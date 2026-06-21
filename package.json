@@ -1,0 +1,35 @@
+{
+  "name": "lucid",
+  "version": "0.1.0",
+  "description": "Agent-agnostic CLI for addressable HTML artifacts and located agent-human review",
+  "type": "module",
+  "module": "src/cli/main.ts",
+  "bin": {
+    "lucid": "./dist/lucid"
+  },
+  "scripts": {
+    "build:client": "bun run scripts/build-client.ts",
+    "build:binary": "bun run scripts/build-binary.ts",
+    "build": "bun run build:client && bun run build:binary",
+    "lucid": "bun run src/cli/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test test/*.test.ts",
+    "test:e2e": "playwright test",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write ."
+  },
+  "dependencies": {
+    "@effect/cli": "^0.75.2",
+    "@effect/platform": "^0.96.2",
+    "@effect/platform-bun": "^0.90.0",
+    "effect": "^3.21.4",
+    "linkedom": "^0.18.12",
+    "lit": "^3.3.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.0",
+    "@playwright/test": "^1.56.0",
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.9.0"
+  }
+}

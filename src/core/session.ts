@@ -1,0 +1,176 @@
+import { basename } from "node:path";
+import { mkdirSync, renameSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { ArtifactError } from "../errors.ts";
+import type { Warning } from "../errors.ts";
+import { appendEvent, readEvents } from "./log.ts";
+import { foldLog, type FoldedState } from "./fold.ts";
+import type { SessionPaths } from "./paths.ts";
+import { snapshotPath, snapshotRelPath } from "./paths.ts";
+import { hashContent, validateStructure, writeSnapshot } from "./version.ts";
+
+/** Ensure the session directory tree exists. */
+export const ensureSessionDirs = (paths: SessionPaths): void => {
+  mkdirSync(paths.sessionDir, { recursive: true });
+  mkdirSync(paths.versionsDir, { recursive: true });
+};
+
+/** Atomic write within the session dir (temp-then-rename; same-dir rename). */
+export const atomicWrite = (absPath: string, content: string): void => {
+  const tmp = `${absPath}.tmp.${process.pid}`;
+  writeSnapshot(tmp, content);
+  renameSync(tmp, absPath);
+};
+
+/** Read the agent's artifact file; ARTIFACT_ERROR if unreadable. */
+export const readArtifact = async (paths: SessionPaths): Promise<string> => {
+  try {
+    return await readFile(paths.artifactPath, "utf8");
+  } catch (err) {
+    throw new ArtifactError({
+      message: `cannot read artifact: ${(err as Error).message}`,
+      detail: { path: paths.artifactPath },
+    });
+  }
+};
+
+const readCurrent = async (paths: SessionPaths): Promise<string | undefined> => {
+  try {
+    return await readFile(paths.currentHtml, "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
+export interface VersionCommit {
+  readonly version: number;
+  readonly hash: string;
+  readonly path: string;
+}
+
+/**
+ * Commit a version's bytes crash-safely (D-024): write the segment-scoped
+ * snapshot (+fsync), then update `current.html` (the serve target). The caller
+ * appends the `version`/`session_opened` event AFTER this returns.
+ */
+export const commitVersionBytes = (
+  paths: SessionPaths,
+  html: string,
+  segment: number,
+  version: number,
+): VersionCommit => {
+  const snapAbs = snapshotPath(paths, segment, version);
+  writeSnapshot(snapAbs, html);
+  atomicWrite(paths.currentHtml, html);
+  return { version, hash: hashContent(html), path: snapshotRelPath(segment, version) };
+};
+
+export interface OpenResult {
+  readonly state: FoldedState;
+  /** Opening cursor seq the authoring agent persists (D-040). */
+  readonly cursor: number;
+  readonly warnings: readonly Warning[];
+  /** True when this open started or re-opened a lifecycle segment. */
+  readonly startedSegment: boolean;
+}
+
+/**
+ * Open / resume / re-segment a session at the log level (no server). Handles:
+ *  - fresh open (status none): segment 1, commit v1, session_opened
+ *  - re-open on ENDED: new segment, commit v1, session_opened (D-045)
+ *  - resume on SUSPENDED: reconcile file vs current.html, session_resumed (D-061)
+ *  - idempotent open on ACTIVE: reconcile only
+ */
+export const openSession = async (paths: SessionPaths): Promise<OpenResult> => {
+  ensureSessionDirs(paths);
+  const warnings: Warning[] = [];
+  const before = foldLog((await readEvents(paths.logPath)).events);
+  const html = await readArtifact(paths);
+  const structure = validateStructure(html);
+
+  let startedSegment = false;
+
+  if (before.status === "none" || before.status === "ended") {
+    if (!structure.ok) {
+      throw new ArtifactError({
+        message: `artifact failed structural validation: ${structure.reason}`,
+        detail: { path: paths.artifactPath },
+      });
+    }
+    const segment = before.status === "none" ? 1 : before.segment + 1;
+    const commit = commitVersionBytes(paths, html, segment, 1);
+    await appendEvent(paths.logPath, {
+      t: "session_opened",
+      segment,
+      artifact: basename(paths.artifactPath),
+      version: 1,
+      hash: commit.hash,
+      path: commit.path,
+    });
+    startedSegment = true;
+  } else {
+    // ACTIVE or SUSPENDED: reconcile the file against current.html (D-061).
+    const current = await readCurrent(paths);
+    const changed = current === undefined || hashContent(html) !== hashContent(current);
+    if (changed) {
+      if (structure.ok) {
+        const nextVersion = before.version + 1;
+        const commit = commitVersionBytes(paths, html, before.segment, nextVersion);
+        await appendEvent(paths.logPath, {
+          t: "version",
+          version: nextVersion,
+          hash: commit.hash,
+          path: commit.path,
+        });
+      } else {
+        warnings.push({
+          code: "STRUCTURE_INVALID",
+          message: `artifact change ignored on resume: ${structure.reason}`,
+          detail: { path: paths.artifactPath },
+        });
+      }
+    }
+    if (before.status === "suspended") {
+      await appendEvent(paths.logPath, { t: "session_resumed", segment: before.segment });
+    }
+  }
+
+  const state = foldLog((await readEvents(paths.logPath)).events);
+  return { state, cursor: state.highSeq, warnings, startedSegment };
+};
+
+/**
+ * Commit a watcher-detected artifact change as a new version, if the settled
+ * file is structurally valid and actually differs from current.html. Returns
+ * the commit (and appends the `version` event) or a warning.
+ */
+export const commitWatchedChange = async (
+  paths: SessionPaths,
+): Promise<{ committed?: VersionCommit; warning?: Warning }> => {
+  const html = await readArtifact(paths);
+  const structure = validateStructure(html);
+  if (!structure.ok) {
+    return {
+      warning: {
+        code: "STRUCTURE_INVALID",
+        message: `artifact change not committed: ${structure.reason}`,
+        detail: { path: paths.artifactPath },
+      },
+    };
+  }
+  const current = await readCurrent(paths);
+  if (current !== undefined && hashContent(html) === hashContent(current)) {
+    return {}; // no real change
+  }
+  const state = foldLog((await readEvents(paths.logPath)).events);
+  if (state.status !== "active") return {};
+  const nextVersion = state.version + 1;
+  const commit = commitVersionBytes(paths, html, state.segment, nextVersion);
+  await appendEvent(paths.logPath, {
+    t: "version",
+    version: nextVersion,
+    hash: commit.hash,
+    path: commit.path,
+  });
+  return { committed: commit };
+};

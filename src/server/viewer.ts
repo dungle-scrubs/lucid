@@ -1,0 +1,36 @@
+/**
+ * The viewer (chrome) parent page (RFC §1). This Lucid-owned document is what
+ * the browser opens. It hosts the chrome (composer, conversation log, queued
+ * annotations, controls) and an isolated `<iframe src="/">` whose document is
+ * the artifact with the injected overlay. Served from a control route, never
+ * from the artifact directory, so it cannot bypass the asset allowlist (D-054).
+ */
+
+export interface ViewerConfig {
+  readonly session: string;
+  readonly name: string;
+  readonly port: number;
+  readonly version: number;
+}
+
+const escapeJson = (value: unknown): string =>
+  JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+
+export const renderViewer = (config: ViewerConfig): string => `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lucid · ${config.name}</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: #0b0d12; }
+  lucid-chrome { display: block; height: 100vh; }
+</style>
+</head>
+<body>
+<script>window.__LUCID__ = Object.assign({ mode: "chrome" }, ${escapeJson(config)});</script>
+<lucid-chrome></lucid-chrome>
+<script type="module" src="/__lucid/client.js"></script>
+</body>
+</html>`;
