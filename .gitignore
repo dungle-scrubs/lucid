@@ -1,0 +1,10 @@
+# SQLite transient files (plan.db itself IS tracked - it is the canonical plan state)
+*.db-wal
+*.db-shm
+
+# One-off manual backups (kept on disk, not version-controlled)
+_backup_pre_revert_*/
+**/_backup_pre_revert_*/
+
+# macOS
+.DS_Store
