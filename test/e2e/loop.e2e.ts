@@ -24,10 +24,10 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
 
   // Click an element in the artifact -> overlay picks it -> chrome composer opens.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await expect(page.locator('textarea[placeholder="What should change here?"]')).toBeVisible();
+  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
 
   await page
-    .locator('textarea[placeholder="What should change here?"]')
+    .locator('textarea[placeholder^="What should change here?"]')
     .fill("Backfill in one batch, not nightly - nightly will take weeks.");
   await page.locator('[data-test="add-to-queue"]').click();
   await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
@@ -92,7 +92,7 @@ test("agent reply appears in the conversation log", async ({ page }) => {
 test("human message (non-located) reaches the agent as feedback", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
   await page
-    .locator('textarea[placeholder="Message the agent (not tied to an element)…"]')
+    .locator('textarea[placeholder^="Message the agent"]')
     .fill("Overall: tighten the wording.");
   await page.locator('[data-test="send-message"]').click();
   await expect(page.locator(".msg.human .text")).toContainText("tighten the wording");
@@ -136,7 +136,7 @@ test("text-range selection produces a located annotation", async ({ page }) => {
   // Select the phrase "zero downtime" inside the note paragraph and fire mouseup.
   await frame!.evaluate(() => {
     const p = document.getElementById("note");
-    if (!p || !p.firstChild) throw new Error("note not found");
+    if (!p?.firstChild) throw new Error("note not found");
     const text = p.firstChild as Text;
     const content = text.textContent ?? "";
     const start = content.indexOf("zero downtime");
@@ -149,9 +149,9 @@ test("text-range selection produces a located annotation", async ({ page }) => {
     document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
 
-  await expect(page.locator('textarea[placeholder="What should change here?"]')).toBeVisible();
+  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
   await page
-    .locator('textarea[placeholder="What should change here?"]')
+    .locator('textarea[placeholder^="What should change here?"]')
     .fill("Is zero downtime really required?");
   await page.locator('[data-test="add-to-queue"]').click();
   await page.locator('[data-test="send-queue"]').click();
@@ -178,7 +178,7 @@ test("defer-until-committed shows the newer-version indicator and never loses a 
 
   // Compose (but do not send) an annotation - a committed-but-unsent draft.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('textarea[placeholder="What should change here?"]').fill("Draft in flight");
+  await page.locator('textarea[placeholder^="What should change here?"]').fill("Draft in flight");
   await page.locator('[data-test="add-to-queue"]').click();
   await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
 
@@ -192,4 +192,64 @@ test("defer-until-committed shows the newer-version indicator and never loses a 
   await page.locator('[data-test="send-queue"]').click();
   await expect(page.locator('[data-test="newer-version"]')).toHaveCount(0);
   await expect(surface.locator("h1")).toContainText("revised");
+});
+
+test("agent question surfaces in the viewer and the answer reaches the agent", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+
+  // Agent poses a question.
+  await cli.run(["ask", cli.artifact, "--text", "Should backfill run before the cutover?"]);
+
+  // It surfaces in the "Questions for you" panel.
+  await expect(page.locator('[data-test="question"]')).toContainText("Should backfill run before");
+
+  // Human answers it.
+  await page.locator('[data-test="question"] .qinput').fill("Yes - backfill must finish first.");
+  await page.locator('[data-test="answer"]').click();
+  await expect(page.locator('[data-test="question-answered"]')).toContainText(
+    "backfill must finish first",
+  );
+
+  // The answer reaches the agent as feedback.
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    status: string;
+    questions?: { answered: boolean; answer?: string }[];
+  };
+  expect(fb.status).toBe("feedback");
+  expect(fb.questions?.[0]?.answered).toBe(true);
+  expect(fb.questions?.[0]?.answer).toContain("backfill must finish first");
+});
+
+test("diff view shows changes since a version and revert reaches the agent", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+
+  // Agent revises v1 -> v2; the viewer live-reloads.
+  await cli.write(PLAN_V2);
+  await expect(surface.locator("h1")).toContainText("revised");
+  await expect(page.locator(".vtag")).toContainText("v2");
+
+  // Enter the change view.
+  await page.locator('[data-test="enter-diff"]').click();
+  await expect(page.locator('[data-test="diff-bar"]')).toBeVisible();
+  await expect(page.locator('[data-test="diff-count"]')).toContainText("/");
+
+  // The surface shows in-place diff markup (sage adds/changes, ghost removes).
+  expect(await surface.locator("[data-diff]").count()).toBeGreaterThan(0);
+  expect(await surface.locator("ins.lucid-ins").count()).toBeGreaterThan(0);
+
+  // Revert the current change back to v1, with a reason; the agent receives it.
+  await page.locator(".revert-why").fill("keep the nightly backfill");
+  await page.locator('[data-test="revert"]').click();
+
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    status: string;
+    reverts?: { targetVersion: number; why: string }[];
+  };
+  expect(fb.reverts?.[0]?.targetVersion).toBe(1);
+  expect(fb.reverts?.[0]?.why).toContain("nightly backfill");
+
+  // Exit the change view.
+  await page.locator('[data-test="diff-done"]').click();
+  await expect(page.locator('[data-test="diff-bar"]')).toHaveCount(0);
 });
