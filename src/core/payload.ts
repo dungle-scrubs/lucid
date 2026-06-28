@@ -3,7 +3,13 @@ import type { DomRootLike } from "../anchors/dom.ts";
 import { anchorResolves } from "../anchors/dom.ts";
 import type { Warning } from "../errors.ts";
 import { renderCursor } from "./cursor.ts";
-import type { AnnotationRecord, FoldedState, MessageRecord } from "./fold.ts";
+import type {
+  AnnotationRecord,
+  FoldedState,
+  MessageRecord,
+  QuestionRecord,
+  RevertRecord,
+} from "./fold.ts";
 import { versionRef } from "./fold.ts";
 import { verifySnapshot } from "./version.ts";
 
@@ -18,10 +24,32 @@ export interface PayloadAnnotation {
   readonly at: string;
 }
 
+export interface PayloadImage {
+  readonly name: string;
+  /** Absolute local path to the pasted image, for the agent to read. */
+  readonly path: string;
+}
+
 export interface PayloadMessage {
   readonly role: "human" | "agent";
   readonly text: string;
   readonly at: string;
+  readonly images?: readonly PayloadImage[];
+}
+
+export interface PayloadRevert {
+  readonly target: AnnotationRecord["target"];
+  readonly targetVersion: number;
+  readonly why: string;
+  readonly at: string;
+}
+
+export interface PayloadQuestion {
+  readonly id: string;
+  readonly text: string;
+  readonly ref?: string;
+  readonly answered: boolean;
+  readonly answer?: string;
 }
 
 export interface WaitPayload {
@@ -32,13 +60,18 @@ export interface WaitPayload {
   readonly reviewResolved: boolean;
   readonly annotations: readonly PayloadAnnotation[];
   readonly messages: readonly PayloadMessage[];
+  readonly reverts?: readonly PayloadRevert[];
+  readonly questions?: readonly PayloadQuestion[];
   readonly warnings?: readonly Warning[];
 }
 
-const toMessage = (m: MessageRecord): PayloadMessage => ({
+const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): PayloadMessage => ({
   role: m.role,
   text: m.text,
   at: m.at,
+  ...(m.images && m.images.length > 0
+    ? { images: m.images.map((img) => ({ name: img.name, path: assetAbsPath(img.file) })) }
+    : {}),
 });
 
 /**
@@ -104,6 +137,10 @@ export interface BuildPayloadOptions {
   readonly annotations: readonly AnnotationRecord[];
   /** Messages to include (full set or delta). */
   readonly messages: readonly MessageRecord[];
+  /** Revert decisions to include (full set or delta). */
+  readonly reverts?: readonly RevertRecord[];
+  /** Questions/answers to include (full set or delta). */
+  readonly questions?: readonly QuestionRecord[];
   /** Cursor floor: the seq to render as nextCursor. */
   readonly nextSeq: number;
   readonly extraWarnings?: readonly Warning[];
@@ -139,7 +176,30 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     nextCursor: renderCursor(opts.nextSeq),
     reviewResolved: opts.state.reviewResolved,
     annotations,
-    messages: opts.messages.map(toMessage),
+    messages: opts.messages.map((m) =>
+      toMessage(m, (file) => opts.snapshotAbsPath(`pasted/${file}`)),
+    ),
+    ...(opts.reverts && opts.reverts.length > 0
+      ? {
+          reverts: opts.reverts.map((r) => ({
+            target: r.target,
+            targetVersion: r.targetVersion,
+            why: r.why,
+            at: r.at,
+          })),
+        }
+      : {}),
+    ...(opts.questions && opts.questions.length > 0
+      ? {
+          questions: opts.questions.map((q) => ({
+            id: q.id,
+            text: q.text,
+            ...(q.ref ? { ref: q.ref } : {}),
+            answered: q.answered,
+            ...(q.answer !== undefined ? { answer: q.answer } : {}),
+          })),
+        }
+      : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
   };
   return payload;

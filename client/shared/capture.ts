@@ -12,15 +12,53 @@ const CONTEXT_LEN = 32;
 /** Character offset of (node, offset) within document.body.textContent. */
 const offsetInBody = (node: Node, nodeOffset: number): number => {
   const body = document.body;
+  // Text node: offset is a character offset.
+  if (node.nodeType === Node.TEXT_NODE) {
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    let total = 0;
+    let current = walker.nextNode();
+    while (current) {
+      if (current === node) return total + nodeOffset;
+      total += current.textContent?.length ?? 0;
+      current = walker.nextNode();
+    }
+    return total;
+  }
+  // Element node: offset is a child index. Walk text up to (not including) the
+  // child at that index, so the position lands at the start of that subtree.
+  if (node.nodeType === Node.ELEMENT_NODE && body.contains(node)) {
+    const child = node.childNodes[nodeOffset];
+    if (!child) return textLengthOf(node);
+    return textLengthBefore(child);
+  }
+  return 0;
+};
+
+/** Total character length of all text descendants of a node. */
+const textLengthOf = (node: Node): number => {
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  let total = 0;
+  let current = walker.nextNode();
+  while (current) {
+    total += current.textContent?.length ?? 0;
+    current = walker.nextNode();
+  }
+  return total;
+};
+
+/** Character offset of `target` within document.body.textContent. */
+const textLengthBefore = (target: Node): number => {
+  const body = document.body;
   const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
   let total = 0;
   let current = walker.nextNode();
   while (current) {
-    if (current === node) return total + nodeOffset;
+    if (current === target) return total;
+    // `target` may be an element whose first text node is `current`'s successor.
+    if (target.contains(current) === false && current.contains(target)) return total;
     total += current.textContent?.length ?? 0;
     current = walker.nextNode();
   }
-  // If the node is an element (offset is a child index), accumulate up to it.
   return total;
 };
 

@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { NotFoundError } from "../errors.ts";
 import { discoverLiveServer } from "../server/discovery.ts";
 import { parseCursor } from "./cursor.ts";
-import { foldLog, type AnnotationRecord, type FoldedState, type MessageRecord } from "./fold.ts";
+import {
+  foldLog,
+  type AnnotationRecord,
+  type FoldedState,
+  type MessageRecord,
+  type RevertRecord,
+} from "./fold.ts";
 import { readEvents } from "./log.ts";
 import type { SessionPaths } from "./paths.ts";
 import { buildWaitPayload, type PayloadStatus, type WaitPayload } from "./payload.ts";
@@ -17,10 +23,88 @@ export interface WaitOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_POLL_MS = 200;
-const LIVENESS_EVERY = 10; // re-handshake every N polls
+/** Heartbeat fallback between SSE wakes (so it still works if the stream drops). */
+const HEARTBEAT_MS = 1500;
+const LIVENESS_EVERY = 4; // re-handshake every N wakes
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Push-woken wait (RFC §6 refinement). Subscribes to the server's SSE stream
+ * purely as a wake signal; the log stays the source of truth. The server is
+ * not in the read path - on any event we re-read the log for truth. Reconnects
+ * automatically if the stream drops, so push latency is preserved across a
+ * transient disconnect instead of degrading to the heartbeat for the rest of
+ * the wait. Falls back to a heartbeat if the stream is unavailable, so `wait`
+ * still works without it.
+ */
+interface Waker {
+  next(ms: number): Promise<void>;
+  close(): void;
+}
+
+/** Backoff between SSE reconnect attempts, capped. */
+const RECONNECT_BASE_MS = 200;
+const RECONNECT_MAX_MS = 3000;
+
+const createWaker = (port: number): Waker => {
+  let pending = false;
+  let resolveWake: (() => void) | null = null;
+  let closed = false;
+  const controller = new AbortController();
+  const signal = () => {
+    pending = true;
+    if (resolveWake) {
+      resolveWake();
+      resolveWake = null;
+    }
+  };
+  // One persistent reader loop that reconnects on stream end/error. This keeps
+  // push-woken latency after a dropped stream instead of silently relying on
+  // the heartbeat for the remainder of the wait window.
+  void (async () => {
+    let backoff = RECONNECT_BASE_MS;
+    while (!closed) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/__lucid/events`, {
+          signal: controller.signal,
+          headers: { host: `127.0.0.1:${port}` },
+        });
+        if (!res.body) throw new Error("no body");
+        const reader = res.body.getReader();
+        for (;;) {
+          const { done } = await reader.read();
+          if (done) break;
+          signal(); // any frame wakes us; we re-read the log for truth
+        }
+        // Stream ended cleanly (server is shutting down). Reconnect in case it
+        // restarts; the liveness handshake in runWait will eventually detect a
+        // truly-dead server and report suspended.
+        backoff = RECONNECT_BASE_MS;
+      } catch {
+        // stream ended/aborted/errored; heartbeat carries this wake, then we retry
+      }
+      if (closed) break;
+      await sleep(backoff);
+      backoff = Math.min(backoff * 2, RECONNECT_MAX_MS);
+    }
+  })();
+  return {
+    next: (ms: number) => {
+      if (pending) {
+        pending = false;
+        return Promise.resolve();
+      }
+      return Promise.race([new Promise<void>((r) => (resolveWake = r)), sleep(ms)]).then(() => {
+        resolveWake = null;
+      });
+    },
+    close: () => {
+      closed = true;
+      controller.abort();
+    },
+  };
+};
 
 const sliceDelta = <T extends { readonly seq: number }>(
   items: readonly T[],
@@ -33,6 +117,7 @@ const buildFromState = async (
   status: PayloadStatus,
   annotations: readonly AnnotationRecord[],
   messages: readonly MessageRecord[],
+  reverts: readonly RevertRecord[] = [],
 ): Promise<WaitPayload> => {
   const currentHtml = await readFile(paths.currentHtml, "utf8").catch(() => "");
   return buildWaitPayload({
@@ -43,6 +128,8 @@ const buildFromState = async (
     snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
     annotations,
     messages,
+    reverts,
+    questions: state.questions,
     nextSeq: state.highSeq,
   });
 };
@@ -59,7 +146,7 @@ export const runWait = async (
 ): Promise<WaitPayload> => {
   const cursor = parseCursor(options.since);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
+  const heartbeatMs = options.pollMs ?? HEARTBEAT_MS;
 
   const initial = foldLog((await readEvents(paths.logPath)).events);
   if (initial.status === "none") {
@@ -75,55 +162,111 @@ export const runWait = async (
   // No cursor -> immediate full folded state for cross-agent bootstrap (D-056).
   if (cursor === undefined) {
     const hasContent =
-      initial.annotations.length > 0 || initial.messages.length > 0 || initial.reviewResolved;
+      initial.annotations.length > 0 ||
+      initial.messages.length > 0 ||
+      initial.reverts.length > 0 ||
+      initial.questions.length > 0 ||
+      initial.reviewResolved;
     if (initial.status === "suspended") {
-      return buildFromState(paths, initial, "suspended", initial.annotations, initial.messages);
+      return buildFromState(
+        paths,
+        initial,
+        "suspended",
+        initial.annotations,
+        initial.messages,
+        initial.reverts,
+      );
     }
     const live = await discoverLiveServer(paths);
     const status: PayloadStatus = !live ? "suspended" : hasContent ? "feedback" : "waiting";
-    return buildFromState(paths, initial, status, initial.annotations, initial.messages);
+    return buildFromState(
+      paths,
+      initial,
+      status,
+      initial.annotations,
+      initial.messages,
+      initial.reverts,
+    );
   }
 
   const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;
-  let polls = 0;
+  let wakes = 0;
   let liveKnown = true;
+  let waker: Waker | undefined;
 
-  for (;;) {
-    const state = foldLog((await readEvents(paths.logPath)).events);
+  try {
+    for (;;) {
+      const state = foldLog((await readEvents(paths.logPath)).events);
 
-    if (state.status === "ended") return buildFromState(paths, state, "ended", [], []);
-    if (state.status === "suspended") {
-      return buildFromState(paths, state, "suspended", state.annotations, state.messages);
+      if (state.status === "ended") return buildFromState(paths, state, "ended", [], []);
+      if (state.status === "suspended") {
+        return buildFromState(
+          paths,
+          state,
+          "suspended",
+          state.annotations,
+          state.messages,
+          state.reverts,
+        );
+      }
+
+      // Liveness: an ACTIVE fold with a dead server reports suspended (D-038).
+      if (wakes % LIVENESS_EVERY === 0) {
+        const live = await discoverLiveServer(paths);
+        liveKnown = live !== undefined;
+        if (live && !waker) waker = createWaker(live.port);
+      }
+      if (!liveKnown) {
+        return buildFromState(
+          paths,
+          state,
+          "suspended",
+          state.annotations,
+          state.messages,
+          state.reverts,
+        );
+      }
+
+      const deltaAnnotations = sliceDelta(state.annotations, cursor);
+      const deltaMessages = sliceDelta(state.messages, cursor);
+      const deltaReverts = sliceDelta(state.reverts, cursor);
+      const deltaHumanMessages = deltaMessages.filter((m) => m.role === "human");
+      const newAnswers = state.questions.some((q) => q.answered && (q.answerSeq ?? 0) > cursor);
+      const reviewResolvedAfterCursor = state.reviewResolved && state.reviewToggleSeq > cursor;
+
+      // Feedback = located annotations, human messages, reverts, answered
+      // questions, or an approve signal. An agent's own reply / version / its own
+      // just-posted question do not self-trigger.
+      if (
+        deltaAnnotations.length > 0 ||
+        deltaHumanMessages.length > 0 ||
+        deltaReverts.length > 0 ||
+        newAnswers ||
+        reviewResolvedAfterCursor
+      ) {
+        return buildFromState(
+          paths,
+          state,
+          "feedback",
+          deltaAnnotations,
+          deltaMessages,
+          deltaReverts,
+        );
+      }
+
+      // Version-only delta (e.g. the authoring agent's own revision) -> waiting (D-062).
+      if (state.highSeq > cursor) {
+        return buildFromState(paths, state, "waiting", [], []);
+      }
+      if (Date.now() >= deadline) {
+        return buildFromState(paths, state, "waiting", [], []);
+      }
+
+      wakes += 1;
+      // Push-woken: wakes instantly on an SSE frame, else after the heartbeat.
+      await (waker ? waker.next(heartbeatMs) : sleep(heartbeatMs));
     }
-
-    // Liveness: an ACTIVE fold with a dead server reports suspended (D-038).
-    if (polls % LIVENESS_EVERY === 0) {
-      liveKnown = (await discoverLiveServer(paths)) !== undefined;
-    }
-    if (!liveKnown) {
-      return buildFromState(paths, state, "suspended", state.annotations, state.messages);
-    }
-
-    const deltaAnnotations = sliceDelta(state.annotations, cursor);
-    const deltaMessages = sliceDelta(state.messages, cursor);
-    const deltaHumanMessages = deltaMessages.filter((m) => m.role === "human");
-    const reviewResolvedAfterCursor = state.reviewResolved && state.reviewToggleSeq > cursor;
-
-    // Feedback = located annotations, human messages, or an approve signal.
-    // An agent's own reply (or a version-only delta) does not self-trigger.
-    if (deltaAnnotations.length > 0 || deltaHumanMessages.length > 0 || reviewResolvedAfterCursor) {
-      return buildFromState(paths, state, "feedback", deltaAnnotations, deltaMessages);
-    }
-
-    // Version-only delta (e.g. the authoring agent's own revision) -> waiting (D-062).
-    if (state.highSeq > cursor) {
-      return buildFromState(paths, state, "waiting", [], []);
-    }
-
-    if (Date.now() >= deadline) {
-      return buildFromState(paths, state, "waiting", [], []);
-    }
-    polls += 1;
-    await sleep(pollMs);
+  } finally {
+    waker?.close();
   }
 };

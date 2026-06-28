@@ -1,12 +1,16 @@
 import { Glob } from "bun";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { renderCursor } from "../core/cursor.ts";
 import { foldLog } from "../core/fold.ts";
 import { appendEvent, readEvents } from "../core/log.ts";
 import { cursorSidecarPath, sessionPaths } from "../core/paths.ts";
+import type { WaitPayload } from "../core/payload.ts";
 import { ensureSessionDirs, openSession } from "../core/session.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
-import { NotFoundError, ServerError } from "../errors.ts";
+import { ArtifactError, NotFoundError, ServerError } from "../errors.ts";
+import { ingestPayload } from "../plan/ingest.ts";
+import { renderPlanDoc } from "../plan/render.ts";
 import {
   discoverLiveServer,
   readServerDescriptor,
@@ -92,6 +96,30 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   print(payload);
 };
 
+/** `lucid ask <file> --text "..." [--ref <id>]` - pose a question to the human. */
+export const runAsk = async (file: string, text: string, ref?: string): Promise<void> => {
+  const paths = sessionPaths(file);
+  const state = foldLog((await readEvents(paths.logPath)).events);
+  if (state.status === "none") {
+    throw new NotFoundError({
+      message: `No Lucid session for ${paths.artifactPath}`,
+      detail: { path: paths.artifactPath },
+    });
+  }
+  const id = randomId();
+  const live = await discoverLiveServer(paths);
+  if (live) {
+    await fetch(`http://127.0.0.1:${live.port}/__lucid/question`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${live.port}` },
+      body: JSON.stringify({ id, text, ...(ref ? { ref } : {}) }),
+    });
+  } else {
+    await appendEvent(paths.logPath, { t: "question", id, text, ...(ref ? { ref } : {}) });
+  }
+  print({ session: paths.artifactPath, asked: id, text });
+};
+
 /** `lucid end <file>` - terminal end of the session. */
 export const runEnd = async (file: string): Promise<void> => {
   const paths = sessionPaths(file);
@@ -164,4 +192,45 @@ export const runStatus = async (): Promise<void> => {
       end: "lucid end <file>",
     },
   });
+};
+
+export interface PlanRenderOptions {
+  readonly out?: string;
+  readonly title?: string;
+  readonly stage?: string;
+}
+
+/** `lucid plan render <doc.md>` - render a planner doc to a Lucid artifact. */
+export const runPlanRender = async (
+  doc: string,
+  options: PlanRenderOptions = {},
+): Promise<void> => {
+  let markdown: string;
+  try {
+    markdown = await readFile(doc, "utf8");
+  } catch (err) {
+    throw new ArtifactError({
+      message: `cannot read plan doc: ${(err as Error).message}`,
+      detail: { path: doc },
+    });
+  }
+  const html = renderPlanDoc(markdown, {
+    ...(options.title !== undefined ? { title: options.title } : {}),
+    ...(options.stage !== undefined ? { stage: options.stage } : {}),
+  });
+  const outPath = resolve(options.out ?? `${doc.replace(/\.md$/i, "")}.lucid.html`);
+  await writeFile(outPath, html);
+  print({ artifact: outPath, next: `lucid open ${outPath}` });
+};
+
+/** `lucid plan ingest --plan <name>` - map a wait payload (stdin) to plan-db. */
+export const runPlanIngest = async (plan: string, payloadPath?: string): Promise<void> => {
+  const raw = payloadPath ? await readFile(payloadPath, "utf8") : await Bun.stdin.text();
+  let payload: WaitPayload;
+  try {
+    payload = JSON.parse(raw) as WaitPayload;
+  } catch {
+    throw new ArtifactError({ message: "could not parse wait payload JSON from input" });
+  }
+  print(ingestPayload(payload, plan));
 };

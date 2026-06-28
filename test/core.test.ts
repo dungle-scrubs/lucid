@@ -97,6 +97,19 @@ describe("anchors/dom", () => {
     expect(anchorResolves(anchor, dup)).toBe(false);
   });
 
+  test("identical-text siblings get distinct fingerprints and resolve to the right one", () => {
+    const root = rootOf("<body><ul><li>same</li><li>same</li><li>same</li></ul></body>");
+    const lis = root.querySelectorAll("li");
+    const first = lis[0]!;
+    const third = lis[2]!;
+    // Identical text but distinct fingerprints (sibling index folded into hash).
+    expect(computeFingerprint(first)).not.toBe(computeFingerprint(third));
+    // An anchor captured on the third <li> resolves on an identical re-render.
+    const anchor = captureElementAnchor(third);
+    const reRender = rootOf("<body><ul><li>same</li><li>same</li><li>same</li></ul></body>");
+    expect(anchorResolves(anchor, reRender)).toBe(true);
+  });
+
   test("resolves a range anchor by quote", () => {
     const anchor: RangeAnchor = {
       kind: "range",

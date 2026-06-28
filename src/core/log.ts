@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, openSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, openSync, readFileSync, truncateSync, writeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { LogError } from "../errors.ts";
 import { hasId, type EventInput, type LogEvent } from "./events.ts";
@@ -77,9 +77,31 @@ const appendDurable = (logPath: string, payload: string): void => {
 };
 
 /**
+ * Truncate a torn (non-newline-terminated) trailing line in-place, leaving the
+ * file ending at the last newline. Called inside the append lock before writing
+ * so that an append following a crash-mid-append does not concatenate onto the
+ * partial line and corrupt the log (D-030).
+ */
+const truncateTornTail = (logPath: string): void => {
+  let data: Buffer;
+  try {
+    data = readFileSync(logPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  if (data.length === 0 || data[data.length - 1] === 0x0a /* \n */) return;
+  const lastNewline = data.lastIndexOf(0x0a);
+  const cut = lastNewline === -1 ? 0 : lastNewline + 1;
+  truncateSync(logPath, cut);
+};
+
+/**
  * Append events under the exclusive log lock (D-049). Re-reads inside the lock
  * to assign globally-monotonic `seq` (D-050) and to dedupe identified events
- * against the ids already in the log (D-057). Returns the resulting events in
+ * against the ids already in the log (D-057). A torn trailing line from a prior
+ * crash-mid-append is truncated before writing so the new append never
+ * concatenates onto a partial line (D-030). Returns the resulting events in
  * input order - newly appended events with their assigned `seq`/`at`, and for a
  * deduped input the pre-existing event already in the log.
  */
@@ -89,7 +111,8 @@ export const appendEvents = async (
 ): Promise<readonly LogEvent[]> => {
   if (inputs.length === 0) return [];
   return withAppendLock(logPath, async () => {
-    const { events } = await readEvents(logPath);
+    const { tornTail, events } = await readEvents(logPath);
+    if (tornTail) truncateTornTail(logPath);
     const existingIds = collectIds(events);
     let seq = maxSeq(events);
     const at = new Date().toISOString();
@@ -126,4 +149,47 @@ export const appendEvent = async (logPath: string, input: EventInput): Promise<L
     throw new LogError({ message: "append produced no event" });
   }
   return ev;
+};
+
+/**
+ * Atomically check-then-append under the exclusive log lock (D-049). Runs
+ * `guard` (re-reading the log inside the lock) and only commits `inputs` if the
+ * guard returns true. This closes the TOCTOU where a status check outside the
+ * lock could let an event land in a just-closed segment. Returns the appended
+ * events (empty if the guard rejected) in input order, with dedupe applied.
+ */
+export const appendEventsIf = async (
+  logPath: string,
+  guard: (events: readonly LogEvent[]) => boolean | Promise<boolean>,
+  inputs: readonly EventInput[],
+): Promise<readonly LogEvent[]> => {
+  if (inputs.length === 0) return [];
+  return withAppendLock(logPath, async () => {
+    const { tornTail, events } = await readEvents(logPath);
+    if (tornTail) truncateTornTail(logPath);
+    if (!(await guard(events))) return [];
+    const existingIds = collectIds(events);
+    let seq = maxSeq(events);
+    const at = new Date().toISOString();
+    const toWrite: LogEvent[] = [];
+    const result: LogEvent[] = [];
+    for (const input of inputs) {
+      const id = inputId(input);
+      if (id !== undefined && existingIds.has(id)) {
+        const existing = events.find((e) => hasId(e) && e.id === id);
+        if (existing) result.push(existing);
+        continue;
+      }
+      seq += 1;
+      const ev = { ...input, seq, at } as LogEvent;
+      toWrite.push(ev);
+      result.push(ev);
+      if (id !== undefined) existingIds.add(id);
+    }
+    if (toWrite.length > 0) {
+      const payload = `${toWrite.map((e) => JSON.stringify(e)).join("\n")}\n`;
+      appendDurable(logPath, payload);
+    }
+    return result;
+  });
 };

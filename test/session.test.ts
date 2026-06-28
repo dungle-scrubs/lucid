@@ -137,7 +137,8 @@ describe("commitWatchedChange", () => {
     await openSession(paths);
     await writeFile(artifact, V2);
     const r = await commitWatchedChange(paths);
-    expect(r.committed?.version).toBe(2);
+    expect(r.committed?.t).toBe("version");
+    expect(r.committed && "version" in r.committed ? r.committed.version : undefined).toBe(2);
     expect(r.warning).toBeUndefined();
   });
 
@@ -238,5 +239,139 @@ describe("buildWaitPayload resolution", () => {
     const a = payload.annotations.find((x) => x.id === "a-v1");
     expect(a?.resolved).toBe(false); // orphaned, not re-pointed at v2
     expect(payload.warnings?.some((w) => w.code === "SNAPSHOT_MISSING")).toBe(true);
+  });
+});
+
+describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
+  test("append recovers after a torn trailing line (crash mid-append then restart)", async () => {
+    const paths = sessionPaths(artifact);
+    // A clean committed line, then a torn (crash-mid-append) line.
+    const good = JSON.stringify({
+      t: "session_opened",
+      seq: 1,
+      at: "x",
+      segment: 1,
+      artifact: "a",
+      version: 1,
+      hash: "h",
+      path: "p",
+    });
+    await Bun.write(paths.logPath, `${good}\n{"t":"version","seq":2`);
+    // The next append must re-read, drop the torn tail, and continue monotonic.
+    const ev = await appendEvent(paths.logPath, {
+      t: "agent_reply",
+      id: "r1",
+      text: "after crash",
+    });
+    expect(ev.seq).toBe(2);
+    const { events } = await readEvents(paths.logPath);
+    expect(events.map((e) => e.seq)).toEqual([1, 2]);
+    expect(events[1]?.t).toBe("agent_reply");
+  });
+
+  test("staggered readers each see exactly the events in (cursor, nextCursor]", async () => {
+    // Drives the same invariant runWait uses: slice by seq against a log under
+    // concurrent append pressure. If seq assignment or slicing were racy, a
+    // reader would see a gap or a duplicate.
+    const paths = sessionPaths(artifact);
+    await Bun.write(paths.logPath, "");
+    const total = 40;
+    // Appenders: 40 identified events under the lock in parallel.
+    await Promise.all(
+      Array.from({ length: total }, (_, i) =>
+        appendEvent(paths.logPath, { t: "agent_reply", id: `r${i}`, text: `m${i}` }),
+      ),
+    );
+    const { events } = await readEvents(paths.logPath);
+    const seqs = events.map((e) => e.seq);
+    expect(seqs).toEqual(Array.from({ length: total }, (_, i) => i + 1));
+
+    // Simulate N readers with staggered cursors; each must receive exactly the
+    // contiguous run after its cursor, with no gaps and no duplicates.
+    const sliceDelta = <T extends { readonly seq: number }>(items: readonly T[], cursor: number) =>
+      items.filter((i) => i.seq > cursor);
+    for (let cursor = 0; cursor <= total; cursor++) {
+      const delta = sliceDelta(events, cursor);
+      const deltaSeqs = delta.map((e) => e.seq);
+      // contiguous from cursor+1..total, no dupes, no gaps.
+      expect(deltaSeqs).toEqual(Array.from({ length: total - cursor }, (_, i) => cursor + 1 + i));
+      // ids are unique within the delta (idempotent delivery contract).
+      expect(new Set(delta.map((e) => (e as { id: string }).id)).size).toBe(delta.length);
+    }
+  });
+
+  test("cursor survives end-then-reopen across segments with no gap (D-045/D-050)", async () => {
+    // A persisted cursor must stay valid across an end -> reopen: seq is globally
+    // monotonic and never reset, so a reader holding the pre-end cursor sees the
+    // new segment's events as a continuation, not a repeat of segment 1.
+    const paths = sessionPaths(artifact);
+    // Segment 1: session_opened (seq 1), an annotation (seq 2), ended (seq 3).
+    await openSession(paths);
+    const a1 = await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "seg1-1",
+      version: 1,
+      target: { kind: "element", fingerprint: "f", domPath: "li:nth-child(1)", snippet: "s" },
+      note: "first",
+    });
+    expect(a1.seq).toBe(2);
+    await appendEvent(paths.logPath, { t: "session_ended" });
+    const beforeReopen = await readEvents(paths.logPath);
+    expect(beforeReopen.events.map((e) => e.seq)).toEqual([1, 2, 3]);
+    const persistedCursor = 2; // the agent advanced past seq 2
+
+    // Reopen starts segment 2 in the same log; seqs continue (not reset).
+    await openSession(paths);
+    const afterReopen = await readEvents(paths.logPath);
+    const seg2Opened = afterReopen.events.find((e) => e.t === "session_opened" && e.seq > 3);
+    expect(seg2Opened).toBeTruthy();
+    expect(seg2Opened?.seq).toBe(4); // continues the global monotonic seq
+
+    // A reader with the pre-end cursor sees exactly (cursor, highSeq] with no
+    // gap and no segment-1 duplicate: the ended event + the new session_opened.
+    const slice = afterReopen.events.filter((e) => e.seq > persistedCursor);
+    expect(slice.map((e) => e.seq)).toEqual([3, 4]);
+    expect(slice.some((e) => e.t === "annotation" && e.id === "seg1-1")).toBe(false);
+  });
+
+  test("writer swap mid-segment does not duplicate or drop (server then direct CLI write)", async () => {
+    // The contract: an identified event appended by one writer, then re-appended
+    // (same id) by a different writer after a simulated crash, dedupes; a
+    // distinct event appended after lands at the next seq. This is the
+    // open->wait->(crash)->resume path where the server is the first writer and
+    // the CLI writes directly under the lock when no server is live.
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    const first = await appendEvent(paths.logPath, {
+      t: "prompt",
+      id: "msg-1",
+      refs: [],
+      text: "from server writer",
+    });
+    expect(first.seq).toBe(2);
+
+    // Simulate the CLI re-issuing the same idempotent id after a restart
+    // (at-least-once delivery => the same message may be POSTed twice).
+    const deduped = await appendEvent(paths.logPath, {
+      t: "prompt",
+      id: "msg-1",
+      refs: [],
+      text: "from server writer",
+    });
+    expect(deduped.seq).toBe(2); // returns the existing event, no new seq
+
+    // A new, distinct event continues the monotonic seq.
+    const next = await appendEvent(paths.logPath, {
+      t: "prompt",
+      id: "msg-2",
+      refs: [],
+      text: "from cli writer",
+    });
+    expect(next.seq).toBe(3);
+
+    const { events } = await readEvents(paths.logPath);
+    const prompts = events.filter((e) => e.t === "prompt");
+    expect(prompts).toHaveLength(2);
+    expect(prompts.map((e) => e.seq)).toEqual([2, 3]);
   });
 });

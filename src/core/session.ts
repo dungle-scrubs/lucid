@@ -3,7 +3,8 @@ import { mkdirSync, renameSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { ArtifactError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
-import { appendEvent, readEvents } from "./log.ts";
+import { appendEvent, appendEventsIf, readEvents } from "./log.ts";
+import type { LogEvent } from "./events.ts";
 import { foldLog, type FoldedState } from "./fold.ts";
 import type { SessionPaths } from "./paths.ts";
 import { snapshotPath, snapshotRelPath } from "./paths.ts";
@@ -142,11 +143,17 @@ export const openSession = async (paths: SessionPaths): Promise<OpenResult> => {
 /**
  * Commit a watcher-detected artifact change as a new version, if the settled
  * file is structurally valid and actually differs from current.html. Returns
- * the commit (and appends the `version` event) or a warning.
+ * the appended `version` event (so callers can broadcast the real persisted
+ * event rather than a synthetic one) or a warning.
+ *
+ * The status check and the version append run atomically under the exclusive
+ * log lock (D-049) via `appendEventsIf`, so a concurrent
+ * `session_suspended`/`session_ended` cannot land a `version` event in a
+ * just-closed segment.
  */
 export const commitWatchedChange = async (
   paths: SessionPaths,
-): Promise<{ committed?: VersionCommit; warning?: Warning }> => {
+): Promise<{ committed?: LogEvent; warning?: Warning }> => {
   const html = await readArtifact(paths);
   const structure = validateStructure(html);
   if (!structure.ok) {
@@ -162,15 +169,16 @@ export const commitWatchedChange = async (
   if (current !== undefined && hashContent(html) === hashContent(current)) {
     return {}; // no real change
   }
-  const state = foldLog((await readEvents(paths.logPath)).events);
-  if (state.status !== "active") return {};
-  const nextVersion = state.version + 1;
-  const commit = commitVersionBytes(paths, html, state.segment, nextVersion);
-  await appendEvent(paths.logPath, {
-    t: "version",
-    version: nextVersion,
-    hash: commit.hash,
-    path: commit.path,
-  });
-  return { committed: commit };
+  // The version number and segment are derived from the current fold; the
+  // status gate is re-checked atomically inside the lock by appendEventsIf so a
+  // concurrent suspend/end cannot let this version land in a closed segment.
+  const before = foldLog((await readEvents(paths.logPath)).events);
+  const nextVersion = before.version + 1;
+  const commit = commitVersionBytes(paths, html, before.segment, nextVersion);
+  const events = await appendEventsIf(
+    paths.logPath,
+    (existing) => foldLog(existing).status === "active",
+    [{ t: "version", version: nextVersion, hash: commit.hash, path: commit.path }],
+  );
+  return events.length > 0 ? { committed: events[0] } : {};
 };

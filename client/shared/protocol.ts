@@ -15,10 +15,26 @@ export interface PayloadAnnotationLike {
   readonly at: string;
 }
 
+/**
+ * A composed-but-unsent annotation's anchor. The chrome sends these so the
+ * overlay can paint the queued item in place (its "queued" lifecycle state),
+ * keeping the left-panel card and its spot in the artifact visibly linked.
+ */
+export interface QueuedAnchorLike {
+  readonly id: string;
+  readonly target: Anchor;
+}
+
 /** overlay -> chrome */
 export type OverlayMessage =
   | { readonly source: "lucid-overlay"; readonly type: "ready" }
   | { readonly source: "lucid-overlay"; readonly type: "target-picked"; readonly anchor: Anchor }
+  | {
+      readonly source: "lucid-overlay";
+      readonly type: "annotation-hover";
+      readonly id: string | null;
+    }
+  | { readonly source: "lucid-overlay"; readonly type: "annotation-activate"; readonly id: string }
   | { readonly source: "lucid-overlay"; readonly type: "selection-cleared" };
 
 /** chrome -> overlay */
@@ -27,9 +43,13 @@ export type ChromeMessage =
       readonly source: "lucid-chrome";
       readonly type: "highlight";
       readonly annotations: readonly PayloadAnnotationLike[];
+      readonly queued: readonly QueuedAnchorLike[];
+      readonly pending: Anchor | null;
     }
   | { readonly source: "lucid-chrome"; readonly type: "swap"; readonly html: string }
   | { readonly source: "lucid-chrome"; readonly type: "focus-annotation"; readonly id: string }
+  | { readonly source: "lucid-chrome"; readonly type: "diff-show"; readonly html: string }
+  | { readonly source: "lucid-chrome"; readonly type: "diff-goto"; readonly hunkId: string }
   | { readonly source: "lucid-chrome"; readonly type: "clear-pending" };
 
 export const isOverlayMessage = (data: unknown): data is OverlayMessage =>

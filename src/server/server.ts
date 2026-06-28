@@ -1,10 +1,10 @@
-import { watch } from "node:fs";
+import { statSync, mkdirSync, watch } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { parseAnchor } from "../anchors/anchor.ts";
-import { foldLog } from "../core/fold.ts";
-import type { EventInput, LogEvent } from "../core/events.ts";
+import { diffHtml } from "../diff/diff.ts";
+import { foldLog, versionRef } from "../core/fold.ts";
+import type { EventInput, LogEvent, PromptImage } from "../core/events.ts";
 import { appendEvents, readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { ServerError } from "../errors.ts";
@@ -26,6 +26,63 @@ export interface ServerOptions {
 const DEFAULT_IDLE_MS = 30 * 60 * 1000;
 const DEFAULT_DEBOUNCE_MS = 150;
 
+/** Accepted pasted-image content types -> extension. */
+const IMAGE_EXT: Readonly<Record<string, string>> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/avif": "avif",
+  "image/svg+xml": "svg",
+};
+const ASSET_CONTENT_TYPE: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  svg: "image/svg+xml",
+};
+const MAX_ASSET_BYTES = 20 * 1024 * 1024;
+
+/** Validate a browser-supplied pasted-image manifest. */
+const parseImages = (input: unknown): PromptImage[] => {
+  if (!Array.isArray(input)) return [];
+  const out: PromptImage[] = [];
+  for (const item of input) {
+    if (
+      item &&
+      typeof item === "object" &&
+      typeof (item as PromptImage).id === "string" &&
+      typeof (item as PromptImage).name === "string" &&
+      typeof (item as PromptImage).file === "string" &&
+      /^[a-f0-9-]+\.[a-z]+$/i.test((item as PromptImage).file)
+    ) {
+      const it = item as PromptImage;
+      out.push({ id: it.id, name: it.name.slice(0, 120), file: it.file });
+    }
+  }
+  return out;
+};
+
+/** Paths the browser/crawler requests on its own (not referenced by the
+ *  artifact). They are answered without a missing-asset warning. */
+const BROWSER_PROBES = new Set([
+  "/apple-touch-icon.png",
+  "/apple-touch-icon-precomposed.png",
+  "/robots.txt",
+]);
+
+/** The viewer tab's own icon: the Lucid mark (a surface element in the brass
+ *  annotation outline). Served at /favicon.ico for the viewer origin. */
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" rx="14" fill="#131210"/>
+<rect x="17" y="18.5" width="22" height="3.4" rx="1.7" fill="#e6dbc3" fill-opacity="0.5"/>
+<rect x="17" y="30.3" width="30" height="3.6" rx="1.8" fill="#f2ecdc"/>
+<rect x="17" y="42.1" width="18" height="3.4" rx="1.7" fill="#e6dbc3" fill-opacity="0.5"/>
+<rect x="12.5" y="26.3" width="39" height="11.6" rx="3.5" fill="none" stroke="#bd9a4e" stroke-width="2.4"/>
+<circle cx="12.5" cy="26.3" r="3.1" fill="#cba85a"/></svg>`;
+
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {
     status,
@@ -33,6 +90,20 @@ const json = (body: unknown, status = 200): Response =>
   });
 
 const noStore = { "cache-control": "no-store" } as const;
+
+/**
+ * Cheap `stat` fingerprint (size + mtimeMs) for the polling watcher. Returns
+ * null if the artifact is not statable. Used to gate the 1Hz poll so a quiet
+ * session does not re-read + hash the artifact every second.
+ */
+const statFingerprint = (absPath: string): string | null => {
+  try {
+    const s = statSync(absPath);
+    return `${s.size}:${s.mtimeMs}`;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Run the per-session loopback server (the long-lived daemon body). It is the
@@ -94,7 +165,9 @@ export const runServer = async (
   // ---- request handling -----------------------------------------------------
 
   const handleEvents = (): Response => {
-    let self: ReadableStreamDefaultController<Uint8Array>;
+    // Assigned synchronously in `start` before any frame is enqueued; the `!`
+    // marks that definite assignment for the `cancel` reader below.
+    let self!: ReadableStreamDefaultController<Uint8Array>;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         self = controller;
@@ -137,8 +210,114 @@ export const runServer = async (
     const refs = Array.isArray(body.refs)
       ? body.refs.filter((r): r is string => typeof r === "string")
       : [];
-    await serverAppend([{ t: "prompt", id: body.id, refs, text: body.text }]);
+    const images = parseImages(body.images);
+    if (body.text.trim() === "" && images.length === 0) {
+      return json({ error: "empty message" }, 400);
+    }
+    await serverAppend([
+      { t: "prompt", id: body.id, refs, text: body.text, ...(images.length > 0 ? { images } : {}) },
+    ]);
     return json({ ok: true });
+  };
+
+  const handleAssetUpload = async (req: Request): Promise<Response> => {
+    const contentType = req.headers.get("content-type") ?? "application/octet-stream";
+    if (!contentType.startsWith("image/")) {
+      return json({ error: "only image uploads are accepted" }, 400);
+    }
+    const ext = IMAGE_EXT[contentType.split(";")[0] ?? ""] ?? "bin";
+    const name = (req.headers.get("x-lucid-filename") ?? "pasted").slice(0, 120);
+    const id = crypto.randomUUID();
+    const file = `${id}.${ext}`;
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_ASSET_BYTES) {
+      return json({ error: "image is empty or too large" }, 400);
+    }
+    mkdirSync(join(paths.sessionDir, "pasted"), { recursive: true });
+    await Bun.write(join(paths.sessionDir, "pasted", file), bytes);
+    touch();
+    return json({ id, name, file });
+  };
+
+  const handleQuestion = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body.id !== "string" ||
+      typeof body.text !== "string" ||
+      body.text.trim() === ""
+    ) {
+      return json({ error: "invalid question" }, 400);
+    }
+    await serverAppend([
+      {
+        t: "question",
+        id: body.id,
+        text: body.text,
+        ...(typeof body.ref === "string" ? { ref: body.ref } : {}),
+      },
+    ]);
+    return json({ ok: true });
+  };
+
+  const handleAnswer = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body.id !== "string" ||
+      typeof body.questionId !== "string" ||
+      typeof body.text !== "string" ||
+      body.text.trim() === ""
+    ) {
+      return json({ error: "invalid answer" }, 400);
+    }
+    await serverAppend([
+      { t: "question_answered", id: body.id, questionId: body.questionId, text: body.text },
+    ]);
+    return json({ ok: true });
+  };
+
+  const handleRevert = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body.id !== "string" ||
+      typeof body.why !== "string" ||
+      typeof body.targetVersion !== "number"
+    ) {
+      return json({ error: "invalid revert" }, 400);
+    }
+    const anchor = parseAnchor(body.target);
+    if ("error" in anchor) return json({ error: anchor.error }, 400);
+    await serverAppend([
+      {
+        t: "revert",
+        id: body.id,
+        target: anchor,
+        targetVersion: Math.trunc(body.targetVersion),
+        why: body.why,
+      },
+    ]);
+    return json({ ok: true });
+  };
+
+  /** Diff the current artifact against a base version (RFC §8). */
+  const handleDiff = async (url: URL): Promise<Response> => {
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const baseVersion = Number.parseInt(url.searchParams.get("base") ?? "", 10);
+    const ref = versionRef(state, Number.isFinite(baseVersion) ? baseVersion : state.version - 1);
+    const currentHtml = await readFile(paths.currentHtml, "utf8").catch(() => "");
+    if (!ref || !Number.isFinite(baseVersion) || baseVersion >= state.version) {
+      return json({
+        base: baseVersion,
+        current: state.version,
+        changed: false,
+        hunks: [],
+        mergedHtml: "",
+      });
+    }
+    const baseHtml = await readFile(join(paths.sessionDir, ref.path), "utf8").catch(() => "");
+    return json(diffHtml(baseHtml, currentHtml, ref.version, state.version));
   };
 
   const handleReply = async (req: Request): Promise<Response> => {
@@ -155,6 +334,7 @@ export const runServer = async (
     stopped = true;
     if (watcher) watcher.close();
     if (idleTimer) clearInterval(idleTimer);
+    clearInterval(pollTimer);
     for (const client of sseClients) {
       try {
         client.close();
@@ -171,6 +351,22 @@ export const runServer = async (
   const handle = async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     const { pathname } = url;
+
+    // The overlay bootstrap bundle is a public static asset. It must be
+    // reachable from the sandboxed artifact iframe, which loads it cross-origin
+    // (opaque origin -> Origin: null). Serving it BEFORE the Host/Origin gate
+    // (with a CORS allow) lets the overlay mount; the control routes below still
+    // reject null/cross-origin callers, so artifact scripts cannot reach them.
+    if (pathname === "/__lucid/client.js") {
+      const headers: Record<string, string> = {
+        "content-type": "text/javascript; charset=utf-8",
+        "access-control-allow-origin": req.headers.get("origin") ?? "*",
+        "access-control-allow-credentials": "true",
+        ...noStore,
+      };
+      if (req.headers.get("origin") !== null) headers.vary = "Origin";
+      return new Response(CLIENT_BUNDLE, { headers });
+    }
 
     const headerCheck = validateHeaders(req, port);
     if (!headerCheck.ok) {
@@ -198,11 +394,6 @@ export const runServer = async (
         { headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
       );
     }
-    if (pathname === "/__lucid/client.js") {
-      return new Response(CLIENT_BUNDLE, {
-        headers: { "content-type": "text/javascript; charset=utf-8", ...noStore },
-      });
-    }
     if (pathname === "/__lucid/events") {
       return handleEvents();
     }
@@ -228,12 +419,29 @@ export const runServer = async (
         snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
         annotations: state.annotations,
         messages: state.messages,
+        reverts: state.reverts,
+        questions: state.questions,
         nextSeq: state.highSeq,
       });
       return json(payload);
     }
+    if (pathname === "/__lucid/diff") return handleDiff(url);
     if (pathname === "/__lucid/annotation" && req.method === "POST") return handleAnnotation(req);
     if (pathname === "/__lucid/message" && req.method === "POST") return handleMessage(req);
+    if (pathname === "/__lucid/revert" && req.method === "POST") return handleRevert(req);
+    if (pathname === "/__lucid/question" && req.method === "POST") return handleQuestion(req);
+    if (pathname === "/__lucid/answer" && req.method === "POST") return handleAnswer(req);
+    if (pathname === "/__lucid/asset" && req.method === "POST") return handleAssetUpload(req);
+    if (pathname.startsWith("/__lucid/asset/")) {
+      const file = pathname.slice("/__lucid/asset/".length);
+      if (!/^[a-f0-9-]+\.[a-z]+$/i.test(file)) return json({ error: "bad asset" }, 400);
+      const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
+      const f = Bun.file(join(paths.sessionDir, "pasted", file));
+      if (!(await f.exists())) return json({ error: "not found" }, 404);
+      return new Response(f, {
+        headers: { "content-type": ASSET_CONTENT_TYPE[ext] ?? "application/octet-stream" },
+      });
+    }
     if (pathname === "/__lucid/reply" && req.method === "POST") return handleReply(req);
     if (pathname === "/__lucid/resolve" && req.method === "POST") {
       await serverAppend([{ t: "review_resolved" }]);
@@ -247,6 +455,18 @@ export const runServer = async (
       await serverAppend([{ t: "session_ended" }]);
       queueMicrotask(() => void stop());
       return json({ ok: true });
+    }
+
+    // ---- browser auto-probes: serve the viewer's own icon, never warn ----
+    // These are requested by the browser/crawler, not referenced by the
+    // artifact, so a 404 here is not a missing artifact asset (no warning).
+    if (pathname === "/favicon.ico") {
+      return new Response(FAVICON_SVG, {
+        headers: { "content-type": "image/svg+xml", "cache-control": "max-age=86400" },
+      });
+    }
+    if (BROWSER_PROBES.has(pathname)) {
+      return new Response(null, { status: 204 });
     }
 
     // ---- artifact document route (fixed; D-054) ----
@@ -321,39 +541,60 @@ export const runServer = async (
     startedAt: new Date().toISOString(),
   });
 
-  // ---- file watcher ----------------------------------------------------------
+  // ---- artifact change detection --------------------------------------------
+  // commitNow() is driven by BOTH fs.watch and a polling fallback: fs.watch is
+  // not guaranteed (Node documents this) and is unreliable through a symlinked
+  // path (e.g. macOS /tmp -> /private/tmp) or across atomic-rename saves, so a
+  // 1s hash poll guarantees a settled change is committed regardless.
   const artifactBase = basename(paths.artifactPath);
+  let committing = false;
+  const commitNow = async (): Promise<void> => {
+    if (committing) return;
+    committing = true;
+    try {
+      const result = await commitWatchedChange(paths);
+      if (result.committed) {
+        // Broadcast the actually-appended event (real seq/timestamp), not a
+        // synthetic stand-in, so the SSE stream stays consistent with the log.
+        broadcast(result.committed);
+      } else if (result.warning) {
+        broadcastWarning(result.warning.code, result.warning.message);
+      }
+    } catch {
+      // transient; the poll will retry
+    } finally {
+      committing = false;
+    }
+  };
+
   let debounce: ReturnType<typeof setTimeout> | undefined;
   const onChange = (): void => {
     if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => {
-      void commitWatchedChange(paths)
-        .then((result) => {
-          if (result.committed) {
-            broadcast({
-              t: "version",
-              seq: -1,
-              at: new Date().toISOString(),
-              version: result.committed.version,
-              hash: result.committed.hash,
-              path: result.committed.path,
-            } as LogEvent);
-          } else if (result.warning) {
-            broadcastWarning(result.warning.code, result.warning.message);
-          }
-        })
-        .catch(() => {});
-    }, debounceMs);
+    debounce = setTimeout(() => void commitNow(), debounceMs);
   };
 
   let watcher: ReturnType<typeof watch> | undefined;
   try {
     watcher = watch(paths.artifactDir, (_event, filename) => {
-      if (filename === artifactBase) onChange();
+      if (!filename || filename === artifactBase) onChange();
     });
   } catch {
     watcher = undefined;
   }
+  // Polling fallback (see above): catches anything fs.watch misses. To avoid
+  // re-reading + hashing the artifact every second on a quiet session, the poll
+  // is gated on a cheap stat (size + mtimeMs); it only commits when those move.
+  let lastStat = statFingerprint(paths.artifactPath);
+  const pollTimer = setInterval(() => {
+    const next = statFingerprint(paths.artifactPath);
+    if (next !== null && next !== lastStat) {
+      lastStat = next;
+      void commitNow();
+    } else if (next !== null) {
+      // unchanged; keep the baseline current
+      lastStat = next;
+    }
+  }, 1000);
 
   // ---- idle suspend ----------------------------------------------------------
   let idleTimer: ReturnType<typeof setInterval> | undefined;
@@ -362,7 +603,9 @@ export const runServer = async (
       () => {
         if (Date.now() - lastActivity > idleMs && !stopped) {
           void (async () => {
-            await appendEvents(paths.logPath, [{ t: "session_suspended" }]);
+            // Route through serverAppend so subscribers learn of the suspend
+            // before stop() closes the streams.
+            await serverAppend([{ t: "session_suspended" }]);
             await stop();
           })();
         }

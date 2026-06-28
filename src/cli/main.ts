@@ -3,7 +3,16 @@ import { Args, Command, Options } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Effect, Option } from "effect";
 import { toErrorJson, type LucidError } from "../errors.ts";
-import { runEnd, runOpen, runServe, runStatus, runWaitCli } from "./run.ts";
+import {
+  runAsk,
+  runEnd,
+  runOpen,
+  runPlanIngest,
+  runPlanRender,
+  runServe,
+  runStatus,
+  runWaitCli,
+} from "./run.ts";
 
 const isLucidError = (e: unknown): e is LucidError =>
   typeof e === "object" &&
@@ -60,12 +69,59 @@ const endCommand = Command.make("end", { file: fileArg }, ({ file }) =>
   runEffect(() => runEnd(file)),
 );
 
+const askText = Options.text("text");
+const askRef = Options.text("ref").pipe(Options.optional);
+const askCommand = Command.make(
+  "ask",
+  { file: fileArg, text: askText, ref: askRef },
+  ({ file, text, ref }) => runEffect(() => runAsk(file, text, Option.getOrUndefined(ref))),
+);
+
 const serveCommand = Command.make("__serve", { file: fileArg }, ({ file }) =>
   runEffect(() => runServe(file)),
 );
 
+// `lucid plan render|ingest` - the planner bridge.
+const docArg = Args.file({ name: "doc" });
+const outOpt = Options.file("out").pipe(Options.optional);
+const titleOpt = Options.text("title").pipe(Options.optional);
+const stageOpt = Options.text("stage").pipe(Options.optional);
+const planRenderCommand = Command.make(
+  "render",
+  { doc: docArg, out: outOpt, title: titleOpt, stage: stageOpt },
+  ({ doc, out, title, stage }) =>
+    runEffect(() =>
+      runPlanRender(doc, {
+        out: Option.getOrUndefined(out),
+        title: Option.getOrUndefined(title),
+        stage: Option.getOrUndefined(stage),
+      }),
+    ),
+);
+const planOpt = Options.text("plan");
+const payloadOpt = Options.file("payload").pipe(Options.optional);
+const planIngestCommand = Command.make(
+  "ingest",
+  { plan: planOpt, payload: payloadOpt },
+  ({ plan, payload }) => runEffect(() => runPlanIngest(plan, Option.getOrUndefined(payload))),
+);
+const planCommand = Command.make("plan", {}, () =>
+  runEffect(async () => {
+    process.stdout.write(
+      "lucid plan render <doc.md> [--out <file>] [--title <t>] [--stage <s>]\nlucid plan ingest --plan <name> [--payload <file>]  (or pipe `lucid wait` JSON to stdin)\n",
+    );
+  }),
+).pipe(Command.withSubcommands([planRenderCommand, planIngestCommand]));
+
 const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe(
-  Command.withSubcommands([openCommand, waitCommand, endCommand, serveCommand]),
+  Command.withSubcommands([
+    openCommand,
+    waitCommand,
+    endCommand,
+    askCommand,
+    serveCommand,
+    planCommand,
+  ]),
 );
 
 const cli = Command.run(lucid, {
