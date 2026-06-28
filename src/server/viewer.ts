@@ -16,12 +16,17 @@ export interface ViewerConfig {
 const escapeJson = (value: unknown): string =>
   JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
 
+/** Escape a string for safe interpolation into HTML text content (e.g. <title>). */
+const escapeHtmlText = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 export const renderViewer = (config: ViewerConfig): string => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Lucid · ${config.name}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.ico" />
+<title>Lucid · ${escapeHtmlText(config.name)}</title>
 <style>
   html, body { margin: 0; height: 100%; }
   body { background: #0b0d12; }

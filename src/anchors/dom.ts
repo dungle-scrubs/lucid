@@ -41,11 +41,18 @@ const shortHash = (s: string): string => {
 
 const PREVIEW_LEN = 24;
 
-/** Content + structure fingerprint, e.g. `li#a3f9·"Backfill from…"`. */
+/**
+ * Content + structure fingerprint, e.g. `li#a3f9·"Backfill from…"`. The hash
+ * folds in the element's 1-based index among same-tag siblings so that two
+ * siblings with identical tag + text (common: repeated placeholder rows,
+ * identical status labels) still get distinct fingerprints; the human-readable
+ * preview is unchanged.
+ */
 export const computeFingerprint = (el: DomElementLike): string => {
   const tag = el.tagName.toLowerCase();
   const text = normalizeText(el.textContent ?? "");
-  const hash = shortHash(`${tag}|${text}`);
+  const sibIndex = indexAmongSiblings(el);
+  const hash = shortHash(`${tag}|${sibIndex}|${text}`);
   const preview = text.length > PREVIEW_LEN ? `${text.slice(0, PREVIEW_LEN)}…` : text;
   return `${tag}#${hash}·"${preview}"`;
 };

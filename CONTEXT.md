@@ -45,13 +45,18 @@ Lucid's core concept.
 The interaction layer Lucid injects into/over the artifact (built with Lit +
 Shadow DOM) that makes the surface addressable: hover targets, annotation
 cards, text-range highlights. It is **CSS-isolated** from the artifact (Shadow
-DOM) and never alters the saved artifact file. Because it is injected into the
-artifact's iframe, it shares the artifact's **JS realm** - Shadow DOM gives CSS
-isolation, not script isolation; for MVP the artifact is the agent's own
-semi-trusted output and the overlay only hardens against accidental breakage
-(D-020). The defensive re-mount is scoped and debounced: it fires only when the
-overlay's own nodes are removed or altered, never on arbitrary artifact DOM
-mutation, so a self-mutating or animated artifact does not thrash it (D-041).
+DOM) and never alters the saved artifact file. The artifact iframe is served
+with `sandbox="allow-scripts"` (no `allow-same-origin`), which gives it an
+opaque origin: the overlay loads and runs, and `postMessage` crosses the
+boundary, but artifact-authored scripts cannot reach the Lucid control routes
+(`/__lucid/*`) - those are now cross-origin from the opaque iframe and rejected
+by both the browser and the server's Host/Origin validation (D-020, resolved).
+Because the overlay is injected into the artifact's iframe, it shares the
+artifact's **JS realm** - Shadow DOM gives the CSS isolation, and the
+opaque-origin sandbox gives the script boundary the artifact cannot cross. The
+defensive re-mount is scoped and debounced: it fires only when the overlay's own
+nodes are removed or altered, never on arbitrary artifact DOM mutation, so a
+self-mutating or animated artifact does not thrash it (D-041).
 
 ### Chrome
 The Lucid-owned panel surrounding the artifact: the composer, the
@@ -69,10 +74,17 @@ by an annotation. In Lucid, addressability is applied by the surface, not
 required of the agent. It is **best-effort** (D-022): some artifact-authored
 content is inherently unreachable - closed shadow roots, text painted into
 `<canvas>`, nested cross-origin iframes - and the overlay marks such regions as
-non-addressable rather than failing silently. An artifact whose own JS reshapes
-the DOM **within a version** (no file change) also degrades it: the overlay
-re-resolves and orphans committed anchors on intra-version DOM mutation too, not
-only on a version swap, so feedback is never silently detached (D-041).
+non-addressable rather than failing silently. **Open** shadow roots also
+degrade addressability in the current implementation: the element-anchor
+fingerprint and DOM-path resolvers scan the light DOM
+(`querySelectorAll("*")`) and do not recurse into `shadowRoot`, so a web
+component that renders its content into an open shadow root is not targetable
+even though the browser could reach it; agents that want such content
+annotated should expose it in the light DOM or supply a `data-lucid-id`. An
+artifact whose own JS reshapes the DOM **within a version** (no file change)
+also degrades it: the overlay re-resolves and orphans committed anchors on
+intra-version DOM mutation too, not only on a version swap, so feedback is
+never silently detached (D-041).
 
 ### Annotation
 One piece of **located** human feedback, bound to a specific element or text

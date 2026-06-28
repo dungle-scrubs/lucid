@@ -24,13 +24,20 @@ matrices, anything the human will want to mark up at the element or phrase level
    <body>
      <article>
        <h1>Migration plan</h1>
-       <ol>
-         <li data-lucid-id="step-backfill">Backfill from the events table</li>
-         <li>Cut over reads</li>
-       </ol>
+       <section style="padding:16px">
+         <ol>
+           <li data-lucid-id="step-backfill">Backfill from the events table</li>
+           <li>Cut over reads</li>
+         </ol>
+       </section>
      </article>
    </body></html>
    ```
+
+   Wrap each reviewable group (section, phase, card) in a **padded** container
+   (~16px). The padding is the comfortable band a reviewer hovers to annotate the
+   whole group as a unit; without it the only target for the group itself is the
+   hairline gap between children.
 
 2. **Reference assets with relative paths.** `./diagram.png` resolves both under
    Lucid and on a direct `file://` open. Root-prefixed `/diagram.png` also works
