@@ -1,0 +1,143 @@
+import { parseHTML } from "linkedom";
+import { marked } from "marked";
+
+/**
+ * Planner -> Lucid bridge (render half). Turns a planner living document
+ * (markdown with `<!-- D-NNN -->` decision markers) into an addressable Lucid
+ * artifact: every decided claim becomes `data-lucid-id="D-NNN"` (the planner's
+ * ledger address IS Lucid's anchor), and the Open Questions section becomes
+ * addressable `Q-N` items the human can answer in place. Styled with the Lucid
+ * design system.
+ */
+
+export interface RenderOptions {
+  readonly title?: string;
+  readonly stage?: string;
+}
+
+const DECISION_RE = /^\s*D-\d+\s*$/;
+
+/** Assign data-lucid-id to the claim governed by each `<!-- D-NNN -->` marker. */
+const applyDecisionIds = (document: Document): void => {
+  // Walk all comment nodes; linkedom exposes them via childNodes (nodeType 8).
+  const comments: Comment[] = [];
+  const walk = (node: Node): void => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === 8) comments.push(child as Comment);
+      else walk(child);
+    }
+  };
+  walk(document.body);
+
+  for (const comment of comments) {
+    const text = comment.textContent ?? "";
+    if (!DECISION_RE.test(text)) continue;
+    const id = text.trim();
+    // Block marker: id the next element sibling. Inline marker: id the parent.
+    const next = comment.nextElementSibling;
+    const target = next ?? (comment.parentElement as Element | null);
+    if (target && target.tagName !== "BODY" && !target.getAttribute("data-lucid-id")) {
+      target.setAttribute("data-lucid-id", id);
+      target.setAttribute("data-lucid-decision", "true");
+    }
+    comment.remove();
+  }
+};
+
+/**
+ * Wrap each heading-delimited group in a padded `<section>` so a reviewer can
+ * hover and annotate the whole group as a unit - the padding gives a
+ * comfortable target band instead of the hairline gap between child lines.
+ */
+const groupIntoSections = (document: Document): void => {
+  const body = document.body;
+  const children = Array.from(body.children);
+  if (children.length === 0) return;
+  const collected: Element[] = [];
+  let section: Element | null = null;
+  for (const child of children) {
+    if (child.tagName === "H1" || child.tagName === "H2" || section === null) {
+      section = document.createElement("section");
+      section.className = "plan-section";
+      collected.push(section);
+    }
+    section.appendChild(child);
+  }
+  for (const s of collected) body.appendChild(s);
+};
+
+/** Turn the Open Questions section's items into addressable Q-N elements. */
+const applyQuestionIds = (document: Document): void => {
+  const headings = Array.from(document.querySelectorAll("h1,h2,h3"));
+  const qHeading = headings.find((h) => /open questions|questions/i.test(h.textContent ?? ""));
+  if (!qHeading) return;
+  let n = 0;
+  let node: Element | null = qHeading.nextElementSibling;
+  while (node && !/^H[1-3]$/.test(node.tagName)) {
+    if (node.tagName === "OL" || node.tagName === "UL") {
+      for (const li of Array.from(node.children)) {
+        n += 1;
+        li.setAttribute("data-lucid-id", `Q-${n}`);
+        li.setAttribute("data-lucid-question", "true");
+      }
+    }
+    node = node.nextElementSibling;
+  }
+};
+
+const STYLE = `
+  @import url("https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap");
+  :root { --ink:#211d15; --soft:#4b4334; --surface:#faf6ec; --line:#e6dbc3; --brass:#bd9a4e; --brass-deep:#9f8038; --sage:#61714b; --amber:#c8862a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--surface); color:var(--ink); font-family:"Geist",system-ui,sans-serif; font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .doc { max-width:860px; margin:0 auto; padding:48px 24px 120px; }
+  .plan-section { padding:14px 20px; margin:6px 0; border-radius:10px; transition:background .12s; }
+  .plan-section:hover { background:rgba(189,154,78,0.05); }
+  .plan-section > :first-child { margin-top:8px; }
+  .eyebrow { font-size:12px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--brass-deep); }
+  h1,h2,h3 { font-family:"EB Garamond",Georgia,serif; font-weight:500; letter-spacing:-.01em; }
+  h1 { font-style:italic; font-size:40px; line-height:1.1; margin:8px 0 16px; }
+  h2 { font-size:26px; margin:36px 0 12px; }
+  h3 { font-size:20px; margin:26px 0 8px; }
+  p,li { margin:8px 0; }
+  ul,ol { padding-left:22px; }
+  code { font-family:"Geist Mono",ui-monospace,monospace; font-size:.86em; background:#efe8d8; padding:1px 5px; border-radius:4px; }
+  pre { background:#0e0d0b; color:#f2ecdc; padding:14px 16px; border-radius:8px; overflow:auto; }
+  pre code { background:none; padding:0; color:inherit; }
+  blockquote { border-left:3px solid var(--brass); margin:12px 0; padding:4px 0 4px 16px; color:var(--soft); font-style:italic; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; font-size:14px; }
+  th,td { border:1px solid var(--line); padding:7px 10px; text-align:left; }
+  hr { border:0; border-top:1px solid var(--line); margin:32px 0; }
+  [data-lucid-decision] { position:relative; }
+  [data-lucid-question] {
+    list-style:none; position:relative; margin-left:-8px; padding:8px 12px 8px 34px;
+    background:rgba(200,134,42,0.08); border-left:3px solid var(--amber); border-radius:6px;
+  }
+  [data-lucid-question]::before { content:"?"; position:absolute; left:11px; top:8px; font-weight:700; color:var(--amber); }
+  footer { margin-top:48px; color:var(--soft); font-size:13px; font-family:"EB Garamond",serif; font-style:italic; }
+`;
+
+/** Render a planner markdown document to a Lucid artifact HTML string. */
+export const renderPlanDoc = (markdown: string, options: RenderOptions = {}): string => {
+  const bodyHtml = marked.parse(markdown, { async: false, gfm: true }) as string;
+  const { document } = parseHTML(`<!doctype html><html><body>${bodyHtml}</body></html>`);
+  applyDecisionIds(document as unknown as Document);
+  applyQuestionIds(document as unknown as Document);
+  groupIntoSections(document as unknown as Document);
+  const inner = document.body.innerHTML;
+  const title = options.title ?? "Plan review";
+  const eyebrow = options.stage ? `Plan review · ${options.stage}` : "Plan review";
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${title}</title>
+<style>${STYLE}</style></head>
+<body>
+<main class="doc">
+<div class="eyebrow">${eyebrow}</div>
+${inner}
+<footer>Mark up any decision, or answer a question, and it loops back to the plan ledger.</footer>
+</main>
+</body>
+</html>`;
+};
