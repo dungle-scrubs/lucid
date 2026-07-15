@@ -149,10 +149,34 @@ const readStoredWidth = (): number => {
   }
 };
 
-const targetLabel = (target: Anchor): string =>
-  target.kind === "element"
-    ? target.snippet.replace(/\s+/g, " ").slice(0, 80)
-    : `“${target.snippet.slice(0, 80)}”`;
+/**
+ * What the human pointed at, in their terms.
+ *
+ * An element anchor's snippet is outerHTML, and showing it raw was markup soup
+ * truncated mid-tag - it named everything except the thing you clicked. Parse it
+ * instead: the tag is the only technical part worth keeping (it says *what kind*
+ * of thing), and the visible text is what was actually pointed at. A range
+ * anchor is already the quote.
+ */
+const targetPreview = (target: Anchor): { readonly tag: string | null; readonly text: string } => {
+  const tidy = (s: string): string => s.replace(/\s+/g, " ").trim();
+  if (target.kind !== "element") return { tag: null, text: tidy(target.snippet) };
+  try {
+    const el = new DOMParser().parseFromString(target.snippet, "text/html").body.firstElementChild;
+    const text = tidy(el?.textContent ?? "");
+    return { tag: el?.tagName.toLowerCase() ?? null, text: text || tidy(target.snippet) };
+  } catch {
+    return { tag: null, text: tidy(target.snippet) };
+  }
+};
+
+const renderTarget = (target: Anchor) => {
+  const { tag, text } = targetPreview(target);
+  return html`<div class="snippet" title=${text}>
+    ${tag ? html`<span class="tag">${tag}</span>` : null}
+    <span class="txt">${tag ? text : `“${text}”`}</span>
+  </div>`;
+};
 
 /**
  * The chrome (RFC §1). The Lucid-owned viewer parent: composer, composer queue,
@@ -564,16 +588,33 @@ export class LucidChrome extends LitElement {
       box-shadow: inset 0 0 0 1px #d69e2e;
     }
     [data-test="send-queue"] { margin-top: 12px; }
+    /* What was marked, shown the way the surface marks it: a translucent brass
+       wash, no rule. A left border on a rounded box curled at both ends, and
+       the box drew more attention than the note it was labelling. */
     .snippet {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      background: rgba(203, 168, 90, 0.10);
+      border-radius: 6px;
+      padding: 6px 8px;
+      color: #e6dbc3;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    /* The tag is the one technical part worth keeping: it says what kind of
+       thing was pointed at. Mono, because it is literal. */
+    .snippet .tag {
+      flex: none;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 11px;
-      color: #cbd5e0;
-      background: #0d1016;
-      border-radius: 5px;
-      padding: 5px 7px;
-      max-height: 56px;
+      font-size: 10px;
+      color: #cba85a;
+    }
+    .snippet .txt {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
       overflow: hidden;
-      border-left: 2px solid #d69e2e;
     }
     .msg { display: flex; flex-direction: column; gap: 3px; }
     .msg .who { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
@@ -1320,7 +1361,7 @@ export class LucidChrome extends LitElement {
                     >
                       <span class="idxchip committed">${item.index}</span>
                       <span class="pill resolved">located · v${item.annotation.version}</span>
-                      <div class="snippet">${targetLabel(item.annotation.target)}</div>
+                      ${renderTarget(item.annotation.target)}
                       <div>${item.annotation.note}</div>
                     </div>
                   `
@@ -1351,7 +1392,7 @@ export class LucidChrome extends LitElement {
                       (a) => html`
                         <div class="card" data-test="orphan">
                           <span class="pill orphan">orphaned · v${a.version}</span>
-                          <div class="snippet">${targetLabel(a.target)}</div>
+                          ${renderTarget(a.target)}
                           <div>${a.note}</div>
                         </div>
                       `,
@@ -1383,7 +1424,7 @@ export class LucidChrome extends LitElement {
                         @mouseleave=${() => this.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: "" })}
                       >
                         <span class="idxchip queued">${i + 1}</span>
-                        <div class="snippet">${targetLabel(q.target)}</div>
+                        ${renderTarget(q.target)}
                         ${
                           this.editingId === q.id
                             ? html`
@@ -1429,7 +1470,7 @@ export class LucidChrome extends LitElement {
                 <section>
                   <h3>New annotation</h3>
                   <div class="card">
-                    <div class="snippet">${targetLabel(this.pendingTarget)}</div>
+                    ${renderTarget(this.pendingTarget)}
                     <textarea
                       rows="3"
                       placeholder="What should change here? (Enter to queue, Shift+Enter for a new line)"
