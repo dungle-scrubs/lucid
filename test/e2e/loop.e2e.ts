@@ -204,6 +204,55 @@ test("a queued annotation can be edited before it is sent", async ({ page }) => 
   expect(fb.annotations[0]?.note).toBe("Backfill in one batch, not nightly.");
 });
 
+test("a sent annotation stays in send order, not pinned above the replies", async ({ page }) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+  const annotate = async (sel: string, note: string) => {
+    await surface.locator(sel).click();
+    await page.locator('textarea[placeholder^="What should change here?"]').fill(note);
+    await page.locator('[data-test="add-to-queue"]').click();
+    await page.locator('[data-test="send-queue"]').click();
+  };
+
+  await annotate('li[data-lucid-id="step-backfill"]', "first note");
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await cli.run(["wait", cli.artifact, "--reply", "agent replied here", "--timeout", "1"]);
+  await expect(page.locator(".msg.agent")).toHaveCount(1);
+  await annotate("#note", "second note");
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(2);
+
+  // The record is chronological: the later annotation sits BELOW the reply that
+  // preceded it, rather than jumping into a pile above the conversation.
+  const order = await page.evaluate(() => {
+    const root = document.querySelector("lucid-chrome")?.shadowRoot;
+    return Array.from(root?.querySelectorAll(".timeline > *") ?? []).map((el) =>
+      el.classList.contains("msg") ? `msg:${el.textContent?.trim().slice(0, 5)}` : "annotation",
+    );
+  });
+  expect(order).toEqual(["annotation", "msg:agent", "annotation"]);
+});
+
+test("annotations on one element cascade instead of hiding each other", async ({ page }) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+  for (const note of ["first", "second"]) {
+    await surface.locator("#note").click();
+    await page.locator('textarea[placeholder^="What should change here?"]').fill(note);
+    await page.locator('[data-test="add-to-queue"]').click();
+  }
+  await page.locator('[data-test="send-queue"]').click();
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(2);
+
+  // Same anchor -> same rect. Without a cascade both badges land on the same
+  // pixel and only the last is reachable.
+  const lefts = await surface
+    .locator(".badge")
+    .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().left)));
+  expect(lefts).toHaveLength(2);
+  expect(lefts[0]).not.toBe(lefts[1]);
+  expect(Math.abs((lefts[1] ?? 0) - (lefts[0] ?? 0))).toBe(13); // steps, still overlapping
+});
+
 test("a pasted image still renders in the conversation after a reload", async ({ page }) => {
   await openViewer(page);
 

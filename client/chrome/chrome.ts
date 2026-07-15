@@ -44,6 +44,21 @@ interface QueuedAnnotation {
   readonly note: string;
 }
 
+/**
+ * One entry in the review record. Sent annotations and messages share a single
+ * `at`-ordered stream, so a sent annotation stays where it happened rather than
+ * jumping above the replies that preceded it.
+ */
+type TimelineItem =
+  | {
+      readonly kind: "annotation";
+      readonly at: string;
+      /** 1-based number matching the annotation's badge on the surface. */
+      readonly index: number;
+      readonly annotation: PayloadAnnotationLike;
+    }
+  | { readonly kind: "message"; readonly at: string; readonly message: ConversationMessage };
+
 interface WarningItem {
   readonly code: string;
   readonly message: string;
@@ -527,6 +542,7 @@ export class LucidChrome extends LitElement {
     }
     .empty { color: #4d5666; font-style: italic; font-size: 12px; }
     .card {
+      position: relative; /* anchors the corner chip + status pill */
       background: #171c25;
       border: 1px solid #232b38;
       border-radius: 8px;
@@ -535,7 +551,14 @@ export class LucidChrome extends LitElement {
       flex-direction: column;
       gap: 7px;
     }
-    .card + .card { margin-top: 8px; }
+    /* One chronological record: annotations sit where they were sent, between
+       the messages around them, rather than in a separate pile above. */
+    /* margin-top clears the section heading: the first card's chip rides 9px
+       above its own top edge and would otherwise touch the label. */
+    .timeline { display: flex; flex-direction: column; gap: 18px; margin-top: 6px; }
+    /* Cards in a plain list (queued, orphaned). Gap, not margin, so the corner
+       chip of the next card never lands on the previous card's edge. */
+    .stack { display: flex; flex-direction: column; gap: 16px; margin-top: 6px; }
     .card.focused {
       border-color: #d69e2e;
       box-shadow: inset 0 0 0 1px #d69e2e;
@@ -553,7 +576,6 @@ export class LucidChrome extends LitElement {
       border-left: 2px solid #d69e2e;
     }
     .msg { display: flex; flex-direction: column; gap: 3px; }
-    .msg + .msg { margin-top: 22px; padding-top: 16px; border-top: 1px solid #1b212c; }
     .msg .who { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
     .msg.human .who { color: #63b3ed; }
     .msg.agent .who { color: #68d391; }
@@ -672,12 +694,20 @@ export class LucidChrome extends LitElement {
     .pill.orphan { background: #5b2330; color: #fbb6c2; }
     .pill.resolved { background: #1f3a2c; color: #9ae6b4; }
     /* Number chip shared with the in-artifact marker badge, so a card and its
-       spot on the surface read as the same numbered item. */
+       spot on the surface read as the same numbered item - same circle, same
+       straddled corner. Absolute so it costs the card no vertical space. */
     .idxchip {
+      position: absolute; top: -9px; left: -9px; z-index: 1;
       display: inline-flex; align-items: center; justify-content: center;
-      min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+      width: 20px; height: 20px; border-radius: 999px;
       font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
       color: #1a202c; flex: none;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    }
+    /* The status pill rides the opposite corner for the same reason. */
+    .card > .pill {
+      position: absolute; top: -9px; right: -9px; z-index: 1;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
     }
     .idxchip.committed { background: rgba(214, 158, 46, 0.97); }
     .idxchip.queued { background: rgba(203, 168, 90, 0.95); border: 1px dashed rgba(110, 84, 28, 0.7); }
@@ -1233,6 +1263,18 @@ export class LucidChrome extends LitElement {
   render() {
     const orphans = this.annotations.filter((a) => !a.resolved);
     const located = this.annotations.filter((a) => a.resolved);
+    // One chronological record. The number is taken from `located` order first,
+    // because that is how the overlay numbers its badges (resolved ones, in log
+    // order) - sorting must never renumber a card away from its mark.
+    const timeline: TimelineItem[] = [
+      ...located.map((annotation, i) => ({
+        kind: "annotation" as const,
+        at: annotation.at,
+        index: i + 1,
+        annotation,
+      })),
+      ...this.messages.map((message) => ({ kind: "message" as const, at: message.at, message })),
+    ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
     return html`
       <div
         class=${`root${this.dragging ? " dragging" : ""}`}
@@ -1247,66 +1289,61 @@ export class LucidChrome extends LitElement {
 
         <div class="scroll">
           <section>
-            <h3>Annotations (${this.annotations.length})</h3>
-            ${this.annotations.length === 0 ? html`<div class="empty">No feedback sent yet.</div>` : null}
-            ${located.map(
-              (a, i) => html`
-                <div
-                  class=${`card${this.hoveredId === a.id ? " focused" : ""}`}
-                  data-test="annotation"
-                  data-annotation-id=${a.id}
-                  @mouseenter=${() => this.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: a.id })}
-                  @mouseleave=${() => this.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: "" })}
-                >
-                  <div class="row" style="justify-content:space-between">
-                    <span class="idxchip committed">${i + 1}</span>
-                    <span class="pill resolved">located · v${a.version}</span>
-                  </div>
-                  <div class="snippet">${targetLabel(a.target)}</div>
-                  <div>${a.note}</div>
-                </div>
-              `,
-            )}
+            <h3>Review</h3>
+            ${timeline.length === 0 ? html`<div class="empty">No feedback sent yet.</div>` : null}
+            <div class="timeline">
+              ${timeline.map((item) =>
+                item.kind === "annotation"
+                  ? html`
+                    <div
+                      class=${`card${this.hoveredId === item.annotation.id ? " focused" : ""}`}
+                      data-test="annotation"
+                      data-annotation-id=${item.annotation.id}
+                      @mouseenter=${() => this.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: item.annotation.id })}
+                      @mouseleave=${() => this.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: "" })}
+                    >
+                      <span class="idxchip committed">${item.index}</span>
+                      <span class="pill resolved">located · v${item.annotation.version}</span>
+                      <div class="snippet">${targetLabel(item.annotation.target)}</div>
+                      <div>${item.annotation.note}</div>
+                    </div>
+                  `
+                  : html`<div class="msg ${item.message.role}">
+                      <span class="who">${item.message.role}</span>
+                      ${item.message.text ? html`<span class="text">${item.message.text}</span>` : null}
+                      ${
+                        item.message.images && item.message.images.length > 0
+                          ? html`<div class="thumbs">
+                            ${item.message.images.map(
+                              (img, i) =>
+                                html`<button class="thumb-btn" title=${img.name} data-test="thumb" @click=${() => this.openLightbox(item.message.images ?? [], i)}>
+                                  <img class="thumb" src=${`/__lucid/asset/${img.file}`} alt=${img.name} />
+                                </button>`,
+                            )}
+                          </div>`
+                          : null
+                      }
+                    </div>`,
+              )}
+            </div>
             ${
               orphans.length > 0
                 ? html`
-                  <h3 style="margin-top:8px">Orphaned (${orphans.length})</h3>
-                  ${orphans.map(
-                    (a) => html`
-                      <div class="card" data-test="orphan">
-                        <span class="pill orphan">orphaned · v${a.version}</span>
-                        <div class="snippet">${targetLabel(a.target)}</div>
-                        <div>${a.note}</div>
-                      </div>
-                    `,
-                  )}
+                  <h3 style="margin-top:18px">Orphaned (${orphans.length})</h3>
+                  <div class="stack">
+                    ${orphans.map(
+                      (a) => html`
+                        <div class="card" data-test="orphan">
+                          <span class="pill orphan">orphaned · v${a.version}</span>
+                          <div class="snippet">${targetLabel(a.target)}</div>
+                          <div>${a.note}</div>
+                        </div>
+                      `,
+                    )}
+                  </div>
                 `
                 : null
             }
-          </section>
-
-          <section>
-            <h3>Conversation</h3>
-            ${this.messages.length === 0 ? html`<div class="empty">No messages.</div>` : null}
-            ${this.messages.map(
-              (m) =>
-                html`<div class="msg ${m.role}">
-                  <span class="who">${m.role}</span>
-                  ${m.text ? html`<span class="text">${m.text}</span>` : null}
-                  ${
-                    m.images && m.images.length > 0
-                      ? html`<div class="thumbs">
-                        ${m.images.map(
-                          (img, i) =>
-                            html`<button class="thumb-btn" title=${img.name} data-test="thumb" @click=${() => this.openLightbox(m.images ?? [], i)}>
-                              <img class="thumb" src=${`/__lucid/asset/${img.file}`} alt=${img.name} />
-                            </button>`,
-                        )}
-                      </div>`
-                      : null
-                  }
-                </div>`,
-            )}
           </section>
 
           ${
@@ -1320,6 +1357,7 @@ export class LucidChrome extends LitElement {
               ? html`
                 <section>
                   <h3>Queued (${this.queue.length})</h3>
+                  <div class="stack">
                   ${this.queue.map(
                     (q, i) => html`
                       <div
@@ -1328,9 +1366,7 @@ export class LucidChrome extends LitElement {
                         @mouseenter=${() => this.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: q.id })}
                         @mouseleave=${() => this.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: "" })}
                       >
-                        <div class="row" style="justify-content:flex-start">
-                          <span class="idxchip queued">${i + 1}</span>
-                        </div>
+                        <span class="idxchip queued">${i + 1}</span>
                         <div class="snippet">${targetLabel(q.target)}</div>
                         ${
                           this.editingId === q.id
@@ -1364,6 +1400,7 @@ export class LucidChrome extends LitElement {
                       </div>
                     `,
                   )}
+                  </div>
                   <button class="primary" data-test="send-queue" ?disabled=${this.sending} @click=${this.sendQueue}>Send ${this.queue.length} annotation${this.queue.length > 1 ? "s" : ""}</button>
                 </section>
               `

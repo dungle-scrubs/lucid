@@ -37,7 +37,15 @@ interface Marker {
   /** 1-based number shared with the left-panel card; 0 = no badge (pending). */
   readonly index: number;
   readonly rects: readonly Rect[];
+  /** How many earlier badges land on this same corner. Annotating one element
+   *  twice would otherwise stack badges exactly and hide all but the last, so
+   *  each is stepped right into a cascade. */
+  readonly stackIndex: number;
 }
+
+/** Horizontal step per cascaded badge - less than the badge width, so they
+ *  overlap and read as a stack rather than a row. */
+const BADGE_STEP_PX = 13;
 
 /**
  * Merge a range's client rects into one box per visual line. `getClientRects()`
@@ -152,11 +160,11 @@ export class LucidOverlay extends LitElement {
     }
     .badge {
       position: fixed;
+      /* Centred on the anchor's top-left corner, so it straddles the edge. */
       transform: translate(-50%, -50%);
-      min-width: 18px;
-      height: 18px;
-      padding: 0 4px;
-      border-radius: 9px;
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
       color: #1a202c;
       font-size: 11px;
       font-weight: 700;
@@ -402,7 +410,7 @@ export class LucidOverlay extends LitElement {
       this.hoverRect = null;
       return;
     }
-    const markers: Marker[] = [];
+    const markers: Omit<Marker, "stackIndex">[] = [];
     let n = 0;
     for (const a of this.committed) {
       if (!a.resolved) continue; // orphaned annotations have no live anchor to paint
@@ -418,7 +426,18 @@ export class LucidOverlay extends LitElement {
       const rects = this.rectsFor(this.pendingAnchor);
       if (rects.length > 0) markers.push({ id: PENDING_ID, state: "pending", index: 0, rects });
     }
-    this.markers = markers;
+    // Two annotations on one element resolve to the same rect, so their badges
+    // would sit exactly on top of each other. Count the earlier ones per corner
+    // and let render step each into a cascade.
+    const perCorner = new Map<string, number>();
+    this.markers = markers.map((m) => {
+      const r = m.rects[0];
+      if (!r) return { ...m, stackIndex: 0 };
+      const corner = `${Math.round(r.left)}:${Math.round(r.top)}`;
+      const stackIndex = perCorner.get(corner) ?? 0;
+      perCorner.set(corner, stackIndex + 1);
+      return { ...m, stackIndex };
+    });
   }
 
   private rectsFor(target: Anchor): Rect[] {
@@ -504,7 +523,7 @@ export class LucidOverlay extends LitElement {
                     class=${`badge ${m.state} ${this.focusedId === m.id ? "focused" : ""}`}
                     title="Jump to this annotation in the panel"
                     @click=${(e: Event) => this.onBadgeClick(m.id, e)}
-                    style=${`left:${r.left}px;top:${r.top}px;`}
+                    style=${`left:${r.left + m.stackIndex * BADGE_STEP_PX}px;top:${r.top}px;z-index:${this.focusedId === m.id ? 60 : 20 + m.stackIndex};`}
                   >${m.index}</div>`
                 : null
             }
