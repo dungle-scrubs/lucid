@@ -152,30 +152,29 @@ const readStoredWidth = (): number => {
 /**
  * What the human pointed at, in their terms.
  *
- * An element anchor's snippet is outerHTML, and showing it raw was markup soup
+ * An element anchor's snippet is outerHTML, so showing it raw was markup soup
  * truncated mid-tag - it named everything except the thing you clicked. Parse it
- * instead: the tag is the only technical part worth keeping (it says *what kind*
- * of thing), and the visible text is what was actually pointed at. A range
- * anchor is already the quote.
+ * and keep the visible text: that *is* what was pointed at. The tag name is not
+ * shown; "p" or "div" is a fact about the markup, not about the thing, and the
+ * text already says what it is.
+ *
+ * A range is a phrase lifted out of a block, so it keeps its quotes; an element
+ * is the block itself and reads as itself.
  */
-const targetPreview = (target: Anchor): { readonly tag: string | null; readonly text: string } => {
+const targetText = (target: Anchor): string => {
   const tidy = (s: string): string => s.replace(/\s+/g, " ").trim();
-  if (target.kind !== "element") return { tag: null, text: tidy(target.snippet) };
+  if (target.kind !== "element") return `“${tidy(target.snippet)}”`;
   try {
     const el = new DOMParser().parseFromString(target.snippet, "text/html").body.firstElementChild;
-    const text = tidy(el?.textContent ?? "");
-    return { tag: el?.tagName.toLowerCase() ?? null, text: text || tidy(target.snippet) };
+    return tidy(el?.textContent ?? "") || tidy(target.snippet);
   } catch {
-    return { tag: null, text: tidy(target.snippet) };
+    return tidy(target.snippet);
   }
 };
 
 const renderTarget = (target: Anchor) => {
-  const { tag, text } = targetPreview(target);
-  return html`<div class="snippet" title=${text}>
-    ${tag ? html`<span class="tag">${tag}</span>` : null}
-    <span class="txt">${tag ? text : `“${text}”`}</span>
-  </div>`;
+  const text = targetText(target);
+  return html`<div class="snippet" title=${text}><span class="txt">${text}</span></div>`;
 };
 
 /**
@@ -592,23 +591,12 @@ export class LucidChrome extends LitElement {
        wash, no rule. A left border on a rounded box curled at both ends, and
        the box drew more attention than the note it was labelling. */
     .snippet {
-      display: flex;
-      align-items: baseline;
-      gap: 7px;
       background: rgba(203, 168, 90, 0.10);
       border-radius: 6px;
       padding: 6px 8px;
       color: #e6dbc3;
       font-size: 12px;
       line-height: 1.45;
-    }
-    /* The tag is the one technical part worth keeping: it says what kind of
-       thing was pointed at. Mono, because it is literal. */
-    .snippet .tag {
-      flex: none;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 10px;
-      color: #cba85a;
     }
     .snippet .txt {
       display: -webkit-box;
