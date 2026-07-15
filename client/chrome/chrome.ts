@@ -113,6 +113,9 @@ export class LucidChrome extends LitElement {
     pendingTarget: { state: true },
     composerNote: { state: true },
     queue: { state: true },
+    editingId: { state: true },
+    editDraft: { state: true },
+    sending: { state: true },
     messageDraft: { state: true },
     pastedImages: { state: true },
     newerVersion: { state: true },
@@ -139,6 +142,9 @@ export class LucidChrome extends LitElement {
   declare pendingTarget: Anchor | null;
   declare composerNote: string;
   declare queue: QueuedAnnotation[];
+  declare editingId: string | null;
+  declare editDraft: string;
+  declare sending: boolean;
   declare messageDraft: string;
   declare pastedImages: PastedImage[];
   declare newerVersion: number | null;
@@ -178,6 +184,9 @@ export class LucidChrome extends LitElement {
     this.pendingTarget = null;
     this.composerNote = "";
     this.queue = [];
+    this.editingId = null;
+    this.editDraft = "";
+    this.sending = false;
     this.messageDraft = "";
     this.pastedImages = [];
     this.newerVersion = null;
@@ -986,16 +995,65 @@ export class LucidChrome extends LitElement {
   }
 
   private removeQueued(id: string): void {
+    if (this.editingId === id) this.cancelEdit();
     this.queue = this.queue.filter((q) => q.id !== id);
     this.applyDeferredSwapIfReady();
     this.pushHighlights();
   }
 
+  /** Open a queued annotation's note for editing. Only one card edits at a
+   *  time, so an already-open edit is folded back in first. */
+  private beginEdit(id: string): void {
+    const item = this.queue.find((q) => q.id === id);
+    if (!item) return;
+    if (!this.commitEdit()) return;
+    this.editingId = id;
+    this.editDraft = item.note;
+    void this.updateComplete.then(() => {
+      const box = this.renderRoot.querySelector(
+        `[data-annotation-id="${id}"] textarea`,
+      ) as HTMLTextAreaElement | null;
+      box?.focus();
+      box?.setSelectionRange(box.value.length, box.value.length);
+    });
+  }
+
+  private cancelEdit(): void {
+    this.editingId = null;
+    this.editDraft = "";
+  }
+
+  /** Fold an open edit back into the queue. The note is the whole point of an
+   *  annotation, so an empty draft is refused rather than silently dropped;
+   *  callers check the result before proceeding. */
+  private commitEdit(): boolean {
+    if (this.editingId === null) return true;
+    const note = this.editDraft.trim();
+    if (note.length === 0) return false;
+    const id = this.editingId;
+    this.queue = this.queue.map((q) => (q.id === id ? { ...q, note } : q));
+    this.cancelEdit();
+    return true;
+  }
+
+  private readonly onEditKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      this.cancelEdit();
+      return;
+    }
+    this.onSubmitKey(e, () => this.commitEdit());
+  };
+
   private async sendQueue(): Promise<void> {
-    const items = this.queue;
+    if (!this.commitEdit()) {
+      this.warn("Finish editing the queued annotation first - a note can't be empty.");
+      return;
+    }
     const sent = new Set<string>();
+    this.sending = true; // freeze the queue: an item edited mid-flight would send its old note
     try {
-      for (const q of items) {
+      for (const q of this.queue) {
         await this.api("/__lucid/annotation", {
           id: q.id,
           version: this.version,
@@ -1004,14 +1062,16 @@ export class LucidChrome extends LitElement {
         });
         sent.add(q.id); // ids are idempotent, so a retry of a sent one is safe
       }
-      this.queue = [];
-      this.applyDeferredSwapIfReady();
-      this.pushHighlights();
     } catch {
-      this.queue = items.filter((q) => !sent.has(q.id)); // keep what didn't send
       this.warn("Some annotations didn't send - they're kept in the queue, try again.");
-      this.pushHighlights();
     }
+    this.sending = false;
+    // Reconcile against live state, not a pre-send snapshot: a fresh annotation
+    // can still be queued while requests are in flight, so drop exactly what
+    // sent and keep the rest.
+    this.queue = this.queue.filter((q) => !sent.has(q.id));
+    this.applyDeferredSwapIfReady();
+    this.pushHighlights();
   }
 
   private async sendMessage(): Promise<void> {
@@ -1191,12 +1251,39 @@ export class LucidChrome extends LitElement {
                           <span class="idxchip queued">${i + 1}</span>
                         </div>
                         <div class="snippet">${targetLabel(q.target)}</div>
-                        <div>${q.note}</div>
-                        <div class="row"><button @click=${() => this.removeQueued(q.id)}>Remove</button></div>
+                        ${
+                          this.editingId === q.id
+                            ? html`
+                              <textarea
+                                rows="3"
+                                data-test="edit-note"
+                                placeholder="Edit this annotation… (Enter to save, Shift+Enter for a new line, Esc to cancel)"
+                                .value=${this.editDraft}
+                                @input=${(e: Event) => (this.editDraft = (e.target as HTMLTextAreaElement).value)}
+                                @keydown=${this.onEditKey}
+                              ></textarea>
+                              <div class="row">
+                                <button
+                                  class="primary"
+                                  data-test="save-edit"
+                                  ?disabled=${this.editDraft.trim().length === 0}
+                                  @click=${() => this.commitEdit()}
+                                >Save</button>
+                                <button data-test="cancel-edit" @click=${this.cancelEdit}>Cancel</button>
+                              </div>
+                            `
+                            : html`
+                              <div>${q.note}</div>
+                              <div class="row">
+                                <button data-test="edit-queued" ?disabled=${this.sending} @click=${() => this.beginEdit(q.id)}>Edit</button>
+                                <button ?disabled=${this.sending} @click=${() => this.removeQueued(q.id)}>Remove</button>
+                              </div>
+                            `
+                        }
                       </div>
                     `,
                   )}
-                  <button class="primary" data-test="send-queue" @click=${this.sendQueue}>Send ${this.queue.length} annotation${this.queue.length > 1 ? "s" : ""}</button>
+                  <button class="primary" data-test="send-queue" ?disabled=${this.sending} @click=${this.sendQueue}>Send ${this.queue.length} annotation${this.queue.length > 1 ? "s" : ""}</button>
                 </section>
               `
               : null

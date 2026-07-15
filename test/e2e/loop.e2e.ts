@@ -170,6 +170,40 @@ test("text-range selection produces a located annotation", async ({ page }) => {
     .catch(() => {});
 });
 
+test("a queued annotation can be edited before it is sent", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await page.locator('textarea[placeholder^="What should change here?"]').fill("Frist draft, typo");
+  await page.locator('[data-test="add-to-queue"]').click();
+
+  // Cancel restores the original note, leaving the queue untouched.
+  await page.locator('[data-test="edit-queued"]').click();
+  await page.locator('[data-test="edit-note"]').fill("Discarded rewrite");
+  await page.locator('[data-test="cancel-edit"]').click();
+  await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
+  await expect(page.locator("[data-annotation-id]")).toContainText("Frist draft, typo");
+
+  // An empty note is refused - Save stays disabled.
+  await page.locator('[data-test="edit-queued"]').click();
+  await page.locator('[data-test="edit-note"]').fill("   ");
+  await expect(page.locator('[data-test="save-edit"]')).toBeDisabled();
+
+  // Save rewrites the note in place, and that is what reaches the agent.
+  await page.locator('[data-test="edit-note"]').fill("Backfill in one batch, not nightly.");
+  await page.locator('[data-test="save-edit"]').click();
+  await expect(page.locator('[data-test="edit-note"]')).toHaveCount(0);
+  await page.locator('[data-test="send-queue"]').click();
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    annotations: { note: string }[];
+  };
+  expect(fb.annotations).toHaveLength(1);
+  expect(fb.annotations[0]?.note).toBe("Backfill in one batch, not nightly.");
+});
+
 test("defer-until-committed shows the newer-version indicator and never loses a draft", async ({
   page,
 }) => {
