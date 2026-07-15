@@ -285,8 +285,9 @@ test("an image pasted onto an annotation reaches the agent, located", async ({ p
 
   // It decoded, rather than merely resolving.
   const width = await page.evaluate(
-    () => (document.querySelector('[data-test="annotation-thumb"] img') as HTMLImageElement)
-      .naturalWidth,
+    () =>
+      (document.querySelector('[data-test="annotation-thumb"] img') as HTMLImageElement)
+        .naturalWidth,
   );
   expect(width).toBeGreaterThan(0);
 
