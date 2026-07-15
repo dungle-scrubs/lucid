@@ -78,6 +78,11 @@ const HUNK_SIGN: Readonly<Record<DiffHunk["kind"], string>> = {
 
 const uuid = (): string => crypto.randomUUID();
 
+/** True when a key event is destined for a text field, so window-level
+ *  shortcuts can leave the caret alone. */
+const isTextEntry = (node: EventTarget | undefined): boolean =>
+  node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement;
+
 const DEFAULT_CHROME_WIDTH = 384;
 const CHROME_MIN_WIDTH = 320;
 const DIVIDER_WIDTH = 5;
@@ -310,6 +315,10 @@ export class LucidChrome extends LitElement {
 
   private readonly onDiffKey = (e: KeyboardEvent): void => {
     if (!this.diffMode) return;
+    // Hunk navigation is a window listener, so it would otherwise steal arrows
+    // from the caret and Escape from a composer while a text field has focus.
+    // composedPath()[0] is the real target; e.target retargets to the host.
+    if (isTextEntry(e.composedPath()[0])) return;
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
       e.preventDefault();
       this.gotoHunk(this.diffIndex + 1);

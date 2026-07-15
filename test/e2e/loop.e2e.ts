@@ -204,6 +204,33 @@ test("a queued annotation can be edited before it is sent", async ({ page }) => 
   expect(fb.annotations[0]?.note).toBe("Backfill in one batch, not nightly.");
 });
 
+test("change-view hunk navigation does not steal keys from a text field", async ({ page }) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+
+  // Commit v2 so change view is reachable, then queue an annotation and edit it.
+  await cli.write(PLAN_V2);
+  await expect(page.locator(".vtag")).toContainText("v2");
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await page.locator('textarea[placeholder^="What should change here?"]').fill("ABCDEF");
+  await page.locator('[data-test="add-to-queue"]').click();
+  await page.locator('[data-test="enter-diff"]').click();
+  await expect(page.locator('[data-test="enter-diff"]')).toHaveCount(0);
+  await page.locator('[data-test="edit-queued"]').click();
+
+  // Arrows move the caret rather than jumping hunks...
+  const box = page.locator('[data-test="edit-note"]');
+  await box.click();
+  await box.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(4, 4));
+  await page.keyboard.press("ArrowLeft");
+  expect(await box.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(3);
+
+  // ...and Escape cancels the edit without also exiting change view.
+  await page.keyboard.press("Escape");
+  await expect(box).toHaveCount(0);
+  await expect(page.locator('[data-test="enter-diff"]')).toHaveCount(0);
+});
+
 test("defer-until-committed shows the newer-version indicator and never loses a draft", async ({
   page,
 }) => {
