@@ -336,6 +336,31 @@ test("a pasted image still renders in the conversation after a reload", async ({
   expect(decoded?.width).toBeGreaterThan(0); // it actually decoded, not just resolved
 });
 
+test("double-clicking the divider fits the surface to the document", async ({ page }) => {
+  await openViewer(page);
+  const divider = page.locator('[aria-label="Resize the review panel"]');
+  const panelWidth = async () =>
+    (
+      await page
+        .locator("#lucid-root > div")
+        .evaluate((el) => getComputedStyle(el).gridTemplateColumns)
+    ).split(" ")[0];
+
+  const before = await panelWidth();
+  await divider.dblclick();
+  // The chrome cannot measure the surface itself - it is on an opaque origin,
+  // so contentDocument is null. The width only changes if the overlay measured
+  // and posted back across the boundary.
+  await expect.poll(panelWidth).not.toBe(before);
+  const fitted = Number.parseFloat((await panelWidth()) ?? "0");
+  expect(fitted).toBeGreaterThanOrEqual(320); // never below the panel minimum
+
+  // Arrow keys resize too, so the divider is not pointer-only.
+  await divider.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(panelWidth).toBe(`${fitted + 16}px`);
+});
+
 test("the target toggle quiets the surface for reading and restores it", async ({ page }) => {
   await openViewer(page);
   const surface = surfaceOf(page);

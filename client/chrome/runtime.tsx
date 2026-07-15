@@ -131,16 +131,18 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
       .trim();
     const images = (message.attachments ?? []).flatMap((a) => {
       const meta = uploaded.get(a.id);
-      if (!meta) return [];
-      uploaded.delete(a.id);
-      return [{ id: a.id, name: meta.name, file: meta.file }];
+      return meta ? [{ id: a.id, name: meta.name, file: meta.file }] : [];
     });
     if (text.length === 0 && images.length === 0) return;
-    try {
-      await api("/__lucid/message", { id: uuid(), text, refs: [], images });
-    } catch {
-      warn("Your message didn't send - try again.");
-    }
+    // Forget the uploads only once the message referencing them is in the log,
+    // and let a failure propagate: api() has already retried, the composer is
+    // cleared by the time we are called, and swallowing here would report a
+    // send that never happened.
+    await api("/__lucid/message", { id: uuid(), text, refs: [], images }).catch((e: unknown) => {
+      warn("Your message didn't send - the agent has not seen it.");
+      throw e;
+    });
+    for (const a of message.attachments ?? []) uploaded.delete(a.id);
   };
 
   const runtime = useExternalStoreRuntime({

@@ -382,6 +382,8 @@ export class LucidOverlay extends LitElement {
       // An empty id clears the focus (chrome card mouse-out).
       this.focusedId = msg.id || null;
       this.reposition();
+    } else if (msg.type === "measure-content") {
+      post({ source: "lucid-overlay", type: "content-width", width: this.measureContent() });
     } else if (msg.type === "clear-pending") {
       this.focusedId = null;
     }
@@ -438,6 +440,18 @@ export class LucidOverlay extends LitElement {
       perCorner.set(corner, stackIndex + 1);
       return { ...m, stackIndex };
     });
+  }
+
+  /** The widest real child of the body - what the chrome would measure itself
+   *  if the sandbox let it reach in. Our own root and scripts do not count. */
+  private measureContent(): number {
+    let w = 0;
+    for (const child of Array.from(document.body?.children ?? [])) {
+      const el = child as HTMLElement;
+      if (this.isOwn(el) || el.tagName === "SCRIPT") continue;
+      w = Math.max(w, el.getBoundingClientRect().width);
+    }
+    return Math.round(w);
   }
 
   private rectsFor(target: Anchor): Rect[] {

@@ -5,10 +5,19 @@ import { isOverlayMessage } from "../shared/protocol.ts";
 import { exitDiff, gotoHunk } from "./actions.ts";
 import { Header } from "./Header.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
-import { api, get, persistWidth, set, useLucid, warn, CHROME_MIN_WIDTH } from "./store.ts";
+import {
+  api,
+  get,
+  persistWidth,
+  set,
+  useLucid,
+  warn,
+  CHROME_MIN_WIDTH,
+  DEFAULT_CHROME_WIDTH,
+} from "./store.ts";
 import { DiffBar, Lightbox, NewerVersionBanner } from "./Surface.tsx";
 import { Thread } from "./Thread.tsx";
-import type { AgentQuestion, ConversationMessage, MessageImage } from "./types.ts";
+import type { AgentQuestion, ConversationMessage } from "./types.ts";
 
 const DIVIDER_WIDTH = 5;
 
@@ -58,9 +67,18 @@ export const applyDeferredSwapIfReady = (): void => {
   }
 };
 
+/**
+ * Bootstraps are fired from SSE frames, so several can be in flight at once.
+ * Only the newest may land: an older snapshot arriving late would roll state
+ * back over a message that has since been applied. A failure leaves state
+ * alone rather than half-applying.
+ */
+let bootstrapSeq = 0;
+
 const bootstrap = async (): Promise<void> => {
+  const mine = ++bootstrapSeq;
   const res = await api("/__lucid/state").catch(() => null);
-  if (!res) return;
+  if (!res || mine !== bootstrapSeq) return;
   const payload = (await res.json()) as {
     version: number;
     reviewResolved: boolean;
@@ -81,27 +99,18 @@ const bootstrap = async (): Promise<void> => {
 
 const onLogEvent = (ev: LogEvent): void => {
   switch (ev.t) {
+    // Every content event re-reads the folded state rather than patching it
+    // locally. The log is the source of truth and the fold does real work
+    // (anchor carry-forward, orphaning, image paths); a local append would be a
+    // second, worse copy of it - and could be silently dropped by a bootstrap
+    // that started before the append landed.
     case "annotation":
     case "revert":
     case "question":
     case "question_answered":
-      void bootstrap();
-      break;
     case "prompt":
-      set((s) => ({
-        messages: [
-          ...s.messages,
-          {
-            role: "human",
-            text: ev.text,
-            at: ev.at,
-            ...(Array.isArray(ev.images) ? { images: ev.images as MessageImage[] } : {}),
-          },
-        ],
-      }));
-      break;
     case "agent_reply":
-      set((s) => ({ messages: [...s.messages, { role: "agent", text: ev.text, at: ev.at }] }));
+      void bootstrap();
       break;
     case "version":
       void onNewVersion(ev.version);
@@ -156,6 +165,17 @@ export const Chrome = () => {
         pushHighlights();
       } else if (msg.type === "annotation-hover") {
         set({ hoveredId: msg.id });
+      } else if (msg.type === "content-width") {
+        // Size the surface to the content and give the rest to the review,
+        // keeping the panel at or above its minimum. Fall back to the default
+        // when there is nothing measurable.
+        set({
+          chromeWidth:
+            msg.width <= 0
+              ? DEFAULT_CHROME_WIDTH
+              : Math.max(CHROME_MIN_WIDTH, window.innerWidth - DIVIDER_WIDTH - msg.width),
+        });
+        persistWidth(get().chromeWidth);
       } else if (msg.type === "annotation-activate") {
         set({ hoveredId: msg.id });
         document
@@ -264,10 +284,34 @@ export const Chrome = () => {
           <Thread />
         </LucidRuntimeProvider>
       </div>
-      <div
+      {/* The window-splitter pattern: a separator carries the role, and arrow
+          keys resize it for anything that cannot drag. Double-click asks the
+          overlay to measure, because the parent cannot - the surface is on an
+          opaque origin, so contentDocument is null from here. */}
+      <hr
+        aria-orientation="vertical"
+        aria-label="Resize the review panel"
+        aria-valuenow={chromeWidth}
+        aria-valuemin={CHROME_MIN_WIDTH}
+        tabIndex={0}
         onPointerDown={onPointerDown}
-        title="Drag to resize"
-        className="cursor-col-resize bg-ink-700 hover:bg-accent-dim"
+        onDoubleClick={() => toOverlay({ source: "lucid-chrome", type: "measure-content" })}
+        onKeyDown={(e) => {
+          const step = e.shiftKey ? 64 : 16;
+          if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+          e.preventDefault();
+          const next = Math.max(
+            CHROME_MIN_WIDTH,
+            Math.min(
+              window.innerWidth - 320,
+              chromeWidth + (e.key === "ArrowRight" ? step : -step),
+            ),
+          );
+          set({ chromeWidth: next });
+          persistWidth(next);
+        }}
+        title="Drag to resize · double-click to fit the document"
+        className="m-0 cursor-col-resize border-0 bg-ink-700 hover:bg-accent-dim focus-visible:bg-accent"
       />
       <div className="flex min-h-0 flex-col bg-ink-850">
         <Header />
@@ -281,6 +325,14 @@ export const Chrome = () => {
             // No allow-same-origin: the artifact runs on an opaque origin so its
             // scripts cannot reach the control routes (D-020).
             sandbox="allow-scripts"
+            // `ready` is a one-shot message and the listener is installed in an
+            // effect, i.e. after this element exists. Load fires only once the
+            // overlay's module has run, so treating it as ready too means a
+            // missed `ready` cannot leave the surface permanently unpainted.
+            onLoad={() => {
+              overlayReady = true;
+              pushHighlights();
+            }}
             className="h-full w-full border-0 bg-white"
           />
         </div>

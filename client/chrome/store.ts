@@ -131,17 +131,36 @@ export const buildTimeline = (
   ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 };
 
+/** Capped: EventSource reconnects on its own and can report the same outage
+ *  repeatedly, so an unbounded list would grow state and DOM all through it. */
 export const warn = (message: string): void =>
-  set((s) => ({ warnings: [...s.warnings, { code: "CLIENT", message }] }));
+  set((s) => ({ warnings: [...s.warnings.slice(-4), { code: "SEND_FAILED", message }] }));
 
 export const api = async (path: string, body?: unknown): Promise<Response> => {
-  const res = await fetch(path, {
-    method: body === undefined ? "GET" : "POST",
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
-  return res;
+  const isPost = body !== undefined;
+  const init: RequestInit = {
+    method: isPost ? "POST" : "GET",
+    ...(isPost
+      ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
+      : {}),
+  };
+  // POSTs retry with backoff so a brief server blip (e.g. a restart) doesn't
+  // lose the submission - every mutation carries a client-minted idempotent id,
+  // so a retry of one that landed is safe. A persistent failure throws so the
+  // caller can keep the human's input and surface an error.
+  const attempts = isPost ? 4 : 1;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(path, init);
+      if (res.ok) return res;
+      lastErr = new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      lastErr = e;
+    }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+  }
+  throw lastErr ?? new Error(`request to ${path} failed`);
 };
 
 /**
