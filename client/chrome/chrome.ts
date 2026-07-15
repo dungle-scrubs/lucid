@@ -727,8 +727,10 @@ export class LucidChrome extends LitElement {
     /* Number chip shared with the in-artifact marker badge, so a card and its
        spot on the surface read as the same numbered item - same circle, same
        straddled corner. Absolute so it costs the card no vertical space. */
+    /* Nudged in by ~39% of its own size (8px of 20px): centred on the corner it
+       hung off the card and crowded the section label above. */
     .idxchip {
-      position: absolute; top: -9px; left: -9px; z-index: 1;
+      position: absolute; top: -1px; left: -1px; z-index: 1;
       display: inline-flex; align-items: center; justify-content: center;
       width: 20px; height: 20px; border-radius: 999px;
       font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
