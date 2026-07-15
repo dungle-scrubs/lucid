@@ -45,6 +45,12 @@ export type ChromeMessage =
       readonly annotations: readonly PayloadAnnotationLike[];
       readonly queued: readonly QueuedAnchorLike[];
       readonly pending: Anchor | null;
+      /**
+       * False puts the surface in read mode: the overlay paints nothing and
+       * stops targeting, so the artifact reads as plain document. It still
+       * receives the anchors above and repaints instantly when this flips back.
+       */
+      readonly showTargets: boolean;
     }
   | { readonly source: "lucid-chrome"; readonly type: "swap"; readonly html: string }
   | { readonly source: "lucid-chrome"; readonly type: "focus-annotation"; readonly id: string }

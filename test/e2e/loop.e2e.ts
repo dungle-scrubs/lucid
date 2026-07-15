@@ -204,6 +204,38 @@ test("a queued annotation can be edited before it is sent", async ({ page }) => 
   expect(fb.annotations[0]?.note).toBe("Backfill in one batch, not nightly.");
 });
 
+test("the target toggle quiets the surface for reading and restores it", async ({ page }) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+  const marker = surface.locator(".marker");
+  const toggle = page.locator('[data-test="toggle-targets"]');
+
+  // Targets are on by default, so a sent annotation paints a mark.
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await page.locator('textarea[placeholder^="What should change here?"]').fill("A note");
+  await page.locator('[data-test="add-to-queue"]').click();
+  await page.locator('[data-test="send-queue"]').click();
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await expect(marker).toHaveCount(1);
+
+  // Read mode: marks gone, and clicking the artifact no longer picks a target -
+  // the overlay must stop swallowing clicks, not just stop painting.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(marker).toHaveCount(0);
+  await surface.locator("#note").click();
+  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveCount(0);
+
+  // The annotation itself is untouched - this is a view preference, not a delete.
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+
+  // Toggling back repaints from anchors the overlay kept the whole time.
+  await toggle.click();
+  await expect(marker).toHaveCount(1);
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+});
+
 test("change-view hunk navigation does not steal keys from a text field", async ({ page }) => {
   await openViewer(page);
   const surface = surfaceOf(page);

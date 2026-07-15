@@ -78,6 +78,29 @@ const HUNK_SIGN: Readonly<Record<DiffHunk["kind"], string>> = {
 
 const uuid = (): string => crypto.randomUUID();
 
+/**
+ * Lucide `crosshair` - the surface's targeting affordance. Two whole SVGs rather
+ * than one with a bound child: a nested template inside <svg> would be parsed in
+ * the HTML namespace and the slash would not render.
+ */
+const CROSSHAIR = html`<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <circle cx="12" cy="12" r="10"></circle>
+  <line x1="22" x2="18" y1="12" y2="12"></line>
+  <line x1="6" x2="2" y1="12" y2="12"></line>
+  <line x1="12" x2="12" y1="6" y2="2"></line>
+  <line x1="12" x2="12" y1="22" y2="18"></line>
+</svg>`;
+
+/** The same mark struck through - the non-color cue that read mode is on. */
+const CROSSHAIR_OFF = html`<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <circle cx="12" cy="12" r="10"></circle>
+  <line x1="22" x2="18" y1="12" y2="12"></line>
+  <line x1="6" x2="2" y1="12" y2="12"></line>
+  <line x1="12" x2="12" y1="6" y2="2"></line>
+  <line x1="12" x2="12" y1="22" y2="18"></line>
+  <line x1="4.2" x2="19.8" y1="4.2" y2="19.8"></line>
+</svg>`;
+
 /** True when a key event is destined for a text field, so window-level
  *  shortcuts can leave the caret alone. */
 const isTextEntry = (node: EventTarget | undefined): boolean =>
@@ -87,6 +110,17 @@ const DEFAULT_CHROME_WIDTH = 384;
 const CHROME_MIN_WIDTH = 320;
 const DIVIDER_WIDTH = 5;
 const CHROME_WIDTH_KEY = "lucid:chromeWidth";
+const SHOW_TARGETS_KEY = "lucid:showTargets";
+
+/** Annotation marks are the point of the surface, so they are on unless the
+ *  human has explicitly turned them off before. */
+const readStoredShowTargets = (): boolean => {
+  try {
+    return localStorage.getItem(SHOW_TARGETS_KEY) !== "0";
+  } catch {
+    return true;
+  }
+};
 
 const readStoredWidth = (): number => {
   try {
@@ -127,6 +161,7 @@ export class LucidChrome extends LitElement {
     warnings: { state: true },
     status: { state: true },
     chromeWidth: { state: true },
+    showTargets: { state: true },
     dragging: { state: true },
     hoveredId: { state: true },
     diffMode: { state: true },
@@ -156,6 +191,7 @@ export class LucidChrome extends LitElement {
   declare warnings: WarningItem[];
   declare status: string;
   declare chromeWidth: number;
+  declare showTargets: boolean;
   declare dragging: boolean;
   declare hoveredId: string | null;
   declare diffMode: boolean;
@@ -198,6 +234,7 @@ export class LucidChrome extends LitElement {
     this.warnings = [];
     this.status = "active";
     this.chromeWidth = readStoredWidth();
+    this.showTargets = readStoredShowTargets();
     this.dragging = false;
     this.hoveredId = null;
     this.diffMode = false;
@@ -674,6 +711,12 @@ export class LucidChrome extends LitElement {
       border-radius: 999px; padding: 2px 10px; cursor: pointer;
     }
     .ghostbtn:hover { background: #1b2230; border-color: #cba85a; }
+    /* Icon-only variant. Brass = the marks are on the surface; steel = read mode,
+       where the surface should recede. The struck-through glyph carries the same
+       state without relying on hue. */
+    .ghostbtn.icon { padding: 3px; display: inline-flex; align-items: center; }
+    .ghostbtn.icon.off { color: #7b8593; border-color: #2f3846; }
+    .ghostbtn.icon.off:hover { color: #9aa3b0; border-color: #454d58; }
     /* Diff navigator pinned to the surface */
     .diffbar {
       position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
@@ -993,7 +1036,20 @@ export class LucidChrome extends LitElement {
       annotations: this.annotations,
       queued: this.queue.map((q) => ({ id: q.id, target: q.target })),
       pending: this.pendingTarget,
+      showTargets: this.showTargets,
     });
+  }
+
+  /** Read mode: quiet the surface so the artifact can be read as a document.
+   *  The anchors still travel to the overlay, so flipping back repaints at once. */
+  private toggleTargets(): void {
+    this.showTargets = !this.showTargets;
+    try {
+      localStorage.setItem(SHOW_TARGETS_KEY, this.showTargets ? "1" : "0");
+    } catch {
+      /* storage unavailable; the toggle simply resets next load */
+    }
+    this.pushHighlights();
   }
 
   // ---- composer actions -----------------------------------------------------
@@ -1392,6 +1448,18 @@ export class LucidChrome extends LitElement {
                 ? html`<button class="ghostbtn" data-test="enter-diff" title="Show what changed" @click=${() => void this.enterDiff()}>changes</button>`
                 : null
             }
+            <button
+              class=${`ghostbtn icon${this.showTargets ? "" : " off"}`}
+              data-test="toggle-targets"
+              aria-pressed=${this.showTargets ? "true" : "false"}
+              aria-label=${this.showTargets ? "Hide annotation targets" : "Show annotation targets"}
+              title=${
+                this.showTargets
+                  ? "Hide annotation targets - read the artifact without marks"
+                  : "Show annotation targets"
+              }
+              @click=${this.toggleTargets}
+            >${this.showTargets ? CROSSHAIR : CROSSHAIR_OFF}</button>
             <div class="vtag" title="current artifact version">v${this.version}</div>
           </div>
         </header>

@@ -91,6 +91,9 @@ export class LucidOverlay extends LitElement {
   private committed: PayloadAnnotationLike[] = [];
   private queuedAnchors: QueuedAnchorLike[] = [];
   private pendingAnchor: Anchor | null = null;
+  /** Read mode when false: no marks painted, no targeting. The chrome owns this
+   *  and restates it on every highlight, so the two can never drift. */
+  private showTargets = true;
   private hoverAnnotationId: string | null = null;
   private lastMouse: { x: number; y: number } | null = null;
   private rafPending = false;
@@ -233,6 +236,7 @@ export class LucidOverlay extends LitElement {
 
   /** Recompute the hover outline + reverse-highlight for a cursor position. */
   private updateHover(target: Element | null, x: number, y: number): void {
+    if (!this.showTargets) return; // read mode: no hover outline, no reverse-highlight
     if (!target || this.isOwn(target) || this.isStructural(target)) {
       this.hoverRect = null;
     } else {
@@ -320,6 +324,9 @@ export class LucidOverlay extends LitElement {
   }
 
   private readonly onClick = (e: MouseEvent): void => {
+    // Read mode must return the document to normal: bail before the
+    // preventDefault below, which would otherwise swallow links and controls.
+    if (!this.showTargets) return;
     const target = e.target as Element | null;
     if (!target || this.isOwn(target) || this.isStructural(target)) return;
     // Clicking the content always starts a NEW annotation, even over a region
@@ -342,6 +349,7 @@ export class LucidOverlay extends LitElement {
   };
 
   private readonly onMouseUp = (): void => {
+    if (!this.showTargets) return; // read mode: selecting text is just selecting text
     const anchor = captureRangeAnchor();
     if (anchor) post({ source: "lucid-overlay", type: "target-picked", anchor });
   };
@@ -353,6 +361,7 @@ export class LucidOverlay extends LitElement {
       this.committed = [...msg.annotations];
       this.queuedAnchors = [...msg.queued];
       this.pendingAnchor = msg.pending;
+      this.showTargets = msg.showTargets;
       this.reposition();
     } else if (msg.type === "swap") {
       this.swapArtifact(msg.html);
@@ -388,6 +397,11 @@ export class LucidOverlay extends LitElement {
    * rest, not only on hover.
    */
   private reposition(): void {
+    if (!this.showTargets) {
+      this.markers = [];
+      this.hoverRect = null;
+      return;
+    }
     const markers: Marker[] = [];
     let n = 0;
     for (const a of this.committed) {
