@@ -545,8 +545,13 @@ export class LucidChrome extends LitElement {
       justify-content: space-between;
       gap: 8px;
     }
-    .title { font-weight: 600; letter-spacing: 0.2px; }
-    .title small { color: #7b8694; font-weight: 400; display: block; font-size: 11px; }
+    /* min-width:0 lets a long artifact name truncate instead of shoving the
+       controls out of the header when the surface is dragged narrow. */
+    .title { font-weight: 600; letter-spacing: 0.2px; flex: 1 1 auto; min-width: 0; }
+    .title small {
+      color: #7b8694; font-weight: 400; display: block; font-size: 11px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .vtag {
       font-variant-numeric: tabular-nums;
       background: #1b2230;
@@ -696,8 +701,13 @@ export class LucidChrome extends LitElement {
     button.primary { background: #2563eb; border-color: #2563eb; color: white; }
     button.primary:hover { background: #1d4ed8; }
     button.good { background: #16794d; border-color: #16794d; color: white; }
-    /* Amber: this is the human's own unsent work, not an error. */
-    .approve-blocked { font-size: 11px; color: #e2a541; }
+    /* Amber: this is the human's own unsent work, not an error. Truncates on a
+       narrow surface; the button's title always carries the full reason. */
+    .approve-blocked {
+      font-size: 11px; color: #e2a541;
+      flex: 0 1 auto; min-width: 0; max-width: 280px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
     /* Agent questions awaiting the human - anchored above the composer */
     .questions-section {
@@ -750,6 +760,11 @@ export class LucidChrome extends LitElement {
       padding: 10px 16px; border-bottom: 1px solid #1f2530;
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
     }
+    /* The title gives way first, then the blocked reason ellipsizes. The
+       controls themselves never shrink - a header that clips its own buttons is
+       worse than one that clips a sentence. */
+    .surface-header > .row { flex: 0 1 auto; min-width: 0; }
+    .surface-header > .row > *:not(.approve-blocked) { flex: none; }
     .surface-body { position: relative; flex: 1; min-height: 0; background: #fff; }
     iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
     .banner {
@@ -1505,30 +1520,11 @@ export class LucidChrome extends LitElement {
               @keydown=${(e: KeyboardEvent) => this.onSubmitKey(e, () => void this.sendMessage())}
             ></textarea>
           </div>
-          <div class="row" style="justify-content:space-between">
+          <!-- Send sits where the eye ends up after typing. Approve moved to the
+               header: it ends the review, which is a session decision, not
+               something that belongs next to the message you are composing. -->
+          <div class="row" style="justify-content:flex-end">
             <button data-test="send-message" @click=${this.sendMessage}>Send message</button>
-            ${
-              this.reviewResolved
-                ? null
-                : html`
-                  ${
-                    this.hasUnsentDraft()
-                      ? html`<span class="approve-blocked">${this.approveBlocker()}</span>`
-                      : null
-                  }
-                  <button
-                    class="good"
-                    data-test="approve"
-                    ?disabled=${this.hasUnsentDraft()}
-                    title=${
-                      this.hasUnsentDraft()
-                        ? `${this.approveBlocker()} - the agent stops reading once you approve`
-                        : "End the review; the agent stops until re-invoked"
-                    }
-                    @click=${this.resolveReview}
-                  >Approve review</button>
-                `
-            }
           </div>
         </footer>
       </div>
@@ -1564,6 +1560,28 @@ export class LucidChrome extends LitElement {
               @click=${this.toggleTargets}
             >${this.showTargets ? CROSSHAIR : CROSSHAIR_OFF}</button>
             <div class="vtag" title="current artifact version">v${this.version}</div>
+            ${
+              this.reviewResolved
+                ? null
+                : html`
+                  ${
+                    this.hasUnsentDraft()
+                      ? html`<span class="approve-blocked">${this.approveBlocker()}</span>`
+                      : null
+                  }
+                  <button
+                    class="good"
+                    data-test="approve"
+                    ?disabled=${this.hasUnsentDraft()}
+                    title=${
+                      this.hasUnsentDraft()
+                        ? `${this.approveBlocker()} - the agent stops reading once you approve`
+                        : "End the review; the agent stops until re-invoked"
+                    }
+                    @click=${this.resolveReview}
+                  >Approve review</button>
+                `
+            }
           </div>
         </header>
         <div class="surface-body">
