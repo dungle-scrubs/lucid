@@ -886,10 +886,24 @@ export class LucidChrome extends LitElement {
 
   // ---- live reload (defer-until-committed; D-055) ---------------------------
 
+  /** A started-but-unqueued note in the composer. Discardable, unlike the
+   *  queue - which is only cleared by sending or removing card by card. */
+  private hasComposerDraft(): boolean {
+    return this.pendingTarget !== null && this.composerNote.trim().length > 0;
+  }
+
   private hasUnsentDraft(): boolean {
-    return (
-      this.queue.length > 0 || (this.pendingTarget !== null && this.composerNote.trim().length > 0)
-    );
+    return this.queue.length > 0 || this.hasComposerDraft();
+  }
+
+  /** Name what is actually holding back the swap, so the banner never offers a
+   *  discard for work that discarding cannot touch. */
+  private deferralBlocker(): string {
+    const n = this.queue.length;
+    const queued = `send your ${n} queued annotation${n > 1 ? "s" : ""} to see it`;
+    if (n > 0 && this.hasComposerDraft()) return `${queued}, or discard your draft`;
+    if (n > 0) return queued;
+    return "send or discard your draft";
   }
 
   private async onNewVersion(version: number): Promise<void> {
@@ -1384,7 +1398,11 @@ export class LucidChrome extends LitElement {
         <div class="surface-body">
           ${
             this.newerVersion !== null
-              ? html`<div class="banner" data-test="newer-version">Newer version (v${this.newerVersion}) available · send or discard your draft<button @click=${this.discardPending}>Discard draft</button></div>`
+              ? html`<div class="banner" data-test="newer-version">Newer version (v${this.newerVersion}) available · ${this.deferralBlocker()}${
+                  this.hasComposerDraft()
+                    ? html`<button data-test="discard-draft" @click=${this.discardPending}>Discard draft</button>`
+                    : null
+                }</div>`
               : null
           }
           ${this.diffMode ? this.renderDiffBar() : null}

@@ -255,6 +255,36 @@ test("defer-until-committed shows the newer-version indicator and never loses a 
   await expect(surface.locator("h1")).toContainText("revised");
 });
 
+test("the newer-version banner names the real blocker and only offers a live discard", async ({
+  page,
+}) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+  const banner = page.locator('[data-test="newer-version"]');
+
+  // A queue is not discardable, so the banner must ask for a send and show no
+  // Discard button - it could only ever clear the composer, not the queue.
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await page.locator('textarea[placeholder^="What should change here?"]').fill("Queued work");
+  await page.locator('[data-test="add-to-queue"]').click();
+  await cli.write(PLAN_V2);
+  await expect(banner).toContainText("send your 1 queued annotation to see it");
+  await expect(page.locator('[data-test="discard-draft"]')).toHaveCount(0);
+
+  // A composer draft on top of the queue is discardable, so the button returns.
+  await surface.locator("#note").click();
+  await page.locator('textarea[placeholder^="What should change here?"]').fill("Composer draft");
+  await expect(banner).toContainText("or discard your draft");
+  await expect(page.locator('[data-test="discard-draft"]')).toBeVisible();
+
+  // Discarding it clears only the composer - the queue survives, swap still deferred.
+  await page.locator('[data-test="discard-draft"]').click();
+  await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
+  await expect(page.locator("[data-annotation-id]")).toContainText("Queued work");
+  await expect(banner).toContainText("send your 1 queued annotation to see it");
+  await expect(surface.locator("h1")).not.toContainText("revised");
+});
+
 test("agent question surfaces in the viewer and the answer reaches the agent", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
 
