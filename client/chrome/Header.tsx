@@ -1,3 +1,4 @@
+import { enterDiff } from "./actions.ts";
 import { persistShowTargets, set, useLucid } from "./store.ts";
 import type { Config } from "./types.ts";
 import { pushHighlights } from "./Chrome.tsx";
@@ -33,6 +34,7 @@ const Crosshair = ({ on }: { readonly on: boolean }) => (
 export const Header = () => {
   const version = useLucid((s) => s.version);
   const showTargets = useLucid((s) => s.showTargets);
+  const diffMode = useLucid((s) => s.diffMode);
 
   const toggleTargets = (): void => {
     const next = !showTargets;
@@ -48,6 +50,17 @@ export const Header = () => {
         <small className="ml-2 font-normal text-fg-muted">{config().name}</small>
       </div>
       <div className="flex items-center gap-1.5">
+        {version > 1 && !diffMode ? (
+          <button
+            type="button"
+            data-test="enter-diff"
+            title="Show what changed"
+            onClick={() => void enterDiff()}
+            className="cursor-pointer rounded-full border border-ink-400 px-2.5 py-px text-[11px] font-semibold text-accent-bright hover:border-accent-bright hover:bg-ink-700"
+          >
+            changes
+          </button>
+        ) : null}
         <button
           type="button"
           data-test="toggle-targets"
@@ -68,6 +81,7 @@ export const Header = () => {
           <Crosshair on={showTargets} />
         </button>
         <div
+          data-test="version"
           className="rounded-full bg-ink-700 px-[9px] py-px text-[11px] tabular-nums text-steel-300"
           title="current artifact version"
         >

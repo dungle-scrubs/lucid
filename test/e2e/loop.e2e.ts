@@ -58,7 +58,7 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
   // The agent revises the artifact; the watcher commits v2 and the viewer live-reloads.
   await cli.write(PLAN_V2);
   await expect(surface.locator("h1")).toContainText("revised");
-  await expect(page.locator(".vtag")).toContainText("v2");
+  await expect(page.locator('[data-test="version"]')).toContainText("v2");
 
   // A version-only delta returns `waiting`, not feedback (D-062).
   const afterRevise = (await cli.run([
@@ -86,7 +86,7 @@ test("agent reply appears in the conversation log", async ({ page }) => {
     "--timeout",
     "1",
   ]);
-  await expect(page.locator(".msg.agent .text")).toContainText("reordered and batched");
+  await expect(page.locator('[data-role="agent"]')).toContainText("reordered and batched");
 });
 
 test("human message (non-located) reaches the agent as feedback", async ({ page }) => {
@@ -95,7 +95,7 @@ test("human message (non-located) reaches the agent as feedback", async ({ page 
     .locator('textarea[placeholder^="Message the agent"]')
     .fill("Overall: tighten the wording.");
   await page.locator('[data-test="send-message"]').click();
-  await expect(page.locator(".msg.human .text")).toContainText("tighten the wording");
+  await expect(page.locator('[data-role="human"]')).toContainText("tighten the wording");
 
   const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
     status: string;
@@ -108,7 +108,7 @@ test("human message (non-located) reaches the agent as feedback", async ({ page 
 test("approve/resolve closes the loop and reopen clears it", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
   await page.locator('[data-test="approve"]').click();
-  await expect(page.locator(".resolved-bar")).toBeVisible();
+  await expect(page.locator('[data-test="resolved-bar"]')).toBeVisible();
 
   const resolved = (await cli.run([
     "wait",
@@ -124,8 +124,8 @@ test("approve/resolve closes the loop and reopen clears it", async ({ page }) =>
   expect(resolved.reviewResolved).toBe(true);
 
   // Reopen clears the resolved state (D-059).
-  await page.locator(".resolved-bar button").click();
-  await expect(page.locator(".resolved-bar")).toHaveCount(0);
+  await page.locator('[data-test="reopen"]').click();
+  await expect(page.locator('[data-test="resolved-bar"]')).toHaveCount(0);
 });
 
 test("text-range selection produces a located annotation", async ({ page }) => {
@@ -217,19 +217,18 @@ test("a sent annotation stays in send order, not pinned above the replies", asyn
   await annotate('li[data-lucid-id="step-backfill"]', "first note");
   await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
   await cli.run(["wait", cli.artifact, "--reply", "agent replied here", "--timeout", "1"]);
-  await expect(page.locator(".msg.agent")).toHaveCount(1);
+  await expect(page.locator('[data-role="agent"]')).toHaveCount(1);
   await annotate("#note", "second note");
   await expect(page.locator('[data-test="annotation"]')).toHaveCount(2);
 
   // The record is chronological: the later annotation sits BELOW the reply that
   // preceded it, rather than jumping into a pile above the conversation.
-  const order = await page.evaluate(() => {
-    const root = document.querySelector("lucid-chrome")?.shadowRoot;
-    return Array.from(root?.querySelectorAll(".timeline > *") ?? []).map((el) =>
-      el.classList.contains("msg") ? `msg:${el.textContent?.trim().slice(0, 5)}` : "annotation",
-    );
-  });
-  expect(order).toEqual(["annotation", "msg:agent", "annotation"]);
+  const order = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-role], [data-test="annotation"]')).map(
+      (el) => (el as HTMLElement).dataset.role ?? "annotation",
+    ),
+  );
+  expect(order).toEqual(["annotation", "agent", "annotation"]);
 });
 
 test("annotations on one element cascade instead of hiding each other", async ({ page }) => {
@@ -265,8 +264,7 @@ test("a pasted image still renders in the conversation after a reload", async ({
     const file = new File([bytes], "shot.png", { type: "image/png" });
     const dt = new DataTransfer();
     dt.items.add(file);
-    const chrome = document.querySelector("lucid-chrome");
-    const ta = chrome?.shadowRoot?.querySelector("textarea") as HTMLTextAreaElement;
+    const ta = document.querySelector('[data-test="message-input"]') as HTMLTextAreaElement;
     ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
   });
   await expect(page.locator('[data-test="image-chip"]')).toHaveCount(1);
@@ -281,8 +279,7 @@ test("a pasted image still renders in the conversation after a reload", async ({
   await page.reload();
   await expect(page.locator('[data-test="thumb"]')).toHaveCount(1);
   const decoded = await page.evaluate(() => {
-    const chrome = document.querySelector("lucid-chrome");
-    const img = chrome?.shadowRoot?.querySelector("img.thumb") as HTMLImageElement | null;
+    const img = document.querySelector('[data-test="thumb"] img') as HTMLImageElement | null;
     return img ? { src: img.getAttribute("src") ?? "", width: img.naturalWidth } : null;
   });
   expect(decoded?.src).not.toContain("undefined");
@@ -327,7 +324,7 @@ test("change-view hunk navigation does not steal keys from a text field", async 
 
   // Commit v2 so change view is reachable, then queue an annotation and edit it.
   await cli.write(PLAN_V2);
-  await expect(page.locator(".vtag")).toContainText("v2");
+  await expect(page.locator('[data-test="version"]')).toContainText("v2");
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
   await page.locator('textarea[placeholder^="What should change here?"]').fill("ABCDEF");
   await page.locator('[data-test="add-to-queue"]').click();
@@ -435,7 +432,7 @@ test("diff view shows changes since a version and revert reaches the agent", asy
   // Agent revises v1 -> v2; the viewer live-reloads.
   await cli.write(PLAN_V2);
   await expect(surface.locator("h1")).toContainText("revised");
-  await expect(page.locator(".vtag")).toContainText("v2");
+  await expect(page.locator('[data-test="version"]')).toContainText("v2");
 
   // Enter the change view.
   await page.locator('[data-test="enter-diff"]').click();
@@ -447,7 +444,7 @@ test("diff view shows changes since a version and revert reaches the agent", asy
   expect(await surface.locator("ins.lucid-ins").count()).toBeGreaterThan(0);
 
   // Revert the current change back to v1, with a reason; the agent receives it.
-  await page.locator(".revert-why").fill("keep the nightly backfill");
+  await page.locator('[data-test="revert-why"]').fill("keep the nightly backfill");
   await page.locator('[data-test="revert"]').click();
 
   const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {

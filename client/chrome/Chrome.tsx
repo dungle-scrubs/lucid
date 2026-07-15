@@ -2,13 +2,20 @@ import { useEffect, useRef } from "react";
 import type { LogEvent } from "../../src/core/events.ts";
 import type { ChromeMessage, PayloadAnnotationLike } from "../shared/protocol.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
+import { exitDiff, gotoHunk } from "./actions.ts";
 import { Header } from "./Header.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
 import { api, get, persistWidth, set, useLucid, warn, CHROME_MIN_WIDTH } from "./store.ts";
+import { DiffBar, Lightbox, NewerVersionBanner } from "./Surface.tsx";
 import { Thread } from "./Thread.tsx";
 import type { AgentQuestion, ConversationMessage, MessageImage } from "./types.ts";
 
 const DIVIDER_WIDTH = 5;
+
+/** True when a key event is destined for a text field, so window-level
+ *  shortcuts can leave the caret alone. */
+const isTextEntry = (node: EventTarget | null): boolean =>
+  node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement;
 
 /** The chrome owns all server I/O; the overlay only does DOM targeting. */
 let iframeEl: HTMLIFrameElement | null = null;
@@ -165,6 +172,35 @@ export const Chrome = () => {
     };
     window.addEventListener("lucid:focus-annotation", onFocusAnnotation);
 
+    // A thumb asks for the lightbox by URL; resolve it back to the message's
+    // image list so the arrows can step through the set it came from.
+    const onLightbox = (e: Event): void => {
+      const src = (e as CustomEvent<string>).detail;
+      const file = src.split("/").pop() ?? "";
+      const owner = get().messages.find((m) => m.images?.some((i) => i.file === file));
+      const images = owner?.images;
+      if (!images) return;
+      set({ lightboxImages: images, lightboxIndex: images.findIndex((i) => i.file === file) });
+    };
+    window.addEventListener("lucid:lightbox", onLightbox);
+
+    // Hunk navigation is a window listener, so it would otherwise steal arrows
+    // from the caret and Escape from a composer while a text field has focus.
+    const onDiffKey = (e: KeyboardEvent): void => {
+      if (!get().diffMode) return;
+      if (isTextEntry(e.target)) return;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        gotoHunk(get().diffIndex + 1);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        gotoHunk(get().diffIndex - 1);
+      } else if (e.key === "Escape") {
+        void exitDiff();
+      }
+    };
+    window.addEventListener("keydown", onDiffKey);
+
     const source = new EventSource("/__lucid/events");
     source.onmessage = (e) => {
       try {
@@ -187,6 +223,8 @@ export const Chrome = () => {
     return () => {
       window.removeEventListener("message", onMessage);
       window.removeEventListener("lucid:focus-annotation", onFocusAnnotation);
+      window.removeEventListener("lucid:lightbox", onLightbox);
+      window.removeEventListener("keydown", onDiffKey);
       source.close();
     };
   }, []);
@@ -233,16 +271,21 @@ export const Chrome = () => {
       />
       <div className="flex min-h-0 flex-col bg-ink-850">
         <Header />
-        <iframe
-          ref={iframeRef}
-          title="artifact surface"
-          src="/"
-          // No allow-same-origin: the artifact runs on an opaque origin so its
-          // scripts cannot reach the control routes (D-020).
-          sandbox="allow-scripts"
-          className="h-full w-full border-0 bg-white"
-        />
+        <div className="relative min-h-0 flex-1">
+          <NewerVersionBanner />
+          <DiffBar />
+          <iframe
+            ref={iframeRef}
+            title="artifact surface"
+            src="/"
+            // No allow-same-origin: the artifact runs on an opaque origin so its
+            // scripts cannot reach the control routes (D-020).
+            sandbox="allow-scripts"
+            className="h-full w-full border-0 bg-white"
+          />
+        </div>
       </div>
+      <Lightbox />
     </div>
   );
 };

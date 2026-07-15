@@ -1,0 +1,251 @@
+import { useEffect, useMemo, useRef } from "react";
+import {
+  addToQueue,
+  beginEdit,
+  cancelEdit,
+  commitEdit,
+  discardPending,
+  removeQueued,
+  sendQueue,
+} from "./actions.ts";
+import { targetLabel } from "./AnnotationPart.tsx";
+import { set, useLucid } from "./store.ts";
+
+/**
+ * The parts of the panel that are not transcript: work staged but not yet in
+ * the log. They sit at the end of the record, where the eye already is after a
+ * pick.
+ */
+
+const btn =
+  "cursor-pointer rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40";
+const btnPrimary =
+  "cursor-pointer rounded-md border border-accent bg-accent px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-on-accent hover:bg-accent-bright disabled:cursor-not-allowed disabled:opacity-40";
+const heading = "mb-2 text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-muted";
+const snippet =
+  "max-h-14 overflow-hidden rounded-[5px] border-l-2 border-accent bg-bg-inset px-[7px] py-[5px] font-mono text-[11px] text-cream-300";
+const field =
+  "resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline";
+
+/** Enter submits, Shift+Enter is a newline - the composer's rule everywhere. */
+const onSubmitKey = (e: React.KeyboardEvent, action: () => void): void => {
+  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+    e.preventDefault();
+    action();
+  }
+};
+
+/** Anchors that no longer attach. Listed, never floated at a stale spot. */
+export const Orphans = () => {
+  // Select the slice, derive after: a selector that filters returns a new array
+  // every read, which never compares equal and re-renders forever (React #185).
+  const annotations = useLucid((s) => s.annotations);
+  const orphans = useMemo(() => annotations.filter((a) => !a.resolved), [annotations]);
+  if (orphans.length === 0) return null;
+  return (
+    <section>
+      <h3 className={heading}>Orphaned ({orphans.length})</h3>
+      <div className="mt-1.5 flex flex-col gap-4">
+        {orphans.map((a) => (
+          <div
+            key={a.id}
+            data-test="orphan"
+            className="relative flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-850 px-[11px] py-[10px]"
+          >
+            <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-rust-500/30 px-[7px] py-px text-[10px] text-rust-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+              orphaned · v{a.version}
+            </span>
+            <div className={snippet}>{targetLabel(a.target)}</div>
+            <div className="text-fg">{a.note}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+};
+
+export const Warnings = () => {
+  const warnings = useLucid((s) => s.warnings);
+  if (warnings.length === 0) return null;
+  return (
+    <section>
+      <h3 className={heading}>Warnings</h3>
+      {warnings.map((w) => (
+        <div key={`${w.code}:${w.message}`} className="text-[12px] text-rust-300">
+          {w.code}: {w.message}
+        </div>
+      ))}
+    </section>
+  );
+};
+
+/** Composed-but-unsent annotations. Client-side until Send. */
+export const Queue = () => {
+  const queue = useLucid((s) => s.queue);
+  const editingId = useLucid((s) => s.editingId);
+  const editDraft = useLucid((s) => s.editDraft);
+  const sending = useLucid((s) => s.sending);
+  const hoveredId = useLucid((s) => s.hoveredId);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const box = editRef.current;
+    if (!box) return;
+    box.focus();
+    box.setSelectionRange(box.value.length, box.value.length);
+  }, []);
+
+  if (queue.length === 0) return null;
+  return (
+    <section>
+      <h3 className={heading}>Queued ({queue.length})</h3>
+      <div className="mt-1.5 flex flex-col gap-4">
+        {queue.map((q, i) => (
+          <section
+            key={q.id}
+            data-annotation-id={q.id}
+            aria-label={`Queued annotation ${i + 1}`}
+            className={`relative flex flex-col gap-[7px] rounded-lg border bg-ink-850 px-[11px] py-[10px] ${
+              hoveredId === q.id
+                ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]"
+                : "border-ink-600"
+            }`}
+            onMouseEnter={() => {
+              set({ hoveredId: q.id });
+              window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: q.id }));
+            }}
+            onMouseLeave={() => {
+              set({ hoveredId: null });
+              window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: "" }));
+            }}
+          >
+            <span className="absolute -top-[9px] -left-[9px] z-1 flex size-5 items-center justify-center rounded-full border border-dashed border-accent-dim bg-brass-400 text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+              {i + 1}
+            </span>
+            <div className={snippet}>{targetLabel(q.target)}</div>
+            {editingId === q.id ? (
+              <>
+                <textarea
+                  ref={editRef}
+                  rows={3}
+                  data-test="edit-note"
+                  placeholder="Edit this annotation… (Enter to save, Shift+Enter for a new line, Esc to cancel)"
+                  value={editDraft}
+                  onChange={(e) => set({ editDraft: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      cancelEdit();
+                      return;
+                    }
+                    onSubmitKey(e, () => commitEdit());
+                  }}
+                  className={field}
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    data-test="save-edit"
+                    disabled={editDraft.trim().length === 0}
+                    onClick={() => commitEdit()}
+                    className={btnPrimary}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    data-test="cancel-edit"
+                    onClick={cancelEdit}
+                    className={btn}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-fg">{q.note}</div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    data-test="edit-queued"
+                    disabled={sending}
+                    onClick={() => beginEdit(q.id)}
+                    className={btn}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    disabled={sending}
+                    onClick={() => removeQueued(q.id)}
+                    className={btn}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
+        ))}
+      </div>
+      <button
+        type="button"
+        data-test="send-queue"
+        disabled={sending}
+        onClick={() => void sendQueue()}
+        className={`${btnPrimary} mt-3`}
+      >
+        Send {queue.length} annotation{queue.length > 1 ? "s" : ""}
+      </button>
+    </section>
+  );
+};
+
+/** The in-flight pick: an element chosen on the surface, awaiting its note. */
+export const PendingComposer = () => {
+  const pendingTarget = useLucid((s) => s.pendingTarget);
+  const composerNote = useLucid((s) => s.composerNote);
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (pendingTarget) ref.current?.focus();
+  }, [pendingTarget]);
+
+  return (
+    <section>
+      <h3 className={heading}>New annotation</h3>
+      {pendingTarget ? (
+        <div className="flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-850 px-[11px] py-[10px]">
+          <div className={snippet}>{targetLabel(pendingTarget)}</div>
+          <textarea
+            ref={ref}
+            rows={3}
+            placeholder="What should change here? (Enter to queue, Shift+Enter for a new line)"
+            value={composerNote}
+            onChange={(e) => set({ composerNote: e.target.value })}
+            onKeyDown={(e) => onSubmitKey(e, addToQueue)}
+            className={field}
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              data-test="add-to-queue"
+              onClick={addToQueue}
+              className={btnPrimary}
+            >
+              Add to queue
+            </button>
+            <button type="button" data-test="discard" onClick={discardPending} className={btn}>
+              Discard
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="text-[12px] italic text-fg-faint">
+          Click an element or select text in the artifact to annotate it.
+        </div>
+      )}
+    </section>
+  );
+};

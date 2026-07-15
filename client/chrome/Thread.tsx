@@ -6,7 +6,11 @@ import {
   useAssistantDataUI,
   useMessage,
 } from "@assistant-ui/react";
+import { approveReview, reopenReview } from "./actions.ts";
 import { AnnotationPart } from "./AnnotationPart.tsx";
+import { Orphans, PendingComposer, Queue, Warnings } from "./Panel.tsx";
+import { Questions } from "./Questions.tsx";
+import { useLucid } from "./store.ts";
 
 /**
  * The review record. assistant-ui owns the transcript, the composer and the
@@ -110,6 +114,44 @@ const Composer = () => (
   </ComposerPrimitive.Root>
 );
 
+/** Approve ends the agent's involvement until it is re-invoked (D-064), so it
+ *  is not a bigger Send - it is the opposite. Kept apart from the composer. */
+const ReviewBar = () => {
+  const resolved = useLucid((s) => s.reviewResolved);
+  return (
+    <div
+      data-test={resolved ? "resolved-bar" : "review-bar"}
+      className="flex items-center justify-between gap-2 border-t border-ink-600 bg-bg px-[14px] py-2"
+    >
+      {resolved ? (
+        <>
+          <span className="text-[12px] text-agent">✓ Review approved</span>
+          <button
+            type="button"
+            data-test="reopen"
+            onClick={() => void reopenReview()}
+            className="cursor-pointer rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600"
+          >
+            Reopen review
+          </button>
+        </>
+      ) : (
+        <>
+          <span className="text-[11px] text-fg-faint">Done reviewing?</span>
+          <button
+            type="button"
+            data-test="approve"
+            onClick={() => void approveReview()}
+            className="cursor-pointer rounded-md border border-sage-600 bg-sage-600 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-cream-50 hover:bg-sage-500"
+          >
+            Approve review
+          </button>
+        </>
+      )}
+    </div>
+  );
+};
+
 export const Thread = () => {
   // Registers the renderer for the `data-annotation` parts that convertMessage
   // emits. Without it those parts fall through to the unknown-data fallback.
@@ -127,8 +169,16 @@ export const Thread = () => {
           <div className="text-[12px] italic text-fg-faint">No feedback sent yet.</div>
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+        {/* Staged work lives at the end of the record, where the eye already is
+            after a pick - and where auto-scroll brings it. */}
+        <Orphans />
+        <Warnings />
+        <Queue />
+        <PendingComposer />
       </ThreadPrimitive.Viewport>
+      <Questions />
       <Composer />
+      <ReviewBar />
     </ThreadPrimitive.Root>
   );
 };
