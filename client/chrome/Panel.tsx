@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
+  addPastedImage,
   addToQueue,
   beginEdit,
   cancelEdit,
   commitEdit,
   discardPending,
+  removePastedImage,
   removeQueued,
   sendQueue,
 } from "./actions.ts";
 import { targetLabel } from "./AnnotationPart.tsx";
-import { set, useLucid } from "./store.ts";
+import { imagesFromPaste, set, useLucid } from "./store.ts";
+import type { PastedImage } from "./types.ts";
 
 /**
  * The parts of the panel that are not transcript: work staged but not yet in
@@ -33,6 +36,41 @@ const onSubmitKey = (e: React.KeyboardEvent, action: () => void): void => {
     e.preventDefault();
     action();
   }
+};
+
+/** Staged images, before the annotation carrying them is sent. */
+const Chips = ({
+  images,
+  onRemove,
+}: {
+  readonly images: readonly PastedImage[];
+  readonly onRemove?: (id: string) => void;
+}) => {
+  if (images.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {images.map((img) => (
+        <span
+          key={img.id}
+          data-test="annotation-chip"
+          className="inline-flex items-center gap-1.5 rounded-full border border-ink-600 bg-ink-800 py-[3px] pr-[6px] pl-[3px]"
+        >
+          <img src={img.url} alt="" className="size-[22px] rounded-full object-cover" />
+          <span className="max-w-[150px] truncate text-[11px] text-cream-300">{img.name}</span>
+          {onRemove ? (
+            <button
+              type="button"
+              title="Remove"
+              onClick={() => onRemove(img.id)}
+              className="cursor-pointer px-[3px] text-fg-muted hover:text-rust-300"
+            >
+              ×
+            </button>
+          ) : null}
+        </span>
+      ))}
+    </div>
+  );
 };
 
 /** Anchors that no longer attach. Listed, never floated at a stale spot. */
@@ -88,12 +126,15 @@ export const Queue = () => {
   const hoveredId = useLucid((s) => s.hoveredId);
   const editRef = useRef<HTMLTextAreaElement>(null);
 
+  // Keyed on editingId, not mount: the textarea does not exist until a card
+  // opens, so an empty dep array would focus nothing, every time.
   useEffect(() => {
+    if (editingId === null) return;
     const box = editRef.current;
     if (!box) return;
     box.focus();
     box.setSelectionRange(box.value.length, box.value.length);
-  }, []);
+  }, [editingId]);
 
   if (queue.length === 0) return null;
   return (
@@ -123,6 +164,7 @@ export const Queue = () => {
               {i + 1}
             </span>
             <div className={snippet}>{targetLabel(q.target)}</div>
+            <Chips images={q.images} />
             {editingId === q.id ? (
               <>
                 <textarea
@@ -206,6 +248,7 @@ export const Queue = () => {
 export const PendingComposer = () => {
   const pendingTarget = useLucid((s) => s.pendingTarget);
   const composerNote = useLucid((s) => s.composerNote);
+  const pastedImages = useLucid((s) => s.pastedImages);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -218,13 +261,21 @@ export const PendingComposer = () => {
       {pendingTarget ? (
         <div className="flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-850 px-[11px] py-[10px]">
           <div className={snippet}>{targetLabel(pendingTarget)}</div>
+          <Chips images={pastedImages} onRemove={removePastedImage} />
           <textarea
             ref={ref}
             rows={3}
-            placeholder="What should change here? (Enter to queue, Shift+Enter for a new line)"
+            data-test="annotation-note"
+            placeholder="What should change here? Paste an image to show it. (Enter to queue, Shift+Enter for a new line)"
             value={composerNote}
             onChange={(e) => set({ composerNote: e.target.value })}
             onKeyDown={(e) => onSubmitKey(e, addToQueue)}
+            onPaste={(e) => {
+              const files = imagesFromPaste(e);
+              if (files.length === 0) return; // let a normal text paste through
+              e.preventDefault();
+              for (const f of files) void addPastedImage(f);
+            }}
             className={field}
           />
           <div className="flex gap-2">

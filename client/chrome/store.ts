@@ -144,6 +144,34 @@ export const api = async (path: string, body?: unknown): Promise<Response> => {
   return res;
 };
 
+/**
+ * Upload a pasted blob and stage it. Shared by the annotation composer and the
+ * message composer: the bytes must land before the event referencing them does,
+ * because the agent reads them off disk.
+ */
+export const uploadPaste = async (file: File): Promise<PastedImage | null> => {
+  try {
+    const res = await fetch("/__lucid/asset", {
+      method: "POST",
+      headers: { "content-type": file.type, "x-lucid-filename": file.name || "pasted" },
+      body: file,
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const meta = (await res.json()) as { id: string; name: string; file: string };
+    return { ...meta, url: URL.createObjectURL(file) };
+  } catch {
+    warn("That image didn't upload - try again.");
+    return null;
+  }
+};
+
+/** Pull image files out of a paste, ignoring a normal text paste. */
+export const imagesFromPaste = (e: ClipboardEvent | React.ClipboardEvent): readonly File[] =>
+  Array.from(("clipboardData" in e ? e.clipboardData : null)?.items ?? [])
+    .filter((i) => i.kind === "file" && i.type.startsWith("image/"))
+    .map((i) => i.getAsFile())
+    .filter((f): f is File => f !== null);
+
 export const persistWidth = (w: number): void => {
   try {
     localStorage.setItem(CHROME_WIDTH_KEY, String(w));

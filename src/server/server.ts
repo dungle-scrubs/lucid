@@ -196,8 +196,18 @@ export const runServer = async (
     if ("error" in anchor) return json({ error: anchor.error }, 400);
     const version =
       typeof body.version === "number" && Number.isInteger(body.version) ? body.version : 0;
+    // Same validator as a message's images: an annotation's images are the same
+    // pasted blobs, just located.
+    const images = parseImages(body.images);
     await serverAppend([
-      { t: "annotation", id: body.id, version, target: anchor, note: body.note },
+      {
+        t: "annotation",
+        id: body.id,
+        version,
+        target: anchor,
+        note: body.note,
+        ...(images.length > 0 ? { images } : {}),
+      },
     ]);
     return json({ ok: true });
   };

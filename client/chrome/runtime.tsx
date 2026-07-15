@@ -45,6 +45,7 @@ const convertMessage = (item: TimelineItem): ThreadMessageLike => {
             version: item.annotation.version,
             note: item.annotation.note,
             target: item.annotation.target,
+            images: item.annotation.images,
           },
         },
       ],

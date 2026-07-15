@@ -175,11 +175,17 @@ test("a queued annotation can be edited before it is sent", async ({ page }) => 
   const surface = surfaceOf(page);
 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  // Picking a target puts the caret in the note: the click already said where,
+  // so the next thing you do is type.
+  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeFocused();
   await page.locator('textarea[placeholder^="What should change here?"]').fill("Frist draft, typo");
   await page.locator('[data-test="add-to-queue"]').click();
 
   // Cancel restores the original note, leaving the queue untouched.
   await page.locator('[data-test="edit-queued"]').click();
+  // Edit puts the caret in the box: opening an editor you then have to click is
+  // not an editor.
+  await expect(page.locator('[data-test="edit-note"]')).toBeFocused();
   await page.locator('[data-test="edit-note"]').fill("Discarded rewrite");
   await page.locator('[data-test="cancel-edit"]').click();
   await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
@@ -250,6 +256,49 @@ test("annotations on one element cascade instead of hiding each other", async ({
   expect(lefts).toHaveLength(2);
   expect(lefts[0]).not.toBe(lefts[1]);
   expect(Math.abs((lefts[1] ?? 0) - (lefts[0] ?? 0))).toBe(13); // steps, still overlapping
+});
+
+test("an image pasted onto an annotation reaches the agent, located", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await page.locator('[data-test="annotation-note"]').fill("Looks like this instead");
+  await page.evaluate(async () => {
+    const b64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], "shot.png", { type: "image/png" }));
+    document
+      .querySelector('[data-test="annotation-note"]')
+      ?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
+  });
+  await expect(page.locator('[data-test="annotation-chip"]')).toHaveCount(1);
+
+  // The image travels with the queued item, through to the sent card.
+  await page.locator('[data-test="add-to-queue"]').click();
+  await expect(page.locator('[data-test="annotation-chip"]')).toHaveCount(1);
+  await page.locator('[data-test="send-queue"]').click();
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await expect(page.locator('[data-test="annotation-thumb"]')).toHaveCount(1);
+
+  // It decoded, rather than merely resolving.
+  const width = await page.evaluate(
+    () => (document.querySelector('[data-test="annotation-thumb"] img') as HTMLImageElement)
+      .naturalWidth,
+  );
+  expect(width).toBeGreaterThan(0);
+
+  // The agent gets the anchor and the bytes together: an absolute path to read
+  // and the note saying what is wrong.
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    annotations: { note: string; images?: { name: string; file: string; path: string }[] }[];
+  };
+  expect(fb.annotations).toHaveLength(1);
+  expect(fb.annotations[0]?.images).toHaveLength(1);
+  expect(fb.annotations[0]?.images?.[0]?.name).toBe("shot.png");
+  expect(fb.annotations[0]?.images?.[0]?.path).toContain("/pasted/");
 });
 
 test("a pasted image still renders in the conversation after a reload", async ({ page }) => {

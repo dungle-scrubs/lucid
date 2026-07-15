@@ -11,6 +11,7 @@ export interface AnnotationRecord {
   readonly target: Anchor;
   readonly note: string;
   readonly at: string;
+  readonly images?: readonly PromptImage[];
 }
 
 export interface MessageRecord {
@@ -181,6 +182,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
           target: e.target,
           note: e.note,
           at: e.at,
+          ...(e.images ? { images: e.images } : {}),
         });
         break;
       case "prompt":

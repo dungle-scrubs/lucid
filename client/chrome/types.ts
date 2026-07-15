@@ -37,6 +37,9 @@ export interface QueuedAnnotation {
   readonly id: string;
   readonly target: Anchor;
   readonly note: string;
+  /** Staged images travel with the queued item, so an edit or a reorder never
+   *  separates a screenshot from the note it belongs to. */
+  readonly images: readonly PastedImage[];
 }
 
 export interface WarningItem {

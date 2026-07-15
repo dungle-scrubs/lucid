@@ -1,5 +1,5 @@
 import { applyDeferredSwapIfReady, pushHighlights, toOverlay } from "./Chrome.tsx";
-import { api, get, set, uuid, warn } from "./store.ts";
+import { api, get, set, uploadPaste, uuid, warn } from "./store.ts";
 import type { AgentQuestion, DiffData } from "./types.ts";
 
 /** Every mutation the human can make. Kept out of the components so the flow
@@ -11,17 +11,39 @@ export const addToQueue = (): void => {
   const s = get();
   if (!s.pendingTarget || s.composerNote.trim().length === 0) return;
   set({
-    queue: [...s.queue, { id: uuid(), target: s.pendingTarget, note: s.composerNote.trim() }],
+    queue: [
+      ...s.queue,
+      {
+        id: uuid(),
+        target: s.pendingTarget,
+        note: s.composerNote.trim(),
+        images: s.pastedImages,
+      },
+    ],
     pendingTarget: null,
     composerNote: "",
+    pastedImages: [],
   });
   pushHighlights();
 };
 
 export const discardPending = (): void => {
-  set({ pendingTarget: null, composerNote: "" });
+  for (const img of get().pastedImages) URL.revokeObjectURL(img.url);
+  set({ pendingTarget: null, composerNote: "", pastedImages: [] });
   applyDeferredSwapIfReady();
   pushHighlights();
+};
+
+/** Stage a pasted image on the annotation being composed. */
+export const addPastedImage = async (file: File): Promise<void> => {
+  const img = await uploadPaste(file);
+  if (img) set((s) => ({ pastedImages: [...s.pastedImages, img] }));
+};
+
+export const removePastedImage = (id: string): void => {
+  const img = get().pastedImages.find((i) => i.id === id);
+  if (img) URL.revokeObjectURL(img.url);
+  set((s) => ({ pastedImages: s.pastedImages.filter((i) => i.id !== id) }));
 };
 
 export const removeQueued = (id: string): void => {
@@ -73,6 +95,7 @@ export const sendQueue = async (): Promise<void> => {
         version: get().version,
         target: q.target,
         note: q.note,
+        images: q.images.map(({ id, name, file }) => ({ id, name, file })),
       });
       sent.add(q.id); // ids are idempotent, so a retry of a sent one is safe
     }
@@ -82,6 +105,9 @@ export const sendQueue = async (): Promise<void> => {
   // Reconcile against live state, not a pre-send snapshot: a fresh annotation
   // can still be queued while requests are in flight, so drop exactly what
   // sent and keep the rest.
+  for (const q of get().queue) {
+    if (sent.has(q.id)) for (const img of q.images) URL.revokeObjectURL(img.url);
+  }
   set((s) => ({ sending: false, queue: s.queue.filter((q) => !sent.has(q.id)) }));
   applyDeferredSwapIfReady();
   pushHighlights();

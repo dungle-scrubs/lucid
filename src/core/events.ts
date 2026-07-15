@@ -40,6 +40,12 @@ export interface AnnotationEvent extends BaseEvent {
   readonly version: number;
   readonly target: Anchor;
   readonly note: string;
+  /**
+   * Images pasted onto this annotation. They belong here rather than on a
+   * separate message because the anchor already says which element they are
+   * about - a screenshot of "this control, broken" is located feedback.
+   */
+  readonly images?: readonly PromptImage[];
 }
 
 /** An image pasted into the composer, stored under the session's `pasted/` dir. */

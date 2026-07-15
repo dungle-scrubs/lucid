@@ -13,6 +13,9 @@ export interface PayloadAnnotationLike {
   readonly target: Anchor;
   readonly note: string;
   readonly at: string;
+  /** Images pasted onto the annotation. `file` is what the viewer addresses as
+   *  `/__lucid/asset/<file>`; the agent gets an absolute `path` alongside. */
+  readonly images?: readonly { readonly name: string; readonly file: string }[];
 }
 
 /**

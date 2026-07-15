@@ -22,6 +22,10 @@ export interface PayloadAnnotation {
   readonly target: AnnotationRecord["target"];
   readonly note: string;
   readonly at: string;
+  /** Images pasted onto the annotation; addressed for both consumers, as on a
+   *  message. Drop `file` and the viewer's thumbs 404; drop `path` and the
+   *  agent cannot read the bytes. */
+  readonly images?: readonly PayloadImage[];
 }
 
 /**
@@ -179,6 +183,15 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
       target: a.target,
       note: a.note,
       at: a.at,
+      ...(a.images && a.images.length > 0
+        ? {
+            images: a.images.map((img) => ({
+              name: img.name,
+              file: img.file,
+              path: opts.snapshotAbsPath(`pasted/${img.file}`),
+            })),
+          }
+        : {}),
     });
   }
 

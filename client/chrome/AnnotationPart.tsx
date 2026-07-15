@@ -1,6 +1,7 @@
 import type { DataMessagePartComponent } from "@assistant-ui/react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import { set, useLucid } from "./store.ts";
+import type { MessageImage } from "./types.ts";
 
 export interface AnnotationData {
   readonly id: string;
@@ -8,6 +9,7 @@ export interface AnnotationData {
   readonly version: number;
   readonly note: string;
   readonly target: Anchor;
+  readonly images?: readonly { readonly name: string; readonly file: string }[];
 }
 
 export const targetLabel = (target: Anchor): string =>
@@ -28,6 +30,7 @@ const focus = (id: string): void => {
  */
 export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data }) => {
   const hovered = useLucid((s) => s.hoveredId === data.id);
+  const images: readonly MessageImage[] = data.images ?? [];
   const enter = (): void => {
     set({ hoveredId: data.id });
     focus(data.id);
@@ -62,6 +65,26 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
         {targetLabel(data.target)}
       </div>
       <div className="text-fg">{data.note}</div>
+      {images.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {images.map((img, i) => (
+            <button
+              key={img.file}
+              type="button"
+              data-test="annotation-thumb"
+              title={img.name}
+              onClick={() => set({ lightboxImages: images, lightboxIndex: i })}
+              className="cursor-zoom-in rounded-md focus-visible:annot-outline"
+            >
+              <img
+                src={`/__lucid/asset/${img.file}`}
+                alt={img.name}
+                className="block h-[66px] w-[88px] rounded-md border border-ink-600 object-cover hover:border-accent"
+              />
+            </button>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 };
