@@ -10,7 +10,7 @@ import type { SessionPaths } from "../core/paths.ts";
 import { ServerError } from "../errors.ts";
 import { buildWaitPayload } from "../core/payload.ts";
 import { commitWatchedChange } from "../core/session.ts";
-import { CLIENT_BUNDLE } from "./client-bundle.generated.ts";
+import { CHROME_BUNDLE, CHROME_CSS, CLIENT_BUNDLE } from "./client-bundle.generated.ts";
 import { removeServerDescriptor, writeServerDescriptor } from "./discovery.ts";
 import { injectOverlay } from "./inject.ts";
 import { resolveAsset, validateHeaders } from "./security.ts";
@@ -393,6 +393,19 @@ export const runServer = async (
         }),
         { headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
       );
+    }
+    // The chrome's own bundle + stylesheet. Unlike the overlay these stay
+    // behind the Host/Origin gate: they are same-origin requests from Lucid's
+    // viewer page, and nothing in the sandboxed artifact should reach them.
+    if (pathname === "/__lucid/chrome.js") {
+      return new Response(CHROME_BUNDLE, {
+        headers: { "content-type": "text/javascript; charset=utf-8", ...noStore },
+      });
+    }
+    if (pathname === "/__lucid/chrome.css") {
+      return new Response(CHROME_CSS, {
+        headers: { "content-type": "text/css; charset=utf-8", ...noStore },
+      });
     }
     if (pathname === "/__lucid/events") {
       return handleEvents();

@@ -27,15 +27,11 @@ export const renderViewer = (config: ViewerConfig): string => `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
 <title>Lucid · ${escapeHtmlText(config.name)}</title>
-<style>
-  html, body { margin: 0; height: 100%; }
-  body { background: #0b0d12; }
-  lucid-chrome { display: block; height: 100vh; }
-</style>
+<link rel="stylesheet" href="/__lucid/chrome.css" />
 </head>
 <body>
 <script>window.__LUCID__ = Object.assign({ mode: "chrome" }, ${escapeJson(config)});</script>
-<lucid-chrome></lucid-chrome>
-<script type="module" src="/__lucid/client.js"></script>
+<div id="lucid-root"></div>
+<script type="module" src="/__lucid/chrome.js"></script>
 </body>
 </html>`;

@@ -61,15 +61,24 @@ describe("server routes + security", () => {
     expect(id).toMatchObject({ lucid: true, session: paths.artifactPath });
 
     const viewer = await (await get("/__lucid/viewer")).text();
-    expect(viewer).toContain("<lucid-chrome>");
+    expect(viewer).toContain('<div id="lucid-root">'); // the React chrome mounts here
+    expect(viewer).toContain("/__lucid/chrome.js");
+    expect(viewer).toContain("/__lucid/chrome.css");
 
     const doc = await (await get("/")).text();
     expect(doc).toContain("Hello");
     expect(doc).toContain("__lucid_overlay_root"); // overlay injected
+    // The artifact gets the overlay bundle only. Serving it the chrome would
+    // push React into a sandboxed document Lucid does not own.
     expect(doc).toContain("/__lucid/client.js");
+    expect(doc).not.toContain("/__lucid/chrome.js");
 
     const client = await get("/__lucid/client.js");
     expect(client.headers.get("content-type")).toContain("javascript");
+    const chromeJs = await get("/__lucid/chrome.js");
+    expect(chromeJs.headers.get("content-type")).toContain("javascript");
+    const chromeCss = await get("/__lucid/chrome.css");
+    expect(chromeCss.headers.get("content-type")).toContain("css");
   });
 
   test("browser auto-probes are answered without a missing-asset warning", async () => {

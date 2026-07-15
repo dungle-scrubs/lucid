@@ -1,0 +1,161 @@
+import { create } from "zustand";
+import type { Anchor } from "../../src/anchors/anchor.ts";
+import type { PayloadAnnotationLike } from "../shared/protocol.ts";
+import type {
+  AgentQuestion,
+  Config,
+  ConversationMessage,
+  DiffData,
+  MessageImage,
+  PastedImage,
+  QueuedAnnotation,
+  TimelineItem,
+  WarningItem,
+} from "./types.ts";
+
+export const uuid = (): string => crypto.randomUUID();
+
+const config = (): Config => (window as unknown as { __LUCID__: Config }).__LUCID__;
+
+const CHROME_WIDTH_KEY = "lucid:chromeWidth";
+const SHOW_TARGETS_KEY = "lucid:showTargets";
+export const DEFAULT_CHROME_WIDTH = 384;
+export const CHROME_MIN_WIDTH = 320;
+
+const readStoredWidth = (): number => {
+  try {
+    const raw = localStorage.getItem(CHROME_WIDTH_KEY);
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n >= 300 ? n : DEFAULT_CHROME_WIDTH;
+  } catch {
+    return DEFAULT_CHROME_WIDTH;
+  }
+};
+
+/** Annotation marks are the point of the surface, so they are on unless the
+ *  human has explicitly turned them off before. */
+const readStoredShowTargets = (): boolean => {
+  try {
+    return localStorage.getItem(SHOW_TARGETS_KEY) !== "0";
+  } catch {
+    return true;
+  }
+};
+
+interface LucidState {
+  annotations: PayloadAnnotationLike[];
+  messages: ConversationMessage[];
+  version: number;
+  reviewResolved: boolean;
+  pendingTarget: Anchor | null;
+  composerNote: string;
+  queue: QueuedAnnotation[];
+  editingId: string | null;
+  editDraft: string;
+  sending: boolean;
+  pastedImages: PastedImage[];
+  newerVersion: number | null;
+  warnings: WarningItem[];
+  status: string;
+  chromeWidth: number;
+  showTargets: boolean;
+  hoveredId: string | null;
+  diffMode: boolean;
+  diffData: DiffData | null;
+  diffIndex: number;
+  diffBase: number;
+  revertWhy: string;
+  lightboxImages: readonly MessageImage[] | null;
+  lightboxIndex: number;
+  questions: AgentQuestion[];
+  answerDrafts: Record<string, string>;
+}
+
+const initial: LucidState = {
+  annotations: [],
+  messages: [],
+  version: config().version,
+  reviewResolved: false,
+  pendingTarget: null,
+  composerNote: "",
+  queue: [],
+  editingId: null,
+  editDraft: "",
+  sending: false,
+  pastedImages: [],
+  newerVersion: null,
+  warnings: [],
+  status: "active",
+  chromeWidth: readStoredWidth(),
+  showTargets: readStoredShowTargets(),
+  hoveredId: null,
+  diffMode: false,
+  diffData: null,
+  diffIndex: 0,
+  diffBase: Math.max(1, config().version - 1),
+  revertWhy: "",
+  lightboxImages: null,
+  lightboxIndex: 0,
+  questions: [],
+  answerDrafts: {},
+};
+
+export const useLucid = create<LucidState>(() => initial);
+
+export const set = useLucid.setState;
+export const get = useLucid.getState;
+
+/**
+ * The review record: annotations and messages in one `at`-ordered stream.
+ *
+ * A plain function, not a zustand selector: it builds a new array every call,
+ * and a selector that never returns a referentially-equal value re-renders on
+ * every store read. Callers memoize it on the two slices it reads.
+ *
+ * The number comes from `located` order first, because that is how the overlay
+ * numbers its badges - sorting must never renumber a card away from its mark.
+ */
+export const buildTimeline = (
+  annotations: readonly PayloadAnnotationLike[],
+  messages: readonly ConversationMessage[],
+): TimelineItem[] => {
+  const located = annotations.filter((a) => a.resolved);
+  return [
+    ...located.map((annotation, i) => ({
+      kind: "annotation" as const,
+      at: annotation.at,
+      index: i + 1,
+      annotation,
+    })),
+    ...messages.map((message) => ({ kind: "message" as const, at: message.at, message })),
+  ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+};
+
+export const warn = (message: string): void =>
+  set((s) => ({ warnings: [...s.warnings, { code: "CLIENT", message }] }));
+
+export const api = async (path: string, body?: unknown): Promise<Response> => {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  return res;
+};
+
+export const persistWidth = (w: number): void => {
+  try {
+    localStorage.setItem(CHROME_WIDTH_KEY, String(w));
+  } catch {
+    /* storage unavailable; width simply resets next load */
+  }
+};
+
+export const persistShowTargets = (on: boolean): void => {
+  try {
+    localStorage.setItem(SHOW_TARGETS_KEY, on ? "1" : "0");
+  } catch {
+    /* storage unavailable; the toggle simply resets next load */
+  }
+};

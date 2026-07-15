@@ -1,0 +1,89 @@
+import type { Anchor } from "../../src/anchors/anchor.ts";
+import type { PayloadAnnotationLike } from "../shared/protocol.ts";
+
+export interface Config {
+  readonly mode: string;
+  readonly session: string;
+  readonly name: string;
+  readonly port: number;
+  readonly version: number;
+}
+
+/** An image on a message already in the log. The thumb and lightbox address it
+ *  as `/__lucid/asset/<file>`, so `file` is the field that must survive the
+ *  round trip through the wait payload. */
+export interface MessageImage {
+  readonly name: string;
+  readonly file: string;
+}
+
+export interface ConversationMessage {
+  readonly role: "human" | "agent";
+  readonly text: string;
+  readonly at: string;
+  readonly images?: readonly MessageImage[];
+}
+
+/** A pasted image staged in the composer (not yet sent). */
+export interface PastedImage {
+  readonly id: string;
+  readonly name: string;
+  readonly file: string;
+  /** Local object URL for the composer thumbnail. */
+  readonly url: string;
+}
+
+export interface QueuedAnnotation {
+  readonly id: string;
+  readonly target: Anchor;
+  readonly note: string;
+}
+
+export interface WarningItem {
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface AgentQuestion {
+  readonly id: string;
+  readonly text: string;
+  readonly ref?: string;
+  readonly answered: boolean;
+  readonly answer?: string;
+}
+
+export interface DiffHunk {
+  readonly id: string;
+  readonly kind: "added" | "removed" | "changed";
+  readonly label: string;
+  readonly anchor: Anchor;
+}
+
+export interface DiffData {
+  readonly base: number;
+  readonly current: number;
+  readonly changed: boolean;
+  readonly hunks: readonly DiffHunk[];
+  readonly mergedHtml: string;
+}
+
+/**
+ * One entry in the review record.
+ *
+ * assistant-ui has no notion of a thread item that is not a message, and the
+ * transcript renders in array order (not by `createdAt`). Lucid's log is
+ * already chronological, so mapping it 1:1 into this array is what keeps a sent
+ * annotation sitting where it happened rather than jumping above the replies
+ * that preceded it.
+ */
+export type TimelineItem =
+  | {
+      readonly kind: "annotation";
+      readonly at: string;
+      /** 1-based number matching the annotation's badge on the surface. */
+      readonly index: number;
+      readonly annotation: PayloadAnnotationLike;
+    }
+  | { readonly kind: "message"; readonly at: string; readonly message: ConversationMessage };
+
+export type { Anchor, PayloadAnnotationLike };
