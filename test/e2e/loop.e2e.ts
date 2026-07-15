@@ -204,6 +204,42 @@ test("a queued annotation can be edited before it is sent", async ({ page }) => 
   expect(fb.annotations[0]?.note).toBe("Backfill in one batch, not nightly.");
 });
 
+test("a pasted image still renders in the conversation after a reload", async ({ page }) => {
+  await openViewer(page);
+
+  // A 1x1 red PNG, pasted the way the browser delivers a real screenshot.
+  await page.locator('textarea[placeholder^="Message the agent"]').click();
+  await page.evaluate(async () => {
+    const b64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const file = new File([bytes], "shot.png", { type: "image/png" });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    const chrome = document.querySelector("lucid-chrome");
+    const ta = chrome?.shadowRoot?.querySelector("textarea") as HTMLTextAreaElement;
+    ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
+  });
+  await expect(page.locator('[data-test="image-chip"]')).toHaveCount(1);
+
+  await page.locator('textarea[placeholder^="Message the agent"]').fill("look at this");
+  await page.locator('[data-test="send-message"]').click();
+  await expect(page.locator('[data-test="thumb"]')).toHaveCount(1);
+
+  // Reload: messages now come from the wait payload rather than the live SSE
+  // frame. The payload rewrites images for the agent, and used to drop the
+  // filename the viewer needs - so the thumb 404'd only after a reload.
+  await page.reload();
+  await expect(page.locator('[data-test="thumb"]')).toHaveCount(1);
+  const decoded = await page.evaluate(() => {
+    const chrome = document.querySelector("lucid-chrome");
+    const img = chrome?.shadowRoot?.querySelector("img.thumb") as HTMLImageElement | null;
+    return img ? { src: img.getAttribute("src") ?? "", width: img.naturalWidth } : null;
+  });
+  expect(decoded?.src).not.toContain("undefined");
+  expect(decoded?.width).toBeGreaterThan(0); // it actually decoded, not just resolved
+});
+
 test("the target toggle quiets the surface for reading and restores it", async ({ page }) => {
   await openViewer(page);
   const surface = surfaceOf(page);

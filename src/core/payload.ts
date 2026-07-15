@@ -24,8 +24,15 @@ export interface PayloadAnnotation {
   readonly at: string;
 }
 
+/**
+ * One pasted image, addressed for both consumers of this payload: the agent
+ * reads bytes off disk via `path`, the viewer fetches `/__lucid/asset/<file>`.
+ * Dropping either one silently breaks that half.
+ */
 export interface PayloadImage {
   readonly name: string;
+  /** Stored filename under the session's `pasted/` dir, for the viewer's URL. */
+  readonly file: string;
   /** Absolute local path to the pasted image, for the agent to read. */
   readonly path: string;
 }
@@ -70,7 +77,13 @@ const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): Pa
   text: m.text,
   at: m.at,
   ...(m.images && m.images.length > 0
-    ? { images: m.images.map((img) => ({ name: img.name, path: assetAbsPath(img.file) })) }
+    ? {
+        images: m.images.map((img) => ({
+          name: img.name,
+          file: img.file,
+          path: assetAbsPath(img.file),
+        })),
+      }
     : {}),
 });
 

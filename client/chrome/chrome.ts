@@ -14,8 +14,10 @@ interface Config {
   readonly version: number;
 }
 
+/** An image on a message already in the log. The thumb and lightbox address it
+ *  as `/__lucid/asset/<file>`, so `file` is the field that must survive the
+ *  round trip through the wait payload. */
 interface MessageImage {
-  readonly id: string;
   readonly name: string;
   readonly file: string;
 }

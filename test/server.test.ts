@@ -129,7 +129,10 @@ describe("server routes + security", () => {
     const payload = await runWait(paths, { since: "evt_00001", timeoutMs: 3000 });
     const msg = payload.messages.find((m) => m.text === "see this");
     expect(msg?.images?.[0]?.name).toBe("shot.png");
+    // The agent reads bytes off disk...
     expect(msg?.images?.[0]?.path).toContain("/pasted/");
+    // ...and the viewer builds /__lucid/asset/<file>, so both must survive.
+    expect(msg?.images?.[0]?.file).toBe(meta.file);
   });
 
   test("annotation POST lands in the log and reaches wait", async () => {
