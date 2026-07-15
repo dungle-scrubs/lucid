@@ -128,6 +128,42 @@ test("approve/resolve closes the loop and reopen clears it", async ({ page }) =>
   await expect(page.locator(".resolved-bar")).toHaveCount(0);
 });
 
+test("approve refuses while anything is unsent, so nothing is stranded", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+  const approve = page.locator('[data-test="approve"]');
+  const composer = page.locator('textarea[placeholder^="What should change here?"]');
+  await expect(approve).toBeEnabled();
+
+  // A half-composed annotation already blocks: approving would abandon it.
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await composer.fill("Backfill in one batch");
+  await expect(approve).toBeDisabled();
+  await expect(page.locator(".approve-blocked")).toContainText("draft annotation first");
+
+  // Queued still blocks, and says how many.
+  await page.locator('[data-test="add-to-queue"]').click();
+  await expect(approve).toBeDisabled();
+  await expect(page.locator(".approve-blocked")).toContainText("1 queued annotation");
+
+  // Sending clears the block...
+  await page.locator('[data-test="send-queue"]').click();
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await expect(approve).toBeEnabled();
+  await approve.click();
+  await expect(page.locator(".resolved-bar")).toBeVisible();
+
+  // ...and the agent sees the annotation together with the approval, rather
+  // than a stop with the feedback stranded behind it.
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    reviewResolved: boolean;
+    annotations: { note: string }[];
+  };
+  expect(fb.reviewResolved).toBe(true);
+  expect(fb.annotations).toHaveLength(1);
+  expect(fb.annotations[0]?.note).toContain("one batch");
+});
+
 test("text-range selection produces a located annotation", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
   const frame = page.frames().find((f) => /127\.0\.0\.1:\d+\/$/.test(f.url()));

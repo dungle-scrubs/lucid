@@ -667,6 +667,8 @@ export class LucidChrome extends LitElement {
     button.primary { background: #2563eb; border-color: #2563eb; color: white; }
     button.primary:hover { background: #1d4ed8; }
     button.good { background: #16794d; border-color: #16794d; color: white; }
+    /* Amber: this is the human's own unsent work, not an error. */
+    .approve-blocked { font-size: 11px; color: #e2a541; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
     /* Agent questions awaiting the human - anchored above the composer */
     .questions-section {
@@ -969,6 +971,20 @@ export class LucidChrome extends LitElement {
 
   private hasUnsentDraft(): boolean {
     return this.queue.length > 0 || this.hasComposerDraft();
+  }
+
+  /**
+   * Why Approve is refused. Approving appends `review_resolved`, which ends the
+   * agent's involvement until it is re-invoked (D-064) - so anything sent after
+   * it lands in the log behind a stop the agent has already acted on, and is
+   * never read. "Approve" means "I'm done, here's my review"; the queue has to
+   * go first for that to be true.
+   */
+  private approveBlocker(): string {
+    const n = this.queue.length;
+    return n > 0
+      ? `Send or remove your ${n} queued annotation${n > 1 ? "s" : ""} first`
+      : "Queue or discard your draft annotation first";
   }
 
   /** Name what is actually holding back the swap, so the banner never offers a
@@ -1463,7 +1479,24 @@ export class LucidChrome extends LitElement {
             ${
               this.reviewResolved
                 ? null
-                : html`<button class="good" data-test="approve" @click=${this.resolveReview}>Approve review</button>`
+                : html`
+                  ${
+                    this.hasUnsentDraft()
+                      ? html`<span class="approve-blocked">${this.approveBlocker()}</span>`
+                      : null
+                  }
+                  <button
+                    class="good"
+                    data-test="approve"
+                    ?disabled=${this.hasUnsentDraft()}
+                    title=${
+                      this.hasUnsentDraft()
+                        ? `${this.approveBlocker()} - the agent stops reading once you approve`
+                        : "End the review; the agent stops until re-invoked"
+                    }
+                    @click=${this.resolveReview}
+                  >Approve review</button>
+                `
             }
           </div>
         </footer>
