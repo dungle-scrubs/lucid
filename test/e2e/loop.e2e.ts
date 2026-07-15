@@ -336,6 +336,27 @@ test("a pasted image still renders in the conversation after a reload", async ({
   expect(decoded?.width).toBeGreaterThan(0); // it actually decoded, not just resolved
 });
 
+test("a dropped live connection shows a self-clearing indicator, not a warning pile", async ({
+  page,
+}) => {
+  await openViewer(page);
+  await expect(page.locator('[data-test="reconnecting"]')).toHaveCount(0);
+
+  // Stop the server out from under the viewer.
+  await cli.run(["end", cli.artifact]);
+  await expect(page.locator('[data-test="reconnecting"]')).toBeVisible();
+
+  // EventSource retries by itself, so this must never tell the human to reload,
+  // and must never pile up one warning per failed attempt.
+  await page.waitForTimeout(1500);
+  await expect(page.locator('[data-test="reconnecting"]')).toHaveCount(1);
+  await expect(page.locator("body")).not.toContainText("reload to resume");
+
+  // ...and it clears itself once the stream is back.
+  await cli.run(["open", cli.artifact]);
+  await expect(page.locator('[data-test="reconnecting"]')).toHaveCount(0, { timeout: 15_000 });
+});
+
 test("double-clicking the divider fits the surface to the document", async ({ page }) => {
   await openViewer(page);
   const divider = page.locator('[aria-label="Resize the review panel"]');

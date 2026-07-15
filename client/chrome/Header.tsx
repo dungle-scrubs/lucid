@@ -35,6 +35,7 @@ export const Header = () => {
   const version = useLucid((s) => s.version);
   const showTargets = useLucid((s) => s.showTargets);
   const diffMode = useLucid((s) => s.diffMode);
+  const live = useLucid((s) => s.live);
 
   const toggleTargets = (): void => {
     const next = !showTargets;
@@ -50,6 +51,17 @@ export const Header = () => {
         <small className="ml-2 font-normal text-fg-muted">{config().name}</small>
       </div>
       <div className="flex items-center gap-1.5">
+        {live ? null : (
+          // Self-clearing: EventSource is already retrying, so this states what
+          // is happening rather than asking the human to do anything.
+          <span
+            data-test="reconnecting"
+            title="The live connection dropped; retrying"
+            className="rounded-full bg-ink-700 px-[9px] py-px text-[11px] text-steel-400"
+          >
+            reconnecting…
+          </span>
+        )}
         {version > 1 && !diffMode ? (
           <button
             type="button"

@@ -57,6 +57,9 @@ interface LucidState {
   newerVersion: number | null;
   warnings: WarningItem[];
   status: string;
+  /** SSE stream health. EventSource reconnects by itself, so this is a
+   *  transient indicator, not an error the human has to act on. */
+  live: boolean;
   chromeWidth: number;
   showTargets: boolean;
   hoveredId: string | null;
@@ -86,6 +89,7 @@ const initial: LucidState = {
   newerVersion: null,
   warnings: [],
   status: "active",
+  live: true,
   chromeWidth: readStoredWidth(),
   showTargets: readStoredShowTargets(),
   hoveredId: null,

@@ -11,7 +11,6 @@ import {
   persistWidth,
   set,
   useLucid,
-  warn,
   CHROME_MIN_WIDTH,
   DEFAULT_CHROME_WIDTH,
 } from "./store.ts";
@@ -237,7 +236,11 @@ export const Chrome = () => {
         /* ignore */
       }
     });
-    source.onerror = () => warn("Lost the live connection - reload to resume.");
+    // EventSource retries on its own, so a drop is a state to show, not a
+    // warning to accumulate: warning per failed attempt spammed the panel and
+    // told the human to reload, which was never true.
+    source.onopen = () => set({ live: true });
+    source.onerror = () => set({ live: false });
 
     void bootstrap();
     return () => {
@@ -311,7 +314,9 @@ export const Chrome = () => {
           persistWidth(next);
         }}
         title="Drag to resize · double-click to fit the document"
-        className="m-0 cursor-col-resize border-0 bg-ink-700 hover:bg-accent-dim focus-visible:bg-accent"
+        // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so with
+        // border-0 the divider collapses to nothing - invisible and undraggable.
+        className="m-0 h-full w-full cursor-col-resize border-0 bg-ink-700 hover:bg-accent-dim focus-visible:bg-accent"
       />
       <div className="flex min-h-0 flex-col bg-ink-850">
         <Header />
