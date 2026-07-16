@@ -129,6 +129,15 @@ Never fake the review loop, and never paste build instructions at the user.
    the human can only produce with the Approve button. Until then you are in a
    review, not an execution.
 
+   The same boundary holds for scope. A review is about the artifact in front
+   of you: feedback may reshape *it* without limit, but a request for new work
+   beyond it - "build this feature", "refactor that module" - is not executed
+   from inside the review loop, however small. Acknowledge it in a reply,
+   record it in the artifact (a backlog or roadmap section is ideal), and
+   carry it back to the terminal conversation, where work is scoped, planned
+   and approved in the open. The review channel reports and reshapes; it does
+   not commission.
+
 ## Standing review (opt-in, never the default)
 
 The blocking loop above is the default and stays the default: a review is a
