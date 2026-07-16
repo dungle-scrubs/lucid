@@ -118,6 +118,28 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   print(payload);
 };
 
+/**
+ * `lucid intent <file> <revise|reply>` - refine an open working window with
+ * declared intent, so the viewer can say "an update is on the way" vs "a
+ * reply is coming". A promise, not a fact: the window still only closes on
+ * real output. Best-effort, like the ack it refines.
+ */
+export const runIntent = async (file: string, intent: "revise" | "reply"): Promise<void> => {
+  const paths = sessionPaths(file);
+  const id = randomId();
+  const live = await discoverLiveServer(paths);
+  if (live) {
+    await fetch(`http://127.0.0.1:${live.port}/__lucid/ack`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${live.port}` },
+      body: JSON.stringify({ id, intent }),
+    });
+  } else {
+    await appendEvent(paths.logPath, { t: "agent_ack", id, intent });
+  }
+  print({ ok: true, intent });
+};
+
 /** `lucid ask <file> --text "..." [--ref <id>]` - pose a question to the human. */
 export const runAsk = async (file: string, text: string, ref?: string): Promise<void> => {
   const paths = sessionPaths(file);

@@ -184,6 +184,14 @@ describe("server routes + security", () => {
     await post("/__lucid/ack", { id: "ack-1" });
     let state = foldLog((await readEvents(paths.logPath)).events);
     expect(state.agentWorking).toBeTruthy();
+    expect(state.agentWorking?.intent).toBeUndefined();
+
+    // A re-ack declares intent without restarting the window's clock.
+    const since = state.agentWorking?.since;
+    await post("/__lucid/ack", { id: "ack-2", intent: "revise" });
+    state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.agentWorking?.intent).toBe("revise");
+    expect(state.agentWorking?.since).toBe(since!);
 
     // An ack-only delta must not wake a waiting agent: acks are presence
     // metadata, not feedback, and agents must not wake each other by

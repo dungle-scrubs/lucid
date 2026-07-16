@@ -153,7 +153,9 @@ const WorkingIndicator = () => {
         <>
           {/* tw-shimmer clips to the text, so the base color's opacity is what
               makes the sweep visible (their documented /40 idiom). */}
-          <span className="shimmer text-fg/40">Agent responding…</span>
+          <span className="shimmer text-fg/40">
+            {working.intent === "revise" ? "Updating the artifact…" : "Agent responding…"}
+          </span>
           <span className="text-[11px] text-fg-faint tabular-nums">
             ({mm}:{ss})
           </span>

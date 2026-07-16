@@ -490,6 +490,39 @@ test("the working indicator opens when the agent takes delivery and closes on it
   await expect(page.locator('[data-role="agent"]')).toContainText("Batched.");
 });
 
+test("declared revise intent puts an update-on-the-way spinner on the surface", async ({
+  page,
+}) => {
+  await openViewer(page);
+
+  // Delivery, then declared intent - the shimmer names it and the surface
+  // announces it where reading starts.
+  await page.evaluate(() =>
+    fetch("/__lucid/ack", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "i-ack" }),
+    }),
+  );
+  await expect(page.locator('[data-test="agent-working"]')).toContainText("Agent responding");
+  await expect(page.locator('[data-test="surface-updating"]')).toHaveCount(0);
+
+  await page.evaluate(() =>
+    fetch("/__lucid/ack", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "i-intent", intent: "revise" }),
+    }),
+  );
+  await expect(page.locator('[data-test="surface-updating"]')).toBeVisible();
+  await expect(page.locator('[data-test="agent-working"]')).toContainText("Updating the artifact");
+
+  // Real output closes the window and the spinner with it.
+  await cli.run(["wait", cli.artifact, "--reply", "done", "--timeout", "1"]);
+  await expect(page.locator('[data-test="surface-updating"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+});
+
 test("a dropped live connection shows a self-clearing indicator, not a warning pile", async ({
   page,
 }) => {

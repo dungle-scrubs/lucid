@@ -77,7 +77,7 @@ export interface WaitPayload {
   readonly questions?: readonly PayloadQuestion[];
   readonly warnings?: readonly Warning[];
   /** Open "agent is working" window (ack received, no output yet). */
-  readonly agentWorking?: { readonly since: string };
+  readonly agentWorking?: { readonly since: string; readonly intent?: "revise" | "reply" };
 }
 
 const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): PayloadMessage => ({

@@ -5,6 +5,7 @@ import { Effect, Option } from "effect";
 import { toErrorJson, type LucidError } from "../errors.ts";
 import {
   runAsk,
+  runIntent,
   runEnd,
   runOpen,
   runPlanIngest,
@@ -77,6 +78,19 @@ const askCommand = Command.make(
   ({ file, text, ref }) => runEffect(() => runAsk(file, text, Option.getOrUndefined(ref))),
 );
 
+const intentArg = Args.choice(
+  [
+    ["revise", "revise"],
+    ["reply", "reply"],
+  ],
+  { name: "intent" },
+);
+const intentCommand = Command.make(
+  "intent",
+  { file: fileArg, intent: intentArg },
+  ({ file, intent }) => runEffect(() => runIntent(file, intent as "revise" | "reply")),
+);
+
 const serveCommand = Command.make("__serve", { file: fileArg }, ({ file }) =>
   runEffect(() => runServe(file)),
 );
@@ -119,6 +133,7 @@ const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe
     waitCommand,
     endCommand,
     askCommand,
+    intentCommand,
     serveCommand,
     planCommand,
   ]),

@@ -14,7 +14,7 @@ import {
   CHROME_MIN_WIDTH,
   DEFAULT_CHROME_WIDTH,
 } from "./store.ts";
-import { DiffBar, Lightbox, NewerVersionBanner } from "./Surface.tsx";
+import { DiffBar, Lightbox, NewerVersionBanner, SurfaceUpdating } from "./Surface.tsx";
 import { Thread } from "./Thread.tsx";
 import type { AgentQuestion, ConversationMessage } from "./types.ts";
 
@@ -85,7 +85,7 @@ const bootstrap = async (): Promise<void> => {
     messages: ConversationMessage[];
     questions?: AgentQuestion[];
     warnings?: { code: string; message: string }[];
-    agentWorking?: { since: string };
+    agentWorking?: { since: string; intent?: "revise" | "reply" };
   };
   set({
     version: payload.version,
@@ -326,6 +326,7 @@ export const Chrome = () => {
         <div className="relative min-h-0 flex-1">
           <NewerVersionBanner />
           <DiffBar />
+          <SurfaceUpdating />
           <iframe
             ref={iframeRef}
             title="artifact surface"

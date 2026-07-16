@@ -342,7 +342,8 @@ export const runServer = async (
   const handleAck = async (req: Request): Promise<Response> => {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body || typeof body.id !== "string") return json({ error: "invalid ack" }, 400);
-    await serverAppend([{ t: "agent_ack", id: body.id }]);
+    const intent = body.intent === "revise" || body.intent === "reply" ? body.intent : undefined;
+    await serverAppend([{ t: "agent_ack", id: body.id, ...(intent ? { intent } : {}) }]);
     return json({ ok: true });
   };
 

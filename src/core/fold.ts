@@ -79,8 +79,9 @@ export interface FoldedState {
   /** Last seq that is not an agent_ack: `wait` blocks past ack-only deltas. */
   readonly lastNonAckSeq: number;
   /** Open "agent is working" window: set by agent_ack, closed by any agent
-   *  output (version, reply, question) within the segment. */
-  readonly agentWorking: { readonly since: string } | null;
+   *  output (version, reply, question) within the segment. A re-ack may add
+   *  declared intent; the window's `since` stays the first ack's time. */
+  readonly agentWorking: { readonly since: string; readonly intent?: "revise" | "reply" } | null;
   /** seq of the session_opened that begins the current segment. */
   readonly segmentStartSeq: number;
 }
@@ -254,11 +255,22 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
 
   // Presence: an ack opens the working window; any agent output closes it.
   // Separate pass so the content fold above stays untouched by metadata.
-  let agentWorking: { readonly since: string } | null = null;
+  let workingSince: string | null = null;
+  let workingIntent: "revise" | "reply" | undefined;
   for (const e of segmentEvents) {
-    if (e.t === "agent_ack") agentWorking = { since: e.at };
-    else if (e.t === "version" || e.t === "agent_reply" || e.t === "question") agentWorking = null;
+    if (e.t === "agent_ack") {
+      // A re-ack refines the open window (declared intent) without restarting
+      // its clock; the first ack's time is when delivery happened.
+      workingSince = workingSince ?? e.at;
+      if (e.intent) workingIntent = e.intent;
+    } else if (e.t === "version" || e.t === "agent_reply" || e.t === "question") {
+      workingSince = null;
+      workingIntent = undefined;
+    }
   }
+  const agentWorking = workingSince
+    ? { since: workingSince, ...(workingIntent ? { intent: workingIntent } : {}) }
+    : null;
 
   return {
     status,

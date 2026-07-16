@@ -59,7 +59,7 @@ interface LucidState {
   status: string;
   /** Open "agent is working" window from the fold: set by the agent's ack on
    *  taking delivery, closed by its next output (version, reply, question). */
-  agentWorking: { readonly since: string } | null;
+  agentWorking: { readonly since: string; readonly intent?: "revise" | "reply" } | null;
   /** SSE stream health. EventSource reconnects by itself, so this is a
    *  transient indicator, not an error the human has to act on. */
   live: boolean;

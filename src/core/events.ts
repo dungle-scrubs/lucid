@@ -89,6 +89,14 @@ export interface AgentReplyEvent extends BaseEvent {
 export interface AgentAckEvent extends BaseEvent {
   readonly t: "agent_ack";
   readonly id: string;
+  /**
+   * Optional declared intent, re-acked by the agent once it has read the
+   * feedback and decided what kind of output is coming: "revise" (the
+   * artifact will change - the surface shows an update-on-the-way spinner)
+   * or "reply" (a conversation message). A promise, not a fact - the window
+   * still only closes on real output.
+   */
+  readonly intent?: "revise" | "reply";
 }
 
 /**

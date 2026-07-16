@@ -168,6 +168,41 @@ export const NewerVersionBanner = () => {
   );
 };
 
+/**
+ * The agent has declared its next output will revise this document. Upper-left
+ * of the surface, where reading starts. Declared intent is a promise, not a
+ * fact - which is why it only ever says an update is on the way, and the
+ * update itself (live reload, version bump) remains the proof.
+ */
+export const SurfaceUpdating = () => {
+  const working = useLucid((s) => s.agentWorking);
+  const status = useLucid((s) => s.status);
+  if (!working || working.intent !== "revise" || status !== "active") return null;
+  return (
+    <div
+      data-test="surface-updating"
+      className="absolute top-3 left-3 z-5 flex items-center gap-2 rounded-full border border-ink-400 bg-ink-900/95 py-1 pr-3 pl-2 text-[12px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+    >
+      {/* lucide loader-circle */}
+      <svg
+        viewBox="0 0 24 24"
+        width="14"
+        height="14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        className="animate-spin text-accent-bright"
+      >
+        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+      </svg>
+      update on the way…
+    </div>
+  );
+};
+
 /** Full-bleed image view. Floats, so it gets a shadow. */
 export const Lightbox = () => {
   const images = useLucid((s) => s.lightboxImages);
