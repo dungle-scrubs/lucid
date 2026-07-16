@@ -91,6 +91,7 @@ const ComposerAttachment = () => (
 
 const Composer = () => (
   <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-ink-600 bg-bg p-[14px]">
+    <ListenerLine />
     <div className="flex flex-wrap gap-1.5 empty:hidden">
       <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
     </div>
@@ -158,6 +159,43 @@ const WorkingIndicator = () => {
           </span>
           <span className="text-[11px] text-fg-faint tabular-nums">
             ({mm}:{ss})
+          </span>
+        </>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Presence above the prompt: is anyone on the other end right now. Listening
+ * (an agent blocked in wait, its waker connected) is distinct from working
+ * (delivery acked, output pending) - while working the agent is deliberately
+ * disconnected, so this line yields to the working indicator rather than
+ * contradicting it.
+ */
+const ListenerLine = () => {
+  const listening = useLucid((s) => s.agentsListening);
+  const working = useLucid((s) => s.agentWorking);
+  const status = useLucid((s) => s.status);
+  if (status !== "active" || working) return null;
+  return (
+    <div
+      data-test="listener-line"
+      data-listening={listening > 0 ? "true" : "false"}
+      className="flex items-center gap-1.5 text-[11px]"
+    >
+      {listening > 0 ? (
+        <>
+          <span className="size-1.5 rounded-full bg-agent" />
+          <span className="text-agent">
+            {listening === 1 ? "agent listening" : `${listening} agents listening`}
+          </span>
+        </>
+      ) : (
+        <>
+          <span className="size-1.5 rounded-full bg-steel-600" />
+          <span className="text-fg-faint">
+            no agent connected · feedback is recorded and delivered when one checks in
           </span>
         </>
       )}

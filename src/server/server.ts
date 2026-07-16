@@ -126,6 +126,9 @@ export const runServer = async (
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  /** Which subscribers are agents blocked in `wait` (their waker connects with
+   *  ?role=agent). Presence for the viewer: "is anyone listening right now". */
+  const agentClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
   let port = 0; // assigned once the server binds (below)
   let stopped = false;
@@ -139,15 +142,29 @@ export const runServer = async (
     lastActivity = Date.now();
   };
 
-  const broadcast = (event: LogEvent): void => {
-    const chunk = encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+  const broadcastRaw = (chunk: Uint8Array): void => {
     for (const client of sseClients) {
       try {
         client.enqueue(chunk);
       } catch {
         sseClients.delete(client);
+        if (agentClients.delete(client)) queueMicrotask(broadcastListeners);
       }
     }
+  };
+
+  const broadcast = (event: LogEvent): void => {
+    broadcastRaw(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+  };
+
+  /** Synthetic frame (like `warning`): the count of agents currently blocked
+   *  in wait. Sent whenever it changes, so the composer can say "listening". */
+  const broadcastListeners = (): void => {
+    broadcastRaw(
+      encoder.encode(
+        `event: listeners\ndata: ${JSON.stringify({ agents: agentClients.size })}\n\n`,
+      ),
+    );
   };
 
   const serverAppend = async (inputs: readonly EventInput[]): Promise<readonly LogEvent[]> => {
@@ -164,7 +181,7 @@ export const runServer = async (
 
   // ---- request handling -----------------------------------------------------
 
-  const handleEvents = (): Response => {
+  const handleEvents = (isAgent: boolean): Response => {
     // Assigned synchronously in `start` before any frame is enqueued; the `!`
     // marks that definite assignment for the `cancel` reader below.
     let self!: ReadableStreamDefaultController<Uint8Array>;
@@ -172,10 +189,15 @@ export const runServer = async (
       start(controller) {
         self = controller;
         sseClients.add(controller);
+        if (isAgent) {
+          agentClients.add(controller);
+          broadcastListeners();
+        }
         controller.enqueue(encoder.encode(": connected\n\n"));
       },
       cancel() {
         sseClients.delete(self);
+        if (agentClients.delete(self)) broadcastListeners();
       },
     });
     return new Response(stream, {
@@ -435,7 +457,7 @@ export const runServer = async (
       });
     }
     if (pathname === "/__lucid/events") {
-      return handleEvents();
+      return handleEvents(url.searchParams.get("role") === "agent");
     }
     if (pathname === "/__lucid/artifact") {
       const html = await readFile(paths.currentHtml, "utf8").catch(() => "");
@@ -463,7 +485,7 @@ export const runServer = async (
         questions: state.questions,
         nextSeq: state.highSeq,
       });
-      return json(payload);
+      return json({ ...payload, agentsListening: agentClients.size });
     }
     if (pathname === "/__lucid/diff") return handleDiff(url);
     if (pathname === "/__lucid/annotation" && req.method === "POST") return handleAnnotation(req);

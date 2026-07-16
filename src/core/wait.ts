@@ -66,7 +66,7 @@ const createWaker = (port: number): Waker => {
     let backoff = RECONNECT_BASE_MS;
     while (!closed) {
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/__lucid/events`, {
+        const res = await fetch(`http://127.0.0.1:${port}/__lucid/events?role=agent`, {
           signal: controller.signal,
           headers: { host: `127.0.0.1:${port}` },
         });

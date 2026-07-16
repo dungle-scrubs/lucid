@@ -490,6 +490,25 @@ test("the working indicator opens when the agent takes delivery and closes on it
   await expect(page.locator('[data-role="agent"]')).toContainText("Batched.");
 });
 
+test("the composer says whether an agent is listening", async ({ page }) => {
+  await openViewer(page);
+  const line = page.locator('[data-test="listener-line"]');
+
+  // Nobody is waiting on a fresh session.
+  await expect(line).toHaveAttribute("data-listening", "false");
+  await expect(line).toContainText("no agent connected");
+
+  // An agent blocks in wait: its waker connects and the line flips - live via
+  // the synthetic listeners frame, no reload.
+  const waiting = cli.run(["wait", cli.artifact, "--since", "evt_00001", "--timeout", "6"]);
+  await expect(line).toHaveAttribute("data-listening", "true");
+  await expect(line).toContainText("agent listening");
+
+  // The wait window closes with nothing to deliver; the waker disconnects.
+  await waiting;
+  await expect(line).toHaveAttribute("data-listening", "false");
+});
+
 test("declared revise intent puts an update-on-the-way spinner on the surface", async ({
   page,
 }) => {

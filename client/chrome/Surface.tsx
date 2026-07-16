@@ -177,7 +177,7 @@ export const NewerVersionBanner = () => {
 export const SurfaceUpdating = () => {
   const working = useLucid((s) => s.agentWorking);
   const status = useLucid((s) => s.status);
-  if (!working || working.intent !== "revise" || status !== "active") return null;
+  if (working?.intent !== "revise" || status !== "active") return null;
   return (
     <div
       data-test="surface-updating"

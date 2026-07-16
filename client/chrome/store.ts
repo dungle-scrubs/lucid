@@ -60,6 +60,10 @@ interface LucidState {
   /** Open "agent is working" window from the fold: set by the agent's ack on
    *  taking delivery, closed by its next output (version, reply, question). */
   agentWorking: { readonly since: string; readonly intent?: "revise" | "reply" } | null;
+  /** Agents currently blocked in `wait` on this session - someone is
+   *  listening. Distinct from agentWorking: listening is presence before
+   *  delivery, working is the window after it. */
+  agentsListening: number;
   /** SSE stream health. EventSource reconnects by itself, so this is a
    *  transient indicator, not an error the human has to act on. */
   live: boolean;
@@ -93,6 +97,7 @@ const initial: LucidState = {
   warnings: [],
   status: "active",
   agentWorking: null,
+  agentsListening: 0,
   live: true,
   chromeWidth: readStoredWidth(),
   showTargets: readStoredShowTargets(),

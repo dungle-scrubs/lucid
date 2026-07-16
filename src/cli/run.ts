@@ -11,11 +11,7 @@ import { runWait, type WaitOptions } from "../core/wait.ts";
 import { ArtifactError, NotFoundError, ServerError } from "../errors.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
-import {
-  discoverLiveServer,
-  readServerDescriptor,
-  removeServerDescriptor,
-} from "../server/discovery.ts";
+import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { openBrowser, spawnServer, waitForServer } from "./self.ts";
 
@@ -203,30 +199,41 @@ export const runServe = async (file: string): Promise<void> => {
 
 /** `lucid` (bare) - status over per-session server.json discovery (no global registry; D-065). */
 export const runStatus = async (): Promise<void> => {
+  // Browse every session under the working directory - the log is the marker,
+  // not the server descriptor, so dormant and ended sessions are listed too.
+  // Session state is co-located with the artifact, which makes this
+  // per-project by construction: cd into a project, run `lucid`.
   const cwd = process.cwd();
-  const glob = new Glob("**/.lucid/*/server.json");
+  const glob = new Glob("**/.lucid/*/log.ndjson");
   const sessions: unknown[] = [];
   for await (const rel of glob.scan({ cwd, dot: true, onlyFiles: true })) {
-    // rel like  .lucid/<name>/server.json  or  sub/dir/.lucid/<name>/server.json
     const parts = rel.split("/");
     const idx = parts.lastIndexOf(".lucid");
     if (idx === -1 || parts[idx + 1] === undefined) continue;
-    const name = parts[idx + 1];
-    const artifactDir = parts.slice(0, idx).join("/") || ".";
-    // Reconstruct an approximate artifact path; the descriptor holds the canonical one.
-    const fakePath = `${cwd}/${artifactDir}/${name}.html`.replace("//", "/");
-    const paths = sessionPaths(fakePath);
-    const descriptor = await readServerDescriptor(paths);
-    if (!descriptor) continue;
-    const realPaths = sessionPaths(descriptor.session);
-    const identity = await discoverLiveServer(realPaths);
-    sessions.push({
-      session: descriptor.session,
-      port: descriptor.port,
-      live: identity !== undefined,
-      version: identity?.version,
-      viewer: identity ? `http://127.0.0.1:${descriptor.port}/__lucid/viewer` : undefined,
-    });
+    const artifactDir = [cwd, ...parts.slice(0, idx)].join("/");
+    try {
+      const stem = parts[idx + 1];
+      const probe = sessionPaths(`${artifactDir}/${stem}.html`);
+      const state = foldLog((await readEvents(probe.logPath)).events);
+      if (state.status === "none") continue;
+      // The log records the artifact's real basename (extension included).
+      const artifactPath = `${artifactDir}/${state.artifact || `${stem}.html`}`;
+      const paths = sessionPaths(artifactPath);
+      const identity = await discoverLiveServer(paths);
+      sessions.push({
+        session: artifactPath,
+        status: identity ? "active" : state.status === "active" ? "suspended" : state.status,
+        version: state.version,
+        segment: state.segment,
+        annotations: state.annotations.length,
+        live: identity !== undefined,
+        ...(identity
+          ? { viewer: `http://127.0.0.1:${identity.port}/__lucid/viewer` }
+          : { resume: `lucid open ${artifactPath}` }),
+      });
+    } catch {
+      /* unreadable log: skip rather than fail the listing */
+    }
   }
   print({
     sessions,

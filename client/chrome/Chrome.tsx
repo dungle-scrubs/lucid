@@ -86,6 +86,7 @@ const bootstrap = async (): Promise<void> => {
     questions?: AgentQuestion[];
     warnings?: { code: string; message: string }[];
     agentWorking?: { since: string; intent?: "revise" | "reply" };
+    agentsListening?: number;
   };
   set({
     version: payload.version,
@@ -94,6 +95,7 @@ const bootstrap = async (): Promise<void> => {
     messages: payload.messages,
     questions: payload.questions ?? [],
     agentWorking: payload.agentWorking ?? null,
+    agentsListening: payload.agentsListening ?? 0,
   });
   pushHighlights();
 };
@@ -231,6 +233,14 @@ export const Chrome = () => {
         /* a frame we cannot parse is not worth tearing the stream down for */
       }
     };
+    source.addEventListener("listeners", (e) => {
+      try {
+        const d = JSON.parse((e as MessageEvent).data) as { agents: number };
+        set({ agentsListening: d.agents });
+      } catch {
+        /* ignore */
+      }
+    });
     source.addEventListener("warning", (e) => {
       try {
         const w = JSON.parse((e as MessageEvent).data) as { code: string; message: string };
