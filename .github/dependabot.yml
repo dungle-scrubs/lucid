@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+
+  # This repo locks with bun.lock. Dependabot reads that under the "bun"
+  # ecosystem; the "npm" ecosystem only parses package-lock.json / yarn.lock and
+  # would silently update nothing here.
+  - package-ecosystem: bun
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
