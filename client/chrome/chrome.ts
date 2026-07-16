@@ -149,10 +149,33 @@ const readStoredWidth = (): number => {
   }
 };
 
-const targetLabel = (target: Anchor): string =>
-  target.kind === "element"
-    ? target.snippet.replace(/\s+/g, " ").slice(0, 80)
-    : `“${target.snippet.slice(0, 80)}”`;
+/**
+ * What the human pointed at, in their terms.
+ *
+ * An element anchor's snippet is outerHTML, so showing it raw was markup soup
+ * truncated mid-tag - it named everything except the thing you clicked. Parse it
+ * and keep the visible text: that *is* what was pointed at. The tag name is not
+ * shown; "p" or "div" is a fact about the markup, not about the thing, and the
+ * text already says what it is.
+ *
+ * A range is a phrase lifted out of a block, so it keeps its quotes; an element
+ * is the block itself and reads as itself.
+ */
+const targetText = (target: Anchor): string => {
+  const tidy = (s: string): string => s.replace(/\s+/g, " ").trim();
+  if (target.kind !== "element") return `“${tidy(target.snippet)}”`;
+  try {
+    const el = new DOMParser().parseFromString(target.snippet, "text/html").body.firstElementChild;
+    return tidy(el?.textContent ?? "") || tidy(target.snippet);
+  } catch {
+    return tidy(target.snippet);
+  }
+};
+
+const renderTarget = (target: Anchor) => {
+  const text = targetText(target);
+  return html`<div class="snippet" title=${text}><span class="txt">${text}</span></div>`;
+};
 
 /**
  * The chrome (RFC §1). The Lucid-owned viewer parent: composer, composer queue,
@@ -522,8 +545,13 @@ export class LucidChrome extends LitElement {
       justify-content: space-between;
       gap: 8px;
     }
-    .title { font-weight: 600; letter-spacing: 0.2px; }
-    .title small { color: #7b8694; font-weight: 400; display: block; font-size: 11px; }
+    /* min-width:0 lets a long artifact name truncate instead of shoving the
+       controls out of the header when the surface is dragged narrow. */
+    .title { font-weight: 600; letter-spacing: 0.2px; flex: 1 1 auto; min-width: 0; }
+    .title small {
+      color: #7b8694; font-weight: 400; display: block; font-size: 11px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .vtag {
       font-variant-numeric: tabular-nums;
       background: #1b2230;
@@ -564,16 +592,22 @@ export class LucidChrome extends LitElement {
       box-shadow: inset 0 0 0 1px #d69e2e;
     }
     [data-test="send-queue"] { margin-top: 12px; }
+    /* What was marked, shown the way the surface marks it: a translucent brass
+       wash, no rule. A left border on a rounded box curled at both ends, and
+       the box drew more attention than the note it was labelling. */
     .snippet {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 11px;
-      color: #cbd5e0;
-      background: #0d1016;
-      border-radius: 5px;
-      padding: 5px 7px;
-      max-height: 56px;
+      background: rgba(203, 168, 90, 0.10);
+      border-radius: 6px;
+      padding: 6px 8px;
+      color: #e6dbc3;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .snippet .txt {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
       overflow: hidden;
-      border-left: 2px solid #d69e2e;
     }
     .msg { display: flex; flex-direction: column; gap: 3px; }
     .msg .who { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
@@ -667,6 +701,13 @@ export class LucidChrome extends LitElement {
     button.primary { background: #2563eb; border-color: #2563eb; color: white; }
     button.primary:hover { background: #1d4ed8; }
     button.good { background: #16794d; border-color: #16794d; color: white; }
+    /* Amber: this is the human's own unsent work, not an error. Truncates on a
+       narrow surface; the button's title always carries the full reason. */
+    .approve-blocked {
+      font-size: 11px; color: #e2a541;
+      flex: 0 1 auto; min-width: 0; max-width: 280px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
     /* Agent questions awaiting the human - anchored above the composer */
     .questions-section {
@@ -696,8 +737,10 @@ export class LucidChrome extends LitElement {
     /* Number chip shared with the in-artifact marker badge, so a card and its
        spot on the surface read as the same numbered item - same circle, same
        straddled corner. Absolute so it costs the card no vertical space. */
+    /* Nudged in by ~39% of its own size (8px of 20px): centred on the corner it
+       hung off the card and crowded the section label above. */
     .idxchip {
-      position: absolute; top: -9px; left: -9px; z-index: 1;
+      position: absolute; top: -1px; left: -1px; z-index: 1;
       display: inline-flex; align-items: center; justify-content: center;
       width: 20px; height: 20px; border-radius: 999px;
       font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
@@ -717,6 +760,11 @@ export class LucidChrome extends LitElement {
       padding: 10px 16px; border-bottom: 1px solid #1f2530;
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
     }
+    /* The title gives way first, then the blocked reason ellipsizes. The
+       controls themselves never shrink - a header that clips its own buttons is
+       worse than one that clips a sentence. */
+    .surface-header > .row { flex: 0 1 auto; min-width: 0; }
+    .surface-header > .row > *:not(.approve-blocked) { flex: none; }
     .surface-body { position: relative; flex: 1; min-height: 0; background: #fff; }
     iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
     .banner {
@@ -969,6 +1017,20 @@ export class LucidChrome extends LitElement {
 
   private hasUnsentDraft(): boolean {
     return this.queue.length > 0 || this.hasComposerDraft();
+  }
+
+  /**
+   * Why Approve is refused. Approving appends `review_resolved`, which ends the
+   * agent's involvement until it is re-invoked (D-064) - so anything sent after
+   * it lands in the log behind a stop the agent has already acted on, and is
+   * never read. "Approve" means "I'm done, here's my review"; the queue has to
+   * go first for that to be true.
+   */
+  private approveBlocker(): string {
+    const n = this.queue.length;
+    return n > 0
+      ? `Send or remove your ${n} queued annotation${n > 1 ? "s" : ""} first`
+      : "Queue or discard your draft annotation first";
   }
 
   /** Name what is actually holding back the swap, so the banner never offers a
@@ -1304,7 +1366,7 @@ export class LucidChrome extends LitElement {
                     >
                       <span class="idxchip committed">${item.index}</span>
                       <span class="pill resolved">located · v${item.annotation.version}</span>
-                      <div class="snippet">${targetLabel(item.annotation.target)}</div>
+                      ${renderTarget(item.annotation.target)}
                       <div>${item.annotation.note}</div>
                     </div>
                   `
@@ -1335,7 +1397,7 @@ export class LucidChrome extends LitElement {
                       (a) => html`
                         <div class="card" data-test="orphan">
                           <span class="pill orphan">orphaned · v${a.version}</span>
-                          <div class="snippet">${targetLabel(a.target)}</div>
+                          ${renderTarget(a.target)}
                           <div>${a.note}</div>
                         </div>
                       `,
@@ -1367,7 +1429,7 @@ export class LucidChrome extends LitElement {
                         @mouseleave=${() => this.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: "" })}
                       >
                         <span class="idxchip queued">${i + 1}</span>
-                        <div class="snippet">${targetLabel(q.target)}</div>
+                        ${renderTarget(q.target)}
                         ${
                           this.editingId === q.id
                             ? html`
@@ -1413,7 +1475,7 @@ export class LucidChrome extends LitElement {
                 <section>
                   <h3>New annotation</h3>
                   <div class="card">
-                    <div class="snippet">${targetLabel(this.pendingTarget)}</div>
+                    ${renderTarget(this.pendingTarget)}
                     <textarea
                       rows="3"
                       placeholder="What should change here? (Enter to queue, Shift+Enter for a new line)"
@@ -1458,13 +1520,11 @@ export class LucidChrome extends LitElement {
               @keydown=${(e: KeyboardEvent) => this.onSubmitKey(e, () => void this.sendMessage())}
             ></textarea>
           </div>
-          <div class="row" style="justify-content:space-between">
+          <!-- Send sits where the eye ends up after typing. Approve moved to the
+               header: it ends the review, which is a session decision, not
+               something that belongs next to the message you are composing. -->
+          <div class="row" style="justify-content:flex-end">
             <button data-test="send-message" @click=${this.sendMessage}>Send message</button>
-            ${
-              this.reviewResolved
-                ? null
-                : html`<button class="good" data-test="approve" @click=${this.resolveReview}>Approve review</button>`
-            }
           </div>
         </footer>
       </div>
@@ -1500,6 +1560,28 @@ export class LucidChrome extends LitElement {
               @click=${this.toggleTargets}
             >${this.showTargets ? CROSSHAIR : CROSSHAIR_OFF}</button>
             <div class="vtag" title="current artifact version">v${this.version}</div>
+            ${
+              this.reviewResolved
+                ? null
+                : html`
+                  ${
+                    this.hasUnsentDraft()
+                      ? html`<span class="approve-blocked">${this.approveBlocker()}</span>`
+                      : null
+                  }
+                  <button
+                    class="good"
+                    data-test="approve"
+                    ?disabled=${this.hasUnsentDraft()}
+                    title=${
+                      this.hasUnsentDraft()
+                        ? `${this.approveBlocker()} - the agent stops reading once you approve`
+                        : "End the review; the agent stops until re-invoked"
+                    }
+                    @click=${this.resolveReview}
+                  >Approve review</button>
+                `
+            }
           </div>
         </header>
         <div class="surface-body">
