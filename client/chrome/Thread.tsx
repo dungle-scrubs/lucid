@@ -61,11 +61,12 @@ const UserMessage = () => {
   );
 };
 
+/** The agent speaks in the open: full-width, no container. Everything else in
+ *  the record wears a shape (amber bubble, bordered card), so bare prose reads
+ *  unmistakably as the agent without a bubble of its own. */
 const AssistantMessage = () => (
-  <div className="flex justify-start" data-role="agent">
-    <div className="flex max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tl-[4px] border border-cream-100/10 bg-[rgba(125,142,99,0.16)] px-3 py-2">
-      <MessagePrimitive.Parts components={parts} />
-    </div>
+  <div className="flex flex-wrap gap-1.5" data-role="agent">
+    <MessagePrimitive.Parts components={parts} />
   </div>
 );
 
