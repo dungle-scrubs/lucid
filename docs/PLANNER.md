@@ -1,9 +1,16 @@
 # Lucid + the planner: addressable plan review
 
-The [`planner`](https://) skill takes an idea to an implementation-ready plan and
-keeps a decision ledger in `plan.db`. Its REVIEW and iterate stages are where a
-human reviews the living document and gives feedback. Lucid is the addressable
-surface for exactly that moment.
+> **Status: integration note, not a shipped feature.** The `planner` skill this
+> document describes is not published. `lucid plan render` and `lucid plan
+> ingest` exist in the CLI and work against any document carrying `<!-- D-NNN -->`
+> decision markers, but the planner half of the loop is not something you can
+> install today. This is here to record the design, and because the marker
+> convention is worth stealing.
+
+The `planner` skill takes an idea to an implementation-ready plan and keeps a
+decision ledger in `plan.db`. Its REVIEW and iterate stages are where a human
+reviews the living document and gives feedback. Lucid is the addressable surface
+for exactly that moment.
 
 The fit is mechanical, not aspirational: **the planner already gives every
 decided claim a stable address** - the `<!-- D-NNN -->` marker it writes before

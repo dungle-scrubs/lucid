@@ -38,7 +38,7 @@ sequenceDiagram
 
 ## Quickstart
 
-Requires [Bun](https://bun.sh).
+Requires [Bun](https://bun.sh) 1.3.0 or newer. Linux and macOS.
 
 ```sh
 bun install
@@ -47,7 +47,11 @@ bun run build     # browser bundles + single self-contained binary -> dist/lucid
 
 `dist/lucid` embeds everything - viewer, overlay, stylesheets - so it works
 offline, binds loopback only, and needs nothing on disk at runtime. Put it on
-your PATH with a symlink: `ln -s "$PWD/dist/lucid" /opt/homebrew/bin/lucid`.
+your PATH with a symlink into any directory already there:
+
+```sh
+ln -s "$PWD/dist/lucid" ~/.local/bin/lucid       # or /usr/local/bin, /opt/homebrew/bin
+```
 
 The commands a human might ever run:
 
@@ -119,12 +123,19 @@ and read fine as prompts for any other harness:
   system (ink/cream/brass tokens, type rules, UI kit) for building
   Lucid-branded interfaces, including this repo's own chrome.
 
-Install by symlink so they can never drift from the binary you built:
+Install by symlink so they can never drift from the binary you built. For
+Claude Code, that is `~/.claude/skills/`:
 
 ```sh
-ln -s "$PWD/skills/lucid"        ~/.agents/skills/lucid
-ln -s "$PWD/skills/lucid-design" ~/.agents/skills/lucid-design
+ln -s "$PWD/skills/lucid"        ~/.claude/skills/lucid
+ln -s "$PWD/skills/lucid-design" ~/.claude/skills/lucid-design
 ```
+
+Claude Code surfaces every skill as a slash command, so this also gives you
+`/lucid` to invoke a review explicitly - though the skill is written to trigger
+on its own when a response wants to be an artifact. Other harnesses have their
+own skill directories, or can read `SKILL.md` as a plain prompt; substitute
+your own path.
 
 If your dotfiles are managed by GNU Stow, put a **relative** symlink inside
 the stowed tree instead, computed against the repo's real location (for
@@ -185,6 +196,8 @@ src/
   core/       event log, fold, versions, wait, cursor, paths, lock
   server/     Bun.serve daemon, overlay injection, viewer page, security
   anchors/    anchor schema + shared DOM resolution (browser + linkedom)
+  diff/       version-to-version artifact diffing
+  plan/       planner-document rendering and feedback ingest (see docs/PLANNER.md)
 client/
   chrome/     the review panel (React + assistant-ui + Tailwind)
   overlay/    in-artifact targeting and highlights (Lit)
@@ -202,10 +215,27 @@ bun run build:client   # browser bundles + Tailwind
 bun run build          # + compile dist/lucid
 bun run typecheck && bun run lint
 bun test test/*.test.ts        # unit/integration
-bunx playwright test           # end-to-end against a real browser
+bunx playwright install chromium && bunx playwright test   # end-to-end
 ```
 
+A running viewer serves the bundle its binary embedded at compile time: after
+client changes, rebuild **and** restart the viewer. Green tests against a stale
+bundle are not green.
+
 Conventions for coding agents working on this repo: [AGENTS.md](AGENTS.md).
+How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Thanks
+
+Lucid owes its premise to [lavish-axi](https://github.com/kunchenguid/lavish-axi)
+by [@kunchenguid](https://github.com/kunchenguid), which got there first: HTML is
+the format agents should be writing when prose stops being enough, and the review
+belongs in a browser rather than scrolling out of a terminal. Lavish worked out
+the shape of the thing - a CLI that serves an agent-written page, an overlay that
+makes it annotatable, sessions keyed by file path, and a skill that teaches the
+agent when to reach for it at all. Lucid goes somewhere different from there, and
+the [differences are real](#architecture), but the starting insight was not ours.
+Worth naming.
 
 ## Roadmap
 
@@ -216,7 +246,7 @@ flowchart TD
     C["Wire-contract consolidation:<br/>one payload owner + doc-pinning test"]
     C --> D["Persist unsent drafts across reloads"]
     D --> E["Multi-artifact sessions"]
-    E --> F["Public release: license,<br/>packaging, distribution"]
+    E --> F["Public release:<br/>packaging, distribution"]
 ```
 
 - **Skills distribution** - embed `skills/` in the binary like the client
@@ -231,4 +261,13 @@ flowchart TD
   test asserting the documented example against a real payload.
 - **Draft persistence** - queued annotations are client memory today; a
   reload before sending loses them.
-- **License and packaging** - not yet chosen; this repo is pre-release.
+- **Packaging and distribution** - the binary is built from source today.
+  Prebuilt release artifacts and a published package are not set up yet.
+
+## License
+
+[MIT](LICENSE), copyright Kevin Frilot.
+
+Lucid inlines Lucide icon path data and compiles its dependencies into the
+binary; those carry their own notices, reproduced in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

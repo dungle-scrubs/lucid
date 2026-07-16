@@ -10,8 +10,16 @@
    Lucid's values because the bridge below points them at our ramps.
    ========================================================================== */
 
-@import "tailwindcss";
+/* `source(none)` disables Tailwind v4's automatic source detection, which would
+   otherwise scan the whole repository and compile any token that merely looks
+   like a utility - including prose in README.md or docs/ - into this bundle.
+   The chrome's classes live in exactly one place, so scan exactly that. Keep
+   this explicit: the generated bundle is committed, and CI fails if it drifts,
+   so a stylesheet that reacts to documentation edits fails the build for
+   unrelated PRs. */
+@import "tailwindcss" source(none);
 @import "tw-shimmer";
+@source "../../client/chrome";
 
 /* Fonts are self-hosted-or-bust: the viewer is a localhost tool that must work
    with no network, so we ship stacks that degrade to system faces instead of

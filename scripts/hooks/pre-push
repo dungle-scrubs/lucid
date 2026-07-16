@@ -1,0 +1,23 @@
+#!/bin/sh
+# Scan for verified secrets before they leave the machine. Scanning after a
+# push is theatre - the secret is already published and must be rotated - so
+# this gate is local and deliberately not a CI workflow.
+#
+# Install: bun run hooks:install
+# Bypass (you had better be sure): git push --no-verify
+
+if ! command -v trufflehog >/dev/null 2>&1; then
+  echo "pre-push: trufflehog not installed, skipping secret scan." >&2
+  echo "          brew install trufflehog  (or see https://github.com/trufflesecurity/trufflehog)" >&2
+  exit 0
+fi
+
+echo "pre-push: scanning for verified secrets..."
+if ! trufflehog git "file://$(git rev-parse --show-toplevel)" --only-verified --fail --no-update; then
+  echo >&2
+  echo "pre-push: verified secrets found. Push blocked." >&2
+  echo "          Rotate the credential first - removing it from the diff is not enough." >&2
+  exit 1
+fi
+
+exit 0

@@ -112,7 +112,12 @@ const statFingerprint = (absPath: string): string | null => {
  * broadcasts to SSE subscribers. Resolves when the session is ended or
  * auto-suspended.
  */
-/** Reserved per-session port pool (see ~/.agents/PORTS.md), then ephemeral. */
+/**
+ * Preferred per-session ports, tried in order before falling back to `0`
+ * (ephemeral). A stable port keeps a reopened session on the URL the browser
+ * already has; the trailing `0` guarantees a session still starts when every
+ * preferred port is taken.
+ */
 export const PORT_POOL: readonly number[] = [
   17412, 17413, 17414, 17415, 17416, 17417, 17418, 17419, 0,
 ];

@@ -1,4 +1,7 @@
-# SQLite transient files (plan.db itself IS tracked - it is the canonical plan state)
+# Planner working state (decision ledger, RFC drafts) - kept local, never tracked
+.plans/
+
+# SQLite transient files
 *.db-wal
 *.db-shm
 
