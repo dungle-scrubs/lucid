@@ -57,11 +57,17 @@ Never fake the review loop, and never paste build instructions at the user.
    same directory, then rename). Give it a clear title and real structure (headings,
    lists, tables). Add `data-lucid-id="<stable-id>"` to the elements most likely to
    get feedback; keep each id unique within the document - duplicate ids are
-   skipped during anchor resolution. Style it with the **Lucid design system**: `@import` (or inline)
-   `../lucid-design/colors_and_type.css` (sibling skill, shipped alongside this one) and follow its rules
-   (dark ink, cream type, one brass accent; serif for prose, sans for chrome; no
-   emoji, no exclamation marks). Invoke the `lucid-design` skill if you want the
-   full kit.
+   skipped during anchor resolution.
+
+   **Self-contained is not optional**: one inline `<style>`, system font stacks,
+   no CDN, no remote assets. The artifact must render identically opened straight
+   from disk with no network - it is content that outlives the review.
+
+   For how it should *look*, invoke the **`lucid-design`** skill if it is
+   installed: the artifact is a document (paper, one accent, editorial voice),
+   not a copy of Lucid's own dark chrome. If the user has their own brand, use
+   theirs. If neither exists, write clean semantic HTML with generous padding and
+   a real type hierarchy - never leave it unstyled.
 
    **Wrap each reviewable group (a section, a phase, a card) in a container
    element with generous padding** - at least ~16px around its content. The
@@ -108,8 +114,21 @@ Never fake the review loop, and never paste build instructions at the user.
    whole review - you have nothing better to do during a review-moment than wait on
    the human - until `suspended`, `ended`, or `reviewResolved`.
    ```sh
-   lucid wait <file> --since <cursor> --timeout 120
+   lucid wait <file> --since <cursor> --timeout 120 \
+     --harness <name> --resume "<command that resumes this conversation>"
    ```
+   **Always pass `--harness` and `--resume`.** They record who is attending and
+   the exact terminal command that puts this conversation back behind the
+   artifact, so a human returning to a dormant review can copy it from the
+   viewer and pick up where you left off. Build the command from your own
+   harness session id, and include your harness's yolo-mode argument so the
+   resumed conversation can keep driving the review without permission stops:
+   - Claude Code: `--harness claude-code --resume "claude --resume <session-id> --dangerously-skip-permissions"`
+     (your session id is the UUID naming your transcript and scratchpad paths)
+   - Codex: `--harness codex --resume "codex resume <session-id> --yolo"`
+
+   Lucid only records and displays this command; running it is always the
+   human's act, in their terminal.
    - `status: "feedback"` -> apply the `annotations` (each has a `note`, the target
      `snippet`, and `resolved`) and any human `messages`. Revise the file (atomic
      write -> the viewer live-reloads) and/or reply with

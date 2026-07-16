@@ -11,15 +11,36 @@ icon**: copy its path data inline, stroke style, `stroke-width: 1.5`,
 `stroke: currentColor`, no fills. Solo icons only for truly universal actions,
 always with an accessible label. Existing examples to follow:
 `client/chrome/Header.tsx` (crosshair), `client/chrome/Thread.tsx`
-(chevron-down). The full iconography rules are in
-`skills/lucid-design/README.md` §4.
+(chevron-down). The full iconography rules are in `docs/DESIGN.md` §4. The
+brand marks are `assets/*.svg` - reference them, never redraw them.
 
 ## Design
 
-All chrome UI follows the Lucid design system - load the `lucid-design` skill
-(`skills/lucid-design/`) before styling anything. Dark ink, cream type, one
-brass accent; sage marks the agent, amber the human, and neither is ever
-decoration. No emoji, no exclamation marks, sentence case.
+Two design systems, and they are not interchangeable:
+
+- **The chrome** (this app) follows `docs/DESIGN.md`. Dark ink, cream type, one
+  brass accent; sage marks the agent, amber the human, and neither is ever
+  decoration. No emoji, no exclamation marks, sentence case. The tokens live in
+  `client/chrome/styles.css`; the running chrome is the only reference
+  implementation of a Lucid control.
+- **The artifact** (the agent's document, inside the iframe) is **paper** and
+  follows the optional `lucid-design` skill. It is content, not Lucid UI, and it
+  renders identically with or without Lucid, so it never wears the chrome's
+  palette. Do not style an artifact from `docs/DESIGN.md`.
+
+## UI primitives
+
+Chat and transcript primitives come from **assistant-ui**. For everything it
+does not cover (sidebar, tabs, and future shell chrome), use **shadcn/ui, the
+Base UI variant** - `shadcn add <c> -b base` against the `base-nova` registry -
+vendored under `client/chrome/ui/`. shadcn is open code, not a dependency: the
+copies are ours to edit, and they inherit Lucid's palette through the
+`@theme inline` shadcn variable bridge in `styles.css` (including the
+`--color-sidebar-*` ramp) rather than carrying a second theme. Keep each vendored
+file close to upstream so a later `shadcn add` stays diffable; note the edits in
+its header comment. Runtime deps this pulls in: `@base-ui/react`,
+`class-variance-authority`, `clsx`, `tailwind-merge`. Icons inside these
+components still follow the Lucide-only rule above.
 
 ## Build and verify
 

@@ -97,6 +97,18 @@ not happening; after ten minutes of silence it degrades to a plain statement
 that nothing has come back. If it never appears after you send, nothing took
 delivery. Silence is a signal, not a mystery.
 
+### Getting the conversation back
+
+Agents record who they are when they attend a review (`lucid wait --harness
+claude-code --resume "claude --resume <session-id> --dangerously-skip-permissions"`).
+When no agent is connected, the viewer offers a one-click copy of that command
+above the composer, and the `lucid` listing prints it per session as
+`lastAttendant` - paste it into a terminal and the original conversation is
+back behind the artifact, context intact. Lucid only records and displays the
+command; running it is always your act. Any fresh agent can still bootstrap
+from the log alone (`lucid wait <file>` with no cursor) - the recorded
+conversation is a bonus, not a requirement.
+
 ### Attended and standing reviews
 
 By default the agent runs `wait` **in the foreground and blocks its turn**: a
@@ -119,9 +131,13 @@ and read fine as prompts for any other harness:
 - **[`skills/lucid`](skills/lucid/SKILL.md)** - when and how to render
   responses as artifacts and drive the review loop. The consumer manual,
   versioned with the CLI it documents.
-- **[`skills/lucid-design`](skills/lucid-design/README.md)** - the design
-  system (ink/cream/brass tokens, type rules, UI kit) for building
-  Lucid-branded interfaces, including this repo's own chrome.
+- **[`skills/lucid-design`](skills/lucid-design/SKILL.md)** - optional. How the
+  *artifact* should look: a document on paper, self-contained, one accent,
+  editorial voice. Lucid works without it, and your own brand always wins.
+
+Lucid's own interface has a separate design system, [`docs/DESIGN.md`](docs/DESIGN.md),
+which stays in the repo - the chrome is dark and recedes so the artifact reads
+as paper, and the two are deliberately not interchangeable.
 
 Install by symlink so they can never drift from the binary you built. For
 Claude Code, that is `~/.claude/skills/`:
