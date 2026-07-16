@@ -26,6 +26,12 @@ export const addToQueue = (): void => {
     pastedImages: [],
   });
   pushHighlights();
+  // Queueing dismounts the note's textarea, which would strand focus on
+  // <body>. Hand it to the message composer - the next thing typed is either
+  // a message or another pick, and a pick never needed keyboard focus.
+  requestAnimationFrame(() => {
+    document.querySelector<HTMLTextAreaElement>('[data-test="message-input"]')?.focus();
+  });
 };
 
 export const discardPending = (): void => {

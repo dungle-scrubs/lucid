@@ -256,6 +256,9 @@ test("the record is chronological: queued cards hold their authored place", asyn
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
   await page.locator('[data-test="annotation-note"]').fill("Queued first");
   await page.locator('[data-test="add-to-queue"]').click();
+  // Queueing hands focus to the message composer - the flow the panel is
+  // built around: point, note, Enter, keep talking.
+  await expect(page.locator('[data-test="message-input"]')).toBeFocused();
   await page.locator('[data-test="message-input"]').fill("typed second");
   await page.locator('[data-test="send-message"]').click();
   await expect(page.locator('[data-role="human"]')).toContainText("typed second");
