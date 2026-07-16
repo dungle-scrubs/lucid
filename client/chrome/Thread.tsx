@@ -9,7 +9,7 @@ import {
 import { AnnotationPart } from "./AnnotationPart.tsx";
 import { useEffect, useState } from "react";
 import { Orphans, PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
-import { useLucid } from "./store.ts";
+import { useLucid, warn } from "./store.ts";
 import { Questions } from "./Questions.tsx";
 
 /**
@@ -179,27 +179,98 @@ const ListenerLine = () => {
   const status = useLucid((s) => s.status);
   if (status !== "active" || working) return null;
   return (
-    <div
-      data-test="listener-line"
-      data-listening={listening > 0 ? "true" : "false"}
-      className="flex items-center gap-1.5 text-[11px]"
-    >
-      {listening > 0 ? (
-        <>
-          <span className="size-1.5 rounded-full bg-agent" />
-          <span className="text-agent">
-            {listening === 1 ? "agent listening" : `${listening} agents listening`}
-          </span>
-        </>
-      ) : (
-        <>
-          <span className="size-1.5 rounded-full bg-steel-600" />
-          <span className="text-fg-faint">
-            no agent connected · feedback is recorded and delivered when one checks in
-          </span>
-        </>
-      )}
+    <div className="flex flex-col gap-1">
+      <div
+        data-test="listener-line"
+        data-listening={listening > 0 ? "true" : "false"}
+        className="flex items-center gap-1.5 text-[11px]"
+      >
+        {listening > 0 ? (
+          <>
+            <span className="size-1.5 rounded-full bg-agent" />
+            <span className="text-agent">
+              {listening === 1 ? "agent listening" : `${listening} agents listening`}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="size-1.5 rounded-full bg-steel-600" />
+            <span className="text-fg-faint">
+              no agent connected · feedback is recorded and delivered when one checks in
+            </span>
+          </>
+        )}
+      </div>
+      {listening === 0 ? <ResumeHint /> : null}
     </div>
+  );
+};
+
+/**
+ * The way back when nobody is listening: the last attendant's recorded resume
+ * command, copied for the human to paste into a terminal themselves. The
+ * screen grants no power - Lucid displays the command, it never runs it.
+ */
+const ResumeHint = () => {
+  const attendant = useLucid((s) => s.lastAttendant);
+  const [copied, setCopied] = useState(false);
+  if (!attendant?.resume) return null;
+  const cmd = attendant.resume;
+  return (
+    <button
+      type="button"
+      data-test="resume-copy"
+      title={cmd}
+      onClick={() => {
+        navigator.clipboard.writeText(cmd).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          },
+          () => warn("Couldn't copy - the command is in this button's tooltip."),
+        );
+      }}
+      className="flex cursor-pointer items-center gap-1.5 self-start text-[11px] text-fg-faint hover:text-fg"
+    >
+      {copied ? (
+        // lucide check
+        <svg
+          viewBox="0 0 24 24"
+          width="12"
+          height="12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+          className="text-agent"
+        >
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      ) : (
+        // lucide copy
+        <svg
+          viewBox="0 0 24 24"
+          width="12"
+          height="12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+          <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+        </svg>
+      )}
+      <span data-test="resume-copy-label">
+        {copied
+          ? "copied - paste it in a terminal"
+          : `copy the command to resume the ${attendant.harness} conversation`}
+      </span>
+    </button>
   );
 };
 
@@ -291,6 +362,12 @@ export const Thread = () => {
             No feedback sent yet. Click an element or select text in the artifact to annotate it.
           </div>
         </ThreadPrimitive.Empty>
+        {/* Bottom-anchor sparse content the way every chat does: this spacer
+            eats the free space above it, so a short record rests just over the
+            composer instead of stranding one message at the top. When the
+            record outgrows the viewport the spacer collapses to zero and it
+            scrolls from the top, oldest-first, unchanged. */}
+        <div aria-hidden className="mt-auto" />
         <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
         <WorkingIndicator />
         {/* Staged work lives at the end of the record, where the eye already is

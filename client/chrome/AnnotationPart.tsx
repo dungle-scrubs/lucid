@@ -39,10 +39,11 @@ export const targetText = (target: Anchor): string => {
 export const TargetSnippet = ({ target }: { readonly target: Anchor }) => {
   const text = targetText(target);
   return (
-    <div
-      title={text}
-      className="rounded-md bg-brass-400/10 px-2 py-1.5 text-[12px] leading-[1.45] text-cream-200"
-    >
+    // No `title`: the full text as a native tooltip was a wall of run-together
+    // prose on anything larger than a phrase, and it fired on every pass of the
+    // pointer over the card. The mark on the surface is the real referent - this
+    // is a two-line reminder of what was pointed at, not a way to read it.
+    <div className="rounded-md bg-brass-400/10 px-2 py-1.5 text-[12px] leading-[1.45] text-cream-200">
       <span className="line-clamp-2">{text}</span>
     </div>
   );
@@ -89,7 +90,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
       <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
         {data.index}
       </span>
-      <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-sage-600/25 px-[7px] py-px text-[10px] text-sage-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+      {/* Straddles the top edge like the number chip, but stays inside the
+          card horizontally: hung off the right corner it landed a few px from
+          the panel's own border and read as tucked under it, rounded end and
+          all. Nothing needs to hang into that gutter. */}
+      <span className="absolute -top-[9px] right-2 z-1 rounded-full bg-sage-600/25 px-[7px] py-px text-[10px] text-sage-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
         located · v{data.version}
       </span>
       <TargetSnippet target={data.target} />

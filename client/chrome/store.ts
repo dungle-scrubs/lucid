@@ -9,6 +9,7 @@ import type {
   MessageImage,
   PastedImage,
   QueuedAnnotation,
+  SessionSummary,
   TimelineItem,
   WarningItem,
 } from "./types.ts";
@@ -19,6 +20,7 @@ const config = (): Config => (window as unknown as { __LUCID__: Config }).__LUCI
 
 const CHROME_WIDTH_KEY = "lucid:chromeWidth";
 const SHOW_TARGETS_KEY = "lucid:showTargets";
+const SIDEBAR_OPEN_KEY = "lucid:sidebarOpen";
 export const DEFAULT_CHROME_WIDTH = 384;
 export const CHROME_MIN_WIDTH = 320;
 
@@ -42,9 +44,22 @@ const readStoredShowTargets = (): boolean => {
   }
 };
 
+/** The review panel is the reason the viewer exists, so it starts open unless
+ *  the human closed it last time. */
+const readStoredSidebarOpen = (): boolean => {
+  try {
+    return localStorage.getItem(SIDEBAR_OPEN_KEY) !== "0";
+  } catch {
+    return true;
+  }
+};
+
 interface LucidState {
   annotations: PayloadAnnotationLike[];
   messages: ConversationMessage[];
+  /** This viewer's own artifact path - the session identity, so the sessions
+   *  list can tell which row is the one you are looking at. */
+  session: string;
   version: number;
   reviewResolved: boolean;
   pendingTarget: Anchor | null;
@@ -64,10 +79,24 @@ interface LucidState {
    *  listening. Distinct from agentWorking: listening is presence before
    *  delivery, working is the window after it. */
   agentsListening: number;
+  /** Who last took delivery (advisory sidecar), with the copy-paste command
+   *  that resumes their conversation when the harness recorded one. Display
+   *  data only: resuming is the human's act, in their terminal. */
+  lastAttendant: { readonly harness: string; readonly at: string; readonly resume?: string } | null;
   /** SSE stream health. EventSource reconnects by itself, so this is a
    *  transient indicator, not an error the human has to act on. */
   live: boolean;
   chromeWidth: number;
+  /** Panel open/closed. Closing collapses it out of flow, so the artifact
+   *  reflows to full width rather than being covered. */
+  sidebarOpen: boolean;
+  /** Which face of the panel is showing: the review, or the project's other
+   *  sessions. */
+  sidebarTab: "chat" | "sessions";
+  /** Sibling sessions in this project, fetched lazily when the tab is first
+   *  opened. Null means "not looked yet", which is distinct from "none found". */
+  sessions: SessionSummary[] | null;
+  sessionsLoading: boolean;
   showTargets: boolean;
   hoveredId: string | null;
   diffMode: boolean;
@@ -84,6 +113,7 @@ interface LucidState {
 const initial: LucidState = {
   annotations: [],
   messages: [],
+  session: config().session,
   version: config().version,
   reviewResolved: false,
   pendingTarget: null,
@@ -98,8 +128,13 @@ const initial: LucidState = {
   status: "active",
   agentWorking: null,
   agentsListening: 0,
+  lastAttendant: null,
   live: true,
   chromeWidth: readStoredWidth(),
+  sidebarOpen: readStoredSidebarOpen(),
+  sidebarTab: "chat",
+  sessions: null,
+  sessionsLoading: false,
   showTargets: readStoredShowTargets(),
   hoveredId: null,
   diffMode: false,
@@ -223,5 +258,13 @@ export const persistShowTargets = (on: boolean): void => {
     localStorage.setItem(SHOW_TARGETS_KEY, on ? "1" : "0");
   } catch {
     /* storage unavailable; the toggle simply resets next load */
+  }
+};
+
+export const persistSidebarOpen = (open: boolean): void => {
+  try {
+    localStorage.setItem(SIDEBAR_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    /* storage unavailable; the panel simply reopens next load */
   }
 };

@@ -51,16 +51,25 @@ const openCommand = Command.make("open", { file: fileArg, noOpen }, ({ file, noO
 const sinceOpt = Options.text("since").pipe(Options.optional);
 const replyOpt = Options.text("reply").pipe(Options.optional);
 const harnessOpt = Options.text("harness").pipe(Options.optional);
+const resumeOpt = Options.text("resume").pipe(Options.optional);
 const timeoutOpt = Options.integer("timeout").pipe(Options.optional);
 const waitCommand = Command.make(
   "wait",
-  { file: fileArg, since: sinceOpt, reply: replyOpt, harness: harnessOpt, timeout: timeoutOpt },
-  ({ file, since, reply, harness, timeout }) =>
+  {
+    file: fileArg,
+    since: sinceOpt,
+    reply: replyOpt,
+    harness: harnessOpt,
+    resume: resumeOpt,
+    timeout: timeoutOpt,
+  },
+  ({ file, since, reply, harness, resume, timeout }) =>
     runEffect(() =>
       runWaitCli(file, {
         since: Option.getOrUndefined(since),
         reply: Option.getOrUndefined(reply),
         harness: Option.getOrUndefined(harness),
+        resume: Option.getOrUndefined(resume),
         timeoutMs: Option.match(timeout, { onNone: () => undefined, onSome: (s) => s * 1000 }),
       }),
     ),

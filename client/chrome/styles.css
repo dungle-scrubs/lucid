@@ -71,7 +71,12 @@
   --color-bg-raised: var(--color-ink-850);
   --color-bg-inset: #0d0c0a;
   --color-bg-overlay: var(--color-ink-700);
+  /* The artifact's ground. The chrome is dark and recedes; the artifact is
+     paper and is the thing being looked at. We only supply the ground it
+     renders on - what the agent paints there is its own (see the lucid-design
+     skill), and it must read as a document, not as more of this app. */
   --color-surface: var(--color-cream-50);
+  --color-surface-ink: #211d15;
 
   --color-fg: var(--color-cream-100);
   --color-fg-strong: var(--color-cream-50);
@@ -106,7 +111,11 @@
 @theme inline {
   --color-background: var(--color-bg);
   --color-foreground: var(--color-fg);
-  --color-muted: var(--color-ink-800);
+  /* The segmented tab track. It must sit BELOW the panel ground, not above it:
+     the active chip is what rises, so the track has to be the well it rises
+     out of. ink-800 made the track lighter than the chip and the control read
+     inside out. */
+  --color-muted: var(--color-bg-inset);
   --color-muted-foreground: var(--color-fg-muted);
   --color-primary: var(--color-accent);
   --color-primary-foreground: var(--color-on-accent);
@@ -118,6 +127,16 @@
   --color-ring: var(--color-accent);
   --color-card: var(--color-bg-raised);
   --color-card-foreground: var(--color-fg);
+
+  /* The vendored shadcn sidebar reads its own ramp. Point it at the review
+     panel's existing colors so the sidebar IS the panel, not a themed guest
+     sitting inside it. */
+  --color-sidebar: var(--color-bg);
+  --color-sidebar-foreground: var(--color-fg);
+  --color-sidebar-accent: var(--color-ink-700);
+  --color-sidebar-accent-foreground: var(--color-fg-strong);
+  --color-sidebar-border: var(--color-ink-600);
+  --color-sidebar-ring: var(--color-accent);
 }
 
 @layer base {

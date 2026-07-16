@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readLastAttendant, writeAttendantSidecar } from "../src/core/attendant.ts";
 import { foldLog } from "../src/core/fold.ts";
 import { appendEvent, appendEvents, readEvents } from "../src/core/log.ts";
 import { buildWaitPayload } from "../src/core/payload.ts";
-import { sessionPaths, snapshotPath } from "../src/core/paths.ts";
+import { cursorSidecarPath, sessionPaths, snapshotPath } from "../src/core/paths.ts";
 import { commitWatchedChange, openSession } from "../src/core/session.ts";
+import { listSessions, projectRoot } from "../src/core/sessions.ts";
 
 let dir: string;
 let artifact: string;
@@ -373,5 +375,141 @@ describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
     const prompts = events.filter((e) => e.t === "prompt");
     expect(prompts).toHaveLength(2);
     expect(prompts.map((e) => e.seq)).toEqual([2, 3]);
+  });
+});
+
+describe("the session dir ignores itself", () => {
+  test("a fresh .lucid carries a .gitignore", async () => {
+    const paths = sessionPaths(artifact);
+    expect(existsSync(join(dir, ".lucid"))).toBe(false);
+    await openSession(paths);
+    // The machinery lands in whatever directory the artifact lives in - often a
+    // repo - so it must not show up in `git status` unasked.
+    expect(await readFile(join(dir, ".lucid", ".gitignore"), "utf8")).toBe("*\n");
+  });
+
+  test("a .lucid that predates the behaviour gets one on the next open", async () => {
+    // The sessions already polluting someone's repo are precisely the ones that
+    // were created before this existed; writing only for a brand-new directory
+    // would miss every one of them.
+    const paths = sessionPaths(artifact);
+    await mkdir(join(dir, ".lucid", "plan"), { recursive: true });
+    expect(existsSync(join(dir, ".lucid", ".gitignore"))).toBe(false);
+
+    await openSession(paths);
+    expect(await readFile(join(dir, ".lucid", ".gitignore"), "utf8")).toBe("*\n");
+  });
+
+  test("an edited .gitignore is never overwritten", async () => {
+    // Editing it is how a team opts part of the record into git; that decision
+    // has to survive every subsequent open.
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await writeFile(join(dir, ".lucid", ".gitignore"), "*\n!log.ndjson\n");
+
+    await openSession(paths);
+    expect(await readFile(join(dir, ".lucid", ".gitignore"), "utf8")).toBe("*\n!log.ndjson\n");
+  });
+});
+
+describe("attendant sidecars (D-051 identity)", () => {
+  test("records harness identity + resume command; reads back the newest", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+
+    await writeAttendantSidecar(paths, {
+      harness: "codex",
+      nextCursor: "evt_00001",
+      at: "2026-07-16T09:00:00.000Z",
+      resume: "codex resume abc --yolo",
+    });
+    await writeAttendantSidecar(paths, {
+      harness: "claude-code",
+      nextCursor: "evt_00009",
+      at: "2026-07-16T10:00:00.000Z",
+      resume: "claude --resume xyz --dangerously-skip-permissions",
+    });
+
+    // Several harnesses may attend over a session's life; "who to resume"
+    // means the most recent one, not whichever file the FS lists first.
+    const latest = await readLastAttendant(paths);
+    expect(latest?.harness).toBe("claude-code");
+    expect(latest?.resume).toBe("claude --resume xyz --dangerously-skip-permissions");
+
+    // The sidecar keeps its documented shape on disk: it is advisory data other
+    // tools may read, not an internal encoding.
+    const raw = JSON.parse(await readFile(cursorSidecarPath(paths, "codex"), "utf8"));
+    expect(raw).toMatchObject({ harness: "codex", nextCursor: "evt_00001" });
+  });
+
+  test("no sidecars, an unreadable one, and a session dir that does not exist", async () => {
+    const paths = sessionPaths(artifact);
+    expect(await readLastAttendant(paths)).toBeUndefined(); // no session dir yet
+
+    await openSession(paths);
+    expect(await readLastAttendant(paths)).toBeUndefined(); // opened, never attended
+
+    // Advisory data gone bad must never take down a listing or a state read.
+    await writeFile(cursorSidecarPath(paths, "broken"), "{not json");
+    expect(await readLastAttendant(paths)).toBeUndefined();
+
+    await writeAttendantSidecar(paths, {
+      harness: "gpt",
+      nextCursor: "evt_00002",
+      at: "2026-07-16T11:00:00.000Z",
+    });
+    const latest = await readLastAttendant(paths);
+    expect(latest?.harness).toBe("gpt");
+    expect(latest?.resume).toBeUndefined(); // a harness may decline to record one
+  });
+});
+
+describe("projectRoot", () => {
+  test("returns the nearest ancestor with a .git entry", async () => {
+    const root = join(dir, "project");
+    const artifactDir = join(root, "nested", "artifacts");
+    await mkdir(join(root, ".git"), { recursive: true });
+    await mkdir(artifactDir, { recursive: true });
+
+    expect(await projectRoot(sessionPaths(join(artifactDir, "plan.html")))).toBe(root);
+  });
+
+  test("falls back to the artifact directory without a .git ancestor", async () => {
+    const artifactDir = join(dir, "standalone", "artifacts");
+    await mkdir(artifactDir, { recursive: true });
+
+    expect(await projectRoot(sessionPaths(join(artifactDir, "plan.html")))).toBe(artifactDir);
+  });
+});
+
+describe("listSessions", () => {
+  test("lists dormant sessions by name with resume and attendant data", async () => {
+    const alphaPaths = sessionPaths(join(dir, "alpha.html"));
+    const zetaPaths = sessionPaths(join(dir, "zeta.html"));
+    await writeFile(alphaPaths.artifactPath, V1);
+    await writeFile(zetaPaths.artifactPath, V1);
+    await openSession(zetaPaths);
+    await openSession(alphaPaths);
+    await writeAttendantSidecar(zetaPaths, {
+      harness: "codex",
+      nextCursor: "evt_00001",
+      at: "2026-07-16T12:00:00.000Z",
+      resume: "codex resume zeta",
+    });
+
+    const sessions = await listSessions(dir);
+
+    expect(sessions.map((session) => session.name)).toEqual(["alpha.html", "zeta.html"]);
+    expect(sessions[0]).toMatchObject({
+      session: alphaPaths.artifactPath,
+      status: "suspended",
+      live: false,
+      resume: `lucid open ${alphaPaths.artifactPath}`,
+    });
+    expect(sessions[1]?.lastAttendant).toEqual({
+      harness: "codex",
+      at: "2026-07-16T12:00:00.000Z",
+      resume: "codex resume zeta",
+    });
   });
 });

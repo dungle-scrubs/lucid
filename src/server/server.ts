@@ -2,15 +2,22 @@ import { statSync, mkdirSync, watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { parseAnchor } from "../anchors/anchor.ts";
+import { readLastAttendant } from "../core/attendant.ts";
 import { diffHtml } from "../diff/diff.ts";
 import { foldLog, versionRef } from "../core/fold.ts";
 import type { EventInput, LogEvent, PromptImage } from "../core/events.ts";
 import { appendEvents, readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
+import { listSessions, projectRoot } from "../core/sessions.ts";
 import { ServerError } from "../errors.ts";
 import { buildWaitPayload } from "../core/payload.ts";
 import { commitWatchedChange } from "../core/session.ts";
-import { CHROME_BUNDLE, CHROME_CSS, CLIENT_BUNDLE } from "./client-bundle.generated.ts";
+import {
+  CHROME_BUNDLE,
+  CHROME_CSS,
+  CLIENT_BUNDLE,
+  FAVICON_SVG,
+} from "./client-bundle.generated.ts";
 import { removeServerDescriptor, writeServerDescriptor } from "./discovery.ts";
 import { injectOverlay } from "./inject.ts";
 import { resolveAsset, validateHeaders } from "./security.ts";
@@ -73,20 +80,10 @@ const BROWSER_PROBES = new Set([
   "/robots.txt",
 ]);
 
-/** The viewer tab's own icon: the Lucid mark (a surface element in the brass
- *  annotation outline). Served at /favicon.ico for the viewer origin. */
-const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-<rect width="64" height="64" rx="14" fill="#131210"/>
-<rect x="17" y="18.5" width="22" height="3.4" rx="1.7" fill="#e6dbc3" fill-opacity="0.5"/>
-<rect x="17" y="30.3" width="30" height="3.6" rx="1.8" fill="#f2ecdc"/>
-<rect x="17" y="42.1" width="18" height="3.4" rx="1.7" fill="#e6dbc3" fill-opacity="0.5"/>
-<rect x="12.5" y="26.3" width="39" height="11.6" rx="3.5" fill="none" stroke="#bd9a4e" stroke-width="2.4"/>
-<circle cx="12.5" cy="26.3" r="3.1" fill="#cba85a"/></svg>`;
-
-const json = (body: unknown, status = 200): Response =>
+const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: { "content-type": "application/json; charset=utf-8", ...headers },
   });
 
 const noStore = { "cache-control": "no-store" } as const;
@@ -490,7 +487,30 @@ export const runServer = async (
         questions: state.questions,
         nextSeq: state.highSeq,
       });
-      return json({ ...payload, agentsListening: agentClients.size });
+      // Who last took delivery, from the advisory sidecars: display data for
+      // the chrome's resume affordance, never something the server executes.
+      const attendant = await readLastAttendant(paths);
+      return json({
+        ...payload,
+        agentsListening: agentClients.size,
+        ...(attendant
+          ? {
+              lastAttendant: {
+                harness: attendant.harness,
+                at: attendant.at,
+                ...(attendant.resume ? { resume: attendant.resume } : {}),
+              },
+            }
+          : {}),
+      });
+    }
+    if (pathname === "/__lucid/sessions" && req.method === "GET") {
+      const root = await projectRoot(paths);
+      return json(
+        { root, current: paths.artifactPath, sessions: await listSessions(root) },
+        200,
+        noStore,
+      );
     }
     if (pathname === "/__lucid/diff") return handleDiff(url);
     if (pathname === "/__lucid/annotation" && req.method === "POST") return handleAnnotation(req);

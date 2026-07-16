@@ -1,5 +1,5 @@
-import { basename } from "node:path";
-import { mkdirSync, renameSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { ArtifactError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
@@ -10,10 +10,33 @@ import type { SessionPaths } from "./paths.ts";
 import { snapshotPath, snapshotRelPath } from "./paths.ts";
 import { hashContent, validateStructure, writeSnapshot } from "./version.ts";
 
-/** Ensure the session directory tree exists. */
+/**
+ * Ensure the session directory tree exists, and that it ignores itself.
+ *
+ * Session state is Lucid's machinery - a log, an advisory lock, a served copy,
+ * version snapshots, pasted bytes - and it lands next to the artifact, which is
+ * often inside someone's repo. Left alone it shows up in `git status` as a
+ * lockfile and a server log nobody asked for, so `.lucid/` carries its own
+ * `.gitignore` rather than asking every user to discover the problem and patch
+ * their root .gitignore by hand.
+ *
+ * Written whenever it is absent, not only for a brand-new `.lucid/`: sessions
+ * that predate this behaviour are exactly the ones already polluting a repo.
+ * An existing file is never touched, so a team that wants part of the record
+ * committed edits it (`!log.ndjson`) and keeps that forever.
+ */
 export const ensureSessionDirs = (paths: SessionPaths): void => {
+  const lucidRoot = dirname(paths.sessionDir);
   mkdirSync(paths.sessionDir, { recursive: true });
   mkdirSync(paths.versionsDir, { recursive: true });
+  const ignore = join(lucidRoot, ".gitignore");
+  if (!existsSync(ignore)) {
+    try {
+      writeFileSync(ignore, "*\n");
+    } catch {
+      /* self-ignoring is a courtesy; never fail a session over it */
+    }
+  }
 };
 
 /** Atomic write within the session dir (temp-then-rename; same-dir rename). */

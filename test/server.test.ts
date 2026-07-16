@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeAttendantSidecar } from "../src/core/attendant.ts";
 import { foldLog } from "../src/core/fold.ts";
 import { readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
@@ -81,6 +82,52 @@ describe("server routes + security", () => {
     expect(chromeJs.headers.get("content-type")).toContain("javascript");
     const chromeCss = await get("/__lucid/chrome.css");
     expect(chromeCss.headers.get("content-type")).toContain("css");
+  });
+
+  test("lists sibling sessions for the current project", async () => {
+    const siblingPaths = sessionPaths(join(dir, "notes.html"));
+    await writeFile(siblingPaths.artifactPath, DOC);
+    await openSession(siblingPaths);
+    await writeAttendantSidecar(siblingPaths, {
+      harness: "codex",
+      nextCursor: "evt_00001",
+      at: "2026-07-16T10:00:00.000Z",
+      resume: "codex resume sibling",
+    });
+    await startServer();
+
+    const response = await get("/__lucid/sessions");
+    const listing = (await response.json()) as {
+      root: string;
+      current: string;
+      sessions: Array<{
+        session: string;
+        live: boolean;
+        viewer?: string;
+        resume?: string;
+        lastAttendant?: { harness: string; at: string; resume?: string };
+      }>;
+    };
+
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(listing.root).toBe(dir);
+    expect(listing.current).toBe(paths.artifactPath);
+    expect(listing.sessions).toHaveLength(2);
+    expect(listing.sessions[0]).toMatchObject({
+      session: paths.artifactPath,
+      live: true,
+      viewer: `http://127.0.0.1:${port}/__lucid/viewer`,
+    });
+    expect(listing.sessions[1]).toMatchObject({
+      session: siblingPaths.artifactPath,
+      live: false,
+      resume: `lucid open ${siblingPaths.artifactPath}`,
+      lastAttendant: {
+        harness: "codex",
+        at: "2026-07-16T10:00:00.000Z",
+        resume: "codex resume sibling",
+      },
+    });
   });
 
   test("browser auto-probes are answered without a missing-asset warning", async () => {
@@ -205,6 +252,27 @@ describe("server routes + security", () => {
     await post("/__lucid/reply", { id: "r-1", text: "done" });
     state = foldLog((await readEvents(paths.logPath)).events);
     expect(state.agentWorking).toBeNull();
+  });
+
+  test("state exposes the last attendant so the viewer can offer its resume command", async () => {
+    await startServer();
+    // Nothing has attended: the affordance has nothing to show, and says so by
+    // omission rather than by inventing a command.
+    expect(await (await get("/__lucid/state")).json()).not.toHaveProperty("lastAttendant");
+
+    await writeAttendantSidecar(paths, {
+      harness: "claude-code",
+      nextCursor: "evt_00003",
+      at: new Date().toISOString(),
+      resume: "claude --resume s-1 --dangerously-skip-permissions",
+    });
+    const state = (await (await get("/__lucid/state")).json()) as {
+      lastAttendant?: { harness: string; resume?: string };
+    };
+    expect(state.lastAttendant).toMatchObject({
+      harness: "claude-code",
+      resume: "claude --resume s-1 --dangerously-skip-permissions",
+    });
   });
 
   test("agent question -> human answer reaches the agent as feedback", async () => {

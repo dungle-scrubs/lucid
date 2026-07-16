@@ -118,3 +118,14 @@ it requires no always-running process of its own.
 Any harness can resume by calling `lucid wait <file>` with **no** `--since`,
 which returns the full folded state of the current segment (annotations,
 conversation, current version, status). Then advance your own cursor from there.
+
+## Attendant identity (`--harness`, `--resume`)
+
+`lucid wait <file> --harness <name> --resume "<cmd>"` records an advisory
+sidecar (`.lucid/<name>/cursor.<harness>.json`) alongside the cursor: who last
+took delivery, when, and - if the harness supplied one - the exact terminal
+command that resumes its conversation (including any autonomy flag, e.g.
+`claude --resume <id> --dangerously-skip-permissions`). The viewer and the
+`lucid` listing surface it as `lastAttendant` so a human can copy the command
+and re-summon the original conversation themselves. It is display data only:
+Lucid never executes it, and re-invocation stays external (D-064).

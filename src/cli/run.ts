@@ -1,21 +1,18 @@
-import { Glob } from "bun";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { writeAttendantSidecar } from "../core/attendant.ts";
 import { renderCursor } from "../core/cursor.ts";
 import { foldLog } from "../core/fold.ts";
 import { appendEvent, readEvents } from "../core/log.ts";
-import { cursorSidecarPath, sessionPaths } from "../core/paths.ts";
+import { sessionPaths } from "../core/paths.ts";
 import type { WaitPayload } from "../core/payload.ts";
 import { ensureSessionDirs, openSession } from "../core/session.ts";
+import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
 import { ArtifactError, NotFoundError, ServerError } from "../errors.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
-import {
-  discoverLiveServer,
-  readServerDescriptor,
-  removeServerDescriptor,
-} from "../server/discovery.ts";
+import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { openBrowser, spawnServer, waitForServer } from "./self.ts";
 
@@ -63,9 +60,12 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
 export interface WaitCliOptions extends WaitOptions {
   readonly reply?: string;
   readonly harness?: string;
+  /** Ready-to-paste command that resumes this harness conversation. Recorded
+   *  in the sidecar and surfaced (viewer, listing); never executed by Lucid. */
+  readonly resume?: string;
 }
 
-/** `lucid wait <file> [--since] [--reply] [--harness]` - block for feedback. */
+/** `lucid wait <file> [--since] [--reply] [--harness] [--resume]` - block for feedback. */
 export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Promise<void> => {
   const paths = sessionPaths(file);
 
@@ -108,11 +108,15 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
     }
   }
 
-  if (options.harness !== undefined && options.harness.length > 0) {
-    await writeFile(
-      cursorSidecarPath(paths, options.harness),
-      `${JSON.stringify({ harness: options.harness, nextCursor: payload.nextCursor, at: new Date().toISOString() }, null, 2)}\n`,
-    );
+  // `--resume` without `--harness` still records identity, under a generic name.
+  const harness = options.harness || (options.resume ? "agent" : undefined);
+  if (harness !== undefined) {
+    await writeAttendantSidecar(paths, {
+      harness,
+      nextCursor: payload.nextCursor,
+      at: new Date().toISOString(),
+      ...(options.resume ? { resume: options.resume } : {}),
+    });
   }
 
   print(payload);
@@ -203,51 +207,22 @@ export const runServe = async (file: string): Promise<void> => {
 
 /** `lucid` (bare) - status over per-session server.json discovery (no global registry; D-065). */
 export const runStatus = async (): Promise<void> => {
-  // Browse every session under the working directory - the log is the marker,
-  // not the server descriptor, so dormant and ended sessions are listed too.
-  // Session state is co-located with the artifact, which makes this
-  // per-project by construction: cd into a project, run `lucid`.
-  const cwd = process.cwd();
-  const glob = new Glob("**/.lucid/*/log.ndjson");
-  const sessions: unknown[] = [];
-  for await (const rel of glob.scan({ cwd, dot: true, onlyFiles: true })) {
-    const parts = rel.split("/");
-    const idx = parts.lastIndexOf(".lucid");
-    if (idx === -1 || parts[idx + 1] === undefined) continue;
-    const artifactDir = [cwd, ...parts.slice(0, idx)].join("/");
-    try {
-      const stem = parts[idx + 1];
-      const probe = sessionPaths(`${artifactDir}/${stem}.html`);
-      const state = foldLog((await readEvents(probe.logPath)).events);
-      if (state.status === "none") continue;
-      // The log records the artifact's real basename (extension included).
-      // Prefer the descriptor's canonical path when a server has run: the
-      // reconstructed one can differ by symlink aliasing (/tmp vs /private/tmp
-      // on macOS), and identity comparison is exact.
-      const reconstructed = `${artifactDir}/${state.artifact || `${stem}.html`}`;
-      const descriptor = await readServerDescriptor(sessionPaths(reconstructed));
-      const artifactPath = descriptor?.session ?? reconstructed;
-      const identity = await discoverLiveServer(sessionPaths(artifactPath));
-      sessions.push({
-        session: artifactPath,
-        status: identity ? "active" : state.status === "active" ? "suspended" : state.status,
-        version: state.version,
-        segment: state.segment,
-        annotations: state.annotations.length,
-        live: identity !== undefined,
-        ...(identity
-          ? { viewer: `http://127.0.0.1:${identity.port}/__lucid/viewer` }
-          : { resume: `lucid open ${artifactPath}` }),
-      });
-    } catch {
-      /* unreadable log: skip rather than fail the listing */
-    }
-  }
+  const sessions = (await listSessions(process.cwd())).map((summary) => ({
+    session: summary.session,
+    status: summary.status,
+    version: summary.version,
+    segment: summary.segment,
+    annotations: summary.annotations,
+    live: summary.live,
+    ...(summary.viewer ? { viewer: summary.viewer } : {}),
+    ...(summary.resume ? { resume: summary.resume } : {}),
+    ...(summary.lastAttendant ? { lastAttendant: summary.lastAttendant } : {}),
+  }));
   print({
     sessions,
     usage: {
       open: "lucid open <file>",
-      wait: "lucid wait <file> [--since <cursor>] [--reply <msg>] [--harness <id>]",
+      wait: "lucid wait <file> [--since <cursor>] [--reply <msg>] [--harness <id>] [--resume <cmd>]",
       end: "lucid end <file>",
     },
   });

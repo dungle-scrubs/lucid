@@ -2,9 +2,10 @@ import { useEffect, useRef } from "react";
 import type { LogEvent } from "../../src/core/events.ts";
 import type { ChromeMessage, PayloadAnnotationLike } from "../shared/protocol.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
-import { exitDiff, gotoHunk } from "./actions.ts";
+import { exitDiff, gotoHunk, setSidebarOpen, setSidebarTab } from "./actions.ts";
 import { Header } from "./Header.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
+import { Sessions } from "./Sessions.tsx";
 import {
   api,
   get,
@@ -17,6 +18,14 @@ import {
 import { DiffBar, Lightbox, NewerVersionBanner, SurfaceUpdating } from "./Surface.tsx";
 import { Thread } from "./Thread.tsx";
 import type { AgentQuestion, ConversationMessage } from "./types.ts";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarHeader,
+  SidebarInset,
+  SidebarProvider,
+} from "./ui/sidebar.tsx";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 
 const DIVIDER_WIDTH = 5;
 
@@ -87,6 +96,7 @@ const bootstrap = async (): Promise<void> => {
     warnings?: { code: string; message: string }[];
     agentWorking?: { since: string; intent?: "revise" | "reply" };
     agentsListening?: number;
+    lastAttendant?: { harness: string; at: string; resume?: string };
   };
   set({
     version: payload.version,
@@ -96,6 +106,7 @@ const bootstrap = async (): Promise<void> => {
     questions: payload.questions ?? [],
     agentWorking: payload.agentWorking ?? null,
     agentsListening: payload.agentsListening ?? 0,
+    lastAttendant: payload.lastAttendant ?? null,
   });
   pushHighlights();
 };
@@ -152,6 +163,8 @@ const onNewVersion = async (version: number): Promise<void> => {
 
 export const Chrome = () => {
   const chromeWidth = useLucid((s) => s.chromeWidth);
+  const sidebarOpen = useLucid((s) => s.sidebarOpen);
+  const sidebarTab = useLucid((s) => s.sidebarTab);
   const dragging = useRef(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -291,47 +304,103 @@ export const Chrome = () => {
   };
 
   return (
-    <div
-      className="grid h-screen"
-      style={{ gridTemplateColumns: `${chromeWidth}px ${DIVIDER_WIDTH}px 1fr` }}
+    // The sidebar owns its width through --sidebar-width, so pointing that at
+    // the dragged width keeps the resize and the collapse as one mechanism
+    // instead of two fighting over the same edge.
+    <SidebarProvider
+      open={sidebarOpen}
+      onOpenChange={setSidebarOpen}
+      style={{ "--sidebar-width": `${chromeWidth}px` } as React.CSSProperties}
+      className="h-screen"
     >
-      <div className="flex min-h-0 flex-col border-r border-ink-600 bg-bg">
-        <LucidRuntimeProvider>
-          <Thread />
-        </LucidRuntimeProvider>
-      </div>
+      {/* No border of its own: the divider draws the single boundary line, and
+          two of them stacked read as one thick band. The variant prefix has to
+          match the component's own `group-data-[side=left]:border-r` - a bare
+          `border-r-0` is a different tailwind-merge group, so both would
+          survive and the variant would win on specificity. */}
+      <Sidebar collapsible="offcanvas" className="group-data-[side=left]:border-r-0">
+        {/* One Tabs root spanning header and content: the triggers live in the
+            header, their panels fill the body. */}
+        <Tabs
+          value={sidebarTab}
+          onValueChange={(v) => setSidebarTab(v as "chat" | "sessions")}
+          className="flex min-h-0 flex-1 flex-col gap-0"
+        >
+          {/* No border and no fill of its own: the strip sits on the panel's
+              own ground so it reads as a control in the panel, not a titlebar
+              above it. The segmented track is the only thing drawn here. */}
+          <SidebarHeader className="p-2 pb-1">
+            <TabsList className="w-full">
+              <TabsTrigger value="chat" data-test="tab-chat">
+                Review
+              </TabsTrigger>
+              <TabsTrigger value="sessions" data-test="tab-sessions">
+                Sessions
+              </TabsTrigger>
+            </TabsList>
+          </SidebarHeader>
+          {/* keepMounted is load-bearing: Base UI unmounts a hidden panel by
+              default, which would throw away the composer draft, the unsent
+              queue and the scroll position every time the human glanced at the
+              sessions list. */}
+          <TabsContent
+            value="chat"
+            keepMounted
+            className="flex min-h-0 flex-1 flex-col data-[hidden]:hidden"
+          >
+            <LucidRuntimeProvider>
+              <Thread />
+            </LucidRuntimeProvider>
+          </TabsContent>
+          <TabsContent value="sessions" className="flex min-h-0 flex-1 flex-col">
+            <SidebarContent>
+              <Sessions />
+            </SidebarContent>
+          </TabsContent>
+        </Tabs>
+      </Sidebar>
       {/* The window-splitter pattern: a separator carries the role, and arrow
           keys resize it for anything that cannot drag. Double-click asks the
           overlay to measure, because the parent cannot - the surface is on an
-          opaque origin, so contentDocument is null from here. */}
-      <hr
-        aria-orientation="vertical"
-        aria-label="Resize the review panel"
-        aria-valuenow={chromeWidth}
-        aria-valuemin={CHROME_MIN_WIDTH}
-        tabIndex={0}
-        onPointerDown={onPointerDown}
-        onDoubleClick={() => toOverlay({ source: "lucid-chrome", type: "measure-content" })}
-        onKeyDown={(e) => {
-          const step = e.shiftKey ? 64 : 16;
-          if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-          e.preventDefault();
-          const next = Math.max(
-            CHROME_MIN_WIDTH,
-            Math.min(
-              window.innerWidth - 320,
-              chromeWidth + (e.key === "ArrowRight" ? step : -step),
-            ),
-          );
-          set({ chromeWidth: next });
-          persistWidth(next);
-        }}
-        title="Drag to resize · double-click to fit the document"
-        // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so with
-        // border-0 the divider collapses to nothing - invisible and undraggable.
-        className="m-0 h-full w-full cursor-col-resize border-0 bg-ink-700 hover:bg-accent-dim focus-visible:bg-accent"
-      />
-      <div className="flex min-h-0 flex-col bg-ink-850">
+          opaque origin, so contentDocument is null from here. Hidden while
+          collapsed: there is no panel edge to drag. */}
+      {sidebarOpen ? (
+        <hr
+          aria-orientation="vertical"
+          aria-label="Resize the review panel"
+          aria-valuenow={chromeWidth}
+          aria-valuemin={CHROME_MIN_WIDTH}
+          tabIndex={0}
+          onPointerDown={onPointerDown}
+          onDoubleClick={() => toOverlay({ source: "lucid-chrome", type: "measure-content" })}
+          onKeyDown={(e) => {
+            const step = e.shiftKey ? 64 : 16;
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+            e.preventDefault();
+            const next = Math.max(
+              CHROME_MIN_WIDTH,
+              Math.min(
+                window.innerWidth - 320,
+                chromeWidth + (e.key === "ArrowRight" ? step : -step),
+              ),
+            );
+            set({ chromeWidth: next });
+            persistWidth(next);
+          }}
+          title="Drag to resize · double-click to fit the document"
+          // The boundary is the 1px LEFT BORDER, not the element: the element
+          // stays DIVIDER_WIDTH wide as a grabbable target, filled with the
+          // artifact side's own ground so it disappears into that edge. Hover
+          // thickens the line inside that fixed footprint (border-box), so the
+          // artifact never shifts under the pointer.
+          //
+          // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so
+          // without it the divider collapses to nothing - invisible and undraggable.
+          style={{ width: DIVIDER_WIDTH }}
+          className="m-0 h-full shrink-0 cursor-col-resize border-0 border-l-[1px] border-l-ink-600 bg-ink-850 hover:border-l-[2px] hover:border-l-accent-bright focus-visible:border-l-[2px] focus-visible:border-l-accent-bright"
+        />
+      ) : null}
+      <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
         <Header />
         <div className="relative min-h-0 flex-1">
           <NewerVersionBanner />
@@ -352,11 +421,16 @@ export const Chrome = () => {
               overlayReady = true;
               pushHighlights();
             }}
-            className="h-full w-full border-0 bg-white"
+            // bg-surface, not white: this is the paper the artifact renders on,
+            // and it is the one place the chrome admits what is inside it is a
+            // document rather than more app. It only shows before the artifact
+            // paints (or through a transparent one), so it must not be a
+            // different white than the paper the artifact assumes.
+            className="h-full w-full border-0 bg-surface"
           />
         </div>
-      </div>
+      </SidebarInset>
       <Lightbox />
-    </div>
+    </SidebarProvider>
   );
 };

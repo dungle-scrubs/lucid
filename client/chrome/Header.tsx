@@ -1,7 +1,43 @@
-import { approveReview, enterDiff, reopenReview } from "./actions.ts";
+import { approveReview, enterDiff, reopenReview, setSidebarOpen } from "./actions.ts";
 import { persistShowTargets, set, useLucid } from "./store.ts";
 import type { Config } from "./types.ts";
 import { pushHighlights } from "./Chrome.tsx";
+
+/**
+ * Open/close the review panel. It lives in the header, on the artifact side,
+ * because that is where it stays reachable once the panel is closed and the
+ * artifact fills the window. Cmd/Ctrl+B toggles the same state (the sidebar
+ * owns that shortcut); this is its visible handle. Lucide `panel-left`.
+ */
+const PanelToggle = () => {
+  const open = useLucid((s) => s.sidebarOpen);
+  return (
+    <button
+      type="button"
+      data-test="panel-toggle"
+      aria-pressed={open}
+      aria-label={open ? "Hide the review panel" : "Show the review panel"}
+      title={open ? "Hide the review panel (⌘B)" : "Show the review panel (⌘B)"}
+      onClick={() => setSidebarOpen(!open)}
+      className="inline-flex flex-none cursor-pointer items-center rounded-md border border-ink-400 p-[3px] text-fg-muted hover:border-accent-bright hover:text-fg"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="15"
+        height="15"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <rect width="18" height="18" x="3" y="3" rx="2" />
+        <path d="M9 3v18" />
+      </svg>
+    </button>
+  );
+};
 
 const config = (): Config => (window as unknown as { __LUCID__: Config }).__LUCID__;
 
@@ -105,6 +141,7 @@ export const Header = () => {
 
   return (
     <header className="flex items-center justify-between gap-2 border-b border-ink-600 px-4 py-[10px]">
+      <PanelToggle />
       {/* min-w-0 lets a long artifact name truncate instead of shoving the
           controls out of the header; the controls themselves never shrink. */}
       <div className="min-w-0 flex-1 text-[13px] font-semibold text-fg-strong">

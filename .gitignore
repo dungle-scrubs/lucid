@@ -24,7 +24,6 @@ node_modules/
 /playwright-report/
 
 # Session state written by Lucid during local runs
-.lucid/
 
 # Bun build temp artifacts
 *.bun-build

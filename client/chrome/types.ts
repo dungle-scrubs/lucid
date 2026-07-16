@@ -49,6 +49,32 @@ export interface WarningItem {
   readonly message: string;
 }
 
+/**
+ * One sibling session in this project, as `/__lucid/sessions` reports it.
+ * Mirrors `SessionSummary` in src/core/sessions.ts - the chrome cannot import
+ * server types across the bundle boundary, so this is a hand-mirror, and the
+ * wire contract is what actually binds them.
+ */
+export interface SessionSummary {
+  readonly session: string;
+  readonly name: string;
+  readonly status: "active" | "suspended" | "ended";
+  readonly version: number;
+  readonly segment: number;
+  readonly annotations: number;
+  readonly live: boolean;
+  /** Present when live: the other session's own viewer, on its own port. */
+  readonly viewer?: string;
+  /** Present when dormant: the `lucid open` that would revive it. */
+  readonly resume?: string;
+  /** Who last attended it, and how to get that conversation back. */
+  readonly lastAttendant?: {
+    readonly harness: string;
+    readonly at: string;
+    readonly resume?: string;
+  };
+}
+
 export interface AgentQuestion {
   readonly id: string;
   readonly text: string;

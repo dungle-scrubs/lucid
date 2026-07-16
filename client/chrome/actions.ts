@@ -1,6 +1,6 @@
 import { applyDeferredSwapIfReady, pushHighlights, toOverlay } from "./Chrome.tsx";
-import { api, get, set, uploadPaste, uuid, warn } from "./store.ts";
-import type { AgentQuestion, DiffData } from "./types.ts";
+import { api, get, persistSidebarOpen, set, uploadPaste, uuid, warn } from "./store.ts";
+import type { AgentQuestion, DiffData, SessionSummary } from "./types.ts";
 
 /** Every mutation the human can make. Kept out of the components so the flow
  *  (and its ordering rules) reads in one place. */
@@ -140,6 +140,51 @@ export const reopenReview = async (): Promise<void> => {
   } catch {
     warn("Reopen didn't send - try again.");
   }
+};
+
+// ---- sessions -------------------------------------------------------------
+
+export const loadSessions = async (): Promise<void> => {
+  set({ sessionsLoading: true });
+  try {
+    const res = await api("/__lucid/sessions");
+    const data = (await res.json()) as { sessions: SessionSummary[] };
+    set({ sessions: data.sessions, sessionsLoading: false });
+  } catch {
+    set({ sessions: [], sessionsLoading: false });
+    warn("Couldn't list this project's sessions.");
+  }
+};
+
+export const setSidebarTab = (tab: "chat" | "sessions"): void => {
+  set({ sidebarTab: tab });
+  // Fetch on first look rather than at boot: a review that never opens the tab
+  // should never pay for a project-wide directory scan. Refetch on every visit
+  // after that, because liveness is exactly the thing that goes stale.
+  if (tab === "sessions") void loadSessions();
+};
+
+export const setSidebarOpen = (open: boolean): void => {
+  set({ sidebarOpen: open });
+  persistSidebarOpen(open);
+};
+
+/**
+ * Switch the viewer to another session. Each session is its own server on its
+ * own port, so this is a navigation, not a swap: a full load is correct, since
+ * the new session has its own stream, its own folded state and its own origin.
+ *
+ * The queue lives in this tab's memory, so leaving with unsent work would
+ * silently eat it. Refuse instead, and say why.
+ */
+export const switchToSession = (s: SessionSummary): void => {
+  const st = get();
+  if (st.queue.length > 0 || (st.pendingTarget !== null && st.composerNote.trim().length > 0)) {
+    warn("Send or discard your unsent feedback before switching sessions.");
+    return;
+  }
+  if (!s.viewer) return;
+  window.location.href = s.viewer;
 };
 
 // ---- agent questions ------------------------------------------------------

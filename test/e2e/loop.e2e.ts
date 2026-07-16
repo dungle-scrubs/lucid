@@ -566,26 +566,78 @@ test("a dropped live connection shows a self-clearing indicator, not a warning p
 test("double-clicking the divider fits the surface to the document", async ({ page }) => {
   await openViewer(page);
   const divider = page.locator('[aria-label="Resize the review panel"]');
+  // The panel owns its width through --sidebar-width on the sidebar wrapper, so
+  // the drag and the collapse share one lever; read the resolved gap width the
+  // sidebar actually lays out to.
   const panelWidth = async () =>
-    (
-      await page
-        .locator("#lucid-root > div")
-        .evaluate((el) => getComputedStyle(el).gridTemplateColumns)
-    ).split(" ")[0];
+    Number.parseFloat(
+      await page.locator('[data-slot="sidebar-gap"]').evaluate((el) => getComputedStyle(el).width),
+    );
 
-  const before = await panelWidth();
+  // The gap animates its width (transition-[width]); getComputedStyle samples
+  // mid-transition, so settle to a stable value before measuring.
+  const settledWidth = async (): Promise<number> => {
+    let prev = await panelWidth();
+    for (;;) {
+      await page.waitForTimeout(120);
+      const now = await panelWidth();
+      if (now === prev) return now;
+      prev = now;
+    }
+  };
+
+  const before = await settledWidth();
   await divider.dblclick();
   // The chrome cannot measure the surface itself - it is on an opaque origin,
   // so contentDocument is null. The width only changes if the overlay measured
   // and posted back across the boundary.
   await expect.poll(panelWidth).not.toBe(before);
-  const fitted = Number.parseFloat((await panelWidth()) ?? "0");
+  const fitted = await settledWidth();
   expect(fitted).toBeGreaterThanOrEqual(320); // never below the panel minimum
 
   // Arrow keys resize too, so the divider is not pointer-only.
   await divider.focus();
   await page.keyboard.press("ArrowRight");
-  await expect.poll(panelWidth).toBe(`${fitted + 16}px`);
+  await expect.poll(settledWidth).toBe(fitted + 16);
+});
+
+test("the panel tabs switch between review and sessions, and the panel collapses to reflow", async ({
+  page,
+}) => {
+  await openViewer(page);
+  const gap = page.locator('[data-slot="sidebar-gap"]');
+
+  // The review tab is the default face of the panel; the composer is present.
+  await expect(page.locator('[data-test="message-input"]')).toBeVisible();
+  const openWidth = Number.parseFloat(await gap.evaluate((el) => getComputedStyle(el).width));
+  expect(openWidth).toBeGreaterThan(300);
+
+  // Switch to Sessions: the current session lists itself as "you are here", and
+  // the composer survives underneath (keepMounted), it is only hidden.
+  await page.locator('[data-test="tab-sessions"]').click();
+  await expect(page.locator('[data-test="sessions-list"]')).toBeVisible();
+  await expect(page.locator('[data-test="session-row"]')).toHaveCount(1);
+  await expect(page.locator('[data-test="sessions-list"]')).toContainText("you are here");
+  await expect(page.locator('[data-test="message-input"]')).toBeHidden();
+
+  // Back to review; the composer is shown again, never remounted.
+  await page.locator('[data-test="tab-chat"]').click();
+  await expect(page.locator('[data-test="message-input"]')).toBeVisible();
+
+  // Closing the panel collapses the gap to zero - the artifact reflows into the
+  // space rather than being covered by an overlay.
+  await page.locator('[data-test="panel-toggle"]').click();
+  await expect
+    .poll(async () => Number.parseFloat(await gap.evaluate((el) => getComputedStyle(el).width)))
+    .toBe(0);
+  // The divider goes with it: there is no panel edge to drag while collapsed.
+  await expect(page.locator('[aria-label="Resize the review panel"]')).toHaveCount(0);
+
+  // Reopen restores the panel to its width.
+  await page.locator('[data-test="panel-toggle"]').click();
+  await expect
+    .poll(async () => Number.parseFloat(await gap.evaluate((el) => getComputedStyle(el).width)))
+    .toBe(openWidth);
 });
 
 test("the target toggle quiets the surface for reading and restores it", async ({ page }) => {
