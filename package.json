@@ -47,7 +47,7 @@
     "@base-ui/react": "^1.6.0",
     "@effect/cli": "^0.75.2",
     "@effect/platform": "^0.96.2",
-    "@effect/platform-bun": "^0.90.0",
+    "@effect/platform-bun": "^0.91.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "effect": "^3.21.4",
