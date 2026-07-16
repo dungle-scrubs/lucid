@@ -25,8 +25,11 @@ const btn =
 const btnPrimary =
   "cursor-pointer rounded-md border border-accent bg-accent px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-on-accent hover:bg-accent-bright disabled:cursor-not-allowed disabled:opacity-40";
 const heading = "mb-2 text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-muted";
+/* mt-1 on top of the card's 7px gap: the focus ring extends 4px past the
+   border (2px outline + 2px offset), which otherwise leaves the snippet and
+   the ring visually touching. */
 const field =
-  "resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline";
+  "mt-1 resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline";
 
 /** Enter submits, Shift+Enter is a newline - the composer's rule everywhere. */
 const onSubmitKey = (e: React.KeyboardEvent, action: () => void): void => {
