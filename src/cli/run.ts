@@ -11,7 +11,11 @@ import { runWait, type WaitOptions } from "../core/wait.ts";
 import { ArtifactError, NotFoundError, ServerError } from "../errors.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
-import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
+import {
+  discoverLiveServer,
+  readServerDescriptor,
+  removeServerDescriptor,
+} from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { openBrowser, spawnServer, waitForServer } from "./self.ts";
 
@@ -217,9 +221,13 @@ export const runStatus = async (): Promise<void> => {
       const state = foldLog((await readEvents(probe.logPath)).events);
       if (state.status === "none") continue;
       // The log records the artifact's real basename (extension included).
-      const artifactPath = `${artifactDir}/${state.artifact || `${stem}.html`}`;
-      const paths = sessionPaths(artifactPath);
-      const identity = await discoverLiveServer(paths);
+      // Prefer the descriptor's canonical path when a server has run: the
+      // reconstructed one can differ by symlink aliasing (/tmp vs /private/tmp
+      // on macOS), and identity comparison is exact.
+      const reconstructed = `${artifactDir}/${state.artifact || `${stem}.html`}`;
+      const descriptor = await readServerDescriptor(sessionPaths(reconstructed));
+      const artifactPath = descriptor?.session ?? reconstructed;
+      const identity = await discoverLiveServer(sessionPaths(artifactPath));
       sessions.push({
         session: artifactPath,
         status: identity ? "active" : state.status === "active" ? "suspended" : state.status,
