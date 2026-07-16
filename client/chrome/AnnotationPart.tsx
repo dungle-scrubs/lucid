@@ -12,10 +12,41 @@ export interface AnnotationData {
   readonly images?: readonly { readonly name: string; readonly file: string }[];
 }
 
-export const targetLabel = (target: Anchor): string =>
-  target.kind === "element"
-    ? target.snippet.replace(/\s+/g, " ").slice(0, 80)
-    : `“${target.snippet.slice(0, 80)}”`;
+/**
+ * What the human pointed at, in their terms.
+ *
+ * An element anchor's snippet is outerHTML, so showing it raw was markup soup
+ * truncated mid-tag - it named everything except the thing you clicked. Parse it
+ * and keep the visible text: that *is* what was pointed at. The tag name is not
+ * shown; "p" or "div" is a fact about the markup, not about the thing.
+ *
+ * A range is a phrase lifted out of a block, so it keeps its quotes; an element
+ * is the block itself and reads as itself.
+ */
+export const targetText = (target: Anchor): string => {
+  const tidy = (s: string): string => s.replace(/\s+/g, " ").trim();
+  if (target.kind !== "element") return `“${tidy(target.snippet)}”`;
+  try {
+    const el = new DOMParser().parseFromString(target.snippet, "text/html").body.firstElementChild;
+    return tidy(el?.textContent ?? "") || tidy(target.snippet);
+  } catch {
+    return tidy(target.snippet);
+  }
+};
+
+/** The marked-text treatment: a translucent brass wash, no rule - the same
+ *  language the surface uses for the mark itself. */
+export const TargetSnippet = ({ target }: { readonly target: Anchor }) => {
+  const text = targetText(target);
+  return (
+    <div
+      title={text}
+      className="rounded-md bg-brass-400/10 px-2 py-1.5 text-[12px] leading-[1.45] text-cream-200"
+    >
+      <span className="line-clamp-2">{text}</span>
+    </div>
+  );
+};
 
 const focus = (id: string): void => {
   window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: id }));
@@ -55,15 +86,13 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
         hovered ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]" : "border-ink-600"
       }`}
     >
-      <span className="absolute -top-[9px] -left-[9px] z-1 flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+      <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
         {data.index}
       </span>
       <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-sage-600/25 px-[7px] py-px text-[10px] text-sage-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
         located · v{data.version}
       </span>
-      <div className="max-h-14 overflow-hidden rounded-[5px] border-l-2 border-accent bg-bg-inset px-[7px] py-[5px] font-mono text-[11px] text-cream-300">
-        {targetLabel(data.target)}
-      </div>
+      <TargetSnippet target={data.target} />
       <div className="text-fg">{data.note}</div>
       {images.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">

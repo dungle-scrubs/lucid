@@ -10,7 +10,7 @@ import {
   removeQueued,
   sendQueue,
 } from "./actions.ts";
-import { targetLabel } from "./AnnotationPart.tsx";
+import { TargetSnippet } from "./AnnotationPart.tsx";
 import { imagesFromPaste, set, useLucid } from "./store.ts";
 import type { PastedImage } from "./types.ts";
 
@@ -25,8 +25,6 @@ const btn =
 const btnPrimary =
   "cursor-pointer rounded-md border border-accent bg-accent px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-on-accent hover:bg-accent-bright disabled:cursor-not-allowed disabled:opacity-40";
 const heading = "mb-2 text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-muted";
-const snippet =
-  "max-h-14 overflow-hidden rounded-[5px] border-l-2 border-accent bg-bg-inset px-[7px] py-[5px] font-mono text-[11px] text-cream-300";
 const field =
   "resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline";
 
@@ -93,7 +91,7 @@ export const Orphans = () => {
             <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-rust-500/30 px-[7px] py-px text-[10px] text-rust-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
               orphaned · v{a.version}
             </span>
-            <div className={snippet}>{targetLabel(a.target)}</div>
+            <TargetSnippet target={a.target} />
             <div className="text-fg">{a.note}</div>
           </div>
         ))}
@@ -160,10 +158,10 @@ export const Queue = () => {
               window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: "" }));
             }}
           >
-            <span className="absolute -top-[9px] -left-[9px] z-1 flex size-5 items-center justify-center rounded-full border border-dashed border-accent-dim bg-brass-400 text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+            <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center rounded-full border border-dashed border-accent-dim bg-brass-400 text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
               {i + 1}
             </span>
-            <div className={snippet}>{targetLabel(q.target)}</div>
+            <TargetSnippet target={q.target} />
             <Chips images={q.images} />
             {editingId === q.id ? (
               <>
@@ -260,7 +258,7 @@ export const PendingComposer = () => {
       <h3 className={heading}>New annotation</h3>
       {pendingTarget ? (
         <div className="flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-850 px-[11px] py-[10px]">
-          <div className={snippet}>{targetLabel(pendingTarget)}</div>
+          <TargetSnippet target={pendingTarget} />
           <Chips images={pastedImages} onRemove={removePastedImage} />
           <textarea
             ref={ref}

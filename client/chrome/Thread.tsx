@@ -6,11 +6,9 @@ import {
   useAssistantDataUI,
   useMessage,
 } from "@assistant-ui/react";
-import { approveReview, reopenReview } from "./actions.ts";
 import { AnnotationPart } from "./AnnotationPart.tsx";
 import { Orphans, PendingComposer, Queue, Warnings } from "./Panel.tsx";
 import { Questions } from "./Questions.tsx";
-import { useLucid } from "./store.ts";
 
 /**
  * The review record. assistant-ui owns the transcript, the composer and the
@@ -103,7 +101,7 @@ const Composer = () => (
       placeholder="Message the agent, or paste an image… (Enter to send, Shift+Enter for a new line)"
       className="resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
     />
-    <div className="flex items-center gap-2">
+    <div className="flex items-center justify-end gap-2">
       <ComposerPrimitive.Send
         data-test="send-message"
         className="cursor-pointer rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
@@ -113,66 +111,6 @@ const Composer = () => (
     </div>
   </ComposerPrimitive.Root>
 );
-
-/**
- * Approve ends the agent's involvement until it is re-invoked (D-064), so it is
- * not a bigger Send - it is the opposite.
- *
- * Which is why it refuses while anything is unsent. Approving appends
- * `review_resolved`; work sent afterwards lands in the log behind a stop the
- * agent has already acted on, so it is never read. The human reasonably reads
- * "approve" as "I'm done, here's my review" - the queue has to go first for
- * that to be true.
- */
-const ReviewBar = () => {
-  const resolved = useLucid((s) => s.reviewResolved);
-  const queueLen = useLucid((s) => s.queue.length);
-  const pendingTarget = useLucid((s) => s.pendingTarget);
-  const composerNote = useLucid((s) => s.composerNote);
-  // The same predicate that defers a live-reload: work that is not in the log.
-  const hasDraft = pendingTarget !== null && composerNote.trim().length > 0;
-  const blocked = queueLen > 0 || hasDraft;
-  const reason =
-    queueLen > 0
-      ? `Send or remove your ${queueLen} queued annotation${queueLen > 1 ? "s" : ""} first`
-      : "Queue or discard your draft annotation first";
-  return (
-    <div
-      data-test={resolved ? "resolved-bar" : "review-bar"}
-      className="flex items-center justify-between gap-2 border-t border-ink-600 bg-bg px-[14px] py-2"
-    >
-      {resolved ? (
-        <>
-          <span className="text-[12px] text-agent">✓ Review approved</span>
-          <button
-            type="button"
-            data-test="reopen"
-            onClick={() => void reopenReview()}
-            className="cursor-pointer rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600"
-          >
-            Reopen review
-          </button>
-        </>
-      ) : (
-        <>
-          <span className={`text-[11px] ${blocked ? "text-user" : "text-fg-faint"}`}>
-            {blocked ? reason : "Done reviewing?"}
-          </span>
-          <button
-            type="button"
-            data-test="approve"
-            disabled={blocked}
-            title={blocked ? `${reason} - the agent stops reading once you approve` : undefined}
-            onClick={() => void approveReview()}
-            className="cursor-pointer rounded-md border border-sage-600 bg-sage-600 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-cream-50 hover:bg-sage-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Approve review
-          </button>
-        </>
-      )}
-    </div>
-  );
-};
 
 export const Thread = () => {
   // Registers the renderer for the `data-annotation` parts that convertMessage
@@ -200,7 +138,6 @@ export const Thread = () => {
       </ThreadPrimitive.Viewport>
       <Questions />
       <Composer />
-      <ReviewBar />
     </ThreadPrimitive.Root>
   );
 };

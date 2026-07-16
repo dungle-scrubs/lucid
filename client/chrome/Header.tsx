@@ -1,4 +1,4 @@
-import { enterDiff } from "./actions.ts";
+import { approveReview, enterDiff, reopenReview } from "./actions.ts";
 import { persistShowTargets, set, useLucid } from "./store.ts";
 import type { Config } from "./types.ts";
 import { pushHighlights } from "./Chrome.tsx";
@@ -31,6 +31,65 @@ const Crosshair = ({ on }: { readonly on: boolean }) => (
   </svg>
 );
 
+/**
+ * Approve lives here, not under the composer: it ends the review - a session
+ * decision alongside the version, the change view and the target toggle - and
+ * it refuses while anything is unsent. Approving appends `review_resolved`,
+ * which ends the agent's involvement (D-064); work sent after it lands behind a
+ * stop the agent has already acted on and is never read.
+ */
+const ApproveControls = () => {
+  const resolved = useLucid((s) => s.reviewResolved);
+  const queueLen = useLucid((s) => s.queue.length);
+  const pendingTarget = useLucid((s) => s.pendingTarget);
+  const composerNote = useLucid((s) => s.composerNote);
+  const hasDraft = pendingTarget !== null && composerNote.trim().length > 0;
+  const blocked = queueLen > 0 || hasDraft;
+  const reason =
+    queueLen > 0
+      ? `Send or remove your ${queueLen} queued annotation${queueLen > 1 ? "s" : ""} first`
+      : "Queue or discard your draft annotation first";
+
+  if (resolved) {
+    return (
+      <span data-test="resolved-bar" className="flex items-center gap-1.5">
+        <span className="text-[11px] text-agent">✓ approved</span>
+        <button
+          type="button"
+          data-test="reopen"
+          onClick={() => void reopenReview()}
+          className="cursor-pointer rounded-full border border-ink-400 px-2.5 py-px text-[11px] font-semibold text-fg hover:bg-ink-700"
+        >
+          Reopen review
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span data-test="review-bar" className="flex min-w-0 items-center gap-1.5">
+      {blocked ? (
+        // Amber: the human's own unsent work, not an error. Truncates on a
+        // narrow surface; the button's title always carries the full reason.
+        <span className="min-w-0 max-w-[280px] truncate text-[11px] text-user">{reason}</span>
+      ) : null}
+      <button
+        type="button"
+        data-test="approve"
+        disabled={blocked}
+        title={
+          blocked
+            ? `${reason} - the agent stops reading once you approve`
+            : "End the review; the agent stops until re-invoked"
+        }
+        onClick={() => void approveReview()}
+        className="cursor-pointer rounded-md border border-sage-600 bg-sage-600 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-cream-50 hover:bg-sage-500 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Approve review
+      </button>
+    </span>
+  );
+};
+
 export const Header = () => {
   const version = useLucid((s) => s.version);
   const showTargets = useLucid((s) => s.showTargets);
@@ -46,11 +105,13 @@ export const Header = () => {
 
   return (
     <header className="flex items-center justify-between gap-2 border-b border-ink-600 px-4 py-[10px]">
-      <div className="text-[13px] font-semibold text-fg-strong">
+      {/* min-w-0 lets a long artifact name truncate instead of shoving the
+          controls out of the header; the controls themselves never shrink. */}
+      <div className="min-w-0 flex-1 text-[13px] font-semibold text-fg-strong">
         Lucid review
         <small className="ml-2 font-normal text-fg-muted">{config().name}</small>
       </div>
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-none items-center gap-1.5">
         {live ? null : (
           // Self-clearing: EventSource is already retrying, so this states what
           // is happening rather than asking the human to do anything.
@@ -99,6 +160,7 @@ export const Header = () => {
         >
           v{version}
         </div>
+        <ApproveControls />
       </div>
     </header>
   );
