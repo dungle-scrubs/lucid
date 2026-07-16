@@ -41,32 +41,29 @@ const parts = {
 } as const;
 
 /**
- * Both a typed message and an annotation arrive as `user` turns, so the label
- * is decided by what the message carries: an annotation is a card that speaks
- * for itself and must not wear a "human" header.
+ * Conversation bubbles per the design kit: no attribution headings - alignment
+ * and fill carry who is speaking (amber tint right = the human, sage tint left
+ * = the agent), with the tighter corner on the speaker's side. Brass stays out
+ * of the log: color marks WHO here, never attention.
+ *
+ * Annotation and queued cards ride `user` turns too, but they are full-width
+ * cards that speak for themselves - only a typed message gets a bubble.
  */
 const UserMessage = () => {
-  // `data-*` parts are normalised on the way in to `{ type: "data", name }` -
-  // and every data part here (annotation, queued) is a card that speaks for
-  // itself; only a typed message wears the "human" header.
   const isCard = useMessage((m) => m.content.some((p) => p.type === "data"));
   if (isCard) return <MessagePrimitive.Parts components={parts} />;
   return (
-    <div className="flex flex-col gap-[3px]" data-role="human">
-      {/* Amber is the human. */}
-      <span className="text-[10px] font-semibold uppercase tracking-[0.6px] text-user">human</span>
-      <div className="flex flex-wrap gap-1.5">
+    <div className="flex justify-end" data-role="human">
+      <div className="flex max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tr-[4px] border border-cream-100/10 bg-[rgba(226,165,65,0.16)] px-3 py-2">
         <MessagePrimitive.Parts components={parts} />
       </div>
     </div>
   );
 };
 
-/** Sage is the agent. */
 const AssistantMessage = () => (
-  <div className="flex flex-col gap-[3px]" data-role="agent">
-    <span className="text-[10px] font-semibold uppercase tracking-[0.6px] text-agent">agent</span>
-    <div className="flex flex-wrap gap-1.5">
+  <div className="flex justify-start" data-role="agent">
+    <div className="flex max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tl-[4px] border border-cream-100/10 bg-[rgba(125,142,99,0.16)] px-3 py-2">
       <MessagePrimitive.Parts components={parts} />
     </div>
   </div>
