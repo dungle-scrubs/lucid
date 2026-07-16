@@ -51,7 +51,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "effect": "^3.21.4",
-    "linkedom": "^0.18.12",
+    "linkedom": "^0.18.13",
     "lit": "^3.3.1",
     "marked": "^18.0.5",
     "react": "^19.2.7",
