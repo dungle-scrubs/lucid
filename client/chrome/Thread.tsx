@@ -184,7 +184,9 @@ export const Thread = () => {
         className="flex flex-1 flex-col gap-[18px] overflow-y-auto p-[14px_14px_12px]"
       >
         <ThreadPrimitive.Empty>
-          <div className="text-[12px] italic text-fg-faint">No feedback sent yet.</div>
+          <div className="text-[12px] italic text-fg-faint">
+            No feedback sent yet. Click an element or select text in the artifact to annotate it.
+          </div>
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
         <WorkingIndicator />

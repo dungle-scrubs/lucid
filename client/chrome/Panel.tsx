@@ -254,7 +254,9 @@ export const SendQueueBar = () => {
   );
 };
 
-/** The in-flight pick: an element chosen on the surface, awaiting its note. */
+/** The in-flight pick: an element chosen on the surface, awaiting its note.
+ *  Renders nothing at all when idle - the pick gesture is taught once, by the
+ *  empty-thread state, and a permanent placeholder was furniture after that. */
 export const PendingComposer = () => {
   const pendingTarget = useLucid((s) => s.pendingTarget);
   const composerNote = useLucid((s) => s.composerNote);
@@ -265,10 +267,11 @@ export const PendingComposer = () => {
     if (pendingTarget) ref.current?.focus();
   }, [pendingTarget]);
 
+  if (!pendingTarget) return null;
   return (
     <section>
       <h3 className={heading}>New annotation</h3>
-      {pendingTarget ? (
+      {
         <div className="flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-850 px-[11px] py-[10px]">
           <TargetSnippet target={pendingTarget} />
           <Chips images={pastedImages} onRemove={removePastedImage} />
@@ -302,11 +305,7 @@ export const PendingComposer = () => {
             </button>
           </div>
         </div>
-      ) : (
-        <div className="text-[12px] italic text-fg-faint">
-          Click an element or select text in the artifact to annotate it.
-        </div>
-      )}
+      }
     </section>
   );
 };
