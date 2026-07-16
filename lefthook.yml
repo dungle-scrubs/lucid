@@ -1,0 +1,21 @@
+# Managed git hooks (https://lefthook.dev).
+# Installed by `bunx lefthook install`, which the "prepare" script runs on
+# `bun install`. Bypass any hook with `git commit/push --no-verify`.
+
+pre-commit:
+  jobs:
+    - name: biome
+      # Same gate CI enforces (bun run lint == biome check), but only on the
+      # files being committed. Safe fixes are applied and re-staged; real lint
+      # errors still block the commit.
+      glob: "*.{ts,tsx,js,jsx,json,jsonc,css}"
+      run: bunx biome check --write --no-errors-on-unmatched {staged_files}
+      stage_fixes: true
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: typecheck
+      run: bun run typecheck
+    - name: secrets
+      run: bash scripts/secret-scan.sh

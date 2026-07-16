@@ -1,0 +1,50 @@
+<svg width="760" height="252" viewBox="0 0 760 252" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lucid review loop: agent writes an artifact, the human annotates it, located feedback returns to the agent">
+  <defs>
+    <style>
+      .lbl { font-family: 'Geist', system-ui, sans-serif; font-size: 13px; font-weight: 500; letter-spacing: 0.02em; }
+      .eyebrow { font-family: 'Geist', system-ui, sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.085em; text-transform: uppercase; }
+      .mono { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; }
+    </style>
+  </defs>
+
+  <rect x="1" y="1" width="758" height="250" rx="18" fill="#131210"/>
+  <rect x="1.5" y="1.5" width="757" height="249" rx="17.5" stroke="#f2ecdc" stroke-opacity="0.07"/>
+
+  <!-- ===== Agent node (sage) ===== -->
+  <circle cx="118" cy="104" r="38" fill="#7d8e63" fill-opacity="0.14" stroke="#97a67e" stroke-width="2"/>
+  <rect x="103" y="92" width="30" height="22" rx="5" stroke="#97a67e" stroke-width="2"/>
+  <circle cx="111" cy="103" r="2.1" fill="#97a67e"/>
+  <circle cx="125" cy="103" r="2.1" fill="#97a67e"/>
+  <line x1="118" y1="86" x2="118" y2="92" stroke="#97a67e" stroke-width="2" stroke-linecap="round"/>
+  <text x="118" y="166" text-anchor="middle" class="lbl" fill="#97a67e">agent</text>
+
+  <!-- ===== Artifact node (cream surface) ===== -->
+  <rect x="338" y="58" width="84" height="92" rx="8" fill="#faf6ec"/>
+  <rect x="352" y="74" width="40" height="4" rx="2" fill="#211d15" fill-opacity="0.35"/>
+  <rect x="352" y="98" width="56" height="5" rx="2.5" fill="#211d15"/>
+  <rect x="352" y="120" width="34" height="4" rx="2" fill="#211d15" fill-opacity="0.35"/>
+  <rect x="347" y="93" width="66" height="15" rx="3.5" stroke="#bd9a4e" stroke-width="2.2"/>
+  <circle cx="347" cy="93" r="2.8" fill="#cba85a"/>
+  <text x="380" y="178" text-anchor="middle" class="lbl" fill="#f2ecdc">artifact</text>
+  <text x="380" y="196" text-anchor="middle" class="mono" fill="#7b8593">addressable surface</text>
+
+  <!-- ===== Human node (amber) ===== -->
+  <circle cx="642" cy="104" r="38" fill="#e2a541" fill-opacity="0.14" stroke="#e2a541" stroke-width="2"/>
+  <circle cx="642" cy="96" r="9" stroke="#e2a541" stroke-width="2"/>
+  <path d="M627 122c2-9 8-13 15-13s13 4 15 13" stroke="#e2a541" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <text x="642" y="166" text-anchor="middle" class="lbl" fill="#e2a541">human</text>
+
+  <!-- ===== top arrows ===== -->
+  <line x1="166" y1="104" x2="326" y2="104" stroke="#d3c5a7" stroke-opacity="0.5" stroke-width="2"/>
+  <path d="M326 104l-9-4.5v9z" fill="#d3c5a7" fill-opacity="0.6"/>
+  <text x="246" y="92" text-anchor="middle" class="eyebrow" fill="#7b8593">writes</text>
+
+  <line x1="434" y1="104" x2="594" y2="104" stroke="#d3c5a7" stroke-opacity="0.5" stroke-width="2"/>
+  <path d="M594 104l-9-4.5v9z" fill="#d3c5a7" fill-opacity="0.6"/>
+  <text x="514" y="92" text-anchor="middle" class="eyebrow" fill="#7b8593">annotates</text>
+
+  <!-- ===== return arrow: located feedback (brass) ===== -->
+  <path d="M642 144c0 40-10 58-50 58H168c-40 0-50-18-50-58" stroke="#bd9a4e" stroke-width="2.4" fill="none"/>
+  <path d="M118 150l-4.5 9h9z" fill="#bd9a4e"/>
+  <text x="380" y="226" text-anchor="middle" class="eyebrow" fill="#cba85a">located feedback</text>
+</svg>

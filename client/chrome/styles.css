@@ -1,0 +1,166 @@
+/* ============================================================================
+   The chrome's stylesheet. Tailwind v4, built by scripts/build-client.ts and
+   embedded in the binary alongside the JS (D-034) - there is no CSS file on
+   disk at runtime and no CDN, so the viewer works offline.
+
+   This is Lucid's palette, not a stock theme: dark ink ground, cream type, a
+   single brass accent. Brass means "attention is here" (annotations, focus).
+   Sage means the agent, amber means the human - attribution, never decoration.
+   Steel recedes. Any assistant-ui component reading --color-muted et al gets
+   Lucid's values because the bridge below points them at our ramps.
+   ========================================================================== */
+
+/* `source(none)` disables Tailwind v4's automatic source detection, which would
+   otherwise scan the whole repository and compile any token that merely looks
+   like a utility - including prose in README.md or docs/ - into this bundle.
+   The chrome's classes live in exactly one place, so scan exactly that. Keep
+   this explicit: the generated bundle is committed, and CI fails if it drifts,
+   so a stylesheet that reacts to documentation edits fails the build for
+   unrelated PRs. */
+@import "tailwindcss" source(none);
+@import "tw-shimmer";
+@source "../../client/chrome";
+
+/* Fonts are self-hosted-or-bust: the viewer is a localhost tool that must work
+   with no network, so we ship stacks that degrade to system faces instead of
+   importing from Google Fonts. */
+
+@theme {
+  /* ---- Raw ramps ------------------------------------------------------- */
+  --color-ink-900: #131210;
+  --color-ink-850: #17150f;
+  --color-ink-800: #1b1813;
+  --color-ink-700: #232019;
+  --color-ink-600: #2d2920;
+  --color-ink-500: #393327;
+  --color-ink-400: #4b4334;
+
+  --color-cream-50: #faf6ec;
+  --color-cream-100: #f2ecdc;
+  --color-cream-200: #e6dbc3;
+  --color-cream-300: #d3c5a7;
+
+  --color-brass-200: #e7d3a0;
+  --color-brass-300: #d9bd7a;
+  --color-brass-400: #cba85a;
+  --color-brass-500: #bd9a4e;
+  --color-brass-600: #9f8038;
+  --color-brass-700: #7b6228;
+
+  --color-sage-300: #b4c0a2;
+  --color-sage-400: #97a67e;
+  --color-sage-500: #7d8e63;
+  --color-sage-600: #61714b;
+
+  --color-amber-300: #efc684;
+  --color-amber-400: #e2a541;
+  --color-amber-500: #c8862a;
+  --color-amber-600: #a06a20;
+
+  --color-rust-300: #d68a6b;
+  --color-rust-400: #c0613f;
+  --color-rust-500: #a4502f;
+
+  --color-steel-300: #9aa3b0;
+  --color-steel-400: #7b8593;
+  --color-steel-500: #5e6773;
+  --color-steel-600: #454d58;
+
+  /* ---- Semantic ------------------------------------------------------- */
+  --color-bg: var(--color-ink-900);
+  --color-bg-raised: var(--color-ink-850);
+  --color-bg-inset: #0d0c0a;
+  --color-bg-overlay: var(--color-ink-700);
+  /* The artifact's ground. The chrome is dark and recedes; the artifact is
+     paper and is the thing being looked at. We only supply the ground it
+     renders on - what the agent paints there is its own (see the lucid-design
+     skill), and it must read as a document, not as more of this app. */
+  --color-surface: var(--color-cream-50);
+  --color-surface-ink: #211d15;
+
+  --color-fg: var(--color-cream-100);
+  --color-fg-strong: var(--color-cream-50);
+  --color-fg-muted: var(--color-steel-400);
+  --color-fg-faint: var(--color-steel-500);
+
+  --color-accent: var(--color-brass-500);
+  --color-accent-bright: var(--color-brass-400);
+  --color-accent-dim: var(--color-brass-700);
+  --color-on-accent: #1a1610;
+
+  --color-agent: var(--color-sage-400);
+  --color-user: var(--color-amber-400);
+  --color-danger: var(--color-rust-400);
+  --color-meta: var(--color-steel-400);
+
+  --color-border: rgba(242, 236, 220, 0.1);
+  --color-border-strong: rgba(242, 236, 220, 0.17);
+
+  /* ---- Type: serif for prose, sans for chrome, mono for the literal ---- */
+  --font-serif: "EB Garamond", Georgia, "Times New Roman", serif;
+  --font-sans: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-md: 7px;
+  --radius-lg: 12px;
+}
+
+/* assistant-ui's copied components are authored against shadcn's variable
+   names. Point those at Lucid's ramps so they inherit the brand instead of
+   introducing a second palette. */
+@theme inline {
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-fg);
+  /* The segmented tab track. It must sit BELOW the panel ground, not above it:
+     the active chip is what rises, so the track has to be the well it rises
+     out of. ink-800 made the track lighter than the chip and the control read
+     inside out. */
+  --color-muted: var(--color-bg-inset);
+  --color-muted-foreground: var(--color-fg-muted);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: var(--color-on-accent);
+  --color-secondary: var(--color-ink-700);
+  --color-secondary-foreground: var(--color-fg);
+  --color-accent-foreground: var(--color-on-accent);
+  --color-destructive: var(--color-danger);
+  --color-input: var(--color-border);
+  --color-ring: var(--color-accent);
+  --color-card: var(--color-bg-raised);
+  --color-card-foreground: var(--color-fg);
+
+  /* The vendored shadcn sidebar reads its own ramp. Point it at the review
+     panel's existing colors so the sidebar IS the panel, not a themed guest
+     sitting inside it. */
+  --color-sidebar: var(--color-bg);
+  --color-sidebar-foreground: var(--color-fg);
+  --color-sidebar-accent: var(--color-ink-700);
+  --color-sidebar-accent-foreground: var(--color-fg-strong);
+  --color-sidebar-border: var(--color-ink-600);
+  --color-sidebar-ring: var(--color-accent);
+}
+
+@layer base {
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+  }
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* The artifact is the spectacle; the chrome should never scroll the page. */
+  #lucid-root {
+    height: 100vh;
+    overflow: hidden;
+  }
+}
+
+@utility annot-outline {
+  /* "Selected", "focused" and "annotated" are one visual idea: attention here. */
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

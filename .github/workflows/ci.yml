@@ -1,0 +1,36 @@
+name: CI
+
+on: pull_request
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run typecheck
+
+      - run: bun run lint
+
+      - run: bun test test/*.test.ts
+
+      # Also proves the generated client bundle committed to the repo is not
+      # stale: build:client rewrites it, and the diff check below fails if the
+      # committed copy disagrees with what the current client source produces.
+      - run: bun run build
+
+      - name: Verify committed client bundle is current
+        run: git diff --exit-code -- src/server/client-bundle.generated.ts
