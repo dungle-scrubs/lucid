@@ -86,6 +86,28 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
 
   const payload = await runWait(paths, options);
 
+  // Ack on delivery (cursor path only): the viewer flips to "agent is
+  // working". Best-effort - a failed ack must never fail the wait itself -
+  // and never on a no-cursor bootstrap fold, which is a catch-up read, not a
+  // hand-off (D-064).
+  if (payload.status === "feedback" && options.since !== undefined) {
+    try {
+      const live = await discoverLiveServer(paths);
+      const id = randomId();
+      if (live) {
+        await fetch(`http://127.0.0.1:${live.port}/__lucid/ack`, {
+          method: "POST",
+          headers: { "content-type": "application/json", host: `127.0.0.1:${live.port}` },
+          body: JSON.stringify({ id }),
+        });
+      } else {
+        await appendEvent(paths.logPath, { t: "agent_ack", id });
+      }
+    } catch {
+      /* presence is advisory */
+    }
+  }
+
   if (options.harness !== undefined && options.harness.length > 0) {
     await writeFile(
       cursorSidecarPath(paths, options.harness),

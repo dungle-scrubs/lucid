@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { foldLog } from "../src/core/fold.ts";
+import { readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import { runWait } from "../src/core/wait.ts";
@@ -168,6 +170,33 @@ describe("server routes + security", () => {
     expect(payload.status).toBe("feedback");
     expect(payload.annotations[0]?.note).toBe("fix this heading");
     expect(payload.annotations[0]?.resolved).toBe(true);
+  });
+
+  test("agent_ack opens the working window, output closes it, waiters stay asleep", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+
+    await post("/__lucid/ack", { id: "ack-1" });
+    let state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.agentWorking).toBeTruthy();
+
+    // An ack-only delta must not wake a waiting agent: acks are presence
+    // metadata, not feedback, and agents must not wake each other by
+    // acknowledging. The wait should run its full window.
+    const t0 = Date.now();
+    const w = await runWait(paths, { since: "evt_00001", timeoutMs: 900 });
+    expect(w.status).toBe("waiting");
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(700);
+
+    // Any agent output closes the window.
+    await post("/__lucid/reply", { id: "r-1", text: "done" });
+    state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.agentWorking).toBeNull();
   });
 
   test("agent question -> human answer reaches the agent as feedback", async () => {

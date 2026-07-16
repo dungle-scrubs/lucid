@@ -76,6 +76,11 @@ export interface FoldedState {
   readonly artifact: string;
   /** Highest seq across the WHOLE log (nextCursor floor). */
   readonly highSeq: number;
+  /** Last seq that is not an agent_ack: `wait` blocks past ack-only deltas. */
+  readonly lastNonAckSeq: number;
+  /** Open "agent is working" window: set by agent_ack, closed by any agent
+   *  output (version, reply, question) within the segment. */
+  readonly agentWorking: { readonly since: string } | null;
   /** seq of the session_opened that begins the current segment. */
   readonly segmentStartSeq: number;
 }
@@ -109,6 +114,7 @@ const statusFromLifecycle = (t: string): SessionStatus => {
  */
 export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   const highSeq = maxSeq(events);
+  const lastNonAckSeq = maxSeq(events.filter((e) => e.t !== "agent_ack"));
 
   if (events.length === 0) {
     return {
@@ -124,6 +130,8 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       versions: [],
       artifact: "",
       highSeq,
+      lastNonAckSeq,
+      agentWorking: null,
       segmentStartSeq: 0,
     };
   }
@@ -244,6 +252,14 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     }
   }
 
+  // Presence: an ack opens the working window; any agent output closes it.
+  // Separate pass so the content fold above stays untouched by metadata.
+  let agentWorking: { readonly since: string } | null = null;
+  for (const e of segmentEvents) {
+    if (e.t === "agent_ack") agentWorking = { since: e.at };
+    else if (e.t === "version" || e.t === "agent_reply" || e.t === "question") agentWorking = null;
+  }
+
   return {
     status,
     segment,
@@ -257,6 +273,8 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     versions,
     artifact,
     highSeq,
+    lastNonAckSeq,
+    agentWorking,
     segmentStartSeq,
   };
 };

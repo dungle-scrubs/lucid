@@ -254,8 +254,10 @@ export const runWait = async (
         );
       }
 
-      // Version-only delta (e.g. the authoring agent's own revision) -> waiting (D-062).
-      if (state.highSeq > cursor) {
+      // Version-only delta (e.g. the authoring agent's own revision) -> waiting
+      // (D-062). Acks are invisible here: an agent acknowledging delivery must
+      // not wake itself or another waiting agent.
+      if (state.lastNonAckSeq > cursor) {
         return buildFromState(paths, state, "waiting", [], []);
       }
       if (Date.now() >= deadline) {

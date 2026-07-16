@@ -80,6 +80,18 @@ export interface AgentReplyEvent extends BaseEvent {
 }
 
 /**
+ * The agent took delivery of feedback (appended by the CLI at the moment
+ * `wait` returns a `feedback` payload). Presence metadata for the viewer: it
+ * opens the "agent is working" window, which any agent output (a version, a
+ * reply, a question) closes. Never treated as feedback, and `wait` ignores
+ * ack-only deltas - agents do not wake each other by acknowledging.
+ */
+export interface AgentAckEvent extends BaseEvent {
+  readonly t: "agent_ack";
+  readonly id: string;
+}
+
+/**
  * A human revert decision (RFC §8). Forward-only: it does not rewind the log;
  * it records "restore this target to `targetVersion`, because `why`" as feedback
  * the agent applies by re-authoring the artifact forward. Self-justifying so the
@@ -140,6 +152,7 @@ export type LogEvent =
   | AnnotationEvent
   | PromptEvent
   | AgentReplyEvent
+  | AgentAckEvent
   | RevertEvent
   | QuestionEvent
   | QuestionAnsweredEvent
@@ -156,6 +169,7 @@ export type IdentifiedEvent =
   | AnnotationEvent
   | PromptEvent
   | AgentReplyEvent
+  | AgentAckEvent
   | RevertEvent
   | QuestionEvent
   | QuestionAnsweredEvent;
@@ -164,6 +178,7 @@ export const hasId = (event: LogEvent): event is IdentifiedEvent =>
   event.t === "annotation" ||
   event.t === "prompt" ||
   event.t === "agent_reply" ||
+  event.t === "agent_ack" ||
   event.t === "revert" ||
   event.t === "question" ||
   event.t === "question_answered";
@@ -175,6 +190,7 @@ export type EventInput =
   | Omit<AnnotationEvent, "seq" | "at">
   | Omit<PromptEvent, "seq" | "at">
   | Omit<AgentReplyEvent, "seq" | "at">
+  | Omit<AgentAckEvent, "seq" | "at">
   | Omit<RevertEvent, "seq" | "at">
   | Omit<QuestionEvent, "seq" | "at">
   | Omit<QuestionAnsweredEvent, "seq" | "at">

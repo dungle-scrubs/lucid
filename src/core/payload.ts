@@ -76,6 +76,8 @@ export interface WaitPayload {
   readonly reverts?: readonly PayloadRevert[];
   readonly questions?: readonly PayloadQuestion[];
   readonly warnings?: readonly Warning[];
+  /** Open "agent is working" window (ack received, no output yet). */
+  readonly agentWorking?: { readonly since: string };
 }
 
 const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): PayloadMessage => ({
@@ -204,6 +206,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     status: opts.status,
     nextCursor: renderCursor(opts.nextSeq),
     reviewResolved: opts.state.reviewResolved,
+    ...(opts.state.agentWorking ? { agentWorking: opts.state.agentWorking } : {}),
     annotations,
     messages: opts.messages.map((m) =>
       toMessage(m, (file) => opts.snapshotAbsPath(`pasted/${file}`)),

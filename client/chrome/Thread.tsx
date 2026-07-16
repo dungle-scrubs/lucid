@@ -7,7 +7,9 @@ import {
   useMessage,
 } from "@assistant-ui/react";
 import { AnnotationPart } from "./AnnotationPart.tsx";
+import { useEffect, useState } from "react";
 import { Orphans, PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
+import { useLucid } from "./store.ts";
 import { Questions } from "./Questions.tsx";
 
 /**
@@ -111,6 +113,56 @@ const Composer = () => (
   </ComposerPrimitive.Root>
 );
 
+/** Ten minutes with no output stops being "working" and becomes a fact the
+ *  human should see plainly: the feedback was picked up, nothing came back. */
+const WORKING_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * The agent took delivery and has not produced anything yet. Sage, because it
+ * is the agent speaking - or rather, the agent's silence. Driven entirely by
+ * the log (ack opens it, version/reply/question closes it), so it can never
+ * claim work that is not happening... though it can miss work by a crashed
+ * agent, which is exactly what the stale state is for.
+ */
+const WorkingIndicator = () => {
+  const working = useLucid((s) => s.agentWorking);
+  const status = useLucid((s) => s.status);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!working) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [working]);
+
+  if (!working || status !== "active") return null;
+  const elapsed = Math.max(0, now - new Date(working.since).getTime());
+  const stale = elapsed >= WORKING_STALE_MS;
+  const mm = Math.floor(elapsed / 60000);
+  const ss = String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0");
+
+  return (
+    <div
+      data-test="agent-working"
+      data-stale={stale ? "true" : "false"}
+      className="flex items-center gap-2 text-[12px]"
+    >
+      {stale ? (
+        <span className="text-fg-muted">
+          agent picked up your feedback {mm}m ago · no response yet
+        </span>
+      ) : (
+        <>
+          <span className="size-2 animate-pulse rounded-full bg-agent" />
+          <span className="text-agent">
+            agent is working · {mm}:{ss}
+          </span>
+        </>
+      )}
+    </div>
+  );
+};
+
 const QueuedPart = ({ data }: { readonly data: { id: string; index: number } }) => (
   <QueuedCard id={data.id} index={data.index} />
 );
@@ -133,6 +185,7 @@ export const Thread = () => {
           <div className="text-[12px] italic text-fg-faint">No feedback sent yet.</div>
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+        <WorkingIndicator />
         {/* Staged work lives at the end of the record, where the eye already is
             after a pick - and where auto-scroll brings it. */}
         <Orphans />

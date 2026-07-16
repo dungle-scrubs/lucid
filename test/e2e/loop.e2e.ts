@@ -411,6 +411,37 @@ test("a pasted image still renders in the conversation after a reload", async ({
   expect(decoded?.width).toBeGreaterThan(0); // it actually decoded, not just resolved
 });
 
+test("the working indicator opens when the agent takes delivery and closes on its reply", async ({
+  page,
+}) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+
+  // No agent has taken anything yet.
+  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await page.locator('[data-test="annotation-note"]').fill("Backfill in one batch");
+  await page.locator('[data-test="add-to-queue"]').click();
+  await page.locator('[data-test="send-queue"]').click();
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+
+  // The agent takes delivery: wait returns feedback and acks it. The viewer
+  // flips to "agent is working".
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    status: string;
+    nextCursor: string;
+  };
+  expect(fb.status).toBe("feedback");
+  await expect(page.locator('[data-test="agent-working"]')).toBeVisible();
+  await expect(page.locator('[data-test="agent-working"]')).toContainText("agent is working");
+
+  // The agent's reply closes the window.
+  await cli.run(["wait", cli.artifact, "--reply", "Batched.", "--timeout", "1"]);
+  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+  await expect(page.locator('[data-role="agent"]')).toContainText("Batched.");
+});
+
 test("a dropped live connection shows a self-clearing indicator, not a warning pile", async ({
   page,
 }) => {

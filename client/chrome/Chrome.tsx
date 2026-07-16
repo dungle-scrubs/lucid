@@ -85,6 +85,7 @@ const bootstrap = async (): Promise<void> => {
     messages: ConversationMessage[];
     questions?: AgentQuestion[];
     warnings?: { code: string; message: string }[];
+    agentWorking?: { since: string };
   };
   set({
     version: payload.version,
@@ -92,6 +93,7 @@ const bootstrap = async (): Promise<void> => {
     annotations: payload.annotations,
     messages: payload.messages,
     questions: payload.questions ?? [],
+    agentWorking: payload.agentWorking ?? null,
   });
   pushHighlights();
 };
@@ -109,6 +111,7 @@ const onLogEvent = (ev: LogEvent): void => {
     case "question_answered":
     case "prompt":
     case "agent_reply":
+    case "agent_ack":
       void bootstrap();
       break;
     case "version":

@@ -339,6 +339,13 @@ export const runServer = async (
     return json(diffHtml(baseHtml, currentHtml, ref.version, state.version));
   };
 
+  const handleAck = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body.id !== "string") return json({ error: "invalid ack" }, 400);
+    await serverAppend([{ t: "agent_ack", id: body.id }]);
+    return json({ ok: true });
+  };
+
   const handleReply = async (req: Request): Promise<Response> => {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body || typeof body.id !== "string" || typeof body.text !== "string") {
@@ -475,6 +482,7 @@ export const runServer = async (
       });
     }
     if (pathname === "/__lucid/reply" && req.method === "POST") return handleReply(req);
+    if (pathname === "/__lucid/ack" && req.method === "POST") return handleAck(req);
     if (pathname === "/__lucid/resolve" && req.method === "POST") {
       await serverAppend([{ t: "review_resolved" }]);
       return json({ ok: true });
