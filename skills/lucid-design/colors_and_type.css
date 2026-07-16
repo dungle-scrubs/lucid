@@ -1,0 +1,169 @@
+/* ============================================================================
+   Lucid - design system
+   Drop-in token system. @import this file, then build with the semantic vars
+   (--bg, --fg, --accent, ...). Never hard-code hex in product code.
+
+   One dark theme. Dark ink + cream type + a single brass accent.
+   Sage = agent. Amber = user. Rust = danger. Steel = quiet/meta.
+   ========================================================================== */
+
+@import url("https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap");
+
+:root {
+  /* ---- Raw palette ------------------------------------------------------- */
+  /* Ink - warm near-black. The base of everything. */
+  --ink-900: #131210;
+  --ink-850: #17150f;
+  --ink-800: #1b1813;
+  --ink-700: #232019;
+  --ink-600: #2d2920;
+  --ink-500: #393327;
+  --ink-400: #4b4334;
+
+  /* Cream - warm light. Type and paper. */
+  --cream-50: #faf6ec;
+  --cream-100: #f2ecdc;
+  --cream-200: #e6dbc3;
+  --cream-300: #d3c5a7;
+
+  /* Brass - the one accent. Attention, annotation, focus. */
+  --brass-200: #e7d3a0;
+  --brass-300: #d9bd7a;
+  --brass-400: #cba85a;
+  --brass-500: #bd9a4e;
+  --brass-600: #9f8038;
+  --brass-700: #7b6228;
+
+  /* Sage - the agent. Calm, considered, machine. */
+  --sage-300: #b4c0a2;
+  --sage-400: #97a67e;
+  --sage-500: #7d8e63;
+  --sage-600: #61714b;
+
+  /* Amber - the user. Present, human, marking things up. */
+  --amber-300: #efc684;
+  --amber-400: #e2a541;
+  --amber-500: #c8862a;
+  --amber-600: #a06a20;
+
+  /* Rust - danger only. Destroy, discard, reject. */
+  --rust-300: #d68a6b;
+  --rust-400: #c0613f;
+  --rust-500: #a4502f;
+
+  /* Steel - quiet. Meta text, dividers, disabled, chrome scaffolding. */
+  --steel-300: #9aa3b0;
+  --steel-400: #7b8593;
+  --steel-500: #5e6773;
+  --steel-600: #454d58;
+
+  /* ---- Semantic surface + text ------------------------------------------ */
+  --bg: var(--ink-900); /* app background */
+  --bg-raised: var(--ink-800); /* panels, chrome */
+  --bg-overlay: var(--ink-700); /* hover, selected rows */
+  --bg-inset: #0e0d0b; /* inputs, code wells */
+  --surface: var(--cream-50); /* the artifact / paper surface */
+  --surface-ink: #211d15; /* type on the paper surface */
+
+  --fg: var(--cream-100); /* default text on ink */
+  --fg-strong: var(--cream-50); /* headings, emphasis */
+  --fg-muted: var(--steel-400); /* meta, captions, secondary */
+  --fg-faint: var(--steel-500); /* placeholders, disabled */
+
+  --border: rgba(242, 236, 220, 0.1); /* hairline on ink */
+  --border-strong: rgba(242, 236, 220, 0.17);
+  --border-inset: rgba(0, 0, 0, 0.4);
+
+  /* ---- Semantic roles --------------------------------------------------- */
+  --accent: var(--brass-500); /* the single accent */
+  --accent-bright: var(--brass-400); /* hover / active accent */
+  --accent-dim: var(--brass-700); /* pressed / quiet accent */
+  --on-accent: #1a1610; /* text on a brass fill */
+
+  --agent: var(--sage-400); /* agent attribution */
+  --agent-fill: rgba(125, 142, 99, 0.16);
+  --user: var(--amber-400); /* user attribution */
+  --user-fill: rgba(226, 165, 65, 0.16);
+  --danger: var(--rust-400);
+  --danger-fill: rgba(192, 97, 63, 0.16);
+  --meta: var(--steel-400);
+
+  /* ---- Annotation + focus (rule 4) -------------------------------------- */
+  /* Element annotation outline == focus ring: 2px brass, 2px offset.
+     Text-range annotation: translucent brass highlight instead. */
+  --annot-color: var(--brass-500);
+  --annot-outline-width: 2px;
+  --annot-outline-offset: 2px;
+  --annot-fill: rgba(189, 154, 78, 0.18); /* range highlight */
+  --annot-fill-strong: rgba(189, 154, 78, 0.3); /* focused range */
+  --focus-ring: var(--brass-500);
+
+  /* ---- Type ------------------------------------------------------------- */
+  --font-serif: "EB Garamond", Georgia, "Times New Roman", serif;
+  --font-sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+
+  --text-xs: 0.75rem; /* 12 - micro labels, badges */
+  --text-sm: 0.8125rem; /* 13 - chrome body, controls */
+  --text-base: 0.9375rem; /* 15 - default body */
+  --text-md: 1.0625rem; /* 17 - lead paragraph */
+  --text-lg: 1.3125rem; /* 21 - card titles, h3 */
+  --text-xl: 1.625rem; /* 26 - h2 */
+  --text-2xl: 2.0625rem; /* 33 - h1 */
+  --text-3xl: 2.625rem; /* 42 - page hero */
+  --text-display: 3.5rem; /* 56 - brand moment */
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --leading-tight: 1.15; /* display, headings */
+  --leading-snug: 1.3; /* subheads, UI */
+  --leading-normal: 1.5; /* sans body */
+  --leading-relaxed: 1.62; /* serif prose */
+
+  --tracking-tight: -0.012em; /* large serif / display */
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+  --tracking-caps: 0.085em; /* uppercase eyebrows / labels */
+
+  /* ---- Spacing (4px base) ----------------------------------------------- */
+  --space-1: 0.25rem; /* 4 */
+  --space-2: 0.5rem; /* 8 */
+  --space-3: 0.75rem; /* 12 */
+  --space-4: 1rem; /* 16 */
+  --space-5: 1.25rem; /* 20 */
+  --space-6: 1.5rem; /* 24 */
+  --space-8: 2rem; /* 32 */
+  --space-10: 2.5rem; /* 40 */
+  --space-12: 3rem; /* 48 */
+  --space-16: 4rem; /* 64 */
+
+  /* ---- Radii ------------------------------------------------------------ */
+  --radius-sm: 4px; /* pills inputs, tight chips */
+  --radius-md: 7px; /* buttons, cards, controls */
+  --radius-lg: 12px; /* panels, floating surfaces */
+  --radius-pill: 999px;
+
+  /* ---- Shadows (rule 5: floating surfaces ONLY) ------------------------- */
+  --shadow-floating: 0 14px 38px -14px rgba(0, 0, 0, 0.62), 0 3px 8px rgba(0, 0, 0, 0.34);
+  --shadow-tooltip: 0 8px 22px -8px rgba(0, 0, 0, 0.55);
+  --shadow-none: none;
+
+  /* ---- Motion ----------------------------------------------------------- */
+  --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+  --dur-fast: 90ms;
+  --dur-base: 160ms;
+}
+
+/* Optional convenience base. Safe to delete in production; the tokens above
+   are the contract. */
+.lucid-base {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
