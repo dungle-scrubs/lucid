@@ -82,7 +82,7 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
       onMouseLeave={leave}
       onFocus={enter}
       onBlur={leave}
-      className={`relative flex flex-col gap-[7px] rounded-lg border bg-ink-800 px-[11px] py-[10px] focus-visible:annot-outline ${
+      className={`relative flex flex-col gap-[7px] rounded-lg border bg-ink-700 px-[11px] py-[10px] focus-visible:annot-outline ${
         hovered ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]" : "border-ink-600"
       }`}
     >

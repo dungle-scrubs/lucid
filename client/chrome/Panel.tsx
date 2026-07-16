@@ -89,7 +89,7 @@ export const Orphans = () => {
           <div
             key={a.id}
             data-test="orphan"
-            className="relative flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-800 px-[11px] py-[10px]"
+            className="relative flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-700 px-[11px] py-[10px]"
           >
             <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-rust-500/30 px-[7px] py-px text-[10px] text-rust-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
               orphaned · v{a.version}
@@ -149,7 +149,7 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
       data-test="queued-annotation"
       data-annotation-id={q.id}
       aria-label={`Queued annotation ${index}`}
-      className={`relative flex flex-col gap-[7px] rounded-lg border border-dashed bg-ink-800 px-[11px] py-[10px] ${
+      className={`relative flex flex-col gap-[7px] rounded-lg border border-dashed bg-ink-700 px-[11px] py-[10px] ${
         hoveredId === q.id
           ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]"
           : "border-ink-500"
@@ -166,7 +166,7 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
       <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center rounded-full border border-dashed border-accent-dim bg-brass-400 text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
         {index}
       </span>
-      <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-ink-700 px-[7px] py-px text-[10px] text-steel-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+      <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-ink-600 px-[7px] py-px text-[10px] text-steel-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
         queued
       </span>
       <TargetSnippet target={q.target} />
@@ -272,7 +272,7 @@ export const PendingComposer = () => {
     <section>
       <h3 className={heading}>New annotation</h3>
       {
-        <div className="flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-800 px-[11px] py-[10px]">
+        <div className="flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-700 px-[11px] py-[10px]">
           <TargetSnippet target={pendingTarget} />
           <Chips images={pastedImages} onRemove={removePastedImage} />
           <textarea
