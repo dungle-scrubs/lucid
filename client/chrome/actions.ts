@@ -17,6 +17,7 @@ export const addToQueue = (): void => {
         id: uuid(),
         target: s.pendingTarget,
         note: s.composerNote.trim(),
+        at: new Date().toISOString(),
         images: s.pastedImages,
       },
     ],
@@ -95,6 +96,7 @@ export const sendQueue = async (): Promise<void> => {
         version: get().version,
         target: q.target,
         note: q.note,
+        authoredAt: q.at,
         images: q.images.map(({ id, name, file }) => ({ id, name, file })),
       });
       sent.add(q.id); // ids are idempotent, so a retry of a sent one is safe

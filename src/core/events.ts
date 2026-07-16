@@ -41,6 +41,13 @@ export interface AnnotationEvent extends BaseEvent {
   readonly target: Anchor;
   readonly note: string;
   /**
+   * When the human wrote the note (client-minted, ISO-8601). `at` is when the
+   * writer appended it - send time. An annotation can sit queued while the
+   * conversation moves on, so display order follows authorship, not the send;
+   * `seq` stays the only ordering agents rely on.
+   */
+  readonly authoredAt?: string;
+  /**
    * Images pasted onto this annotation. They belong here rather than on a
    * separate message because the anchor already says which element they are
    * about - a screenshot of "this control, broken" is located feedback.

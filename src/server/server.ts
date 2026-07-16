@@ -199,6 +199,14 @@ export const runServer = async (
     // Same validator as a message's images: an annotation's images are the same
     // pasted blobs, just located.
     const images = parseImages(body.images);
+    // Client-supplied authorship time, display metadata only (seq stays the
+    // cursor). Bounded sanity check rather than trust: a parseable timestamp.
+    const authoredAt =
+      typeof body.authoredAt === "string" &&
+      body.authoredAt.length <= 40 &&
+      !Number.isNaN(Date.parse(body.authoredAt))
+        ? body.authoredAt
+        : undefined;
     await serverAppend([
       {
         t: "annotation",
@@ -206,6 +214,7 @@ export const runServer = async (
         version,
         target: anchor,
         note: body.note,
+        ...(authoredAt ? { authoredAt } : {}),
         ...(images.length > 0 ? { images } : {}),
       },
     ]);

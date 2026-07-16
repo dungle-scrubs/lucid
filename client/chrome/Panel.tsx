@@ -118,130 +118,139 @@ export const Warnings = () => {
   );
 };
 
-/** Composed-but-unsent annotations. Client-side until Send. */
-export const Queue = () => {
-  const queue = useLucid((s) => s.queue);
+/**
+ * A composed-but-unsent annotation, inline in the record at the moment it was
+ * written - the same place its sent form will hold (the event carries
+ * authoredAt). Client-side until Send; reads the live queue by id so edits
+ * re-render without the timeline rebuilding.
+ */
+export const QueuedCard = ({ id, index }: { readonly id: string; readonly index: number }) => {
+  const q = useLucid((s) => s.queue.find((x) => x.id === id));
   const editingId = useLucid((s) => s.editingId);
   const editDraft = useLucid((s) => s.editDraft);
   const sending = useLucid((s) => s.sending);
   const hoveredId = useLucid((s) => s.hoveredId);
   const editRef = useRef<HTMLTextAreaElement>(null);
+  const editing = editingId === id;
 
-  // Keyed on editingId, not mount: the textarea does not exist until a card
-  // opens, so an empty dep array would focus nothing, every time.
+  // Keyed on the edit state, not mount: the textarea does not exist until the
+  // card opens, so an empty dep array would focus nothing, every time.
   useEffect(() => {
-    if (editingId === null) return;
+    if (!editing) return;
     const box = editRef.current;
     if (!box) return;
     box.focus();
     box.setSelectionRange(box.value.length, box.value.length);
-  }, [editingId]);
+  }, [editing]);
 
-  if (queue.length === 0) return null;
+  if (!q) return null; // just sent: the located card takes this spot over
   return (
-    <section>
-      <h3 className={heading}>Queued ({queue.length})</h3>
-      <div className="mt-1.5 flex flex-col gap-4">
-        {queue.map((q, i) => (
-          <section
-            key={q.id}
-            data-annotation-id={q.id}
-            aria-label={`Queued annotation ${i + 1}`}
-            className={`relative flex flex-col gap-[7px] rounded-lg border bg-ink-850 px-[11px] py-[10px] ${
-              hoveredId === q.id
-                ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]"
-                : "border-ink-600"
-            }`}
-            onMouseEnter={() => {
-              set({ hoveredId: q.id });
-              window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: q.id }));
+    <section
+      data-test="queued-annotation"
+      data-annotation-id={q.id}
+      aria-label={`Queued annotation ${index}`}
+      className={`relative flex flex-col gap-[7px] rounded-lg border border-dashed bg-ink-850 px-[11px] py-[10px] ${
+        hoveredId === q.id
+          ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]"
+          : "border-ink-500"
+      }`}
+      onMouseEnter={() => {
+        set({ hoveredId: q.id });
+        window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: q.id }));
+      }}
+      onMouseLeave={() => {
+        set({ hoveredId: null });
+        window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: "" }));
+      }}
+    >
+      <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center rounded-full border border-dashed border-accent-dim bg-brass-400 text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+        {index}
+      </span>
+      <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-ink-700 px-[7px] py-px text-[10px] text-steel-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+        queued
+      </span>
+      <TargetSnippet target={q.target} />
+      <Chips images={q.images} />
+      {editing ? (
+        <>
+          <textarea
+            ref={editRef}
+            rows={3}
+            data-test="edit-note"
+            placeholder="Edit this annotation… (Enter to save, Shift+Enter for a new line, Esc to cancel)"
+            value={editDraft}
+            onChange={(e) => set({ editDraft: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                cancelEdit();
+                return;
+              }
+              onSubmitKey(e, () => commitEdit());
             }}
-            onMouseLeave={() => {
-              set({ hoveredId: null });
-              window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: "" }));
-            }}
-          >
-            <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center rounded-full border border-dashed border-accent-dim bg-brass-400 text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
-              {i + 1}
-            </span>
-            <TargetSnippet target={q.target} />
-            <Chips images={q.images} />
-            {editingId === q.id ? (
-              <>
-                <textarea
-                  ref={editRef}
-                  rows={3}
-                  data-test="edit-note"
-                  placeholder="Edit this annotation… (Enter to save, Shift+Enter for a new line, Esc to cancel)"
-                  value={editDraft}
-                  onChange={(e) => set({ editDraft: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      cancelEdit();
-                      return;
-                    }
-                    onSubmitKey(e, () => commitEdit());
-                  }}
-                  className={field}
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    data-test="save-edit"
-                    disabled={editDraft.trim().length === 0}
-                    onClick={() => commitEdit()}
-                    className={btnPrimary}
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    data-test="cancel-edit"
-                    onClick={cancelEdit}
-                    className={btn}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="text-fg">{q.note}</div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    data-test="edit-queued"
-                    disabled={sending}
-                    onClick={() => beginEdit(q.id)}
-                    className={btn}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    disabled={sending}
-                    onClick={() => removeQueued(q.id)}
-                    className={btn}
-                  >
-                    Remove
-                  </button>
-                </div>
-              </>
-            )}
-          </section>
-        ))}
-      </div>
+            className={field}
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              data-test="save-edit"
+              disabled={editDraft.trim().length === 0}
+              onClick={() => commitEdit()}
+              className={btnPrimary}
+            >
+              Save
+            </button>
+            <button type="button" data-test="cancel-edit" onClick={cancelEdit} className={btn}>
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="text-fg">{q.note}</div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              data-test="edit-queued"
+              disabled={sending}
+              onClick={() => beginEdit(q.id)}
+              className={btn}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => removeQueued(q.id)}
+              className={btn}
+            >
+              Remove
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+};
+
+/** The one queue-wide action. The cards live in the record; the send is a bar
+ *  that stays visible above the composer however far the transcript scrolls. */
+export const SendQueueBar = () => {
+  const queueLen = useLucid((s) => s.queue.length);
+  const sending = useLucid((s) => s.sending);
+  if (queueLen === 0) return null;
+  return (
+    <div className="border-t border-ink-600 bg-bg px-[14px] py-2">
       <button
         type="button"
         data-test="send-queue"
         disabled={sending}
         onClick={() => void sendQueue()}
-        className={`${btnPrimary} mt-3`}
+        className={`${btnPrimary} w-full`}
       >
-        Send {queue.length} annotation{queue.length > 1 ? "s" : ""}
+        Send {queueLen} annotation{queueLen > 1 ? "s" : ""}
       </button>
-    </section>
+    </div>
   );
 };
 

@@ -22,6 +22,8 @@ export interface PayloadAnnotation {
   readonly target: AnnotationRecord["target"];
   readonly note: string;
   readonly at: string;
+  /** When the human wrote it; `at` is when it reached the log. */
+  readonly authoredAt?: string;
   /** Images pasted onto the annotation; addressed for both consumers, as on a
    *  message. Drop `file` and the viewer's thumbs 404; drop `path` and the
    *  agent cannot read the bytes. */
@@ -183,6 +185,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
       target: a.target,
       note: a.note,
       at: a.at,
+      ...(a.authoredAt ? { authoredAt: a.authoredAt } : {}),
       ...(a.images && a.images.length > 0
         ? {
             images: a.images.map((img) => ({

@@ -122,15 +122,21 @@ export const get = useLucid.getState;
 export const buildTimeline = (
   annotations: readonly PayloadAnnotationLike[],
   messages: readonly ConversationMessage[],
+  queue: readonly QueuedAnnotation[],
 ): TimelineItem[] => {
   const located = annotations.filter((a) => a.resolved);
   return [
     ...located.map((annotation, i) => ({
       kind: "annotation" as const,
-      at: annotation.at,
+      // Authorship time when known: an annotation queued at 8:50 and sent at
+      // 8:54 happened at 8:50, and must not leapfrog the messages in between.
+      at: annotation.authoredAt ?? annotation.at,
       index: i + 1,
       annotation,
     })),
+    // Unsent queue items hold their place in the record from the moment they
+    // were written - the same instant their sent form will occupy.
+    ...queue.map((q, i) => ({ kind: "queued" as const, at: q.at, index: i + 1, id: q.id })),
     ...messages.map((message) => ({ kind: "message" as const, at: message.at, message })),
   ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 };

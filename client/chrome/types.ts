@@ -37,6 +37,8 @@ export interface QueuedAnnotation {
   readonly id: string;
   readonly target: Anchor;
   readonly note: string;
+  /** When the note was queued - its place in the record. */
+  readonly at: string;
   /** Staged images travel with the queued item, so an edit or a reorder never
    *  separates a screenshot from the note it belongs to. */
   readonly images: readonly PastedImage[];
@@ -86,6 +88,15 @@ export type TimelineItem =
       /** 1-based number matching the annotation's badge on the surface. */
       readonly index: number;
       readonly annotation: PayloadAnnotationLike;
+    }
+  | {
+      /** Composed but unsent: client-side state holding its place in the
+       *  record at the moment it was written, exactly where the same card
+       *  lands once sent (the event carries authoredAt). */
+      readonly kind: "queued";
+      readonly at: string;
+      readonly index: number;
+      readonly id: string;
     }
   | { readonly kind: "message"; readonly at: string; readonly message: ConversationMessage };
 

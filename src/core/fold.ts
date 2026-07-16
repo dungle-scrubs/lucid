@@ -11,6 +11,8 @@ export interface AnnotationRecord {
   readonly target: Anchor;
   readonly note: string;
   readonly at: string;
+  /** Authorship time when the client supplied one; display-order metadata. */
+  readonly authoredAt?: string;
   readonly images?: readonly PromptImage[];
 }
 
@@ -182,6 +184,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
           target: e.target,
           note: e.note,
           at: e.at,
+          ...(e.authoredAt ? { authoredAt: e.authoredAt } : {}),
           ...(e.images ? { images: e.images } : {}),
         });
         break;

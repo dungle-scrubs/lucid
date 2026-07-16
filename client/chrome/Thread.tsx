@@ -7,7 +7,7 @@ import {
   useMessage,
 } from "@assistant-ui/react";
 import { AnnotationPart } from "./AnnotationPart.tsx";
-import { Orphans, PendingComposer, Queue, Warnings } from "./Panel.tsx";
+import { Orphans, PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
 import { Questions } from "./Questions.tsx";
 
 /**
@@ -44,12 +44,11 @@ const parts = {
  * for itself and must not wear a "human" header.
  */
 const UserMessage = () => {
-  // A `data-annotation` part is normalised on the way in to
-  // `{ type: "data", name: "annotation" }` - the prefix moves into `name`.
-  const isAnnotation = useMessage((m) =>
-    m.content.some((p) => p.type === "data" && p.name === "annotation"),
-  );
-  if (isAnnotation) return <MessagePrimitive.Parts components={parts} />;
+  // `data-*` parts are normalised on the way in to `{ type: "data", name }` -
+  // and every data part here (annotation, queued) is a card that speaks for
+  // itself; only a typed message wears the "human" header.
+  const isCard = useMessage((m) => m.content.some((p) => p.type === "data"));
+  if (isCard) return <MessagePrimitive.Parts components={parts} />;
   return (
     <div className="flex flex-col gap-[3px]" data-role="human">
       {/* Amber is the human. */}
@@ -112,10 +111,15 @@ const Composer = () => (
   </ComposerPrimitive.Root>
 );
 
+const QueuedPart = ({ data }: { readonly data: { id: string; index: number } }) => (
+  <QueuedCard id={data.id} index={data.index} />
+);
+
 export const Thread = () => {
   // Registers the renderer for the `data-annotation` parts that convertMessage
   // emits. Without it those parts fall through to the unknown-data fallback.
   useAssistantDataUI({ name: "annotation", render: AnnotationPart });
+  useAssistantDataUI({ name: "queued", render: QueuedPart });
   return (
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
       <ThreadPrimitive.Viewport
@@ -133,9 +137,9 @@ export const Thread = () => {
             after a pick - and where auto-scroll brings it. */}
         <Orphans />
         <Warnings />
-        <Queue />
         <PendingComposer />
       </ThreadPrimitive.Viewport>
+      <SendQueueBar />
       <Questions />
       <Composer />
     </ThreadPrimitive.Root>

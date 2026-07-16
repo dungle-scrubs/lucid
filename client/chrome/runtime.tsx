@@ -31,6 +31,17 @@ import type { TimelineItem } from "./types.ts";
  * annotation into a neighbouring agent reply.
  */
 const convertMessage = (item: TimelineItem): ThreadMessageLike => {
+  if (item.kind === "queued") {
+    // Client-side state riding the transcript: the card holds its authored
+    // place in the record before the log knows about it. The component reads
+    // the live queue by id, so edits re-render without reconverting.
+    return {
+      role: "user",
+      id: item.id,
+      createdAt: new Date(item.at),
+      content: [{ type: "data-queued", data: { id: item.id, index: item.index } }],
+    } as ThreadMessageLike;
+  }
   if (item.kind === "annotation") {
     return {
       role: "user",
@@ -115,8 +126,12 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
   // infinite loop (React #185).
   const annotations = useLucid((s) => s.annotations);
   const messages = useLucid((s) => s.messages);
+  const queue = useLucid((s) => s.queue);
   const sending = useLucid((s) => s.sending);
-  const timeline = useMemo(() => buildTimeline(annotations, messages), [annotations, messages]);
+  const timeline = useMemo(
+    () => buildTimeline(annotations, messages, queue),
+    [annotations, messages, queue],
+  );
 
   /**
    * Posts and returns. No assistant message follows synchronously - the agent

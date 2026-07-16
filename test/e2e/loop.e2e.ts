@@ -245,6 +245,46 @@ test("a queued annotation can be edited before it is sent", async ({ page }) => 
   expect(fb.annotations[0]?.note).toBe("Backfill in one batch, not nightly.");
 });
 
+test("the record is chronological: queued cards hold their authored place", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+
+  // Queue an annotation, THEN send a message. The message is newer, so it must
+  // land BELOW the queued card - this was the reported bug: the queue was a
+  // separate section pinned under the transcript, so every new message
+  // appeared above the older queued item.
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await page.locator('[data-test="annotation-note"]').fill("Queued first");
+  await page.locator('[data-test="add-to-queue"]').click();
+  await page.locator('[data-test="message-input"]').fill("typed second");
+  await page.locator('[data-test="send-message"]').click();
+  await expect(page.locator('[data-role="human"]')).toContainText("typed second");
+
+  const order = () =>
+    page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll(
+          '[data-role], [data-test="annotation"], [data-test="queued-annotation"]',
+        ),
+      ).map((el) => (el as HTMLElement).dataset.role ?? (el as HTMLElement).dataset.test),
+    );
+  expect(await order()).toEqual(["queued-annotation", "human"]);
+
+  // Sending must not reorder: the event carries authoredAt, so the located
+  // card takes the queued card's place instead of leapfrogging to send time.
+  await page.locator('[data-test="send-queue"]').click();
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  expect(await order()).toEqual(["annotation", "human"]);
+
+  // And the agent sees the authorship time alongside the log time.
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    annotations: { note: string; authoredAt?: string; at: string }[];
+  };
+  const sent = fb.annotations[0];
+  expect(sent?.authoredAt).toBeTruthy();
+  if (sent?.authoredAt) expect(sent.authoredAt <= sent.at).toBe(true);
+});
+
 test("a sent annotation stays in send order, not pinned above the replies", async ({ page }) => {
   await openViewer(page);
   const surface = surfaceOf(page);
