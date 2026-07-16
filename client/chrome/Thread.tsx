@@ -145,7 +145,7 @@ const WorkingIndicator = () => {
     <div
       data-test="agent-working"
       data-stale={stale ? "true" : "false"}
-      className="flex items-center gap-2 text-[12px]"
+      className="flex items-baseline gap-1.5 text-[12px]"
     >
       {stale ? (
         <span className="text-fg-muted">
@@ -153,9 +153,11 @@ const WorkingIndicator = () => {
         </span>
       ) : (
         <>
-          <span className="size-2 animate-pulse rounded-full bg-agent" />
-          <span className="text-agent">
-            agent is working · {mm}:{ss}
+          {/* tw-shimmer clips to the text, so the base color's opacity is what
+              makes the sweep visible (their documented /40 idiom). */}
+          <span className="shimmer text-fg/40">Agent responding…</span>
+          <span className="text-[11px] text-fg-faint tabular-nums">
+            ({mm}:{ss})
           </span>
         </>
       )}

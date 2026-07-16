@@ -437,7 +437,7 @@ test("the working indicator opens when the agent takes delivery and closes on it
   };
   expect(fb.status).toBe("feedback");
   await expect(page.locator('[data-test="agent-working"]')).toBeVisible();
-  await expect(page.locator('[data-test="agent-working"]')).toContainText("agent is working");
+  await expect(page.locator('[data-test="agent-working"]')).toContainText("Agent responding");
 
   // The agent's reply closes the window.
   await cli.run(["wait", cli.artifact, "--reply", "Batched.", "--timeout", "1"]);
