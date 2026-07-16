@@ -414,6 +414,51 @@ test("a pasted image still renders in the conversation after a reload", async ({
   expect(decoded?.width).toBeGreaterThan(0); // it actually decoded, not just resolved
 });
 
+test("scrolled-up readers are not yanked; the floating button brings them back", async ({
+  page,
+}) => {
+  await openViewer(page);
+
+  // Enough transcript to genuinely overflow - a viewport that cannot scroll is
+  // always "at bottom", which would pass every assertion here vacuously.
+  const filler = "detail ".repeat(40);
+  for (let i = 0; i < 12; i++) {
+    await cli.run(["wait", cli.artifact, "--reply", `filler ${i}: ${filler}`, "--timeout", "1"]);
+  }
+  await expect(page.locator('[data-role="agent"]')).toHaveCount(12);
+  const vp = page.locator('[data-test="thread-viewport"]');
+  expect(await vp.evaluate((el) => el.scrollHeight > el.clientHeight + 100)).toBe(true);
+
+  // Pinned to the bottom, the button is disabled and hidden.
+  await expect(page.locator('[data-test="scroll-bottom"]')).toBeDisabled();
+
+  // Scroll up the way a reader does - with the wheel; a new agent reply must
+  // NOT yank the reader down.
+  await vp.hover();
+  await page.mouse.wheel(0, -4000);
+  await expect.poll(async () => vp.evaluate((el) => el.scrollTop)).toBeLessThan(50);
+  await cli.run([
+    "wait",
+    cli.artifact,
+    "--reply",
+    "one more while you were reading",
+    "--timeout",
+    "1",
+  ]);
+  await expect(page.locator('[data-role="agent"]')).toHaveCount(13);
+  await page.waitForTimeout(400); // any yank would have happened by now
+  expect(await vp.evaluate((el) => el.scrollTop)).toBeLessThan(50);
+
+  // The affordance is live while scrolled up, and returns the reader.
+  const btn = page.locator('[data-test="scroll-bottom"]');
+  await expect(btn).toBeEnabled();
+  await btn.click();
+  await expect
+    .poll(async () => vp.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight))
+    .toBeLessThan(30);
+  await expect(btn).toBeDisabled();
+});
+
 test("the working indicator opens when the agent takes delivery and closes on its reply", async ({
   page,
 }) => {

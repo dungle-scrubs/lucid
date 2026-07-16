@@ -28,9 +28,12 @@ export const addToQueue = (): void => {
   pushHighlights();
   // Queueing dismounts the note's textarea, which would strand focus on
   // <body>. Hand it to the message composer - the next thing typed is either
-  // a message or another pick, and a pick never needed keyboard focus.
+  // a message or another pick, and a pick never needed keyboard focus. And a
+  // manual submit is an explicit "take me back down", even from a scroll-up.
   requestAnimationFrame(() => {
     document.querySelector<HTMLTextAreaElement>('[data-test="message-input"]')?.focus();
+    const vp = document.querySelector('[data-test="thread-viewport"]');
+    vp?.scrollTo({ top: vp.scrollHeight, behavior: "smooth" });
   });
 };
 

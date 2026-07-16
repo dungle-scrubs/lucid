@@ -167,6 +167,67 @@ const QueuedPart = ({ data }: { readonly data: { id: string; index: number } }) 
   <QueuedCard id={data.id} index={data.index} />
 );
 
+/**
+ * Our own at-bottom tracking rather than ThreadPrimitive.ScrollToBottom: that
+ * primitive's viewport store never left isAtBottom=true under our external-
+ * store composition, so its button stayed disabled forever. A scroll listener
+ * plus a re-check whenever the record grows is the whole requirement. Sticky
+ * inside the viewport so it floats over the scrolling content; floats, so it
+ * earns a shadow.
+ */
+const ScrollToLatest = () => {
+  const [atBottom, setAtBottom] = useState(true);
+  // Where "bottom" is changes when the record grows; these are the slices
+  // that grow it.
+  const tick = useLucid((s) => s.messages.length + s.annotations.length + s.queue.length);
+
+  useEffect(() => {
+    // Reading `tick` is the point: the effect re-checks whenever the record
+    // grows, since growth moves where "bottom" is without any scroll event.
+    if (tick < 0) return;
+    const el = document.querySelector('[data-test="thread-viewport"]');
+    if (!el) return;
+    const check = (): void =>
+      setAtBottom(
+        el.scrollHeight - el.scrollTop - el.clientHeight <= 2 || el.scrollHeight <= el.clientHeight,
+      );
+    check();
+    el.addEventListener("scroll", check, { passive: true });
+    return () => el.removeEventListener("scroll", check);
+  }, [tick]);
+
+  return (
+    <div className="pointer-events-none sticky bottom-0 z-10 flex justify-center">
+      <button
+        type="button"
+        data-test="scroll-bottom"
+        title="Scroll to the latest"
+        disabled={atBottom}
+        onClick={() => {
+          const el = document.querySelector('[data-test="thread-viewport"]');
+          el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+        }}
+        className="pointer-events-auto flex size-8 cursor-pointer items-center justify-center rounded-full border border-ink-400 bg-ink-800/95 text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)] hover:bg-ink-700 disabled:invisible"
+      >
+        {/* lucide chevron-down */}
+        <svg
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+    </div>
+  );
+};
+
 export const Thread = () => {
   // Registers the renderer for the `data-annotation` parts that convertMessage
   // emits. Without it those parts fall through to the unknown-data fallback.
@@ -176,9 +237,13 @@ export const Thread = () => {
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
       <ThreadPrimitive.Viewport
         // Anchored to the bottom: this is a record of what happened, so new
-        // entries belong at the end and the eye should follow them.
+        // entries belong at the end and the eye should follow them - but only
+        // when the eye is already there. autoScroll never yanks a reader who
+        // scrolled up; submitting (a run start, or queueing an annotation)
+        // is an explicit "take me back down".
         autoScroll
         scrollToBottomOnRunStart
+        data-test="thread-viewport"
         className="flex flex-1 flex-col gap-[18px] overflow-y-auto p-[14px_14px_12px]"
       >
         <ThreadPrimitive.Empty>
@@ -193,6 +258,7 @@ export const Thread = () => {
         <Orphans />
         <Warnings />
         <PendingComposer />
+        <ScrollToLatest />
       </ThreadPrimitive.Viewport>
       <SendQueueBar />
       <Questions />
