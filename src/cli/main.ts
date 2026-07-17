@@ -44,8 +44,11 @@ const runEffect = (fn: () => Promise<void>): Effect.Effect<void> =>
 const fileArg = Args.file({ name: "file" });
 
 const noOpen = Options.boolean("no-open").pipe(Options.withDefault(false));
-const openCommand = Command.make("open", { file: fileArg, noOpen }, ({ file, noOpen }) =>
-  runEffect(() => runOpen(file, { open: !noOpen })),
+const restart = Options.boolean("restart").pipe(Options.withDefault(false));
+const openCommand = Command.make(
+  "open",
+  { file: fileArg, noOpen, restart },
+  ({ file, noOpen, restart }) => runEffect(() => runOpen(file, { open: !noOpen, restart })),
 );
 
 const sinceOpt = Options.text("since").pipe(Options.optional);
