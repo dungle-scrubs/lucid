@@ -124,6 +124,16 @@ export const sendQueue = async (): Promise<void> => {
   pushHighlights();
 };
 
+/** cmd/ctrl+Enter from anywhere: fold an in-progress composer note into the
+ *  queue, then send the whole thing. The composer's plain Enter only queues
+ *  the current note; this is the one gesture that flushes the queue without
+ *  reaching for the button, even while a text field has focus. */
+export const sendAll = async (): Promise<void> => {
+  addToQueue(); // no-op unless a note is being composed
+  if (get().sending || get().queue.length === 0) return;
+  await sendQueue();
+};
+
 // ---- review lifecycle -----------------------------------------------------
 
 export const approveReview = async (): Promise<void> => {

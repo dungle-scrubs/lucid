@@ -9,9 +9,9 @@ description: >
   table, multi-step or multi-item explanation, comparison or option matrix,
   checklist, schema or data model, ranked list, spec or API walkthrough, or
   diagram - anything the user will likely want to correct at the element or
-  phrase level. Invoking Lucid is itself the signal that the response is an
-  artifact rather than prose; the user reviews in the browser and never
-  touches the CLI. Triggers: visualize the plan, show me the plan, lay out
+  phrase level. Invoking Lucid signals the response is an artifact; the
+  user reviews in the browser and never touches the CLI. Triggers:
+  visualize the plan, show me the plan, lay out
   the plan, map out the roadmap, walk me through, render this as a document,
   let me review this, let me mark this up, I want to annotate, review this
   plan, give feedback on each step, plan, roadmap, checklist, comparison

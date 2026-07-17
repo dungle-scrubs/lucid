@@ -76,6 +76,46 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
   expect(afterRevise.version).toBe(2);
 });
 
+test("cmd+enter queues the open note and sends the whole queue", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+
+  // Queue one annotation, then start a second and flush both with cmd+enter -
+  // the shortcut folds the in-progress note into the queue before sending.
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await page
+    .locator('textarea[placeholder^="What should change here?"]')
+    .fill("Batch the backfill.");
+  await page.locator('[data-test="add-to-queue"]').click();
+  await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
+
+  await surface.locator("#note").click();
+  const composer = page.locator('textarea[placeholder^="What should change here?"]');
+  await composer.fill("Cut over on a weekend.");
+  await composer.press("ControlOrMeta+Enter");
+
+  // Both annotations echo back via SSE and the queue clears.
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(2);
+  await expect(page.locator('[data-test="send-queue"]')).toHaveCount(0);
+
+  const feedback = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    "8",
+  ])) as {
+    status: string;
+    annotations: { note: string }[];
+  };
+  expect(feedback.status).toBe("feedback");
+  expect(feedback.annotations).toHaveLength(2);
+  const notes = feedback.annotations.map((a) => a.note).join(" ");
+  expect(notes).toContain("Batch the backfill.");
+  expect(notes).toContain("Cut over on a weekend.");
+});
+
 test("agent reply appears in the conversation log", async ({ page }) => {
   await openViewer(page);
   await cli.run([

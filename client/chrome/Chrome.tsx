@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { LogEvent } from "../../src/core/events.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
-import { exitDiff, gotoHunk, setSidebarOpen, setSidebarTab } from "./actions.ts";
+import { exitDiff, gotoHunk, sendAll, setSidebarOpen, setSidebarTab } from "./actions.ts";
 import { Header } from "./Header.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
 import { Sessions } from "./Sessions.tsx";
@@ -152,6 +152,18 @@ export const Chrome = () => {
     };
     window.addEventListener("keydown", onDiffKey);
 
+    // cmd/ctrl+Enter is the queue's flush-from-anywhere. Unlike the composer's
+    // plain Enter (which only queues the current note), this deliberately fires
+    // inside text fields too - the whole point is to send without leaving the
+    // keyboard, so it does not skip text-entry targets the way onDiffKey does.
+    const onSendKey = (e: KeyboardEvent): void => {
+      if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.isComposing) return;
+      if (get().queue.length === 0 && !get().pendingTarget) return;
+      e.preventDefault();
+      void sendAll();
+    };
+    window.addEventListener("keydown", onSendKey);
+
     const source = new EventSource("/__lucid/events");
     source.onmessage = (e) => {
       try {
@@ -188,6 +200,7 @@ export const Chrome = () => {
       window.removeEventListener("lucid:focus-annotation", onFocusAnnotation);
       window.removeEventListener("lucid:lightbox", onLightbox);
       window.removeEventListener("keydown", onDiffKey);
+      window.removeEventListener("keydown", onSendKey);
       source.close();
     };
   }, []);
