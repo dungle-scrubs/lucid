@@ -162,20 +162,29 @@ export const get = useLucid.getState;
  *
  * The number comes from `located` order first, because that is how the overlay
  * numbers its badges - sorting must never renumber a card away from its mark.
+ *
+ * Orphans stay in the record at the moment they were written. Acting on an
+ * annotation is what orphans it - revise the text a note points at and its
+ * anchor stops resolving - so filing orphans elsewhere moved a note out of
+ * sequence exactly when it had been answered, stranding the reply above the
+ * question it answered.
  */
 export const buildTimeline = (
   annotations: readonly PayloadAnnotationLike[],
   messages: readonly ConversationMessage[],
   queue: readonly QueuedAnnotation[],
 ): TimelineItem[] => {
-  const located = annotations.filter((a) => a.resolved);
+  let located = 0;
   return [
-    ...located.map((annotation, i) => ({
+    ...annotations.map((annotation) => ({
       kind: "annotation" as const,
       // Authorship time when known: an annotation queued at 8:50 and sent at
       // 8:54 happened at 8:50, and must not leapfrog the messages in between.
       at: annotation.authoredAt ?? annotation.at,
-      index: i + 1,
+      // Only a located anchor takes a number: the badge exists to match a mark
+      // on the surface, and an orphan has no mark. Counting them would shift
+      // every later card off its own badge.
+      index: annotation.resolved ? ++located : null,
       annotation,
     })),
     // Unsent queue items hold their place in the record from the moment they
