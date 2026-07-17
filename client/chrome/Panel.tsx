@@ -217,9 +217,12 @@ export const SendQueueBar = () => {
         data-test="send-queue"
         disabled={sending}
         onClick={() => void sendQueue()}
-        className={`${btnPrimary} w-full`}
+        className={`${btnPrimary} flex w-full items-center justify-center gap-2`}
       >
-        Send {queueLen} annotation{queueLen > 1 ? "s" : ""}
+        <span>
+          Send {queueLen} annotation{queueLen > 1 ? "s" : ""}
+        </span>
+        <span className="font-normal normal-case tracking-normal opacity-60">⌘↵</span>
       </button>
     </div>
   );
