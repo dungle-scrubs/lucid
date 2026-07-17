@@ -111,8 +111,9 @@ export type TimelineItem =
   | {
       readonly kind: "annotation";
       readonly at: string;
-      /** 1-based number matching the annotation's badge on the surface. */
-      readonly index: number;
+      /** 1-based number matching the annotation's badge on the surface, or
+       *  null when the anchor is orphaned - there is no mark left to match. */
+      readonly index: number | null;
       readonly annotation: PayloadAnnotationLike;
     }
   | {

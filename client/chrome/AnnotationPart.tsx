@@ -5,7 +5,8 @@ import type { MessageImage } from "./types.ts";
 
 export interface AnnotationData {
   readonly id: string;
-  readonly index: number;
+  /** null when the anchor is orphaned: no mark on the surface, so no badge. */
+  readonly index: number | null;
   readonly version: number;
   readonly note: string;
   readonly target: Anchor;
@@ -59,10 +60,15 @@ const focus = (id: string): void => {
  * The chip and the status pill ride the card's corners rather than sitting in a
  * row, so the card costs one line less and reads as the same numbered item as
  * its mark on the surface - same circle, same straddled corner.
+ *
+ * An orphan keeps its place in the record and loses only what it no longer has:
+ * the number, because the badge it matched is gone. The snippet stays - what was
+ * pointed at is still what the note is about.
  */
 export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data }) => {
   const hovered = useLucid((s) => s.hoveredId === data.id);
   const images: readonly MessageImage[] = data.images ?? [];
+  const orphaned = data.index === null;
   const enter = (): void => {
     set({ hoveredId: data.id });
     focus(data.id);
@@ -76,27 +82,37 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
     // itself, and focus mirrors hover so the card↔mark link survives for
     // anything that focuses it, not only a pointer.
     <section
-      data-test="annotation"
+      data-test={orphaned ? "orphan" : "annotation"}
       data-annotation-id={data.id}
-      aria-label={`Annotation ${data.index}`}
-      onMouseEnter={enter}
-      onMouseLeave={leave}
-      onFocus={enter}
-      onBlur={leave}
+      aria-label={orphaned ? "Annotation with an orphaned anchor" : `Annotation ${data.index}`}
+      // An orphan has no mark to light up, so it takes no hover wiring: the
+      // card↔mark link is the only thing these handlers exist for.
+      onMouseEnter={orphaned ? undefined : enter}
+      onMouseLeave={orphaned ? undefined : leave}
+      onFocus={orphaned ? undefined : enter}
+      onBlur={orphaned ? undefined : leave}
       className={`relative flex flex-col gap-[7px] rounded-lg border bg-ink-700 px-[11px] py-[10px] focus-visible:annot-outline ${
         hovered ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]" : "border-ink-600"
       }`}
     >
-      <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
-        {data.index}
-      </span>
+      {orphaned ? null : (
+        <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+          {data.index}
+        </span>
+      )}
       {/* Straddles the top edge like the number chip, but stays inside the
           card horizontally: hung off the right corner it landed a few px from
           the panel's own border and read as tucked under it, rounded end and
           all. Nothing needs to hang into that gutter. */}
-      <span className="absolute -top-[9px] right-2 z-1 rounded-full bg-sage-600/25 px-[7px] py-px text-[10px] text-sage-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
-        located · v{data.version}
-      </span>
+      {orphaned ? (
+        <span className="absolute -top-[9px] right-2 z-1 rounded-full bg-rust-500/30 px-[7px] py-px text-[10px] text-rust-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+          Orphaned anchor
+        </span>
+      ) : (
+        <span className="absolute -top-[9px] right-2 z-1 rounded-full bg-sage-600/25 px-[7px] py-px text-[10px] text-sage-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+          located · v{data.version}
+        </span>
+      )}
       <TargetSnippet target={data.target} />
       <div className="text-fg">{data.note}</div>
       {images.length > 0 ? (

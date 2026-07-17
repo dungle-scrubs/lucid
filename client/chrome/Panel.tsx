@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
   addPastedImage,
   addToQueue,
@@ -71,35 +71,6 @@ const Chips = ({
         </span>
       ))}
     </div>
-  );
-};
-
-/** Anchors that no longer attach. Listed, never floated at a stale spot. */
-export const Orphans = () => {
-  // Select the slice, derive after: a selector that filters returns a new array
-  // every read, which never compares equal and re-renders forever (React #185).
-  const annotations = useLucid((s) => s.annotations);
-  const orphans = useMemo(() => annotations.filter((a) => !a.resolved), [annotations]);
-  if (orphans.length === 0) return null;
-  return (
-    <section>
-      <h3 className={heading}>Orphaned ({orphans.length})</h3>
-      <div className="mt-1.5 flex flex-col gap-4">
-        {orphans.map((a) => (
-          <div
-            key={a.id}
-            data-test="orphan"
-            className="relative flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-700 px-[11px] py-[10px]"
-          >
-            <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-rust-500/30 px-[7px] py-px text-[10px] text-rust-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
-              orphaned · v{a.version}
-            </span>
-            <TargetSnippet target={a.target} />
-            <div className="text-fg">{a.note}</div>
-          </div>
-        ))}
-      </div>
-    </section>
   );
 };
 

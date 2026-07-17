@@ -8,7 +8,7 @@ import {
 } from "@assistant-ui/react";
 import { AnnotationPart } from "./AnnotationPart.tsx";
 import { useEffect, useState } from "react";
-import { Orphans, PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
+import { PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
 import { useLucid, warn } from "./store.ts";
 import { Questions } from "./Questions.tsx";
 
@@ -372,7 +372,6 @@ export const Thread = () => {
         <WorkingIndicator />
         {/* Staged work lives at the end of the record, where the eye already is
             after a pick - and where auto-scroll brings it. */}
-        <Orphans />
         <Warnings />
         <PendingComposer />
         <ScrollToLatest />
