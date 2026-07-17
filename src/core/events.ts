@@ -172,38 +172,28 @@ export type LogEvent =
 
 export type LogEventType = LogEvent["t"];
 
+/** The one list of event types that carry a client/CLI-minted idempotent id
+ *  used for dedupe (D-057). `IdentifiedEvent` and `hasId` both derive from it,
+ *  so a new identified event is added in exactly one place. */
+const IDENTIFIED_TYPES = [
+  "annotation",
+  "prompt",
+  "agent_reply",
+  "agent_ack",
+  "revert",
+  "question",
+  "question_answered",
+] as const satisfies readonly LogEventType[];
+
 /** Events that carry a client/CLI-minted idempotent id used for dedupe (D-057). */
-export type IdentifiedEvent =
-  | AnnotationEvent
-  | PromptEvent
-  | AgentReplyEvent
-  | AgentAckEvent
-  | RevertEvent
-  | QuestionEvent
-  | QuestionAnsweredEvent;
+export type IdentifiedEvent = Extract<LogEvent, { t: (typeof IDENTIFIED_TYPES)[number] }>;
 
-export const hasId = (event: LogEvent): event is IdentifiedEvent =>
-  event.t === "annotation" ||
-  event.t === "prompt" ||
-  event.t === "agent_reply" ||
-  event.t === "agent_ack" ||
-  event.t === "revert" ||
-  event.t === "question" ||
-  event.t === "question_answered";
+const IDENTIFIED = new Set<string>(IDENTIFIED_TYPES);
 
-/** Body to append: a LogEvent without the writer-assigned `seq`/`at`. */
-export type EventInput =
-  | Omit<SessionOpenedEvent, "seq" | "at">
-  | Omit<VersionEvent, "seq" | "at">
-  | Omit<AnnotationEvent, "seq" | "at">
-  | Omit<PromptEvent, "seq" | "at">
-  | Omit<AgentReplyEvent, "seq" | "at">
-  | Omit<AgentAckEvent, "seq" | "at">
-  | Omit<RevertEvent, "seq" | "at">
-  | Omit<QuestionEvent, "seq" | "at">
-  | Omit<QuestionAnsweredEvent, "seq" | "at">
-  | Omit<ReviewResolvedEvent, "seq" | "at">
-  | Omit<ReviewReopenedEvent, "seq" | "at">
-  | Omit<SessionSuspendedEvent, "seq" | "at">
-  | Omit<SessionResumedEvent, "seq" | "at">
-  | Omit<SessionEndedEvent, "seq" | "at">;
+export const hasId = (event: LogEvent): event is IdentifiedEvent => IDENTIFIED.has(event.t);
+
+/** Body to append: a LogEvent without the writer-assigned `seq`/`at`.
+ *  Distributes over the union, so a new event type is covered automatically. */
+export type EventInput = {
+  [K in LogEventType]: Omit<Extract<LogEvent, { t: K }>, "seq" | "at">;
+}[LogEventType];

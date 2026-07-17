@@ -1,4 +1,5 @@
 import type { Anchor } from "../../src/anchors/anchor.ts";
+import type { PayloadAnnotation } from "../../src/protocol/wire.ts";
 
 /**
  * postMessage protocol between the chrome (parent document) and the overlay
@@ -6,19 +7,10 @@ import type { Anchor } from "../../src/anchors/anchor.ts";
  * overlay owns DOM targeting and highlight rendering on the surface.
  */
 
-export interface PayloadAnnotationLike {
-  readonly id: string;
-  readonly version: number;
-  readonly resolved: boolean;
-  readonly target: Anchor;
-  readonly note: string;
-  readonly at: string;
-  /** When the human wrote it; `at` is send time. Display order follows this. */
-  readonly authoredAt?: string;
-  /** Images pasted onto the annotation. `file` is what the viewer addresses as
-   *  `/__lucid/asset/<file>`; the agent gets an absolute `path` alongside. */
-  readonly images?: readonly { readonly name: string; readonly file: string }[];
-}
+/** The annotation as the wire delivers it (src/protocol/wire.ts) - the chrome
+ *  forwards it to the overlay unchanged, so the highlight message carries the
+ *  same shape the server built. */
+export type PayloadAnnotationLike = PayloadAnnotation;
 
 /**
  * A composed-but-unsent annotation's anchor. The chrome sends these so the

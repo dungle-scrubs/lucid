@@ -1,6 +1,7 @@
 import { Glob } from "bun";
 import { stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import type { SessionSummary } from "../protocol/wire.ts";
 import { discoverLiveServer, readServerDescriptor } from "../server/discovery.ts";
 import { readLastAttendant } from "./attendant.ts";
 import { foldLog } from "./fold.ts";
@@ -8,18 +9,9 @@ import { readEvents } from "./log.ts";
 import { sessionPaths } from "./paths.ts";
 import type { SessionPaths } from "./paths.ts";
 
-export interface SessionSummary {
-  readonly session: string;
-  readonly name: string;
-  readonly status: "active" | "suspended" | "ended";
-  readonly version: number;
-  readonly segment: number;
-  readonly annotations: number;
-  readonly live: boolean;
-  readonly viewer?: string;
-  readonly resume?: string;
-  readonly lastAttendant?: { harness: string; at: string; resume?: string };
-}
+// The summary is wire contract (src/protocol/wire.ts); re-exported here so
+// server-side callers keep importing it from the module that produces it.
+export type { SessionSummary } from "../protocol/wire.ts";
 
 export const projectRoot = async (paths: SessionPaths): Promise<string> => {
   let current = paths.artifactDir;

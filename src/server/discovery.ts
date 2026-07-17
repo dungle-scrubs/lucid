@@ -16,6 +16,23 @@ export interface ServerDescriptor {
   readonly startedAt: string;
 }
 
+/**
+ * Fetch a per-session server route over loopback. Owns the one request shape
+ * every out-of-process caller must use: the explicit Host header is what lets
+ * the request through the server's DNS-rebind gate (`validateHeaders`).
+ */
+export const loopbackFetch = (
+  port: number,
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> => {
+  // Headers() normalizes every HeadersInit form, so a caller passing a Headers
+  // instance or an entries array is not silently dropped by an object spread.
+  const headers = new Headers(init.headers);
+  headers.set("host", `127.0.0.1:${port}`);
+  return fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers });
+};
+
 export const writeServerDescriptor = async (
   paths: SessionPaths,
   descriptor: ServerDescriptor,
@@ -59,10 +76,7 @@ export const handshake = async (
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
-    const res = await fetch(`http://127.0.0.1:${port}/__lucid/identity`, {
-      signal: controller.signal,
-      headers: { host: `127.0.0.1:${port}` },
-    });
+    const res = await loopbackFetch(port, "/__lucid/identity", { signal: controller.signal });
     clearTimeout(timer);
     if (!res.ok) return undefined;
     const body = (await res.json()) as IdentityResponse;

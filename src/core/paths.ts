@@ -20,8 +20,12 @@ export interface SessionPaths {
   readonly currentHtml: string;
   /** Root of frozen, segment-scoped version snapshots. */
   readonly versionsDir: string;
+  /** Pasted-image bytes (composer uploads), addressed by `pastedRelPath`. */
+  readonly pastedDir: string;
   /** This session's runtime descriptor (port + pid) for discovery. */
   readonly serverJson: string;
+  /** The detached per-session server's stdout/stderr log. */
+  readonly serverLog: string;
 }
 
 /** Slugify the artifact basename (strip the final extension). */
@@ -49,7 +53,9 @@ export const sessionPaths = (input: string): SessionPaths => {
     logPath: resolve(sessionDir, "log.ndjson"),
     currentHtml: resolve(sessionDir, "current.html"),
     versionsDir: resolve(sessionDir, "versions"),
+    pastedDir: resolve(sessionDir, "pasted"),
     serverJson: resolve(sessionDir, "server.json"),
+    serverLog: resolve(sessionDir, "server.out.log"),
   };
 };
 
@@ -60,6 +66,9 @@ export const snapshotPath = (paths: SessionPaths, segment: number, version: numb
 /** Relative snapshot path recorded inside log events, e.g. `versions/s2/v3.html`. */
 export const snapshotRelPath = (segment: number, version: number): string =>
   `versions/s${segment}/v${version}.html`;
+
+/** Session-relative path of a pasted image, e.g. `pasted/a1b2.png`. */
+export const pastedRelPath = (file: string): string => `pasted/${file}`;
 
 /** Advisory per-harness cursor sidecar path (D-051). */
 export const cursorSidecarPath = (paths: SessionPaths, harness: string): string => {

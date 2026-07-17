@@ -2,8 +2,9 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { writeAttendantSidecar } from "../core/attendant.ts";
 import { renderCursor } from "../core/cursor.ts";
+import { deliver } from "../core/deliver.ts";
 import { foldLog } from "../core/fold.ts";
-import { appendEvent, readEvents } from "../core/log.ts";
+import { readEvents } from "../core/log.ts";
 import { sessionPaths } from "../core/paths.ts";
 import type { WaitPayload } from "../core/payload.ts";
 import { ensureSessionDirs, openSession } from "../core/session.ts";
@@ -70,18 +71,7 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   const paths = sessionPaths(file);
 
   if (options.reply !== undefined && options.reply.length > 0) {
-    const live = await discoverLiveServer(paths);
-    const id = randomId();
-    if (live) {
-      await fetch(`http://127.0.0.1:${live.port}/__lucid/reply`, {
-        method: "POST",
-        headers: { "content-type": "application/json", host: `127.0.0.1:${live.port}` },
-        body: JSON.stringify({ id, text: options.reply }),
-      });
-    } else {
-      // No live server: direct write under the exclusive log lock (D-049).
-      await appendEvent(paths.logPath, { t: "agent_reply", id, text: options.reply });
-    }
+    await deliver(paths, { t: "agent_reply", id: randomId(), text: options.reply });
   }
 
   const payload = await runWait(paths, options);
@@ -92,17 +82,7 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   // hand-off (D-064).
   if (payload.status === "feedback" && options.since !== undefined) {
     try {
-      const live = await discoverLiveServer(paths);
-      const id = randomId();
-      if (live) {
-        await fetch(`http://127.0.0.1:${live.port}/__lucid/ack`, {
-          method: "POST",
-          headers: { "content-type": "application/json", host: `127.0.0.1:${live.port}` },
-          body: JSON.stringify({ id }),
-        });
-      } else {
-        await appendEvent(paths.logPath, { t: "agent_ack", id });
-      }
+      await deliver(paths, { t: "agent_ack", id: randomId() });
     } catch {
       /* presence is advisory */
     }
@@ -130,17 +110,7 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
  */
 export const runIntent = async (file: string, intent: "revise" | "reply"): Promise<void> => {
   const paths = sessionPaths(file);
-  const id = randomId();
-  const live = await discoverLiveServer(paths);
-  if (live) {
-    await fetch(`http://127.0.0.1:${live.port}/__lucid/ack`, {
-      method: "POST",
-      headers: { "content-type": "application/json", host: `127.0.0.1:${live.port}` },
-      body: JSON.stringify({ id, intent }),
-    });
-  } else {
-    await appendEvent(paths.logPath, { t: "agent_ack", id, intent });
-  }
+  await deliver(paths, { t: "agent_ack", id: randomId(), intent });
   print({ ok: true, intent });
 };
 
@@ -155,16 +125,7 @@ export const runAsk = async (file: string, text: string, ref?: string): Promise<
     });
   }
   const id = randomId();
-  const live = await discoverLiveServer(paths);
-  if (live) {
-    await fetch(`http://127.0.0.1:${live.port}/__lucid/question`, {
-      method: "POST",
-      headers: { "content-type": "application/json", host: `127.0.0.1:${live.port}` },
-      body: JSON.stringify({ id, text, ...(ref ? { ref } : {}) }),
-    });
-  } else {
-    await appendEvent(paths.logPath, { t: "question", id, text, ...(ref ? { ref } : {}) });
-  }
+  await deliver(paths, { t: "question", id, text, ...(ref ? { ref } : {}) });
   print({ session: paths.artifactPath, asked: id, text });
 };
 
@@ -182,16 +143,9 @@ export const runEnd = async (file: string): Promise<void> => {
     print({ session: paths.artifactPath, status: "ended" });
     return;
   }
-  const live = await discoverLiveServer(paths);
-  if (live) {
-    await fetch(`http://127.0.0.1:${live.port}/__lucid/end`, {
-      method: "POST",
-      headers: { host: `127.0.0.1:${live.port}` },
-    });
-  } else {
-    await appendEvent(paths.logPath, { t: "session_ended" });
-    await removeServerDescriptor(paths);
-  }
+  const { live } = await deliver(paths, { t: "session_ended" });
+  // A live server removes its own descriptor as it stops; a dead one left it behind.
+  if (!live) await removeServerDescriptor(paths);
   print({ session: paths.artifactPath, status: "ended" });
 };
 

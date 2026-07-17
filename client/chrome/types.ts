@@ -1,4 +1,12 @@
 import type { Anchor } from "../../src/anchors/anchor.ts";
+import type {
+  DiffHunk,
+  DiffResult,
+  PayloadImage,
+  PayloadMessage,
+  PayloadQuestion,
+  SessionSummary,
+} from "../../src/protocol/wire.ts";
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
 
 export interface Config {
@@ -10,19 +18,11 @@ export interface Config {
 }
 
 /** An image on a message already in the log. The thumb and lightbox address it
- *  as `/__lucid/asset/<file>`, so `file` is the field that must survive the
- *  round trip through the wait payload. */
-export interface MessageImage {
-  readonly name: string;
-  readonly file: string;
-}
+ *  as `/__lucid/asset/<file>` via its `file` field. */
+export type MessageImage = PayloadImage;
 
-export interface ConversationMessage {
-  readonly role: "human" | "agent";
-  readonly text: string;
-  readonly at: string;
-  readonly images?: readonly MessageImage[];
-}
+/** A message as the wire delivers it (src/protocol/wire.ts). */
+export type ConversationMessage = PayloadMessage;
 
 /** A pasted image staged in the composer (not yet sent). */
 export interface PastedImage {
@@ -49,54 +49,15 @@ export interface WarningItem {
   readonly message: string;
 }
 
-/**
- * One sibling session in this project, as `/__lucid/sessions` reports it.
- * Mirrors `SessionSummary` in src/core/sessions.ts - the chrome cannot import
- * server types across the bundle boundary, so this is a hand-mirror, and the
- * wire contract is what actually binds them.
- */
-export interface SessionSummary {
-  readonly session: string;
-  readonly name: string;
-  readonly status: "active" | "suspended" | "ended";
-  readonly version: number;
-  readonly segment: number;
-  readonly annotations: number;
-  readonly live: boolean;
-  /** Present when live: the other session's own viewer, on its own port. */
-  readonly viewer?: string;
-  /** Present when dormant: the `lucid open` that would revive it. */
-  readonly resume?: string;
-  /** Who last attended it, and how to get that conversation back. */
-  readonly lastAttendant?: {
-    readonly harness: string;
-    readonly at: string;
-    readonly resume?: string;
-  };
-}
+/** One sibling session in this project, as `/__lucid/sessions` reports it -
+ *  the wire type itself (src/protocol/wire.ts), so the two sides cannot drift. */
+export type { DiffHunk, SessionSummary };
 
-export interface AgentQuestion {
-  readonly id: string;
-  readonly text: string;
-  readonly ref?: string;
-  readonly answered: boolean;
-  readonly answer?: string;
-}
+/** An agent question as the wire delivers it (src/protocol/wire.ts). */
+export type AgentQuestion = PayloadQuestion;
 
-export interface DiffHunk {
-  readonly id: string;
-  readonly kind: "added" | "removed" | "changed";
-  readonly label: string;
-  readonly anchor: Anchor;
-}
-
-export interface DiffData {
-  readonly base: number;
-  readonly current: number;
-  readonly changed: boolean;
-  readonly hunks: readonly DiffHunk[];
-  readonly mergedHtml: string;
-}
+/** The `/__lucid/diff` response as the wire delivers it (src/protocol/wire.ts). */
+export type DiffData = DiffResult;
 
 /**
  * One entry in the review record.

@@ -7,7 +7,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import { useMemo, type ReactNode } from "react";
-import { api, buildTimeline, useLucid, uuid, warn } from "./store.ts";
+import { api, buildTimeline, uploadAsset, useLucid, uuid, warn } from "./store.ts";
 import type { TimelineItem } from "./types.ts";
 
 /**
@@ -89,13 +89,7 @@ const uploaded = new Map<string, { name: string; file: string }>();
 const attachmentAdapter: AttachmentAdapter = {
   accept: "image/*",
   async add({ file }): Promise<PendingAttachment> {
-    const upload = await fetch("/__lucid/asset", {
-      method: "POST",
-      headers: { "content-type": file.type, "x-lucid-filename": file.name || "pasted" },
-      body: file,
-    });
-    if (!upload.ok) throw new Error("upload failed");
-    const meta = (await upload.json()) as { id: string; name: string; file: string };
+    const meta = await uploadAsset(file);
     uploaded.set(meta.id, { name: meta.name, file: meta.file });
     return {
       id: meta.id,

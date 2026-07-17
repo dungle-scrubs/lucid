@@ -1,7 +1,7 @@
 import { approveReview, enterDiff, reopenReview, setSidebarOpen } from "./actions.ts";
 import { persistShowTargets, set, useLucid } from "./store.ts";
+import { pushHighlights } from "./surface.ts";
 import type { Config } from "./types.ts";
-import { pushHighlights } from "./Chrome.tsx";
 
 /**
  * Open/close the review panel. It lives in the header, on the artifact side,

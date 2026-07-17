@@ -1,13 +1,11 @@
 import { useEffect, useRef } from "react";
 import type { LogEvent } from "../../src/core/events.ts";
-import type { ChromeMessage, PayloadAnnotationLike } from "../shared/protocol.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
 import { exitDiff, gotoHunk, setSidebarOpen, setSidebarTab } from "./actions.ts";
 import { Header } from "./Header.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
 import { Sessions } from "./Sessions.tsx";
 import {
-  api,
   get,
   persistWidth,
   set,
@@ -15,9 +13,16 @@ import {
   CHROME_MIN_WIDTH,
   DEFAULT_CHROME_WIDTH,
 } from "./store.ts";
+import {
+  bootstrap,
+  markOverlayReady,
+  onNewVersion,
+  pushHighlights,
+  setSurfaceIframe,
+  toOverlay,
+} from "./surface.ts";
 import { DiffBar, Lightbox, NewerVersionBanner, SurfaceUpdating } from "./Surface.tsx";
 import { Thread } from "./Thread.tsx";
-import type { AgentQuestion, ConversationMessage } from "./types.ts";
 import {
   Sidebar,
   SidebarContent,
@@ -33,83 +38,6 @@ const DIVIDER_WIDTH = 5;
  *  shortcuts can leave the caret alone. */
 const isTextEntry = (node: EventTarget | null): boolean =>
   node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement;
-
-/** The chrome owns all server I/O; the overlay only does DOM targeting. */
-let iframeEl: HTMLIFrameElement | null = null;
-let overlayReady = false;
-let pendingSwapHtml: string | null = null;
-
-export const toOverlay = (message: ChromeMessage): void => {
-  iframeEl?.contentWindow?.postMessage(message, "*");
-};
-
-export const pushHighlights = (): void => {
-  if (!overlayReady) return;
-  const s = get();
-  toOverlay({
-    source: "lucid-chrome",
-    type: "highlight",
-    annotations: s.annotations,
-    queued: s.queue.map((q) => ({ id: q.id, target: q.target })),
-    pending: s.pendingTarget,
-    showTargets: s.showTargets,
-  });
-};
-
-const hasUnsentDraft = (): boolean => {
-  const s = get();
-  return s.queue.length > 0 || (s.pendingTarget !== null && s.composerNote.trim().length > 0);
-};
-
-const applySwap = (html: string, version: number): void => {
-  toOverlay({ source: "lucid-chrome", type: "swap", html });
-  set((s) => ({ diffBase: s.version, version, newerVersion: null }));
-  pendingSwapHtml = null;
-  void bootstrap();
-};
-
-export const applyDeferredSwapIfReady = (): void => {
-  const s = get();
-  if (pendingSwapHtml !== null && s.newerVersion !== null && !hasUnsentDraft()) {
-    applySwap(pendingSwapHtml, s.newerVersion);
-  }
-};
-
-/**
- * Bootstraps are fired from SSE frames, so several can be in flight at once.
- * Only the newest may land: an older snapshot arriving late would roll state
- * back over a message that has since been applied. A failure leaves state
- * alone rather than half-applying.
- */
-let bootstrapSeq = 0;
-
-const bootstrap = async (): Promise<void> => {
-  const mine = ++bootstrapSeq;
-  const res = await api("/__lucid/state").catch(() => null);
-  if (!res || mine !== bootstrapSeq) return;
-  const payload = (await res.json()) as {
-    version: number;
-    reviewResolved: boolean;
-    annotations: PayloadAnnotationLike[];
-    messages: ConversationMessage[];
-    questions?: AgentQuestion[];
-    warnings?: { code: string; message: string }[];
-    agentWorking?: { since: string; intent?: "revise" | "reply" };
-    agentsListening?: number;
-    lastAttendant?: { harness: string; at: string; resume?: string };
-  };
-  set({
-    version: payload.version,
-    reviewResolved: payload.reviewResolved,
-    annotations: payload.annotations,
-    messages: payload.messages,
-    questions: payload.questions ?? [],
-    agentWorking: payload.agentWorking ?? null,
-    agentsListening: payload.agentsListening ?? 0,
-    lastAttendant: payload.lastAttendant ?? null,
-  });
-  pushHighlights();
-};
 
 const onLogEvent = (ev: LogEvent): void => {
   switch (ev.t) {
@@ -147,20 +75,6 @@ const onLogEvent = (ev: LogEvent): void => {
   }
 };
 
-/** Live reload, deferred until the human's draft is committed (D-055). */
-const onNewVersion = async (version: number): Promise<void> => {
-  const html = await api("/__lucid/artifact")
-    .then((r) => r.text())
-    .catch(() => null);
-  if (html === null) return;
-  if (hasUnsentDraft()) {
-    pendingSwapHtml = html;
-    set({ newerVersion: version });
-    return;
-  }
-  applySwap(html, version);
-};
-
 export const Chrome = () => {
   const chromeWidth = useLucid((s) => s.chromeWidth);
   const sidebarOpen = useLucid((s) => s.sidebarOpen);
@@ -169,13 +83,13 @@ export const Chrome = () => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
-    iframeEl = iframeRef.current;
+    setSurfaceIframe(iframeRef.current);
 
     const onMessage = (e: MessageEvent): void => {
       if (!isOverlayMessage(e.data)) return;
       const msg = e.data;
       if (msg.type === "ready") {
-        overlayReady = true;
+        markOverlayReady();
         pushHighlights();
       } else if (msg.type === "target-picked") {
         set({ pendingTarget: msg.anchor });
@@ -418,7 +332,7 @@ export const Chrome = () => {
             // overlay's module has run, so treating it as ready too means a
             // missed `ready` cannot leave the surface permanently unpainted.
             onLoad={() => {
-              overlayReady = true;
+              markOverlayReady();
               pushHighlights();
             }}
             // bg-surface, not white: this is the paper the artifact renders on,
