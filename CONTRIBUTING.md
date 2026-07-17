@@ -38,10 +38,10 @@ bunx playwright install chromium   # once
 bunx playwright test               # end-to-end against a real browser
 ```
 
-Run all of it before opening a PR. CI on Linux runs typecheck, lint, the unit
-tests, and the build (and fails if the committed client bundle is stale). It
-does not run the Playwright end-to-end suite - that needs a browser download, so
-run it locally, especially for any change to the viewer, overlay, or chrome.
+Run all of it before opening a PR. CI on Linux runs the build, then typecheck,
+lint, and the unit tests, on pull requests and on main. It does not run the
+Playwright end-to-end suite - that needs a browser download, so run it locally,
+especially for any change to the viewer, overlay, or chrome.
 
 ## Two things that will bite you
 
@@ -55,10 +55,16 @@ curl http://127.0.0.1:<port>/__lucid/client.js
 
 Green tests against a stale bundle are not green.
 
-**`src/server/client-bundle.generated.ts` is generated and tracked.**
-`bun run build:client` rewrites it and it is committed to git, because the
-binary compiles it in. Regenerate and commit it whenever client code changes.
-CI fails if the committed copy disagrees with the current client source.
+**`src/server/client-bundle.generated.ts` is generated, and not tracked.**
+`src/server` imports it, so nothing typechecks or runs until it exists: `bun
+install` builds it via the `prepare` script, and `bun run build:client` rewrites
+it. If you ever see it missing, that is the command.
+
+It is deliberately not in git. Bun's bundler does not emit byte-identical output
+for identical input - identifier mangling and emit length both move between runs
+of the same source - so a tracked copy could only be kept honest by a byte
+comparison that fails at random, on a defect no author could act on. Not
+tracking it deletes the question instead of answering it badly.
 
 ## Conventions
 

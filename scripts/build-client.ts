@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 /**
@@ -46,10 +46,10 @@ const bundle = async (entry: string, label: string): Promise<string> => {
  *
  * Not `bunx @tailwindcss/cli`: bunx is free to satisfy the name from the
  * registry, and it did - the build emitted CSS from whatever Tailwind npm had
- * published most recently while node_modules held the pinned version. That put
- * the bundle's bytes outside the lockfile's control, so a rebuild of unchanged
- * source produced unchanged JS and different CSS, and CI's byte-comparison
- * against the committed bundle failed for every PR.
+ * published most recently (4.3.3) while node_modules held the pinned 4.3.2. A
+ * lockfile that the build ignores is not a lockfile: the bundle's bytes moved
+ * whenever npm published, with no source change, and every open PR went red on
+ * the day that happened.
  *
  * Resolved through `package.json` (the package exports nothing else) and run on
  * this same Bun, so neither PATH nor a .bin symlink can reintroduce a second
@@ -60,12 +60,6 @@ const tailwindCli = (): string =>
 
 const buildCss = async (): Promise<string> => {
   const out = resolve(root, "dist/chrome.css");
-  // Hermetic: Tailwind's output varies with what already sits at `out` - the
-  // same source emitted two different orderings depending on the previous
-  // build's leftovers, which is how a rebuild of unchanged source produced a
-  // bundle CI could not reproduce from a fresh checkout. Start from no file so
-  // the only input is the source.
-  await rm(out, { force: true });
   const proc = Bun.spawn(
     [
       process.execPath,
