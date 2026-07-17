@@ -1,4 +1,5 @@
 import type { Anchor } from "../anchors/anchor.ts";
+import type { AgentWorking } from "../protocol/wire.ts";
 import type { LogEvent, PromptImage } from "./events.ts";
 import { maxSeq } from "./log.ts";
 
@@ -81,7 +82,7 @@ export interface FoldedState {
   /** Open "agent is working" window: set by agent_ack, closed by any agent
    *  output (version, reply, question) within the segment. A re-ack may add
    *  declared intent; the window's `since` stays the first ack's time. */
-  readonly agentWorking: { readonly since: string; readonly intent?: "revise" | "reply" } | null;
+  readonly agentWorking: AgentWorking | null;
   /** seq of the session_opened that begins the current segment. */
   readonly segmentStartSeq: number;
 }

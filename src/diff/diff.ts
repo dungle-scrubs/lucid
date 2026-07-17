@@ -1,6 +1,8 @@
 import { parseHTML } from "linkedom";
 import type { Anchor } from "../anchors/anchor.ts";
 import { computeDomPath, computeFingerprint, type DomElementLike } from "../anchors/dom.ts";
+import { escapeHtml } from "../core/escape.ts";
+import type { DiffHunk, DiffResult } from "../protocol/wire.ts";
 
 /**
  * Whole-DOM version diff (RFC §8, change view). Compares two artifact snapshots
@@ -12,25 +14,9 @@ import { computeDomPath, computeFingerprint, type DomElementLike } from "../anch
  * diff is exact, and it degrades to text matching otherwise.
  */
 
-export type HunkKind = "added" | "removed" | "changed";
-
-export interface DiffHunk {
-  readonly id: string;
-  readonly kind: HunkKind;
-  /** Short one-line label for the jump menu. */
-  readonly label: string;
-  /** Anchor identifying the target, for revert reference. */
-  readonly anchor: Anchor;
-}
-
-export interface DiffResult {
-  readonly base: number;
-  readonly current: number;
-  readonly changed: boolean;
-  readonly hunks: readonly DiffHunk[];
-  /** Current document body with diff markup injected. */
-  readonly mergedHtml: string;
-}
+// The diff shapes are wire contract (src/protocol/wire.ts); re-exported here so
+// server-side callers keep importing them from the module that computes them.
+export type { DiffHunk, DiffResult, HunkKind } from "../protocol/wire.ts";
 
 const BLOCK_SELECTOR =
   "h1,h2,h3,h4,h5,h6,p,li,td,th,blockquote,pre,figcaption,dt,dd,[data-lucid-id]";
@@ -117,9 +103,6 @@ const wordRedline = (oldText: string, newText: string): string => {
   flush();
   return parts.join("");
 };
-
-const escapeHtml = (s: string): string =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** Jaccard word-set overlap, for pairing an edited block to its prior self. */
 const similarity = (a: string, b: string): number => {

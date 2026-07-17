@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { openSync } from "node:fs";
-import { join } from "node:path";
 import type { SessionPaths } from "../core/paths.ts";
 import { discoverLiveServer, type IdentityResponse } from "../server/discovery.ts";
 
@@ -24,7 +23,7 @@ export const selfInvocation = (): {
 /** Spawn the detached per-session server (`__serve`) that outlives this process. */
 export const spawnServer = (paths: SessionPaths): void => {
   const { command, prefix } = selfInvocation();
-  const out = openSync(join(paths.sessionDir, "server.out.log"), "a");
+  const out = openSync(paths.serverLog, "a");
   const child = spawn(command, [...prefix, "__serve", paths.artifactPath], {
     detached: true,
     stdio: ["ignore", out, out],

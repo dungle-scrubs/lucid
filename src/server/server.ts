@@ -10,8 +10,9 @@ import { appendEvents, readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
 import { ServerError } from "../errors.ts";
-import { buildWaitPayload } from "../core/payload.ts";
+import { assemblePayload } from "../core/payload.ts";
 import { commitWatchedChange } from "../core/session.ts";
+import type { SessionsResponse, StateResponse } from "../protocol/wire.ts";
 import {
   CHROME_BUNDLE,
   CHROME_CSS,
@@ -276,8 +277,8 @@ export const runServer = async (
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_ASSET_BYTES) {
       return json({ error: "image is empty or too large" }, 400);
     }
-    mkdirSync(join(paths.sessionDir, "pasted"), { recursive: true });
-    await Bun.write(join(paths.sessionDir, "pasted", file), bytes);
+    mkdirSync(paths.pastedDir, { recursive: true });
+    await Bun.write(join(paths.pastedDir, file), bytes);
     touch();
     return json({ id, name, file });
   };
@@ -469,28 +470,24 @@ export const runServer = async (
     }
     if (pathname === "/__lucid/state") {
       const state = foldLog((await readEvents(paths.logPath)).events);
-      const currentHtml = await readFile(paths.currentHtml, "utf8").catch(() => "");
-      const payload = await buildWaitPayload({
-        session: paths.artifactPath,
+      const payload = await assemblePayload(
+        paths,
         state,
-        status:
-          state.status === "ended"
-            ? "ended"
-            : state.status === "suspended"
-              ? "suspended"
-              : "feedback",
-        currentHtml,
-        snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
-        annotations: state.annotations,
-        messages: state.messages,
-        reverts: state.reverts,
-        questions: state.questions,
-        nextSeq: state.highSeq,
-      });
+        state.status === "ended"
+          ? "ended"
+          : state.status === "suspended"
+            ? "suspended"
+            : "feedback",
+        {
+          annotations: state.annotations,
+          messages: state.messages,
+          reverts: state.reverts,
+        },
+      );
       // Who last took delivery, from the advisory sidecars: display data for
       // the chrome's resume affordance, never something the server executes.
       const attendant = await readLastAttendant(paths);
-      return json({
+      const response: StateResponse = {
         ...payload,
         agentsListening: agentClients.size,
         ...(attendant
@@ -502,15 +499,17 @@ export const runServer = async (
               },
             }
           : {}),
-      });
+      };
+      return json(response);
     }
     if (pathname === "/__lucid/sessions" && req.method === "GET") {
       const root = await projectRoot(paths);
-      return json(
-        { root, current: paths.artifactPath, sessions: await listSessions(root) },
-        200,
-        noStore,
-      );
+      const response: SessionsResponse = {
+        root,
+        current: paths.artifactPath,
+        sessions: await listSessions(root),
+      };
+      return json(response, 200, noStore);
     }
     if (pathname === "/__lucid/diff") return handleDiff(url);
     if (pathname === "/__lucid/annotation" && req.method === "POST") return handleAnnotation(req);
@@ -523,7 +522,7 @@ export const runServer = async (
       const file = pathname.slice("/__lucid/asset/".length);
       if (!/^[a-f0-9-]+\.[a-z]+$/i.test(file)) return json({ error: "bad asset" }, 400);
       const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
-      const f = Bun.file(join(paths.sessionDir, "pasted", file));
+      const f = Bun.file(join(paths.pastedDir, file));
       if (!(await f.exists())) return json({ error: "not found" }, 404);
       return new Response(f, {
         headers: { "content-type": ASSET_CONTENT_TYPE[ext] ?? "application/octet-stream" },

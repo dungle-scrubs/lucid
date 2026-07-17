@@ -108,39 +108,7 @@ const truncateTornTail = (logPath: string): void => {
 export const appendEvents = async (
   logPath: string,
   inputs: readonly EventInput[],
-): Promise<readonly LogEvent[]> => {
-  if (inputs.length === 0) return [];
-  return withAppendLock(logPath, async () => {
-    const { tornTail, events } = await readEvents(logPath);
-    if (tornTail) truncateTornTail(logPath);
-    const existingIds = collectIds(events);
-    let seq = maxSeq(events);
-    const at = new Date().toISOString();
-
-    const toWrite: LogEvent[] = [];
-    const result: LogEvent[] = [];
-
-    for (const input of inputs) {
-      const id = inputId(input);
-      if (id !== undefined && existingIds.has(id)) {
-        const existing = events.find((e) => hasId(e) && e.id === id);
-        if (existing) result.push(existing);
-        continue;
-      }
-      seq += 1;
-      const ev = { ...input, seq, at } as LogEvent;
-      toWrite.push(ev);
-      result.push(ev);
-      if (id !== undefined) existingIds.add(id);
-    }
-
-    if (toWrite.length > 0) {
-      const payload = `${toWrite.map((e) => JSON.stringify(e)).join("\n")}\n`;
-      appendDurable(logPath, payload);
-    }
-    return result;
-  });
-};
+): Promise<readonly LogEvent[]> => appendEventsIf(logPath, () => true, inputs);
 
 /** Convenience single-event append. */
 export const appendEvent = async (logPath: string, input: EventInput): Promise<LogEvent> => {

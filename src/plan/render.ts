@@ -86,22 +86,28 @@ const applyQuestionIds = (document: Document): void => {
 };
 
 const STYLE = `
-  @import url("https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap");
-  :root { --ink:#211d15; --soft:#4b4334; --surface:#faf6ec; --line:#e6dbc3; --brass:#bd9a4e; --brass-deep:#9f8038; --sage:#61714b; --amber:#c8862a; }
+  /* Self-contained by doctrine: an artifact must render identically offline
+     from disk, so system font stacks only - never a CDN import. */
+  :root {
+    --ink:#211d15; --soft:#4b4334; --surface:#faf6ec; --line:#e6dbc3; --brass:#bd9a4e; --brass-deep:#9f8038; --sage:#61714b; --amber:#c8862a;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--surface); color:var(--ink); font-family:"Geist",system-ui,sans-serif; font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  body { margin:0; background:var(--surface); color:var(--ink); font-family:var(--sans); font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; }
   .doc { max-width:860px; margin:0 auto; padding:48px 24px 120px; }
   .plan-section { padding:14px 20px; margin:6px 0; border-radius:10px; transition:background .12s; }
   .plan-section:hover { background:rgba(189,154,78,0.05); }
   .plan-section > :first-child { margin-top:8px; }
   .eyebrow { font-size:12px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--brass-deep); }
-  h1,h2,h3 { font-family:"EB Garamond",Georgia,serif; font-weight:500; letter-spacing:-.01em; }
+  h1,h2,h3 { font-family:var(--serif); font-weight:500; letter-spacing:-.01em; }
   h1 { font-style:italic; font-size:40px; line-height:1.1; margin:8px 0 16px; }
   h2 { font-size:26px; margin:36px 0 12px; }
   h3 { font-size:20px; margin:26px 0 8px; }
   p,li { margin:8px 0; }
   ul,ol { padding-left:22px; }
-  code { font-family:"Geist Mono",ui-monospace,monospace; font-size:.86em; background:#efe8d8; padding:1px 5px; border-radius:4px; }
+  code { font-family:var(--mono); font-size:.86em; background:#efe8d8; padding:1px 5px; border-radius:4px; }
   pre { background:#0e0d0b; color:#f2ecdc; padding:14px 16px; border-radius:8px; overflow:auto; }
   pre code { background:none; padding:0; color:inherit; }
   blockquote { border-left:3px solid var(--brass); margin:12px 0; padding:4px 0 4px 16px; color:var(--soft); font-style:italic; }
@@ -114,7 +120,7 @@ const STYLE = `
     background:rgba(200,134,42,0.08); border-left:3px solid var(--amber); border-radius:6px;
   }
   [data-lucid-question]::before { content:"?"; position:absolute; left:11px; top:8px; font-weight:700; color:var(--amber); }
-  footer { margin-top:48px; color:var(--soft); font-size:13px; font-family:"EB Garamond",serif; font-style:italic; }
+  footer { margin-top:48px; color:var(--soft); font-size:13px; font-family:var(--serif); font-style:italic; }
 `;
 
 /** Render a planner markdown document to a Lucid artifact HTML string. */

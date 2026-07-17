@@ -1,7 +1,15 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { parseHTML } from "linkedom";
 import type { DomRootLike } from "../anchors/dom.ts";
 import { anchorResolves } from "../anchors/dom.ts";
 import type { Warning } from "../errors.ts";
+import type {
+  PayloadAnnotation,
+  PayloadMessage,
+  PayloadStatus,
+  WaitPayload,
+} from "../protocol/wire.ts";
 import { renderCursor } from "./cursor.ts";
 import type {
   AnnotationRecord,
@@ -11,74 +19,20 @@ import type {
   RevertRecord,
 } from "./fold.ts";
 import { versionRef } from "./fold.ts";
+import { pastedRelPath, type SessionPaths } from "./paths.ts";
 import { verifySnapshot } from "./version.ts";
 
-export type PayloadStatus = "feedback" | "ended" | "suspended" | "waiting";
-
-export interface PayloadAnnotation {
-  readonly id: string;
-  readonly version: number;
-  readonly resolved: boolean;
-  readonly target: AnnotationRecord["target"];
-  readonly note: string;
-  readonly at: string;
-  /** When the human wrote it; `at` is when it reached the log. */
-  readonly authoredAt?: string;
-  /** Images pasted onto the annotation; addressed for both consumers, as on a
-   *  message. Drop `file` and the viewer's thumbs 404; drop `path` and the
-   *  agent cannot read the bytes. */
-  readonly images?: readonly PayloadImage[];
-}
-
-/**
- * One pasted image, addressed for both consumers of this payload: the agent
- * reads bytes off disk via `path`, the viewer fetches `/__lucid/asset/<file>`.
- * Dropping either one silently breaks that half.
- */
-export interface PayloadImage {
-  readonly name: string;
-  /** Stored filename under the session's `pasted/` dir, for the viewer's URL. */
-  readonly file: string;
-  /** Absolute local path to the pasted image, for the agent to read. */
-  readonly path: string;
-}
-
-export interface PayloadMessage {
-  readonly role: "human" | "agent";
-  readonly text: string;
-  readonly at: string;
-  readonly images?: readonly PayloadImage[];
-}
-
-export interface PayloadRevert {
-  readonly target: AnnotationRecord["target"];
-  readonly targetVersion: number;
-  readonly why: string;
-  readonly at: string;
-}
-
-export interface PayloadQuestion {
-  readonly id: string;
-  readonly text: string;
-  readonly ref?: string;
-  readonly answered: boolean;
-  readonly answer?: string;
-}
-
-export interface WaitPayload {
-  readonly session: string;
-  readonly version: number;
-  readonly status: PayloadStatus;
-  readonly nextCursor: string;
-  readonly reviewResolved: boolean;
-  readonly annotations: readonly PayloadAnnotation[];
-  readonly messages: readonly PayloadMessage[];
-  readonly reverts?: readonly PayloadRevert[];
-  readonly questions?: readonly PayloadQuestion[];
-  readonly warnings?: readonly Warning[];
-  /** Open "agent is working" window (ack received, no output yet). */
-  readonly agentWorking?: { readonly since: string; readonly intent?: "revise" | "reply" };
-}
+// The payload shapes are the wire contract (src/protocol/wire.ts); re-exported
+// here so server-side callers keep importing them from the module that builds them.
+export type {
+  PayloadAnnotation,
+  PayloadImage,
+  PayloadMessage,
+  PayloadQuestion,
+  PayloadRevert,
+  PayloadStatus,
+  WaitPayload,
+} from "../protocol/wire.ts";
 
 const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): PayloadMessage => ({
   role: m.role,
@@ -193,7 +147,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
             images: a.images.map((img) => ({
               name: img.name,
               file: img.file,
-              path: opts.snapshotAbsPath(`pasted/${img.file}`),
+              path: opts.snapshotAbsPath(pastedRelPath(img.file)),
             })),
           }
         : {}),
@@ -209,7 +163,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     ...(opts.state.agentWorking ? { agentWorking: opts.state.agentWorking } : {}),
     annotations,
     messages: opts.messages.map((m) =>
-      toMessage(m, (file) => opts.snapshotAbsPath(`pasted/${file}`)),
+      toMessage(m, (file) => opts.snapshotAbsPath(pastedRelPath(file))),
     ),
     ...(opts.reverts && opts.reverts.length > 0
       ? {
@@ -235,4 +189,43 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     ...(warnings.length > 0 ? { warnings } : {}),
   };
   return payload;
+};
+
+/** The record slices a payload carries (full folded sets or since-cursor deltas). */
+export interface PayloadSlices {
+  readonly annotations: readonly AnnotationRecord[];
+  readonly messages: readonly MessageRecord[];
+  readonly reverts?: readonly RevertRecord[];
+  /** Defaults to the segment's full question set. */
+  readonly questions?: readonly QuestionRecord[];
+}
+
+/**
+ * Assemble a payload for a session on disk: read the served copy, resolve
+ * snapshot/pasted paths against the session dir, and cursor at the fold's high
+ * seq. The one assembly protocol behind BOTH consumer surfaces - `lucid wait`
+ * (CLI agents) and `/__lucid/state` (the viewer) - so they cannot drift on how
+ * anchors carry forward or images are pathed.
+ */
+export const assemblePayload = async (
+  paths: SessionPaths,
+  state: FoldedState,
+  status: PayloadStatus,
+  slices: PayloadSlices,
+  extraWarnings?: readonly Warning[],
+): Promise<WaitPayload> => {
+  const currentHtml = await readFile(paths.currentHtml, "utf8").catch(() => "");
+  return buildWaitPayload({
+    session: paths.artifactPath,
+    state,
+    status,
+    currentHtml,
+    snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
+    annotations: slices.annotations,
+    messages: slices.messages,
+    reverts: slices.reverts ?? [],
+    questions: slices.questions ?? state.questions,
+    nextSeq: state.highSeq,
+    ...(extraWarnings && extraWarnings.length > 0 ? { extraWarnings } : {}),
+  });
 };

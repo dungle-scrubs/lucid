@@ -1,5 +1,5 @@
-import { applyDeferredSwapIfReady, pushHighlights, toOverlay } from "./Chrome.tsx";
 import { api, get, persistSidebarOpen, set, uploadPaste, uuid, warn } from "./store.ts";
+import { applyDeferredSwapIfReady, pushHighlights, toOverlay } from "./surface.ts";
 import type { AgentQuestion, DiffData, SessionSummary } from "./types.ts";
 
 /** Every mutation the human can make. Kept out of the components so the flow

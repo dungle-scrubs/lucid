@@ -1,7 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { NotFoundError } from "../errors.ts";
-import { discoverLiveServer } from "../server/discovery.ts";
+import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
 import { parseCursor } from "./cursor.ts";
 import {
   foldLog,
@@ -12,7 +10,7 @@ import {
 } from "./fold.ts";
 import { readEvents } from "./log.ts";
 import type { SessionPaths } from "./paths.ts";
-import { buildWaitPayload, type PayloadStatus, type WaitPayload } from "./payload.ts";
+import { assemblePayload, type PayloadStatus, type WaitPayload } from "./payload.ts";
 
 export interface WaitOptions {
   readonly since?: string;
@@ -66,9 +64,8 @@ const createWaker = (port: number): Waker => {
     let backoff = RECONNECT_BASE_MS;
     while (!closed) {
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/__lucid/events?role=agent`, {
+        const res = await loopbackFetch(port, "/__lucid/events?role=agent", {
           signal: controller.signal,
-          headers: { host: `127.0.0.1:${port}` },
         });
         if (!res.body) throw new Error("no body");
         const reader = res.body.getReader();
@@ -111,28 +108,15 @@ const sliceDelta = <T extends { readonly seq: number }>(
   cursor: number | undefined,
 ): readonly T[] => (cursor === undefined ? items : items.filter((i) => i.seq > cursor));
 
-const buildFromState = async (
+const buildFromState = (
   paths: SessionPaths,
   state: FoldedState,
   status: PayloadStatus,
   annotations: readonly AnnotationRecord[],
   messages: readonly MessageRecord[],
   reverts: readonly RevertRecord[] = [],
-): Promise<WaitPayload> => {
-  const currentHtml = await readFile(paths.currentHtml, "utf8").catch(() => "");
-  return buildWaitPayload({
-    session: paths.artifactPath,
-    state,
-    status,
-    currentHtml,
-    snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
-    annotations,
-    messages,
-    reverts,
-    questions: state.questions,
-    nextSeq: state.highSeq,
-  });
-};
+): Promise<WaitPayload> =>
+  assemblePayload(paths, state, status, { annotations, messages, reverts });
 
 /**
  * Core `wait` semantics (RFC §6, state machine). Tails the log directly (the

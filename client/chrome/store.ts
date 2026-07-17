@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Anchor } from "../../src/anchors/anchor.ts";
+import type { AgentWorking, AttendantRef } from "../../src/protocol/wire.ts";
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
 import type {
   AgentQuestion,
@@ -74,7 +75,7 @@ interface LucidState {
   status: string;
   /** Open "agent is working" window from the fold: set by the agent's ack on
    *  taking delivery, closed by its next output (version, reply, question). */
-  agentWorking: { readonly since: string; readonly intent?: "revise" | "reply" } | null;
+  agentWorking: AgentWorking | null;
   /** Agents currently blocked in `wait` on this session - someone is
    *  listening. Distinct from agentWorking: listening is presence before
    *  delivery, working is the window after it. */
@@ -82,7 +83,7 @@ interface LucidState {
   /** Who last took delivery (advisory sidecar), with the copy-paste command
    *  that resumes their conversation when the harness recorded one. Display
    *  data only: resuming is the human's act, in their terminal. */
-  lastAttendant: { readonly harness: string; readonly at: string; readonly resume?: string } | null;
+  lastAttendant: AttendantRef | null;
   /** SSE stream health. EventSource reconnects by itself, so this is a
    *  transient indicator, not an error the human has to act on. */
   live: boolean;
@@ -226,20 +227,34 @@ export const api = async (path: string, body?: unknown): Promise<Response> => {
   throw lastErr ?? new Error(`request to ${path} failed`);
 };
 
+/** What `POST /__lucid/asset` returns: the server-decided identity of a stored blob. */
+export interface UploadedAsset {
+  readonly id: string;
+  readonly name: string;
+  readonly file: string;
+}
+
 /**
- * Upload a pasted blob and stage it. Shared by the annotation composer and the
- * message composer: the bytes must land before the event referencing them does,
- * because the agent reads them off disk.
+ * Upload a blob to the session's pasted store. The one implementation of the
+ * upload protocol (content-type + x-lucid-filename headers, raw body) - the
+ * annotation composer and the message composer both route through it. The
+ * bytes must land before the event referencing them does, because the agent
+ * reads them off disk. Throws on failure so each caller keeps its own recovery.
  */
+export const uploadAsset = async (file: File): Promise<UploadedAsset> => {
+  const res = await fetch("/__lucid/asset", {
+    method: "POST",
+    headers: { "content-type": file.type, "x-lucid-filename": file.name || "pasted" },
+    body: file,
+  });
+  if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
+  return (await res.json()) as UploadedAsset;
+};
+
+/** Upload a pasted blob and stage it for the annotation composer. */
 export const uploadPaste = async (file: File): Promise<PastedImage | null> => {
   try {
-    const res = await fetch("/__lucid/asset", {
-      method: "POST",
-      headers: { "content-type": file.type, "x-lucid-filename": file.name || "pasted" },
-      body: file,
-    });
-    if (!res.ok) throw new Error(String(res.status));
-    const meta = (await res.json()) as { id: string; name: string; file: string };
+    const meta = await uploadAsset(file);
     return { ...meta, url: URL.createObjectURL(file) };
   } catch {
     warn("That image didn't upload - try again.");
