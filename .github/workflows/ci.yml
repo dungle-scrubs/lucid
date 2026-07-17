@@ -1,6 +1,13 @@
 name: CI
 
-on: pull_request
+# Pull requests, and main itself. Main was unverified for a while, and a broken
+# build landed on it unnoticed: every PR opened afterwards went red on a defect
+# none of them introduced, and the first author to look paid for all of them. A
+# branch nothing checks is a branch that hands its breakage to the next person.
+on:
+  pull_request:
+  push:
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,16 +28,29 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # `bunx <tool>` falls back to the npm registry when the name is not
+      # already resolvable, so a build that shells out through it stops honouring
+      # the lockfile without saying so: this build emitted CSS from a Tailwind
+      # that node_modules did not contain, which meant the bundle's bytes changed
+      # whenever npm published, with no source change. Build scripts must name
+      # the pinned install. (bunx is fine for lefthook, biome and playwright -
+      # the hazard is only code that produces a shipped artifact.)
+      - name: Guard against registry-resolved tools in the build
+        run: |
+          if grep -rnE '"(bunx|npx)"' scripts/; then
+            echo "::error::scripts/ must resolve tools from the lockfile, not bunx/npx - see the match above"
+            exit 1
+          fi
+
+      # First: src/server imports the generated client bundle, so nothing below
+      # can typecheck, lint or run until it exists. It is not in git - Bun's
+      # bundler does not emit byte-identical output for identical input, so a
+      # tracked copy could only be verified by a byte comparison that fails at
+      # random. Building it here is what makes it unnecessary to check.
+      - run: bun run build
+
       - run: bun run typecheck
 
       - run: bun run lint
 
       - run: bun test test/*.test.ts
-
-      # Also proves the generated client bundle committed to the repo is not
-      # stale: build:client rewrites it, and the diff check below fails if the
-      # committed copy disagrees with what the current client source produces.
-      - run: bun run build
-
-      - name: Verify committed client bundle is current
-        run: git diff --exit-code -- src/server/client-bundle.generated.ts
