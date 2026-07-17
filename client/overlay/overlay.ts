@@ -287,10 +287,14 @@ export class LucidOverlay extends LitElement {
     const style = document.createElement("style");
     style.id = "__lucid_diff_style";
     style.textContent = `
-      ins.lucid-ins { background: rgba(125,142,99,0.30); color: inherit; text-decoration: none; border-radius: 2px; padding: 0 1px; }
-      del.lucid-del { background: rgba(192,97,63,0.18); text-decoration: line-through; opacity: 0.65; border-radius: 2px; padding: 0 1px; }
       [data-diff="added"] { box-shadow: inset 3px 0 0 #7d8e63; background: rgba(125,142,99,0.10); border-radius: 3px; }
       [data-diff="changed"] { box-shadow: inset 3px 0 0 #97a67e; }
+      .lucid-diff-was, .lucid-diff-now { display: block; border-radius: 3px; padding: 2px 6px; }
+      .lucid-diff-was { text-decoration: line-through; opacity: 0.7; background: rgba(192,97,63,0.12); }
+      .lucid-diff-now { margin-top: 3px; background: rgba(125,142,99,0.12); }
+      .lucid-diff-was::before, .lucid-diff-now::before { display: block; font-size: 9px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; text-decoration: none; opacity: 0.8; }
+      .lucid-diff-was::before { content: "was"; color: #c0613f; }
+      .lucid-diff-now::before { content: "now"; color: #7d8e63; }
       .lucid-ghost { display: block; opacity: 0.55; text-decoration: line-through; background: rgba(192,97,63,0.08); box-shadow: inset 3px 0 0 #c0613f; border-radius: 3px; }
       [data-hunk].lucid-active { outline: 2px solid #bd9a4e; outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; }
     `;
@@ -310,6 +314,19 @@ export class LucidOverlay extends LitElement {
     if (!target) return;
     target.classList.add("lucid-active");
     target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  /** Light a mark and scroll the artifact to it - the keyboard "open" of a
+   *  card whose mark may be far off-screen. Reuses the already-resolved marker
+   *  rect (viewport-relative), so it lands wherever the anchor currently paints. */
+  private revealAnnotation(id: string): void {
+    this.focusedId = id;
+    this.reposition();
+    const m = this.markers.find((mk) => mk.id === id);
+    const r = m?.rects[0];
+    if (!r) return; // orphaned or unresolved: the focus glow is all there is to give
+    const y = window.scrollY + r.top - window.innerHeight / 2 + r.height / 2;
+    window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
   }
 
   /** Topmost committed annotation whose outline contains the point, if any. */
@@ -382,6 +399,8 @@ export class LucidOverlay extends LitElement {
       // An empty id clears the focus (chrome card mouse-out).
       this.focusedId = msg.id || null;
       this.reposition();
+    } else if (msg.type === "reveal-annotation") {
+      this.revealAnnotation(msg.id);
     } else if (msg.type === "measure-content") {
       post({ source: "lucid-overlay", type: "content-width", width: this.measureContent() });
     } else if (msg.type === "clear-pending") {

@@ -834,8 +834,9 @@ test("diff view shows changes since a version and revert reaches the agent", asy
   await expect(page.locator('[data-test="diff-count"]')).toContainText("/");
 
   // The surface shows in-place diff markup (sage adds/changes, ghost removes).
+  // A changed block stacks its old version over the new one, in place.
   expect(await surface.locator("[data-diff]").count()).toBeGreaterThan(0);
-  expect(await surface.locator("ins.lucid-ins").count()).toBeGreaterThan(0);
+  expect(await surface.locator(".lucid-diff-now").count()).toBeGreaterThan(0);
 
   // Revert the current change back to v1, with a reason; the agent receives it.
   await page.locator('[data-test="revert-why"]').fill("keep the nightly backfill");

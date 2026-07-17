@@ -1,7 +1,12 @@
 import { spawn } from "node:child_process";
 import { openSync } from "node:fs";
 import type { SessionPaths } from "../core/paths.ts";
-import { discoverLiveServer, type IdentityResponse } from "../server/discovery.ts";
+import {
+  discoverLiveServer,
+  type IdentityResponse,
+  readServerDescriptor,
+  removeServerDescriptor,
+} from "../server/discovery.ts";
 
 /**
  * How to re-invoke this same CLI as a child process. In dev (`bun run
@@ -46,6 +51,39 @@ export const waitForServer = async (
     if (Date.now() > deadline) return undefined;
     await sleep(100);
   }
+};
+
+/**
+ * Stop a running per-session daemon by the pid in its descriptor, then wait for
+ * its handshake to go dark. Used by `open --restart` to replace a live server
+ * (e.g. after a rebuild) without ending the session: the log and folded state
+ * are untouched - only the process, and the client bundle it loaded at start,
+ * are replaced. Returns whether a live server was actually stopped.
+ */
+export const stopServer = async (paths: SessionPaths, timeoutMs = 5000): Promise<boolean> => {
+  const descriptor = await readServerDescriptor(paths);
+  if (!descriptor || !(await discoverLiveServer(paths))) return false; // nothing live to stop
+  const kill = (signal: "SIGTERM" | "SIGKILL"): void => {
+    try {
+      process.kill(descriptor.pid, signal);
+    } catch {
+      // already gone, or not our process to signal
+    }
+  };
+  kill("SIGTERM");
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // Liveness is the handshake, never pid existence: a reused pid would read as
+    // alive forever. Once the port stops answering, the daemon is truly down.
+    if (!(await discoverLiveServer(paths))) break;
+    if (Date.now() > deadline) {
+      kill("SIGKILL"); // SIGTERM did not take; force it
+      break;
+    }
+    await sleep(100);
+  }
+  await removeServerDescriptor(paths); // the daemon installs no signal handler, so clear its mark here
+  return true;
 };
 
 /** Open the system browser to a URL (best-effort, detached). Skipped if LUCID_NO_OPEN. */

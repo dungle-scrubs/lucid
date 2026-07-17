@@ -1,4 +1,13 @@
-import { api, get, persistSidebarOpen, set, uploadPaste, uuid, warn } from "./store.ts";
+import {
+  api,
+  get,
+  persistShowTargets,
+  persistSidebarOpen,
+  set,
+  uploadPaste,
+  uuid,
+  warn,
+} from "./store.ts";
 import { applyDeferredSwapIfReady, pushHighlights, toOverlay } from "./surface.ts";
 import type { AgentQuestion, DiffData, SessionSummary } from "./types.ts";
 
@@ -35,6 +44,17 @@ export const addToQueue = (): void => {
     const vp = document.querySelector('[data-test="thread-viewport"]');
     vp?.scrollTo({ top: vp.scrollHeight, behavior: "smooth" });
   });
+};
+
+/** The common annotation asks, offered as one-tap chips on a fresh pick so they
+ *  need not be typed. Clicking one queues an annotation for the pending target
+ *  with that note - exactly what typing it and pressing Enter does. */
+export const QUICK_REPLIES = ["Explain further", "What is this?"] as const;
+
+export const queueQuickReply = (note: string): void => {
+  if (!get().pendingTarget) return;
+  set({ composerNote: note });
+  addToQueue();
 };
 
 export const discardPending = (): void => {
@@ -137,11 +157,32 @@ export const sendAll = async (): Promise<void> => {
 // ---- review lifecycle -----------------------------------------------------
 
 export const approveReview = async (): Promise<void> => {
+  // The button disables itself while work is unsent; the ⌘⇧↵ shortcut bypasses
+  // that, so the refusal lives here where both paths pass through it. Approving
+  // appends review_resolved, which the agent acts on and never re-reads behind.
+  const s = get();
+  if (s.reviewResolved) return;
+  const hasDraft = s.pendingTarget !== null && s.composerNote.trim().length > 0;
+  if (s.queue.length > 0 || hasDraft) {
+    warn(
+      "Send or discard your unsent feedback before approving - the agent stops reading once you do.",
+    );
+    return;
+  }
   try {
     await api("/__lucid/resolve", {});
   } catch {
     warn("Approve didn't send - try again.");
   }
+};
+
+/** Show/hide the annotation marks on the surface (the crosshair toggle, and its
+ *  ⌘⇧M shortcut). Read mode lets the artifact be read as a plain document. */
+export const toggleTargets = (): void => {
+  const next = !get().showTargets;
+  set({ showTargets: next });
+  persistShowTargets(next);
+  pushHighlights();
 };
 
 export const reopenReview = async (): Promise<void> => {
@@ -222,6 +263,7 @@ export const focusQuestionRef = (ref?: string): void => {
 // ---- change view ----------------------------------------------------------
 
 export const enterDiff = async (base = get().diffBase): Promise<void> => {
+  if (get().viewingVersion !== null) set({ viewingVersion: null }); // diff and history view are exclusive surfaces
   try {
     const res = await api(`/__lucid/diff?base=${base}`);
     const data = (await res.json()) as DiffData;
@@ -229,8 +271,52 @@ export const enterDiff = async (base = get().diffBase): Promise<void> => {
     toOverlay({ source: "lucid-chrome", type: "diff-show", html: data.mergedHtml });
     if (data.hunks.length > 0) requestAnimationFrame(() => gotoHunk(0));
   } catch {
-    /* diff unavailable */
+    // The bare catch here used to swallow a dead server whole, so the button
+    // looked inert. Say what likely broke instead.
+    warn("Couldn't load the changes - is the Lucid server still running?");
   }
+};
+
+/**
+ * Load a past version's full artifact into the surface, read-only. Distinct
+ * from the diff: this is the whole document as it was at vN, not a comparison.
+ * Picking is refused while it is up (Chrome guards target-picked) - a snapshot
+ * is not the live DOM, so an anchor captured against it would point at nothing
+ * on return.
+ */
+export const viewVersion = async (v: number): Promise<void> => {
+  if (v >= get().version) return exitVersionView(); // "current" in the picker means leave history
+  if (get().diffMode) await exitDiff();
+  const html = await api(`/__lucid/version?v=${v}`)
+    .then((r) => r.text())
+    .catch(() => null);
+  if (html === null) {
+    warn("Couldn't load that version's snapshot.");
+    return;
+  }
+  set({ viewingVersion: v });
+  // Clear marks and drop out of targeting first: the current annotations do not
+  // belong on a historical snapshot, and read mode is what a snapshot is.
+  toOverlay({
+    source: "lucid-chrome",
+    type: "highlight",
+    annotations: [],
+    queued: [],
+    pending: null,
+    showTargets: false,
+  });
+  toOverlay({ source: "lucid-chrome", type: "swap", html });
+};
+
+/** Return the surface to the live current artifact and restore its marks. */
+export const exitVersionView = async (): Promise<void> => {
+  if (get().viewingVersion === null) return;
+  set({ viewingVersion: null });
+  const html = await api("/__lucid/artifact")
+    .then((r) => r.text())
+    .catch(() => null);
+  if (html !== null) toOverlay({ source: "lucid-chrome", type: "swap", html });
+  pushHighlights();
 };
 
 export const exitDiff = async (): Promise<void> => {

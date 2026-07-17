@@ -15,7 +15,7 @@ import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
 import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
-import { openBrowser, spawnServer, waitForServer } from "./self.ts";
+import { openBrowser, spawnServer, stopServer, waitForServer } from "./self.ts";
 
 const print = (value: unknown): void => {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -25,12 +25,21 @@ const randomId = (): string => crypto.randomUUID();
 
 export interface OpenOptions {
   readonly open?: boolean;
+  /** Stop a live daemon first, so the next spawn loads a freshly built binary.
+   *  Without it `open` reuses whatever server is already running (D-036). */
+  readonly restart?: boolean;
 }
 
 /** `lucid open <file>` - start/resume/re-segment a session and serve the viewer. */
 export const runOpen = async (file: string, options: OpenOptions = {}): Promise<void> => {
   const paths = sessionPaths(file);
   const result = await openSession(paths);
+
+  // A running daemon embeds the client bundle it loaded at start; `open` alone
+  // reattaches to it, so a rebuild is invisible until the process is replaced.
+  // --restart stops the live one first without touching the session (no
+  // session_ended), so the spawn below starts fresh on the current binary.
+  if (options.restart) await stopServer(paths);
 
   let identity = await discoverLiveServer(paths);
   if (!identity) {

@@ -2,6 +2,7 @@ import type { DataMessagePartComponent } from "@assistant-ui/react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import { set, useLucid } from "./store.ts";
 import type { MessageImage } from "./types.ts";
+import { Kbd } from "./ui/kbd.tsx";
 
 export interface AnnotationData {
   readonly id: string;
@@ -54,6 +55,12 @@ const focus = (id: string): void => {
   window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: id }));
 };
 
+/** Focus lights the mark; reveal also scrolls the surface to it. The keyboard
+ *  "open": a reader on the card who wants to look at the thing it points at. */
+const reveal = (id: string): void => {
+  window.dispatchEvent(new CustomEvent("lucid:reveal-annotation", { detail: id }));
+};
+
 /**
  * A sent annotation, rendered inline in the transcript where it was sent.
  *
@@ -85,13 +92,30 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
       data-test={orphaned ? "orphan" : "annotation"}
       data-annotation-id={data.id}
       aria-label={orphaned ? "Annotation with an orphaned anchor" : `Annotation ${data.index}`}
-      // An orphan has no mark to light up, so it takes no hover wiring: the
-      // card↔mark link is the only thing these handlers exist for.
+      // An orphan has no mark to light up, so it takes no hover wiring and never
+      // enters the tab order: the card↔mark link is the only thing these handlers
+      // (and the keyboard reveal) exist for.
+      tabIndex={orphaned ? undefined : 0}
       onMouseEnter={orphaned ? undefined : enter}
       onMouseLeave={orphaned ? undefined : leave}
       onFocus={orphaned ? undefined : enter}
       onBlur={orphaned ? undefined : leave}
-      className={`relative flex flex-col gap-[7px] rounded-lg border bg-ink-700 px-[11px] py-[10px] focus-visible:annot-outline ${
+      onKeyDown={
+        orphaned
+          ? undefined
+          : (e) => {
+              // Only the card itself opens its mark - not Enter/Space bubbling
+              // up from an inner control (an image thumb opening the lightbox),
+              // which this would otherwise hijack. Space would scroll the panel;
+              // Enter is the primary gesture.
+              if (e.target !== e.currentTarget) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                reveal(data.id);
+              }
+            }
+      }
+      className={`group relative flex flex-col gap-[7px] rounded-lg border bg-ink-700 px-[11px] py-[10px] focus-visible:annot-outline ${
         hovered ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]" : "border-ink-600"
       }`}
     >
@@ -113,6 +137,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
           located · v{data.version}
         </span>
       )}
+      {/* Only on keyboard focus: a pointer user is already at the mark, and a
+          per-card hint on every read would be furniture. */}
+      <span className="pointer-events-none absolute -top-[9px] left-1/2 hidden -translate-x-1/2 items-center gap-1 rounded-full border border-ink-500 bg-ink-800 px-2 py-px text-[10px] text-fg-muted shadow-[0_1px_3px_rgba(0,0,0,0.4)] group-focus-visible:flex">
+        <Kbd>↵</Kbd> reveal
+      </span>
       <TargetSnippet target={data.target} />
       <div className="text-fg">{data.note}</div>
       {images.length > 0 ? (

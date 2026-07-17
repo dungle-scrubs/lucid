@@ -60,50 +60,6 @@ const anchorOf = (el: Element, snippet: string): Anchor => {
   };
 };
 
-/** Token-level LCS diff -> inline <del>/<ins> redline markup (escaped). */
-const wordRedline = (oldText: string, newText: string): string => {
-  const a = oldText.match(/\S+|\s+/g) ?? [];
-  const b = newText.match(/\S+|\s+/g) ?? [];
-  const n = a.length;
-  const m = b.length;
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      lcs[i]![j] =
-        a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
-    }
-  }
-  let i = 0;
-  let j = 0;
-  const parts: string[] = [];
-  let del: string[] = [];
-  let ins: string[] = [];
-  const flush = (): void => {
-    if (del.length) parts.push(`<del class="lucid-del">${escapeHtml(del.join(""))}</del>`);
-    if (ins.length) parts.push(`<ins class="lucid-ins">${escapeHtml(ins.join(""))}</ins>`);
-    del = [];
-    ins = [];
-  };
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      flush();
-      parts.push(escapeHtml(a[i]!));
-      i++;
-      j++;
-    } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) {
-      del.push(a[i]!);
-      i++;
-    } else {
-      ins.push(b[j]!);
-      j++;
-    }
-  }
-  while (i < n) del.push(a[i++]!);
-  while (j < m) ins.push(b[j++]!);
-  flush();
-  return parts.join("");
-};
-
 /** Jaccard word-set overlap, for pairing an edited block to its prior self. */
 const similarity = (a: string, b: string): number => {
   const sa = new Set(a.toLowerCase().split(/\s+/).filter(Boolean));
@@ -140,14 +96,22 @@ export const diffHtml = (
 
   const markChanged = (cb: Block, from: Block): void => {
     const id = nextId();
-    // Capture the anchor snippet from the CURRENT element's original markup
-    // BEFORE redline injection, so the revert payload carries the artifact's
-    // authored HTML rather than Lucid's <del>/<ins> redline markup.
+    // Capture the anchor snippet and the authored new content from the CURRENT
+    // element BEFORE the stack injection, so the revert payload carries the
+    // artifact's authored HTML rather than Lucid's diff markup.
     const snippet = cb.el.outerHTML ?? cb.text;
+    const newInner = cb.el.innerHTML;
     cb.el.setAttribute("data-hunk", id);
     cb.el.setAttribute("data-diff", "changed");
     cb.el.classList.add("lucid-changed");
-    cb.el.innerHTML = wordRedline(from.text, cb.text);
+    // Stack the old version (struck) above the new one, in place - a unified
+    // before/after rather than an inline word redline. Spans, not divs, so the
+    // markup stays valid inside a <p> or <li> as much as a <td>; the injected
+    // diff CSS makes them block. The new side keeps its authored markup; the old
+    // side is text, since a removed block's markup is not carried forward.
+    cb.el.innerHTML =
+      `<span class="lucid-diff-was">${escapeHtml(from.text)}</span>` +
+      `<span class="lucid-diff-now">${newInner}</span>`;
     hunks.push({
       id,
       kind: "changed",
@@ -191,11 +155,29 @@ export const diffHtml = (
     currentLeft.push(cb);
   }
 
-  // Pass 2: pair leftover current blocks with leftover base blocks by
-  // tag + word similarity -> a text edit. Otherwise the current block is added.
+  // Pass 2: pair leftover current blocks with leftover base blocks -> a text
+  // edit. Otherwise the current block is added.
   const baseLeft = baseBlocks.filter((b) => !matchedBaseKeys.has(b.key));
   const baseAvailable = new Set(baseLeft);
+  // Same structural slot (tag + DOM path) is the strongest "this replaced that"
+  // signal, and the only one left when a block was rewritten past word
+  // similarity - e.g. a table cell expanded from a phrase to paragraphs. Pairing
+  // it as a change keeps old and new stacked in the one cell, instead of the old
+  // coming back as a ghost sibling column beside the new.
+  const pathKey = (el: Element): string =>
+    `${el.tagName}\n${computeDomPath(el as unknown as DomElementLike)}`;
+  const baseByPath = new Map<string, Block>();
+  for (const bb of baseLeft)
+    if (!baseByPath.has(pathKey(bb.el))) baseByPath.set(pathKey(bb.el), bb);
+
   for (const cb of currentLeft) {
+    const byPath = baseByPath.get(pathKey(cb.el));
+    if (byPath && baseAvailable.has(byPath)) {
+      baseAvailable.delete(byPath);
+      matchedBaseKeys.add(byPath.key);
+      markChanged(cb, byPath);
+      continue;
+    }
     let best: Block | undefined;
     let bestScore = 0;
     for (const bb of baseAvailable) {

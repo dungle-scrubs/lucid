@@ -26,15 +26,32 @@ describe("diffHtml", () => {
     expect(r.mergedHtml).toContain('data-diff="removed"');
   });
 
-  test("detects a changed block with inline word redline", () => {
+  test("detects a changed block and stacks old over new in place", () => {
     const a = wrap("<p>Backfill from the events table nightly</p>");
     const b = wrap("<p>Backfill from the events table in one batch</p>");
     const r = diffHtml(a, b, 1, 2);
     const changed = r.hunks.filter((h) => h.kind === "changed");
     expect(changed).toHaveLength(1);
-    expect(r.mergedHtml).toContain('<del class="lucid-del">');
-    expect(r.mergedHtml).toContain('<ins class="lucid-ins">');
-    expect(r.mergedHtml).toContain("one batch");
+    // The old version is struck above, the new version below - one element, two
+    // stacked blocks, not two side-by-side columns.
+    expect(r.mergedHtml).toContain('<span class="lucid-diff-was">');
+    expect(r.mergedHtml).toContain('<span class="lucid-diff-now">');
+    expect(r.mergedHtml).toContain("nightly"); // the old text is still shown
+    expect(r.mergedHtml).toContain("one batch"); // alongside the new
+  });
+
+  test("a rewritten cell pairs by position instead of splitting into columns", () => {
+    // A table cell rewritten past word-similarity: it must read as one changed
+    // cell (old stacked over new), never an old ghost cell beside the new one.
+    const a = wrap("<table><tr><td>Replay Window</td><td>Bounded suffix.</td></tr></table>");
+    const b = wrap(
+      "<table><tr><td>Replay Window</td><td>How much catch-up a consumer can request from the transport.</td></tr></table>",
+    );
+    const r = diffHtml(a, b, 1, 2);
+    expect(r.hunks.filter((h) => h.kind === "changed")).toHaveLength(1);
+    expect(r.hunks.some((h) => h.kind === "removed")).toBe(false);
+    expect(r.mergedHtml).toContain('<span class="lucid-diff-was">');
+    expect(r.mergedHtml).not.toContain("lucid-ghost");
   });
 
   test("no changes -> changed false, no hunks", () => {

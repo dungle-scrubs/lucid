@@ -6,6 +6,8 @@ import {
   cancelEdit,
   commitEdit,
   discardPending,
+  QUICK_REPLIES,
+  queueQuickReply,
   removePastedImage,
   removeQueued,
   sendQueue,
@@ -13,6 +15,7 @@ import {
 import { TargetSnippet } from "./AnnotationPart.tsx";
 import { imagesFromPaste, set, useLucid } from "./store.ts";
 import type { PastedImage } from "./types.ts";
+import { Kbd, KbdGroup } from "./ui/kbd.tsx";
 
 /**
  * The parts of the panel that are not transcript: work staged but not yet in
@@ -161,18 +164,25 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
             }}
             className={field}
           />
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <button
               type="button"
               data-test="save-edit"
               disabled={editDraft.trim().length === 0}
               onClick={() => commitEdit()}
-              className={btnPrimary}
+              className={`${btnPrimary} flex items-center gap-1.5`}
             >
               Save
+              <Kbd className="border-on-accent/30 bg-on-accent/10 text-on-accent">↵</Kbd>
             </button>
-            <button type="button" data-test="cancel-edit" onClick={cancelEdit} className={btn}>
+            <button
+              type="button"
+              data-test="cancel-edit"
+              onClick={cancelEdit}
+              className={`${btn} flex items-center gap-1.5`}
+            >
               Cancel
+              <Kbd>esc</Kbd>
             </button>
           </div>
         </>
@@ -222,7 +232,12 @@ export const SendQueueBar = () => {
         <span>
           Send {queueLen} annotation{queueLen > 1 ? "s" : ""}
         </span>
-        <span className="font-normal normal-case tracking-normal opacity-60">⌘↵</span>
+        {/* Keycaps on a filled button borrow the label's own colour: an ink
+            keycap would punch a dark hole in the accent fill. */}
+        <KbdGroup className="opacity-90">
+          <Kbd className="border-on-accent/30 bg-on-accent/10 text-on-accent">⌘</Kbd>
+          <Kbd className="border-on-accent/30 bg-on-accent/10 text-on-accent">↵</Kbd>
+        </KbdGroup>
       </button>
     </div>
   );
@@ -265,14 +280,31 @@ export const PendingComposer = () => {
             }}
             className={field}
           />
-          <div className="flex gap-2">
+          {/* One-tap canned notes. Clicking queues that note for this pick, the
+              same as typing it and pressing Enter - no textarea detour for the
+              asks that recur. */}
+          <div className="flex flex-wrap gap-1.5">
+            {QUICK_REPLIES.map((r) => (
+              <button
+                key={r}
+                type="button"
+                data-test="quick-reply"
+                onClick={() => queueQuickReply(r)}
+                className="cursor-pointer rounded-full border border-ink-500 bg-ink-800 px-2.5 py-1 text-[11px] text-cream-300 hover:border-accent hover:text-fg"
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
             <button
               type="button"
               data-test="add-to-queue"
               onClick={addToQueue}
-              className={btnPrimary}
+              className={`${btnPrimary} flex items-center gap-1.5`}
             >
               Add to queue
+              <Kbd className="border-on-accent/30 bg-on-accent/10 text-on-accent">↵</Kbd>
             </button>
             <button type="button" data-test="discard" onClick={discardPending} className={btn}>
               Discard

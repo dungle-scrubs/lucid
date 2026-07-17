@@ -1,7 +1,15 @@
 import { useEffect, useRef } from "react";
 import type { LogEvent } from "../../src/core/events.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
-import { exitDiff, gotoHunk, sendAll, setSidebarOpen, setSidebarTab } from "./actions.ts";
+import {
+  approveReview,
+  exitDiff,
+  gotoHunk,
+  sendAll,
+  setSidebarOpen,
+  setSidebarTab,
+  toggleTargets,
+} from "./actions.ts";
 import { Header } from "./Header.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
 import { Sessions } from "./Sessions.tsx";
@@ -21,7 +29,13 @@ import {
   setSurfaceIframe,
   toOverlay,
 } from "./surface.ts";
-import { DiffBar, Lightbox, NewerVersionBanner, SurfaceUpdating } from "./Surface.tsx";
+import {
+  DiffBar,
+  Lightbox,
+  NewerVersionBanner,
+  SurfaceUpdating,
+  VersionViewBanner,
+} from "./Surface.tsx";
 import { Thread } from "./Thread.tsx";
 import {
   Sidebar,
@@ -31,6 +45,7 @@ import {
   SidebarProvider,
 } from "./ui/sidebar.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
+import { Kbd } from "./ui/kbd.tsx";
 
 const DIVIDER_WIDTH = 5;
 
@@ -92,6 +107,9 @@ export const Chrome = () => {
         markOverlayReady();
         pushHighlights();
       } else if (msg.type === "target-picked") {
+        // A historical snapshot is read-only: its DOM is not the live artifact,
+        // so an anchor captured against it would point at nothing on return.
+        if (get().viewingVersion !== null) return;
         set({ pendingTarget: msg.anchor });
         pushHighlights();
       } else if (msg.type === "annotation-hover") {
@@ -122,6 +140,13 @@ export const Chrome = () => {
       toOverlay({ source: "lucid-chrome", type: "focus-annotation", id });
     };
     window.addEventListener("lucid:focus-annotation", onFocusAnnotation);
+
+    // Enter on a focused card: light the mark AND scroll the surface to it.
+    const onRevealAnnotation = (e: Event): void => {
+      const id = (e as CustomEvent<string>).detail;
+      toOverlay({ source: "lucid-chrome", type: "reveal-annotation", id });
+    };
+    window.addEventListener("lucid:reveal-annotation", onRevealAnnotation);
 
     // A thumb asks for the lightbox by URL; resolve it back to the message's
     // image list so the arrows can step through the set it came from.
@@ -158,11 +183,34 @@ export const Chrome = () => {
     // keyboard, so it does not skip text-entry targets the way onDiffKey does.
     const onSendKey = (e: KeyboardEvent): void => {
       if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.isComposing) return;
+      if (e.shiftKey) return; // ⌘⇧↵ is Approve, handled below
       if (get().queue.length === 0 && !get().pendingTarget) return;
       e.preventDefault();
       void sendAll();
     };
     window.addEventListener("keydown", onSendKey);
+
+    // Panel-level shortcuts that fire from anywhere, text fields included:
+    // ⌘1/⌘2 switch tabs, ⌘⇧↵ approves. Approve is shifted so a stray ⌘↵ (the
+    // send-queue flush) can never end the review, and it defers to the button's
+    // own guard rather than duplicating the unsent-work rule here.
+    const onPanelKey = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (e.key === "1") {
+        e.preventDefault();
+        setSidebarTab("chat");
+      } else if (e.key === "2") {
+        e.preventDefault();
+        setSidebarTab("sessions");
+      } else if (e.shiftKey && (e.key === "m" || e.key === "M")) {
+        e.preventDefault();
+        toggleTargets();
+      } else if (e.key === "Enter" && e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        void approveReview();
+      }
+    };
+    window.addEventListener("keydown", onPanelKey);
 
     const source = new EventSource("/__lucid/events");
     source.onmessage = (e) => {
@@ -198,9 +246,11 @@ export const Chrome = () => {
     return () => {
       window.removeEventListener("message", onMessage);
       window.removeEventListener("lucid:focus-annotation", onFocusAnnotation);
+      window.removeEventListener("lucid:reveal-annotation", onRevealAnnotation);
       window.removeEventListener("lucid:lightbox", onLightbox);
       window.removeEventListener("keydown", onDiffKey);
       window.removeEventListener("keydown", onSendKey);
+      window.removeEventListener("keydown", onPanelKey);
       source.close();
     };
   }, []);
@@ -260,9 +310,11 @@ export const Chrome = () => {
             <TabsList className="w-full">
               <TabsTrigger value="chat" data-test="tab-chat">
                 Review
+                <Kbd className="ml-1">⌘1</Kbd>
               </TabsTrigger>
               <TabsTrigger value="sessions" data-test="tab-sessions">
                 Sessions
+                <Kbd className="ml-1">⌘2</Kbd>
               </TabsTrigger>
             </TabsList>
           </SidebarHeader>
@@ -332,6 +384,7 @@ export const Chrome = () => {
         <div className="relative min-h-0 flex-1">
           <NewerVersionBanner />
           <DiffBar />
+          <VersionViewBanner />
           <SurfaceUpdating />
           <iframe
             ref={iframeRef}

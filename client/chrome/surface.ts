@@ -49,7 +49,9 @@ const hasUnsentDraft = (): boolean => {
 
 const applySwap = (html: string, version: number): void => {
   toOverlay({ source: "lucid-chrome", type: "swap", html });
-  set((s) => ({ diffBase: s.version, version, newerVersion: null }));
+  // A live update supersedes a historical view: the surface is now the new
+  // current, so history mode ends rather than showing a stale snapshot label.
+  set((s) => ({ diffBase: s.version, version, newerVersion: null, viewingVersion: null }));
   pendingSwapHtml = null;
   void bootstrap();
 };
