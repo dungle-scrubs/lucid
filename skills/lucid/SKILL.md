@@ -40,8 +40,8 @@ or a quick code edit. Returning prose is correct there.
 
 Run every command silently. **Never** paste a CLI command, a flag, or the raw JSON
 payload at the user. Speak in plain language only, for example: "I've opened the
-migration plan in your browser - click any step or highlight any phrase to mark it
-up, and I'll pick up your notes." The CLI is your business; the review is theirs.
+migration plan in your browser - mark up any step or phrase, then hit Cmd-Enter to
+send me your notes." The CLI is your business; the review is theirs.
 
 ## Resolve the CLI first
 
@@ -104,7 +104,12 @@ Never fake the review loop, and never paste build instructions at the user.
    ```
    (`lucid` is the binary resolved above.) Keep the `nextCursor` it returns.
    Tell the user, in plain words, that it's open for review and how to mark
-   it up.
+   it up - and **tell them the send gesture.** In the viewer, typing a note and
+   pressing Enter only *queues* the annotation; it is not sent yet. The reviewer
+   can queue several notes, then flush the whole batch at once with **Cmd-Enter**
+   (Ctrl-Enter on Windows/Linux, or the Send button). Until they send, your
+   `wait` loop keeps returning `waiting` with empty `annotations` - that is the
+   human still composing, not a stall; do not read a long, quiet `wait` as a bug.
 
 3. **Wait for their feedback**, then act. **Run `wait` SYNCHRONOUSLY, in the
    foreground - it is meant to block this turn.** Do NOT launch it as a background

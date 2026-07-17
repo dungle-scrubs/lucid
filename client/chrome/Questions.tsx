@@ -1,5 +1,6 @@
 import { focusQuestionRef, sendAnswer, setAnswerDraft } from "./actions.ts";
 import { useLucid } from "./store.ts";
+import { Kbd } from "./ui/kbd.tsx";
 
 /**
  * Questions the agent is blocked on. Anchored above the composer rather than in
@@ -53,9 +54,10 @@ export const Questions = () => {
               data-test="answer"
               disabled={(answerDrafts[q.id] ?? "").trim().length === 0}
               onClick={() => void sendAnswer(q)}
-              className="w-fit cursor-pointer rounded-md border border-accent bg-accent px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-on-accent hover:bg-accent-bright disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex w-fit cursor-pointer items-center gap-1.5 rounded-md border border-accent bg-accent px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-on-accent hover:bg-accent-bright disabled:cursor-not-allowed disabled:opacity-40"
             >
               Answer
+              <Kbd className="border-on-accent/30 bg-on-accent/10 text-on-accent">↵</Kbd>
             </button>
           </div>
         ))}

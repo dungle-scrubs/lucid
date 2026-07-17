@@ -364,6 +364,21 @@ export const runServer = async (
     return json(diffHtml(baseHtml, currentHtml, ref.version, state.version));
   };
 
+  /** Serve a past version's full snapshot, read-only, for the history viewer.
+   *  The current version is served live from `/__lucid/artifact`; this is only
+   *  ever a prior snapshot, looked up by its version ref within the segment. */
+  const handleVersion = async (url: URL): Promise<Response> => {
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const v = Number.parseInt(url.searchParams.get("v") ?? "", 10);
+    const ref = versionRef(state, v);
+    if (!ref || !Number.isFinite(v)) return json({ error: "unknown version" }, 404);
+    const html = await readFile(join(paths.sessionDir, ref.path), "utf8").catch(() => null);
+    if (html === null) return json({ error: "snapshot unavailable" }, 404);
+    return new Response(html, {
+      headers: { "content-type": "text/html; charset=utf-8", ...noStore },
+    });
+  };
+
   const handleAck = async (req: Request): Promise<Response> => {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body || typeof body.id !== "string") return json({ error: "invalid ack" }, 400);
@@ -512,6 +527,7 @@ export const runServer = async (
       return json(response, 200, noStore);
     }
     if (pathname === "/__lucid/diff") return handleDiff(url);
+    if (pathname === "/__lucid/version") return handleVersion(url);
     if (pathname === "/__lucid/annotation" && req.method === "POST") return handleAnnotation(req);
     if (pathname === "/__lucid/message" && req.method === "POST") return handleMessage(req);
     if (pathname === "/__lucid/revert" && req.method === "POST") return handleRevert(req);

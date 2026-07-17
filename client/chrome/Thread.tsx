@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
 import { useLucid, warn } from "./store.ts";
 import { Questions } from "./Questions.tsx";
+import { Kbd } from "./ui/kbd.tsx";
 
 /**
  * The review record. assistant-ui owns the transcript, the composer and the
@@ -104,9 +105,10 @@ const Composer = () => (
     <div className="flex items-center justify-end gap-2">
       <ComposerPrimitive.Send
         data-test="send-message"
-        className="cursor-pointer rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex cursor-pointer items-center gap-1.5 rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
       >
         Send message
+        <Kbd>↵</Kbd>
       </ComposerPrimitive.Send>
     </div>
   </ComposerPrimitive.Root>
@@ -183,22 +185,16 @@ const ListenerLine = () => {
       <div
         data-test="listener-line"
         data-listening={listening > 0 ? "true" : "false"}
-        className="flex items-center gap-1.5 text-[11px]"
+        className="flex items-center justify-center text-center text-[11px]"
       >
         {listening > 0 ? (
-          <>
-            <span className="size-1.5 rounded-full bg-agent" />
-            <span className="text-agent">
-              {listening === 1 ? "agent listening" : `${listening} agents listening`}
-            </span>
-          </>
+          <span className="text-agent">
+            {listening === 1 ? "agent listening" : `${listening} agents listening`}
+          </span>
         ) : (
-          <>
-            <span className="size-1.5 rounded-full bg-steel-600" />
-            <span className="text-fg-faint">
-              no agent connected · feedback is recorded and delivered when one checks in
-            </span>
-          </>
+          <span className="text-fg-faint">
+            no agent connected · feedback is recorded and delivered when one checks in
+          </span>
         )}
       </div>
       {listening === 0 ? <ResumeHint /> : null}

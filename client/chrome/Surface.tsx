@@ -1,5 +1,12 @@
 import { useEffect } from "react";
-import { discardPending, enterDiff, exitDiff, gotoHunk, revertCurrentHunk } from "./actions.ts";
+import {
+  discardPending,
+  enterDiff,
+  exitDiff,
+  exitVersionView,
+  gotoHunk,
+  revertCurrentHunk,
+} from "./actions.ts";
 import { set, useLucid } from "./store.ts";
 import type { DiffHunk } from "./types.ts";
 
@@ -122,6 +129,37 @@ export const DiffBar = () => {
         className={iconBtn}
       >
         Done
+      </button>
+    </div>
+  );
+};
+
+/**
+ * The read-only history notice. Viewing a past version swaps the surface to
+ * that snapshot; this floats over it so the state is never silent - it says
+ * which version is up, that it cannot be annotated, and offers the way back.
+ */
+export const VersionViewBanner = () => {
+  const viewing = useLucid((s) => s.viewingVersion);
+  const version = useLucid((s) => s.version);
+  if (viewing === null) return null;
+  return (
+    <div
+      data-test="version-view"
+      className="absolute top-3 left-1/2 z-5 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-amber-500/50 bg-ink-900/95 px-3 py-1.5 text-[11px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+    >
+      <span className="flex items-center gap-1.5">
+        <span className="size-1.5 rounded-full bg-amber-400" />
+        Viewing <span className="font-semibold tabular-nums text-amber-300">v{viewing}</span> ·
+        read-only
+      </span>
+      <button
+        type="button"
+        data-test="version-view-exit"
+        onClick={() => void exitVersionView()}
+        className="cursor-pointer rounded-md border border-ink-400 bg-ink-800/80 px-2 py-px text-[11px] text-fg hover:bg-ink-700"
+      >
+        Back to current v{version}
       </button>
     </div>
   );

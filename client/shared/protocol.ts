@@ -55,6 +55,10 @@ export type ChromeMessage =
     }
   | { readonly source: "lucid-chrome"; readonly type: "swap"; readonly html: string }
   | { readonly source: "lucid-chrome"; readonly type: "focus-annotation"; readonly id: string }
+  /** Focus a mark AND bring it into view. `focus-annotation` only lights the
+   *  mark where it already is (pointer hover); this is the keyboard "open" -
+   *  the reader is not looking at the surface, so it must scroll there. */
+  | { readonly source: "lucid-chrome"; readonly type: "reveal-annotation"; readonly id: string }
   | { readonly source: "lucid-chrome"; readonly type: "diff-show"; readonly html: string }
   | { readonly source: "lucid-chrome"; readonly type: "diff-goto"; readonly hunkId: string }
   | { readonly source: "lucid-chrome"; readonly type: "clear-pending" }

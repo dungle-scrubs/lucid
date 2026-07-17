@@ -104,6 +104,10 @@ interface LucidState {
   diffData: DiffData | null;
   diffIndex: number;
   diffBase: number;
+  /** A past version being viewed read-only in the surface, or null for the live
+   *  current artifact. Distinct from diffMode: this shows a whole snapshot as it
+   *  was, not a diff against it. */
+  viewingVersion: number | null;
   revertWhy: string;
   lightboxImages: readonly MessageImage[] | null;
   lightboxIndex: number;
@@ -142,6 +146,7 @@ const initial: LucidState = {
   diffData: null,
   diffIndex: 0,
   diffBase: Math.max(1, config().version - 1),
+  viewingVersion: null,
   revertWhy: "",
   lightboxImages: null,
   lightboxIndex: 0,

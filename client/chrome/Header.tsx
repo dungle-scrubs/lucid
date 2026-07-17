@@ -1,7 +1,15 @@
-import { approveReview, enterDiff, reopenReview, setSidebarOpen } from "./actions.ts";
-import { persistShowTargets, set, useLucid } from "./store.ts";
-import { pushHighlights } from "./surface.ts";
+import {
+  approveReview,
+  enterDiff,
+  reopenReview,
+  setSidebarOpen,
+  toggleTargets,
+  viewVersion,
+} from "./actions.ts";
+import { useLucid } from "./store.ts";
 import type { Config } from "./types.ts";
+import { Kbd } from "./ui/kbd.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 
 /**
  * Open/close the review panel. It lives in the header, on the artifact side,
@@ -118,11 +126,63 @@ const ApproveControls = () => {
             : "End the review; the agent stops until re-invoked"
         }
         onClick={() => void approveReview()}
-        className="cursor-pointer rounded-md border border-sage-600 bg-sage-600 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-cream-50 hover:bg-sage-500 disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex cursor-pointer items-center gap-1.5 rounded-md border border-sage-600 bg-sage-600 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-cream-50 hover:bg-sage-500 disabled:cursor-not-allowed disabled:opacity-40"
       >
         Approve review
+        {/* Keycaps borrow the label's cream so they don't punch a dark hole in
+            the sage fill. Kept compact - the header is a tight row. */}
+        <Kbd className="border-cream-50/30 bg-cream-50/10 text-cream-50">⌘⇧↵</Kbd>
       </button>
     </span>
+  );
+};
+
+/**
+ * The version badge, made browsable. One version, nothing to browse: it stays a
+ * plain badge. Otherwise it opens a picker that loads any prior version into the
+ * surface read-only (viewVersion); choosing the current one drops back to live.
+ * Disabled inside the change view, which owns its own version selector.
+ */
+const VersionPicker = () => {
+  const version = useLucid((s) => s.version);
+  const viewing = useLucid((s) => s.viewingVersion);
+  const diffMode = useLucid((s) => s.diffMode);
+
+  if (version <= 1) {
+    return (
+      <div
+        data-test="version"
+        className="rounded-full bg-ink-700 px-[9px] py-px text-[11px] tabular-nums text-steel-300"
+        title="current artifact version"
+      >
+        v{version}
+      </div>
+    );
+  }
+
+  const versions = Array.from({ length: version }, (_, i) => version - i); // newest first
+  return (
+    <Select
+      value={String(viewing ?? version)}
+      onValueChange={(v) => void viewVersion(Number(v))}
+      disabled={diffMode}
+    >
+      <SelectTrigger
+        data-test="version"
+        title={viewing === null ? "Browse versions" : `Viewing v${viewing} - back to current`}
+        className={viewing === null ? undefined : "border-amber-500 text-amber-300"}
+      >
+        <SelectValue>{(v: string) => `v${v}`}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {versions.map((v) => (
+          <SelectItem key={v} value={String(v)}>
+            v{v}
+            {v === version ? " · current" : ""}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 };
 
@@ -132,15 +192,8 @@ export const Header = () => {
   const diffMode = useLucid((s) => s.diffMode);
   const live = useLucid((s) => s.live);
 
-  const toggleTargets = (): void => {
-    const next = !showTargets;
-    set({ showTargets: next });
-    persistShowTargets(next);
-    pushHighlights();
-  };
-
   return (
-    <header className="flex items-center justify-between gap-2 border-b border-ink-600 px-4 py-[10px]">
+    <header className="relative flex items-center justify-between gap-2 border-b border-ink-600 px-4 py-[10px]">
       <PanelToggle />
       {/* min-w-0 lets a long artifact name truncate instead of shoving the
           controls out of the header; the controls themselves never shrink. */}
@@ -148,18 +201,20 @@ export const Header = () => {
         Lucid review
         <small className="ml-2 font-normal text-fg-muted">{config().name}</small>
       </div>
+      {live ? null : (
+        // Connection status sits in the true centre of the bar, independent of
+        // how wide the controls on either side grow. Self-clearing: EventSource
+        // is already retrying, so this states what is happening rather than
+        // asking the human to do anything.
+        <span
+          data-test="reconnecting"
+          title="The live connection dropped; retrying"
+          className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-ink-700 px-[9px] py-px text-[11px] text-steel-400"
+        >
+          reconnecting…
+        </span>
+      )}
       <div className="flex flex-none items-center gap-1.5">
-        {live ? null : (
-          // Self-clearing: EventSource is already retrying, so this states what
-          // is happening rather than asking the human to do anything.
-          <span
-            data-test="reconnecting"
-            title="The live connection dropped; retrying"
-            className="rounded-full bg-ink-700 px-[9px] py-px text-[11px] text-steel-400"
-          >
-            reconnecting…
-          </span>
-        )}
         {version > 1 && !diffMode ? (
           <button
             type="button"
@@ -178,8 +233,8 @@ export const Header = () => {
           aria-label={showTargets ? "Hide annotation targets" : "Show annotation targets"}
           title={
             showTargets
-              ? "Hide annotation targets - read the artifact without marks"
-              : "Show annotation targets"
+              ? "Hide annotation targets - read the artifact without marks (⌘⇧M)"
+              : "Show annotation targets (⌘⇧M)"
           }
           onClick={toggleTargets}
           className={`inline-flex cursor-pointer items-center rounded-full border p-[3px] ${
@@ -190,13 +245,7 @@ export const Header = () => {
         >
           <Crosshair on={showTargets} />
         </button>
-        <div
-          data-test="version"
-          className="rounded-full bg-ink-700 px-[9px] py-px text-[11px] tabular-nums text-steel-300"
-          title="current artifact version"
-        >
-          v{version}
-        </div>
+        <VersionPicker />
         <ApproveControls />
       </div>
     </header>
