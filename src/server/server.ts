@@ -246,6 +246,44 @@ export const runServer = async (
     return json({ ok: true });
   };
 
+  const handleFork = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    // The fork id becomes a filesystem path component in the launcher
+    // (`.lucid/<name>/forks/<id>/`), so it is held to a strict safe charset -
+    // no path separators or dots - not merely "non-blank" like a log-only id.
+    // A blank/traversing id would also collide in the shared dedupe set (D-057).
+    if (!body || typeof body.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.id)) {
+      return json({ error: "invalid fork id" }, 400);
+    }
+    if (typeof body.note !== "string" || body.note.trim() === "") {
+      return json({ error: "empty fork directive" }, 400);
+    }
+    const anchor = parseAnchor(body.target);
+    if ("error" in anchor) return json({ error: anchor.error }, 400);
+    const version =
+      typeof body.version === "number" && Number.isInteger(body.version) ? body.version : 0;
+    // Same pasted blobs an annotation carries, just attached to a fork directive.
+    const images = parseImages(body.images);
+    const authoredAt =
+      typeof body.authoredAt === "string" &&
+      body.authoredAt.length <= 40 &&
+      !Number.isNaN(Date.parse(body.authoredAt))
+        ? body.authoredAt
+        : undefined;
+    await serverAppend([
+      {
+        t: "fork",
+        id: body.id,
+        version,
+        target: anchor,
+        note: body.note,
+        ...(authoredAt ? { authoredAt } : {}),
+        ...(images.length > 0 ? { images } : {}),
+      },
+    ]);
+    return json({ ok: true });
+  };
+
   const handleMessage = async (req: Request): Promise<Response> => {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body || typeof body.id !== "string" || typeof body.text !== "string") {
@@ -529,6 +567,7 @@ export const runServer = async (
     if (pathname === "/__lucid/diff") return handleDiff(url);
     if (pathname === "/__lucid/version") return handleVersion(url);
     if (pathname === "/__lucid/annotation" && req.method === "POST") return handleAnnotation(req);
+    if (pathname === "/__lucid/fork" && req.method === "POST") return handleFork(req);
     if (pathname === "/__lucid/message" && req.method === "POST") return handleMessage(req);
     if (pathname === "/__lucid/revert" && req.method === "POST") return handleRevert(req);
     if (pathname === "/__lucid/question" && req.method === "POST") return handleQuestion(req);

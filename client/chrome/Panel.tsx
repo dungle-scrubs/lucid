@@ -6,6 +6,7 @@ import {
   cancelEdit,
   commitEdit,
   discardPending,
+  forkPending,
   QUICK_REPLIES,
   queueQuickReply,
   removePastedImage,
@@ -250,6 +251,7 @@ export const PendingComposer = () => {
   const pendingTarget = useLucid((s) => s.pendingTarget);
   const composerNote = useLucid((s) => s.composerNote);
   const pastedImages = useLucid((s) => s.pastedImages);
+  const forking = useLucid((s) => s.forking);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -268,10 +270,18 @@ export const PendingComposer = () => {
             ref={ref}
             rows={3}
             data-test="annotation-note"
-            placeholder="What should change here? Paste an image to show it. (Enter to queue, Shift+Enter for a new line)"
+            disabled={forking}
+            placeholder="What should change here? Paste an image to show it. (Enter to queue, Shift+Enter for a new line, Esc to discard)"
             value={composerNote}
             onChange={(e) => set({ composerNote: e.target.value })}
-            onKeyDown={(e) => onSubmitKey(e, addToQueue)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                discardPending();
+                return;
+              }
+              onSubmitKey(e, addToQueue);
+            }}
             onPaste={(e) => {
               const files = imagesFromPaste(e);
               if (files.length === 0) return; // let a normal text paste through
@@ -308,6 +318,19 @@ export const PendingComposer = () => {
             </button>
             <button type="button" data-test="discard" onClick={discardPending} className={btn}>
               Discard
+            </button>
+            {/* The one composer action that starts something new instead of
+                changing this artifact: spin the selection off into its own
+                artifact + session. The note above is the directive. */}
+            <button
+              type="button"
+              data-test="fork"
+              onClick={forkPending}
+              disabled={forking}
+              title="Spin this selection off into a new artifact and agent session"
+              className={`${btn} ml-auto disabled:cursor-default disabled:opacity-50`}
+            >
+              {forking ? "Forking…" : "Fork"}
             </button>
           </div>
         </div>

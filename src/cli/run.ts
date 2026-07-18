@@ -10,7 +10,9 @@ import type { WaitPayload } from "../core/payload.ts";
 import { ensureSessionDirs, openSession } from "../core/session.ts";
 import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
-import { ArtifactError, NotFoundError, ServerError } from "../errors.ts";
+import { ArtifactError, NotFoundError, ServerError, ValidationError } from "../errors.ts";
+import { runLaunch } from "../launch/launcher.ts";
+import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
 import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
@@ -156,6 +158,71 @@ export const runEnd = async (file: string): Promise<void> => {
   // A live server removes its own descriptor as it stops; a dead one left it behind.
   if (!live) await removeServerDescriptor(paths);
   print({ session: paths.artifactPath, status: "ended" });
+};
+
+export interface LaunchCliOptions {
+  readonly pollMs?: number;
+}
+
+/**
+ * `lucid launch <file>` - the opt-in fork launcher. Watches the session for
+ * fork requests and spawns a headless agent per fork via the harness registry,
+ * then attends each child (shape C). Foreground; Ctrl-C stops it.
+ */
+export const runLaunchCli = async (file: string, options: LaunchCliOptions = {}): Promise<void> => {
+  const paths = sessionPaths(file);
+  const state = foldLog((await readEvents(paths.logPath)).events);
+  if (state.status === "none") {
+    throw new NotFoundError({
+      message: `No Lucid session for ${paths.artifactPath}`,
+      detail: { path: paths.artifactPath },
+    });
+  }
+  const registry = await loadRegistry();
+  if (!registry) {
+    throw new ValidationError({
+      message: `no harness registry at ${registryPath()} - create it to enable the fork launcher`,
+      detail: {
+        path: registryPath(),
+        example: {
+          default: "claude_code",
+          harnesses: {
+            claude_code: {
+              spawn: [
+                "claude",
+                "-p",
+                "--session-id",
+                "{id}",
+                "--allowedTools",
+                "Bash(lucid *) Write Edit Read",
+                "{prompt}",
+              ],
+              resume: [
+                "claude",
+                "--resume",
+                "{id}",
+                "-p",
+                "--allowedTools",
+                "Bash(lucid *) Write Edit Read",
+                "{prompt}",
+              ],
+            },
+          },
+        },
+      },
+    });
+  }
+  const controller = new AbortController();
+  const onSigint = (): void => controller.abort();
+  process.once("SIGINT", onSigint);
+  try {
+    await runLaunch(paths, registry, {
+      signal: controller.signal,
+      ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
+    });
+  } finally {
+    process.removeListener("SIGINT", onSigint);
+  }
 };
 
 /** `lucid __serve <file>` - the long-lived per-session daemon body (hidden). */

@@ -17,6 +17,17 @@ export interface AnnotationRecord {
   readonly images?: readonly PromptImage[];
 }
 
+export interface ForkRecord {
+  readonly id: string;
+  readonly seq: number;
+  readonly version: number;
+  readonly target: Anchor;
+  readonly note: string;
+  readonly at: string;
+  readonly authoredAt?: string;
+  readonly images?: readonly PromptImage[];
+}
+
 export interface MessageRecord {
   readonly role: "human" | "agent";
   readonly seq: number;
@@ -65,6 +76,9 @@ export interface FoldedState {
   readonly reviewToggleSeq: number;
   /** Live annotations of the current segment, in log order (D-056). */
   readonly annotations: readonly AnnotationRecord[];
+  /** Fork requests of the current segment, in log order. Consumed by the
+   *  attending agent (spin off a new artifact), never folded into this one. */
+  readonly forks: readonly ForkRecord[];
   /** Conversation of the current segment, in log order. */
   readonly messages: readonly MessageRecord[];
   /** Revert decisions of the current segment, in log order. */
@@ -126,6 +140,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       reviewResolved: false,
       reviewToggleSeq: 0,
       annotations: [],
+      forks: [],
       messages: [],
       reverts: [],
       questions: [],
@@ -160,6 +175,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   let segmentStartSeq = 0;
   const versions: VersionRef[] = [];
   const annotations: AnnotationRecord[] = [];
+  const forks: ForkRecord[] = [];
   const messages: MessageRecord[] = [];
   const reverts: RevertRecord[] = [];
   const questionMap = new Map<string, QuestionRecord>();
@@ -188,6 +204,18 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
         break;
       case "annotation":
         annotations.push({
+          id: e.id,
+          seq: e.seq,
+          version: e.version,
+          target: e.target,
+          note: e.note,
+          at: e.at,
+          ...(e.authoredAt ? { authoredAt: e.authoredAt } : {}),
+          ...(e.images ? { images: e.images } : {}),
+        });
+        break;
+      case "fork":
+        forks.push({
           id: e.id,
           seq: e.seq,
           version: e.version,
@@ -280,6 +308,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     reviewResolved,
     reviewToggleSeq,
     annotations,
+    forks,
     messages,
     reverts,
     questions: questionOrder.map((id) => questionMap.get(id)!),

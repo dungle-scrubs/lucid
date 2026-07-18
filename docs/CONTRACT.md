@@ -98,6 +98,15 @@ matrices, anything the human will want to mark up at the element or phrase level
       "note": "this step is wrong; backfill must run first"
     }
   ],
+  "forks": [                       // optional: spin-off requests (see below)
+    {
+      "id": "…",
+      "version": 2,
+      "resolved": true,
+      "target": { /* element or range anchor + snippet */ },
+      "note": "turn this into an implementation plan"
+    }
+  ],
   "messages": [ { "role": "human", "text": "tighten the wording", "at": "…" } ],
   "warnings": [ /* optional: orphaned snapshots, denied assets, … */ ]
 }
@@ -105,7 +114,8 @@ matrices, anything the human will want to mark up at the element or phrase level
 
 ## Status handling
 
-- **`feedback`** - located annotations and/or human messages arrived. Act on them.
+- **`feedback`** - located annotations, fork requests, and/or human messages
+  arrived. Act on them.
 - **`waiting`** - no feedback within the bounded window (or your own revision was
   the only change). Re-issue `wait`.
 - **`suspended`** - the review was paused for inactivity, or its server is not
@@ -114,6 +124,28 @@ matrices, anything the human will want to mark up at the element or phrase level
 - **`ended`** - the session was ended (`lucid end`). Stop.
 - **`reviewResolved: true`** - the human approved. Stop iterating; you may `lucid
   end`. (After approving, the human can "reopen review" to add more.)
+
+## Fork requests
+
+`forks` carries spin-off requests: the human selected a region and asked to
+start a **new** artifact + session from it, rather than annotate this one. A
+fork is not a change to the current artifact - never fold it into this file.
+Act on each fork by:
+
+1. Reading the region from `target` (the anchor's snippet / exact quote) and the
+   directive from `note` (what the new artifact should become).
+2. Authoring the new seeded artifact and running `lucid open <new.html>` - which
+   starts its own viewer on its own port, a new row in the Sessions panel.
+
+`resolved: false` means the region was edited away since the fork was authored;
+the directive still stands, but reconstruct the intended region from the
+snippet. Fork IDs are idempotent like annotations - dedupe on re-delivery.
+Lucid only records the request; the spawn/open is yours to run (D-064).
+
+A fork is consumed one of two ways: **(a)** the attending agent acts on it inline
+(create the artifact, `lucid open` it), or **(b)** the opt-in **fork launcher**
+(`lucid launch <file>`) spawns a dedicated headless agent per fork via the harness
+registry and attends each child. See [LAUNCHER.md](./LAUNCHER.md).
 
 ## Delivery is at-least-once
 

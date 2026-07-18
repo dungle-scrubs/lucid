@@ -179,6 +179,32 @@ describe("foldLog segments", () => {
     expect(s.highSeq).toBe(3);
   });
 
+  test("folds fork requests separately from annotations", () => {
+    const events: LogEvent[] = [
+      ev({
+        t: "session_opened",
+        seq: 1,
+        segment: 1,
+        artifact: "a.html",
+        version: 1,
+        hash: "h",
+        path: "versions/s1/v1.html",
+      } as never),
+      ev({
+        t: "fork",
+        seq: 2,
+        id: "fk",
+        version: 1,
+        target: { kind: "element", fingerprint: "f", domPath: "p", snippet: "s" },
+        note: "spin off a plan",
+      } as never),
+    ];
+    const s = foldLog(events);
+    expect(s.annotations.length).toBe(0);
+    expect(s.forks.length).toBe(1);
+    expect(s.forks[0]?.note).toBe("spin off a plan");
+  });
+
   test("re-segment scopes annotations to the latest segment (D-056)", () => {
     const events: LogEvent[] = [
       ev({

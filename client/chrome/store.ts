@@ -69,6 +69,13 @@ interface LucidState {
   editingId: string | null;
   editDraft: string;
   sending: boolean;
+  /** A fork POST is in flight. Freezes the composer and disables Fork so a
+   *  double-click cannot mint a second fork id the shared dedupe can't catch. */
+  forking: boolean;
+  /** Stable id for the in-flight/failed fork, kept across an ambiguous failure
+   *  so a manual retry reuses it (idempotent) rather than creating a twin. Reset
+   *  on a new pick or discard. */
+  forkId: string | null;
   pastedImages: PastedImage[];
   newerVersion: number | null;
   warnings: WarningItem[];
@@ -132,6 +139,8 @@ const initial: LucidState = {
   editingId: null,
   editDraft: "",
   sending: false,
+  forking: false,
+  forkId: null,
   pastedImages: [],
   newerVersion: null,
   warnings: [],

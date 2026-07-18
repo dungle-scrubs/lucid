@@ -49,6 +49,26 @@ export interface PayloadAnnotation {
   readonly images?: readonly PayloadImage[];
 }
 
+/**
+ * A fork request the agent is asked to act on: spin the selected region off
+ * into a new artifact + session. `resolved` says whether the anchor still
+ * attaches to the current version (a stale fork points at a region since
+ * edited away). The agent reads the region from `target` and the directive
+ * from `note`; it is never folded back into this artifact.
+ */
+export interface PayloadFork {
+  readonly id: string;
+  readonly version: number;
+  readonly resolved: boolean;
+  readonly target: Anchor;
+  readonly note: string;
+  readonly at: string;
+  readonly authoredAt?: string;
+  /** Images pasted onto the fork directive; addressed for both consumers like
+   *  an annotation's - the agent reads bytes via `path`, the viewer via `file`. */
+  readonly images?: readonly PayloadImage[];
+}
+
 export interface PayloadMessage {
   readonly role: "human" | "agent";
   readonly text: string;
@@ -78,6 +98,8 @@ export interface WaitPayload {
   readonly nextCursor: string;
   readonly reviewResolved: boolean;
   readonly annotations: readonly PayloadAnnotation[];
+  /** Fork requests to act on (spin off a new artifact); omitted when none. */
+  readonly forks?: readonly PayloadFork[];
   readonly messages: readonly PayloadMessage[];
   readonly reverts?: readonly PayloadRevert[];
   readonly questions?: readonly PayloadQuestion[];

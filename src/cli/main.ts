@@ -7,6 +7,7 @@ import {
   runAsk,
   runIntent,
   runEnd,
+  runLaunchCli,
   runOpen,
   runPlanIngest,
   runPlanRender,
@@ -82,6 +83,11 @@ const endCommand = Command.make("end", { file: fileArg }, ({ file }) =>
   runEffect(() => runEnd(file)),
 );
 
+const pollOpt = Options.integer("poll").pipe(Options.optional);
+const launchCommand = Command.make("launch", { file: fileArg, poll: pollOpt }, ({ file, poll }) =>
+  runEffect(() => runLaunchCli(file, { ...(Option.isSome(poll) ? { pollMs: poll.value } : {}) })),
+);
+
 const askText = Options.text("text");
 const askRef = Options.text("ref").pipe(Options.optional);
 const askCommand = Command.make(
@@ -144,6 +150,7 @@ const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe
     openCommand,
     waitCommand,
     endCommand,
+    launchCommand,
     askCommand,
     intentCommand,
     serveCommand,
