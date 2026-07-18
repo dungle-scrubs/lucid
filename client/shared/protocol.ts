@@ -36,7 +36,16 @@ export type OverlayMessage =
   /** Widest real child of the artifact body, measured inside the iframe. The
    *  chrome cannot measure it: the surface runs on an opaque origin (D-020), so
    *  `iframe.contentDocument` is null from the parent. */
-  | { readonly source: "lucid-overlay"; readonly type: "content-width"; readonly width: number };
+  | { readonly source: "lucid-overlay"; readonly type: "content-width"; readonly width: number }
+  /** Every `data-lucid-id` present in the current artifact. The chrome can't see
+   *  the artifact DOM (opaque origin), so the overlay reports it: a section
+   *  permalink in chat is a live chip while its id is in this set, and degrades
+   *  to plain text once it isn't. Republished on load and every swap. */
+  | {
+      readonly source: "lucid-overlay";
+      readonly type: "section-ids";
+      readonly ids: readonly string[];
+    };
 
 /** chrome -> overlay */
 export type ChromeMessage =
@@ -59,6 +68,8 @@ export type ChromeMessage =
    *  mark where it already is (pointer hover); this is the keyboard "open" -
    *  the reader is not looking at the surface, so it must scroll there. */
   | { readonly source: "lucid-chrome"; readonly type: "reveal-annotation"; readonly id: string }
+  | { readonly source: "lucid-chrome"; readonly type: "reveal-section"; readonly lucidId: string }
+  | { readonly source: "lucid-chrome"; readonly type: "request-section-ids" }
   | { readonly source: "lucid-chrome"; readonly type: "diff-show"; readonly html: string }
   | { readonly source: "lucid-chrome"; readonly type: "diff-goto"; readonly hunkId: string }
   | { readonly source: "lucid-chrome"; readonly type: "clear-pending" }

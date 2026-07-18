@@ -199,6 +199,7 @@ export class LucidOverlay extends LitElement {
     window.addEventListener("resize", this.onResize, { passive: true });
     window.addEventListener("message", this.onMessage);
     post({ source: "lucid-overlay", type: "ready" });
+    this.publishSectionIds();
   }
 
   disconnectedCallback(): void {
@@ -305,6 +306,48 @@ export class LucidOverlay extends LitElement {
     document.getElementById("__lucid_diff_style")?.remove();
   }
 
+  /** Injected once, survives artifact swaps (it lives in <head>, not the body
+   *  the swap rebuilds). The outline fades to nothing so the emphasis is a
+   *  glance, not a permanent mark on the artifact. */
+  private injectSectionStyle(): void {
+    if (document.getElementById("__lucid_section_style")) return;
+    const style = document.createElement("style");
+    style.id = "__lucid_section_style";
+    style.textContent = `
+      @keyframes __lucid_section_flash { from { outline-color: rgba(189,154,78,0.9); } to { outline-color: rgba(189,154,78,0); } }
+      .__lucid_section_target { outline: 2px solid rgba(189,154,78,0.9); outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  /** Scroll the artifact to a section by its `data-lucid-id` and flash it. The
+   *  chat permalink's landing; a no-op if the id is gone (the chip that sent it
+   *  should already have degraded to plain text from the published id set). */
+  private revealSection(lucidId: string): void {
+    this.injectSectionStyle();
+    for (const el of document.querySelectorAll(".__lucid_section_target")) {
+      el.classList.remove("__lucid_section_target");
+    }
+    // Match by attribute value rather than building a selector: an id with a
+    // quote or control char could make querySelector throw instead of missing.
+    const target = Array.from(document.querySelectorAll("[data-lucid-id]")).find(
+      (el) => el.getAttribute("data-lucid-id") === lucidId,
+    );
+    if (!target) return;
+    target.classList.add("__lucid_section_target");
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  /** Report every `data-lucid-id` in the artifact so the chrome can tell a live
+   *  section permalink from a dead one without reaching into this opaque-origin
+   *  DOM. Published on load and after every swap. */
+  private publishSectionIds(): void {
+    const ids = Array.from(document.querySelectorAll("[data-lucid-id]"))
+      .map((el) => el.getAttribute("data-lucid-id"))
+      .filter((id): id is string => id !== null && id !== "");
+    post({ source: "lucid-overlay", type: "section-ids", ids: Array.from(new Set(ids)) });
+  }
+
   /** Scroll to a hunk and emphasize it with the brass active outline. */
   private gotoHunk(hunkId: string): void {
     for (const el of document.querySelectorAll("[data-hunk].lucid-active")) {
@@ -401,6 +444,10 @@ export class LucidOverlay extends LitElement {
       this.reposition();
     } else if (msg.type === "reveal-annotation") {
       this.revealAnnotation(msg.id);
+    } else if (msg.type === "reveal-section") {
+      this.revealSection(msg.lucidId);
+    } else if (msg.type === "request-section-ids") {
+      this.publishSectionIds();
     } else if (msg.type === "measure-content") {
       post({ source: "lucid-overlay", type: "content-width", width: this.measureContent() });
     } else if (msg.type === "clear-pending") {
@@ -526,6 +573,7 @@ export class LucidOverlay extends LitElement {
       document.head.appendChild(clone);
     });
     this.scheduleReposition();
+    this.publishSectionIds();
   }
 
   protected updated(_changed: PropertyValues): void {

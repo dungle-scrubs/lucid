@@ -23,6 +23,11 @@ export const setSurfaceIframe = (el: HTMLIFrameElement | null): void => {
  *  the surface unpainted). */
 export const markOverlayReady = (): void => {
   overlayReady = true;
+  // Pull the section-id set now the overlay is up: its own one-shot push at
+  // connectedCallback can beat React installing the chrome's message listener,
+  // so we ask again from this reliable point (fires on `ready` and on the
+  // iframe onLoad fallback) rather than trusting the push alone.
+  toOverlay({ source: "lucid-chrome", type: "request-section-ids" });
 };
 
 export const toOverlay = (message: ChromeMessage): void => {

@@ -130,6 +130,8 @@ export const Chrome = () => {
         document
           .querySelector(`[data-annotation-id="${msg.id}"]`)
           ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      } else if (msg.type === "section-ids") {
+        set({ sectionIds: msg.ids });
       }
     };
     window.addEventListener("message", onMessage);
