@@ -79,6 +79,8 @@ interface LucidState {
   pastedImages: PastedImage[];
   newerVersion: number | null;
   warnings: WarningItem[];
+  /** Neutral, transient confirmations (e.g. a fork was recorded). */
+  notices: { id: string; message: string }[];
   status: string;
   /** Open "agent is working" window from the fold: set by the agent's ack on
    *  taking delivery, closed by its next output (version, reply, question). */
@@ -144,6 +146,7 @@ const initial: LucidState = {
   pastedImages: [],
   newerVersion: null,
   warnings: [],
+  notices: [],
   status: "active",
   agentWorking: null,
   agentsListening: 0,
@@ -219,6 +222,14 @@ export const buildTimeline = (
  *  repeatedly, so an unbounded list would grow state and DOM all through it. */
 export const warn = (message: string): void =>
   set((s) => ({ warnings: [...s.warnings.slice(-4), { code: "SEND_FAILED", message }] }));
+
+/** A neutral, transient confirmation (distinct from a warning) - e.g. "forked".
+ *  Capped like warnings so it never grows unbounded; carries a stable id so
+ *  repeated identical messages still render as distinct rows. */
+export const notice = (message: string): void =>
+  set((s) => ({
+    notices: [...s.notices.slice(-2), { id: crypto.randomUUID(), message }],
+  }));
 
 export const api = async (path: string, body?: unknown): Promise<Response> => {
   const isPost = body !== undefined;

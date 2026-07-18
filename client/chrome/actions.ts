@@ -1,6 +1,7 @@
 import {
   api,
   get,
+  notice,
   persistShowTargets,
   persistSidebarOpen,
   set,
@@ -63,15 +64,21 @@ export const queueQuickReply = (note: string): void => {
  *  one. Lucid only records the request (D-064); the attending agent creates and
  *  `lucid open`s the seeded artifact. The composer note is the directive: what
  *  the new artifact should become. */
+/** The directive a fork carries when the composer note is left empty: the region
+ *  is the seed, so a fork is meaningful without a typed instruction. */
+const DEFAULT_FORK_DIRECTIVE = "Spin this selection off into its own artifact.";
+
 export const forkPending = async (): Promise<void> => {
   const s = get();
   // Re-entrancy guard: a second click while one is in flight would mint a second
   // fork id (a new artifact), which the shared dedupe can't collapse. One at a time.
-  if (s.forking || !s.pendingTarget || s.composerNote.trim().length === 0) return;
+  // Unlike an annotation, a fork does NOT require a typed note - the selected
+  // region is the seed - so an empty composer still forks (with a default directive).
+  if (s.forking || !s.pendingTarget) return;
   // Capture the draft; the id is stable across an ambiguous failure so a manual
   // retry reuses it and the server dedupes instead of forking twice.
   const target = s.pendingTarget;
-  const note = s.composerNote.trim();
+  const note = s.composerNote.trim() || DEFAULT_FORK_DIRECTIVE;
   const images = s.pastedImages;
   const id = s.forkId ?? uuid();
   set({ forking: true, forkId: id });
@@ -97,6 +104,13 @@ export const forkPending = async (): Promise<void> => {
   } else {
     set({ forking: false, forkId: null });
   }
+  // Confirm it landed - and, since a fork only becomes a new artifact once a
+  // consumer acts on it, say what makes that happen.
+  notice(
+    get().agentsListening > 0
+      ? "Forked - the attending agent will spin it into a new session."
+      : "Fork recorded. Run `lucid launch <file>` (or attend the session) to spawn it.",
+  );
   applyDeferredSwapIfReady();
   pushHighlights();
 };
