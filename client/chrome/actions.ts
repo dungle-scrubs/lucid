@@ -57,9 +57,53 @@ export const queueQuickReply = (note: string): void => {
   addToQueue();
 };
 
+/** Spin the pending pick off into a new artifact + session instead of annotating
+ *  it in place. Unlike an annotation, a fork is a single directive sent on click,
+ *  not queued into the review - it asks for a NEW session, not a change to this
+ *  one. Lucid only records the request (D-064); the attending agent creates and
+ *  `lucid open`s the seeded artifact. The composer note is the directive: what
+ *  the new artifact should become. */
+export const forkPending = async (): Promise<void> => {
+  const s = get();
+  // Re-entrancy guard: a second click while one is in flight would mint a second
+  // fork id (a new artifact), which the shared dedupe can't collapse. One at a time.
+  if (s.forking || !s.pendingTarget || s.composerNote.trim().length === 0) return;
+  // Capture the draft; the id is stable across an ambiguous failure so a manual
+  // retry reuses it and the server dedupes instead of forking twice.
+  const target = s.pendingTarget;
+  const note = s.composerNote.trim();
+  const images = s.pastedImages;
+  const id = s.forkId ?? uuid();
+  set({ forking: true, forkId: id });
+  try {
+    await api("/__lucid/fork", {
+      id,
+      version: s.version,
+      target,
+      note,
+      authoredAt: new Date().toISOString(),
+      images: images.map(({ id: imgId, name, file }) => ({ id: imgId, name, file })),
+    });
+  } catch {
+    warn("The fork didn't send - the draft is kept, try again.");
+    set({ forking: false }); // keep forkId + draft for an idempotent retry
+    return;
+  }
+  // Clear only if the pick hasn't moved on under us (a mid-flight retarget wins);
+  // clearing blind through get() would drop a newer draft and revoke its images.
+  if (get().pendingTarget === target) {
+    for (const img of images) URL.revokeObjectURL(img.url);
+    set({ forking: false, forkId: null, pendingTarget: null, composerNote: "", pastedImages: [] });
+  } else {
+    set({ forking: false, forkId: null });
+  }
+  applyDeferredSwapIfReady();
+  pushHighlights();
+};
+
 export const discardPending = (): void => {
   for (const img of get().pastedImages) URL.revokeObjectURL(img.url);
-  set({ pendingTarget: null, composerNote: "", pastedImages: [] });
+  set({ pendingTarget: null, composerNote: "", pastedImages: [], forkId: null });
   applyDeferredSwapIfReady();
   pushHighlights();
 };

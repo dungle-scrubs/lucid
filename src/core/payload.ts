@@ -6,6 +6,7 @@ import { anchorResolves } from "../anchors/dom.ts";
 import type { Warning } from "../errors.ts";
 import type {
   PayloadAnnotation,
+  PayloadFork,
   PayloadMessage,
   PayloadStatus,
   WaitPayload,
@@ -14,6 +15,7 @@ import { renderCursor } from "./cursor.ts";
 import type {
   AnnotationRecord,
   FoldedState,
+  ForkRecord,
   MessageRecord,
   QuestionRecord,
   RevertRecord,
@@ -26,6 +28,7 @@ import { verifySnapshot } from "./version.ts";
 // here so server-side callers keep importing them from the module that builds them.
 export type {
   PayloadAnnotation,
+  PayloadFork,
   PayloadImage,
   PayloadMessage,
   PayloadQuestion,
@@ -49,40 +52,41 @@ const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): Pa
     : {}),
 });
 
+/** The fields the snapshot guard needs; annotations and forks both satisfy it. */
+type ResolvableRecord = Pick<AnnotationRecord, "id" | "version" | "target">;
+
 /**
- * Resolve a single annotation against the current artifact, applying the
- * authored-version snapshot guard (D-023, D-035). An annotation authored
- * against a now-missing/mismatched snapshot is orphaned and never re-anchored
- * to current.
+ * Resolve a single located record (annotation or fork) against the current
+ * artifact, applying the authored-version snapshot guard (D-023, D-035). A
+ * record authored against a now-missing/mismatched snapshot is orphaned and
+ * never re-anchored to current.
  */
 const resolveAnnotation = async (
-  annotation: AnnotationRecord,
+  record: ResolvableRecord,
   state: FoldedState,
   currentRoot: DomRootLike,
   snapshotAbsPath: (relPath: string) => string,
   warnings: Warning[],
+  /** Noun for diagnostics so a fork's warning does not call it an annotation. */
+  noun: "annotation" | "fork" = "annotation",
 ): Promise<boolean> => {
   // A client-supplied stamp outside [1, current] is never trusted; the
-  // annotation orphans rather than re-pointing at the wrong target (D-066).
-  if (
-    !Number.isInteger(annotation.version) ||
-    annotation.version < 1 ||
-    annotation.version > state.version
-  ) {
+  // record orphans rather than re-pointing at the wrong target (D-066).
+  if (!Number.isInteger(record.version) || record.version < 1 || record.version > state.version) {
     warnings.push({
       code: "VERSION_STAMP_INVALID",
-      message: `annotation ${annotation.id} has out-of-range version ${annotation.version} (current ${state.version}); orphaned`,
-      detail: { id: annotation.id, version: annotation.version, current: state.version },
+      message: `${noun} ${record.id} has out-of-range version ${record.version} (current ${state.version}); orphaned`,
+      detail: { id: record.id, version: record.version, current: state.version },
     });
     return false;
   }
-  if (annotation.version < state.version) {
-    const ref = versionRef(state, annotation.version);
+  if (record.version < state.version) {
+    const ref = versionRef(state, record.version);
     if (!ref) {
       warnings.push({
         code: "SNAPSHOT_MISSING",
-        message: `annotation ${annotation.id} references unknown version ${annotation.version}`,
-        detail: { id: annotation.id, version: annotation.version },
+        message: `${noun} ${record.id} references unknown version ${record.version}`,
+        detail: { id: record.id, version: record.version },
       });
       return false;
     }
@@ -90,14 +94,14 @@ const resolveAnnotation = async (
     if (status !== "ok") {
       warnings.push({
         code: status === "missing" ? "SNAPSHOT_MISSING" : "SNAPSHOT_MISMATCH",
-        message: `authored snapshot for v${annotation.version} is ${status}; annotation ${annotation.id} orphaned`,
-        detail: { id: annotation.id, version: annotation.version, path: ref.path },
+        message: `authored snapshot for v${record.version} is ${status}; ${noun} ${record.id} orphaned`,
+        detail: { id: record.id, version: record.version, path: ref.path },
       });
       return false;
     }
   }
   // Carry forward: does the anchor still attach to the current version?
-  return anchorResolves(annotation.target, currentRoot);
+  return anchorResolves(record.target, currentRoot);
 };
 
 export interface BuildPayloadOptions {
@@ -110,6 +114,8 @@ export interface BuildPayloadOptions {
   readonly snapshotAbsPath: (relPath: string) => string;
   /** Annotations to include (full set or delta). */
   readonly annotations: readonly AnnotationRecord[];
+  /** Fork requests to include (full set or delta). */
+  readonly forks?: readonly ForkRecord[];
   /** Messages to include (full set or delta). */
   readonly messages: readonly MessageRecord[];
   /** Revert decisions to include (full set or delta). */
@@ -154,6 +160,36 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     });
   }
 
+  const forks: PayloadFork[] = [];
+  for (const f of opts.forks ?? []) {
+    const resolved = await resolveAnnotation(
+      f,
+      opts.state,
+      root,
+      opts.snapshotAbsPath,
+      warnings,
+      "fork",
+    );
+    forks.push({
+      id: f.id,
+      version: f.version,
+      resolved,
+      target: f.target,
+      note: f.note,
+      at: f.at,
+      ...(f.authoredAt ? { authoredAt: f.authoredAt } : {}),
+      ...(f.images && f.images.length > 0
+        ? {
+            images: f.images.map((img) => ({
+              name: img.name,
+              file: img.file,
+              path: opts.snapshotAbsPath(pastedRelPath(img.file)),
+            })),
+          }
+        : {}),
+    });
+  }
+
   const payload: WaitPayload = {
     session: opts.session,
     version: opts.state.version,
@@ -162,6 +198,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     reviewResolved: opts.state.reviewResolved,
     ...(opts.state.agentWorking ? { agentWorking: opts.state.agentWorking } : {}),
     annotations,
+    ...(forks.length > 0 ? { forks } : {}),
     messages: opts.messages.map((m) =>
       toMessage(m, (file) => opts.snapshotAbsPath(pastedRelPath(file))),
     ),
@@ -194,6 +231,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
 /** The record slices a payload carries (full folded sets or since-cursor deltas). */
 export interface PayloadSlices {
   readonly annotations: readonly AnnotationRecord[];
+  readonly forks?: readonly ForkRecord[];
   readonly messages: readonly MessageRecord[];
   readonly reverts?: readonly RevertRecord[];
   /** Defaults to the segment's full question set. */
@@ -222,6 +260,7 @@ export const assemblePayload = async (
     currentHtml,
     snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
     annotations: slices.annotations,
+    forks: slices.forks ?? state.forks,
     messages: slices.messages,
     reverts: slices.reverts ?? [],
     questions: slices.questions ?? state.questions,

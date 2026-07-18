@@ -5,6 +5,7 @@ import {
   foldLog,
   type AnnotationRecord,
   type FoldedState,
+  type ForkRecord,
   type MessageRecord,
   type RevertRecord,
 } from "./fold.ts";
@@ -115,8 +116,9 @@ const buildFromState = (
   annotations: readonly AnnotationRecord[],
   messages: readonly MessageRecord[],
   reverts: readonly RevertRecord[] = [],
+  forks: readonly ForkRecord[] = [],
 ): Promise<WaitPayload> =>
-  assemblePayload(paths, state, status, { annotations, messages, reverts });
+  assemblePayload(paths, state, status, { annotations, forks, messages, reverts });
 
 /**
  * Core `wait` semantics (RFC §6, state machine). Tails the log directly (the
@@ -147,6 +149,7 @@ export const runWait = async (
   if (cursor === undefined) {
     const hasContent =
       initial.annotations.length > 0 ||
+      initial.forks.length > 0 ||
       initial.messages.length > 0 ||
       initial.reverts.length > 0 ||
       initial.questions.length > 0 ||
@@ -159,6 +162,7 @@ export const runWait = async (
         initial.annotations,
         initial.messages,
         initial.reverts,
+        initial.forks,
       );
     }
     const live = await discoverLiveServer(paths);
@@ -170,6 +174,7 @@ export const runWait = async (
       initial.annotations,
       initial.messages,
       initial.reverts,
+      initial.forks,
     );
   }
 
@@ -191,6 +196,7 @@ export const runWait = async (
           state.annotations,
           state.messages,
           state.reverts,
+          state.forks,
         );
       }
 
@@ -208,21 +214,24 @@ export const runWait = async (
           state.annotations,
           state.messages,
           state.reverts,
+          state.forks,
         );
       }
 
       const deltaAnnotations = sliceDelta(state.annotations, cursor);
+      const deltaForks = sliceDelta(state.forks, cursor);
       const deltaMessages = sliceDelta(state.messages, cursor);
       const deltaReverts = sliceDelta(state.reverts, cursor);
       const deltaHumanMessages = deltaMessages.filter((m) => m.role === "human");
       const newAnswers = state.questions.some((q) => q.answered && (q.answerSeq ?? 0) > cursor);
       const reviewResolvedAfterCursor = state.reviewResolved && state.reviewToggleSeq > cursor;
 
-      // Feedback = located annotations, human messages, reverts, answered
-      // questions, or an approve signal. An agent's own reply / version / its own
-      // just-posted question do not self-trigger.
+      // Feedback = located annotations, fork requests, human messages, reverts,
+      // answered questions, or an approve signal. An agent's own reply / version
+      // / its own just-posted question do not self-trigger.
       if (
         deltaAnnotations.length > 0 ||
+        deltaForks.length > 0 ||
         deltaHumanMessages.length > 0 ||
         deltaReverts.length > 0 ||
         newAnswers ||
@@ -235,6 +244,7 @@ export const runWait = async (
           deltaAnnotations,
           deltaMessages,
           deltaReverts,
+          deltaForks,
         );
       }
 

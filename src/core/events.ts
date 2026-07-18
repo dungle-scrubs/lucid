@@ -63,6 +63,30 @@ export interface PromptImage {
   readonly file: string;
 }
 
+/**
+ * A fork request (browser POST; client-minted id). The human selected a region
+ * and asked to spin it off into a new artifact + session rather than annotate
+ * in place. Carries the same located shape as an annotation - anchor plus a
+ * directive `note` ("turn this into an implementation plan") - but is consumed,
+ * not folded into the artifact: the attending agent creates and `lucid open`s
+ * the new seeded artifact. The one browser-authored event that asks for a new
+ * session; Lucid still only records it (D-064), the agent acts on it.
+ */
+export interface ForkEvent extends BaseEvent {
+  readonly t: "fork";
+  readonly id: string;
+  /** Artifact version the region was selected against (server-validated; D-066). */
+  readonly version: number;
+  readonly target: Anchor;
+  /** The directive: what the new artifact should become. */
+  readonly note: string;
+  /** When the human authored it (client-minted, ISO-8601); display metadata. */
+  readonly authoredAt?: string;
+  /** Images pasted onto the fork directive - located context for the new
+   *  artifact (e.g. "build this mockup"), same shape as an annotation's. */
+  readonly images?: readonly PromptImage[];
+}
+
 /** A non-located human message (browser POST; client-minted id). */
 export interface PromptEvent extends BaseEvent {
   readonly t: "prompt";
@@ -158,6 +182,7 @@ export type LogEvent =
   | SessionOpenedEvent
   | VersionEvent
   | AnnotationEvent
+  | ForkEvent
   | PromptEvent
   | AgentReplyEvent
   | AgentAckEvent
@@ -177,6 +202,7 @@ export type LogEventType = LogEvent["t"];
  *  so a new identified event is added in exactly one place. */
 const IDENTIFIED_TYPES = [
   "annotation",
+  "fork",
   "prompt",
   "agent_reply",
   "agent_ack",

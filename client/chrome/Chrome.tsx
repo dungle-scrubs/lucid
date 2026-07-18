@@ -110,7 +110,8 @@ export const Chrome = () => {
         // A historical snapshot is read-only: its DOM is not the live artifact,
         // so an anchor captured against it would point at nothing on return.
         if (get().viewingVersion !== null) return;
-        set({ pendingTarget: msg.anchor });
+        // A new pick is a new fork: drop any stable fork id held for the prior pick.
+        set({ pendingTarget: msg.anchor, forkId: null });
         pushHighlights();
       } else if (msg.type === "annotation-hover") {
         set({ hoveredId: msg.id });

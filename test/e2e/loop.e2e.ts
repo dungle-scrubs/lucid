@@ -76,6 +76,60 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
   expect(afterRevise.version).toBe(2);
 });
 
+test("fork button spins the selection off; the request reaches wait as a fork", async ({
+  page,
+}) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+
+  // Pick a region, type the directive, and Fork instead of annotating in place.
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await page
+    .locator('textarea[placeholder^="What should change here?"]')
+    .fill("Turn the backfill into its own implementation plan.");
+  await page.locator('[data-test="fork"]').click();
+
+  // The composer clears (a fork is sent on click, not queued) and nothing lands
+  // in the annotation list.
+  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="annotation"]')).toHaveCount(0);
+
+  // The agent receives the fork - not an annotation - via wait.
+  const feedback = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    "8",
+  ])) as {
+    status: string;
+    annotations: unknown[];
+    forks?: { note: string; resolved: boolean; target: { snippet: string } }[];
+  };
+  expect(feedback.status).toBe("feedback");
+  expect(feedback.annotations).toHaveLength(0);
+  expect(feedback.forks).toHaveLength(1);
+  expect(feedback.forks?.[0]?.note).toContain("implementation plan");
+  expect(feedback.forks?.[0]?.resolved).toBe(true);
+  expect(feedback.forks?.[0]?.target.snippet).toContain("Backfill");
+});
+
+test("Esc discards the annotation being composed", async ({ page }) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  const composer = page.locator('textarea[placeholder^="What should change here?"]');
+  await expect(composer).toBeVisible();
+  await composer.fill("never mind this one");
+  await composer.press("Escape");
+
+  // The composer is dismissed and nothing was queued.
+  await expect(composer).toHaveCount(0);
+  await expect(page.locator('[data-test="send-queue"]')).toHaveCount(0);
+});
+
 test("cmd+enter queues the open note and sends the whole queue", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
   const surface = surfaceOf(page);

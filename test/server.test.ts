@@ -219,6 +219,87 @@ describe("server routes + security", () => {
     expect(payload.annotations[0]?.resolved).toBe(true);
   });
 
+  test("fork POST lands in the log and reaches wait as feedback", async () => {
+    await startServer();
+    const res = await fetch(`http://127.0.0.1:${port}/__lucid/fork`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+      body: JSON.stringify({
+        id: "fork-1",
+        version: 1,
+        note: "turn this into an implementation plan",
+        target: {
+          kind: "element",
+          lucidId: "h",
+          fingerprint: "x",
+          domPath: "h1",
+          snippet: "<h1>Hello</h1>",
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const payload = await runWait(paths, { since: "evt_00001", timeoutMs: 4000 });
+    expect(payload.status).toBe("feedback");
+    expect(payload.annotations.length).toBe(0);
+    expect(payload.forks?.length).toBe(1);
+    expect(payload.forks?.[0]?.note).toBe("turn this into an implementation plan");
+    expect(payload.forks?.[0]?.resolved).toBe(true);
+  });
+
+  test("fork POST rejects an empty directive and a blank id", async () => {
+    await startServer();
+    const post = (body: unknown) =>
+      fetch(`http://127.0.0.1:${port}/__lucid/fork`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+    const target = { kind: "element", lucidId: "h", fingerprint: "x", domPath: "h1", snippet: "s" };
+    expect((await post({ id: "fork-2", version: 1, note: "   ", target })).status).toBe(400);
+    // A blank id would collide in the shared dedupe set, so it is refused.
+    expect((await post({ id: "  ", version: 1, note: "spin off", target })).status).toBe(400);
+    // The id becomes a filesystem path component in the launcher, so path
+    // traversal / separators are refused at the boundary.
+    expect((await post({ id: "../../evil", version: 1, note: "x", target })).status).toBe(400);
+    expect((await post({ id: "a/b", version: 1, note: "x", target })).status).toBe(400);
+  });
+
+  test("two fork POSTs with the same id dedupe to one (D-057 backstop)", async () => {
+    await startServer();
+    const body = JSON.stringify({
+      id: "same-fork",
+      version: 1,
+      note: "spin off a plan",
+      target: { kind: "element", lucidId: "h", fingerprint: "x", domPath: "h1", snippet: "s" },
+    });
+    const headers = { "content-type": "application/json", host: `127.0.0.1:${port}` };
+    await fetch(`http://127.0.0.1:${port}/__lucid/fork`, { method: "POST", headers, body });
+    await fetch(`http://127.0.0.1:${port}/__lucid/fork`, { method: "POST", headers, body });
+    const payload = await runWait(paths, { since: "evt_00001", timeoutMs: 3000 });
+    expect(payload.forks?.length).toBe(1);
+  });
+
+  test("fork POST carries pasted images through to wait", async () => {
+    await startServer();
+    const res = await fetch(`http://127.0.0.1:${port}/__lucid/fork`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+      body: JSON.stringify({
+        id: "fork-img",
+        version: 1,
+        note: "build this mockup",
+        target: { kind: "element", lucidId: "h", fingerprint: "x", domPath: "h1", snippet: "s" },
+        images: [{ id: "i1", name: "mock.png", file: "a1b2c3.png" }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const payload = await runWait(paths, { since: "evt_00001", timeoutMs: 4000 });
+    expect(payload.forks?.[0]?.images?.[0]?.name).toBe("mock.png");
+    // Addressed for the agent to read off disk (absolute path into the session).
+    expect(payload.forks?.[0]?.images?.[0]?.path).toContain("a1b2c3.png");
+  });
+
   test("agent_ack opens the working window, output closes it, waiters stay asleep", async () => {
     await startServer();
     const post = (path: string, body: unknown) =>
