@@ -233,8 +233,8 @@ export const Header = () => {
           aria-label={showTargets ? "Hide annotation targets" : "Show annotation targets"}
           title={
             showTargets
-              ? "Hide annotation targets - read the artifact without marks (⌘⇧M)"
-              : "Show annotation targets (⌘⇧M)"
+              ? "Hide annotation targets - read the artifact without marks (⌘.)"
+              : "Show annotation targets (⌘.)"
           }
           onClick={toggleTargets}
           className={`inline-flex cursor-pointer items-center rounded-full border p-[3px] ${

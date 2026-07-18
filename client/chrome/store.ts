@@ -99,6 +99,11 @@ interface LucidState {
   sessions: SessionSummary[] | null;
   sessionsLoading: boolean;
   showTargets: boolean;
+  /** Every `data-lucid-id` in the current artifact, published by the overlay.
+   *  Null until the first report: a section permalink renders as a live chip
+   *  while null (optimistic) or present, and degrades to plain text once the
+   *  set is known and the id is absent. */
+  sectionIds: readonly string[] | null;
   hoveredId: string | null;
   diffMode: boolean;
   diffData: DiffData | null;
@@ -141,6 +146,7 @@ const initial: LucidState = {
   sessions: null,
   sessionsLoading: false,
   showTargets: readStoredShowTargets(),
+  sectionIds: null,
   hoveredId: null,
   diffMode: false,
   diffData: null,

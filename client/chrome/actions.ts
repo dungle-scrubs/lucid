@@ -260,6 +260,12 @@ export const focusQuestionRef = (ref?: string): void => {
   if (ref) toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: ref });
 };
 
+/** Scroll the artifact to a section by its `data-lucid-id`. The landing for a
+ *  chat section permalink (`lucid:section/<id>`). */
+export const revealSection = (lucidId: string): void => {
+  toOverlay({ source: "lucid-chrome", type: "reveal-section", lucidId });
+};
+
 // ---- change view ----------------------------------------------------------
 
 export const enterDiff = async (base = get().diffBase): Promise<void> => {

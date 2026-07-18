@@ -44,6 +44,7 @@
   },
   "dependencies": {
     "@assistant-ui/react": "^0.14.26",
+    "@assistant-ui/react-markdown": "^0.14.6",
     "@base-ui/react": "^1.6.0",
     "@effect/cli": "^0.75.2",
     "@effect/platform": "^0.96.2",
@@ -56,6 +57,8 @@
     "marked": "^18.0.5",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.6.0",
     "zustand": "^5.0.14"
   },
