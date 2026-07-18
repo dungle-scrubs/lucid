@@ -115,6 +115,33 @@ test("fork button spins the selection off; the request reaches wait as a fork", 
   expect(feedback.forks?.[0]?.target.snippet).toContain("Backfill");
 });
 
+test("Fork with an empty note still forks (default directive), and confirms", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+
+  // Pick a region and click Fork WITHOUT typing a directive - the region is the
+  // seed, so this must still send (regression: it used to silently no-op).
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
+  await page.locator('[data-test="fork"]').click();
+
+  // A neutral confirmation appears and the composer clears.
+  await expect(page.getByText(/Fork(ed)?/)).toBeVisible();
+  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveCount(0);
+
+  // The fork reached wait with the default directive.
+  const feedback = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    "8",
+  ])) as { status: string; forks?: { note: string }[] };
+  expect(feedback.forks).toHaveLength(1);
+  expect(feedback.forks?.[0]?.note.length).toBeGreaterThan(0);
+});
+
 test("Esc discards the annotation being composed", async ({ page }) => {
   await openViewer(page);
   const surface = surfaceOf(page);

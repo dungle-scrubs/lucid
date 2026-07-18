@@ -13,7 +13,7 @@ import type { ReactNode } from "react";
 import { revealSection } from "./actions.ts";
 import { AnnotationPart } from "./AnnotationPart.tsx";
 import { useEffect, useState } from "react";
-import { PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
+import { Notices, PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
 import { useLucid, warn } from "./store.ts";
 import { Questions } from "./Questions.tsx";
 import { Kbd } from "./ui/kbd.tsx";
@@ -500,6 +500,7 @@ export const Thread = () => {
         {/* Staged work lives at the end of the record, where the eye already is
             after a pick - and where auto-scroll brings it. */}
         <Warnings />
+        <Notices />
         <PendingComposer />
         <ScrollToLatest />
       </ThreadPrimitive.Viewport>

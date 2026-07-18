@@ -93,6 +93,25 @@ export const Warnings = () => {
   );
 };
 
+/** Neutral, transient confirmations (e.g. a fork was recorded). Distinct from
+ *  Warnings both in intent and colour so a success never reads as an error. */
+export const Notices = () => {
+  const notices = useLucid((s) => s.notices);
+  if (notices.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-1">
+      {notices.map((n) => (
+        <div
+          key={n.id}
+          className="rounded-md border border-ink-600 bg-ink-700 px-2.5 py-1.5 text-[12px] text-cream-300"
+        >
+          {n.message}
+        </div>
+      ))}
+    </section>
+  );
+};
+
 /**
  * A composed-but-unsent annotation, inline in the record at the moment it was
  * written - the same place its sent form will hold (the event carries
