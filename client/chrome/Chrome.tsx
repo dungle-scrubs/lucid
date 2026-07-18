@@ -202,7 +202,7 @@ export const Chrome = () => {
       } else if (e.key === "2") {
         e.preventDefault();
         setSidebarTab("sessions");
-      } else if (e.shiftKey && (e.key === "m" || e.key === "M")) {
+      } else if (!e.shiftKey && e.key === ".") {
         e.preventDefault();
         toggleTargets();
       } else if (e.key === "Enter" && e.shiftKey && !e.isComposing) {
