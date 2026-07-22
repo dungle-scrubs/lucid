@@ -12,6 +12,8 @@ import { defaultUrlTransform } from "react-markdown";
 import type { ReactNode } from "react";
 import { revealSection } from "./actions.ts";
 import { AnnotationPart } from "./AnnotationPart.tsx";
+import { FoldedText } from "./FoldedText.tsx";
+import { collapseTextPaste } from "./pastes.ts";
 import { useEffect, useState } from "react";
 import { Notices, PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
 import { useLucid, warn } from "./store.ts";
@@ -41,11 +43,9 @@ const Thumb = ({ src, alt }: { readonly src: string; readonly alt: string }) => 
 
 /** The human's own turns stay verbatim: what they typed is a quote, not a
  *  document, so it renders as plain text (no markdown surprises on a stray
- *  `*` or `#`). Whitespace is preserved. */
+ *  `*` or `#`). Whitespace is preserved, and a wall of it folds. */
 const parts = {
-  Text: ({ text }: { readonly text: string }) => (
-    <span className="whitespace-pre-wrap leading-[1.45] text-fg">{text}</span>
-  ),
+  Text: ({ text }: { readonly text: string }) => <FoldedText text={text} />,
   Image: ({ image }: { readonly image: string }) => <Thumb src={image} alt="attachment" />,
 } as const;
 
@@ -186,7 +186,7 @@ const UserMessage = () => {
   if (isCard) return <MessagePrimitive.Parts components={parts} />;
   return (
     <div className="flex justify-end" data-role="human">
-      <div className="flex max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tr-[4px] border border-cream-100/10 bg-[rgba(226,165,65,0.16)] px-3 py-2">
+      <div className="flex min-w-0 max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tr-[4px] border border-cream-100/10 bg-[rgba(226,165,65,0.16)] px-3 py-2">
         <MessagePrimitive.Parts components={parts} />
       </div>
     </div>
@@ -231,6 +231,9 @@ const Composer = () => (
       rows={2}
       data-test="message-input"
       placeholder="Message the agent, or paste an image… (Enter to send, Shift+Enter for a new line)"
+      // Large text pastes fold to `[Pasted text #N +L lines]` and expand back
+      // at send; image pastes fall through to the attachment adapter.
+      onPaste={collapseTextPaste}
       className="resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
     />
     <div className="flex items-center justify-end gap-2">

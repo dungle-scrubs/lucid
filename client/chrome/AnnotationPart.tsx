@@ -1,5 +1,6 @@
 import type { DataMessagePartComponent } from "@assistant-ui/react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
+import { FoldedText } from "./FoldedText.tsx";
 import { set, useLucid } from "./store.ts";
 import type { MessageImage } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
@@ -143,7 +144,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
         <Kbd>↵</Kbd> reveal
       </span>
       <TargetSnippet target={data.target} />
-      <div className="text-fg">{data.note}</div>
+      {/* Verbatim like a message turn - an expanded paste in a note comes
+          back from the log as its full self, so a wall of it folds. */}
+      <div className="text-fg">
+        <FoldedText text={data.note} />
+      </div>
       {images.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {images.map((img, i) => (
