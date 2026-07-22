@@ -535,6 +535,62 @@ test("a pasted image still renders in the conversation after a reload", async ({
   expect(decoded?.width).toBeGreaterThan(0); // it actually decoded, not just resolved
 });
 
+test("a large text paste folds to a placeholder; the agent still gets every line", async ({
+  page,
+}) => {
+  const { nextCursor } = await openViewer(page);
+
+  // Forty lines of terminal output, pasted the way the browser delivers it.
+  const wall = Array.from({ length: 40 }, (_, i) => `log line ${i}`).join("\n");
+  const ta = page.locator('[data-test="message-input"]');
+  await ta.click();
+  await page.evaluate((text) => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", text);
+    const el = document.querySelector('[data-test="message-input"]') as HTMLTextAreaElement;
+    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
+  }, wall);
+
+  // The composer holds the placeholder, not the wall, and typing continues
+  // after it as if the paste were one token.
+  await expect(ta).toHaveValue("[Pasted text #1 +40 lines]");
+  await ta.pressSequentially(" - why did this fail?");
+  await page.locator('[data-test="send-message"]').click();
+
+  // The human's turn renders folded: the head shows, the rest waits behind
+  // the toggle, and expanding brings in the last line.
+  const bubble = page.locator('[data-role="human"]');
+  await expect(page.locator('[data-test="fold-toggle"]')).toContainText("show 34 more lines");
+  await expect(bubble).not.toContainText("log line 39");
+  await page.locator('[data-test="fold-toggle"]').click();
+  await expect(bubble).toContainText("log line 39 - why did this fail?");
+
+  // The agent reads what was actually pasted, not the placeholder.
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    messages: { text: string }[];
+    nextCursor: string;
+  };
+  expect(fb.messages).toHaveLength(1);
+  expect(fb.messages[0]?.text).toContain("log line 0");
+  expect(fb.messages[0]?.text).toContain("log line 39 - why did this fail?");
+  expect(fb.messages[0]?.text).not.toContain("Pasted text #1");
+
+  // A later message that literally quotes the placeholder must NOT expand -
+  // the staged paste was spent by the send that used it.
+  await ta.fill("what did [Pasted text #1 +40 lines] contain?");
+  await page.locator('[data-test="send-message"]').click();
+  const fb2 = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    fb.nextCursor,
+    "--timeout",
+    "8",
+  ])) as { messages: { text: string }[] };
+  expect(fb2.messages).toHaveLength(1);
+  expect(fb2.messages[0]?.text).toBe("what did [Pasted text #1 +40 lines] contain?");
+});
+
 test("scrolled-up readers are not yanked; the floating button brings them back", async ({
   page,
 }) => {
