@@ -1,0 +1,24 @@
+# Eval cases for lucid. The review loop itself is human-in-the-loop
+# (browser markup, blocking wait) and ungradable non-interactively;
+# these cases cover the trigger boundary only. In the sandbox the
+# lucid binary is absent - the skill's own fallback (say so, deliver
+# prose) makes invocation still observable.
+skill: lucid
+class: capability
+cases:
+  # Spatial review-shaped asks must reach the skill.
+  - id: visualize-plan-trigger
+    mode: trigger
+    should_trigger: true
+    prompt: >-
+      Visualize the migration plan for moving our blog from WordPress
+      to Astro so I can mark it up.
+    trials: 1
+
+  # Plain conversational answers stay prose - no artifact.
+  - id: plain-question-negative
+    mode: trigger
+    should_trigger: false
+    prompt: >-
+      What is the difference between REST and GraphQL? Just answer.
+    trials: 3

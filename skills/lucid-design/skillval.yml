@@ -1,0 +1,28 @@
+# Eval cases for lucid-design. Self-containment is the mechanically
+# assertable core: one inline style block, zero external requests.
+skill: lucid-design
+class: preference
+cases:
+  - id: self-contained-artifact
+    mode: generation
+    type: preference
+    rule: self-contained
+    arms: [skill, baseline]
+    prompt: >-
+      Read ~/.agents/skills/lucid-design/SKILL.md if it exists and
+      follow it to write a standalone HTML artifact presenting a
+      three-phase database migration plan for review. Save it as
+      artifact.html. Do it end to end without asking.
+    assert:
+      must_match: ['<style']
+      must_not_match: ['fonts\.googleapis|fonts\.gstatic|cdn\.|unpkg\.com|jsdelivr']
+    trials: 1
+
+  # Generic component styling is not Lucid-artifact design.
+  - id: component-styling-negative
+    mode: trigger
+    should_trigger: false
+    prompt: >-
+      Style this React button component with Tailwind classes. Just
+      show the classes.
+    trials: 3
