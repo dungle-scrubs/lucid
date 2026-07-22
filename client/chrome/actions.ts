@@ -1,3 +1,4 @@
+import { consumePastes, expandPastes } from "./pastes.ts";
 import {
   api,
   get,
@@ -78,7 +79,8 @@ export const forkPending = async (): Promise<void> => {
   // Capture the draft; the id is stable across an ambiguous failure so a manual
   // retry reuses it and the server dedupes instead of forking twice.
   const target = s.pendingTarget;
-  const note = s.composerNote.trim() || DEFAULT_FORK_DIRECTIVE;
+  const rawNote = s.composerNote;
+  const note = expandPastes(rawNote).trim() || DEFAULT_FORK_DIRECTIVE;
   const images = s.pastedImages;
   const id = s.forkId ?? uuid();
   set({ forking: true, forkId: id });
@@ -96,6 +98,7 @@ export const forkPending = async (): Promise<void> => {
     set({ forking: false }); // keep forkId + draft for an idempotent retry
     return;
   }
+  consumePastes(rawNote); // the directive's placeholders are spent
   // Clear only if the pick hasn't moved on under us (a mid-flight retarget wins);
   // clearing blind through get() would drop a newer draft and revoke its images.
   if (get().pendingTarget === target) {
@@ -182,11 +185,14 @@ export const sendQueue = async (): Promise<void> => {
         id: q.id,
         version: get().version,
         target: q.target,
-        note: q.note,
+        // The queued card shows the `[Pasted text #N +L lines]` placeholder;
+        // what sends is the paste it stands for.
+        note: expandPastes(q.note),
         authoredAt: q.at,
         images: q.images.map(({ id, name, file }) => ({ id, name, file })),
       });
       sent.add(q.id); // ids are idempotent, so a retry of a sent one is safe
+      consumePastes(q.note); // this note's placeholders are spent
     }
   } catch {
     warn("Some annotations didn't send - they're kept in the queue, try again.");

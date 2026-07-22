@@ -14,6 +14,7 @@ import {
   sendQueue,
 } from "./actions.ts";
 import { TargetSnippet } from "./AnnotationPart.tsx";
+import { collapseTextPaste } from "./pastes.ts";
 import { imagesFromPaste, set, useLucid } from "./store.ts";
 import type { PastedImage } from "./types.ts";
 import { Kbd, KbdGroup } from "./ui/kbd.tsx";
@@ -182,6 +183,7 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
               }
               onSubmitKey(e, () => commitEdit());
             }}
+            onPaste={collapseTextPaste}
             className={field}
           />
           <div className="flex items-center gap-2">
@@ -303,7 +305,7 @@ export const PendingComposer = () => {
             }}
             onPaste={(e) => {
               const files = imagesFromPaste(e);
-              if (files.length === 0) return; // let a normal text paste through
+              if (files.length === 0) return collapseTextPaste(e); // text: folds only if large
               e.preventDefault();
               for (const f of files) void addPastedImage(f);
             }}

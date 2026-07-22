@@ -7,6 +7,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import { useMemo, type ReactNode } from "react";
+import { consumePastes, expandPastes } from "./pastes.ts";
 import { api, buildTimeline, uploadAsset, useLucid, uuid, warn } from "./store.ts";
 import type { TimelineItem } from "./types.ts";
 
@@ -133,11 +134,14 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
    * like any other log event.
    */
   const onNew = async (message: AppendMessage): Promise<void> => {
-    const text = message.content
+    // A `[Pasted text #N +L lines]` placeholder leaves the composer as the
+    // full paste it stands for: the collapse is input ergonomics, and the
+    // agent must read what was actually pasted.
+    const raw = message.content
       .filter((p): p is { type: "text"; text: string } => p.type === "text")
       .map((p) => p.text)
-      .join("")
-      .trim();
+      .join("");
+    const text = expandPastes(raw).trim();
     const images = (message.attachments ?? []).flatMap((a) => {
       const meta = uploaded.get(a.id);
       return meta ? [{ id: a.id, name: meta.name, file: meta.file }] : [];
@@ -151,6 +155,7 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
       warn("Your message didn't send - the agent has not seen it.");
       throw e;
     });
+    consumePastes(raw); // the placeholders this message used are spent now
     for (const a of message.attachments ?? []) uploaded.delete(a.id);
   };
 
