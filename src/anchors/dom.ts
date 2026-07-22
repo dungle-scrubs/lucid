@@ -98,8 +98,9 @@ const toArray = (a: ArrayLike<DomElementLike>): DomElementLike[] => Array.from(a
 /**
  * Resolve an element anchor against a root, in priority order
  * lucidId -> fingerprint -> domPath (D-047). Returns the matched element or
- * null. A `data-lucid-id` that is not unique within the document is skipped
- * (falls through to fingerprint) per D-047.
+ * null. A layer whose match is not unique within the document is skipped and
+ * falls through to the next (data-lucid-id -> fingerprint -> domPath) per
+ * D-047; only the positional domPath is allowed to disambiguate.
  */
 export const resolveElementAnchor = (
   anchor: ElementAnchor,
@@ -113,10 +114,13 @@ export const resolveElementAnchor = (
     // non-unique -> skip lucidId layer
   }
 
-  const byFingerprint = toArray(root.querySelectorAll("*")).find(
+  const byFingerprint = toArray(root.querySelectorAll("*")).filter(
     (el) => computeFingerprint(el) === anchor.fingerprint,
   );
-  if (byFingerprint) return byFingerprint;
+  // A unique fingerprint wins; a non-unique one is ambiguous (e.g. identical
+  // status cells sharing a column position across table rows) and must fall
+  // through to the positional domPath, same as the lucidId layer above.
+  if (byFingerprint.length === 1 && byFingerprint[0]) return byFingerprint[0];
 
   if (anchor.domPath) {
     try {
