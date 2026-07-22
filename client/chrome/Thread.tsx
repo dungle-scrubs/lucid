@@ -485,7 +485,11 @@ export const Thread = () => {
         autoScroll
         scrollToBottomOnRunStart
         data-test="thread-viewport"
-        className="flex flex-1 flex-col gap-[18px] overflow-y-auto p-[14px_14px_12px]"
+        // overflow-x-hidden: this is a vertical record; wide content scrolls
+        // inside its own container (pre, table) and everything else wraps, so
+        // any residual horizontal overflow is a rendering artifact to clip,
+        // never something to hand the reader a scrollbar for.
+        className="flex flex-1 flex-col gap-[18px] overflow-x-hidden overflow-y-auto p-[14px_14px_12px]"
       >
         <ThreadPrimitive.Empty>
           <div className="text-[12px] italic text-fg-faint">
