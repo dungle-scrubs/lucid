@@ -249,11 +249,30 @@ export const toggleTargets = (): void => {
   pushHighlights();
 };
 
+const REOPEN_ENDED_MSG =
+  "This session has ended - reopening needs the agent to run `lucid open` again.";
+
 export const reopenReview = async (): Promise<void> => {
+  // An ended session has no server to receive the reopen - the POST can only
+  // fail, and "try again" would be a lie. Say what the way back actually is.
+  if (get().status === "ended") {
+    warn(REOPEN_ENDED_MSG);
+    return;
+  }
   try {
     await api("/__lucid/reopen", {});
+    // The reopen landed in the log, but approval already released the agent -
+    // if nobody is in a wait loop, feedback sent now sits recorded until an
+    // agent checks back in, and the human should know that before writing it.
+    if (get().agentsListening === 0) {
+      notice(
+        "Review reopened - no agent is listening right now. Feedback is recorded and delivered when one checks in.",
+      );
+    }
   } catch {
-    warn("Reopen didn't send - try again.");
+    // Re-check after the failure: the click can race the session_ended frame,
+    // and by now the state knows which failure this actually was.
+    warn(get().status === "ended" ? REOPEN_ENDED_MSG : "Reopen didn't send - try again.");
   }
 };
 

@@ -233,9 +233,13 @@ session's `server.json` and verified by a **port handshake, not pid existence**
 and on resume writes `session_resumed` under the log lock (D-038, D-049). `open` on an
 ENDED path starts a fresh lifecycle segment (D-045). `end` is the only path to the
 terminal **ended** state and stops this session's server. Inactivity **suspends** a
-session rather than ending it (D-021, D-036). `suspended` and `review_resolved` end
-the agent's involvement until it is **externally re-invoked**; `open`/resume does
-not notify a stopped agent (D-064).
+session rather than ending it (D-021, D-036). `suspended` and `review_resolved`
+release the agent from its wait loop; once it has stopped, nothing but
+**external re-invocation** brings it back - `open`/resume does not notify a
+stopped agent (D-064). Approval is a release, not an end: the agent leaves the
+session open (so the human can reopen the review), does the approved work, and
+drains the log once before ending its turn - only a drain that still shows
+`reviewResolved: true` clears it to `end`.
 
 ### Harness / agent
 The terminal coding agent driving Lucid (Claude Code, Codex, OpenCode, or a

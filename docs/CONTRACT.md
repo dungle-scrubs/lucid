@@ -122,8 +122,14 @@ matrices, anything the human will want to mark up at the element or phrase level
   live. **Stop re-issuing `wait`**, tell the human "review suspended; run
   `lucid open` to resume", and end your turn. Do not busy-loop.
 - **`ended`** - the session was ended (`lucid end`). Stop.
-- **`reviewResolved: true`** - the human approved. Stop iterating; you may `lucid
-  end`. (After approving, the human can "reopen review" to add more.)
+- **`reviewResolved: true`** - the human approved. Stop iterating and start the
+  work the approval unblocks, but do **not** `lucid end` yet: ending stops the
+  session's server, and the human's "reopen review" button needs it alive (an
+  idle session suspends and resumes on its own). When the approved work is
+  done, drain once with `wait --since <cursor> --timeout 5`: `feedback` or
+  `waiting` with `reviewResolved: false` means the human reopened - re-enter
+  the loop; `waiting` with `reviewResolved: true` means the approval stood, and
+  then you may `lucid end`.
 
 ## Fork requests
 

@@ -249,6 +249,38 @@ test("approve/resolve closes the loop and reopen clears it", async ({ page }) =>
   await expect(page.locator('[data-test="resolved-bar"]')).toHaveCount(0);
 });
 
+test("reopen with nobody listening says feedback is record-only", async ({ page }) => {
+  // No agent ever connects in this test, so the listening count is
+  // deterministically zero - the exact state approval leaves behind.
+  await openViewer(page);
+  await page.locator('[data-test="approve"]').click();
+  await expect(page.locator('[data-test="resolved-bar"]')).toBeVisible();
+
+  await page.locator('[data-test="reopen"]').click();
+  await expect(page.locator('[data-test="resolved-bar"]')).toHaveCount(0);
+  await expect(page.getByText("no agent is listening right now")).toBeVisible();
+});
+
+test("reopen on an ended session explains the way back instead of failing", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+  await page.locator('[data-test="approve"]').click();
+  await expect(page.locator('[data-test="resolved-bar"]')).toBeVisible();
+  await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "6"]);
+  // The wait's delivery ack opens the working indicator...
+  await expect(page.locator('[data-test="agent-working"]')).toBeVisible();
+  await cli.run(["end", cli.artifact]);
+  // ...and session_ended closes it - the observable proof the browser has
+  // processed the ended state before we click.
+  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+
+  // Reopen must not fire a doomed POST at a dead server and claim "try
+  // again" would help.
+  const reopen = page.locator('[data-test="reopen"]');
+  await expect(reopen).toBeVisible();
+  await reopen.click();
+  await expect(page.getByText("needs the agent to run")).toBeVisible();
+});
+
 test("approve refuses while anything is unsent, so nothing is stranded", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
   const surface = surfaceOf(page);
