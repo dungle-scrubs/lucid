@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import type { DomRootLike } from "../src/anchors/dom.ts";
-import { anchorResolves, captureElementAnchor, computeFingerprint } from "../src/anchors/dom.ts";
+import {
+  anchorResolves,
+  captureElementAnchor,
+  computeFingerprint,
+  resolveElementAnchor,
+} from "../src/anchors/dom.ts";
 import type { ElementAnchor, RangeAnchor } from "../src/anchors/anchor.ts";
 import { parseAnchor } from "../src/anchors/anchor.ts";
 import { parseCursor, renderCursor } from "../src/core/cursor.ts";
@@ -108,6 +113,36 @@ describe("anchors/dom", () => {
     const anchor = captureElementAnchor(third);
     const reRender = rootOf("<body><ul><li>same</li><li>same</li><li>same</li></ul></body>");
     expect(anchorResolves(anchor, reRender)).toBe(true);
+  });
+
+  test("identical cells across table rows resolve to the clicked one, not the first", () => {
+    // Each "Not audited" cell sits at the same column position in its own row,
+    // so they share a fingerprint. The ambiguous fingerprint must fall through
+    // to the positional domPath instead of collapsing onto the first cell.
+    const html =
+      "<body><table><tbody>" +
+      "<tr><td>Onboarding</td><td>Not audited</td></tr>" +
+      "<tr><td>Dashboard</td><td>Not audited</td></tr>" +
+      "<tr><td>Alerts</td><td>Not audited</td></tr>" +
+      "</tbody></table></body>";
+    const root = rootOf(html);
+    const cells = Array.from(root.querySelectorAll("td")).filter(
+      (c) => (c.textContent ?? "").trim() === "Not audited",
+    );
+    expect(cells.length).toBe(3);
+    // The three cells share a fingerprint (same tag, column position, text).
+    expect(computeFingerprint(cells[0]!)).toBe(computeFingerprint(cells[2]!));
+    // Capturing each and resolving against an identical re-render lands on the
+    // matching row - not on cells[0] every time.
+    const reRender = rootOf(html);
+    const rows = Array.from(reRender.querySelectorAll("td")).filter(
+      (c) => (c.textContent ?? "").trim() === "Not audited",
+    );
+    cells.forEach((cell, i) => {
+      const anchor = captureElementAnchor(cell);
+      const resolved = resolveElementAnchor(anchor, reRender);
+      expect(resolved).toBe(rows[i]!);
+    });
   });
 
   test("resolves a range anchor by quote", () => {
