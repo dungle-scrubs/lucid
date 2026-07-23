@@ -19,6 +19,23 @@ export type PayloadStatus = "feedback" | "ended" | "suspended" | "waiting";
 export interface AgentWorking {
   readonly since: string;
   readonly intent?: "revise" | "reply";
+  /** Self-reported fan-out progress; present iff the agent called `lucid progress`. */
+  readonly progress?: AgentProgress;
+}
+
+/**
+ * Fan-out status the agent self-reports via `lucid progress`. The canonical
+ * shape (events.ts and the sanitizer both reference it); the viewer shows
+ * counts only when `total` is set. Fields may arrive on separate acks and are
+ * merged, so any one can be omitted on a later refine.
+ */
+export interface AgentProgress {
+  /** Human summary, e.g. "auditing 7 screens against the spec". */
+  readonly label?: string;
+  /** How many subtasks the fan-out spawned. */
+  readonly total?: number;
+  /** How many have reported back so far. */
+  readonly done?: number;
 }
 
 /**

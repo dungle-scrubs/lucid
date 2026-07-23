@@ -6,6 +6,7 @@ import { toErrorJson, type LucidError } from "../errors.ts";
 import {
   runAsk,
   runIntent,
+  runProgress,
   runEnd,
   runLaunchCli,
   runOpen,
@@ -109,6 +110,22 @@ const intentCommand = Command.make(
   ({ file, intent }) => runEffect(() => runIntent(file, intent as "revise" | "reply")),
 );
 
+const progressLabel = Options.text("label").pipe(Options.optional);
+const progressTotal = Options.integer("total").pipe(Options.optional);
+const progressDone = Options.integer("done").pipe(Options.optional);
+const progressCommand = Command.make(
+  "progress",
+  { file: fileArg, label: progressLabel, total: progressTotal, done: progressDone },
+  ({ file, label, total, done }) =>
+    runEffect(() =>
+      runProgress(file, {
+        label: Option.getOrUndefined(label),
+        total: Option.getOrUndefined(total),
+        done: Option.getOrUndefined(done),
+      }),
+    ),
+);
+
 const serveCommand = Command.make("__serve", { file: fileArg }, ({ file }) =>
   runEffect(() => runServe(file)),
 );
@@ -153,6 +170,7 @@ const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe
     launchCommand,
     askCommand,
     intentCommand,
+    progressCommand,
     serveCommand,
     planCommand,
   ]),

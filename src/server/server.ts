@@ -13,6 +13,7 @@ import { ServerError } from "../errors.ts";
 import { assemblePayload } from "../core/payload.ts";
 import { commitWatchedChange } from "../core/session.ts";
 import type { SessionsResponse, StateResponse } from "../protocol/wire.ts";
+import { sanitizeProgress } from "../core/progress.ts";
 import {
   CHROME_BUNDLE,
   CHROME_CSS,
@@ -421,7 +422,15 @@ export const runServer = async (
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body || typeof body.id !== "string") return json({ error: "invalid ack" }, 400);
     const intent = body.intent === "revise" || body.intent === "reply" ? body.intent : undefined;
-    await serverAppend([{ t: "agent_ack", id: body.id, ...(intent ? { intent } : {}) }]);
+    const progress = sanitizeProgress(body.progress);
+    await serverAppend([
+      {
+        t: "agent_ack",
+        id: body.id,
+        ...(intent ? { intent } : {}),
+        ...(progress ? { progress } : {}),
+      },
+    ]);
     return json({ ok: true });
   };
 

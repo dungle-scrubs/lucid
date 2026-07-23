@@ -7,6 +7,7 @@ import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
 import { sessionPaths } from "../core/paths.ts";
 import type { WaitPayload } from "../core/payload.ts";
+import { sanitizeProgress } from "../core/progress.ts";
 import { ensureSessionDirs, openSession } from "../core/session.ts";
 import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
@@ -123,6 +124,29 @@ export const runIntent = async (file: string, intent: "revise" | "reply"): Promi
   const paths = sessionPaths(file);
   await deliver(paths, { t: "agent_ack", id: randomId(), intent });
   print({ ok: true, intent });
+};
+
+/**
+ * `lucid progress <file> [--label <text>] [--total <n>] [--done <n>]` - refine
+ * the open working window with self-reported fan-out status, so the viewer can
+ * show "N agents in progress · done/total reported" instead of a lone spinner.
+ * Call at fan-out start with `--total`, then re-call to bump `--done` as tasks
+ * report. Advisory like `intent`: the window still only closes on real output.
+ */
+export const runProgress = async (
+  file: string,
+  progress: { label?: string; total?: number; done?: number },
+): Promise<void> => {
+  const paths = sessionPaths(file);
+  // Validate here, not just server-side: `deliver` falls back to a direct log
+  // append when no daemon answers, which never passes through the ack handler.
+  const cleaned = sanitizeProgress(progress);
+  if (!cleaned) {
+    print({ ok: false, error: "progress needs a --label, --total, or --done" });
+    return;
+  }
+  await deliver(paths, { t: "agent_ack", id: randomId(), progress: cleaned });
+  print({ ok: true, progress: cleaned });
 };
 
 /** `lucid ask <file> --text "..." [--ref <id>]` - pose a question to the human. */
@@ -253,6 +277,7 @@ export const runStatus = async (): Promise<void> => {
     usage: {
       open: "lucid open <file>",
       wait: "lucid wait <file> [--since <cursor>] [--reply <msg>] [--harness <id>] [--resume <cmd>]",
+      progress: "lucid progress <file> [--label <text>] [--total <n>] [--done <n>]",
       end: "lucid end <file>",
     },
   });
