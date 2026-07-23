@@ -123,6 +123,58 @@ test("context usage renders a header ring that updates live", async ({ page }) =
   await expect(ring).toHaveAttribute("data-pct", "90");
 });
 
+test("structured question: choose an option and pin an artifact region as the answer", async ({
+  page,
+}) => {
+  const { nextCursor } = await openViewer(page);
+  const surface = surfaceOf(page);
+
+  // The agent forwards a multiple-choice question through Lucid.
+  await cli.run([
+    "ask",
+    cli.artifact,
+    "--text",
+    "Which store for the cutover?",
+    "--option",
+    "Postgres|managed, boring",
+    "--option",
+    "SQLite|embedded, WAL",
+  ]);
+
+  // The slide-up panel shows the choices as buttons.
+  await expect(page.locator('[data-test="questions-panel"]')).toBeVisible();
+  const options = page.locator('[data-test="option"]');
+  await expect(options).toHaveCount(2);
+  await options.first().click();
+  await expect(options.first()).toHaveAttribute("aria-pressed", "true");
+
+  // Pin a region of the artifact as the answer's referent.
+  await page.locator('[data-test="pin-region"]').click();
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await expect(page.locator('[data-test="answer-anchor"]')).toBeVisible();
+
+  // Send the answer; it reaches wait with the chosen option and the pinned region.
+  await page.locator('[data-test="answer"]').click();
+  const payload = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    "8",
+  ])) as {
+    questions?: {
+      answered: boolean;
+      answerOptions?: string[];
+      answerAnchor?: { snippet: string };
+    }[];
+  };
+  const q = payload.questions?.[0];
+  expect(q?.answered).toBe(true);
+  expect(q?.answerOptions).toEqual(["Postgres"]);
+  expect(q?.answerAnchor?.snippet).toContain("Backfill");
+});
+
 test("fork button spins the selection off; the request reaches wait as a fork", async ({
   page,
 }) => {

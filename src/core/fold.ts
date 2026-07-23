@@ -1,5 +1,5 @@
 import type { Anchor } from "../anchors/anchor.ts";
-import type { AgentProgress, AgentWorking } from "../protocol/wire.ts";
+import type { AgentProgress, AgentWorking, QuestionOption } from "../protocol/wire.ts";
 import type { LogEvent, PromptImage } from "./events.ts";
 import { maxSeq } from "./log.ts";
 
@@ -51,8 +51,13 @@ export interface QuestionRecord {
   readonly seq: number;
   readonly text: string;
   readonly ref?: string;
+  readonly options?: readonly QuestionOption[];
+  readonly multi?: boolean;
   readonly answered: boolean;
   readonly answer?: string;
+  readonly answerOptions?: readonly string[];
+  readonly answerAnchor?: Anchor;
+  readonly answerImages?: readonly PromptImage[];
   /** seq of the answer event (for delta detection). */
   readonly answerSeq?: number;
   readonly at: string;
@@ -256,6 +261,8 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
             seq: e.seq,
             text: e.text,
             ...(e.ref ? { ref: e.ref } : {}),
+            ...(e.options && e.options.length > 0 ? { options: e.options } : {}),
+            ...(e.multi ? { multi: true } : {}),
             answered: false,
             at: e.at,
           });
@@ -265,7 +272,15 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       case "question_answered": {
         const q = questionMap.get(e.questionId);
         if (q) {
-          questionMap.set(e.questionId, { ...q, answered: true, answer: e.text, answerSeq: e.seq });
+          questionMap.set(e.questionId, {
+            ...q,
+            answered: true,
+            answer: e.text,
+            answerSeq: e.seq,
+            ...(e.options && e.options.length > 0 ? { answerOptions: e.options } : {}),
+            ...(e.anchor ? { answerAnchor: e.anchor } : {}),
+            ...(e.images && e.images.length > 0 ? { answerImages: e.images } : {}),
+          });
         }
         break;
       }

@@ -326,14 +326,119 @@ export const switchToSession = (s: SessionSummary): void => {
 export const setAnswerDraft = (id: string, value: string): void =>
   set((s) => ({ answerDrafts: { ...s.answerDrafts, [id]: value } }));
 
-export const sendAnswer = async (q: AgentQuestion): Promise<void> => {
-  const text = (get().answerDrafts[q.id] ?? "").trim();
-  if (text.length === 0) return;
+/** Select (single-choice) or toggle (multi) an option on a question's answer. */
+export const toggleAnswerOption = (q: AgentQuestion, label: string): void =>
+  set((s) => {
+    const current = s.answerOptions[q.id] ?? [];
+    const has = current.includes(label);
+    const next = q.multi
+      ? has
+        ? current.filter((l) => l !== label)
+        : [...current, label]
+      : has
+        ? []
+        : [label];
+    return { answerOptions: { ...s.answerOptions, [q.id]: next } };
+  });
+
+/** Enter "pin a region for this answer" mode; the next artifact pick attaches
+ *  to this question (see Chrome's target-picked handler). Ensures marks are on
+ *  so the overlay accepts a pick. */
+export const startAnswerPick = (q: AgentQuestion): void => {
+  if (!get().showTargets) {
+    set({ showTargets: true });
+    persistShowTargets(true);
+  }
+  set({ answerPickFor: q.id });
+  pushHighlights();
+};
+
+export const cancelAnswerPick = (): void => set({ answerPickFor: null });
+
+export const clearAnswerAnchor = (q: AgentQuestion): void =>
+  set((s) => {
+    const next = { ...s.answerAnchors };
+    delete next[q.id];
+    return {
+      answerAnchors: next,
+      answerPickFor: s.answerPickFor === q.id ? null : s.answerPickFor,
+    };
+  });
+
+export const addAnswerImage = async (q: AgentQuestion, file: File): Promise<void> => {
+  // Track the upload so submission can wait on it: choosing an image and
+  // immediately hitting Answer must not drop the image, nor let the send's
+  // cleanup race a finishing upload.
+  set((s) => ({
+    answerUploading: { ...s.answerUploading, [q.id]: (s.answerUploading[q.id] ?? 0) + 1 },
+  }));
   try {
-    await api("/__lucid/answer", { id: uuid(), questionId: q.id, text });
-    const drafts = { ...get().answerDrafts };
-    delete drafts[q.id];
-    set({ answerDrafts: drafts }); // clear only after the answer is recorded
+    const img = await uploadPaste(file);
+    if (img)
+      set((s) => ({
+        answerImages: { ...s.answerImages, [q.id]: [...(s.answerImages[q.id] ?? []), img] },
+      }));
+  } finally {
+    set((s) => ({
+      answerUploading: {
+        ...s.answerUploading,
+        [q.id]: Math.max(0, (s.answerUploading[q.id] ?? 1) - 1),
+      },
+    }));
+  }
+};
+
+export const removeAnswerImage = (q: AgentQuestion, id: string): void =>
+  set((s) => {
+    const list = s.answerImages[q.id] ?? [];
+    const img = list.find((i) => i.id === id);
+    if (img) URL.revokeObjectURL(img.url);
+    return { answerImages: { ...s.answerImages, [q.id]: list.filter((i) => i.id !== id) } };
+  });
+
+export const sendAnswer = async (q: AgentQuestion): Promise<void> => {
+  const s = get();
+  const text = (s.answerDrafts[q.id] ?? "").trim();
+  const options = s.answerOptions[q.id] ?? [];
+  const anchor = s.answerAnchors[q.id];
+  const images = s.answerImages[q.id] ?? [];
+  // Never send with an image still uploading: it would be omitted, and the
+  // send's cleanup could race the finishing upload. Enter is dropped here; the
+  // button is disabled for the same reason.
+  if ((s.answerUploading[q.id] ?? 0) > 0) return;
+  // A bare submission carries nothing to act on; the button is disabled for this
+  // too, but guard here so a stray Enter cannot post an empty answer.
+  if (text.length === 0 && options.length === 0 && !anchor && images.length === 0) return;
+  try {
+    await api("/__lucid/answer", {
+      id: uuid(),
+      questionId: q.id,
+      text,
+      ...(options.length > 0 ? { options } : {}),
+      ...(anchor ? { anchor } : {}),
+      ...(images.length > 0
+        ? { images: images.map(({ id, name, file }) => ({ id, name, file })) }
+        : {}),
+    });
+    // Clear this question's staged answer only after it is recorded.
+    for (const img of images) URL.revokeObjectURL(img.url);
+    set((st) => {
+      const drafts = { ...st.answerDrafts };
+      const opts = { ...st.answerOptions };
+      const anchors = { ...st.answerAnchors };
+      const imgs = { ...st.answerImages };
+      delete drafts[q.id];
+      delete opts[q.id];
+      delete anchors[q.id];
+      delete imgs[q.id];
+      return {
+        answerDrafts: drafts,
+        answerOptions: opts,
+        answerAnchors: anchors,
+        answerImages: imgs,
+        answerPickFor: st.answerPickFor === q.id ? null : st.answerPickFor,
+      };
+    });
   } catch {
     warn("Your answer didn't send - it's kept here, try again.");
   }

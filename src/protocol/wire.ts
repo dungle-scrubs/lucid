@@ -100,12 +100,35 @@ export interface PayloadRevert {
   readonly at: string;
 }
 
+/**
+ * One choice on a structured question, mirroring a harness question tool's
+ * option (Claude Code's AskUserQuestion: a short `label` plus an explanatory
+ * `description`). The human picks one or more; free text via "Other" still lands
+ * in the answer's `answer` field.
+ */
+export interface QuestionOption {
+  readonly label: string;
+  readonly description?: string;
+}
+
 export interface PayloadQuestion {
   readonly id: string;
   readonly text: string;
   readonly ref?: string;
+  /** Structured choices, when the agent posed a multiple-choice question. */
+  readonly options?: readonly QuestionOption[];
+  /** Whether more than one option may be chosen. */
+  readonly multi?: boolean;
   readonly answered: boolean;
+  /** Free-text answer (or the "Other" text alongside chosen options). */
   readonly answer?: string;
+  /** Labels of the options the human chose. */
+  readonly answerOptions?: readonly string[];
+  /** A region of the artifact the human pinned as the referent of their answer
+   *  - the mirror of the agent's `ref`, captured like an annotation's target. */
+  readonly answerAnchor?: Anchor;
+  /** Images the human attached to their answer. */
+  readonly answerImages?: readonly PayloadImage[];
 }
 
 export interface WaitPayload {

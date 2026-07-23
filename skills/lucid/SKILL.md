@@ -186,6 +186,33 @@ Never fake the review loop, and never paste build instructions at the user.
    and approved in the open. The review channel reports and reshapes; it does
    not commission.
 
+## Asking the human a question mid-review
+
+During a review the human is watching the **browser**, not the terminal - so a
+question posed with your harness's own question tool (a terminal prompt) can sit
+unseen while you wait. When a review is active, ask **through Lucid** instead:
+
+```
+lucid ask <file> --text "Which store should the cutover target?" \
+  --option "Postgres|managed, boring, we know it" \
+  --option "SQLite|embedded, WAL, zero ops" \
+  [--multi] [--ref <data-lucid-id>]
+```
+
+- `--option "Label|explanation"` (repeatable) forwards a multiple-choice
+  question - the same shape as a harness question tool's options - and the panel
+  renders them as buttons. Omit options for a free-text question. `--multi`
+  allows more than one choice; `--ref` points the "Show me where" link at an
+  element.
+- The answer comes back in the next `wait` payload under `questions`: `answer`
+  (free text), `answerOptions` (the labels chosen), `answerAnchor` (a region the
+  human **pinned in the artifact** as their referent - read its `snippet`), and
+  `answerImages` (attached, addressed like annotation images). Act on whichever
+  are present; an answer may be options-only with no text.
+- This is advisory forwarding, not interception: use it for questions that
+  arise **while parked in the review loop**. Outside a review, your normal
+  question tool is fine.
+
 ## Standing review (opt-in, never the default)
 
 The blocking loop above is the default and stays the default: a review is a
