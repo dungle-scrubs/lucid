@@ -155,6 +155,8 @@ test("structured question: choose an option and pin an artifact region as the an
 
   // Send the answer; it reaches wait with the chosen option and the pinned region.
   await page.locator('[data-test="answer"]').click();
+  // Answered -> the panel clears (nothing outstanding).
+  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
   const payload = (await cli.run([
     "wait",
     cli.artifact,
@@ -1073,9 +1075,9 @@ test("agent question surfaces in the viewer and the answer reaches the agent", a
   // Human answers it.
   await page.locator('[data-test="question"] .qinput').fill("Yes - backfill must finish first.");
   await page.locator('[data-test="answer"]').click();
-  await expect(page.locator('[data-test="question-answered"]')).toContainText(
-    "backfill must finish first",
-  );
+  // Once answered, the question leaves the inbox: the panel is for outstanding
+  // work, so with nothing open it disappears rather than pinning the answer.
+  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
 
   // The answer reaches the agent as feedback.
   const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
