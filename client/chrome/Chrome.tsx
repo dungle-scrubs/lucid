@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { LogEvent } from "../../src/core/events.ts";
+import type { ContextUsage } from "../../src/protocol/wire.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
 import {
   approveReview,
@@ -239,10 +240,25 @@ export const Chrome = () => {
         /* ignore */
       }
     });
+    source.addEventListener("context", (e) => {
+      try {
+        set({ contextUsage: JSON.parse((e as MessageEvent).data) as ContextUsage });
+      } catch {
+        /* ignore */
+      }
+    });
     // EventSource retries on its own, so a drop is a state to show, not a
     // warning to accumulate: warning per failed attempt spammed the panel and
     // told the human to reload, which was never true.
-    source.onopen = () => set({ live: true });
+    // Re-fetch on every (re)open: synthetic presence frames (listeners,
+    // context) are broadcast only to connected clients and never replayed, so
+    // anything reported while the stream was down would otherwise stay stale
+    // until the next report. bootstrap() is seq-guarded, so the extra fetch at
+    // first open is harmless.
+    source.onopen = () => {
+      set({ live: true });
+      void bootstrap();
+    };
     source.onerror = () => set({ live: false });
 
     void bootstrap();

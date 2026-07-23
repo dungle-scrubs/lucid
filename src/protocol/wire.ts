@@ -170,11 +170,30 @@ export interface DiffResult {
   readonly mergedHtml: string;
 }
 
+/**
+ * Context-window usage the attending harness self-reports (its statusline
+ * posts it; the model cannot read its own usage). Advisory presence, like the
+ * attendant record: shown when reported, absent otherwise, so a non-reporting
+ * harness simply has no ring.
+ */
+export interface ContextUsage {
+  /** 0..100 fill for the ring; derived from used/total when only those given. */
+  readonly pct: number;
+  /** Input tokens used, for the tooltip. */
+  readonly used?: number;
+  /** Context-window size, for the tooltip. */
+  readonly total?: number;
+  /** When the harness reported it (ISO-8601). */
+  readonly at: string;
+}
+
 /** `/__lucid/state` response: the full folded payload plus viewer presence. */
 export interface StateResponse extends WaitPayload {
   /** Agents currently blocked in `wait` on this session. */
   readonly agentsListening: number;
   readonly lastAttendant?: AttendantRef;
+  /** Last-reported context-window usage of the attending harness, if any. */
+  readonly contextUsage?: ContextUsage;
 }
 
 /** `/__lucid/sessions` response. */

@@ -105,6 +105,24 @@ test("lucid progress renders a distinct fan-out indicator that output clears", a
   await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
 });
 
+test("context usage renders a header ring that updates live", async ({ page }) => {
+  await openViewer(page);
+
+  // No report yet -> no ring.
+  await expect(page.locator('[data-test="context-ring"]')).toHaveCount(0);
+
+  // The harness (its statusline) reports usage; the ring appears via SSE.
+  await cli.run(["context", cli.artifact, "--used", "142000", "--total", "200000"]);
+  const ring = page.locator('[data-test="context-ring"]');
+  await expect(ring).toBeVisible();
+  await expect(ring).toHaveAttribute("data-pct", "71");
+  await expect(ring).toHaveAttribute("title", /71% used.*142k\/200k/);
+
+  // A later report updates the same ring in place.
+  await cli.run(["context", cli.artifact, "--pct", "90"]);
+  await expect(ring).toHaveAttribute("data-pct", "90");
+});
+
 test("fork button spins the selection off; the request reaches wait as a fork", async ({
   page,
 }) => {

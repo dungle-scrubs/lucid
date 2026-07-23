@@ -8,6 +8,7 @@ import { readEvents } from "../core/log.ts";
 import { sessionPaths } from "../core/paths.ts";
 import type { WaitPayload } from "../core/payload.ts";
 import { sanitizeProgress } from "../core/progress.ts";
+import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { ensureSessionDirs, openSession } from "../core/session.ts";
 import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
@@ -16,7 +17,7 @@ import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
-import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
+import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { openBrowser, spawnServer, stopServer, waitForServer } from "./self.ts";
 
@@ -149,6 +150,47 @@ export const runProgress = async (
   print({ ok: true, progress: cleaned });
 };
 
+/**
+ * `lucid context <file> [--pct <n>] [--used <n>] [--total <m>]` - report the
+ * attending harness's context-window usage, drawn from its statusline (the only
+ * place the real figure exists; the model cannot read its own). Renders as the
+ * header ring. POSTs to the live server so it broadcasts, or writes the sidecar
+ * directly when no daemon answers - the same live-or-direct rule as `deliver`,
+ * but for a last-value sidecar rather than a log event.
+ */
+export const runContext = async (
+  file: string,
+  usage: { pct?: number; used?: number; total?: number },
+): Promise<void> => {
+  const paths = sessionPaths(file);
+  const clean = sanitizeContext(usage);
+  if (!clean) {
+    print({ ok: false, error: "context needs a --pct, or --used with --total" });
+    return;
+  }
+  const live = await discoverLiveServer(paths);
+  if (live) {
+    try {
+      const res = await loopbackFetch(live.port, "/__lucid/context", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(usage),
+      });
+      // A stale daemon (older build, no /__lucid/context) 404s, and one that
+      // dies mid-request throws - either way fall through to the direct write
+      // rather than report a success that never landed.
+      if (res.ok) {
+        print({ ok: true, live: true, context: clean });
+        return;
+      }
+    } catch {
+      /* server vanished between handshake and post - use the sidecar */
+    }
+  }
+  await writeContextSidecar(paths, { ...clean, at: new Date().toISOString() });
+  print({ ok: true, live: false, context: clean });
+};
+
 /** `lucid ask <file> --text "..." [--ref <id>]` - pose a question to the human. */
 export const runAsk = async (file: string, text: string, ref?: string): Promise<void> => {
   const paths = sessionPaths(file);
@@ -278,6 +320,7 @@ export const runStatus = async (): Promise<void> => {
       open: "lucid open <file>",
       wait: "lucid wait <file> [--since <cursor>] [--reply <msg>] [--harness <id>] [--resume <cmd>]",
       progress: "lucid progress <file> [--label <text>] [--total <n>] [--done <n>]",
+      context: "lucid context <file> [--pct <n>] [--used <n>] [--total <m>]",
       end: "lucid end <file>",
     },
   });

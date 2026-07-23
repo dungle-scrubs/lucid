@@ -75,6 +75,67 @@ const Crosshair = ({ on }: { readonly on: boolean }) => (
   </svg>
 );
 
+const fmtTokens = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+
+/**
+ * The attending agent's context-window usage, as a small ring. Calm steel while
+ * there's headroom, amber past 60%, rust near the limit - so it only draws the
+ * eye as the window fills. Presence, self-reported by the harness's statusline:
+ * absent (no ring) whenever nothing has been reported, e.g. under a harness that
+ * does not post it. Sage never appears here - that hue is the agent's voice.
+ */
+const ContextRing = () => {
+  const usage = useLucid((s) => s.contextUsage);
+  if (!usage) return null;
+  const pct = Math.max(0, Math.min(100, usage.pct));
+  const r = 7;
+  const circumference = 2 * Math.PI * r;
+  const color =
+    pct >= 85
+      ? "var(--color-danger)"
+      : pct >= 60
+        ? "var(--color-amber-400)"
+        : "var(--color-steel-400)";
+  const tokens =
+    usage.used !== undefined && usage.total !== undefined
+      ? ` · ${fmtTokens(usage.used)}/${fmtTokens(usage.total)} tokens`
+      : "";
+  return (
+    <span
+      data-test="context-ring"
+      data-pct={Math.round(pct)}
+      role="img"
+      aria-label={`Agent context: ${Math.round(pct)}% used${tokens}`}
+      title={`Agent context: ${Math.round(pct)}% used${tokens}`}
+      className="inline-flex flex-none items-center"
+    >
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <circle
+          cx="9"
+          cy="9"
+          r={r}
+          fill="none"
+          stroke="var(--color-steel-600)"
+          strokeOpacity="0.5"
+          strokeWidth="2.5"
+        />
+        <circle
+          cx="9"
+          cy="9"
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - pct / 100)}
+          transform="rotate(-90 9 9)"
+        />
+      </svg>
+    </span>
+  );
+};
+
 /**
  * Approve lives here, not under the composer: it ends the review - a session
  * decision alongside the version, the change view and the target toggle - and
@@ -245,6 +306,7 @@ export const Header = () => {
         >
           <Crosshair on={showTargets} />
         </button>
+        <ContextRing />
         <VersionPicker />
         <ApproveControls />
       </div>

@@ -26,6 +26,9 @@ export interface SessionPaths {
   readonly serverJson: string;
   /** The detached per-session server's stdout/stderr log. */
   readonly serverLog: string;
+  /** Last-value context-usage sidecar (advisory presence, overwritten each
+   *  report - never a log event, since usage updates every turn). */
+  readonly contextSidecar: string;
 }
 
 /** Slugify the artifact basename (strip the final extension). */
@@ -56,6 +59,7 @@ export const sessionPaths = (input: string): SessionPaths => {
     pastedDir: resolve(sessionDir, "pasted"),
     serverJson: resolve(sessionDir, "server.json"),
     serverLog: resolve(sessionDir, "server.out.log"),
+    contextSidecar: resolve(sessionDir, "context.json"),
   };
 };
 

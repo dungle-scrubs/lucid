@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { parseAnchor } from "../anchors/anchor.ts";
 import { readLastAttendant } from "../core/attendant.ts";
+import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
 import { foldLog, versionRef } from "../core/fold.ts";
 import type { EventInput, LogEvent, PromptImage } from "../core/events.ts";
@@ -12,7 +13,7 @@ import { listSessions, projectRoot } from "../core/sessions.ts";
 import { ServerError } from "../errors.ts";
 import { assemblePayload } from "../core/payload.ts";
 import { commitWatchedChange } from "../core/session.ts";
-import type { SessionsResponse, StateResponse } from "../protocol/wire.ts";
+import type { ContextUsage, SessionsResponse, StateResponse } from "../protocol/wire.ts";
 import { sanitizeProgress } from "../core/progress.ts";
 import {
   CHROME_BUNDLE,
@@ -181,6 +182,12 @@ export const runServer = async (
   const currentVersion = async (): Promise<number> => {
     const state = foldLog((await readEvents(paths.logPath)).events);
     return state.version;
+  };
+
+  /** Synthetic frame (like `listeners`): the latest reported context usage, so
+   *  the header ring updates live without a full state re-fetch. */
+  const broadcastContext = (usage: ContextUsage): void => {
+    broadcastRaw(encoder.encode(`event: context\ndata: ${JSON.stringify(usage)}\n\n`));
   };
 
   // ---- request handling -----------------------------------------------------
@@ -443,6 +450,18 @@ export const runServer = async (
     return json({ ok: true });
   };
 
+  const handleContext = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    const clean = body ? sanitizeContext(body) : undefined;
+    if (!clean) return json({ error: "invalid context" }, 400);
+    const usage: ContextUsage = { ...clean, at: new Date().toISOString() };
+    // Sidecar, not the log: usage is overwritten every turn (D-051 pattern).
+    await writeContextSidecar(paths, usage);
+    broadcastContext(usage);
+    touch();
+    return json({ ok: true });
+  };
+
   const stop = async (): Promise<void> => {
     if (stopped) return;
     stopped = true;
@@ -549,6 +568,7 @@ export const runServer = async (
       // Who last took delivery, from the advisory sidecars: display data for
       // the chrome's resume affordance, never something the server executes.
       const attendant = await readLastAttendant(paths);
+      const contextUsage = await readContextSidecar(paths);
       const response: StateResponse = {
         ...payload,
         agentsListening: agentClients.size,
@@ -561,6 +581,7 @@ export const runServer = async (
               },
             }
           : {}),
+        ...(contextUsage ? { contextUsage } : {}),
       };
       return json(response);
     }
@@ -594,6 +615,7 @@ export const runServer = async (
     }
     if (pathname === "/__lucid/reply" && req.method === "POST") return handleReply(req);
     if (pathname === "/__lucid/ack" && req.method === "POST") return handleAck(req);
+    if (pathname === "/__lucid/context" && req.method === "POST") return handleContext(req);
     if (pathname === "/__lucid/resolve" && req.method === "POST") {
       await serverAppend([{ t: "review_resolved" }]);
       return json({ ok: true });

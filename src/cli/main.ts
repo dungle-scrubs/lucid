@@ -7,6 +7,7 @@ import {
   runAsk,
   runIntent,
   runProgress,
+  runContext,
   runEnd,
   runLaunchCli,
   runOpen,
@@ -126,6 +127,22 @@ const progressCommand = Command.make(
     ),
 );
 
+const ctxPct = Options.integer("pct").pipe(Options.optional);
+const ctxUsed = Options.integer("used").pipe(Options.optional);
+const ctxTotal = Options.integer("total").pipe(Options.optional);
+const contextCommand = Command.make(
+  "context",
+  { file: fileArg, pct: ctxPct, used: ctxUsed, total: ctxTotal },
+  ({ file, pct, used, total }) =>
+    runEffect(() =>
+      runContext(file, {
+        pct: Option.getOrUndefined(pct),
+        used: Option.getOrUndefined(used),
+        total: Option.getOrUndefined(total),
+      }),
+    ),
+);
+
 const serveCommand = Command.make("__serve", { file: fileArg }, ({ file }) =>
   runEffect(() => runServe(file)),
 );
@@ -171,6 +188,7 @@ const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe
     askCommand,
     intentCommand,
     progressCommand,
+    contextCommand,
     serveCommand,
     planCommand,
   ]),

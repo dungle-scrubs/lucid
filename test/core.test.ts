@@ -12,6 +12,7 @@ import { parseAnchor } from "../src/anchors/anchor.ts";
 import { parseCursor, renderCursor } from "../src/core/cursor.ts";
 import { foldLog } from "../src/core/fold.ts";
 import { sanitizeProgress } from "../src/core/progress.ts";
+import { sanitizeContext } from "../src/core/context.ts";
 import type { LogEvent } from "../src/core/events.ts";
 import { hashContent, validateStructure } from "../src/core/version.ts";
 
@@ -194,6 +195,34 @@ describe("sanitizeProgress", () => {
     expect(sanitizeProgress({ label: "" })).toBeUndefined();
     expect(sanitizeProgress(null)).toBeUndefined();
     expect(sanitizeProgress("nope")).toBeUndefined();
+  });
+});
+
+describe("sanitizeContext", () => {
+  test("takes an explicit pct, clamped to 0..100", () => {
+    expect(sanitizeContext({ pct: 71 })).toEqual({ pct: 71 });
+    expect(sanitizeContext({ pct: 140 })).toEqual({ pct: 100 });
+    expect(sanitizeContext({ pct: -5 })).toEqual({ pct: 0 });
+  });
+  test("derives pct from used/total and keeps them for the tooltip", () => {
+    expect(sanitizeContext({ used: 142000, total: 200000 })).toEqual({
+      pct: 71,
+      used: 142000,
+      total: 200000,
+    });
+  });
+  test("prefers an explicit pct over the derived one", () => {
+    expect(sanitizeContext({ pct: 50, used: 142000, total: 200000 })).toEqual({
+      pct: 50,
+      used: 142000,
+      total: 200000,
+    });
+  });
+  test("returns undefined when no fill fraction can be established", () => {
+    expect(sanitizeContext({ used: 142000 })).toBeUndefined(); // total missing
+    expect(sanitizeContext({ used: -1, total: 200000 })).toBeUndefined();
+    expect(sanitizeContext({})).toBeUndefined();
+    expect(sanitizeContext({ pct: Number.NaN })).toBeUndefined();
   });
 });
 
