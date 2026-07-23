@@ -1,4 +1,5 @@
 import type { Anchor } from "../anchors/anchor.ts";
+import type { AgentProgress } from "../protocol/wire.ts";
 
 /**
  * Event log schema (RFC §7). The NDJSON log is the single source of truth.
@@ -121,6 +122,13 @@ export interface AgentAckEvent extends BaseEvent {
    * still only closes on real output.
    */
   readonly intent?: "revise" | "reply";
+  /**
+   * Optional fan-out progress, self-reported when the agent farms the revision
+   * out to parallel subagents (read-only audits, a workflow). Re-acked as tasks
+   * report so `done` climbs. Purely advisory presence, like `intent`: the window
+   * still only closes on real output, and a crashed orchestrator goes stale.
+   */
+  readonly progress?: AgentProgress;
 }
 
 /**

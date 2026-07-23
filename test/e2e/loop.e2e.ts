@@ -76,6 +76,35 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
   expect(afterRevise.version).toBe(2);
 });
 
+test("lucid progress renders a distinct fan-out indicator that output clears", async ({ page }) => {
+  await openViewer(page);
+
+  // The agent farms the revision out to parallel subagents and self-reports.
+  await cli.run(["progress", cli.artifact, "--label", "auditing 7 screens", "--total", "7"]);
+  const fanout = page.locator('[data-test="agent-working"][data-fanout="true"]');
+  await expect(fanout).toBeVisible();
+  await expect(fanout).toContainText("7 agents in progress");
+  await expect(fanout).toContainText("0/7 reported");
+  await expect(fanout).toContainText("auditing 7 screens");
+
+  // A later report bumps the count in place.
+  await cli.run([
+    "progress",
+    cli.artifact,
+    "--label",
+    "auditing 7 screens",
+    "--total",
+    "7",
+    "--done",
+    "3",
+  ]);
+  await expect(fanout).toContainText("3/7 reported");
+
+  // Real output (a new version) closes the window entirely.
+  await cli.write(PLAN_V2);
+  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+});
+
 test("fork button spins the selection off; the request reaches wait as a fork", async ({
   page,
 }) => {

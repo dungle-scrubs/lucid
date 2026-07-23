@@ -139,6 +139,17 @@ Never fake the review loop, and never paste build instructions at the user.
      write -> the viewer live-reloads) and/or reply with
      `lucid wait <file> --reply "<what you changed>" --since <cursor>`. Persist the
      new `nextCursor` and loop.
+     - **If you farm the revision out to parallel subagents** (read-only audits,
+       a workflow), tell the viewer so the human sees *why* the wait is long.
+       At fan-out start, and again each time a subagent reports, call:
+       ```
+       lucid progress <file> --label "auditing 7 screens against the spec" --total 7 --done 2
+       ```
+       The viewer switches from a lone spinner to "**7 agents in progress · 2/7
+       reported**". It is advisory presence, not output: the window closes on its
+       own when you write the new version or reply, and goes stale if you crash.
+       Report it faithfully - never post a `--total`/`--done` that does not match
+       the subagents actually running.
    - `status: "waiting"` -> wait again.
    - `status: "suspended"` -> stop the loop; tell the user the review is paused and
      that reopening it resumes; end your turn. Do not busy-loop.

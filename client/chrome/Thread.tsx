@@ -276,6 +276,42 @@ const WorkingIndicator = () => {
   const mm = Math.floor(elapsed / 60000);
   const ss = String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0");
 
+  // Fan-out: the agent self-reported parallel subagents working the revision.
+  // A distinct rendering (agent-colored dots + counts) so the human reads "many
+  // agents in flight, this will take a bit" rather than a lone spinner.
+  const progress = working.progress;
+  if (progress && !stale) {
+    const { label, total, done } = progress;
+    return (
+      <div
+        data-test="agent-working"
+        data-fanout="true"
+        data-stale="false"
+        className="flex flex-col gap-0.5 text-[12px]"
+      >
+        <div className="flex items-baseline gap-1.5">
+          <span aria-hidden className="animate-pulse text-agent tracking-[0.2em]">
+            ●●●
+          </span>
+          <span className="shimmer text-fg/40">
+            {total ? `${total} agents in progress…` : "agents in progress…"}
+          </span>
+          {total ? (
+            <span className="text-[11px] text-fg-faint tabular-nums">
+              {/* total and done can arrive on separate acks, so clamp here -
+                  the one place that sees both - rather than trust done<=total. */}
+              {Math.min(done ?? 0, total)}/{total} reported
+            </span>
+          ) : null}
+          <span className="text-[11px] text-fg-faint tabular-nums">
+            ({mm}:{ss})
+          </span>
+        </div>
+        {label ? <span className="text-[11px] text-fg-muted">{label}</span> : null}
+      </div>
+    );
+  }
+
   return (
     <div
       data-test="agent-working"
@@ -284,7 +320,8 @@ const WorkingIndicator = () => {
     >
       {stale ? (
         <span className="text-fg-muted">
-          agent picked up your feedback {mm}m ago · no response yet
+          {progress ? "agents picked up" : "agent picked up"} your feedback {mm}m ago · no response
+          yet
         </span>
       ) : (
         <>

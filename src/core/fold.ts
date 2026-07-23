@@ -1,5 +1,5 @@
 import type { Anchor } from "../anchors/anchor.ts";
-import type { AgentWorking } from "../protocol/wire.ts";
+import type { AgentProgress, AgentWorking } from "../protocol/wire.ts";
 import type { LogEvent, PromptImage } from "./events.ts";
 import { maxSeq } from "./log.ts";
 
@@ -286,19 +286,30 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   // Separate pass so the content fold above stays untouched by metadata.
   let workingSince: string | null = null;
   let workingIntent: "revise" | "reply" | undefined;
+  let workingProgress: AgentProgress | undefined;
   for (const e of segmentEvents) {
     if (e.t === "agent_ack") {
-      // A re-ack refines the open window (declared intent) without restarting
-      // its clock; the first ack's time is when delivery happened.
+      // A re-ack refines the open window (declared intent + fan-out progress)
+      // without restarting its clock; the first ack's time is when delivery
+      // happened. Progress is last-writer-wins so `done` can climb across acks.
       workingSince = workingSince ?? e.at;
       if (e.intent) workingIntent = e.intent;
+      // Merge, don't replace: fields arrive on separate acks (start with
+      // --total, later bump --done), so each refines the report rather than
+      // wiping the ones it omits.
+      if (e.progress) workingProgress = { ...workingProgress, ...e.progress };
     } else if (e.t === "version" || e.t === "agent_reply" || e.t === "question") {
       workingSince = null;
       workingIntent = undefined;
+      workingProgress = undefined;
     }
   }
   const agentWorking = workingSince
-    ? { since: workingSince, ...(workingIntent ? { intent: workingIntent } : {}) }
+    ? {
+        since: workingSince,
+        ...(workingIntent ? { intent: workingIntent } : {}),
+        ...(workingProgress ? { progress: workingProgress } : {}),
+      }
     : null;
 
   return {

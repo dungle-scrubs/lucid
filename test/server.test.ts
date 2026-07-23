@@ -335,6 +335,44 @@ describe("server routes + security", () => {
     expect(state.agentWorking).toBeNull();
   });
 
+  test("ack carries self-reported fan-out progress through to the folded window", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+
+    // `lucid progress` delivers an ack whose body carries a progress struct.
+    await post("/__lucid/ack", {
+      id: "p-1",
+      progress: { label: "auditing 7 screens", total: 7, done: 0 },
+    });
+    let state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.agentWorking?.progress).toEqual({
+      label: "auditing 7 screens",
+      total: 7,
+      done: 0,
+    });
+
+    // A later report bumps done in place (last-writer-wins, clock unchanged).
+    const since = state.agentWorking?.since;
+    await post("/__lucid/ack", {
+      id: "p-2",
+      progress: { label: "auditing 7 screens", total: 7, done: 3 },
+    });
+    state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.agentWorking?.progress?.done).toBe(3);
+    expect(state.agentWorking?.since).toBe(since!);
+
+    // Garbage counts are dropped, not trusted into the window.
+    await post("/__lucid/ack", { id: "p-3", progress: { total: -4, done: Number.NaN } });
+    state = foldLog((await readEvents(paths.logPath)).events);
+    // No usable fields -> the ack carries no progress, so the prior one stands.
+    expect(state.agentWorking?.progress?.done).toBe(3);
+  });
+
   test("state exposes the last attendant so the viewer can offer its resume command", async () => {
     await startServer();
     // Nothing has attended: the affordance has nothing to show, and says so by

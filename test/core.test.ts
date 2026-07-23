@@ -11,6 +11,7 @@ import type { ElementAnchor, RangeAnchor } from "../src/anchors/anchor.ts";
 import { parseAnchor } from "../src/anchors/anchor.ts";
 import { parseCursor, renderCursor } from "../src/core/cursor.ts";
 import { foldLog } from "../src/core/fold.ts";
+import { sanitizeProgress } from "../src/core/progress.ts";
 import type { LogEvent } from "../src/core/events.ts";
 import { hashContent, validateStructure } from "../src/core/version.ts";
 
@@ -176,6 +177,26 @@ describe("parseAnchor", () => {
   });
 });
 
+describe("sanitizeProgress", () => {
+  test("keeps a clean report and floors counts", () => {
+    expect(sanitizeProgress({ label: "auditing", total: 7, done: 3.9 })).toEqual({
+      label: "auditing",
+      total: 7,
+      done: 3,
+    });
+  });
+  test("drops negative, non-finite, and non-numeric counts", () => {
+    // Guards the no-daemon direct-append path, which never hits the server.
+    expect(sanitizeProgress({ total: -4, done: Number.NaN })).toBeUndefined();
+    expect(sanitizeProgress({ label: "x", total: -1, done: "3" })).toEqual({ label: "x" });
+  });
+  test("returns undefined when nothing usable survives", () => {
+    expect(sanitizeProgress({ label: "" })).toBeUndefined();
+    expect(sanitizeProgress(null)).toBeUndefined();
+    expect(sanitizeProgress("nope")).toBeUndefined();
+  });
+});
+
 describe("foldLog segments", () => {
   const ev = (e: Partial<LogEvent> & { t: LogEvent["t"]; seq: number }): LogEvent =>
     ({ at: "2026-01-01T00:00:00Z", ...e }) as LogEvent;
@@ -212,6 +233,51 @@ describe("foldLog segments", () => {
     expect(s.version).toBe(2);
     expect(s.annotations.length).toBe(1);
     expect(s.highSeq).toBe(3);
+  });
+
+  test("agent_ack progress accumulates last-writer-wins and closes on output", () => {
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    // Fan-out start, then a bump as a subagent reports.
+    const start = ev({
+      t: "agent_ack",
+      seq: 2,
+      id: "a1",
+      progress: { label: "auditing 7 screens", total: 7, done: 0 },
+    } as never);
+    // A later bump carries ONLY --done; total + label must survive the merge.
+    const bump = ev({
+      t: "agent_ack",
+      seq: 3,
+      id: "a2",
+      progress: { done: 3 },
+    } as never);
+
+    const open = foldLog([opened, start, bump]);
+    expect(open.agentWorking?.progress).toEqual({
+      label: "auditing 7 screens",
+      total: 7,
+      done: 3,
+    });
+    // The first ack's time is the window's `since`; a re-ack does not restart it.
+    expect(open.agentWorking?.since).toBe("2026-01-01T00:00:00Z");
+
+    // Any real output closes the window and clears progress.
+    const version = ev({
+      t: "version",
+      seq: 4,
+      version: 2,
+      hash: "h2",
+      path: "versions/s1/v2.html",
+    } as never);
+    expect(foldLog([opened, start, bump, version]).agentWorking).toBeNull();
   });
 
   test("folds fork requests separately from annotations", () => {
