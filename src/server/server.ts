@@ -75,6 +75,27 @@ const parseImages = (input: unknown): PromptImage[] => {
   return out;
 };
 
+/** Validate an untrusted structured-question `options` array into clean
+ *  choices, dropping any without a non-empty string label. */
+const parseQuestionOptions = (input: unknown): { label: string; description?: string }[] => {
+  if (!Array.isArray(input)) return [];
+  const out: { label: string; description?: string }[] = [];
+  for (const item of input) {
+    if (item && typeof item === "object") {
+      const o = item as Record<string, unknown>;
+      if (typeof o.label === "string" && o.label.trim().length > 0) {
+        out.push({
+          label: o.label.trim(),
+          ...(typeof o.description === "string" && o.description.length > 0
+            ? { description: o.description }
+            : {}),
+        });
+      }
+    }
+  }
+  return out;
+};
+
 /** Paths the browser/crawler requests on its own (not referenced by the
  *  artifact). They are answered without a missing-asset warning. */
 const BROWSER_PROBES = new Set([
@@ -339,12 +360,15 @@ export const runServer = async (
     ) {
       return json({ error: "invalid question" }, 400);
     }
+    const options = parseQuestionOptions(body.options);
     await serverAppend([
       {
         t: "question",
         id: body.id,
         text: body.text,
         ...(typeof body.ref === "string" ? { ref: body.ref } : {}),
+        ...(options.length > 0 ? { options } : {}),
+        ...(body.multi === true && options.length > 0 ? { multi: true } : {}),
       },
     ]);
     return json({ ok: true });
@@ -356,13 +380,34 @@ export const runServer = async (
       !body ||
       typeof body.id !== "string" ||
       typeof body.questionId !== "string" ||
-      typeof body.text !== "string" ||
-      body.text.trim() === ""
+      typeof body.text !== "string"
     ) {
       return json({ error: "invalid answer" }, 400);
     }
+    const text = body.text;
+    // An answer can be text, chosen option labels, an artifact reference, and/or
+    // images. Options and anchor are reused from the same validators as
+    // annotations; empty labels are dropped.
+    const options = Array.isArray(body.options)
+      ? body.options.filter((o): o is string => typeof o === "string" && o.length > 0)
+      : [];
+    const anchorIn = body.anchor === undefined ? undefined : parseAnchor(body.anchor);
+    if (anchorIn && "error" in anchorIn) return json({ error: anchorIn.error }, 400);
+    const images = parseImages(body.images);
+    // Must carry something: bare empty submissions are rejected.
+    if (text.trim() === "" && options.length === 0 && !anchorIn && images.length === 0) {
+      return json({ error: "empty answer" }, 400);
+    }
     await serverAppend([
-      { t: "question_answered", id: body.id, questionId: body.questionId, text: body.text },
+      {
+        t: "question_answered",
+        id: body.id,
+        questionId: body.questionId,
+        text,
+        ...(options.length > 0 ? { options } : {}),
+        ...(anchorIn ? { anchor: anchorIn } : {}),
+        ...(images.length > 0 ? { images } : {}),
+      },
     ]);
     return json({ ok: true });
   };

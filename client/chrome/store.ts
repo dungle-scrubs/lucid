@@ -130,6 +130,18 @@ interface LucidState {
   lightboxIndex: number;
   questions: AgentQuestion[];
   answerDrafts: Record<string, string>;
+  /** Option labels the human has selected per question (structured answers). */
+  answerOptions: Record<string, string[]>;
+  /** A pinned artifact region attached to a question's answer, by question id. */
+  answerAnchors: Record<string, Anchor>;
+  /** Images staged on a question's answer, by question id. */
+  answerImages: Record<string, PastedImage[]>;
+  /** Count of in-flight answer-image uploads per question; submission waits on
+   *  it so a just-picked image is never dropped by the send race. */
+  answerUploading: Record<string, number>;
+  /** The question currently awaiting an artifact pick, or null. While set, the
+   *  next overlay target-pick attaches to that answer instead of the composer. */
+  answerPickFor: string | null;
 }
 
 const initial: LucidState = {
@@ -174,6 +186,11 @@ const initial: LucidState = {
   lightboxIndex: 0,
   questions: [],
   answerDrafts: {},
+  answerOptions: {},
+  answerAnchors: {},
+  answerImages: {},
+  answerUploading: {},
+  answerPickFor: null,
 };
 
 export const useLucid = create<LucidState>(() => initial);

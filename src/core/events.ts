@@ -1,5 +1,5 @@
 import type { Anchor } from "../anchors/anchor.ts";
-import type { AgentProgress } from "../protocol/wire.ts";
+import type { AgentProgress, QuestionOption } from "../protocol/wire.ts";
 
 /**
  * Event log schema (RFC §7). The NDJSON log is the single source of truth.
@@ -155,6 +155,10 @@ export interface QuestionEvent extends BaseEvent {
   readonly text: string;
   /** Optional `data-lucid-id` of the element the question is about. */
   readonly ref?: string;
+  /** Structured choices, when forwarding a multiple-choice question tool. */
+  readonly options?: readonly QuestionOption[];
+  /** Whether more than one option may be chosen. */
+  readonly multi?: boolean;
 }
 
 /** The human's answer to a question (browser POST). */
@@ -162,7 +166,15 @@ export interface QuestionAnsweredEvent extends BaseEvent {
   readonly t: "question_answered";
   readonly id: string;
   readonly questionId: string;
+  /** Free-text answer, or the "Other" text alongside chosen options. May be
+   *  empty when the human answered purely by selecting options. */
   readonly text: string;
+  /** Labels of the options the human chose. */
+  readonly options?: readonly string[];
+  /** A region of the artifact the human pinned as their answer's referent. */
+  readonly anchor?: Anchor;
+  /** Images the human attached to their answer. */
+  readonly images?: readonly PromptImage[];
 }
 
 export interface ReviewResolvedEvent extends BaseEvent {

@@ -192,7 +192,20 @@ export const runContext = async (
 };
 
 /** `lucid ask <file> --text "..." [--ref <id>]` - pose a question to the human. */
-export const runAsk = async (file: string, text: string, ref?: string): Promise<void> => {
+/** Parse a `--option "Label|explanation"` string into a structured choice. */
+const parseOption = (raw: string): { label: string; description?: string } | undefined => {
+  const sep = raw.indexOf("|");
+  const label = (sep === -1 ? raw : raw.slice(0, sep)).trim();
+  if (label.length === 0) return undefined;
+  const description = sep === -1 ? "" : raw.slice(sep + 1).trim();
+  return { label, ...(description.length > 0 ? { description } : {}) };
+};
+
+export const runAsk = async (
+  file: string,
+  text: string,
+  opts: { ref?: string; options?: readonly string[]; multi?: boolean } = {},
+): Promise<void> => {
   const paths = sessionPaths(file);
   const state = foldLog((await readEvents(paths.logPath)).events);
   if (state.status === "none") {
@@ -201,9 +214,22 @@ export const runAsk = async (file: string, text: string, ref?: string): Promise<
       detail: { path: paths.artifactPath },
     });
   }
+  const options = (opts.options ?? []).map(parseOption).filter((o) => o !== undefined);
   const id = randomId();
-  await deliver(paths, { t: "question", id, text, ...(ref ? { ref } : {}) });
-  print({ session: paths.artifactPath, asked: id, text });
+  await deliver(paths, {
+    t: "question",
+    id,
+    text,
+    ...(opts.ref ? { ref: opts.ref } : {}),
+    ...(options.length > 0 ? { options } : {}),
+    ...(opts.multi && options.length > 0 ? { multi: true } : {}),
+  });
+  print({
+    session: paths.artifactPath,
+    asked: id,
+    text,
+    ...(options.length > 0 ? { options } : {}),
+  });
 };
 
 /** `lucid end <file>` - terminal end of the session. */
@@ -319,6 +345,7 @@ export const runStatus = async (): Promise<void> => {
     usage: {
       open: "lucid open <file>",
       wait: "lucid wait <file> [--since <cursor>] [--reply <msg>] [--harness <id>] [--resume <cmd>]",
+      ask: 'lucid ask <file> --text "<q>" [--option "label|desc"]... [--multi] [--ref <id>]',
       progress: "lucid progress <file> [--label <text>] [--total <n>] [--done <n>]",
       context: "lucid context <file> [--pct <n>] [--used <n>] [--total <m>]",
       end: "lucid end <file>",

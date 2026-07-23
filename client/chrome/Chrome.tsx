@@ -111,6 +111,16 @@ export const Chrome = () => {
         // A historical snapshot is read-only: its DOM is not the live artifact,
         // so an anchor captured against it would point at nothing on return.
         if (get().viewingVersion !== null) return;
+        // Pinning a region for an open question's answer wins over starting a
+        // new annotation: the pick attaches to that answer and exits pick mode.
+        const pickFor = get().answerPickFor;
+        if (pickFor !== null) {
+          set((s) => ({
+            answerAnchors: { ...s.answerAnchors, [pickFor]: msg.anchor },
+            answerPickFor: null,
+          }));
+          return;
+        }
         // A new pick is a new fork: drop any stable fork id held for the prior pick.
         set({ pendingTarget: msg.anchor, forkId: null });
         pushHighlights();

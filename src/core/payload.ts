@@ -218,8 +218,23 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
             id: q.id,
             text: q.text,
             ...(q.ref ? { ref: q.ref } : {}),
+            ...(q.options && q.options.length > 0 ? { options: q.options } : {}),
+            ...(q.multi ? { multi: true } : {}),
             answered: q.answered,
-            ...(q.answer !== undefined ? { answer: q.answer } : {}),
+            ...(q.answer !== undefined && q.answer.length > 0 ? { answer: q.answer } : {}),
+            ...(q.answerOptions && q.answerOptions.length > 0
+              ? { answerOptions: q.answerOptions }
+              : {}),
+            ...(q.answerAnchor ? { answerAnchor: q.answerAnchor } : {}),
+            ...(q.answerImages && q.answerImages.length > 0
+              ? {
+                  answerImages: q.answerImages.map((img) => ({
+                    name: img.name,
+                    file: img.file,
+                    path: opts.snapshotAbsPath(pastedRelPath(img.file)),
+                  })),
+                }
+              : {}),
           })),
         }
       : {}),

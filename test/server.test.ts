@@ -406,6 +406,55 @@ describe("server routes + security", () => {
     expect(state.contextUsage.pct).toBe(71);
   });
 
+  test("structured question round-trips options and a rich answer", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+
+    // A multiple-choice question - options must survive the handler (not be
+    // stripped like the pre-fix ack/progress path).
+    await post("/__lucid/question", {
+      id: "q1",
+      text: "Which store for the cutover?",
+      options: [
+        { label: "Postgres", description: "managed, boring" },
+        { label: "SQLite", description: "embedded, WAL" },
+      ],
+    });
+    let state = await (await get("/__lucid/state")).json();
+    expect(state.questions[0].options).toHaveLength(2);
+    expect(state.questions[0].options[0].label).toBe("Postgres");
+
+    // An options-only answer (no free text) that also pins an artifact region.
+    const anchor = {
+      kind: "element",
+      fingerprint: "f",
+      domPath: "h1",
+      snippet: "<h1>Hello</h1>",
+    };
+    const ok = await post("/__lucid/answer", {
+      id: "a1",
+      questionId: "q1",
+      text: "",
+      options: ["Postgres"],
+      anchor,
+    });
+    expect(ok.status).toBe(200);
+    state = await (await get("/__lucid/state")).json();
+    expect(state.questions[0].answered).toBe(true);
+    expect(state.questions[0].answerOptions).toEqual(["Postgres"]);
+    expect(state.questions[0].answerAnchor.domPath).toBe("h1");
+    expect(state.questions[0].answer).toBeUndefined(); // empty text is omitted
+
+    // A truly empty answer (no text, options, anchor, or images) is rejected.
+    const empty = await post("/__lucid/answer", { id: "a2", questionId: "q1", text: "" });
+    expect(empty.status).toBe(400);
+  });
+
   test("lucid context falls back to the sidecar when no daemon is live", async () => {
     // No server running: runContext must still land the value on disk (the same
     // path a failed live POST falls through to) so a reopened viewer picks it up.

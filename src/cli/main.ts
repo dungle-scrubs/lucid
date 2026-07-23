@@ -92,10 +92,19 @@ const launchCommand = Command.make("launch", { file: fileArg, poll: pollOpt }, (
 
 const askText = Options.text("text");
 const askRef = Options.text("ref").pipe(Options.optional);
+const askOption = Options.text("option").pipe(Options.repeated);
+const askMulti = Options.boolean("multi").pipe(Options.withDefault(false));
 const askCommand = Command.make(
   "ask",
-  { file: fileArg, text: askText, ref: askRef },
-  ({ file, text, ref }) => runEffect(() => runAsk(file, text, Option.getOrUndefined(ref))),
+  { file: fileArg, text: askText, ref: askRef, option: askOption, multi: askMulti },
+  ({ file, text, ref, option, multi }) =>
+    runEffect(() =>
+      runAsk(file, text, {
+        ref: Option.getOrUndefined(ref),
+        options: option,
+        multi,
+      }),
+    ),
 );
 
 const intentArg = Args.choice(
