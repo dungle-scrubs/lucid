@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Anchor } from "../../src/anchors/anchor.ts";
-import type { AgentWorking, AttendantRef } from "../../src/protocol/wire.ts";
+import type { AgentWorking, AttendantRef, ContextUsage } from "../../src/protocol/wire.ts";
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
 import type {
   AgentQuestion,
@@ -93,6 +93,9 @@ interface LucidState {
    *  that resumes their conversation when the harness recorded one. Display
    *  data only: resuming is the human's act, in their terminal. */
   lastAttendant: AttendantRef | null;
+  /** Last-reported context-window usage of the attending harness (its
+   *  statusline posts it). Presence, like lastAttendant: null = no ring. */
+  contextUsage: ContextUsage | null;
   /** SSE stream health. EventSource reconnects by itself, so this is a
    *  transient indicator, not an error the human has to act on. */
   live: boolean;
@@ -151,6 +154,7 @@ const initial: LucidState = {
   agentWorking: null,
   agentsListening: 0,
   lastAttendant: null,
+  contextUsage: null,
   live: true,
   chromeWidth: readStoredWidth(),
   sidebarOpen: readStoredSidebarOpen(),

@@ -176,3 +176,44 @@ command that resumes its conversation (including any autonomy flag, e.g.
 `lucid` listing surface it as `lastAttendant` so a human can copy the command
 and re-summon the original conversation themselves. It is display data only:
 Lucid never executes it, and re-invocation stays external (D-064).
+
+## Context-window usage (`lucid context`)
+
+`lucid context <file> [--pct <n>] [--used <n>] [--total <m>]` reports the
+attending harness's context-window usage. The viewer renders it as a small ring
+in the header - calm while there is headroom, amber past 60%, rust near the
+limit - so the human can see how much runway the agent has left mid-review. Pass
+`--pct` directly, or `--used`/`--total` (the ring derives the percentage and
+shows the token counts in its tooltip).
+
+It is advisory presence, stored in a last-value sidecar
+(`.lucid/<name>/context.json`), never a log event: usage updates every turn and
+must not bloat the append-only log. No report means no ring, so a harness that
+does not post usage simply has no ring - nothing to configure.
+
+**The number can only come from the harness, not the agent.** A model cannot
+read its own context-window usage; only the harness sees it (in Claude Code, the
+statusline payload's `context_window.used_percentage`). So the report is wired at
+the harness layer, not from the agent loop. A Claude Code statusline can post it
+in a few lines - best-effort, backgrounded so it never slows the statusline:
+
+```bash
+# In your statusline command, after computing used_pct from
+# .context_window.used_percentage:
+if [ -n "$used_pct" ] && [ -n "$cwd" ]; then
+  {
+    while IFS= read -r sj; do
+      port=$(jq -r '.port // empty' "$sj" 2>/dev/null)
+      [ -n "$port" ] || continue
+      curl -s -m 0.3 -o /dev/null \
+        -X POST "http://127.0.0.1:$port/__lucid/context" \
+        -H 'content-type: application/json' \
+        -d "{\"pct\": ${used_pct}}" 2>/dev/null
+    done < <(find "$cwd" -maxdepth 4 -type f -name server.json -path '*/.lucid/*' 2>/dev/null)
+  } &
+fi
+```
+
+This posts to every live Lucid session in the working tree by reading each
+session's `server.json` port and hitting `POST /__lucid/context`. The endpoint
+takes the same `{pct}` / `{used,total}` body as the CLI.

@@ -90,6 +90,7 @@ export const bootstrap = async (): Promise<void> => {
     agentWorking: payload.agentWorking ?? null,
     agentsListening: payload.agentsListening ?? 0,
     lastAttendant: payload.lastAttendant ?? null,
+    contextUsage: payload.contextUsage ?? null,
   });
   pushHighlights();
 };

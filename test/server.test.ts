@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeAttendantSidecar } from "../src/core/attendant.ts";
+import { readContextSidecar } from "../src/core/context.ts";
+import { runContext } from "../src/cli/run.ts";
 import { foldLog } from "../src/core/fold.ts";
 import { readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
@@ -371,6 +373,47 @@ describe("server routes + security", () => {
     state = foldLog((await readEvents(paths.logPath)).events);
     // No usable fields -> the ack carries no progress, so the prior one stands.
     expect(state.agentWorking?.progress?.done).toBe(3);
+  });
+
+  test("context usage posts to a sidecar and surfaces in /__lucid/state", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+
+    // Nothing reported yet -> no ring.
+    let state = await (await get("/__lucid/state")).json();
+    expect(state).not.toHaveProperty("contextUsage");
+
+    // A statusline-shaped report (raw tokens) is stored and echoed with a
+    // derived pct + a stamped `at`, without ever entering the log.
+    const before = (await readEvents(paths.logPath)).events.length;
+    const ok = await post("/__lucid/context", { used: 142000, total: 200000 });
+    expect(ok.status).toBe(200);
+    state = await (await get("/__lucid/state")).json();
+    expect(state.contextUsage.pct).toBe(71);
+    expect(state.contextUsage.used).toBe(142000);
+    expect(typeof state.contextUsage.at).toBe("string");
+    expect((await readEvents(paths.logPath)).events.length).toBe(before);
+
+    // A malformed report is rejected, and the last good value stands.
+    const bad = await post("/__lucid/context", { used: -1 });
+    expect(bad.status).toBe(400);
+    state = await (await get("/__lucid/state")).json();
+    expect(state.contextUsage.pct).toBe(71);
+  });
+
+  test("lucid context falls back to the sidecar when no daemon is live", async () => {
+    // No server running: runContext must still land the value on disk (the same
+    // path a failed live POST falls through to) so a reopened viewer picks it up.
+    await ensureSessionDirs(paths);
+    await runContext(paths.artifactPath, { pct: 88 });
+    const usage = await readContextSidecar(paths);
+    expect(usage?.pct).toBe(88);
+    expect(typeof usage?.at).toBe("string");
   });
 
   test("state exposes the last attendant so the viewer can offer its resume command", async () => {
