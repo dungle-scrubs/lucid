@@ -5,6 +5,7 @@ import { isOverlayMessage } from "../shared/protocol.ts";
 import {
   approveReview,
   exitDiff,
+  flushOutbox,
   gotoHunk,
   sendAll,
   setSidebarOpen,
@@ -17,6 +18,7 @@ import { Sessions } from "./Sessions.tsx";
 import {
   get,
   persistWidth,
+  pushWarning,
   set,
   useLucid,
   CHROME_MIN_WIDTH,
@@ -245,7 +247,7 @@ export const Chrome = () => {
     source.addEventListener("warning", (e) => {
       try {
         const w = JSON.parse((e as MessageEvent).data) as { code: string; message: string };
-        set((s) => ({ warnings: [...s.warnings, w] }));
+        pushWarning(w.code, w.message);
       } catch {
         /* ignore */
       }
@@ -268,6 +270,11 @@ export const Chrome = () => {
     source.onopen = () => {
       set({ live: true });
       void bootstrap();
+      // A live stream means the server is answering again, which is the only
+      // thing an undelivered message was waiting on. Fires on the first open
+      // too, so a message stranded by a closed tab leaves on the next load
+      // without the human having to notice it.
+      void flushOutbox();
     };
     source.onerror = () => set({ live: false });
 

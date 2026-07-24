@@ -1,8 +1,10 @@
 import { consumePastes, expandPastes } from "./pastes.ts";
 import {
   api,
+  forgetOutboxMessage,
   get,
   notice,
+  persistOutboxMessage,
   persistShowTargets,
   persistSidebarOpen,
   set,
@@ -11,7 +13,7 @@ import {
   warn,
 } from "./store.ts";
 import { applyDeferredSwapIfReady, pushHighlights, toOverlay } from "./surface.ts";
-import type { AgentQuestion, DiffData, SessionSummary } from "./types.ts";
+import type { AgentQuestion, DiffData, OutboxMessage, SessionSummary } from "./types.ts";
 
 /** Every mutation the human can make. Kept out of the components so the flow
  *  (and its ordering rules) reads in one place. */
@@ -218,6 +220,114 @@ export const sendAll = async (): Promise<void> => {
   await sendQueue();
 };
 
+// ---- message outbox -------------------------------------------------------
+
+/**
+ * The message composer's durability layer.
+ *
+ * assistant-ui empties the composer before `onNew` is called, so from that
+ * moment the human's typing exists in exactly one place. It used to be a local
+ * variable inside a failing POST - a disconnected server ate long prompts with
+ * nothing but a warning left behind. Now every submitted message is written
+ * here (and to localStorage) *before* the network is touched, and only leaves
+ * once the server has it. A message can therefore be late, but never lost.
+ */
+
+export const enqueueMessage = (text: string, images: OutboxMessage["images"]): void => {
+  const message: OutboxMessage = {
+    id: uuid(),
+    text,
+    images,
+    at: new Date().toISOString(),
+    failed: false,
+  };
+  // Storage first, state second. The gap between them is the only window in
+  // which a crash could still eat the message, and this ordering points it the
+  // harmless way: a saved-but-unrendered message is recovered on the next load,
+  // where a rendered-but-unsaved one would not be.
+  persistOutboxMessage(message);
+  set((s) => ({ outbox: [...s.outbox, message] }));
+};
+
+export const discardOutboxMessage = (id: string): void => {
+  forgetOutboxMessage(id);
+  set((s) => ({ outbox: s.outbox.filter((m) => m.id !== id) }));
+};
+
+/** Surface every entry still held, not just the one that failed. The rest are
+ *  equally undelivered, and leaving them `failed: false` hid them behind the
+ *  head - blocking approval with no card to retry or discard. */
+const markOutboxFailed = (): void => {
+  const next = get().outbox.map((m) => (m.failed ? m : { ...m, failed: true }));
+  for (const m of next) persistOutboxMessage(m);
+  set({ outbox: next });
+};
+
+/** Re-entrancy guard for the drain. A reconnect can land while the composer's
+ *  own flush is still running; two drains would post the same message twice
+ *  (harmless - ids dedupe server-side) and race on the outbox array (not). */
+let draining = false;
+
+/**
+ * Confirm the server answering at this address is still *our* session's.
+ *
+ * Ports come from a shared pool (PORT_POOL), so a session that goes away frees
+ * an address a different session can later bind. A stale tab's EventSource
+ * reconnects to that server perfectly happily - and posting there would hand
+ * the human's prompt to the wrong agent, working on the wrong artifact. A
+ * message that cannot be delivered is a nuisance; one delivered to the wrong
+ * place is worse than the loss this whole mechanism exists to prevent.
+ *
+ * Only a positive mismatch stops the flush: an unreachable server is the
+ * ordinary outage, and it should take the ordinary retry path.
+ */
+const anotherSessionAnswers = async (): Promise<boolean> => {
+  const identity = await api("/__lucid/identity")
+    .then((r) => r.json() as Promise<{ session?: unknown }>)
+    .catch(() => null);
+  return identity !== null && identity.session !== get().session;
+};
+
+/**
+ * Deliver the outbox, oldest first, stopping at the first failure so the record
+ * keeps the order it was written in. `api` has already retried with backoff by
+ * the time anything throws here, so a failure means the server is genuinely not
+ * answering; the entries stay put and say so.
+ */
+export const flushOutbox = async (): Promise<void> => {
+  if (draining || get().outbox.length === 0) return;
+  draining = true;
+  set({ outboxSending: true });
+  try {
+    if (await anotherSessionAnswers()) {
+      markOutboxFailed();
+      warn(
+        "A different session is running at this address now - your message was not sent to it. Copy it and paste it into the right viewer.",
+      );
+      return;
+    }
+    // Re-read the head each pass rather than iterate a snapshot: a message
+    // submitted *during* a drain (the composer flushing into a reconnect
+    // already in flight) appends to the outbox, and a snapshot would leave it
+    // sitting there unsent - and invisible, since it has not failed yet.
+    for (let m = get().outbox[0]; m !== undefined; m = get().outbox[0]) {
+      try {
+        // Ids are client-minted and deduped server-side, so re-sending one that
+        // actually landed (a lost response) appends nothing.
+        await api("/__lucid/message", { id: m.id, text: m.text, refs: [], images: m.images });
+      } catch {
+        markOutboxFailed();
+        warn("Your message didn't send - it's kept below, and you can retry it.");
+        return;
+      }
+      discardOutboxMessage(m.id);
+    }
+  } finally {
+    draining = false;
+    set({ outboxSending: false });
+  }
+};
+
 // ---- review lifecycle -----------------------------------------------------
 
 export const approveReview = async (): Promise<void> => {
@@ -227,7 +337,9 @@ export const approveReview = async (): Promise<void> => {
   const s = get();
   if (s.reviewResolved) return;
   const hasDraft = s.pendingTarget !== null && s.composerNote.trim().length > 0;
-  if (s.queue.length > 0 || hasDraft) {
+  // The outbox counts: a message the server never took is unsent feedback in
+  // exactly the sense this guard exists for.
+  if (s.queue.length > 0 || hasDraft || s.outbox.length > 0) {
     warn(
       "Send or discard your unsent feedback before approving - the agent stops reading once you do.",
     );

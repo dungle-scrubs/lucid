@@ -45,8 +45,39 @@ export interface QueuedAnnotation {
 }
 
 export interface WarningItem {
+  /** Stable per occurrence: the same warning can legitimately fire twice (two
+   *  failed sends), and keying the list by text alone collapsed them into one
+   *  React key. */
+  readonly id: string;
   readonly code: string;
   readonly message: string;
+}
+
+/** An image already uploaded to the session's store, as the wire takes it. */
+export interface OutboxImage {
+  readonly id: string;
+  readonly name: string;
+  readonly file: string;
+}
+
+/**
+ * A message the human submitted that is not in the log yet.
+ *
+ * assistant-ui empties the composer before it hands the message over, so by the
+ * time anything can fail the human's typing exists nowhere else. The outbox is
+ * that "nowhere else": written (and persisted) before the network is touched,
+ * cleared only once the server has the message. `text` is post-expansion - the
+ * paste map is tab-local, so a placeholder would not survive a reload.
+ */
+export interface OutboxMessage {
+  readonly id: string;
+  readonly text: string;
+  readonly images: readonly OutboxImage[];
+  readonly at: string;
+  /** An attempt has failed. Until then the entry is invisible: an in-flight
+   *  message is about to become a real one, and flashing a card for it would
+   *  make every normal send stutter. */
+  readonly failed: boolean;
 }
 
 /** One sibling session in this project, as `/__lucid/sessions` reports it -

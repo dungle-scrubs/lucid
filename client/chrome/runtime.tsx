@@ -7,8 +7,9 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import { useMemo, type ReactNode } from "react";
+import { enqueueMessage, flushOutbox } from "./actions.ts";
 import { consumePastes, expandPastes } from "./pastes.ts";
-import { api, buildTimeline, uploadAsset, useLucid, uuid, warn } from "./store.ts";
+import { buildTimeline, uploadAsset, useLucid } from "./store.ts";
 import type { TimelineItem } from "./types.ts";
 
 /**
@@ -129,9 +130,15 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
   );
 
   /**
-   * Posts and returns. No assistant message follows synchronously - the agent
-   * replies on its own schedule, and the reply reaches us through the SSE tail
-   * like any other log event.
+   * Records the message and returns. No assistant message follows synchronously
+   * - the agent replies on its own schedule, and the reply reaches us through
+   * the SSE tail like any other log event.
+   *
+   * assistant-ui empties the composer before it calls this, so by now the
+   * human's typing is gone from the only place it lived. Nothing here may risk
+   * it: the message goes into the (persisted) outbox first, and the network is
+   * touched only after. A failed send therefore leaves a card to retry, not a
+   * warning about text nobody has any more.
    */
   const onNew = async (message: AppendMessage): Promise<void> => {
     // A `[Pasted text #N +L lines]` placeholder leaves the composer as the
@@ -147,16 +154,14 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
       return meta ? [{ id: a.id, name: meta.name, file: meta.file }] : [];
     });
     if (text.length === 0 && images.length === 0) return;
-    // Forget the uploads only once the message referencing them is in the log,
-    // and let a failure propagate: api() has already retried, the composer is
-    // cleared by the time we are called, and swallowing here would report a
-    // send that never happened.
-    await api("/__lucid/message", { id: uuid(), text, refs: [], images }).catch((e: unknown) => {
-      warn("Your message didn't send - the agent has not seen it.");
-      throw e;
-    });
-    consumePastes(raw); // the placeholders this message used are spent now
+    enqueueMessage(text, images);
+    // Both are safe to retire now: the outbox holds the expanded text, and the
+    // uploads it references are already on disk under their stored names. The
+    // paste map is tab-local, so keeping placeholders alive for a retry would
+    // only make the retry weaker than the entry it retries.
+    consumePastes(raw);
     for (const a of message.attachments ?? []) uploaded.delete(a.id);
+    await flushOutbox();
   };
 
   const runtime = useExternalStoreRuntime({

@@ -8,6 +8,7 @@ import type {
   ConversationMessage,
   DiffData,
   MessageImage,
+  OutboxMessage,
   PastedImage,
   QueuedAnnotation,
   SessionSummary,
@@ -22,6 +23,18 @@ const config = (): Config => (window as unknown as { __LUCID__: Config }).__LUCI
 const CHROME_WIDTH_KEY = "lucid:chromeWidth";
 const SHOW_TARGETS_KEY = "lucid:showTargets";
 const SIDEBAR_OPEN_KEY = "lucid:sidebarOpen";
+/**
+ * One storage key per undelivered message, namespaced by session.
+ *
+ * Per session, so two viewers on different artifacts never inherit each other's
+ * messages. Per *message*, because the alternative - one key holding the whole
+ * array - makes every write a read-modify-write that two tabs on the same
+ * session will lose: tab B saves its array, silently erasing the message tab A
+ * had just written. Independent keys make the writes disjoint, so no tab can
+ * overwrite another's undelivered work.
+ */
+const OUTBOX_PREFIX = `lucid:outbox:${config().session}:`;
+const outboxKey = (id: string): string => `${OUTBOX_PREFIX}${id}`;
 export const DEFAULT_CHROME_WIDTH = 384;
 export const CHROME_MIN_WIDTH = 320;
 
@@ -55,6 +68,51 @@ const readStoredSidebarOpen = (): boolean => {
   }
 };
 
+const isOutboxImage = (v: unknown): v is { id: string; name: string; file: string } => {
+  const o = v as Record<string, unknown> | null;
+  return typeof o?.id === "string" && typeof o.name === "string" && typeof o.file === "string";
+};
+
+/** Storage is untrusted input (a stale schema, another tool's key, a truncated
+ *  write), and the outbox drives POSTs - so every field is checked rather than
+ *  cast. A malformed entry is dropped, never sent. */
+const isOutboxMessage = (v: unknown): v is OutboxMessage => {
+  const o = v as Record<string, unknown> | null;
+  return (
+    typeof o?.id === "string" &&
+    typeof o.text === "string" &&
+    typeof o.at === "string" &&
+    typeof o.failed === "boolean" &&
+    Array.isArray(o.images) &&
+    o.images.every(isOutboxImage)
+  );
+};
+
+/** Undelivered messages from a previous page life (this tab's or another's).
+ *  They outlive the tab on purpose: the whole point is that hitting Enter can
+ *  never destroy typing. Restored in authoring order, which is the order they
+ *  must reach the agent in. */
+const readStoredOutbox = (): OutboxMessage[] => {
+  try {
+    const found: OutboxMessage[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key === null || !key.startsWith(OUTBOX_PREFIX)) continue;
+      try {
+        const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "");
+        // A malformed entry is skipped, not deleted: it is unreadable to us but
+        // it is still the only copy of something a human typed.
+        if (isOutboxMessage(parsed)) found.push(parsed);
+      } catch {
+        /* not ours to interpret */
+      }
+    }
+    return found.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  } catch {
+    return [];
+  }
+};
+
 interface LucidState {
   annotations: PayloadAnnotationLike[];
   messages: ConversationMessage[];
@@ -77,6 +135,11 @@ interface LucidState {
    *  on a new pick or discard. */
   forkId: string | null;
   pastedImages: PastedImage[];
+  /** Messages submitted but not yet in the log, oldest first. Persisted, so a
+   *  dead server - or a closed tab - cannot swallow what was typed. */
+  outbox: OutboxMessage[];
+  /** The outbox is being drained right now (freezes its per-card actions). */
+  outboxSending: boolean;
   newerVersion: number | null;
   warnings: WarningItem[];
   /** Neutral, transient confirmations (e.g. a fork was recorded). */
@@ -159,6 +222,8 @@ const initial: LucidState = {
   forking: false,
   forkId: null,
   pastedImages: [],
+  outbox: readStoredOutbox(),
+  outboxSending: false,
   newerVersion: null,
   warnings: [],
   notices: [],
@@ -240,9 +305,14 @@ export const buildTimeline = (
 };
 
 /** Capped: EventSource reconnects on its own and can report the same outage
- *  repeatedly, so an unbounded list would grow state and DOM all through it. */
-export const warn = (message: string): void =>
-  set((s) => ({ warnings: [...s.warnings.slice(-4), { code: "SEND_FAILED", message }] }));
+ *  repeatedly, so an unbounded list would grow state and DOM all through it.
+ *  The one way a warning enters the list, so the cap and the id cannot be
+ *  skipped by a caller appending directly (the SSE `warning` frame did, and
+ *  grew without bound). */
+export const pushWarning = (code: string, message: string): void =>
+  set((s) => ({ warnings: [...s.warnings.slice(-4), { id: crypto.randomUUID(), code, message }] }));
+
+export const warn = (message: string): void => pushWarning("SEND_FAILED", message);
 
 /** A neutral, transient confirmation (distinct from a warning) - e.g. "forked".
  *  Capped like warnings so it never grows unbounded; carries a stable id so
@@ -334,6 +404,31 @@ export const persistShowTargets = (on: boolean): void => {
     localStorage.setItem(SHOW_TARGETS_KEY, on ? "1" : "0");
   } catch {
     /* storage unavailable; the toggle simply resets next load */
+  }
+};
+
+/** Write one undelivered message to storage. Unlike the other persisters this
+ *  one guards real data, so a failure (quota, private mode) is said out loud:
+ *  the entry still lives in memory, but it will not survive a reload and the
+ *  human is the only one who can act on that. */
+export const persistOutboxMessage = (message: OutboxMessage): void => {
+  try {
+    localStorage.setItem(outboxKey(message.id), JSON.stringify(message));
+  } catch {
+    pushWarning(
+      "DRAFT_AT_RISK",
+      "Couldn't save your unsent message to this browser - copy it before reloading.",
+    );
+  }
+};
+
+/** Drop one message from storage: it reached the log, or the human discarded
+ *  it. Silent on failure - there is nothing at stake in a delete that no-ops. */
+export const forgetOutboxMessage = (id: string): void => {
+  try {
+    localStorage.removeItem(outboxKey(id));
+  } catch {
+    /* storage unavailable; the entry was never written either */
   }
 };
 

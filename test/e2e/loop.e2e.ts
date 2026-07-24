@@ -873,6 +873,118 @@ test("a dropped live connection shows a self-clearing indicator, not a warning p
   await expect(page.locator('[data-test="reconnecting"]')).toHaveCount(0, { timeout: 15_000 });
 });
 
+test("a message sent at a dead server is kept, not eaten, and delivers itself on reconnect", async ({
+  page,
+}) => {
+  await openViewer(page);
+  const composer = page.locator('textarea[placeholder^="Message the agent"]');
+  const first = "Confirm the routing: Patch re-enters at Test, not Build.";
+  const second = "Also: Land is the right name for the phase, not Merge.";
+
+  // The server goes out from under the viewer - the failure this whole path
+  // exists for. The composer keeps working; only the POST cannot land.
+  await cli.run(["end", cli.artifact]);
+  await expect(page.locator('[data-test="reconnecting"]')).toBeVisible();
+
+  await composer.fill(first);
+  await page.locator('[data-test="send-message"]').click();
+
+  // assistant-ui empties the composer on Enter, so this card is the only place
+  // the typing still exists. It must exist.
+  await expect(page.locator('[data-test="unsent-message"]')).toContainText(first);
+  await expect(composer).toHaveValue("");
+  // ...and be recoverable by hand, not just by retry.
+  await expect(page.locator('[data-test="copy-unsent"]')).toBeVisible();
+
+  // A second message during the same outage gets its own card. Nothing may hide
+  // behind the first: an invisible entry still blocks approval, with no way to
+  // retry or discard it.
+  await composer.fill(second);
+  await page.locator('[data-test="send-message"]').click();
+  await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(2);
+
+  // Approving would strand them behind a stop the agent has already acted on.
+  await expect(page.locator('[data-test="approve"]')).toBeDisabled();
+  await expect(page.locator('[data-test="review-bar"]')).toContainText("2 undelivered messages");
+
+  // Durability is the claim, so prove it against a genuinely new JS instance
+  // rather than the one that did the typing: leave the origin entirely, bring
+  // the server back, and return. Nothing in memory survives that.
+  await page.goto("about:blank");
+  const reopened = (await cli.run(["open", cli.artifact])) as {
+    url: string;
+    nextCursor: string;
+  };
+  await page.goto(reopened.url);
+
+  // The restored outbox drains on its own - no gesture from the human - and both
+  // messages take their normal place in the record, in the order they were typed.
+  await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(0, { timeout: 20_000 });
+  const humanTurns = page.locator('[data-role="human"]');
+  await expect(humanTurns).toHaveCount(2);
+  await expect(humanTurns.first()).toContainText("Patch re-enters at Test");
+  await expect(humanTurns.last()).toContainText("Land is the right name");
+  await expect(page.locator('[data-test="approve"]')).toBeEnabled();
+
+  // And the agent actually receives them - the cards were never a consolation prize.
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    reopened.nextCursor,
+    "--timeout",
+    "8",
+  ])) as { status: string; messages: { role: string; text: string }[] };
+  expect(fb.status).toBe("feedback");
+  const delivered = fb.messages.filter((m) => m.role === "human").map((m) => m.text);
+  expect(delivered.some((t) => t.includes("Patch re-enters at Test"))).toBe(true);
+  expect(delivered.some((t) => t.includes("Land is the right name"))).toBe(true);
+});
+
+test("a stale viewer never posts its message into whichever session took its port", async ({
+  page,
+}) => {
+  await openViewer(page);
+  const stale = page.url();
+  const composer = page.locator('textarea[placeholder^="Message the agent"]');
+
+  // This session goes away, freeing its port back to the shared pool.
+  await cli.run(["end", cli.artifact]);
+  await expect(page.locator('[data-test="reconnecting"]')).toBeVisible();
+
+  await composer.fill("Renumber the phases in the overview.");
+  await page.locator('[data-test="send-message"]').click();
+  await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(1);
+
+  // A DIFFERENT artifact opens and takes that address. The stale tab's stream
+  // reconnects to it quite happily - but the message belongs to the old session,
+  // and delivering it here would hand it to the wrong agent.
+  const other = await makeCli(PLAN_V2);
+  try {
+    const otherSession = (await other.run(["open", other.artifact])) as {
+      url: string;
+      nextCursor: string;
+    };
+    test.skip(new URL(otherSession.url).port !== new URL(stale).port, "port was not reused");
+
+    await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(1);
+    await expect(page.locator("body")).toContainText("A different session is running");
+
+    // The other session's agent must see nothing at all.
+    const fb = (await other.run([
+      "wait",
+      other.artifact,
+      "--since",
+      otherSession.nextCursor,
+      "--timeout",
+      "2",
+    ])) as { messages?: { role: string }[] };
+    expect(fb.messages?.some((m) => m.role === "human") ?? false).toBe(false);
+  } finally {
+    await other.cleanup();
+  }
+});
+
 test("double-clicking the divider fits the surface to the document", async ({ page }) => {
   await openViewer(page);
   const divider = page.locator('[aria-label="Resize the review panel"]');

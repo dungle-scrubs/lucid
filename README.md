@@ -103,8 +103,12 @@ src/anchors    anchor resolution      skills/          agent skills
   describe a different version of the CLI than the one that wrote it.
 - **Stale-binary guard** - surface a bundle mismatch instead of relying on
   discipline.
-- **Draft persistence** - queued annotations are client memory; a reload before
-  sending loses them.
+- **Draft persistence** - submitted messages survive an outage and a reload (the
+  outbox), but queued annotations are still client memory: a reload before
+  sending loses them, along with their anchors and staged images.
+- **Viewer follows its session** - a session that reopens on a different port
+  strands the tab that was watching the old one. It reconnects to nothing, so
+  undelivered work waits there instead of delivering itself.
 - **Packaging** - prebuilt binaries and a published package.
 
 ## Thanks
