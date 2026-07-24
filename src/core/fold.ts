@@ -54,6 +54,7 @@ export interface QuestionRecord {
   readonly options?: readonly QuestionOption[];
   readonly multi?: boolean;
   readonly answered: boolean;
+  readonly skipped?: boolean;
   readonly answer?: string;
   readonly answerOptions?: readonly string[];
   readonly answerAnchor?: Anchor;
@@ -277,6 +278,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
             answered: true,
             answer: e.text,
             answerSeq: e.seq,
+            ...(e.skipped ? { skipped: true } : {}),
             ...(e.options && e.options.length > 0 ? { answerOptions: e.options } : {}),
             ...(e.anchor ? { answerAnchor: e.anchor } : {}),
             ...(e.images && e.images.length > 0 ? { answerImages: e.images } : {}),

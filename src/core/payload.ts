@@ -221,6 +221,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
             ...(q.options && q.options.length > 0 ? { options: q.options } : {}),
             ...(q.multi ? { multi: true } : {}),
             answered: q.answered,
+            ...(q.skipped ? { skipped: true } : {}),
             ...(q.answer !== undefined && q.answer.length > 0 ? { answer: q.answer } : {}),
             ...(q.answerOptions && q.answerOptions.length > 0
               ? { answerOptions: q.answerOptions }

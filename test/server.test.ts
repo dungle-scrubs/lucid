@@ -455,6 +455,30 @@ describe("server routes + security", () => {
     expect(empty.status).toBe(400);
   });
 
+  test("a question can be skipped: empty answer allowed, marked declined", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+
+    await post("/__lucid/question", { id: "q9", text: "Do you have the API keys?" });
+    // Skip is an explicit empty answer - allowed where a bare one is rejected.
+    const ok = await post("/__lucid/answer", {
+      id: "s1",
+      questionId: "q9",
+      text: "",
+      skipped: true,
+    });
+    expect(ok.status).toBe(200);
+    const state = await (await get("/__lucid/state")).json();
+    expect(state.questions[0].answered).toBe(true);
+    expect(state.questions[0].skipped).toBe(true);
+    expect(state.questions[0].answer).toBeUndefined();
+  });
+
   test("lucid context falls back to the sidecar when no daemon is live", async () => {
     // No server running: runContext must still land the value on disk (the same
     // path a failed live POST falls through to) so a reopened viewer picks it up.

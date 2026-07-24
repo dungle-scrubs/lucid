@@ -7,6 +7,7 @@ import {
   removeAnswerImage,
   sendAnswer,
   setAnswerDraft,
+  skipQuestion,
   startAnswerPick,
   toggleAnswerOption,
 } from "./actions.ts";
@@ -174,16 +175,28 @@ const OpenQuestion = ({ q }: { q: AgentQuestion }) => {
         </div>
       ) : null}
 
-      <button
-        type="button"
-        data-test="answer"
-        disabled={!ready}
-        onClick={() => void sendAnswer(q)}
-        className="flex w-fit cursor-pointer items-center gap-1.5 rounded-md border border-accent bg-accent px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-on-accent hover:bg-accent-bright disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {uploading ? "Uploading…" : "Answer"}
-        <Kbd className="border-on-accent/30 bg-on-accent/10 text-on-accent">↵</Kbd>
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          data-test="answer"
+          disabled={!ready}
+          onClick={() => void sendAnswer(q)}
+          className="flex w-fit cursor-pointer items-center gap-1.5 rounded-md border border-accent bg-accent px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-on-accent hover:bg-accent-bright disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {uploading ? "Uploading…" : "Answer"}
+          <Kbd className="border-on-accent/30 bg-on-accent/10 text-on-accent">↵</Kbd>
+        </button>
+        {/* Decline: clears the question and tells the agent to proceed without
+            an answer - the escape hatch for a question you can't or won't answer. */}
+        <button
+          type="button"
+          data-test="skip"
+          onClick={() => void skipQuestion(q)}
+          className="w-fit cursor-pointer text-[11px] text-fg-faint underline-offset-2 hover:text-fg-muted hover:underline"
+        >
+          Skip
+        </button>
+      </div>
     </div>
   );
 };

@@ -177,6 +177,25 @@ test("structured question: choose an option and pin an artifact region as the an
   expect(q?.answerAnchor?.snippet).toContain("Backfill");
 });
 
+test("a question can be skipped: it leaves the panel and the agent is told", async ({ page }) => {
+  const { nextCursor } = await openViewer(page);
+
+  await cli.run(["ask", cli.artifact, "--text", "Do you have the API keys?"]);
+  await expect(page.locator('[data-test="questions-panel"]')).toBeVisible();
+
+  // Decline without answering.
+  await page.locator('[data-test="skip"]').click();
+  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
+
+  // The agent learns it was declined, not answered with content.
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    questions?: { answered: boolean; skipped?: boolean; answer?: string }[];
+  };
+  expect(fb.questions?.[0]?.answered).toBe(true);
+  expect(fb.questions?.[0]?.skipped).toBe(true);
+  expect(fb.questions?.[0]?.answer).toBeUndefined();
+});
+
 test("fork button spins the selection off; the request reaches wait as a fork", async ({
   page,
 }) => {

@@ -486,17 +486,25 @@ export const addAnswerImage = async (q: AgentQuestion, file: File): Promise<void
   }));
   try {
     const img = await uploadPaste(file);
-    if (img)
+    if (!img) return;
+    // If the question was cleared while this was uploading (answered or
+    // skipped), its uploading counter is gone - don't resurrect state for it;
+    // just release the object URL so nothing leaks.
+    if ((get().answerUploading[q.id] ?? 0) > 0) {
       set((s) => ({
         answerImages: { ...s.answerImages, [q.id]: [...(s.answerImages[q.id] ?? []), img] },
       }));
+    } else {
+      URL.revokeObjectURL(img.url);
+    }
   } finally {
-    set((s) => ({
-      answerUploading: {
-        ...s.answerUploading,
-        [q.id]: Math.max(0, (s.answerUploading[q.id] ?? 1) - 1),
-      },
-    }));
+    set((s) => {
+      // The question may have been cleared mid-upload; if so its counter is
+      // gone and there is nothing to decrement (recreating it would resurrect it).
+      const n = s.answerUploading[q.id];
+      if (n === undefined) return {};
+      return { answerUploading: { ...s.answerUploading, [q.id]: Math.max(0, n - 1) } };
+    });
   }
 };
 
@@ -507,6 +515,32 @@ export const removeAnswerImage = (q: AgentQuestion, id: string): void =>
     if (img) URL.revokeObjectURL(img.url);
     return { answerImages: { ...s.answerImages, [q.id]: list.filter((i) => i.id !== id) } };
   });
+
+/** Drop all staged answer state for a question (draft, options, anchor, images,
+ *  and the upload counter) and exit its pick mode - shared by send and skip.
+ *  Clearing the upload counter is also how an in-flight `addAnswerImage` detects
+ *  the question was cleared and declines to resurrect it. Object URLs the caller
+ *  still holds are revoked by the caller. */
+const clearAnswerState = (st: ReturnType<typeof get>, id: string) => {
+  const drafts = { ...st.answerDrafts };
+  const opts = { ...st.answerOptions };
+  const anchors = { ...st.answerAnchors };
+  const imgs = { ...st.answerImages };
+  const uploading = { ...st.answerUploading };
+  delete drafts[id];
+  delete opts[id];
+  delete anchors[id];
+  delete imgs[id];
+  delete uploading[id];
+  return {
+    answerDrafts: drafts,
+    answerOptions: opts,
+    answerAnchors: anchors,
+    answerImages: imgs,
+    answerUploading: uploading,
+    answerPickFor: st.answerPickFor === id ? null : st.answerPickFor,
+  };
+};
 
 export const sendAnswer = async (q: AgentQuestion): Promise<void> => {
   const s = get();
@@ -534,25 +568,24 @@ export const sendAnswer = async (q: AgentQuestion): Promise<void> => {
     });
     // Clear this question's staged answer only after it is recorded.
     for (const img of images) URL.revokeObjectURL(img.url);
-    set((st) => {
-      const drafts = { ...st.answerDrafts };
-      const opts = { ...st.answerOptions };
-      const anchors = { ...st.answerAnchors };
-      const imgs = { ...st.answerImages };
-      delete drafts[q.id];
-      delete opts[q.id];
-      delete anchors[q.id];
-      delete imgs[q.id];
-      return {
-        answerDrafts: drafts,
-        answerOptions: opts,
-        answerAnchors: anchors,
-        answerImages: imgs,
-        answerPickFor: st.answerPickFor === q.id ? null : st.answerPickFor,
-      };
-    });
+    set((st) => clearAnswerState(st, q.id));
   } catch {
     warn("Your answer didn't send - it's kept here, try again.");
+  }
+};
+
+/** Decline a question: it leaves the panel and the agent is told the human
+ *  skipped it (so it proceeds without an answer rather than re-asking). Any
+ *  staged draft/options/anchor/images for it are discarded. */
+export const skipQuestion = async (q: AgentQuestion): Promise<void> => {
+  try {
+    await api("/__lucid/answer", { id: uuid(), questionId: q.id, text: "", skipped: true });
+    // Revoke any already-staged image URLs; a still-in-flight upload sees the
+    // cleared counter and revokes its own.
+    for (const img of get().answerImages[q.id] ?? []) URL.revokeObjectURL(img.url);
+    set((st) => clearAnswerState(st, q.id));
+  } catch {
+    warn("Couldn't skip that question - try again.");
   }
 };
 

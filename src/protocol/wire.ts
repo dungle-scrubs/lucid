@@ -120,6 +120,9 @@ export interface PayloadQuestion {
   /** Whether more than one option may be chosen. */
   readonly multi?: boolean;
   readonly answered: boolean;
+  /** The human declined to answer (Skip): `answered` is true but there is no
+   *  content - proceed without it rather than re-asking. */
+  readonly skipped?: boolean;
   /** Free-text answer (or the "Other" text alongside chosen options). */
   readonly answer?: string;
   /** Labels of the options the human chose. */

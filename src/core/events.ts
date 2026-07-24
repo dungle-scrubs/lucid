@@ -175,6 +175,9 @@ export interface QuestionAnsweredEvent extends BaseEvent {
   readonly anchor?: Anchor;
   /** Images the human attached to their answer. */
   readonly images?: readonly PromptImage[];
+  /** The human declined to answer (Skip). Clears the question without content;
+   *  the agent should proceed without it rather than re-ask. */
+  readonly skipped?: boolean;
 }
 
 export interface ReviewResolvedEvent extends BaseEvent {
