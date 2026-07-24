@@ -15,7 +15,14 @@ import { AnnotationPart } from "./AnnotationPart.tsx";
 import { FoldedText } from "./FoldedText.tsx";
 import { collapseTextPaste } from "./pastes.ts";
 import { useEffect, useState } from "react";
-import { Notices, PendingComposer, QueuedCard, SendQueueBar, Warnings } from "./Panel.tsx";
+import {
+  Notices,
+  PendingComposer,
+  QueuedCard,
+  SendQueueBar,
+  UnsentMessages,
+  Warnings,
+} from "./Panel.tsx";
 import { useLucid, warn } from "./store.ts";
 import { Questions } from "./Questions.tsx";
 import { Kbd } from "./ui/kbd.tsx";
@@ -545,6 +552,9 @@ export const Thread = () => {
             after a pick - and where auto-scroll brings it. */}
         <Warnings />
         <Notices />
+        {/* Undelivered messages sit directly above the composer that lost them,
+            where the eye lands after pressing Enter. */}
+        <UnsentMessages />
         <PendingComposer />
         <ScrollToLatest />
       </ThreadPrimitive.Viewport>

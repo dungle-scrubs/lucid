@@ -1,11 +1,13 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   addPastedImage,
   addToQueue,
   beginEdit,
   cancelEdit,
   commitEdit,
+  discardOutboxMessage,
   discardPending,
+  flushOutbox,
   forkPending,
   QUICK_REPLIES,
   queueQuickReply,
@@ -14,9 +16,10 @@ import {
   sendQueue,
 } from "./actions.ts";
 import { TargetSnippet } from "./AnnotationPart.tsx";
+import { FoldedText } from "./FoldedText.tsx";
 import { collapseTextPaste } from "./pastes.ts";
-import { imagesFromPaste, set, useLucid } from "./store.ts";
-import type { PastedImage } from "./types.ts";
+import { imagesFromPaste, set, useLucid, warn } from "./store.ts";
+import type { OutboxMessage, PastedImage } from "./types.ts";
 import { Kbd, KbdGroup } from "./ui/kbd.tsx";
 
 /**
@@ -86,10 +89,100 @@ export const Warnings = () => {
     <section>
       <h3 className={heading}>Warnings</h3>
       {warnings.map((w) => (
-        <div key={`${w.code}:${w.message}`} className="text-[12px] text-rust-300">
+        <div key={w.id} className="text-[12px] text-rust-300">
           {w.code}: {w.message}
         </div>
       ))}
+    </section>
+  );
+};
+
+/**
+ * A message that did not reach the log. It is the human's own words, held
+ * verbatim until the server takes them - the composer cannot hold them, because
+ * assistant-ui clears it the instant Enter is pressed.
+ *
+ * Retry is the point, so it leads. Copy is the escape hatch that makes the text
+ * genuinely unlosable (paste it anywhere), and Discard is the only way it ever
+ * goes away.
+ */
+const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
+  const sending = useLucid((s) => s.outboxSending);
+  const [copied, setCopied] = useState(false);
+  return (
+    <article
+      data-test="unsent-message"
+      className="flex flex-col gap-[7px] rounded-lg border border-dashed border-rust-400/60 bg-ink-700 px-[11px] py-[10px]"
+    >
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] text-rust-300">not delivered</span>
+        <span className="text-[10px] text-fg-faint tabular-nums">
+          {new Date(message.at).toLocaleTimeString()}
+        </span>
+      </div>
+      {message.images.length > 0 ? (
+        <Chips images={message.images.map((i) => ({ ...i, url: `/__lucid/asset/${i.file}` }))} />
+      ) : null}
+      <div className="text-fg">
+        <FoldedText text={message.text} />
+      </div>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          data-test="retry-unsent"
+          disabled={sending}
+          onClick={() => void flushOutbox()}
+          className={btnPrimary}
+        >
+          {sending ? "Sending…" : "Retry"}
+        </button>
+        <button
+          type="button"
+          data-test="copy-unsent"
+          onClick={() => {
+            navigator.clipboard.writeText(message.text).then(
+              () => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              },
+              () => warn("Couldn't copy - select the text above instead."),
+            );
+          }}
+          className={btn}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+        <button
+          type="button"
+          data-test="discard-unsent"
+          disabled={sending}
+          onClick={() => discardOutboxMessage(message.id)}
+          className={`${btn} ml-auto`}
+        >
+          Discard
+        </button>
+      </div>
+    </article>
+  );
+};
+
+/**
+ * Messages the server has not taken yet. Only failed ones show: an in-flight
+ * message is about to become a real bubble, and a card flashing up for every
+ * normal send would make the common path stutter for the sake of the rare one.
+ */
+export const UnsentMessages = () => {
+  const outbox = useLucid((s) => s.outbox);
+  const failed = outbox.filter((m) => m.failed);
+  if (failed.length === 0) return null;
+  return (
+    <section data-test="unsent-messages">
+      <h3 className={heading}>Not sent{failed.length > 1 ? ` (${failed.length})` : ""}</h3>
+      <div className="flex flex-col gap-[7px]">
+        {failed.map((m) => (
+          <UnsentMessage key={m.id} message={m} />
+        ))}
+      </div>
     </section>
   );
 };

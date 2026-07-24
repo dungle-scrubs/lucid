@@ -148,12 +148,17 @@ const ApproveControls = () => {
   const queueLen = useLucid((s) => s.queue.length);
   const pendingTarget = useLucid((s) => s.pendingTarget);
   const composerNote = useLucid((s) => s.composerNote);
+  // A message the server never took is unsent work too - approving over it
+  // would strand it behind a stop the agent has already acted on.
+  const undelivered = useLucid((s) => s.outbox.length);
   const hasDraft = pendingTarget !== null && composerNote.trim().length > 0;
-  const blocked = queueLen > 0 || hasDraft;
+  const blocked = queueLen > 0 || hasDraft || undelivered > 0;
   const reason =
-    queueLen > 0
-      ? `Send or remove your ${queueLen} queued annotation${queueLen > 1 ? "s" : ""} first`
-      : "Queue or discard your draft annotation first";
+    undelivered > 0
+      ? `Retry or discard your ${undelivered} undelivered message${undelivered > 1 ? "s" : ""} first`
+      : queueLen > 0
+        ? `Send or remove your ${queueLen} queued annotation${queueLen > 1 ? "s" : ""} first`
+        : "Queue or discard your draft annotation first";
 
   if (resolved) {
     return (
