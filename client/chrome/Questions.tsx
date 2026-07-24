@@ -58,8 +58,10 @@ const OpenQuestion = ({ q }: { q: AgentQuestion }) => {
 
       {q.options && q.options.length > 0 ? (
         <div className="flex flex-col gap-1.5">
-          {q.options.map((opt) => {
+          {q.options.map((opt, i) => {
             const on = options.includes(opt.label);
+            // Number in authored order so a prose note can reference a choice by
+            // its numeral ("I'd go with 1 and 3") and the agent can map it back.
             return (
               <button
                 key={opt.label}
@@ -67,22 +69,43 @@ const OpenQuestion = ({ q }: { q: AgentQuestion }) => {
                 data-test="option"
                 aria-pressed={on}
                 onClick={() => toggleAnswerOption(q, opt.label)}
-                className={`flex cursor-pointer flex-col items-start gap-0.5 rounded-md border px-2.5 py-1.5 text-left ${
+                onKeyDown={(e) => {
+                  // Enter on a focused option submits the whole answer instead
+                  // of re-toggling it (Space still toggles). Without this,
+                  // pressing Enter after clicking options just flipped the last
+                  // one off - an options-only answer couldn't be sent by Enter.
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    void sendAnswer(q);
+                  }
+                }}
+                className={`flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-1.5 text-left ${
                   on
                     ? "border-accent bg-accent/15 text-fg"
                     : "border-ink-600 bg-bg-inset text-fg hover:border-ink-400"
                 }`}
               >
-                <span className="text-[13px] font-medium">{opt.label}</span>
-                {opt.description ? (
-                  <span className="text-[11px] text-fg-muted">{opt.description}</span>
-                ) : null}
+                <span
+                  className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center text-[11px] font-semibold tabular-nums ${
+                    q.multi ? "rounded" : "rounded-full"
+                  } ${on ? "bg-accent text-on-accent" : "bg-ink-700 text-fg-muted"}`}
+                >
+                  {i + 1}
+                </span>
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-[13px] font-medium">{opt.label}</span>
+                  {opt.description ? (
+                    <span className="text-[11px] text-fg-muted">{opt.description}</span>
+                  ) : null}
+                </span>
               </button>
             );
           })}
-          {q.multi ? (
-            <span className="text-[10px] text-fg-faint">Choose any that apply</span>
-          ) : null}
+          <span className="text-[10px] text-fg-faint">
+            {q.multi
+              ? "Choose any that apply, or reference by number in a note"
+              : "Reference a choice by number in a note"}
+          </span>
         </div>
       ) : null}
 
