@@ -3,16 +3,19 @@
 skill: lucid-design
 class: preference
 cases:
+  # Held out: names the skill (not a path, which contaminated the baseline
+  # arm) and drops "standalone" (which led the witness). The task is an
+  # ordinary artifact; self-containment - inline style, no external
+  # requests - is what the skill must add by default.
   - id: self-contained-artifact
     mode: generation
     type: preference
     rule: self-contained
-    arms: [skill, baseline]
+    arms: [solo, baseline]
     prompt: >-
-      Read ~/.agents/skills/lucid-design/SKILL.md if it exists and
-      follow it to write a standalone HTML artifact presenting a
-      three-phase database migration plan for review. Save it as
-      artifact.html. Do it end to end without asking.
+      Using the lucid-design skill, create artifact.html presenting a
+      three-phase database migration plan for review. Do it end to end
+      without asking.
     assert:
       must_match: ['<style']
       must_not_match: ['fonts\.googleapis|fonts\.gstatic|cdn\.|unpkg\.com|jsdelivr']
