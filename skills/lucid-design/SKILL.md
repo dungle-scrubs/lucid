@@ -25,7 +25,10 @@ for when nobody has said otherwise.
 **It is paper.** A warm cream ground with near-black type, not a dark app
 surface. Lucid's chrome is dark and recedes; the artifact is the thing being
 looked at, so it advances. A document that looks like the tool around it reads
-as a screenshot of software rather than something you'd send to someone.
+as a screenshot of software rather than something you'd send to someone. If you
+honour the reader's `prefers-color-scheme`, the dark variant is still paper - a
+warm, lifted ground that reads as a sheet, never the chrome's own near-black.
+See *Responding to dark mode* below.
 
 **It is self-contained, or it is not an artifact.** One inline `<style>` block.
 System font stacks. Zero external requests - no CDN, no Google Fonts, no remote
@@ -74,6 +77,35 @@ eyebrow labels, and washes; keep body copy at full ink. Always pair color with a
 non-color cue - a rule, a label, a weight change - so nothing depends on hue
 alone.
 
+## Responding to dark mode
+
+Optional. If you support it, follow the reader's system setting with a
+`@media (prefers-color-scheme: dark)` block - no toggle, no JS. A control and
+its persisted state are state the artifact is not allowed to carry: it must
+render identically from disk, offline, and a toggle breaks that. Route every
+color through a variable, then remap the variables in the media block; the rest
+of the stylesheet does not change.
+
+The dark variant is still **paper, not the app**. Keep the ground warm and
+*lifted* - a sheet resting on the chrome, distinctly above the chrome's own
+near-black, never equal to it, or the artifact dissolves into the tool. Keep the
+same accent and the same type; only the ground and ink invert. Re-check contrast
+after the flip: a deep brass that worked as an eyebrow on cream is too dark on a
+dark ground, so the accent lifts a step.
+
+```css
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper:     #211d15;  /* warm dark ground, lifted above the chrome */
+    --ink:       #ece3cf;  /* warm off-white, not pure white */
+    --ink-muted: #a89d84;
+    --rule:      rgba(236, 227, 207, 0.14);
+    --accent:    #d9bd7a;  /* the brass lifts so it reads on dark */
+    --accent-wash: rgba(203, 168, 90, 0.18);
+  }
+}
+```
+
 ## Make it reviewable
 
 These are not taste; they decide whether feedback can attach to what the reader
@@ -98,6 +130,7 @@ per line and the review is wasted.
 - Opens from disk, offline, and looks right
 - No emoji, no exclamation marks, no hype
 - Cream ground, ink type, one accent used to mean something
+- If it honours dark mode, the dark variant still reads as paper - warm, lifted, distinct from the chrome, and no toggle or JS
 - Serif prose, sans labels, mono literals
 - Every reviewable group padded and, where it matters, carrying a `data-lucid-id`
 - Nothing depends on color alone
