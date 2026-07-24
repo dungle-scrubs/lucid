@@ -384,18 +384,28 @@ export const runServer = async (
     ) {
       return json({ error: "invalid answer" }, 400);
     }
-    const text = body.text;
-    // An answer can be text, chosen option labels, an artifact reference, and/or
-    // images. Options and anchor are reused from the same validators as
-    // annotations; empty labels are dropped.
-    const options = Array.isArray(body.options)
-      ? body.options.filter((o): o is string => typeof o === "string" && o.length > 0)
-      : [];
-    const anchorIn = body.anchor === undefined ? undefined : parseAnchor(body.anchor);
+    const skipped = body.skipped === true;
+    // A skip is a content-free decline: discard any content so the payload can
+    // never contradict the contract (skipped => no answer). A normal answer can
+    // be text, chosen option labels, an artifact reference, and/or images -
+    // options and anchor reuse the same validators as annotations.
+    const text = skipped ? "" : body.text;
+    const options =
+      !skipped && Array.isArray(body.options)
+        ? body.options.filter((o): o is string => typeof o === "string" && o.length > 0)
+        : [];
+    const anchorIn = skipped || body.anchor === undefined ? undefined : parseAnchor(body.anchor);
     if (anchorIn && "error" in anchorIn) return json({ error: anchorIn.error }, 400);
-    const images = parseImages(body.images);
-    // Must carry something: bare empty submissions are rejected.
-    if (text.trim() === "" && options.length === 0 && !anchorIn && images.length === 0) {
+    const images = skipped ? [] : parseImages(body.images);
+    // Must carry something - UNLESS it is an explicit skip (the human declined).
+    // A bare non-skip submission is rejected.
+    if (
+      !skipped &&
+      text.trim() === "" &&
+      options.length === 0 &&
+      !anchorIn &&
+      images.length === 0
+    ) {
       return json({ error: "empty answer" }, 400);
     }
     await serverAppend([
@@ -404,6 +414,7 @@ export const runServer = async (
         id: body.id,
         questionId: body.questionId,
         text,
+        ...(skipped ? { skipped: true } : {}),
         ...(options.length > 0 ? { options } : {}),
         ...(anchorIn ? { anchor: anchorIn } : {}),
         ...(images.length > 0 ? { images } : {}),

@@ -209,6 +209,10 @@ lucid ask <file> --text "Which store should the cutover target?" \
   human **pinned in the artifact** as their referent - read its `snippet`), and
   `answerImages` (attached, addressed like annotation images). Act on whichever
   are present; an answer may be options-only with no text.
+- A question may come back `answered: true` with **`skipped: true`** and no
+  content: the human **declined** to answer. Proceed without it and do **not**
+  re-ask the same question - a decline is a decision. Design questions so a
+  skip is safe (a good `--option "Not now|…"` is often kinder than forcing one).
 - This is advisory forwarding, not interception: use it for questions that
   arise **while parked in the review loop**. Outside a review, your normal
   question tool is fine.
