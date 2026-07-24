@@ -177,6 +177,57 @@ test("structured question: choose an option and pin an artifact region as the an
   expect(q?.answerAnchor?.snippet).toContain("Backfill");
 });
 
+test("multi-select question: options are numbered and more than one can be chosen", async ({
+  page,
+}) => {
+  const { nextCursor } = await openViewer(page);
+
+  // A --multi question lets the human accept more than one answer.
+  await cli.run([
+    "ask",
+    cli.artifact,
+    "--text",
+    "Which axes should day-one score?",
+    "--multi",
+    "--option",
+    "Category|rubric",
+    "--option",
+    "Owner|actual replier",
+    "--option",
+    "Spam|marked-spam label",
+  ]);
+
+  await expect(page.locator('[data-test="questions-panel"]')).toBeVisible();
+  const options = page.locator('[data-test="option"]');
+  await expect(options).toHaveCount(3);
+  // Options carry a numeral (1..N) so a prose note can reference a choice by
+  // number; the third choice is "3".
+  await expect(options.nth(2)).toContainText("3");
+
+  // Pick two - both stay selected (single-select would have replaced the first).
+  await options.nth(0).click();
+  await options.nth(2).click();
+  await expect(options.nth(0)).toHaveAttribute("aria-pressed", "true");
+  await expect(options.nth(2)).toHaveAttribute("aria-pressed", "true");
+
+  // Enter from a focused option submits the options-only answer (rather than
+  // re-toggling the option) - no note or Answer-button click needed.
+  await options.nth(2).press("Enter");
+  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
+
+  const payload = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    "8",
+  ])) as { questions?: { answered: boolean; answerOptions?: string[] }[] };
+  const q = payload.questions?.[0];
+  expect(q?.answered).toBe(true);
+  expect(q?.answerOptions).toEqual(["Category", "Spam"]);
+});
+
 test("a question can be skipped: it leaves the panel and the agent is told", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
 
