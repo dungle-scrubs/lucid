@@ -188,55 +188,6 @@ const OpenQuestion = ({ q }: { q: AgentQuestion }) => {
   );
 };
 
-const AnsweredQuestion = ({ q }: { q: AgentQuestion }) => {
-  const hasOptions = Boolean(q.answerOptions && q.answerOptions.length > 0);
-  const answerImages = q.answerImages ?? [];
-  // An answer can be options, text, a pinned region, and/or images. Render
-  // whatever it carried - an anchor- or image-only answer must not read blank.
-  const wordless = !hasOptions && !q.answer;
-  return (
-    <div
-      data-test="question-answered"
-      className="flex flex-col gap-1 rounded-lg border border-ink-600 bg-ink-850/60 px-[11px] py-[10px] opacity-80"
-    >
-      <div className="text-fg-muted">{q.text}</div>
-      <div className="text-fg">
-        <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-[0.6px] text-user">
-          you
-        </span>
-        {hasOptions ? <span className="font-medium">{q.answerOptions?.join(", ")}</span> : null}
-        {q.answer ? (
-          <span>
-            {hasOptions ? " · " : ""}
-            {q.answer}
-          </span>
-        ) : null}
-        {wordless && !q.answerAnchor && answerImages.length === 0 ? (
-          <span className="italic text-fg-faint">answered</span>
-        ) : null}
-      </div>
-      {q.answerAnchor ? (
-        <span className="inline-flex w-fit items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-px text-[11px] text-fg-muted">
-          <span className="text-accent-bright">◎</span>
-          {anchorLabel(q.answerAnchor.snippet)}
-        </span>
-      ) : null}
-      {answerImages.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5">
-          {answerImages.map((img) => (
-            <img
-              key={img.file}
-              src={`/__lucid/asset/${img.file}`}
-              alt={img.name}
-              className="h-12 w-12 rounded border border-ink-600 object-cover"
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-};
-
 /**
  * Questions the agent is blocked on. Slides up from the bottom of the panel
  * (above the composer): they are outstanding work, not history, and burying
@@ -247,22 +198,24 @@ const AnsweredQuestion = ({ q }: { q: AgentQuestion }) => {
 export const Questions = () => {
   const questions = useLucid((s) => s.questions);
   const pickFor = useLucid((s) => s.answerPickFor);
+  // The panel is an inbox of OUTSTANDING questions, not a history: once answered,
+  // a question leaves it (the answer is in the log, and the agent acts on it).
+  // Keeping answered cards pinned here forever was just clutter above the composer.
   const open = questions.filter((q) => !q.answered);
-  const answered = questions.filter((q) => q.answered);
+  const hasOpen = open.length > 0;
 
   // Slide-up when the panel goes from empty to populated. The component stays
   // mounted returning null while empty, so keying the transition on presence
   // (not mount) is what makes a mid-review question actually slide up.
-  const hasQuestions = questions.length > 0;
   const [shown, setShown] = useState(false);
   useEffect(() => {
-    if (!hasQuestions) {
+    if (!hasOpen) {
       setShown(false);
       return;
     }
     const r = requestAnimationFrame(() => setShown(true));
     return () => cancelAnimationFrame(r);
-  }, [hasQuestions]);
+  }, [hasOpen]);
 
   // Esc cancels an in-progress artifact pick.
   useEffect(() => {
@@ -277,7 +230,7 @@ export const Questions = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, [pickFor]);
 
-  if (questions.length === 0) return null;
+  if (!hasOpen) return null;
 
   return (
     <section
@@ -287,14 +240,11 @@ export const Questions = () => {
       }`}
     >
       <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-muted">
-        Questions for you{open.length > 0 ? ` (${open.length})` : ""}
+        Questions for you{open.length > 1 ? ` (${open.length})` : ""}
       </h3>
       <div className="flex flex-col gap-2.5">
         {open.map((q) => (
           <OpenQuestion key={q.id} q={q} />
-        ))}
-        {answered.map((q) => (
-          <AnsweredQuestion key={q.id} q={q} />
         ))}
       </div>
     </section>
