@@ -238,6 +238,24 @@ export const connectHub = (): void => {
       /* a frame we cannot parse is not worth tearing the stream down for */
     }
   };
+  // `lucid open` ran in a terminal: the daemon asks live windows to surface
+  // the session as a tab so the CLI never has to pop a browser next to a
+  // shell that is already up. The listing snapshot may not carry the row yet
+  // (notify is async), so ask the hub directly.
+  es.addEventListener("open-tab", (e) => {
+    void (async () => {
+      try {
+        const { id } = JSON.parse((e as MessageEvent).data) as { id: string };
+        const listed = (await fetch("/hub/sessions").then((r) =>
+          r.ok ? (r.json() as Promise<{ sessions: HubSession[] }>) : null,
+        )) as { sessions: HubSession[] } | null;
+        const row = listed?.sessions.find((s) => s.id === id);
+        if (row) await openTab(row);
+      } catch {
+        /* the next snapshot still lists it; the human can open it by hand */
+      }
+    })();
+  });
   es.onopen = () => {
     useHub.setState({ connected: true });
     refreshIdentity();

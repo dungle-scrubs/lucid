@@ -15,6 +15,11 @@ import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
 import { sanitizeAttendant } from "../core/events.ts";
 import type { AttendantStamp } from "../core/events.ts";
+import {
+  legacyProjection,
+  normalizeQuestionGroup,
+  validateGroup,
+} from "../core/question-contract.ts";
 import { ArtifactError, NotFoundError, ServerError, ValidationError } from "../errors.ts";
 import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
@@ -89,6 +94,10 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
 
   let identity = await discoverLiveServer(paths);
   let url: string | undefined;
+  // A connected shell window already surfaced this session as a tab: the
+  // /hub/open broadcast told it to. Popping the default browser NEXT TO that
+  // window is worse than doing nothing, so the launch below is skipped.
+  let surfacedInShell = false;
 
   // Model B: a running hub daemon is preferred - the session surfaces as a
   // TAB in the one shell window instead of spawning another process on
@@ -98,6 +107,7 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     const viaHub = await hubOpen(paths.artifactPath);
     if (viaHub) {
       url = viaHub.shell;
+      surfacedInShell = (viaHub.shells ?? 0) > 0;
       // The hub accepted this session - it owns it now. A transient miss on
       // the follow-up handshake must NOT fall through to spawning a
       // dedicated server: the hub's mount stays alive, and two appenders is
@@ -110,6 +120,14 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
           detail: { path: paths.artifactPath, shell: viaHub.shell },
         });
       }
+    }
+  } else if (identity.base) {
+    // Already hub-hosted (a repeat `open`): re-announce so live windows raise
+    // the tab again - same idempotent route, no remount side effects.
+    const viaHub = await hubOpen(paths.artifactPath);
+    if (viaHub) {
+      url = viaHub.shell;
+      surfacedInShell = (viaHub.shells ?? 0) > 0;
     }
   }
 
@@ -126,7 +144,7 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
   }
 
   url ??= viewerUrl(identity);
-  if (options.open !== false) openBrowser(url);
+  if (options.open !== false && !surfacedInShell) openBrowser(url);
 
   // Register a pointer in the global hub registry (Model B, Phase 0). Advisory:
   // a registry failure must never fail `open`.
@@ -305,10 +323,33 @@ const parseOption = (raw: string): { label: string; description?: string } | und
   return { label, ...(description.length > 0 ? { description } : {}) };
 };
 
+/** Read `--group`'s JSON: a file path, or "-" for stdin. */
+const readGroupSource = async (source: string): Promise<unknown> => {
+  const raw =
+    source === "-"
+      ? await Bun.stdin.text()
+      : await readFile(resolve(source), "utf8").catch(() => "");
+  if (raw.trim() === "") {
+    throw new ValidationError({
+      message:
+        source === "-" ? "no question group on stdin" : `cannot read question group: ${source}`,
+      detail: { source },
+    });
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new ValidationError({
+      message: `question group is not valid JSON: ${(e as Error).message}`,
+      detail: { source },
+    });
+  }
+};
+
 export const runAsk = async (
   file: string,
-  text: string,
-  opts: { ref?: string; options?: readonly string[]; multi?: boolean } = {},
+  text: string | undefined,
+  opts: { ref?: string; options?: readonly string[]; multi?: boolean; group?: string } = {},
 ): Promise<void> => {
   const paths = sessionPaths(file);
   const state = foldLog((await readEvents(paths.logPath)).events);
@@ -318,9 +359,46 @@ export const runAsk = async (
       detail: { path: paths.artifactPath },
     });
   }
-  const options = (opts.options ?? []).map(parseOption).filter((o) => o !== undefined);
   const id = randomId();
   const attendant = attendantStamp();
+  // The rich grouped form (D12). Normalized and validated through the SAME
+  // module the server accepts with, so a group this command takes is a group
+  // the drawer can render and the server would re-accept.
+  if (opts.group !== undefined) {
+    const group = normalizeQuestionGroup(await readGroupSource(opts.group));
+    const issues = validateGroup(group);
+    if (issues.length > 0) {
+      throw new ValidationError({
+        message: `invalid question group: ${issues.map((i) => i.message).join(" ")}`,
+        detail: { issues },
+      });
+    }
+    const legacy = legacyProjection(group);
+    await deliver(paths, {
+      t: "question",
+      id,
+      text: legacy.text,
+      ...(opts.ref ? { ref: opts.ref } : {}),
+      ...(legacy.options ? { options: legacy.options } : {}),
+      ...(legacy.multi ? { multi: true } : {}),
+      group,
+      ...(attendant ? { attendant } : {}),
+    });
+    print({
+      session: paths.artifactPath,
+      asked: id,
+      text: legacy.text,
+      questions: group.map((q) => ({ id: q.id, question: q.question, shape: q.answerShape })),
+    });
+    return;
+  }
+  if (text === undefined || text.trim() === "") {
+    throw new ValidationError({
+      message: "lucid ask needs --text <question> or --group <file|->",
+      detail: { path: paths.artifactPath },
+    });
+  }
+  const options = (opts.options ?? []).map(parseOption).filter((o) => o !== undefined);
   await deliver(paths, {
     t: "question",
     id,

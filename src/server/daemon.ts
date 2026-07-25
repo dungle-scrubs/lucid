@@ -519,7 +519,18 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (!live || live.port === port) await mount(id, artifact);
     lastSnapshot = ""; // force the next notify to fire even inside POLL_MS
     void notify();
-    return json({ ok: true, id, base: `/s/${id}`, shell: `http://127.0.0.1:${port}/?s=${id}` });
+    // Tell open shell windows to surface this session as a tab NOW. The CLI
+    // reads `shells` to decide whether a window took it - if one did, it
+    // skips the default browser entirely (opening in Arc next to a live
+    // shell window was the bug).
+    broadcast(`event: open-tab\ndata: ${JSON.stringify({ id })}\n\n`);
+    return json({
+      ok: true,
+      id,
+      base: `/s/${id}`,
+      shell: `http://127.0.0.1:${port}/?s=${id}`,
+      shells: sseClients.size,
+    });
   };
 
   /**
@@ -787,6 +798,9 @@ export interface HubOpenResult {
   readonly id: string;
   readonly base: string;
   readonly shell: string;
+  /** Connected shell windows at open time. 0 means nobody is looking - the
+   *  CLI falls back to opening a browser. */
+  readonly shells?: number;
 }
 
 /**
