@@ -302,6 +302,48 @@ describe("server routes + security", () => {
     expect(payload.forks?.[0]?.images?.[0]?.path).toContain("a1b2c3.png");
   });
 
+  test("attendant stamps ride agent events and fold into session history (D18)", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+
+    await post("/__lucid/ack", {
+      id: "ack-st-1",
+      attendant: { harness: "claude_code", sessionId: "sess-9", cwd: "/proj" },
+    });
+    await post("/__lucid/reply", {
+      id: "r-st-1",
+      text: "done",
+      attendant: { harness: "claude_code", sessionId: "sess-9", cwd: "/proj" },
+    });
+    // A malformed stamp is dropped, never trusted or echoed.
+    await post("/__lucid/reply", {
+      id: "r-st-2",
+      text: "again",
+      attendant: { harness: "", sessionId: 42 },
+    });
+
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const hist = state.sessionHistory.filter((h) => h.sessionId === "sess-9");
+    expect(hist).toHaveLength(1);
+    expect(hist[0]?.harness).toBe("claude_code");
+    expect(hist[0]?.events).toBe(2);
+    expect(hist[0]?.cwd).toBe("/proj");
+
+    // The state payload exposes the derived history to the viewer.
+    const res = await fetch(`http://127.0.0.1:${port}/__lucid/state`, {
+      headers: { host: `127.0.0.1:${port}` },
+    });
+    const payload = (await res.json()) as {
+      sessionHistory?: { harness: string; sessionId?: string }[];
+    };
+    expect(payload.sessionHistory?.some((h) => h.sessionId === "sess-9")).toBe(true);
+  });
+
   test("agent_ack opens the working window, output closes it, waiters stay asleep", async () => {
     await startServer();
     const post = (path: string, body: unknown) =>

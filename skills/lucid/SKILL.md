@@ -132,6 +132,14 @@ Never fake the review loop, and never paste build instructions at the user.
      (your session id is the UUID naming your transcript and scratchpad paths)
    - Codex: `--harness codex --resume "codex resume <session-id> --yolo"`
 
+   **Also export your identity once, before the first lucid command** - every
+   event you write is then provenance-stamped, and the artifact accumulates
+   its session history (which harness conversations touched it, resumable
+   from where):
+   ```sh
+   export LUCID_HARNESS=claude-code LUCID_SESSION_ID=<session-id>
+   ```
+
    Lucid only records and displays this command; running it is always the
    human's act, in their terminal.
    - `status: "feedback"` -> apply the `annotations` (each has a `note`, the target

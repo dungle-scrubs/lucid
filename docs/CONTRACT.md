@@ -166,6 +166,30 @@ Any harness can resume by calling `lucid wait <file>` with **no** `--since`,
 which returns the full folded state of the current segment (annotations,
 conversation, current version, status). Then advance your own cursor from there.
 
+## Provenance stamps (`attendant`, D18) - additive
+
+The artifact is the durable object; a harness session (a Claude Code / Codex
+conversation) is an inference source temporarily associated with it. Agent-
+originated events (`session_opened`, `session_resumed`, `version`,
+`agent_ack`, `agent_reply`, `question`) MAY carry an optional `attendant`
+stamp - `{ harness, sessionId?, cwd? }` - naming the harness session that
+produced them. The CLI stamps automatically when the environment provides
+identity:
+
+```sh
+export LUCID_HARNESS=claude_code     # harness name (or use wait --harness)
+export LUCID_SESSION_ID=<uuid>       # the harness's own conversation id
+```
+
+`cwd` is recorded because resuming a harness session is scoped to its
+original directory (or a worktree of the same repo). The fold derives the
+artifact's whole-log **session history** from these stamps - every harness
+session that ever touched it, `firstAt`/`lastAt`/event counts - and the wait
+payload exposes it as `sessionHistory` (omitted when no event is stamped).
+Everything here is additive and optional: old logs, stampless writers, and
+existing integrations are unaffected. Payload field names (e.g. `session` for
+the artifact path) are unchanged for compatibility.
+
 ## Attendant identity (`--harness`, `--resume`)
 
 `lucid wait <file> --harness <name> --resume "<cmd>"` records an advisory

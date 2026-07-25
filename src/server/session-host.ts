@@ -6,7 +6,7 @@ import { readLastAttendant } from "../core/attendant.ts";
 import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
 import { foldLog, versionRef } from "../core/fold.ts";
-import type { EventInput, LogEvent, PromptImage } from "../core/events.ts";
+import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/events.ts";
 import { appendEvents, readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
@@ -74,6 +74,27 @@ const parseImages = (input: unknown): PromptImage[] => {
     }
   }
   return out;
+};
+
+/** Validate an untrusted attendant provenance stamp (D18): bounded strings
+ *  or nothing - a malformed stamp is dropped, never trusted. */
+const parseAttendant = (input: unknown): AttendantStamp | undefined => {
+  if (!input || typeof input !== "object") return undefined;
+  const o = input as Record<string, unknown>;
+  if (typeof o.harness !== "string" || o.harness.length === 0 || o.harness.length > 64) {
+    return undefined;
+  }
+  const sessionId =
+    typeof o.sessionId === "string" && o.sessionId.length > 0 && o.sessionId.length <= 128
+      ? o.sessionId
+      : undefined;
+  const cwd =
+    typeof o.cwd === "string" && o.cwd.length > 0 && o.cwd.length <= 1024 ? o.cwd : undefined;
+  return {
+    harness: o.harness,
+    ...(sessionId ? { sessionId } : {}),
+    ...(cwd ? { cwd } : {}),
+  };
 };
 
 /** Validate an untrusted structured-question `options` array into clean
@@ -380,6 +401,7 @@ export const createSessionHost = (
       return json({ error: "invalid question" }, 400);
     }
     const options = parseQuestionOptions(body.options);
+    const attendant = parseAttendant(body.attendant);
     await serverAppend([
       {
         t: "question",
@@ -388,6 +410,7 @@ export const createSessionHost = (
         ...(typeof body.ref === "string" ? { ref: body.ref } : {}),
         ...(options.length > 0 ? { options } : {}),
         ...(body.multi === true && options.length > 0 ? { multi: true } : {}),
+        ...(attendant ? { attendant } : {}),
       },
     ]);
     return json({ ok: true });
@@ -505,12 +528,14 @@ export const createSessionHost = (
     if (!body || typeof body.id !== "string") return json({ error: "invalid ack" }, 400);
     const intent = body.intent === "revise" || body.intent === "reply" ? body.intent : undefined;
     const progress = sanitizeProgress(body.progress);
+    const attendant = parseAttendant(body.attendant);
     await serverAppend([
       {
         t: "agent_ack",
         id: body.id,
         ...(intent ? { intent } : {}),
         ...(progress ? { progress } : {}),
+        ...(attendant ? { attendant } : {}),
       },
     ]);
     return json({ ok: true });
@@ -521,7 +546,10 @@ export const createSessionHost = (
     if (!body || typeof body.id !== "string" || typeof body.text !== "string") {
       return json({ error: "invalid reply" }, 400);
     }
-    await serverAppend([{ t: "agent_reply", id: body.id, text: body.text }]);
+    const attendant = parseAttendant(body.attendant);
+    await serverAppend([
+      { t: "agent_reply", id: body.id, text: body.text, ...(attendant ? { attendant } : {}) },
+    ]);
     return json({ ok: true });
   };
 

@@ -149,6 +149,23 @@ export interface WaitPayload {
   readonly warnings?: readonly Warning[];
   /** Open "agent is working" window (ack received, no output yet). */
   readonly agentWorking?: AgentWorking;
+  /** Every harness session that ever touched this artifact (D18); omitted
+   *  when no event carries a stamp (old logs, stampless writers). */
+  readonly sessionHistory?: readonly SessionHistoryRecord[];
+}
+
+/**
+ * One harness session's association with an artifact, derived from attendant
+ * stamps on the log events (D18). The artifact's lifetime provenance: born-in
+ * first, every later attendant after, oldest association first.
+ */
+export interface SessionHistoryRecord {
+  readonly harness: string;
+  readonly sessionId?: string;
+  readonly cwd?: string;
+  readonly firstAt: string;
+  readonly lastAt: string;
+  readonly events: number;
 }
 
 /** Who last took delivery of feedback (advisory sidecar): display data with

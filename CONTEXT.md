@@ -36,6 +36,18 @@ The agent-authored, free-form HTML document under review. It is **content,
 not Lucid UI**, and renders identically with or without Lucid. The agent has
 full creative freedom over it (any HTML/CSS, sandboxed JS).
 
+**The artifact is the primary, durable object** (artifact-first, D18). What
+Lucid's CLI and payload historically call a "session" is the artifact's
+review record - the co-located log, versions and annotations - and it lives
+and dies with the artifact. A **harness session** (a Claude Code / Codex
+conversation) is a different object: an inference source temporarily
+associated with the artifact. An artifact accumulates a session history -
+born in one harness session, continued in others - derived entirely from
+optional `attendant` provenance stamps on agent-originated log events. The
+payload keeps the field name `session` (the artifact path) for
+compatibility; prose should say "review record" for the artifact side and
+"harness session" for the inference side.
+
 ### Surface
 The **addressable rendering** of the agent's output: the artifact plus the
 overlay that makes every part of it targetable. "Addressable surface" is

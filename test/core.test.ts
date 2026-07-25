@@ -230,6 +230,58 @@ describe("foldLog segments", () => {
   const ev = (e: Partial<LogEvent> & { t: LogEvent["t"]; seq: number }): LogEvent =>
     ({ at: "2026-01-01T00:00:00Z", ...e }) as LogEvent;
 
+  test("derives session history from attendant stamps, whole-log (D18)", () => {
+    const events: LogEvent[] = [
+      ev({
+        t: "session_opened",
+        seq: 1,
+        segment: 1,
+        artifact: "a.html",
+        version: 1,
+        hash: "h",
+        path: "versions/s1/v1.html",
+        attendant: { harness: "claude_code", sessionId: "sess-1", cwd: "/proj" },
+      } as never),
+      ev({
+        t: "agent_reply",
+        seq: 2,
+        at: "2026-01-01T01:00:00Z",
+        id: "r1",
+        text: "hello",
+        attendant: { harness: "claude_code", sessionId: "sess-1", cwd: "/proj" },
+      } as never),
+      // A different session takes over later - and an unstamped human event
+      // in between contributes nothing to the history.
+      ev({
+        t: "prompt",
+        seq: 3,
+        id: "p1",
+        refs: [],
+        text: "human words",
+      } as never),
+      ev({
+        t: "agent_ack",
+        seq: 4,
+        at: "2026-01-01T02:00:00Z",
+        id: "a1",
+        attendant: { harness: "codex", sessionId: "sess-2" },
+      } as never),
+    ];
+    const s = foldLog(events);
+    expect(s.sessionHistory).toHaveLength(2);
+    const [born, second] = s.sessionHistory;
+    expect(born?.harness).toBe("claude_code");
+    expect(born?.sessionId).toBe("sess-1");
+    expect(born?.cwd).toBe("/proj");
+    expect(born?.events).toBe(2);
+    expect(born?.firstAt).toBe("2026-01-01T00:00:00Z");
+    expect(born?.lastAt).toBe("2026-01-01T01:00:00Z");
+    expect(second?.harness).toBe("codex");
+    expect(second?.events).toBe(1);
+    // Old logs without stamps fold to an empty history, not a failure.
+    expect(foldLog([events[2] as LogEvent]).sessionHistory).toEqual([]);
+  });
+
   test("folds a single segment", () => {
     const events: LogEvent[] = [
       ev({

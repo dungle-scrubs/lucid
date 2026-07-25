@@ -1,5 +1,10 @@
 import type { Anchor } from "../anchors/anchor.ts";
-import type { AgentProgress, AgentWorking, QuestionOption } from "../protocol/wire.ts";
+import type {
+  AgentProgress,
+  AgentWorking,
+  QuestionOption,
+  SessionHistoryRecord,
+} from "../protocol/wire.ts";
 import type { LogEvent, PromptImage } from "./events.ts";
 import { maxSeq } from "./log.ts";
 
@@ -72,6 +77,9 @@ export interface VersionRef {
 }
 
 export interface FoldedState {
+  /** Every harness session that ever touched this artifact, in first-touch
+   *  order (D18: derived from event stamps, oldest association first). */
+  readonly sessionHistory: readonly SessionHistoryRecord[];
   readonly status: SessionStatus;
   /** Current lifecycle segment number (1-based). */
   readonly segment: number;
@@ -128,6 +136,32 @@ const statusFromLifecycle = (t: string): SessionStatus => {
   }
 };
 
+/** Derive the artifact's session history from attendant stamps (D18):
+ *  whole-log, not segment-scoped - provenance is the artifact's lifetime
+ *  story, and there is no second store to drift. */
+const deriveSessionHistory = (events: readonly LogEvent[]): SessionHistoryRecord[] => {
+  const byKey = new Map<string, SessionHistoryRecord>();
+  for (const e of events) {
+    const stamp = "attendant" in e ? e.attendant : undefined;
+    if (!stamp) continue;
+    const key = `${stamp.harness}\u0000${stamp.sessionId ?? ""}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      byKey.set(key, { ...existing, lastAt: e.at, events: existing.events + 1 });
+    } else {
+      byKey.set(key, {
+        harness: stamp.harness,
+        ...(stamp.sessionId ? { sessionId: stamp.sessionId } : {}),
+        ...(stamp.cwd ? { cwd: stamp.cwd } : {}),
+        firstAt: e.at,
+        lastAt: e.at,
+        events: 1,
+      });
+    }
+  }
+  return [...byKey.values()];
+};
+
 /**
  * Fold the event log to current state. Lifecycle status derives from the latest
  * lifecycle event across the whole log (D-049); current version, reviewResolved,
@@ -141,6 +175,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   if (events.length === 0) {
     return {
       status: "none",
+      sessionHistory: [],
       segment: 0,
       version: 0,
       reviewResolved: false,
@@ -331,6 +366,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
 
   return {
     status,
+    sessionHistory: deriveSessionHistory(events),
     segment,
     version,
     reviewResolved,

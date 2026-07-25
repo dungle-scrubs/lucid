@@ -13,6 +13,7 @@ import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { ensureSessionDirs, openSession } from "../core/session.ts";
 import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
+import type { AttendantStamp } from "../core/events.ts";
 import { ArtifactError, NotFoundError, ServerError, ValidationError } from "../errors.ts";
 import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
@@ -41,6 +42,26 @@ const print = (value: unknown): void => {
 
 const randomId = (): string => crypto.randomUUID();
 
+/**
+ * D18 provenance from the invoking harness's environment. A harness (or its
+ * lucid skill) exports LUCID_HARNESS and LUCID_SESSION_ID once; every event
+ * this CLI writes then carries who produced it, and the fold derives the
+ * artifact's session history from the stamps. No env, no stamp - old
+ * integrations keep working unlabeled. `--harness` on `wait` doubles as the
+ * harness identity when the env is absent. cwd rides along because resuming
+ * a harness session is cwd-scoped.
+ */
+const attendantStamp = (harness?: string): AttendantStamp | undefined => {
+  const h = harness || process.env.LUCID_HARNESS;
+  const sessionId = process.env.LUCID_SESSION_ID;
+  if (!h && !sessionId) return undefined;
+  return {
+    harness: h || "agent",
+    ...(sessionId ? { sessionId } : {}),
+    cwd: process.cwd(),
+  };
+};
+
 export interface OpenOptions {
   readonly open?: boolean;
   /** Stop a live daemon first, so the next spawn loads a freshly built binary.
@@ -51,7 +72,8 @@ export interface OpenOptions {
 /** `lucid open <file>` - start/resume/re-segment a session and serve the viewer. */
 export const runOpen = async (file: string, options: OpenOptions = {}): Promise<void> => {
   const paths = sessionPaths(file);
-  const result = await openSession(paths);
+  const opener = attendantStamp();
+  const result = await openSession(paths, opener ? { attendant: opener } : undefined);
 
   // A running daemon embeds the client bundle it loaded at start; `open` alone
   // reattaches to it, so a rebuild is invisible until the process is replaced.
@@ -133,7 +155,13 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   const paths = sessionPaths(file);
 
   if (options.reply !== undefined && options.reply.length > 0) {
-    await deliver(paths, { t: "agent_reply", id: randomId(), text: options.reply });
+    const attendant = attendantStamp(options.harness);
+    await deliver(paths, {
+      t: "agent_reply",
+      id: randomId(),
+      text: options.reply,
+      ...(attendant ? { attendant } : {}),
+    });
   }
 
   const payload = await runWait(paths, options);
@@ -144,7 +172,12 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   // hand-off (D-064).
   if (payload.status === "feedback" && options.since !== undefined) {
     try {
-      await deliver(paths, { t: "agent_ack", id: randomId() });
+      const attendant = attendantStamp(options.harness);
+      await deliver(paths, {
+        t: "agent_ack",
+        id: randomId(),
+        ...(attendant ? { attendant } : {}),
+      });
     } catch {
       /* presence is advisory */
     }
@@ -172,7 +205,13 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
  */
 export const runIntent = async (file: string, intent: "revise" | "reply"): Promise<void> => {
   const paths = sessionPaths(file);
-  await deliver(paths, { t: "agent_ack", id: randomId(), intent });
+  const attendant = attendantStamp();
+  await deliver(paths, {
+    t: "agent_ack",
+    id: randomId(),
+    intent,
+    ...(attendant ? { attendant } : {}),
+  });
   print({ ok: true, intent });
 };
 
@@ -195,7 +234,13 @@ export const runProgress = async (
     print({ ok: false, error: "progress needs a --label, --total, or --done" });
     return;
   }
-  await deliver(paths, { t: "agent_ack", id: randomId(), progress: cleaned });
+  const attendant = attendantStamp();
+  await deliver(paths, {
+    t: "agent_ack",
+    id: randomId(),
+    progress: cleaned,
+    ...(attendant ? { attendant } : {}),
+  });
   print({ ok: true, progress: cleaned });
 };
 
@@ -265,6 +310,7 @@ export const runAsk = async (
   }
   const options = (opts.options ?? []).map(parseOption).filter((o) => o !== undefined);
   const id = randomId();
+  const attendant = attendantStamp();
   await deliver(paths, {
     t: "question",
     id,
@@ -272,6 +318,7 @@ export const runAsk = async (
     ...(opts.ref ? { ref: opts.ref } : {}),
     ...(options.length > 0 ? { options } : {}),
     ...(opts.multi && options.length > 0 ? { multi: true } : {}),
+    ...(attendant ? { attendant } : {}),
   });
   print({
     session: paths.artifactPath,

@@ -15,6 +15,24 @@ interface BaseEvent {
   readonly at: string;
 }
 
+/**
+ * Provenance: which harness conversation produced an agent-originated event
+ * (D18, artifact-first). The artifact is the durable object; a harness
+ * session is an inference source temporarily associated with it - so agent
+ * events carry WHO, and the fold derives the artifact's session history from
+ * stamps already on the record. Optional everywhere: old logs and stampless
+ * writers fold unchanged, and human-authored events never carry one (a human
+ * has no harness session).
+ */
+export interface AttendantStamp {
+  /** Harness identity, e.g. "claude_code", "codex". */
+  readonly harness: string;
+  /** The harness's own conversation/session id (stable across resumes). */
+  readonly sessionId?: string;
+  /** Working directory the session runs from - resume is cwd-scoped. */
+  readonly cwd?: string;
+}
+
 /** Opens a lifecycle segment; carries the v1 snapshot reference. */
 export interface SessionOpenedEvent extends BaseEvent {
   readonly t: "session_opened";
@@ -23,6 +41,8 @@ export interface SessionOpenedEvent extends BaseEvent {
   readonly version: number;
   readonly hash: string;
   readonly path: string;
+  /** The session the artifact was born in / reopened under (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 /** A new artifact version (watcher-driven). */
@@ -31,6 +51,9 @@ export interface VersionEvent extends BaseEvent {
   readonly version: number;
   readonly hash: string;
   readonly path: string;
+  /** The session whose turn produced this revision, when the writer knows it
+   *  (the attend-mode hub does; a dedicated server's watcher may not). */
+  readonly attendant?: AttendantStamp;
 }
 
 /** A located human annotation (browser POST; client-minted id). */
@@ -102,6 +125,8 @@ export interface AgentReplyEvent extends BaseEvent {
   readonly t: "agent_reply";
   readonly id: string;
   readonly text: string;
+  /** Which harness session spoke (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 /**
@@ -129,6 +154,8 @@ export interface AgentAckEvent extends BaseEvent {
    * still only closes on real output, and a crashed orchestrator goes stale.
    */
   readonly progress?: AgentProgress;
+  /** Which harness session took delivery (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 /**
@@ -159,6 +186,8 @@ export interface QuestionEvent extends BaseEvent {
   readonly options?: readonly QuestionOption[];
   /** Whether more than one option may be chosen. */
   readonly multi?: boolean;
+  /** Which harness session asked (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 /** The human's answer to a question (browser POST). */
@@ -195,6 +224,8 @@ export interface SessionSuspendedEvent extends BaseEvent {
 export interface SessionResumedEvent extends BaseEvent {
   readonly t: "session_resumed";
   readonly segment: number;
+  /** Who resumed it (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 export interface SessionEndedEvent extends BaseEvent {

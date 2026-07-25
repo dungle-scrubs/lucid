@@ -197,6 +197,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     nextCursor: renderCursor(opts.nextSeq),
     reviewResolved: opts.state.reviewResolved,
     ...(opts.state.agentWorking ? { agentWorking: opts.state.agentWorking } : {}),
+    ...(opts.state.sessionHistory.length > 0 ? { sessionHistory: opts.state.sessionHistory } : {}),
     annotations,
     ...(forks.length > 0 ? { forks } : {}),
     messages: opts.messages.map((m) =>
