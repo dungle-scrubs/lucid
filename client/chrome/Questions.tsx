@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   addAnswerImage,
   cancelAnswerPick,
   clearAnswerAnchor,
   focusQuestionRef,
+  reaskQuestion,
   removeAnswerImage,
   sendAnswer,
   setAnswerDraft,
@@ -14,6 +15,7 @@ import {
 import { useLucid } from "./store.ts";
 import type { AgentQuestion } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
+import { Markdown } from "./ui/markdown.tsx";
 
 /** Short, human excerpt of a pinned region for the chip - the anchor's snippet
  *  is outerHTML, so strip tags and clip. */
@@ -23,6 +25,66 @@ const anchorLabel = (snippet: string): string => {
     .replace(/\s+/g, " ")
     .trim();
   return text.length > 48 ? `${text.slice(0, 48)}…` : text || "pinned region";
+};
+
+/** Past this height a question is a wall, not a prompt: the panel sits above
+ *  the composer, so an unbounded one pushes the record off screen. */
+const CLAMP_PX = 200;
+
+/**
+ * The question itself, in the agent's Markdown - paragraphs, lists, and fenced
+ * code render as themselves, the same treatment the transcript gives agent
+ * prose. A long one clamps to a readable height with the rest one click away:
+ * the ask stays in view next to the buttons that act on it.
+ */
+const QuestionText = ({ text }: { readonly text: string }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [long, setLong] = useState(false);
+
+  // Layout effect, and re-measured on resize: the panel is draggable, so the
+  // same question is two lines at one width and ten at another - and measuring
+  // after paint would flash the wall it exists to prevent.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // scrollHeight is the full content height even while clamped, so this stays
+    // correct once folded. Tolerance: a few pixels over is not worth a
+    // disclosure, and late-loading fonts nudge the measurement.
+    const measure = (): void => setLong(el.scrollHeight > CLAMP_PX + 24);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="relative">
+        <div
+          ref={ref}
+          data-test="question-text"
+          className={long && !open ? "overflow-hidden" : undefined}
+          style={long && !open ? { maxHeight: CLAMP_PX } : undefined}
+        >
+          <Markdown text={text} />
+        </div>
+        {long && !open ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-850 to-transparent" />
+        ) : null}
+      </div>
+      {long ? (
+        <button
+          type="button"
+          data-test="question-fold"
+          onClick={() => setOpen((v) => !v)}
+          className="w-fit cursor-pointer text-[11px] text-fg-faint underline-offset-2 hover:text-fg-muted hover:underline"
+        >
+          {open ? "Show less" : "Show the rest"}
+        </button>
+      ) : null}
+    </div>
+  );
 };
 
 /** One open question with its full answer surface: options, note, a pinned
@@ -45,7 +107,7 @@ const OpenQuestion = ({ q }: { q: AgentQuestion }) => {
       data-test="question"
       className="flex flex-col gap-2 rounded-lg border border-ink-600 bg-ink-850 px-[11px] py-[10px]"
     >
-      <div className="text-fg">{q.text}</div>
+      <QuestionText text={q.text} />
       {q.ref ? (
         <button
           type="button"
@@ -219,6 +281,19 @@ const OpenQuestion = ({ q }: { q: AgentQuestion }) => {
         >
           Skip
         </button>
+        {/* The other escape hatch, and the more common one: the question is not
+            unanswerable, it is unreadable. Hands it back for a clearer, shorter
+            version instead of forcing a guess or a decline. A note, if there is
+            one, rides along as what was confusing. */}
+        <button
+          type="button"
+          data-test="reask"
+          title="I don't understand - have the agent ask again, more clearly"
+          onClick={() => void reaskQuestion(q)}
+          className="w-fit cursor-pointer text-[11px] text-fg-faint underline-offset-2 hover:text-fg-muted hover:underline"
+        >
+          Re-ask
+        </button>
       </div>
     </div>
   );
@@ -271,7 +346,10 @@ export const Questions = () => {
   return (
     <section
       data-test="questions-panel"
-      className={`border-t border-ink-600 bg-bg-inset p-[12px_14px] transition-transform duration-200 ease-out ${
+      // Bounded: the inbox may hold several questions with options apiece, and
+      // it must never grow past the window and push the composer - the thing
+      // that answers them - off screen. Past half the viewport it scrolls.
+      className={`max-h-[55vh] overflow-y-auto border-t border-ink-600 bg-bg-inset p-[12px_14px] transition-transform duration-200 ease-out ${
         shown ? "translate-y-0" : "translate-y-full"
       }`}
     >

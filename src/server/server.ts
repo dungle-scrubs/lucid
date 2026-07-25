@@ -385,27 +385,30 @@ export const runServer = async (
       return json({ error: "invalid answer" }, 400);
     }
     const skipped = body.skipped === true;
-    // A skip is a content-free decline: discard any content so the payload can
-    // never contradict the contract (skipped => no answer). A normal answer can
-    // be text, chosen option labels, an artifact reference, and/or images -
-    // options and anchor reuse the same validators as annotations.
+    // "I don't understand" is not an answer and not a decline: it clears the
+    // question and puts a clearer re-ask on the agent. Any note the human typed
+    // survives, because it is the most useful thing they can say here (what was
+    // confusing), and a bare one is allowed - not understanding is the point.
+    const unclear = !skipped && body.unclear === true;
+    // Neither outcome decides anything, so neither may carry a decision: discard
+    // chosen options, the pinned region and images for both, so the payload can
+    // never contradict the contract (skipped/unclear => nothing was chosen).
+    // A skip drops the text too; a re-ask keeps it, because there it is not an
+    // answer but the note saying what was confusing. A normal answer can be
+    // text, chosen option labels, an artifact reference, and/or images - options
+    // and anchor reuse the same validators as annotations.
+    const decided = !skipped && !unclear;
     const text = skipped ? "" : body.text;
     const options =
-      !skipped && Array.isArray(body.options)
+      decided && Array.isArray(body.options)
         ? body.options.filter((o): o is string => typeof o === "string" && o.length > 0)
         : [];
-    const anchorIn = skipped || body.anchor === undefined ? undefined : parseAnchor(body.anchor);
+    const anchorIn = decided && body.anchor !== undefined ? parseAnchor(body.anchor) : undefined;
     if (anchorIn && "error" in anchorIn) return json({ error: anchorIn.error }, 400);
-    const images = skipped ? [] : parseImages(body.images);
-    // Must carry something - UNLESS it is an explicit skip (the human declined).
-    // A bare non-skip submission is rejected.
-    if (
-      !skipped &&
-      text.trim() === "" &&
-      options.length === 0 &&
-      !anchorIn &&
-      images.length === 0
-    ) {
+    const images = decided ? parseImages(body.images) : [];
+    // Must carry something - UNLESS the human declined (skip) or said the
+    // question was unclear (re-ask). A bare ordinary submission is rejected.
+    if (decided && text.trim() === "" && options.length === 0 && !anchorIn && images.length === 0) {
       return json({ error: "empty answer" }, 400);
     }
     await serverAppend([
@@ -415,6 +418,7 @@ export const runServer = async (
         questionId: body.questionId,
         text,
         ...(skipped ? { skipped: true } : {}),
+        ...(unclear ? { unclear: true } : {}),
         ...(options.length > 0 ? { options } : {}),
         ...(anchorIn ? { anchor: anchorIn } : {}),
         ...(images.length > 0 ? { images } : {}),

@@ -589,6 +589,25 @@ export const skipQuestion = async (q: AgentQuestion): Promise<void> => {
   }
 };
 
+/** "I don't understand this" - the question leaves the panel unanswered and the
+ *  agent owes a clearer, shorter version of it. Any note the human typed goes
+ *  along as what confused them; everything else staged for the answer is
+ *  discarded, since nothing was decided. */
+export const reaskQuestion = async (q: AgentQuestion): Promise<void> => {
+  try {
+    await api("/__lucid/answer", {
+      id: uuid(),
+      questionId: q.id,
+      text: (get().answerDrafts[q.id] ?? "").trim(),
+      unclear: true,
+    });
+    for (const img of get().answerImages[q.id] ?? []) URL.revokeObjectURL(img.url);
+    set((st) => clearAnswerState(st, q.id));
+  } catch {
+    warn("Couldn't send that back - try again.");
+  }
+};
+
 export const focusQuestionRef = (ref?: string): void => {
   if (ref) toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: ref });
 };

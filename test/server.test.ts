@@ -479,6 +479,54 @@ describe("server routes + security", () => {
     expect(state.questions[0].answer).toBeUndefined();
   });
 
+  test("a question can be handed back as unclear: bare allowed, any note kept", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+
+    await post("/__lucid/question", { id: "q10", text: "A very long, tangled question" });
+    // Re-ask carries no decision, so a bare one is allowed - and the note, when
+    // there is one, is what the human found confusing.
+    const ok = await post("/__lucid/answer", {
+      id: "u1",
+      questionId: "q10",
+      text: "what does 'the gate' mean here?",
+      unclear: true,
+    });
+    expect(ok.status).toBe(200);
+    let state = await (await get("/__lucid/state")).json();
+    expect(state.questions[0].answered).toBe(true);
+    expect(state.questions[0].unclear).toBe(true);
+    expect(state.questions[0].skipped).toBeUndefined();
+    expect(state.questions[0].answer).toBe("what does 'the gate' mean here?");
+
+    // Nothing was decided, so a second outcome cannot merge over the first:
+    // the fast Re-ask -> Skip double click keeps the answer it already recorded.
+    await post("/__lucid/answer", { id: "u2", questionId: "q10", text: "", skipped: true });
+    state = await (await get("/__lucid/state")).json();
+    expect(state.questions[0].skipped).toBeUndefined();
+    expect(state.questions[0].unclear).toBe(true);
+
+    // A bare re-ask (no note at all) is allowed, and never carries a decision.
+    await post("/__lucid/question", { id: "q11", text: "Another tangled question" });
+    const bare = await post("/__lucid/answer", {
+      id: "u3",
+      questionId: "q11",
+      text: "",
+      unclear: true,
+      options: ["Postgres"],
+    });
+    expect(bare.status).toBe(200);
+    state = await (await get("/__lucid/state")).json();
+    expect(state.questions[1].unclear).toBe(true);
+    expect(state.questions[1].answer).toBeUndefined();
+    expect(state.questions[1].answerOptions).toBeUndefined();
+  });
+
   test("lucid context falls back to the sidecar when no daemon is live", async () => {
     // No server running: runContext must still land the value on disk (the same
     // path a failed live POST falls through to) so a reopened viewer picks it up.
