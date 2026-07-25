@@ -214,10 +214,40 @@ describe("gating", () => {
 });
 
 describe("the tab cursor", () => {
+  // Free-text questions: the only shape that arrives with NOTHING staged.
+  // Single-choice now auto-selects (recommended, else first), so a choice
+  // pair could never exercise the incomplete-tab gating below.
   const pair = group([
-    { id: "a", question: "A?", choices: [{ id: "x", label: "X" }] },
-    { id: "b", question: "B?", choices: [{ id: "y", label: "Y" }] },
+    { id: "a", question: "A?" },
+    { id: "b", question: "B?" },
   ]);
+
+  test("a single-choice question arrives with a selection: recommended, else the first", () => {
+    const g = group([
+      {
+        id: "rec",
+        question: "R?",
+        choices: [
+          { id: "x", label: "X" },
+          { id: "y", label: "Y", recommended: true },
+        ],
+      },
+      {
+        id: "plain",
+        question: "P?",
+        choices: [
+          { id: "p", label: "P" },
+          { id: "q", label: "Q" },
+        ],
+      },
+      { id: "multi", question: "M?", multi: true, choices: [{ id: "m", label: "M" }] },
+    ]);
+    const d = initialDraft(g);
+    expect(d.byId.rec?.selectedIds).toEqual(["y"]);
+    expect(d.byId.plain?.selectedIds).toEqual(["p"]);
+    // Multi-select stays empty: an empty set is a real answer there.
+    expect(d.byId.multi?.selectedIds ?? []).toEqual([]);
+  });
 
   test("advance refuses to skip an unanswered question", () => {
     expect(advance(pair, initialDraft(pair)).activeIndex).toBe(0);
@@ -226,7 +256,7 @@ describe("the tab cursor", () => {
   test("advance moves on once the current question is answered", () => {
     const a = pair[0];
     if (!a) throw new Error("fixture");
-    const d = toggleChoice(initialDraft(pair), a, "x");
+    const d = setCustomText(initialDraft(pair), a, "an answer");
     expect(advance(pair, d).activeIndex).toBe(1);
   });
 
@@ -238,11 +268,11 @@ describe("the tab cursor", () => {
   test("firstInvalidIndex names the tab the final-tab jump goes to", () => {
     const b = pair[1];
     if (!b) throw new Error("fixture");
-    const d = toggleChoice(initialDraft(pair), b, "y");
+    const d = setCustomText(initialDraft(pair), b, "b's answer");
     expect(firstInvalidIndex(pair, d)).toBe(0);
     const a = pair[0];
     if (!a) throw new Error("fixture");
-    expect(firstInvalidIndex(pair, toggleChoice(d, a, "x"))).toBe(-1);
+    expect(firstInvalidIndex(pair, setCustomText(d, a, "a's answer"))).toBe(-1);
   });
 });
 

@@ -75,8 +75,14 @@ export const groupOf = (q: AgentQuestion): QuestionGroup =>
 export const initialDraft = (group: QuestionGroup): GroupDraft => {
   const byId: Record<string, ItemDraft> = {};
   for (const q of group) {
-    const recommended = q.multiSelect ? undefined : q.choices.find((c) => c.recommended);
-    byId[q.id] = recommended ? { ...EMPTY, selectedIds: [recommended.id] } : EMPTY;
+    // A single-choice question always ARRIVES with a selection - the
+    // recommended row when the asker marked one, else simply the first - so
+    // Enter alone is always an answer. Multi-select stays empty: an empty
+    // set is a real answer there, and pre-checking one would fake a lean.
+    const preset = q.multiSelect
+      ? undefined
+      : (q.choices.find((c) => c.recommended) ?? q.choices[0]);
+    byId[q.id] = preset ? { ...EMPTY, selectedIds: [preset.id] } : EMPTY;
   }
   return { byId, activeIndex: 0 };
 };

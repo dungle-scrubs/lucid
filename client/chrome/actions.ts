@@ -560,6 +560,15 @@ export const createActions = (ctx: ActionsCtx) => {
 
   const cancelAnswerPick = (): void => set({ answerPickFor: null });
 
+  /** The one panic gesture for targeting: drop the composer's collected spots
+   *  (the whole annotation draft) AND every question's staged pins at once.
+   *  Lives on the surface, where the marks are - by the time several spots
+   *  are lit across the draft and two answers, per-chip × is bookkeeping. */
+  const cancelAllPicks = (): void => {
+    set({ answerAnchors: {}, answerAnchorLists: {}, answerPickFor: null });
+    discardPending();
+  };
+
   const clearAnswerAnchor = (q: AgentQuestion): void =>
     set((s) => {
       const next = { ...s.answerAnchors };
@@ -917,6 +926,7 @@ export const createActions = (ctx: ActionsCtx) => {
     raiseQuestionDrawer,
     startAnswerPick,
     cancelAnswerPick,
+    cancelAllPicks,
     clearAnswerAnchor,
     removeAnswerAnchor,
     addAnswerImage,

@@ -296,7 +296,7 @@ test("a question renders as Markdown and can be handed back for a clearer re-ask
   expect(fb.questions?.[0]?.answer).toContain("which schema");
 });
 
-test("a wall-of-text question clamps to a readable height with the rest one click away", async ({
+test("a wall-of-text question renders whole; the drawer caps and scrolls instead", async ({
   page,
 }) => {
   await openViewer(page);
@@ -308,19 +308,22 @@ test("a wall-of-text question clamps to a readable height with the rest one clic
   ).join("\n\n");
   await cli.run(["ask", cli.artifact, "--text", wall]);
 
+  // No disclosure step: the reader always needs the whole question, so the
+  // full text renders and the DRAWER is what bounds height (60% cap,
+  // internal scroll).
   const text = page.locator('[data-test="question-text"]');
   await expect(text).toBeVisible();
-  const clamped = await text.boundingBox();
-  expect(clamped?.height).toBeLessThan(240);
+  await expect(page.locator('[data-test="question-fold"]')).toHaveCount(0);
+  await expect(text).toContainText("Paragraph 12");
 
-  // The rest is one click away, and folds back.
-  await page.locator('[data-test="question-fold"]').click();
-  const opened = await text.boundingBox();
-  expect(opened?.height ?? 0).toBeGreaterThan(clamped?.height ?? 0);
-  await page.locator('[data-test="question-fold"]').click();
-  expect((await text.boundingBox())?.height).toBeLessThan(240);
+  const drawer = page.locator('[data-test="question-drawer"]');
+  const surfaceBox = await page.locator('iframe[title="artifact surface"]').boundingBox();
+  const drawerBox = await drawer.boundingBox();
+  expect(drawerBox?.height ?? Infinity).toBeLessThanOrEqual((surfaceBox?.height ?? 0) * 0.62);
+  const scrollable = await drawer.evaluate((el) => el.scrollHeight > el.clientHeight);
+  expect(scrollable).toBe(true);
 
-  // However tall the question, the panel never eats the composer that answers it.
+  // However tall the question, the drawer never eats the composer that answers it.
   await expect(page.locator('[data-test="message-input"]')).toBeVisible();
 });
 

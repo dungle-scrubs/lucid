@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   QuestionChoice,
   QuestionGroup,
@@ -227,7 +227,7 @@ const ChoiceRow = ({
     onFocus={onActivate}
     onMouseEnter={onActivate}
     onKeyDown={onKeyNav}
-    className={`flex w-full items-start gap-2.5 rounded-md border px-2.5 py-1.5 text-left ${
+    className={`flex w-full cursor-pointer items-start gap-2.5 rounded-md border px-2.5 py-1.5 text-left ${
       selected
         ? "border-accent bg-accent/15"
         : active
@@ -296,7 +296,7 @@ const CustomRow = ({
   return (
     // A label, so a click anywhere in the row focuses the field natively.
     <label
-      className={`flex w-full items-start gap-2.5 rounded-md border px-2.5 py-1.5 ${
+      className={`flex w-full cursor-pointer items-start gap-2.5 rounded-md border px-2.5 py-1.5 ${
         d.customSelected ? "border-accent bg-accent/15" : "border-ink-600 bg-bg-inset"
       }`}
     >
@@ -378,65 +378,18 @@ const tabIndexFor = (item: QuestionItem, draft: GroupDraft, index: number): numb
   return d.selectedIds.includes(id) || (d.selectedIds.length === 0 && index === 0) ? 0 : -1;
 };
 
-/** Past this height a question is a wall, not a prompt: the drawer sits over
- *  the artifact, so an unbounded one spends the very space D11 protects. */
-const CLAMP_PX = 200;
-
 /**
  * The question itself, in the agent's Markdown (#40) - paragraphs, lists, and
  * fenced code render as themselves, the same treatment the transcript gives
- * agent prose. A long one clamps to a readable height with the rest one click
- * away: the ask stays in view next to the controls that answer it.
+ * agent prose. No clamp: the reader always needs the whole question before
+ * answering, so a disclosure was a step they took every time. The drawer's
+ * own 60% cap with internal scroll is the height governor for true walls.
  */
-const QuestionText = ({ text }: { readonly text: string }) => {
-  const ref = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [long, setLong] = useState(false);
-
-  // Layout effect, and re-measured on resize: the drawer is width-fluid, so
-  // the same question is two lines at one width and ten at another - and
-  // measuring after paint would flash the wall it exists to prevent.
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    // scrollHeight is the full content height even while clamped, so this
-    // stays correct once folded. Tolerance: a few pixels over is not worth a
-    // disclosure, and late-loading fonts nudge the measurement.
-    const measure = (): void => setLong(el.scrollHeight > CLAMP_PX + 24);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="relative">
-        <div
-          ref={ref}
-          data-test="question-text"
-          className={long && !open ? "overflow-hidden" : undefined}
-          style={long && !open ? { maxHeight: CLAMP_PX } : undefined}
-        >
-          <Markdown text={text} />
-        </div>
-        {long && !open ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-850 to-transparent" />
-        ) : null}
-      </div>
-      {long ? (
-        <button
-          type="button"
-          data-test="question-fold"
-          onClick={() => setOpen((v) => !v)}
-          className="w-fit cursor-pointer text-[11px] text-fg-faint underline-offset-2 hover:text-fg-muted hover:underline"
-        >
-          {open ? "Show less" : "Show the rest"}
-        </button>
-      ) : null}
-    </div>
-  );
-};
+const QuestionText = ({ text }: { readonly text: string }) => (
+  <div data-test="question-text">
+    <Markdown text={text} />
+  </div>
+);
 
 /** One question: its choices (or a free-text field), the required reason, and
  *  its own defer. */
@@ -655,10 +608,13 @@ const Drawer = ({
   q,
   group,
   pending,
+  animate,
 }: {
   readonly q: AgentQuestion;
   readonly group: QuestionGroup;
   readonly pending: number;
+  /** False when a drawer was already up: swap content, do not re-slide. */
+  readonly animate: boolean;
 }) => {
   const {
     dismissQuestionDrawer,
@@ -690,13 +646,17 @@ const Drawer = ({
   const ready = issues.length === 0 && !uploading;
   const firstInvalid = firstInvalidIndex(group, draft, { hasAttachments });
 
-  // Slide up on arrival. The element mounts translated down and settles on the
-  // next frame, which is what makes a mid-review question read as arriving.
-  const [shown, setShown] = useState(false);
+  // Slide up on ARRIVAL only. The component remounts per question (key), but
+  // between consecutive questions the drawer must stay up and just swap its
+  // content - the drawer itself is the state, and a full down-and-up between
+  // tests read as the UI losing its place. `animate` is false whenever a
+  // drawer was already showing.
+  const [shown, setShown] = useState(!animate);
   useEffect(() => {
+    if (shown) return;
     const r = requestAnimationFrame(() => setShown(true));
     return () => cancelAnimationFrame(r);
-  }, []);
+  }, [shown]);
 
   // Focus follows a TAB CHANGE, never the drawer's arrival: a question landing
   // while the human types in the composer must not steal their caret.
@@ -954,6 +914,14 @@ export const QuestionDrawer = () => {
   const lightbox = useSession((s) => s.lightboxImages !== null);
   const group = useMemo(() => (current ? groupOf(current) : []), [current]);
 
+  // Whether a drawer was showing on the LAST render: the next question swaps
+  // in place instead of re-running the arrival slide (updated after paint, so
+  // the same render that consults it still sees the previous state).
+  const wasUp = useRef(false);
+  useEffect(() => {
+    wasUp.current = current !== undefined && raised;
+  });
+
   // Escape: cancel an in-progress pick first, then lower the drawer (drafts
   // live in the store, so lowering costs nothing). Yields to the surfaces that
   // own Escape while they are up, so one press only ever does one thing.
@@ -976,7 +944,7 @@ export const QuestionDrawer = () => {
 
   if (!current) return null;
   return raised ? (
-    <Drawer key={current.id} q={current} group={group} pending={pending} />
+    <Drawer key={current.id} q={current} group={group} pending={pending} animate={!wasUp.current} />
   ) : (
     <ReopenBar pending={pending} />
   );

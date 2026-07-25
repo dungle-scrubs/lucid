@@ -43,7 +43,7 @@ export const QaPart: DataMessagePartComponent<QaData> = ({ data }) => {
       data-test="qa"
       data-question-id={question.id}
       aria-label="Question and answer"
-      className="flex flex-col gap-2 rounded-lg border border-ink-600 bg-ink-700 px-[11px] py-[10px]"
+      className="flex flex-col gap-2 rounded-lg border border-ink-600 bg-ink-800 px-[11px] py-[10px]"
     >
       <span className="text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint">
         {question.skipped
@@ -56,7 +56,7 @@ export const QaPart: DataMessagePartComponent<QaData> = ({ data }) => {
         <>
           {/* The same Markdown the drawer rendered: a fenced command must not
               decay to literal backticks the moment the question settles. */}
-          <div className="text-[12px] leading-[1.45] text-fg-muted [&_.text-fg]:text-fg-muted">
+          <div className="text-[12px] leading-[1.45]">
             <Markdown text={question.text} />
           </div>
           <div className="text-[12px] text-fg-faint italic" data-test="qa-answer">
@@ -74,7 +74,7 @@ export const QaPart: DataMessagePartComponent<QaData> = ({ data }) => {
             const line = answer ? summarizeItemAnswer(item, answer) : legacy;
             return (
               <li key={item.id} className="flex flex-col gap-1">
-                <div className="text-[12px] leading-[1.45] text-fg-muted [&_.text-fg]:text-fg-muted">
+                <div className="text-[12px] leading-[1.45]">
                   <Markdown text={item.question} />
                 </div>
                 {/* The decision, on a frost rule: the one thing a reader scans
