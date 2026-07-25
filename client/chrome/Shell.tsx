@@ -155,8 +155,22 @@ const ProjectsDrawer = () => {
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint">
-          Projects
+        <div className="flex items-center justify-between px-3 pb-2">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint">
+            Projects
+          </span>
+          {/* Click-away and ☰ both close it too, but a drawer with no visible
+              exit reads as a trap. */}
+          <button
+            type="button"
+            data-test="drawer-close"
+            aria-label="Close the projects drawer"
+            title="Close"
+            onClick={() => setDrawerOpen(false)}
+            className="cursor-pointer rounded-full px-1.5 text-[13px] leading-none text-fg-faint hover:text-fg"
+          >
+            ×
+          </button>
         </div>
         {[...byProject(sessions)].map(([project, rows]) => {
           const isActive = project === activeProject;
@@ -454,7 +468,9 @@ export const Shell = () => {
             title={`${activeProject} - switch project`}
             onClick={(e) => {
               e.currentTarget.blur();
-              setDrawerOpen(true);
+              // A toggle, like the ☰ beside it: the control that opened the
+              // drawer must also be able to close it.
+              setDrawerOpen(!useShell.getState().drawerOpen);
             }}
             className="mx-2 flex flex-none cursor-pointer items-center gap-1 self-center rounded-full border border-accent/40 bg-accent/10 px-2.5 py-px text-[10px] font-semibold uppercase tracking-[0.8px] text-accent-bright outline-none hover:border-accent hover:bg-accent/20"
           >
