@@ -63,6 +63,14 @@ Never fake the review loop, and never paste build instructions at the user.
    no CDN, no remote assets. The artifact must render identically opened straight
    from disk with no network - it is content that outlives the review.
 
+   **Draw diagrams with elements, never ASCII.** A box-and-arrow diagram, a
+   layer stack, a flow - build it from padded `div`s with borders, laid out with
+   flex, or from inline SVG. Box-drawing characters in a `<pre>` collapse the
+   whole picture into one opaque text node, so the reviewer cannot annotate the
+   node or edge they mean, and it cannot reflow when the window narrows. Give
+   each node its own `data-lucid-id`. Keep `<pre>` for what is literally text:
+   code, file paths, a directory tree.
+
    For how it should *look*, invoke the **`lucid-design`** skill if it is
    installed: the artifact is a document (paper, one accent, editorial voice),
    not a copy of Lucid's own dark chrome. If the user has their own brand, use
@@ -242,6 +250,8 @@ process instead, so the terminal conversation stays free while feedback flows.
   give every item explicit placement once any cell spans rows/columns. Give
   text-bearing flex/grid children `min-width:0` + `overflow-wrap` so no column
   collapses to one-word-per-line.
+- Diagrams are HTML elements or inline SVG, never ASCII art in a `<pre>`; mono
+  is for literal text only.
 - Reference assets with relative paths, colocated at or below the artifact's folder.
 - Persist `nextCursor` and pass it as `--since`; delivery is at-least-once with
   idempotent IDs, so advance the cursor only after you have applied a payload.
