@@ -111,7 +111,18 @@ export const spawnHub = (port?: number): void => {
 export const openChromeApp = (url: string): boolean => {
   if (process.env.LUCID_NO_OPEN === "1") return false;
   if (process.platform !== "darwin") return false;
-  const candidates = ["Google Chrome", "Chromium", "Brave Browser", "Microsoft Edge"];
+  // Every Chrome release channel counts (a machine with only Canary is
+  // still a Chrome machine). Arc is deliberately absent: it accepts the
+  // flag and ignores it, opening a plain tab.
+  const candidates = [
+    "Google Chrome",
+    "Google Chrome Canary",
+    "Google Chrome Beta",
+    "Google Chrome Dev",
+    "Chromium",
+    "Brave Browser",
+    "Microsoft Edge",
+  ];
   const home = process.env.HOME ?? "";
   // `open -na <app>` does not fail synchronously for a missing app, so probe
   // the two install locations instead of trusting the spawn.
