@@ -144,6 +144,16 @@ export const revisePrompt = (payload: WaitPayload, artifact: string): string | n
   for (const r of payload.reverts ?? []) lines.push(`- revert to v${r.targetVersion}: ${r.why}`);
   for (const q of payload.questions ?? []) {
     if (!q.answered || q.skipped) continue;
+    // A re-ask is an instruction, not an answer: the human did not understand.
+    // Reading it as an answer delivered their confusion note AS the decision,
+    // and a bare one (no note) made the whole turn look non-actionable.
+    if (q.unclear) {
+      const note = q.answer ? ` They said: "${q.answer}".` : "";
+      lines.push(
+        `- the question "${q.text}" was UNCLEAR to the human.${note} Ask it again with lucid ask - the same question, shorter and plainer. Do not treat this as an answer.`,
+      );
+      continue;
+    }
     // Chosen options ARE the answer when the human picked rather than typed;
     // reading only the free text silently dropped the whole reply.
     const answer = [...(q.answerOptions ?? []), ...(q.answer ? [q.answer] : [])].join("; ");

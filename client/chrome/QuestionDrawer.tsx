@@ -883,8 +883,18 @@ const Drawer = ({
             type="button"
             data-test="reask"
             onClick={() => {
+              // Only LIVE typing rides as the confusion note: custom text
+              // behind an unselected "Other" row is a discarded draft, not
+              // what the human found unclear. A grouped ask names the item,
+              // so the agent knows which subquestion to re-ask plainly.
               const active = group[draft.activeIndex];
-              const note = active ? (draft.byId[active.id]?.customText ?? "") : "";
+              const d = active ? draft.byId[active.id] : undefined;
+              const live = active && d && (active.answerShape === "free_text" || d.customSelected);
+              const raw = live ? d.customText.trim() : "";
+              const note =
+                raw && active && group.length > 1
+                  ? `${active.header || `Question ${draft.activeIndex + 1}`}: ${raw}`
+                  : raw;
               void reaskQuestion(q, note);
             }}
             className="w-fit cursor-pointer text-[11px] text-fg-faint underline-offset-2 hover:text-fg-muted hover:underline"

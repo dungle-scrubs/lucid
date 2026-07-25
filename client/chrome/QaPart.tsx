@@ -5,6 +5,7 @@ import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
 import { groupOf } from "./question-draft.ts";
 import type { MessageImage } from "./types.ts";
+import { Markdown } from "./ui/markdown.tsx";
 
 export interface QaData {
   /** The asked question's id; the card reads it live from the store, so a
@@ -53,7 +54,11 @@ export const QaPart: DataMessagePartComponent<QaData> = ({ data }) => {
       </span>
       {question.skipped || question.unclear ? (
         <>
-          <div className="text-[12px] leading-[1.45] text-fg-muted">{question.text}</div>
+          {/* The same Markdown the drawer rendered: a fenced command must not
+              decay to literal backticks the moment the question settles. */}
+          <div className="text-[12px] leading-[1.45] text-fg-muted [&_.text-fg]:text-fg-muted">
+            <Markdown text={question.text} />
+          </div>
           <div className="text-[12px] text-fg-faint italic" data-test="qa-answer">
             {question.unclear
               ? question.answer
@@ -69,7 +74,9 @@ export const QaPart: DataMessagePartComponent<QaData> = ({ data }) => {
             const line = answer ? summarizeItemAnswer(item, answer) : legacy;
             return (
               <li key={item.id} className="flex flex-col gap-1">
-                <div className="text-[12px] leading-[1.45] text-fg-muted">{item.question}</div>
+                <div className="text-[12px] leading-[1.45] text-fg-muted [&_.text-fg]:text-fg-muted">
+                  <Markdown text={item.question} />
+                </div>
                 {/* The decision, on a frost rule: the one thing a reader scans
                     this card for. */}
                 <div

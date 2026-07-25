@@ -199,7 +199,7 @@ const ProjectsDrawer = () => {
           <span className="text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint">
             Projects
           </span>
-          {/* Click-away and ☰ both close it too, but a drawer with no visible
+          {/* Click-away and the scope badge both close it too, but a drawer with no visible
               exit reads as a trap. */}
           <button
             type="button"
@@ -493,54 +493,43 @@ export const Shell = () => {
         data-test="shell-tabbar"
         className="flex h-9 flex-none items-stretch overflow-x-auto border-b border-ink-600 bg-ink-900"
       >
+        {/* The one drawer control: a scope BADGE, not a tab cell - rounded
+            rectangle, frost-tinted, floating in the bar rather than filling
+            it, so nothing about it reads as a disabled sibling of the tabs.
+            It names the scoped project (or "Projects" unscoped) and toggles
+            the drawer that switches projects. */}
         <button
           type="button"
           data-test="drawer-toggle"
-          title="Projects"
+          title={activeProject !== null ? `${activeProject} - switch project` : "Projects"}
           aria-expanded={drawerOpen}
           onClick={(e) => {
             e.currentTarget.blur();
-            setDrawerOpen(!drawerOpen);
+            // A toggle: the control that opened the drawer must also be able
+            // to close it.
+            setDrawerOpen(!useShell.getState().drawerOpen);
           }}
-          className={`cursor-pointer border-r border-ink-600 px-3 text-[13px] leading-none outline-none hover:bg-ink-800 ${
-            drawerOpen ? "text-accent-bright" : "text-fg-muted hover:text-fg"
-          }`}
+          className="mx-2 flex flex-none cursor-pointer items-center gap-1 self-center rounded-[5px] border border-accent/40 bg-accent/10 px-2.5 py-px text-[10px] font-semibold uppercase tracking-[0.8px] text-accent-bright outline-none hover:border-accent hover:bg-accent/20"
         >
-          ☰
-        </button>
-        {activeProject !== null ? (
-          // A scope BADGE, not a tab cell: pill-shaped, frost-tinted, floating
-          // in the bar rather than filling it - nothing about it may read as a
-          // disabled sibling of the tabs. It names the project, so it opens
-          // the drawer that switches projects.
-          <button
-            type="button"
-            data-test="scope-label"
-            title={`${activeProject} - switch project`}
-            onClick={(e) => {
-              e.currentTarget.blur();
-              // A toggle, like the ☰ beside it: the control that opened the
-              // drawer must also be able to close it.
-              setDrawerOpen(!useShell.getState().drawerOpen);
-            }}
-            className="mx-2 flex flex-none cursor-pointer items-center gap-1 self-center rounded-full border border-accent/40 bg-accent/10 px-2.5 py-px text-[10px] font-semibold uppercase tracking-[0.8px] text-accent-bright outline-none hover:border-accent hover:bg-accent/20"
+          {activeProject !== null ? (
+            <span data-test="scope-label">{projectName(activeProject)}</span>
+          ) : (
+            "Projects"
+          )}
+          <svg
+            viewBox="0 0 24 24"
+            width="9"
+            height="9"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
           >
-            {projectName(activeProject)}
-            <svg
-              viewBox="0 0 24 24"
-              width="9"
-              height="9"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="m6 9 6 6 6-6" />
-            </svg>
-          </button>
-        ) : null}
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
         {visibleKeys.map((k) => (
           <Tab key={k} sessionKey={k} active={k === activeKey} />
         ))}

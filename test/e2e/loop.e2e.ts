@@ -201,8 +201,8 @@ test("multi-select question: options are numbered and more than one can be chose
     "Spam|marked-spam label",
   ]);
 
-  await expect(page.locator('[data-test="questions-panel"]')).toBeVisible();
-  const options = page.locator('[data-test="option"]');
+  await expect(page.locator('[data-test="question-drawer"]')).toBeVisible();
+  const options = page.locator('[data-test="choice"]');
   await expect(options).toHaveCount(3);
   // Options carry a numeral (1..N) so a prose note can reference a choice by
   // number; the third choice is "3".
@@ -211,13 +211,13 @@ test("multi-select question: options are numbered and more than one can be chose
   // Pick two - both stay selected (single-select would have replaced the first).
   await options.nth(0).click();
   await options.nth(2).click();
-  await expect(options.nth(0)).toHaveAttribute("aria-pressed", "true");
-  await expect(options.nth(2)).toHaveAttribute("aria-pressed", "true");
+  await expect(options.nth(0)).toHaveAttribute("aria-checked", "true");
+  await expect(options.nth(2)).toHaveAttribute("aria-checked", "true");
 
   // Enter from a focused option submits the options-only answer (rather than
   // re-toggling the option) - no note or Answer-button click needed.
   await options.nth(2).press("Enter");
-  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
 
   const payload = (await cli.run([
     "wait",
@@ -280,10 +280,11 @@ test("a question renders as Markdown and can be handed back for a clearer re-ask
   // Short question, no disclosure: the fold only exists for walls.
   await expect(page.locator('[data-test="question-fold"]')).toHaveCount(0);
 
-  // "I don't understand this" - the note says what was confusing.
-  await page.locator('[data-test="question"] .qinput').fill("which schema do you mean?");
+  // "I don't understand this" - the note says what was confusing. A bare
+  // --text ask renders as a free-text field in the drawer.
+  await page.locator('[data-test="free-text"]').fill("which schema do you mean?");
   await page.locator('[data-test="reask"]').click();
-  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
 
   // The agent is told to ask again rather than that it was answered or declined.
   const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
