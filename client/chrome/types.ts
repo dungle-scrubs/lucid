@@ -46,6 +46,9 @@ export interface PastedImage {
 export interface QueuedAnnotation {
   readonly id: string;
   readonly target: Anchor;
+  /** Every spot the note covers, in pick order; `target` is always the first.
+   *  A singleton for the ordinary single-click annotation. */
+  readonly targets: readonly Anchor[];
   readonly note: string;
   /** When the note was queued - its place in the record. */
   readonly at: string;

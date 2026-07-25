@@ -16,6 +16,8 @@ export interface AnnotationRecord {
   readonly seq: number;
   readonly version: number;
   readonly target: Anchor;
+  /** Every spot the note covers when there are several; `target` is the first. */
+  readonly targets?: readonly Anchor[];
   readonly note: string;
   readonly at: string;
   /** Authorship time when the client supplied one; display-order metadata. */
@@ -69,6 +71,8 @@ export interface QuestionRecord {
   /** Per-question answers to a grouped question, in the group's order. */
   readonly items?: readonly ItemAnswer[];
   readonly answerAnchor?: Anchor;
+  /** Every pinned region when there are several; `answerAnchor` is the first. */
+  readonly answerAnchors?: readonly Anchor[];
   readonly answerImages?: readonly PromptImage[];
   /** seq of the answer event (for delta detection). */
   readonly answerSeq?: number;
@@ -279,6 +283,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
           seq: e.seq,
           version: e.version,
           target: e.target,
+          ...(e.targets && e.targets.length > 0 ? { targets: e.targets } : {}),
           note: e.note,
           at: e.at,
           ...(e.authoredAt ? { authoredAt: e.authoredAt } : {}),
@@ -364,6 +369,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
             ...(e.options && e.options.length > 0 ? { answerOptions: e.options } : {}),
             ...(e.items && e.items.length > 0 ? { items: e.items } : {}),
             ...(e.anchor ? { answerAnchor: e.anchor } : {}),
+            ...(e.anchors && e.anchors.length > 0 ? { answerAnchors: e.anchors } : {}),
             ...(e.images && e.images.length > 0 ? { answerImages: e.images } : {}),
           });
         }

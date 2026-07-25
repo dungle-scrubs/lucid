@@ -13,6 +13,9 @@ export interface AnnotationData {
   readonly version: number;
   readonly note: string;
   readonly target: Anchor;
+  /** Every spot the note covers when several were cmd-collected; `target` is
+   *  always the first (the wire's rule, src/protocol/wire.ts). */
+  readonly targets?: readonly Anchor[];
   readonly images?: readonly { readonly name: string; readonly file: string }[];
 }
 
@@ -146,7 +149,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
       <span className="pointer-events-none absolute -top-[9px] left-1/2 hidden -translate-x-1/2 items-center gap-1 rounded-full border border-ink-500 bg-ink-800 px-2 py-px text-[10px] text-fg-muted shadow-[0_1px_3px_rgba(0,0,0,0.4)] group-focus-visible:flex">
         <Kbd>↵</Kbd> reveal
       </span>
-      <TargetSnippet target={data.target} />
+      {/* Every spot the note covers, first (the numbered one) to last. */}
+      {(data.targets ?? [data.target]).map((t: Anchor, i: number) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: anchors have no id and a sent annotation's list never reorders.
+        <TargetSnippet key={i} target={t} />
+      ))}
       {/* Verbatim like a message turn - an expanded paste in a note comes
           back from the log as its full self, so a wall of it folds. */}
       <div className="text-fg">

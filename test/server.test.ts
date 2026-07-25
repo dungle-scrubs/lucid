@@ -221,6 +221,187 @@ describe("server routes + security", () => {
     expect(payload.annotations[0]?.resolved).toBe(true);
   });
 
+  test("multi-target annotation: target derives as first, full list reaches wait", async () => {
+    await startServer();
+    const spot = (n: number) => ({
+      kind: "element",
+      ...(n === 1 ? { lucidId: "h" } : {}),
+      fingerprint: `f${n}`,
+      domPath: n === 1 ? "h1" : `p:nth-child(${n})`,
+      snippet: `<p>spot ${n}</p>`,
+    });
+    const res = await fetch(`http://127.0.0.1:${port}/__lucid/annotation`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+      body: JSON.stringify({
+        id: "multi-1",
+        version: 1,
+        note: "align these three",
+        targets: [spot(1), spot(2), spot(3)],
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    // The stored event carries the FULL list with `target` equal to its first,
+    // so a legacy reader sees the first spot.
+    const events = (await readEvents(paths.logPath)).events;
+    const stored = events.find((e) => e.t === "annotation" && e.id === "multi-1");
+    expect(stored && "targets" in stored ? stored.targets?.length : 0).toBe(3);
+    expect(stored && "target" in stored ? stored.target : undefined).toEqual(
+      stored && "targets" in stored ? stored.targets?.[0] : undefined,
+    );
+
+    const payload = await runWait(paths, { since: "evt_00001", timeoutMs: 4000 });
+    const a = payload.annotations.find((x) => x.id === "multi-1");
+    expect(a?.targets).toHaveLength(3);
+    expect(a?.target).toEqual(a?.targets?.[0]);
+    // The first spot resolves (lucidId "h"), so the record stays live even
+    // though the collected extras point at nothing in this document.
+    expect(a?.resolved).toBe(true);
+  });
+
+  test("a singleton targets list normalizes to the canonical single form", async () => {
+    await startServer();
+    const res = await fetch(`http://127.0.0.1:${port}/__lucid/annotation`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+      body: JSON.stringify({
+        id: "single-1",
+        version: 1,
+        note: "just this one",
+        targets: [
+          { kind: "element", lucidId: "h", fingerprint: "x", domPath: "h1", snippet: "<h1></h1>" },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const events = (await readEvents(paths.logPath)).events;
+    const stored = events.find((e) => e.t === "annotation" && e.id === "single-1");
+    expect(stored).toBeDefined();
+    expect(stored).not.toHaveProperty("targets");
+    const target = stored && "target" in stored ? stored.target : undefined;
+    expect(target?.kind === "element" ? target.domPath : undefined).toBe("h1");
+  });
+
+  test("multi-target annotation rejects over-cap and any invalid element", async () => {
+    await startServer();
+    const post = (body: unknown) =>
+      fetch(`http://127.0.0.1:${port}/__lucid/annotation`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+    const good = { kind: "element", fingerprint: "f", domPath: "h1", snippet: "s" };
+
+    const over = await post({
+      id: "cap-1",
+      version: 1,
+      note: "too many",
+      targets: Array.from({ length: 9 }, () => good),
+    });
+    expect(over.status).toBe(400);
+    expect(((await over.json()) as { error: string }).error).toContain("max 8");
+
+    // One malformed element rejects the WHOLE list - a note must never claim
+    // spots the log does not have.
+    const bad = await post({
+      id: "bad-1",
+      version: 1,
+      note: "one bad apple",
+      targets: [good, { kind: "element", fingerprint: "f" }],
+    });
+    expect(bad.status).toBe(400);
+
+    const events = (await readEvents(paths.logPath)).events;
+    expect(events.some((e) => e.t === "annotation")).toBe(false);
+  });
+
+  test("answer anchors: first derives as anchor, all pins fold, singleton normalizes", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+    const pin = (n: number) => ({
+      kind: "element",
+      fingerprint: `f${n}`,
+      domPath: `h${n}`,
+      snippet: `<h${n}>pin</h${n}>`,
+    });
+
+    await post("/__lucid/question", { id: "q1", text: "Which sections apply?" });
+    const ok = await post("/__lucid/answer", {
+      id: "a1",
+      questionId: "q1",
+      text: "these two",
+      anchors: [pin(1), pin(2)],
+    });
+    expect(ok.status).toBe(200);
+    let state = await (await get("/__lucid/state")).json();
+    expect(state.questions[0].answerAnchors).toHaveLength(2);
+    expect(state.questions[0].answerAnchor).toEqual(state.questions[0].answerAnchors[0]);
+
+    // A single pin sent through `anchors` stores in the shape a single pin
+    // has always had: `anchor` only, no list field.
+    await post("/__lucid/question", { id: "q2", text: "And this one?" });
+    await post("/__lucid/answer", { id: "a2", questionId: "q2", text: "here", anchors: [pin(1)] });
+    const events = (await readEvents(paths.logPath)).events;
+    const answered = events.find((e) => e.t === "question_answered" && e.questionId === "q2");
+    expect(answered).toBeDefined();
+    expect(answered).not.toHaveProperty("anchors");
+    state = await (await get("/__lucid/state")).json();
+    expect(state.questions[1].answerAnchor.domPath).toBe("h1");
+    expect(state.questions[1]).not.toHaveProperty("answerAnchors");
+
+    // Over-cap is refused like an annotation's.
+    await post("/__lucid/question", { id: "q3", text: "All of them?" });
+    const over = await post("/__lucid/answer", {
+      id: "a3",
+      questionId: "q3",
+      text: "everywhere",
+      anchors: Array.from({ length: 9 }, () => pin(1)),
+    });
+    expect(over.status).toBe(400);
+  });
+
+  test("skip and re-ask discard answer anchors like every other decision", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+    const pin = { kind: "element", fingerprint: "f", domPath: "h1", snippet: "<h1>pin</h1>" };
+
+    await post("/__lucid/question", { id: "q-skip", text: "Ship it?" });
+    await post("/__lucid/answer", {
+      id: "a-skip",
+      questionId: "q-skip",
+      text: "",
+      skipped: true,
+      anchors: [pin, pin],
+    });
+    await post("/__lucid/question", { id: "q-unclear", text: "Thoughts on the frobnitz?" });
+    await post("/__lucid/answer", {
+      id: "a-unclear",
+      questionId: "q-unclear",
+      text: "what is a frobnitz",
+      unclear: true,
+      anchors: [pin, pin],
+    });
+
+    const state = await (await get("/__lucid/state")).json();
+    expect(state.questions[0].skipped).toBe(true);
+    expect(state.questions[0]).not.toHaveProperty("answerAnchor");
+    expect(state.questions[0]).not.toHaveProperty("answerAnchors");
+    expect(state.questions[1].unclear).toBe(true);
+    expect(state.questions[1]).not.toHaveProperty("answerAnchor");
+    expect(state.questions[1]).not.toHaveProperty("answerAnchors");
+  });
+
   test("fork POST lands in the log and reaches wait as feedback", async () => {
     await startServer();
     const res = await fetch(`http://127.0.0.1:${port}/__lucid/fork`, {

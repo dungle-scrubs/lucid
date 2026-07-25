@@ -6,7 +6,8 @@ import type { ForkRecord } from "../src/core/fold.ts";
 import { appendEvent } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
-import { childArtifactPath, handleForks } from "../src/launch/launcher.ts";
+import type { WaitPayload } from "../src/protocol/wire.ts";
+import { childArtifactPath, handleForks, revisePrompt } from "../src/launch/launcher.ts";
 import { buildArgv, loadRegistry, resolveRecipe } from "../src/launch/recipes.ts";
 import { forkDirFor, writeForkSeed } from "../src/launch/seed.ts";
 import { discoverLiveServer, readServerDescriptor } from "../src/server/discovery.ts";
@@ -22,6 +23,75 @@ const elementTarget = (snippet: string) => ({
   fingerprint: "f",
   domPath: "h1",
   snippet,
+});
+
+describe("revisePrompt locations", () => {
+  const base: WaitPayload = {
+    session: "/tmp/plan.html",
+    version: 1,
+    status: "feedback",
+    nextCursor: "evt_00009",
+    reviewResolved: false,
+    annotations: [],
+    messages: [],
+  };
+  const spot = (text: string) => ({
+    kind: "element" as const,
+    fingerprint: "f",
+    domPath: "p",
+    snippet: text,
+  });
+
+  test("a multi-target annotation lists every location, each clipped to 100 chars", () => {
+    const long = `<li>${"x".repeat(200)}</li>`;
+    const payload: WaitPayload = {
+      ...base,
+      annotations: [
+        {
+          id: "a1",
+          version: 1,
+          resolved: true,
+          target: spot("<li>alpha</li>"),
+          targets: [spot("<li>alpha</li>"), spot("<li>beta</li>"), spot(long)],
+          note: "align these",
+          at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    };
+    const prompt = revisePrompt(payload, "/tmp/plan.html");
+    expect(prompt).toContain(
+      `- align these (at: <li>alpha</li>; <li>beta</li>; ${long.slice(0, 100)})`,
+    );
+    expect(prompt).not.toContain("x".repeat(101));
+  });
+
+  test("an answer with pinned regions appends each snippet; a pin alone still surfaces", () => {
+    const payload: WaitPayload = {
+      ...base,
+      questions: [
+        {
+          id: "q1",
+          text: "Which sections?",
+          answered: true,
+          answer: "these",
+          answerAnchor: spot("<h2>Intro</h2>"),
+          answerAnchors: [spot("<h2>Intro</h2>"), spot("<h2>Rollout</h2>")],
+        },
+        {
+          id: "q2",
+          text: "And where does the note go?",
+          answered: true,
+          answerAnchor: spot("<h2>Risks</h2>"),
+        },
+      ],
+    };
+    const prompt = revisePrompt(payload, "/tmp/plan.html");
+    expect(prompt).toContain(
+      '- answer to "Which sections?": these (pinned: <h2>Intro</h2>; <h2>Rollout</h2>)',
+    );
+    // A pin with no words is still a whole answer, not a dropped line.
+    expect(prompt).toContain('- answer to "And where does the note go?": (pinned: <h2>Risks</h2>)');
+  });
 });
 
 describe("recipes registry", () => {

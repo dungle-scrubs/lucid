@@ -567,18 +567,23 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
   const {
     addAnswerImage,
     cancelAnswerPick,
-    clearAnswerAnchor,
+    removeAnswerAnchor,
     removeAnswerImage,
     startAnswerPick,
   } = useActions();
-  const anchor = useSession((s) => s.answerAnchors[q.id]);
+  const anchors = useSession((s) => s.answerAnchorLists[q.id]);
   const images = useSession((s) => s.answerImages[q.id]);
   const picking = useSession((s) => s.answerPickFor === q.id);
+  const pins = anchors ?? [];
   const imgs = images ?? [];
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {anchor ? (
+      {/* One chip per pinned spot (shift+⌘-click collects several); the ×
+          drops that spot alone, and dropping the last clears the pin. */}
+      {pins.map((anchor, i) => (
         <span
+          // biome-ignore lint/suspicious/noArrayIndexKey: anchors have no id and the list only ever shrinks from a fixed pick order.
+          key={i}
           data-test="answer-anchor"
           className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/10 px-2 py-px text-[11px] text-fg"
         >
@@ -587,16 +592,18 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
           <button
             type="button"
             aria-label="Remove pinned region"
-            onClick={() => clearAnswerAnchor(q)}
+            onClick={() => removeAnswerAnchor(q, i)}
             className="cursor-pointer text-fg-faint hover:text-fg"
           >
             ×
           </button>
         </span>
-      ) : (
+      ))}
+      {pins.length === 0 ? (
         <button
           type="button"
           data-test="pin-region"
+          title="Or shift-click the artifact - shift+⌘-click pins several spots"
           onClick={() => (picking ? cancelAnswerPick() : startAnswerPick(q))}
           className={`inline-flex cursor-pointer items-center gap-1 rounded-full border px-2 py-px text-[11px] ${
             picking
@@ -606,7 +613,7 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
         >
           {picking ? "Click a spot in the artifact · Esc to cancel" : "◎ Pin a spot"}
         </button>
-      )}
+      ) : null}
       <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-ink-400 px-2 py-px text-[11px] text-fg-muted hover:border-accent-bright hover:text-fg">
         Attach image
         <input

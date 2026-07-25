@@ -247,7 +247,11 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
       <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-ink-600 px-[7px] py-px text-[10px] text-steel-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
         queued
       </span>
-      <TargetSnippet target={q.target} />
+      {/* Every collected spot, first to last - the one note below covers them all. */}
+      {q.targets.map((t, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: anchors have no id and the list only ever shrinks from a fixed pick order.
+        <TargetSnippet key={i} target={t} />
+      ))}
       <Chips images={q.images} />
       {editing ? (
         <>
@@ -360,10 +364,12 @@ export const PendingComposer = () => {
     forkPending,
     queueQuickReply,
     removePastedImage,
+    removePendingTarget,
     setComposerNote,
   } = useActions();
   const { pastes } = useSessionHandle();
   const pendingTarget = useSession((s) => s.pendingTarget);
+  const pendingTargets = useSession((s) => s.pendingTargets);
   const composerNote = useSession((s) => s.composerNote);
   const pastedImages = useSession((s) => s.pastedImages);
   const forking = useSession((s) => s.forking);
@@ -376,10 +382,41 @@ export const PendingComposer = () => {
   if (!pendingTarget) return null;
   return (
     <section>
-      <h3 className={heading}>New annotation</h3>
+      <h3 className={heading}>
+        New annotation
+        {/* The gesture taught where its result appears; normal-case so the
+            hint reads as an aside, not part of the heading. */}
+        <span className="ml-2 font-normal normal-case tracking-normal text-fg-faint">
+          ⌘-click adds more spots
+        </span>
+      </h3>
       {
         <div className="flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-700 px-[11px] py-[10px]">
-          <TargetSnippet target={pendingTarget} />
+          {pendingTargets.length > 1 ? (
+            /* One chip per collected spot - the note below covers them all,
+               and any spot can leave without discarding the draft. */
+            <div className="flex flex-col gap-1" data-test="pending-targets">
+              {pendingTargets.map((t, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: anchors have no id and the list only ever shrinks from a fixed pick order.
+                <div key={i} data-test="target-chip" className="flex items-start gap-1.5">
+                  <div className="min-w-0 flex-1">
+                    <TargetSnippet target={t} />
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`Remove spot ${i + 1}`}
+                    title="Remove this spot"
+                    onClick={() => removePendingTarget(i)}
+                    className="cursor-pointer px-[3px] pt-1 text-fg-muted hover:text-rust-300"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <TargetSnippet target={pendingTarget} />
+          )}
           <Chips images={pastedImages} onRemove={removePastedImage} />
           <textarea
             ref={ref}
@@ -441,8 +478,15 @@ export const PendingComposer = () => {
               type="button"
               data-test="fork"
               onClick={forkPending}
-              disabled={forking}
-              title="Spin this selection off into a new artifact and agent session"
+              // A fork's seed is ONE selection; the fork wire carries one
+              // target, and silently forking only the first collected spot
+              // would drop the rest of the draft. Disabled beats lossy.
+              disabled={forking || pendingTargets.length > 1}
+              title={
+                pendingTargets.length > 1
+                  ? "Fork takes a single spot - remove the extra chips first"
+                  : "Spin this selection off into a new artifact and agent session"
+              }
               className={`${btn} ml-auto disabled:cursor-default disabled:opacity-50`}
             >
               {forking ? "Forking…" : "Fork"}

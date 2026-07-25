@@ -97,6 +97,13 @@ export interface AnnotationEvent extends BaseEvent {
   /** Artifact version the annotation was authored against (server-validated; D-066). */
   readonly version: number;
   readonly target: Anchor;
+  /**
+   * The FULL ordered list of spots one note covers, when the human collected
+   * several (cmd-click). Present only with two or more entries, and `target`
+   * MUST equal `targets[0]`, so a reader that knows only `target` still sees
+   * the first spot; a single pick stays in the canonical single form.
+   */
+  readonly targets?: readonly Anchor[];
   readonly note: string;
   /**
    * When the human wrote the note (client-minted, ISO-8601). `at` is when the
@@ -259,6 +266,14 @@ export interface QuestionAnsweredEvent extends BaseEvent {
   readonly items?: readonly ItemAnswer[];
   /** A region of the artifact the human pinned as their answer's referent. */
   readonly anchor?: Anchor;
+  /**
+   * The FULL ordered list of pinned regions, when the human pinned several
+   * (shift+cmd-click). Same rule as an annotation's `targets`: present only
+   * with two or more entries, and `anchor` MUST equal `anchors[0]`, so a
+   * single pin stays in the canonical single form. Decided answers only -
+   * skip/unclear discard pins like every other decision field.
+   */
+  readonly anchors?: readonly Anchor[];
   /** Images the human attached to their answer. */
   readonly images?: readonly PromptImage[];
   /** The human declined to answer (Skip). Clears the question without content;

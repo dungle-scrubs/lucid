@@ -316,6 +316,50 @@ describe("foldLog segments", () => {
     expect(s.highSeq).toBe(3);
   });
 
+  test("carries an annotation's targets and an answer's anchors, first-element rule intact", () => {
+    const spot = (n: number) => ({
+      kind: "element" as const,
+      fingerprint: `f${n}`,
+      domPath: `p:nth-child(${n})`,
+      snippet: `<p>${n}</p>`,
+    });
+    const events: LogEvent[] = [
+      ev({
+        t: "session_opened",
+        seq: 1,
+        segment: 1,
+        artifact: "a.html",
+        version: 1,
+        hash: "h",
+        path: "versions/s1/v1.html",
+      } as never),
+      ev({
+        t: "annotation",
+        seq: 2,
+        id: "a1",
+        version: 1,
+        target: spot(1),
+        targets: [spot(1), spot(2)],
+        note: "both of these",
+      } as never),
+      ev({ t: "question", seq: 3, id: "q1", text: "where?" } as never),
+      ev({
+        t: "question_answered",
+        seq: 4,
+        id: "ans1",
+        questionId: "q1",
+        text: "here and here",
+        anchor: spot(1),
+        anchors: [spot(1), spot(3)],
+      } as never),
+    ];
+    const s = foldLog(events);
+    expect(s.annotations[0]?.targets).toEqual([spot(1), spot(2)]);
+    expect(s.annotations[0]?.target).toEqual(spot(1)); // legacy readers see the first
+    expect(s.questions[0]?.answerAnchors).toEqual([spot(1), spot(3)]);
+    expect(s.questions[0]?.answerAnchor).toEqual(spot(1));
+  });
+
   test("agent_ack progress accumulates last-writer-wins and closes on output", () => {
     const opened = ev({
       t: "session_opened",

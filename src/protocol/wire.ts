@@ -57,6 +57,13 @@ export interface PayloadAnnotation {
   readonly version: number;
   readonly resolved: boolean;
   readonly target: Anchor;
+  /**
+   * Every spot the note covers, when the human collected several with one
+   * draft (additive). `target` is always `targets[0]`, so a consumer that
+   * knows only `target` reads the first spot; `resolved` is true while ANY
+   * of them still attaches. Omitted for the single-target annotation.
+   */
+  readonly targets?: readonly Anchor[];
   readonly note: string;
   readonly at: string;
   /** When the human wrote it; `at` is when it reached the log. */
@@ -163,6 +170,9 @@ export interface PayloadQuestion {
   /** A region of the artifact the human pinned as the referent of their answer
    *  - the mirror of the agent's `ref`, captured like an annotation's target. */
   readonly answerAnchor?: Anchor;
+  /** Every pinned region, when the human pinned several (additive).
+   *  `answerAnchor` is always `answerAnchors[0]`; omitted for a single pin. */
+  readonly answerAnchors?: readonly Anchor[];
   /** Images the human attached to their answer. */
   readonly answerImages?: readonly PayloadImage[];
 }

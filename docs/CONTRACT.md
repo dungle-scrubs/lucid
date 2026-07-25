@@ -184,6 +184,24 @@ each problem, never half-recorded. A pinned region or an attached image is
 itself an answer to a group of ONE free-text question - with several questions
 there is nothing to say which one it settles, so it does not stand in for any.
 
+## Multi-spot feedback (`targets`, `answerAnchors`) - additive
+
+An annotation MAY carry `targets`: the full ordered list of anchors one note
+covers, when the human collected several spots into a single draft. `target`
+is **always** `targets[0]`, so a consumer that knows only `target` still reads
+the first spot; `resolved` is true while **any** of the spots still attaches
+(reconstruct the edited-away ones from their snippets). The field appears only
+with two or more entries - a single-spot annotation stays in the shape it has
+always had - and the list is capped at 8 per annotation.
+
+A question's answer MAY likewise carry `answerAnchors`: every region the human
+pinned as their answer's referent, under the same rules - `answerAnchor` is
+always `answerAnchors[0]`, the field appears only with two or more pins, and
+the cap is 8. Pins are decisions, so a skipped or unclear answer never carries
+them. Both fields are additive and optional: old logs, single-spot writers,
+and existing integrations are unaffected. An explicitly empty list is treated
+exactly as an absent field, never as "no spots".
+
 ## Per-item delivery state (`delivered`, `answered`) - additive
 
 Each annotation and each **human** message MAY carry `"delivered": true` (an

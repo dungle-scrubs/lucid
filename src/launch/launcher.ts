@@ -1,6 +1,7 @@
 import { closeSync, openSync } from "node:fs";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { Anchor } from "../anchors/anchor.ts";
 import { readLastAttendant, writeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver } from "../core/deliver.ts";
@@ -130,11 +131,14 @@ export const revisePrompt = (payload: WaitPayload, artifact: string): string | n
     images && images.length > 0
       ? `${text}${text ? " " : ""}(images: ${images.map((i) => i.path).join(", ")})`
       : text;
+  // One clipped location per anchor. A multi-target annotation lists every
+  // spot its note covers; dropping the tail would apply the note to only the
+  // first of the places the human pointed at.
+  const clip = (t: Anchor): string =>
+    (t.kind === "range" ? t.quote.exact : t.snippet).replace(/\s+/g, " ").trim().slice(0, 100);
   for (const a of payload.annotations) {
-    const where = a.target.kind === "range" ? a.target.quote.exact : a.target.snippet;
-    lines.push(
-      `- ${withImages(a.note, a.images)} (at: ${where.replace(/\s+/g, " ").trim().slice(0, 100)})`,
-    );
+    const where = (a.targets ?? [a.target]).map(clip).join("; ");
+    lines.push(`- ${withImages(a.note, a.images)} (at: ${where})`);
   }
   for (const m of payload.messages) {
     if (m.role !== "human") continue;
@@ -157,7 +161,14 @@ export const revisePrompt = (payload: WaitPayload, artifact: string): string | n
     // Chosen options ARE the answer when the human picked rather than typed;
     // reading only the free text silently dropped the whole reply.
     const answer = [...(q.answerOptions ?? []), ...(q.answer ? [q.answer] : [])].join("; ");
-    if (answer) lines.push(`- answer to "${q.text}": ${withImages(answer, q.answerImages)}`);
+    // Pinned regions are part of the answer too - a pin says WHERE the words
+    // apply, and a pin alone is a whole answer (pointing instead of typing).
+    const pins = q.answerAnchors ?? (q.answerAnchor ? [q.answerAnchor] : []);
+    const pinned = pins.length > 0 ? `(pinned: ${pins.map(clip).join("; ")})` : "";
+    const said = withImages(answer, q.answerImages);
+    if (said || pinned) {
+      lines.push(`- answer to "${q.text}": ${[said, pinned].filter(Boolean).join(" ")}`);
+    }
   }
   if (lines.length === 0) return null;
   return [

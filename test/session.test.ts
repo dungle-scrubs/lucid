@@ -242,6 +242,60 @@ describe("buildWaitPayload resolution", () => {
     expect(a?.resolved).toBe(false); // orphaned, not re-pointed at v2
     expect(payload.warnings?.some((w) => w.code === "SNAPSHOT_MISSING")).toBe(true);
   });
+
+  test("a multi-target annotation stays resolved while ANY spot survives", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    const gone = {
+      kind: "element" as const,
+      fingerprint: 'li#zzzz·"gone"',
+      domPath: "article:nth-child(1)>ol:nth-child(1)>li:nth-child(9)",
+      snippet: "<li>gone</li>",
+    };
+    const alive = {
+      kind: "element" as const,
+      fingerprint: 'li#0000·"two"',
+      domPath: "article:nth-child(1)>ol:nth-child(1)>li:nth-child(2)",
+      snippet: "<li>two</li>",
+    };
+    await appendEvents(paths.logPath, [
+      {
+        t: "annotation",
+        id: "a-multi",
+        version: 1,
+        target: gone,
+        targets: [gone, alive],
+        note: "these two",
+      },
+      {
+        t: "annotation",
+        id: "a-all-gone",
+        version: 1,
+        target: gone,
+        targets: [gone, gone],
+        note: "nothing left",
+      },
+    ]);
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const payload = await buildWaitPayload({
+      session: paths.artifactPath,
+      state,
+      status: "feedback",
+      currentHtml: await readFile(paths.currentHtml, "utf8"),
+      snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
+      annotations: state.annotations,
+      messages: state.messages,
+      nextSeq: state.highSeq,
+    });
+    const multi = payload.annotations.find((a) => a.id === "a-multi");
+    // The first spot no longer attaches, but the second does: the card stays
+    // live and the wire carries the full list beside the legacy first.
+    expect(multi?.resolved).toBe(true);
+    expect(multi?.targets).toHaveLength(2);
+    expect(multi?.target).toEqual(gone);
+    const allGone = payload.annotations.find((a) => a.id === "a-all-gone");
+    expect(allGone?.resolved).toBe(false);
+  });
 });
 
 describe("per-item delivery state (D20)", () => {

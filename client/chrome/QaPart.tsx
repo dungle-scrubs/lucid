@@ -90,7 +90,13 @@ export const QaPart: DataMessagePartComponent<QaData> = ({ data }) => {
           })}
         </ol>
       )}
-      {question.answerAnchor ? <TargetSnippet target={question.answerAnchor} /> : null}
+      {/* Every pinned spot; `answerAnchor` is always the first of `answerAnchors`. */}
+      {(question.answerAnchors ?? (question.answerAnchor ? [question.answerAnchor] : [])).map(
+        (t, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: anchors have no id and a settled answer's list never changes.
+          <TargetSnippet key={i} target={t} />
+        ),
+      )}
       {images.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {images.map((img, i) => (

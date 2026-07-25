@@ -1,7 +1,7 @@
 import { statSync, mkdirSync, watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { parseAnchor } from "../anchors/anchor.ts";
+import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
 import { readLastAttendant } from "../core/attendant.ts";
 import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
@@ -82,6 +82,34 @@ const parseImages = (input: unknown): PromptImage[] => {
       const it = item as PromptImage;
       out.push({ id: it.id, name: it.name.slice(0, 120), file: it.file });
     }
+  }
+  return out;
+};
+
+/** A multi-anchor list is bounded so a runaway client cannot flood the log
+ *  with one POST; the chrome caps collection at the same number. */
+const MAX_ANCHORS = 8;
+
+/**
+ * Validate an optional multi-anchor list (`targets` on an annotation,
+ * `anchors` on an answer). Every element goes through parseAnchor and ONE
+ * invalid element rejects the whole POST - a half-valid list would store a
+ * note claiming spots it does not have. Returns undefined when the field is
+ * absent or empty, so callers fall back to the single-anchor form.
+ */
+const parseAnchorList = (
+  input: unknown,
+  field: string,
+): Anchor[] | { readonly error: string } | undefined => {
+  if (input === undefined) return undefined;
+  if (!Array.isArray(input)) return { error: `${field} must be an array` };
+  if (input.length === 0) return undefined;
+  if (input.length > MAX_ANCHORS) return { error: `too many ${field} (max ${MAX_ANCHORS})` };
+  const out: Anchor[] = [];
+  for (const item of input) {
+    const anchor = parseAnchor(item);
+    if ("error" in anchor) return { error: `${field}[${out.length}]: ${anchor.error}` };
+    out.push(anchor);
   }
   return out;
 };
@@ -284,8 +312,15 @@ export const createSessionHost = (
     if (!body || typeof body.id !== "string" || typeof body.note !== "string") {
       return json({ error: "invalid annotation" }, 400);
     }
-    const anchor = parseAnchor(body.target);
+    // Cmd-collected picks arrive as `targets`; `target` is DERIVED as the
+    // first, never taken from the caller beside them (two sources for one
+    // spot is how they drift). A singleton list normalizes to the canonical
+    // single form so the log has one shape per arity.
+    const targetList = parseAnchorList(body.targets, "targets");
+    if (targetList && "error" in targetList) return json({ error: targetList.error }, 400);
+    const anchor = targetList ? targetList[0]! : parseAnchor(body.target);
     if ("error" in anchor) return json({ error: anchor.error }, 400);
+    const targets = targetList && targetList.length > 1 ? targetList : undefined;
     const version =
       typeof body.version === "number" && Number.isInteger(body.version) ? body.version : 0;
     // Same validator as a message's images: an annotation's images are the same
@@ -305,6 +340,7 @@ export const createSessionHost = (
         id: body.id,
         version,
         target: anchor,
+        ...(targets ? { targets } : {}),
         note: body.note,
         ...(authoredAt ? { authoredAt } : {}),
         ...(images.length > 0 ? { images } : {}),
@@ -471,8 +507,18 @@ export const createSessionHost = (
       decided && Array.isArray(body.options)
         ? body.options.filter((o): o is string => typeof o === "string" && o.length > 0)
         : [];
-    const anchorIn = decided && body.anchor !== undefined ? parseAnchor(body.anchor) : undefined;
+    // Shift+cmd-collected pins arrive as `anchors`, mirroring an annotation's
+    // `targets`: `anchor` derives as the first, a singleton normalizes to the
+    // single form, and none of it survives a skip or re-ask (decided-only).
+    const anchorList = decided ? parseAnchorList(body.anchors, "anchors") : undefined;
+    if (anchorList && "error" in anchorList) return json({ error: anchorList.error }, 400);
+    const anchorIn = anchorList
+      ? anchorList[0]!
+      : decided && body.anchor !== undefined
+        ? parseAnchor(body.anchor)
+        : undefined;
     if (anchorIn && "error" in anchorIn) return json({ error: anchorIn.error }, 400);
+    const anchors = anchorList && anchorList.length > 1 ? anchorList : undefined;
     const images = decided ? parseImages(body.images) : [];
     // Per-item answers to a grouped question (D12), re-validated against the
     // group the ASKING event recorded - the drawer gates its submit with the
@@ -540,6 +586,7 @@ export const createSessionHost = (
         ...(!grouped && options.length > 0 ? { options } : {}),
         ...(items.length > 0 ? { items } : {}),
         ...(anchorIn ? { anchor: anchorIn } : {}),
+        ...(anchors ? { anchors } : {}),
         ...(images.length > 0 ? { images } : {}),
       },
     ]);

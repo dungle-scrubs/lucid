@@ -70,8 +70,16 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
       source: "lucid-chrome",
       type: "highlight",
       annotations: s.annotations,
-      queued: s.queue.map((q) => ({ id: q.id, target: q.target })),
+      // `targets` only with two or more, the wire's one shape per arity: the
+      // type declares it absent on a singleton, so presence may be read as
+      // "multi-target" without also checking the length.
+      queued: s.queue.map((q) => ({
+        id: q.id,
+        target: q.target,
+        ...(q.targets.length > 1 ? { targets: q.targets } : {}),
+      })),
       pending: s.pendingTarget,
+      pendingList: s.pendingTargets,
       showTargets: s.showTargets,
     });
   };
@@ -99,20 +107,39 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     // guard, stall while parsing, and land over a newer snapshot that
     // completed meanwhile. A malformed body applies nothing.
     if (!payload || mine !== bootstrapSeq) return;
-    set({
-      // A deferred swap means the surface still SHOWS the older version, and
-      // `version` is what new annotations are stamped with (D-066). The rest
-      // of the fold - delivery state, the working window - is about the
-      // conversation, not the frame, and must not wait on the draft.
-      ...(pendingSwapHtml === null ? { version: payload.version } : {}),
-      reviewResolved: payload.reviewResolved,
-      annotations: [...payload.annotations],
-      messages: [...payload.messages],
-      questions: [...(payload.questions ?? [])],
-      agentWorking: payload.agentWorking ?? null,
-      agentsListening: payload.agentsListening ?? 0,
-      lastAttendant: payload.lastAttendant ?? null,
-      contextUsage: payload.contextUsage ?? null,
+    set((s) => {
+      // Staged answer state is keyed by question id, and a question can be
+      // settled from OUTSIDE this window (another tab, the CLI). Keep staging
+      // only for questions still open, or the next shift-pick would attach
+      // invisibly to an ask nobody can answer any more - and the pick-mode
+      // arm would point at a ghost.
+      const open = new Set((payload.questions ?? []).filter((q) => !q.answered).map((q) => q.id));
+      const keep = <T>(rec: Record<string, T>): Record<string, T> =>
+        Object.fromEntries(Object.entries(rec).filter(([id]) => open.has(id)));
+      for (const [id, imgs] of Object.entries(s.answerImages)) {
+        if (!open.has(id)) for (const img of imgs) URL.revokeObjectURL(img.url);
+      }
+      return {
+        // A deferred swap means the surface still SHOWS the older version, and
+        // `version` is what new annotations are stamped with (D-066). The rest
+        // of the fold - delivery state, the working window - is about the
+        // conversation, not the frame, and must not wait on the draft.
+        ...(pendingSwapHtml === null ? { version: payload.version } : {}),
+        reviewResolved: payload.reviewResolved,
+        annotations: [...payload.annotations],
+        messages: [...payload.messages],
+        questions: [...(payload.questions ?? [])],
+        agentWorking: payload.agentWorking ?? null,
+        agentsListening: payload.agentsListening ?? 0,
+        lastAttendant: payload.lastAttendant ?? null,
+        contextUsage: payload.contextUsage ?? null,
+        answerAnchors: keep(s.answerAnchors),
+        answerAnchorLists: keep(s.answerAnchorLists),
+        answerImages: keep(s.answerImages),
+        questionDrafts: keep(s.questionDrafts),
+        answerPickFor:
+          s.answerPickFor !== null && open.has(s.answerPickFor) ? s.answerPickFor : null,
+      };
     });
     pushHighlights();
   };

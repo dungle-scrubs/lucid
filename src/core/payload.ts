@@ -107,6 +107,7 @@ const toQuestion = (q: QuestionRecord, assetAbsPath: (file: string) => string): 
     ...(q.answerOptions && q.answerOptions.length > 0 ? { answerOptions: q.answerOptions } : {}),
     ...(q.items && q.items.length > 0 ? { answerItems: q.items } : {}),
     ...(q.answerAnchor ? { answerAnchor: q.answerAnchor } : {}),
+    ...(q.answerAnchors && q.answerAnchors.length > 0 ? { answerAnchors: q.answerAnchors } : {}),
     ...(q.answerImages && q.answerImages.length > 0
       ? {
           answerImages: q.answerImages.map((img) => ({
@@ -119,8 +120,9 @@ const toQuestion = (q: QuestionRecord, assetAbsPath: (file: string) => string): 
   };
 };
 
-/** The fields the snapshot guard needs; annotations and forks both satisfy it. */
-type ResolvableRecord = Pick<AnnotationRecord, "id" | "version" | "target">;
+/** The fields the snapshot guard needs; annotations and forks both satisfy it.
+ *  `targets` rides along so a multi-target annotation resolves per spot. */
+type ResolvableRecord = Pick<AnnotationRecord, "id" | "version" | "target" | "targets">;
 
 /**
  * Resolve a single located record (annotation or fork) against the current
@@ -167,8 +169,10 @@ const resolveAnnotation = async (
       return false;
     }
   }
-  // Carry forward: does the anchor still attach to the current version?
-  return anchorResolves(record.target, currentRoot);
+  // Carry forward: does the anchor still attach to the current version? A
+  // multi-target record stays live while ANY spot survives - the overlay
+  // simply paints no mark for the spots that were edited away.
+  return (record.targets ?? [record.target]).some((t) => anchorResolves(t, currentRoot));
 };
 
 export interface BuildPayloadOptions {
@@ -212,6 +216,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
       version: a.version,
       resolved,
       target: a.target,
+      ...(a.targets && a.targets.length > 0 ? { targets: a.targets } : {}),
       note: a.note,
       at: a.at,
       ...(a.authoredAt ? { authoredAt: a.authoredAt } : {}),

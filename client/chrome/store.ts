@@ -18,6 +18,24 @@ import type {
 
 export const uuid = (): string => crypto.randomUUID();
 
+/** The server rejects a longer list (MAX_ANCHORS in session-host.ts), so the
+ *  chrome stops collecting at the same count rather than composing a draft
+ *  that cannot send. */
+export const MAX_PICK_TARGETS = 8;
+
+/** Anchor identity for the cmd-click toggle: the same element captured twice
+ *  yields the same JSON, so a repeat pick is recognized and removed. */
+export const sameAnchor = (a: Anchor, b: Anchor): boolean =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+/** One cmd-click's effect on a collection: a new spot appends (up to the cap),
+ *  a repeated spot leaves - the familiar multi-select toggle. */
+export const toggleAnchor = (list: readonly Anchor[], anchor: Anchor): readonly Anchor[] => {
+  const without = list.filter((a) => !sameAnchor(a, anchor));
+  if (without.length < list.length) return without;
+  return list.length >= MAX_PICK_TARGETS ? list : [...list, anchor];
+};
+
 /**
  * A session's identity as the store needs it. One instance of everything in
  * this module exists PER SESSION - the shell can hold many at once - so
@@ -170,6 +188,11 @@ export interface SessionState {
   version: number;
   reviewResolved: boolean;
   pendingTarget: Anchor | null;
+  /** Every spot of the in-flight draft, in pick order. INVARIANT:
+   *  `pendingTarget === pendingTargets[0] ?? null` - the single field stays
+   *  authoritative for everything that predates cmd-collection (fork, the
+   *  approve guard, old overlays), so every write updates both together. */
+  pendingTargets: readonly Anchor[];
   composerNote: string;
   queue: QueuedAnnotation[];
   editingId: string | null;
@@ -246,6 +269,10 @@ export interface SessionState {
   questionDrawerDismissed: readonly string[];
   /** A pinned artifact region attached to a question's answer, by question id. */
   answerAnchors: Record<string, Anchor>;
+  /** Every pinned region per answer, in pick order (shift+cmd collects more
+   *  than one). INVARIANT: `answerAnchors[id] === answerAnchorLists[id][0]`,
+   *  kept the same way as pendingTarget/pendingTargets. */
+  answerAnchorLists: Record<string, readonly Anchor[]>;
   /** Images staged on a question's answer, by question id. */
   answerImages: Record<string, PastedImage[]>;
   /** Count of in-flight answer-image uploads per question; submission waits on
@@ -266,6 +293,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     version: config.version,
     reviewResolved: false,
     pendingTarget: null,
+    pendingTargets: [],
     composerNote: "",
     queue: [],
     editingId: null,
@@ -302,6 +330,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     questionDrafts: {},
     questionDrawerDismissed: [],
     answerAnchors: {},
+    answerAnchorLists: {},
     answerImages: {},
     answerUploading: {},
     answerPickFor: null,

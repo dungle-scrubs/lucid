@@ -85,12 +85,16 @@ export const createActions = (ctx: ActionsCtx) => {
         {
           id: uuid(),
           target: s.pendingTarget,
+          // The whole cmd-collected set rides as ONE queued item: one note
+          // covering every spot (a singleton for the ordinary pick).
+          targets: s.pendingTargets,
           note: s.composerNote.trim(),
           at: new Date().toISOString(),
           images: s.pastedImages,
         },
       ],
       pendingTarget: null,
+      pendingTargets: [],
       composerNote: "",
       pastedImages: [],
     });
@@ -158,6 +162,7 @@ export const createActions = (ctx: ActionsCtx) => {
         forking: false,
         forkId: null,
         pendingTarget: null,
+        pendingTargets: [],
         composerNote: "",
         pastedImages: [],
       });
@@ -177,8 +182,31 @@ export const createActions = (ctx: ActionsCtx) => {
 
   const discardPending = (): void => {
     for (const img of get().pastedImages) URL.revokeObjectURL(img.url);
-    set({ pendingTarget: null, composerNote: "", pastedImages: [], forkId: null });
+    // The whole collection goes as one gesture: Escape discards the draft,
+    // and a cmd-collected draft IS one draft, however many spots it covers.
+    set({
+      pendingTarget: null,
+      pendingTargets: [],
+      composerNote: "",
+      pastedImages: [],
+      forkId: null,
+    });
     applyDeferredSwapIfReady();
+    pushHighlights();
+  };
+
+  /** Drop one collected spot from the draft (a chip's ×). Removing the last
+   *  one discards the draft whole - a note with no spot is not an annotation. */
+  const removePendingTarget = (index: number): void => {
+    const next = get().pendingTargets.filter((_, i) => i !== index);
+    if (next.length === 0) {
+      discardPending();
+      return;
+    }
+    // An edited collection is a new fork candidate (the pick handler's rule):
+    // a kept id would let the server dedupe a retry that now forks a
+    // different first spot, silently dropping it.
+    set({ pendingTargets: next, pendingTarget: next[0] ?? null, forkId: null });
     pushHighlights();
   };
 
@@ -246,6 +274,10 @@ export const createActions = (ctx: ActionsCtx) => {
           id: q.id,
           version: get().version,
           target: q.target,
+          // A multi-spot item sends `targets`; the server derives `target` as
+          // the first and ignores the one beside it. A singleton stays the
+          // canonical single form.
+          ...(q.targets.length > 1 ? { targets: q.targets } : {}),
           // The queued card shows the `[Pasted text #N +L lines]` placeholder;
           // what sends is the paste it stands for.
           note: expandPastes(q.note),
@@ -531,12 +563,29 @@ export const createActions = (ctx: ActionsCtx) => {
   const clearAnswerAnchor = (q: AgentQuestion): void =>
     set((s) => {
       const next = { ...s.answerAnchors };
+      const lists = { ...s.answerAnchorLists };
       delete next[q.id];
+      delete lists[q.id];
       return {
         answerAnchors: next,
+        answerAnchorLists: lists,
         answerPickFor: s.answerPickFor === q.id ? null : s.answerPickFor,
       };
     });
+
+  /** Drop one pinned spot from an answer (a chip's ×); clearing the last one
+   *  clears the answer anchor entirely. */
+  const removeAnswerAnchor = (q: AgentQuestion, index: number): void => {
+    const next = (get().answerAnchorLists[q.id] ?? []).filter((_, i) => i !== index);
+    if (next.length === 0) {
+      clearAnswerAnchor(q);
+      return;
+    }
+    set((s) => ({
+      answerAnchors: { ...s.answerAnchors, [q.id]: next[0]! },
+      answerAnchorLists: { ...s.answerAnchorLists, [q.id]: next },
+    }));
+  };
 
   const addAnswerImage = async (q: AgentQuestion, file: File): Promise<void> => {
     // Track the upload so submission can wait on it: choosing an image and
@@ -586,15 +635,18 @@ export const createActions = (ctx: ActionsCtx) => {
   const clearAnswerState = (st: ReturnType<typeof get>, id: string) => {
     const drafts = { ...st.questionDrafts };
     const anchors = { ...st.answerAnchors };
+    const anchorLists = { ...st.answerAnchorLists };
     const imgs = { ...st.answerImages };
     const uploading = { ...st.answerUploading };
     delete drafts[id];
     delete anchors[id];
+    delete anchorLists[id];
     delete imgs[id];
     delete uploading[id];
     return {
       questionDrafts: drafts,
       answerAnchors: anchors,
+      answerAnchorLists: anchorLists,
       answerImages: imgs,
       answerUploading: uploading,
       answerPickFor: st.answerPickFor === id ? null : st.answerPickFor,
@@ -626,6 +678,7 @@ export const createActions = (ctx: ActionsCtx) => {
     if ((s.answerUploading[q.id] ?? 0) > 0) return;
     if (answerSending.has(q.id)) return;
     const anchor = s.answerAnchors[q.id];
+    const anchorList = s.answerAnchorLists[q.id] ?? [];
     const images = s.answerImages[q.id] ?? [];
     const hasAttachments = anchor !== undefined || images.length > 0;
     if (draftIssues(group, draft, { hasAttachments }).length > 0) return;
@@ -640,6 +693,9 @@ export const createActions = (ctx: ActionsCtx) => {
         ...(grouped ? { items: buildItems(group, draft) } : {}),
         ...(legacy && legacy.options.length > 0 ? { options: legacy.options } : {}),
         ...(anchor ? { anchor } : {}),
+        // Several pins send as `anchors`; the server derives `anchor` as the
+        // first, same as an annotation's `targets`.
+        ...(anchorList.length > 1 ? { anchors: anchorList } : {}),
         ...(images.length > 0
           ? { images: images.map(({ id, name, file }) => ({ id, name, file })) }
           : {}),
@@ -837,6 +893,7 @@ export const createActions = (ctx: ActionsCtx) => {
     queueQuickReply,
     forkPending,
     discardPending,
+    removePendingTarget,
     setComposerNote,
     addPastedImage,
     removePastedImage,
@@ -861,6 +918,7 @@ export const createActions = (ctx: ActionsCtx) => {
     startAnswerPick,
     cancelAnswerPick,
     clearAnswerAnchor,
+    removeAnswerAnchor,
     addAnswerImage,
     removeAnswerImage,
     submitAnswer,
