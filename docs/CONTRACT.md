@@ -160,6 +160,25 @@ Annotation and message IDs are idempotent. Advance your persisted cursor only
 `wait` never drops or double-applies feedback. `wait` is safe to kill and re-run;
 it requires no always-running process of its own.
 
+## Per-item delivery state (`delivered`, `answered`) - additive
+
+Each annotation and each **human** message MAY carry `"delivered": true` (an
+`agent_ack` claimed a batch it was in) and/or `"answered": true` (that batch
+was delivered *and* a `version`, `agent_reply`, or `question` landed after the
+item). Both are derived from log seqs within the current segment and are
+omitted rather than false, so nothing existing changes shape. The viewer shows
+them per item, which is what makes "does the agent see this?" answerable
+without asking (D20). Agents may ignore them: they are state Lucid derives,
+never state an agent reports.
+
+The claim comes from the ack's optional `covers` seq - **the cursor its taker
+had just read**, not the ack's own position. `lucid wait --since` writes it for
+you. Two consequences the shapes above depend on: feedback that lands between
+the read and the ack belongs to the *next* batch and is not marked delivered,
+and a presence-only re-ack (`lucid intent`, `lucid progress`) claims nothing.
+An ack without `covers` - a pre-D20 writer - delivers nothing rather than
+everything.
+
 ## Resuming someone else's session
 
 Any harness can resume by calling `lucid wait <file>` with **no** `--since`,

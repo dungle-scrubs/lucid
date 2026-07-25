@@ -2,12 +2,13 @@ import { closeSync, openSync } from "node:fs";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readLastAttendant, writeAttendantSidecar } from "../core/attendant.ts";
-import { renderCursor } from "../core/cursor.ts";
+import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver } from "../core/deliver.ts";
+import { shellArg } from "../core/escape.ts";
 import { foldLog, type ForkRecord } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
 import { sessionPaths, type SessionPaths } from "../core/paths.ts";
-import type { WaitPayload } from "../core/payload.ts";
+import type { PayloadImage, WaitPayload } from "../core/payload.ts";
 import { openSession } from "../core/session.ts";
 import { runWait } from "../core/wait.ts";
 import { openBrowser, spawnServer, waitForServer } from "../cli/self.ts";
@@ -111,23 +112,43 @@ const createPrompt = (seedPath: string, artifact: string): string =>
     `Read the fork seed at ${seedPath}.`,
     `Author the artifact it describes as a single self-contained HTML file written to exactly ${artifact}.`,
     "Then open it for review by running:",
-    `  lucid open ${artifact}`,
+    `  lucid open ${shellArg(artifact)}`,
     `Write only ${artifact}; do not modify other files.`,
   ].join("\n");
 
 /** The revise instruction for a feedback batch, or null when the batch carries
- *  nothing to act on (e.g. only an approval) - so the launcher never drives an
- *  empty resume turn. Mirrors the signals `runWait` counts as feedback. */
-const revisePrompt = (payload: WaitPayload, artifact: string): string | null => {
+ *  nothing to act on (e.g. only an approval) - so no caller ever drives an
+ *  empty resume turn. Mirrors the signals `runWait` counts as feedback. Shared
+ *  with the hub's attend engine: one wording for every headless revise Lucid
+ *  drives, launcher or hub. */
+export const revisePrompt = (payload: WaitPayload, artifact: string): string | null => {
   const lines: string[] = [];
+  // Attachments ride as absolute paths the agent can read. A screenshot with
+  // no words is a whole piece of feedback; dropping it turned an image-only
+  // item into an empty bullet, or into "nothing to act on".
+  const withImages = (text: string, images?: readonly PayloadImage[]): string =>
+    images && images.length > 0
+      ? `${text}${text ? " " : ""}(images: ${images.map((i) => i.path).join(", ")})`
+      : text;
   for (const a of payload.annotations) {
     const where = a.target.kind === "range" ? a.target.quote.exact : a.target.snippet;
-    lines.push(`- ${a.note} (at: ${where.replace(/\s+/g, " ").trim().slice(0, 100)})`);
+    lines.push(
+      `- ${withImages(a.note, a.images)} (at: ${where.replace(/\s+/g, " ").trim().slice(0, 100)})`,
+    );
   }
-  for (const m of payload.messages) if (m.role === "human") lines.push(`- ${m.text}`);
+  for (const m of payload.messages) {
+    if (m.role !== "human") continue;
+    const text = withImages(m.text, m.images);
+    if (text) lines.push(`- ${text}`);
+  }
   for (const r of payload.reverts ?? []) lines.push(`- revert to v${r.targetVersion}: ${r.why}`);
-  for (const q of payload.questions ?? [])
-    if (q.answered && q.answer) lines.push(`- answer to "${q.text}": ${q.answer}`);
+  for (const q of payload.questions ?? []) {
+    if (!q.answered || q.skipped) continue;
+    // Chosen options ARE the answer when the human picked rather than typed;
+    // reading only the free text silently dropped the whole reply.
+    const answer = [...(q.answerOptions ?? []), ...(q.answer ? [q.answer] : [])].join("; ");
+    if (answer) lines.push(`- answer to "${q.text}": ${withImages(answer, q.answerImages)}`);
+  }
   if (lines.length === 0) return null;
   return [
     `Review feedback arrived on ${artifact}. Apply it and save the file (the viewer live-reloads):`,
@@ -138,8 +159,9 @@ const revisePrompt = (payload: WaitPayload, artifact: string): string | null => 
 
 /** Run a recipe argv to completion. Returns the exit code; a spawn that cannot
  *  even start (missing executable -> synchronous throw) returns 127 rather than
- *  throwing, so one bad recipe never crashes the launcher. */
-const runSpawn = async (
+ *  throwing, so one bad recipe never crashes the caller. Shared with the hub's
+ *  attend engine so both spawners carry the same identity + logging discipline. */
+export const runSpawn = async (
   argv: string[],
   cwd: string,
   logFile: string,
@@ -360,10 +382,14 @@ export const attendChild = async (
       nextCursor: payload.nextCursor,
       at: new Date().toISOString(),
     });
+    // What this turn takes delivery of (D20) - the batch just read, not
+    // whatever has landed by the time the ack appends.
+    const covers = parseCursor(payload.nextCursor);
     await deliver(child, {
       t: "agent_ack",
       id: crypto.randomUUID(),
       intent: "revise",
+      ...(covers !== undefined ? { covers } : {}),
       // The CHILD session's identity (D18): the launcher acts on its behalf.
       attendant: { harness: harnessName, sessionId, cwd: child.artifactDir },
     }).catch(() => {});

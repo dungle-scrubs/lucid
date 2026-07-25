@@ -187,6 +187,14 @@ export interface AgentAckEvent extends BaseEvent {
    * still only closes on real output, and a crashed orchestrator goes stale.
    */
   readonly progress?: AgentProgress;
+  /**
+   * The highest seq the acknowledged batch covered - the cursor the taker had
+   * just read (D20). Delivery is a claim about a RANGE, not about the ack's own
+   * position: feedback can land between the read and the ack, and a presence-only
+   * re-ack (`lucid intent`, `lucid progress`) takes delivery of nothing at all.
+   * Absent on those and on pre-D20 logs, which therefore claim no delivery.
+   */
+  readonly covers?: number;
   /** Which harness session took delivery (D18). */
   readonly attendant?: AttendantStamp;
 }

@@ -100,7 +100,11 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     // completed meanwhile. A malformed body applies nothing.
     if (!payload || mine !== bootstrapSeq) return;
     set({
-      version: payload.version,
+      // A deferred swap means the surface still SHOWS the older version, and
+      // `version` is what new annotations are stamped with (D-066). The rest
+      // of the fold - delivery state, the working window - is about the
+      // conversation, not the frame, and must not wait on the draft.
+      ...(pendingSwapHtml === null ? { version: payload.version } : {}),
       reviewResolved: payload.reviewResolved,
       annotations: [...payload.annotations],
       messages: [...payload.messages],
@@ -138,6 +142,10 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     if (hasUnsentDraft()) {
       pendingSwapHtml = html;
       set({ newerVersion: version });
+      // The frame waits for the draft; the record does not. Without this the
+      // panel keeps saying an agent is still working, and every delivery chip
+      // stays at its pre-version answer, until the human sends.
+      void bootstrap();
       return;
     }
     applySwap(html, version);

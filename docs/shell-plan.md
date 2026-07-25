@@ -81,7 +81,11 @@ a pointer registry (`~/.lucid/registry.json`) is central.
 8. **The daemon never spawns agents** (preserves D-064). Agent-spawning stays
    in the separate, opt-in fork launcher. A fork registers its child session
    with the daemon so it appears as a tab — spawning never migrates into the
-   always-on server.
+   always-on server. *Amended by D15 (artifact-first):* "never **without
+   explicit opt-in**". `lucid hub --attend` (or `LUCID_HUB_ATTEND=1`) runs the
+   delivery engine (a headless turn per undelivered feedback batch when
+   nothing is listening) and enables `POST /hub/create`. A hub started
+   without it still spawns nothing.
 9. **UI state — layout global, marks per-session.** Panel width and sidebar
    open/closed are one shell-level setting shared across tabs; the show-marks
    toggle is remembered per session, keyed by session id.

@@ -159,8 +159,11 @@ const serveCommand = Command.make("__serve", { file: fileArg }, ({ file }) =>
 );
 
 const hubPortOpt = Options.integer("port").pipe(Options.optional);
-const hubCommand = Command.make("hub", { port: hubPortOpt }, ({ port }) =>
-  runEffect(() => runHub({ port: Option.getOrUndefined(port) })),
+const hubAttendOpt = Options.boolean("attend").pipe(Options.withDefault(false));
+const hubCommand = Command.make(
+  "hub",
+  { port: hubPortOpt, attend: hubAttendOpt },
+  ({ port, attend }) => runEffect(() => runHub({ port: Option.getOrUndefined(port), attend })),
 );
 
 const appCommand = Command.make("app", {}, () => runEffect(() => runApp()));

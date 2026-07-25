@@ -107,6 +107,15 @@ export interface FoldedState {
   readonly highSeq: number;
   /** Last seq that is not an agent_ack: `wait` blocks past ack-only deltas. */
   readonly lastNonAckSeq: number;
+  /** Highest seq an agent has CLAIMED delivery of in the current segment (0 if
+   *  none): the largest `covers` on any ack. An item at or below it was in a
+   *  batch someone took (D20). An ack that claims no range - a presence-only
+   *  `intent`/`progress` re-ack, or a pre-D20 writer - moves nothing. */
+  readonly deliveredThroughSeq: number;
+  /** Highest agent OUTPUT seq in the current segment - version, agent_reply,
+   *  question (0 if none). An item strictly below it was already followed by
+   *  something the agent produced (D20). */
+  readonly lastAgentOutputSeq: number;
   /** Open "agent is working" window: set by agent_ack, closed by any agent
    *  output (version, reply, question) within the segment. A re-ack may add
    *  declared intent; the window's `since` stays the first ack's time. */
@@ -198,6 +207,8 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       artifact: "",
       highSeq,
       lastNonAckSeq,
+      deliveredThroughSeq: 0,
+      lastAgentOutputSeq: 0,
       agentWorking: null,
       segmentStartSeq: 0,
     };
@@ -348,8 +359,17 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   let workingSince: string | null = null;
   let workingIntent: "revise" | "reply" | undefined;
   let workingProgress: AgentProgress | undefined;
+  // Delivery cursors (D20). They are NOT the working window: that opens and
+  // closes, while these only ever advance within the segment.
+  let deliveredThroughSeq = 0;
+  let lastAgentOutputSeq = 0;
   for (const e of segmentEvents) {
     if (e.t === "agent_ack") {
+      // The claimed range, never the ack's own position: an ack lands AFTER
+      // the read it acknowledges, so feedback in between was not delivered.
+      if (typeof e.covers === "number" && Number.isInteger(e.covers)) {
+        deliveredThroughSeq = Math.max(deliveredThroughSeq, e.covers);
+      }
       // A re-ack refines the open window (declared intent + fan-out progress)
       // without restarting its clock; the first ack's time is when delivery
       // happened. Progress is last-writer-wins so `done` can climb across acks.
@@ -360,6 +380,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       // wiping the ones it omits.
       if (e.progress) workingProgress = { ...workingProgress, ...e.progress };
     } else if (e.t === "version" || e.t === "agent_reply" || e.t === "question") {
+      lastAgentOutputSeq = e.seq;
       workingSince = null;
       workingIntent = undefined;
       workingProgress = undefined;
@@ -389,6 +410,8 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     artifact,
     highSeq,
     lastNonAckSeq,
+    deliveredThroughSeq,
+    lastAgentOutputSeq,
     agentWorking,
     segmentStartSeq,
   };

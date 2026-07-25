@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { join, resolve as resolvePath } from "node:path";
-import { readFile, stat } from "node:fs/promises";
+import { lstat, mkdir, readFile, stat } from "node:fs/promises";
 import { canonicalArtifactPath, sessionPaths, type SessionPaths } from "../core/paths.ts";
 import { defaultRoots, listAll, registerSession, type RegistryEntry } from "../core/registry.ts";
 import {
@@ -12,6 +12,9 @@ import {
 } from "./discovery.ts";
 import { escapeHtml } from "../core/escape.ts";
 import { projectRoot } from "../core/sessions.ts";
+import { runSpawn } from "../launch/launcher.ts";
+import { buildArgv, loadRegistry, resolveRecipe } from "../launch/recipes.ts";
+import { createArtifactPrompt, createAttendant, type Attendant } from "./attend.ts";
 import {
   CHROME_BUNDLE,
   CHROME_CSS,
@@ -39,9 +42,13 @@ import { createSessionHost, type SessionHost } from "./session-host.ts";
  * write the discovery descriptor (with its `base`), making itself the
  * session's server for `deliver` and the browser alike.
  *
- * It never spawns an agent (D-064): agent-spawning stays in the opt-in fork
- * launcher. Binds 127.0.0.1 only, behind the same Host/Origin gate the
- * per-session server uses.
+ * It never spawns agents WITHOUT explicit opt-in (D-064, as amended by D15):
+ * by default agent-spawning stays in the opt-in fork launcher and a
+ * review-only install is inert. Started with `attend`, the hub additionally
+ * runs the delivery engine (attend.ts) - a headless turn per undelivered
+ * feedback batch when nothing is listening - and answers `POST /hub/create`.
+ * Binds 127.0.0.1 only, behind the same Host/Origin gate the per-session
+ * server uses.
  */
 export const HUB_PORT = 17428;
 
@@ -50,6 +57,17 @@ const POLL_MS = 2000;
 
 /** Idle window before a hosted session is suspended and evicted (ms). */
 const DEFAULT_SESSION_IDLE_MS = 30 * 60 * 1000;
+
+/** How often each mount's delivery watcher evaluates, in attend mode. */
+const DEFAULT_ATTEND_POLL_MS = 1000;
+
+/** A new artifact's filename, as `POST /hub/create` accepts it: a plain
+ *  `.html` basename, never a path - the project root comes from the listing
+ *  and the two are joined here, so no traversal is expressible. */
+const CREATE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.html$/;
+
+/** Upper bound on a create request's prompt (chars). */
+const MAX_CREATE_PROMPT = 4000;
 
 /** Opaque, stable session id: a canonical artifact path, hashed. Opaque
  *  because raw absolute paths do not belong in URLs (decision 5). */
@@ -65,6 +83,22 @@ export interface DaemonOptions {
   readonly registryPath?: string;
   /** Idle window before a hosted session suspends + evicts (ms; tests). */
   readonly sessionIdleMs?: number;
+  /**
+   * Attend mode (D15): the hub delivers undelivered feedback itself by
+   * spawning the artifact's own harness session, and answers
+   * `POST /hub/create`. Off by default - D-064 as amended still requires an
+   * explicit opt-in before this process spawns anything.
+   */
+  readonly attend?: boolean;
+  /** Injected harness-registry path (tests). Default: the recipes resolution
+   *  ($LUCID_HARNESSES, else XDG). */
+  readonly harnessesPath?: string;
+  /** Quiet window before an undelivered batch is driven (ms; tests). */
+  readonly attendDebounceMs?: number;
+  /** How often each mount's delivery watcher evaluates (ms; tests). */
+  readonly attendPollMs?: number;
+  /** Activity sink for attend-mode lines. Defaults to stdout. */
+  readonly log?: (message: string) => void;
 }
 
 export interface DaemonHandle {
@@ -125,6 +159,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const registryPath = opts.registryPath;
   const requestedPort = opts.port ?? HUB_PORT;
   const sessionIdleMs = opts.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
+  const attend = opts.attend === true;
+  const attendPollMs = opts.attendPollMs ?? DEFAULT_ATTEND_POLL_MS;
+  const log = opts.log ?? ((m: string) => process.stdout.write(`${m}\n`));
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
@@ -139,7 +176,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     readonly paths: SessionPaths;
     readonly host: SessionHost;
     readonly idleTimer: ReturnType<typeof setInterval>;
+    /** Attend mode only: this artifact's delivery watcher and its timer. */
+    readonly attendant?: Attendant;
+    readonly attendTimer?: ReturnType<typeof setInterval>;
   }
+
+  /** Artifact paths a `POST /hub/create` turn is currently authoring. The
+   *  file does not exist until the agent writes it, so the "does it exist"
+   *  check cannot see an authoring run in progress. */
+  const creating = new Set<string>();
 
   /** id -> artifact path, refreshed from every listing pass. The id space is
    *  derived (hash of path), so this map is a cache, not a source of truth. */
@@ -213,6 +258,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (!mount) return;
     mounts.delete(id);
     clearInterval(mount.idleTimer);
+    if (mount.attendTimer) clearInterval(mount.attendTimer);
+    mount.attendant?.stop();
     mount.host.stop();
     // Only remove OUR descriptor: a dedicated server that took over meanwhile
     // owns the file now.
@@ -249,7 +296,31 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       },
       Math.min(sessionIdleMs, 5000),
     );
-    const created: Mount = { paths, host, idleTimer };
+    // Attend mode: one delivery watcher per mount, reading THIS session's
+    // listener count so a live interactive attendant always wins.
+    const attendant = attend
+      ? createAttendant({
+          paths,
+          agentsListening: () => host.agentsListening(),
+          ...(opts.harnessesPath !== undefined ? { harnessesPath: opts.harnessesPath } : {}),
+          ...(opts.attendDebounceMs !== undefined ? { debounceMs: opts.attendDebounceMs } : {}),
+          log,
+        })
+      : undefined;
+    // Evaluate immediately, not a poll interval from now: the first pass adopts
+    // the log's high seq as delivered, so anything appended before it would be
+    // read as already-taken backlog.
+    if (attendant) void attendant.tick();
+    const attendTimer = attendant
+      ? setInterval(() => void attendant.tick(), attendPollMs)
+      : undefined;
+    const created: Mount = {
+      paths,
+      host,
+      idleTimer,
+      ...(attendant ? { attendant } : {}),
+      ...(attendTimer ? { attendTimer } : {}),
+    };
     mounts.set(id, created);
     try {
       await writeServerDescriptor(paths, {
@@ -262,6 +333,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     } catch (err) {
       mounts.delete(id);
       clearInterval(idleTimer);
+      if (attendTimer) clearInterval(attendTimer);
+      attendant?.stop();
       host.stop();
       throw err;
     }
@@ -449,6 +522,99 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     return json({ ok: true, id, base: `/s/${id}`, shell: `http://127.0.0.1:${port}/?s=${id}` });
   };
 
+  /**
+   * `POST /hub/create {project, name, prompt, harness?}` - create from nothing
+   * (D3/D16): mint a NEW artifact by running the harness registry's spawn
+   * recipe with an author-this-artifact prompt. Attend mode only; a review-only
+   * hub answers 403.
+   *
+   * The target path is never taken from the caller: `project` must be a root
+   * the current listing already reports, `name` is a bare `.html` basename, and
+   * the two are joined here - so no request can name a path outside a project
+   * the hub already knows. Every value reaches the harness as argv.
+   */
+  const handleHubCreate = async (req: Request): Promise<Response> => {
+    if (!attend) {
+      return json({ error: "create requires the hub's attend mode (lucid hub --attend)" }, 403);
+    }
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    const project = typeof body?.project === "string" ? body.project : "";
+    const name = typeof body?.name === "string" ? body.name : "";
+    const prompt = typeof body?.prompt === "string" ? body.prompt : "";
+    const harness = typeof body?.harness === "string" && body.harness ? body.harness : undefined;
+
+    if (!CREATE_NAME.test(name)) {
+      return json({ error: "name must be a plain .html filename" }, 400);
+    }
+    if (prompt.trim().length === 0 || prompt.length > MAX_CREATE_PROMPT) {
+      return json({ error: `prompt must be 1..${MAX_CREATE_PROMPT} characters` }, 400);
+    }
+    const listing = await listHub();
+    // A worktree is a listed root of its own, grouped under its main repo -
+    // both are legitimate create targets; anything else is not a project the
+    // hub knows about.
+    const known = listing.some((s) => s.project === project || s.worktree === project);
+    if (!known) return json({ error: "unknown project" }, 400);
+
+    const artifact = join(project, name);
+    // lstat, not stat: a DANGLING symlink is absent to stat, and creating
+    // "into" it would write the artifact wherever the link points - outside
+    // the project the request was allowed to name.
+    const exists = await lstat(artifact).then(
+      () => true,
+      () => false,
+    );
+    if (exists) return json({ error: "an artifact with that name already exists" }, 409);
+    // Claim the path for the rest of this request: the existence check above
+    // and the spawn below are separated by awaits, and two windows submitting
+    // the same name would otherwise both pass and both author one file.
+    if (creating.has(artifact)) {
+      return json({ error: "an artifact with that name is already being authored" }, 409);
+    }
+    creating.add(artifact);
+    /** The spawn owns the claim once it starts; every other exit releases it. */
+    let handedOff = false;
+    try {
+      const registry = await loadRegistry(opts.harnessesPath);
+      const resolved = registry ? resolveRecipe(registry, harness) : undefined;
+      // An explicitly named harness must exist: falling back to the default
+      // would silently author with a different agent than the one asked for.
+      if (!resolved || (harness !== undefined && resolved.name !== harness)) {
+        return json({ error: `no spawn recipe for harness "${harness ?? "(default)"}"` }, 400);
+      }
+
+      // The child is its own harness session from birth (D18): the id is minted
+      // here so the stamps it writes name a conversation that can be resumed.
+      const childSessionId = crypto.randomUUID();
+      const paths = sessionPaths(artifact);
+      const argv = buildArgv(resolved.recipe.spawn, {
+        id: childSessionId,
+        artifact,
+        cwd: project,
+        prompt: createArtifactPrompt(artifact, prompt),
+      });
+      await mkdir(paths.sessionDir, { recursive: true });
+      log(`create ${name}: spawning "${resolved.name}" in ${project}`);
+      // Answer immediately: authoring is a whole agent turn, and the artifact
+      // surfaces as a tab on its own `lucid open`. The claim is held until the
+      // turn ends, so a retry while it runs is refused rather than doubled.
+      void runSpawn(argv, project, join(paths.sessionDir, "create.out.log"), {
+        harness: resolved.name,
+        sessionId: childSessionId,
+      })
+        .then((code) => {
+          if (code !== 0) log(`create ${name}: create turn exited ${code}`);
+        })
+        .catch((err) => log(`create ${name}: create turn failed: ${(err as Error).message}`))
+        .finally(() => creating.delete(artifact));
+      handedOff = true;
+
+      return json({ ok: true, artifact }, 202);
+    } finally {
+      if (!handedOff) creating.delete(artifact);
+    }
+  };
+
   const handle = async (req: Request): Promise<Response> => {
     const { pathname } = new URL(req.url);
 
@@ -495,13 +661,18 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // `shells` = connected listing subscribers, i.e. open shell windows.
       // `lucid app` uses it to update the live window instead of stacking
       // a new one per invocation.
-      return json({ lucid: "hub", port, shells: sseClients.size }, 200, noStore);
+      // `attend` tells a shell whether this hub spawns at all - the create
+      // affordance is pointless (and 403s) on a review-only hub.
+      return json({ lucid: "hub", port, shells: sseClients.size, attend }, 200, noStore);
     }
     if (pathname === "/hub/sessions" && req.method === "GET") {
       return json({ sessions: await listHub() }, 200, noStore);
     }
     if (pathname === "/hub/open" && req.method === "POST") {
       return handleHubOpen(req);
+    }
+    if (pathname === "/hub/create" && req.method === "POST") {
+      return handleHubCreate(req);
     }
     if (pathname === "/hub/events" && req.method === "GET") {
       return handleEvents();
@@ -582,6 +753,8 @@ export interface HubInfo {
   readonly port: number;
   /** Connected shell windows (listing-stream subscribers). */
   readonly shells: number;
+  /** True when the hub runs the attend engine (headless turns + create). */
+  readonly attend: boolean;
 }
 
 /** The hub's identity on `port`, or undefined when none answers. */
@@ -592,9 +765,13 @@ export const hubInfo = async (port = HUB_PORT): Promise<HubInfo | undefined> => 
     const probe = await loopbackFetch(port, "/hub/identity", { signal: controller.signal });
     clearTimeout(timer);
     if (!probe.ok) return undefined;
-    const who = (await probe.json()) as { lucid?: unknown; shells?: unknown };
+    const who = (await probe.json()) as { lucid?: unknown; shells?: unknown; attend?: unknown };
     if (who.lucid !== "hub") return undefined;
-    return { port, shells: typeof who.shells === "number" ? who.shells : 0 };
+    return {
+      port,
+      shells: typeof who.shells === "number" ? who.shells : 0,
+      attend: who.attend === true,
+    };
   } catch {
     return undefined;
   }

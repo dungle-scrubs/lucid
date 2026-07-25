@@ -159,6 +159,10 @@ export interface SessionHost {
   readonly stop: () => void;
   /** Epoch ms of the last request or append - the owner's idle policy input. */
   readonly lastActivityAt: () => number;
+  /** Agents blocked in `wait` on this session right now. The same presence the
+   *  viewer shows, read by the hub's attend engine: it only delivers a batch
+   *  itself when NOTHING is listening. */
+  readonly agentsListening: () => number;
 }
 
 export const createSessionHost = (
@@ -514,12 +518,20 @@ export const createSessionHost = (
     const intent = body.intent === "revise" || body.intent === "reply" ? body.intent : undefined;
     const progress = sanitizeProgress(body.progress);
     const attendant = parseAttendant(body.attendant);
+    // The delivered range (D20). A non-integer or negative claim is dropped
+    // rather than clamped: the panel says "recorded" instead of asserting a
+    // delivery from a value the writer got wrong.
+    const covers =
+      typeof body.covers === "number" && Number.isInteger(body.covers) && body.covers >= 0
+        ? body.covers
+        : undefined;
     await serverAppend([
       {
         t: "agent_ack",
         id: body.id,
         ...(intent ? { intent } : {}),
         ...(progress ? { progress } : {}),
+        ...(covers !== undefined ? { covers } : {}),
         ...(attendant ? { attendant } : {}),
       },
     ]);
@@ -832,5 +844,6 @@ export const createSessionHost = (
     suspend,
     stop,
     lastActivityAt: () => lastActivity,
+    agentsListening: () => agentClients.size,
   };
 };

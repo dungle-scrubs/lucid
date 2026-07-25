@@ -28,6 +28,22 @@ export interface HubSession {
 export const projectName = (project: string): string =>
   project.split("/").filter(Boolean).pop() ?? project;
 
+/**
+ * Every root `POST /hub/create` would accept: the grouping project of each
+ * listed session, plus any worktree checkout - the hub lists a worktree as a
+ * root of its own, so both are legitimate places to put a new artifact. The
+ * hub only knows projects that already hold a session, so a listing with no
+ * rows has nowhere to create into.
+ */
+export const createRoots = (sessions: readonly HubSession[]): string[] => {
+  const roots = new Set<string>();
+  for (const s of sessions) {
+    roots.add(s.project);
+    if (s.worktree) roots.add(s.worktree);
+  }
+  return [...roots].sort();
+};
+
 /** Sessions grouped by project, insertion-ordered by the (name-sorted)
  *  listing. A tab is a session; the PROJECT is how a human scans for it. */
 export const byProject = (sessions: readonly HubSession[]): Map<string, HubSession[]> => {
@@ -50,6 +66,11 @@ interface HubState {
   connected: boolean;
   /** The ⌘K palette is showing. */
   paletteOpen: boolean;
+  /** The new-artifact dialog (D3/D16) is showing. */
+  createOpen: boolean;
+  /** The hub runs the attend engine, so it can author a new artifact
+   *  (D15). Null until `/hub/identity` answers - unknown is not "no". */
+  attend: boolean | null;
 }
 
 export const useHub = create<HubState>(() => ({
@@ -57,9 +78,13 @@ export const useHub = create<HubState>(() => ({
   loaded: false,
   connected: false,
   paletteOpen: false,
+  createOpen: false,
+  attend: null,
 }));
 
 export const setPaletteOpen = (open: boolean): void => useHub.setState({ paletteOpen: open });
+
+export const setCreateOpen = (open: boolean): void => useHub.setState({ createOpen: open });
 
 /**
  * Open sessions hold a live SSE stream each; past this many, the least
@@ -173,9 +198,27 @@ let hubSource: EventSource | null = null;
 /** Last seen dev-bundle stamp (see connectHub's reload handling). */
 let bundleStamp: string | null = null;
 
+/**
+ * Who the hub is. Only `attend` is kept: it decides whether authoring a new
+ * artifact is on the table at all. Re-read on every (re)connect, because a
+ * hub restarted with `--attend` would otherwise leave the shell repeating the
+ * old answer for as long as the window stays open.
+ */
+const refreshIdentity = (): void => {
+  void fetch("/hub/identity")
+    .then((r) => (r.ok ? (r.json() as Promise<{ attend?: boolean }>) : null))
+    .then((who) => {
+      if (who) useHub.setState({ attend: who.attend === true });
+    })
+    .catch(() => {
+      /* the stream's own connected flag already reports an unreachable hub */
+    });
+};
+
 /** Open the hub listing stream (idempotent). Each frame is a full snapshot. */
 export const connectHub = (): void => {
   if (hubSource !== null) return;
+  refreshIdentity();
   const es = new EventSource("/hub/events");
   hubSource = es;
   es.onmessage = (e) => {
@@ -195,6 +238,9 @@ export const connectHub = (): void => {
       /* a frame we cannot parse is not worth tearing the stream down for */
     }
   };
-  es.onopen = () => useHub.setState({ connected: true });
+  es.onopen = () => {
+    useHub.setState({ connected: true });
+    refreshIdentity();
+  };
   es.onerror = () => useHub.setState({ connected: false });
 };

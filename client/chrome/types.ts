@@ -20,6 +20,13 @@ export interface Config {
   readonly base?: string;
 }
 
+/**
+ * Where a piece of sent feedback got to (D20), strongest known state last:
+ * `recorded` (in the log, nothing has taken it yet) -> `delivered` (an agent
+ * acked the batch it was in) -> `answered` (agent output followed it).
+ */
+export type DeliveryState = "recorded" | "delivered" | "answered";
+
 /** An image on a message already in the log. The thumb and lightbox address it
  *  as `/__lucid/asset/<file>` via its `file` field. */
 export type MessageImage = PayloadImage;

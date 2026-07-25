@@ -64,6 +64,11 @@ export interface PayloadAnnotation {
    *  message. Drop `file` and the viewer's thumbs 404; drop `path` and the
    *  agent cannot read the bytes. */
   readonly images?: readonly PayloadImage[];
+  /** An agent acked delivery of a batch this item was in (D20). */
+  readonly delivered?: true;
+  /** Agent output - a new version, reply, or question - landed after this
+   *  item (D20). */
+  readonly answered?: true;
 }
 
 /**
@@ -91,6 +96,11 @@ export interface PayloadMessage {
   readonly text: string;
   readonly at: string;
   readonly images?: readonly PayloadImage[];
+  /** Human turns only: an agent acked delivery of a batch this message was
+   *  in (D20). An agent's own turn is never "delivered" to anyone. */
+  readonly delivered?: true;
+  /** Human turns only: agent output landed after this message (D20). */
+  readonly answered?: true;
 }
 
 export interface PayloadRevert {

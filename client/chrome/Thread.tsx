@@ -12,6 +12,7 @@ import { defaultUrlTransform } from "react-markdown";
 import type { ReactNode } from "react";
 import { AnnotationPart } from "./AnnotationPart.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
+import { DeliveryLabel } from "./Delivery.tsx";
 import { visibleEl } from "./dom.ts";
 import { FoldedText } from "./FoldedText.tsx";
 import { useEffect, useState } from "react";
@@ -192,10 +193,13 @@ const UserMessage = () => {
   const isCard = useMessage((m) => m.content.some((p) => p.type === "data"));
   if (isCard) return <MessagePrimitive.Parts components={parts} />;
   return (
-    <div className="flex justify-end" data-role="human">
+    // items-end, not justify-end: the delivery state sits under the bubble on
+    // the speaker's side, and both stay right-aligned as the bubble wraps.
+    <div className="flex flex-col items-end gap-1" data-role="human">
       <div className="flex min-w-0 max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tr-[4px] border border-cream-100/10 bg-user/16 px-3 py-2">
         <MessagePrimitive.Parts components={parts} />
       </div>
+      <DeliveryLabel />
     </div>
   );
 };

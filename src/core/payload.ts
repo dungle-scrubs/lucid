@@ -37,7 +37,31 @@ export type {
   WaitPayload,
 } from "../protocol/wire.ts";
 
-const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): PayloadMessage => ({
+/**
+ * Where one piece of human feedback got to (D20): `delivered` once an agent
+ * acked a batch whose claimed range included it, `answered` once agent output
+ * landed after it. Both derive from log seqs alone, so the panel can never
+ * claim a delivery that did not happen - and "does it see it?" is answered
+ * without asking. Absent rather than false: the wire stays additive, and an
+ * old consumer sees the payload it always saw.
+ *
+ * `answered` implies `delivered`: output that happens to land after an item
+ * nobody took delivery of answered something else, and saying otherwise would
+ * be the strongest chip on the weakest evidence.
+ */
+const deliveryOf = (seq: number, state: FoldedState): { delivered?: true; answered?: true } => {
+  const delivered = seq <= state.deliveredThroughSeq;
+  return {
+    ...(delivered ? { delivered: true as const } : {}),
+    ...(delivered && state.lastAgentOutputSeq > seq ? { answered: true as const } : {}),
+  };
+};
+
+const toMessage = (
+  m: MessageRecord,
+  assetAbsPath: (file: string) => string,
+  state: FoldedState,
+): PayloadMessage => ({
   role: m.role,
   text: m.text,
   at: m.at,
@@ -50,6 +74,8 @@ const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): Pa
         })),
       }
     : {}),
+  // An agent's own turn has nobody to be delivered to.
+  ...(m.role === "human" ? deliveryOf(m.seq, state) : {}),
 });
 
 /** The fields the snapshot guard needs; annotations and forks both satisfy it. */
@@ -157,6 +183,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
             })),
           }
         : {}),
+      ...deliveryOf(a.seq, opts.state),
     });
   }
 
@@ -201,7 +228,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     annotations,
     ...(forks.length > 0 ? { forks } : {}),
     messages: opts.messages.map((m) =>
-      toMessage(m, (file) => opts.snapshotAbsPath(pastedRelPath(file))),
+      toMessage(m, (file) => opts.snapshotAbsPath(pastedRelPath(file)), opts.state),
     ),
     ...(opts.reverts && opts.reverts.length > 0
       ? {

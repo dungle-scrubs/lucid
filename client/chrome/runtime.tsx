@@ -8,6 +8,7 @@ import {
 } from "@assistant-ui/react";
 import { useMemo, type ReactNode } from "react";
 import { useSession, useSessionHandle } from "./context.tsx";
+import { deliveryState } from "./Delivery.tsx";
 import { buildTimeline } from "./store.ts";
 import type { TimelineItem } from "./types.ts";
 
@@ -70,6 +71,10 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
             role: "user",
             id: item.annotation.id,
             createdAt: new Date(item.at),
+            // Delivery state rides the MESSAGE, not the data part: the same
+            // label renders on a message bubble, which has no data part to
+            // carry it (D20).
+            metadata: { custom: { delivery: deliveryState(item.annotation) } },
             content: [
               {
                 type: "data-annotation",
@@ -90,6 +95,9 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
           role: m.role === "human" ? "user" : "assistant",
           id: `${m.role}-${m.at}`,
           createdAt: new Date(m.at),
+          // The agent's own turn has nowhere to be delivered to, so it
+          // carries no state rather than a meaningless "recorded".
+          ...(m.role === "human" ? { metadata: { custom: { delivery: deliveryState(m) } } } : {}),
           content: [
             ...(m.text ? [{ type: "text" as const, text: m.text }] : []),
             ...(m.images ?? []).map((img) => ({

@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { writeAttendantSidecar } from "../core/attendant.ts";
-import { renderCursor } from "../core/cursor.ts";
+import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver } from "../core/deliver.ts";
 import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
@@ -177,9 +177,15 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   if (payload.status === "feedback" && options.since !== undefined) {
     try {
       const attendant = attendantStamp(options.harness);
+      // What this hand-off actually covers (D20): the cursor just read, not
+      // the ack's own position. Feedback that lands between the read and this
+      // append belongs to the NEXT batch, and the hub's attend engine reads
+      // this claim to know a batch is already someone's.
+      const covers = parseCursor(payload.nextCursor);
       await deliver(paths, {
         t: "agent_ack",
         id: randomId(),
+        ...(covers !== undefined ? { covers } : {}),
         ...(attendant ? { attendant } : {}),
       });
     } catch {
@@ -428,13 +434,17 @@ export const runServe = async (file: string): Promise<void> => {
 };
 
 /**
- * `lucid hub [--port <n>]` - the always-on hub daemon (Model B). Starts the
- * shared loopback server in the foreground and logs its URL, then blocks
- * until Ctrl-C. Hosts every session in-process under `/s/<id>` and serves
- * the shell at `/`; sessions with a live dedicated server are proxied, never
- * double-hosted. `LUCID_HUB_PORT` overrides the default (tests).
+ * `lucid hub [--port <n>] [--attend]` - the always-on hub daemon (Model B).
+ * Starts the shared loopback server in the foreground and logs its URL, then
+ * blocks until Ctrl-C. Hosts every session in-process under `/s/<id>` and
+ * serves the shell at `/`; sessions with a live dedicated server are proxied,
+ * never double-hosted. `LUCID_HUB_PORT` overrides the default (tests).
+ *
+ * `--attend` (or `LUCID_HUB_ATTEND=1`) opts this hub into the delivery engine
+ * (D15/D19): it drives a headless turn for feedback nobody is listening for,
+ * and answers `POST /hub/create`. Without it the hub spawns nothing.
  */
-export const runHub = async (options: { port?: number } = {}): Promise<void> => {
+export const runHub = async (options: { port?: number; attend?: boolean } = {}): Promise<void> => {
   // options.port is CLI-validated (Options.integer); only the env needs the
   // strict parse. `--port 0` stays allowed for tests (ephemeral bind).
   const port = options.port ?? parseHubPort(process.env.LUCID_HUB_PORT);
@@ -443,11 +453,18 @@ export const runHub = async (options: { port?: number } = {}): Promise<void> => 
   const roots = process.env.LUCID_HUB_ROOTS?.split(",")
     .map((r) => r.trim())
     .filter((r) => r.length > 0);
+  // Env opt-in for supervised starts (launchd/systemd), where there is no
+  // command line to edit. Explicit "1" only: a stray non-empty value must not
+  // silently turn a review-only install into one that spawns agents.
+  const attend = options.attend === true || process.env.LUCID_HUB_ATTEND === "1";
   const daemon = await runDaemon({
     ...(port !== undefined ? { port } : {}),
     ...(roots && roots.length > 0 ? { roots } : {}),
+    ...(attend ? { attend } : {}),
   });
-  process.stdout.write(`lucid hub listening on http://127.0.0.1:${daemon.port}\n`);
+  process.stdout.write(
+    `lucid hub listening on http://127.0.0.1:${daemon.port}${attend ? " (attend mode: headless turns enabled)" : ""}\n`,
+  );
   await new Promise<void>((resolve) => {
     process.once("SIGINT", () => {
       void daemon.stop().then(resolve);
@@ -528,7 +545,7 @@ export const runStatus = async (): Promise<void> => {
       progress: "lucid progress <file> [--label <text>] [--total <n>] [--done <n>]",
       context: "lucid context <file> [--pct <n>] [--used <n>] [--total <m>]",
       end: "lucid end <file>",
-      hub: "lucid hub",
+      hub: "lucid hub [--attend]",
     },
   });
 };

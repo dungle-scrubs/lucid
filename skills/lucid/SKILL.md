@@ -119,9 +119,13 @@ Never fake the review loop, and never paste build instructions at the user.
    whole review - you have nothing better to do during a review-moment than wait on
    the human - until `suspended`, `ended`, or `reviewResolved`.
    ```sh
-   lucid wait <file> --since <cursor> --timeout 120 \
+   lucid wait <file> --since <cursor> --timeout 3600 \
      --harness <name> --resume "<command that resumes this conversation>"
    ```
+   Hold the window for the full hour: an interactive attendant is the human's
+   fastest path. An attend-mode hub only takes over a batch nobody is listening
+   for, nobody acked, and nobody is mid-turn on - so a `wait` that returns is
+   still yours while you work on it, without holding anything open.
    **Always pass `--harness` and `--resume`.** They record who is attending and
    the exact terminal command that puts this conversation back behind the
    artifact, so a human returning to a dormant review can copy it from the

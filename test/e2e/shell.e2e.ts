@@ -147,6 +147,77 @@ test("the review loop works through the daemon mount", async ({ page }) => {
   expect(feedback.annotations.some((a) => a.note.includes("One batch"))).toBe(true);
 });
 
+test("each sent item shows where it got to: recorded, then delivered (D20)", async ({ page }) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+
+  await page.goto(opened.shellUrl);
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
+
+  // The cursor an agent would be holding BEFORE the message exists. A wait
+  // with no `--since` is a catch-up read and deliberately does not ack, so
+  // this leaves the message undelivered when it lands.
+  const before = (await cli.run(["wait", cli.artifact, "--timeout", "1"])) as {
+    nextCursor: string;
+  };
+
+  await page.locator('[data-test="message-input"]:visible').fill("does anyone see this?");
+  await page.locator('[data-test="send-message"]:visible').click();
+
+  const state = page.locator('[data-test="delivery-state"]');
+  await expect(state).toHaveCount(1);
+  await expect(state).toHaveAttribute("data-state", "recorded");
+
+  // A cursor-bearing wait takes delivery and acks it - and the panel says so
+  // on the item itself, which is the whole point: nobody has to ask.
+  const feedback = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    before.nextCursor,
+    "--timeout",
+    "8",
+  ])) as { status: string };
+  expect(feedback.status).toBe("feedback");
+  await expect(state).toHaveAttribute("data-state", "delivered");
+});
+
+test("the new-artifact dialog validates the name and names the flag it needs", async ({ page }) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+
+  await page.goto(opened.shellUrl);
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
+
+  await page.locator('[data-test="tab-add"]').click();
+  await page.locator('[data-test="new-artifact"]').click();
+  await expect(page.locator('[data-test="create-dialog"]')).toBeVisible();
+
+  // Live validation, because the hub joins the name onto a project root it
+  // already knows: a path is never a filename.
+  await page.locator('[data-test="create-name"]').fill("../escape.html");
+  await expect(page.locator('[data-test="create-name-error"]')).toBeVisible();
+  await page.locator('[data-test="create-name"]').fill("rollout.html");
+  await expect(page.locator('[data-test="create-name-error"]')).toHaveCount(0);
+
+  // This hub runs WITHOUT --attend, so it spawns nothing. The dialog says so
+  // up front - and submitting anyway reaches the hub's 403 and reports the
+  // same command rather than a status code.
+  await page.locator('[data-test="create-prompt"]').fill("a rollout plan for billing");
+  await expect(page.locator('[data-test="create-attend-hint"]')).toContainText(
+    "lucid hub --attend",
+  );
+  await page.locator('[data-test="create-submit"]').click();
+  await expect(page.locator('[data-test="create-error"]')).toContainText("lucid hub --attend");
+  // Refused, not started: no authoring state, and nothing was created.
+  await expect(page.locator('[data-test="create-authoring"]')).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[data-test="create-overlay"]')).toHaveCount(0);
+});
+
 test("tabs scope to a project; the drawer switches; drafts survive", async ({ page }) => {
   hub = await startHub();
   const first = await openIntoHub(hub, PLAN_V1);

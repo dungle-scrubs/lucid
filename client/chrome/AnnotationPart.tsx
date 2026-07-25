@@ -1,6 +1,7 @@
 import type { DataMessagePartComponent } from "@assistant-ui/react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
+import { DeliveryLabel } from "./Delivery.tsx";
 import { FoldedText } from "./FoldedText.tsx";
 import type { MessageImage } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
@@ -171,6 +172,9 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
           ))}
         </div>
       ) : null}
+      {/* Bottom-right, under the note: the last thing read on the card is
+          where it got to. */}
+      <DeliveryLabel className="self-end" />
     </section>
   );
 };

@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { SessionView } from "./Chrome.tsx";
+import { CreateDialog } from "./CreateDialog.tsx";
 import {
   activateTab,
   byProject,
   closeTab,
   connectHub,
+  createRoots,
   latestTabIn,
   openTab,
   projectName,
+  setCreateOpen,
   setPaletteOpen,
   useHub,
   type HubSession,
@@ -117,6 +120,41 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
 };
 
 /**
+ * Create from nothing (D3): opens the new-artifact dialog. Rendered only when
+ * the hub has somewhere to put one - it accepts a project it already lists a
+ * session in, so an empty listing has no target and a button would be a dead
+ * end rather than an invitation.
+ */
+const NewArtifactButton = ({
+  testId,
+  className,
+  before,
+}: {
+  readonly testId: string;
+  readonly className: string;
+  /** Ran before the dialog opens - the drawer closes itself on its way out. */
+  readonly before?: () => void;
+}) => {
+  const sessions = useHub((s) => s.sessions);
+  if (createRoots(sessions).length === 0) return null;
+  return (
+    <button
+      type="button"
+      data-test={testId}
+      title="Ask an agent to author a new artifact here"
+      onClick={(e) => {
+        e.currentTarget.blur();
+        before?.();
+        setCreateOpen(true);
+      }}
+      className={className}
+    >
+      New artifact
+    </button>
+  );
+};
+
+/**
  * The projects drawer (D7): GTM-style - slides in from the left, OVERLAYS
  * the content, and parallaxes it right while open. Projects list with
  * session counts; worktrees group under their main repo with a qualifier.
@@ -204,6 +242,13 @@ const ProjectsDrawer = () => {
             </button>
           );
         })}
+        {/* mt-auto: the way to start something new sits at the bottom of the
+            list of what already exists, not competing with it. */}
+        <NewArtifactButton
+          testId="drawer-new-artifact"
+          before={() => setDrawerOpen(false)}
+          className="mt-auto cursor-pointer border-t border-ink-600 px-3 pt-2.5 pb-1 text-left text-[12px] text-fg-muted outline-none hover:text-accent-bright"
+        />
       </aside>
     </>
   );
@@ -312,6 +357,10 @@ const EmptyShell = () => {
                 all projects
               </button>
             ) : null}
+            <NewArtifactButton
+              testId="new-artifact"
+              className="cursor-pointer text-[11px] text-accent-bright underline-offset-2 outline-none hover:underline"
+            />
           </div>
           <div className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto border border-ink-600 bg-ink-800 py-1">
             {[...byProject(sessions)].map(([project, rows]) => (
@@ -506,6 +555,7 @@ export const Shell = () => {
         </button>
       </div>
       <Palette />
+      <CreateDialog />
       {/* GTM-drawer parallax (D7): the drawer OVERLAYS this region, and the
           region also eases right while it is open - motion says "shifted
           aside", not "replaced". EVERY open tab's view stays mounted; the
