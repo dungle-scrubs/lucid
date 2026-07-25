@@ -21,6 +21,10 @@ export interface HubSession {
 
 interface HubState {
   sessions: readonly HubSession[];
+  /** The first listing snapshot has arrived. Until then the shell is
+   *  LOOKING, not empty - the ~/dev scan can take a moment, and "no
+   *  sessions" before it lands would be a false claim. */
+  loaded: boolean;
   /** The listing stream is up. Like a session's `live`: status, not an error. */
   connected: boolean;
   /** The "+" opener popover is showing. */
@@ -31,6 +35,7 @@ interface HubState {
 
 export const useHub = create<HubState>(() => ({
   sessions: [],
+  loaded: false,
   connected: false,
   pickerOpen: false,
   paletteOpen: false,
@@ -146,7 +151,7 @@ export const connectHub = (): void => {
   es.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data) as { sessions: HubSession[] };
-      useHub.setState({ sessions: data.sessions });
+      useHub.setState({ sessions: data.sessions, loaded: true });
     } catch {
       /* a frame we cannot parse is not worth tearing the stream down for */
     }

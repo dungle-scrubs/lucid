@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { Glob } from "bun";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { foldLog } from "./fold.ts";
@@ -97,29 +97,59 @@ const resolveArtifactPath = async (artifactDir: string, stem: string): Promise<s
   return resolve(artifactDir, `${stem}.html`);
 };
 
+/** Directories a session can never live under, pruned WITHOUT descending -
+ *  a glob over all of ~/dev spends nearly all of its time inside
+ *  node_modules, and the hub re-scans while a shell is connected. */
+const SCAN_PRUNE = new Set(["node_modules", "dist", "build", "target", "vendor"]);
+
 /**
  * Recursively find `<root>/**​/.lucid/*​/log.ndjson` under each root and return
- * the canonical artifact paths (deduped). Unreadable roots are skipped rather
- * than fatal. Default roots = `~/dev`.
+ * the canonical artifact paths (deduped). A hand-rolled walk rather than a
+ * glob so pruned subtrees (node_modules, .git, build output) are never
+ * ENTERED - Bun.Glob has no exclude, and traversal is the whole cost.
+ * Unreadable directories are skipped rather than fatal. Default roots = `~/dev`.
  */
 export const scanRoots = async (roots: readonly string[] = defaultRoots()): Promise<string[]> => {
   const found = new Set<string>();
-  for (const root of roots) {
-    const scanRoot = resolve(root);
-    const glob = new Glob("**/.lucid/*/log.ndjson");
+
+  const walk = async (dir: string): Promise<void> => {
+    let entries: Dirent[];
     try {
-      for await (const rel of glob.scan({ cwd: scanRoot, dot: true, onlyFiles: true })) {
-        const parts = rel.split("/");
-        const idx = parts.lastIndexOf(".lucid");
-        const stem = parts[idx + 1];
-        if (idx === -1 || stem === undefined) continue;
-        const artifactDir = resolve(scanRoot, ...parts.slice(0, idx));
-        found.add(await resolveArtifactPath(artifactDir, stem));
-      }
+      entries = await readdir(dir, { withFileTypes: true });
     } catch {
-      // unreadable root: skip rather than fail the scan
+      return; // unreadable: skip rather than fail the scan
     }
-  }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const name = entry.name;
+      if (name === ".lucid") {
+        // <artifactDir>/.lucid/<stem>/log.ndjson - one level, no recursion.
+        const lucidDir = join(dir, name);
+        let stems: Dirent[];
+        try {
+          stems = await readdir(lucidDir, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+        for (const stemEntry of stems) {
+          if (!stemEntry.isDirectory()) continue;
+          try {
+            await stat(join(lucidDir, stemEntry.name, "log.ndjson"));
+          } catch {
+            continue; // no log: not a session
+          }
+          found.add(await resolveArtifactPath(dir, stemEntry.name));
+        }
+        continue;
+      }
+      // Dot-directories (.git, .cache, ...) and known dependency/build trees
+      // cannot contain a project's .lucid and dominate the walk time.
+      if (name.startsWith(".") || SCAN_PRUNE.has(name)) continue;
+      await walk(join(dir, name));
+    }
+  };
+
+  for (const root of roots) await walk(resolve(root));
   return [...found];
 };
 

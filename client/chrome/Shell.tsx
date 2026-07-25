@@ -203,20 +203,40 @@ const HubHealth = () => {
 
 const EmptyShell = () => {
   const sessions = useHub((s) => s.sessions);
+  const loaded = useHub((s) => s.loaded);
+  // Until the first listing lands the truthful state is LOOKING, not empty -
+  // claiming "no sessions" mid-scan told the human to go run a command.
+  if (!loaded) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-ink-850">
+        <div className="text-[12px] italic text-fg-faint">Looking for sessions…</div>
+      </div>
+    );
+  }
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 bg-ink-850">
-      <div className="text-[13px] text-fg-muted">No session open.</div>
       {sessions.length > 0 ? (
-        <div className="flex max-h-[50vh] w-[380px] flex-col overflow-y-auto border border-ink-600 bg-ink-800 py-1">
-          {sessions.map((s) => (
-            <PickerRow key={s.id} row={s} />
-          ))}
-        </div>
+        <>
+          <div className="text-[13px] text-fg-muted">Pick a session to review.</div>
+          <div className="flex max-h-[50vh] w-[380px] flex-col overflow-y-auto border border-ink-600 bg-ink-800 py-1">
+            {sessions.map((s) => (
+              <PickerRow key={s.id} row={s} />
+            ))}
+          </div>
+        </>
       ) : (
-        <div className="text-[12px] text-fg-faint">
-          Run <code className="bg-ink-700 px-1">lucid open &lt;file&gt;</code> in a project to start
-          one.
-        </div>
+        <>
+          <div className="text-[13px] text-fg-muted">No reviews yet.</div>
+          {/* The human's agent is who starts sessions - when it renders an
+              artifact and runs `lucid open`, a tab appears here on its own.
+              The command is a footnote, not the instruction. */}
+          <div className="max-w-[440px] text-center text-[12px] leading-relaxed text-fg-faint">
+            Ask your coding agent to render something reviewable - a plan, a comparison, a schema.
+            When it opens the artifact, the session appears here as a tab.
+            <br />
+            (By hand: <code className="bg-ink-700 px-1">lucid open &lt;artifact&gt;.html</code>)
+          </div>
+        </>
       )}
     </div>
   );
