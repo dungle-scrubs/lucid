@@ -20,6 +20,7 @@ import {
   CLIENT_BUNDLE,
   FAVICON_SVG,
 } from "./client-bundle.generated.ts";
+import { readDevAsset } from "./dev-assets.ts";
 import { injectOverlay } from "./inject.ts";
 import { resolveAsset, validateHeaders } from "./security.ts";
 import { renderViewer } from "./viewer.ts";
@@ -553,7 +554,7 @@ export const createSessionHost = (
         ...noStore,
       };
       if (req.headers.get("origin") !== null) headers.vary = "Origin";
-      return new Response(CLIENT_BUNDLE, { headers });
+      return new Response((await readDevAsset("client.js")) ?? CLIENT_BUNDLE, { headers });
     }
 
     const headerCheck = validateHeaders(req, options.getPort());
@@ -587,12 +588,12 @@ export const createSessionHost = (
     // behind the Host/Origin gate: they are same-origin requests from Lucid's
     // viewer page, and nothing in the sandboxed artifact should reach them.
     if (pathname === "/__lucid/chrome.js") {
-      return new Response(CHROME_BUNDLE, {
+      return new Response((await readDevAsset("chrome.js")) ?? CHROME_BUNDLE, {
         headers: { "content-type": "text/javascript; charset=utf-8", ...noStore },
       });
     }
     if (pathname === "/__lucid/chrome.css") {
-      return new Response(CHROME_CSS, {
+      return new Response((await readDevAsset("chrome.css")) ?? CHROME_CSS, {
         headers: { "content-type": "text/css; charset=utf-8", ...noStore },
       });
     }

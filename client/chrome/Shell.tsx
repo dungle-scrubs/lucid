@@ -7,7 +7,6 @@ import {
   connectHub,
   openTab,
   setPaletteOpen,
-  setPickerOpen,
   useHub,
   type HubSession,
 } from "./hub.ts";
@@ -104,74 +103,21 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
   );
 };
 
-/** The "+" opener: every session the hub knows about, minus the open tabs.
- *  The command palette (Phase 3) subsumes this list; it stays as the
- *  pointer-first path. */
-const Picker = () => {
-  const sessions = useHub((s) => s.sessions);
-  const open = useHub((s) => s.pickerOpen);
-  const openKeys = useShell((s) => s.sessionKeys);
-  const ref = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  // The popover is FIXED-positioned: the tab bar scrolls horizontally, and a
-  // scroll container clips vertical overflow too - an absolute popover
-  // rendered "below" the bar sat invisible inside that clip, so the button
-  // looked dead. Fixed escapes the clip; the anchor is read at open time.
-  const [anchorLeft, setAnchorLeft] = useState(0);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setPickerOpen(false);
-    };
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") setPickerOpen(false);
-    };
-    window.addEventListener("pointerdown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  const candidates = sessions.filter((s) => !openKeys.includes(s.artifact));
-
-  return (
-    <div ref={ref} className="relative flex flex-none items-center">
-      <button
-        ref={buttonRef}
-        type="button"
-        data-test="tab-add"
-        title="Open a session"
-        aria-expanded={open}
-        onClick={() => {
-          const rect = buttonRef.current?.getBoundingClientRect();
-          setAnchorLeft(Math.max(0, Math.min(rect?.left ?? 0, window.innerWidth - 356)));
-          setPickerOpen(!open);
-        }}
-        className="cursor-pointer px-3 py-[7px] text-[14px] leading-none text-fg-muted hover:bg-ink-800 hover:text-fg"
-      >
-        +
-      </button>
-      {open ? (
-        <div
-          data-test="session-picker"
-          style={{ left: anchorLeft }}
-          className="fixed top-(--lucid-shell-top,37px) z-30 max-h-[60vh] w-[340px] overflow-y-auto border border-ink-500 bg-ink-800 py-1 shadow-[0_10px_30px_rgba(0,0,0,0.5)]"
-        >
-          {candidates.length === 0 ? (
-            <div className="px-3 py-2 text-[12px] italic text-fg-faint">
-              Every known session is already open.
-            </div>
-          ) : (
-            candidates.map((s) => <PickerRow key={s.id} row={s} />)
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-};
+/** The "+" opener: a NEW-TAB gesture, not a dropdown. It deselects the
+ *  current tab, which lands the shell on the full-screen pick-a-session
+ *  page (the same screen a fresh shell shows) - the way a browser's + gives
+ *  a whole new-tab page. Existing tabs stay in the bar to click back to. */
+const NewTabButton = () => (
+  <button
+    type="button"
+    data-test="tab-add"
+    title="New tab - pick a session (⌘K also works)"
+    onClick={() => useShell.setState({ activeKey: null })}
+    className="cursor-pointer px-3 py-[7px] text-[14px] leading-none text-fg-muted hover:bg-ink-800 hover:text-fg"
+  >
+    +
+  </button>
+);
 
 const PickerRow = ({ row }: { readonly row: HubSession }) => {
   const [failed, setFailed] = useState(false);
@@ -181,9 +127,10 @@ const PickerRow = ({ row }: { readonly row: HubSession }) => {
       data-test="picker-row"
       title={row.artifact}
       onClick={() => {
+        // openTab activates on success, which swaps the pick screen away on
+        // its own; a failure keeps the screen and says so on the row.
         void openTab(row).then((h) => {
-          if (h) setPickerOpen(false);
-          else setFailed(true);
+          if (!h) setFailed(true);
         });
       }}
       className="flex w-full cursor-pointer flex-col gap-0.5 px-3 py-1.5 text-left hover:bg-ink-700"
@@ -333,7 +280,7 @@ export const Shell = () => {
         {sessionKeys.map((k) => (
           <Tab key={k} sessionKey={k} active={k === activeKey} />
         ))}
-        <Picker />
+        <NewTabButton />
         <HubHealth />
         <button
           type="button"

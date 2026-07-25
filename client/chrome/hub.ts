@@ -27,8 +27,6 @@ interface HubState {
   loaded: boolean;
   /** The listing stream is up. Like a session's `live`: status, not an error. */
   connected: boolean;
-  /** The "+" opener popover is showing. */
-  pickerOpen: boolean;
   /** The ⌘K palette is showing. */
   paletteOpen: boolean;
 }
@@ -37,11 +35,8 @@ export const useHub = create<HubState>(() => ({
   sessions: [],
   loaded: false,
   connected: false,
-  pickerOpen: false,
   paletteOpen: false,
 }));
-
-export const setPickerOpen = (open: boolean): void => useHub.setState({ pickerOpen: open });
 
 export const setPaletteOpen = (open: boolean): void => useHub.setState({ paletteOpen: open });
 
@@ -142,6 +137,8 @@ export const closeTab = (key: string): void => {
 };
 
 let hubSource: EventSource | null = null;
+/** Last seen dev-bundle stamp (see connectHub's reload handling). */
+let bundleStamp: string | null = null;
 
 /** Open the hub listing stream (idempotent). Each frame is a full snapshot. */
 export const connectHub = (): void => {
@@ -150,7 +147,16 @@ export const connectHub = (): void => {
   hubSource = es;
   es.onmessage = (e) => {
     try {
-      const data = JSON.parse(e.data) as { sessions: HubSession[] };
+      const data = JSON.parse(e.data) as { sessions: HubSession[]; bundle?: string };
+      // Dev mode only: the hub stamps each snapshot with its bundle version.
+      // A moved stamp means the watcher rebuilt the UI - reload to run it.
+      if (data.bundle !== undefined) {
+        if (bundleStamp !== null && bundleStamp !== data.bundle) {
+          window.location.reload();
+          return;
+        }
+        bundleStamp = data.bundle;
+      }
       useHub.setState({ sessions: data.sessions, loaded: true });
     } catch {
       /* a frame we cannot parse is not worth tearing the stream down for */

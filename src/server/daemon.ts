@@ -16,6 +16,7 @@ import {
   CLIENT_BUNDLE,
   FAVICON_SVG,
 } from "./client-bundle.generated.ts";
+import { devBundleStamp, readDevAsset } from "./dev-assets.ts";
 import { injectOverlay } from "./inject.ts";
 import { validateHeaders } from "./security.ts";
 import { createSessionHost, type SessionHost } from "./session-host.ts";
@@ -296,7 +297,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
 
   // ---- hub listing + events ---------------------------------------------------
 
-  const snapshot = async (): Promise<string> => JSON.stringify({ sessions: await listHub() });
+  const snapshot = async (): Promise<string> => {
+    // The dev-mode bundle stamp rides the snapshot: when the watcher rewrites
+    // the bundle, the stamp moves, the snapshot differs, and connected shells
+    // reload themselves. Absent entirely outside dev mode.
+    const stamp = devBundleStamp();
+    return JSON.stringify({ sessions: await listHub(), ...(stamp ? { bundle: stamp } : {}) });
+  };
 
   const broadcast = (frame: string): void => {
     const chunk = encoder.encode(frame);
@@ -400,7 +407,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         ...noStore,
       };
       if (req.headers.get("origin") !== null) headers.vary = "Origin";
-      return new Response(CLIENT_BUNDLE, { headers });
+      return new Response((await readDevAsset("client.js")) ?? CLIENT_BUNDLE, { headers });
     }
 
     // EVERYTHING else - hub routes and session mounts alike - sits behind
@@ -440,12 +447,12 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // The shell's own bundle + stylesheet, same generated artifacts every
     // session mount serves - the chrome is one bundle in two modes.
     if (pathname === "/__lucid/chrome.js") {
-      return new Response(CHROME_BUNDLE, {
+      return new Response((await readDevAsset("chrome.js")) ?? CHROME_BUNDLE, {
         headers: { "content-type": "text/javascript; charset=utf-8", ...noStore },
       });
     }
     if (pathname === "/__lucid/chrome.css") {
-      return new Response(CHROME_CSS, {
+      return new Response((await readDevAsset("chrome.css")) ?? CHROME_CSS, {
         headers: { "content-type": "text/css; charset=utf-8", ...noStore },
       });
     }

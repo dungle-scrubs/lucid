@@ -34,6 +34,7 @@
     "build:client": "bun run scripts/build-client.ts",
     "build:binary": "bun run scripts/build-binary.ts",
     "build": "bun run build:client && bun run build:binary",
+    "dev": "bun run scripts/dev.ts",
     "lucid": "bun run src/cli/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test test/*.test.ts",

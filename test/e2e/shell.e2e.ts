@@ -162,10 +162,11 @@ test("two sessions are two tabs with isolated state; switching swaps the view", 
   await page.goto(first.shellUrl);
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
 
-  // Open the second session from the "+" picker. The popover must be truly
-  // HITTABLE, not merely in the DOM: it once rendered inside the tab bar's
-  // scroll clip, where playwright's auto-scroll could still reach it but a
-  // human's pointer could not. elementFromPoint sees what a human sees.
+  // "+" is a NEW-TAB gesture: it deselects the current tab and shows the
+  // full-screen pick-a-session page. The row must be truly HITTABLE, not
+  // merely in the DOM (the old popover rendered inside the tab bar's scroll
+  // clip, where playwright's auto-scroll could reach it but a human's
+  // pointer could not - elementFromPoint sees what a human sees).
   await page.locator('[data-test="tab-add"]').click();
   const row = page.locator('[data-test="picker-row"]').first();
   await expect(row).toBeVisible();
@@ -175,7 +176,8 @@ test("two sessions are two tabs with isolated state; switching swaps the view", 
     return hit !== null && (el === hit || el.contains(hit));
   });
   expect(hittable).toBe(true);
-  await page.locator('[data-test="picker-row"]', { hasText: "plan.html" }).first().click();
+  // Both fixtures are named plan.html - pick by the second session's PATH.
+  await page.locator('[data-test="picker-row"]', { hasText: second.cli.dir }).first().click();
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
   await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
 
