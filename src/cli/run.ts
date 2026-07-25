@@ -487,7 +487,6 @@ export const runApp = async (): Promise<void> => {
   const port = envPort ?? HUB_PORT;
 
   let info = await hubInfo(port);
-  const hadHub = info !== undefined;
   if (!info) {
     spawnHub(envPort);
     const deadline = Date.now() + 8000;
@@ -503,9 +502,11 @@ export const runApp = async (): Promise<void> => {
   // A connected shell window IS the app - opening another would stack
   // windows on every invocation. The window updates itself (the listing
   // stream carries the hub's bundle stamp), so there is nothing to do.
-  // After a hub RESTART the surviving window needs a beat to reconnect
-  // before it shows up in `shells`; give it that beat instead of racing it.
-  if (hadHub && info.shells === 0) {
+  // A surviving window needs a beat to reconnect before it shows up in
+  // `shells` - and that is true WHETHER OR NOT the hub was alive at the
+  // first probe (a just-spawned hub after a restart is the common case
+  // that used to stack a window every time). Always give the beat.
+  if (info.shells === 0) {
     const deadline = Date.now() + 2500;
     while (info && info.shells === 0 && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 250));
