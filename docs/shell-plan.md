@@ -99,23 +99,36 @@ a pointer registry (`~/.lucid/registry.json`) is central.
 
 ## Phase roadmap
 
-- **Phase 0 — the daemon & registry.** SHIPPED (commit `b1d5af2`). Additive:
-  stands up the daemon + pointer registry alongside the existing per-session
+- **Phase 0 — the daemon & registry.** SHIPPED (`b1d5af2`). Additive: stands
+  up the daemon + pointer registry alongside the existing per-session
   servers. `src/core/registry.ts`, `src/server/daemon.ts`, `lucid hub`,
   best-effort register-on-`open`, tests. `wait`/`ask`/`end` untouched.
-- **Phase 1 — session-keyed chrome** (NEXT, the hard core). Turn the
-  single-session store (`client/chrome/store.ts`, `actions.ts`, and the single
-  module-global `EventSource` in `Chrome.tsx`) into a multi-session store keyed
-  by session id, with per-session SSE streams — without changing the visible
-  UX yet (still shows one session). Everything visual rides on this.
-- **Phase 2 — tabs & multi-stream lifecycle.** Tab bar bound to the registry;
-  opening/closing a tab connects/disconnects that session's stream; switching
-  is instant (state pre-loaded). Hard cap of **10** open sessions, LRU-evict
-  the stream (log untouched, reopen refolds). Per-session attention tags.
-- **Phase 3 — `⌘K` command palette.** `cmdk` fuzzy over every registry session
-  plus actions (open, new, approve, jump to annotation), styled to Lucid tokens.
-- **Phase 4 — polish & the Dock app.** Install 17428 as a Chrome app; keyboard,
-  focus routing, empty states, reconnection, cross-session badges.
+- **Phase 1 — session-keyed chrome.** SHIPPED (`2d286d8`). Every module-global
+  singleton in the chrome client became a per-session instance behind a
+  SessionHandle (store, actions, surface, pastes, transport, SSE stream), with
+  a shell store for layout. No visible UX change; opus + codex reviewed.
+- **Phase 2 — daemon hosting, tabs & multi-stream lifecycle.** SHIPPED
+  (`9047cd8`). `session-host.ts` extracted from server.ts and mounted by the
+  daemon under opaque `/s/<id>` routes (one origin); live dedicated servers
+  are proxied, never double-hosted; descriptors carry `base` so the frozen
+  CLI contract keeps working. Shell UI: tab bar with attention tags, `+`
+  picker, cap-10 LRU stream eviction, `open` surfaces a tab (`?s=<id>`).
+- **Phase 3 — `⌘K` command palette.** SHIPPED (`d08de5b`). `cmdk` fuzzy over
+  every hub session plus the active review's actions and annotation jumps,
+  styled to the shell's tokens.
+- **Phase 4 — polish & the Dock app.** SHIPPED. `lucid app` ensures the hub
+  (spawns it detached if down) and opens `127.0.0.1:17428` as a Chrome
+  `--app` window; hub-reconnect indicator; focus routing on tab switch;
+  keyboard map complete (⌘K · ⌘1–9 · ⌘⇧[ / ⌘⇧] · ⌘B · ⌘. · ⌘⏎ / ⌘⇧⏎).
+
+Still open (deliberately deferred): `lucid open` does not yet auto-START the
+daemon when none is running (decision 7's end state) — it prefers a running
+hub and otherwise keeps the exact per-session behavior, so every existing
+harness flow is untouched until the shell has real mileage.
+
+Note: the chrome adopted the SMUI "Spacemolt" theme (Nord frost) on Tailwind
+v4 in `97d9bed`, replacing the ink/brass palette; the mark language on the
+surface followed it.
 
 ## Risks — settled
 

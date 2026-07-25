@@ -102,6 +102,11 @@ export const activateTab = (key: string): void => {
   if (!handle.connected()) handle.connect();
   activate(key);
   enforceStreamCap();
+  // Focus routing: landing on a tab should land the keyboard with it. The
+  // composer is where typing goes next; rAF waits for the view to mount.
+  requestAnimationFrame(() => {
+    document.querySelector<HTMLTextAreaElement>('[data-test="message-input"]')?.focus();
+  });
 };
 
 /** Close a tab: drop the stream and the roster entry. State on disk is

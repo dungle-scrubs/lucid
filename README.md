@@ -59,6 +59,21 @@ lucid end  plan.html    # close the session
 lucid                   # list sessions in this project
 ```
 
+### One window over every session (the shell)
+
+Instead of one browser tab per session, run the hub and get a single window
+with a tab per review - every session across `~/dev`, a `⌘K` palette, and
+`⌘1–9` tab switching:
+
+```sh
+lucid app               # start the hub (if needed) + open the shell as a Chrome app
+lucid hub               # or run the hub daemon in the foreground yourself
+```
+
+While the hub is running, `lucid open` surfaces sessions as tabs in that one
+window (`http://127.0.0.1:17428/`) rather than spawning per-session servers.
+Agents notice nothing: `wait`/`ask`/`end` and the JSON payload are unchanged.
+
 ## How agents use it
 
 The whole integration surface is a CLI and a JSON payload. No SDK, no plugin.

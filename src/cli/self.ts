@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { openSync } from "node:fs";
+import { existsSync, openSync } from "node:fs";
 import type { SessionPaths } from "../core/paths.ts";
 import {
   discoverLiveServer,
@@ -87,6 +87,44 @@ export const stopServer = async (paths: SessionPaths, timeoutMs = 5000): Promise
     await sleep(100);
   }
   await removeServerDescriptor(paths); // the daemon installs no signal handler, so clear its mark here
+  return true;
+};
+
+/** Spawn the detached hub daemon (`hub`) that outlives this process. */
+export const spawnHub = (port?: number): void => {
+  const { command, prefix } = selfInvocation();
+  const args = [...prefix, "hub", ...(port !== undefined ? ["--port", String(port)] : [])];
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  });
+  child.unref();
+};
+
+/**
+ * Open a URL as a Chrome app window (no tabs, no URL bar - a Dock-parked
+ * surface). Falls back to the default browser when no Chrome answers. The
+ * `--app` flag is why the shell keeps ONE stable entry URL: a Dock icon
+ * pinned to a rotating per-session port would go stale; 17428 never does.
+ */
+export const openChromeApp = (url: string): boolean => {
+  if (process.env.LUCID_NO_OPEN === "1") return false;
+  if (process.platform !== "darwin") return false;
+  const candidates = ["Google Chrome", "Chromium", "Brave Browser", "Microsoft Edge"];
+  const home = process.env.HOME ?? "";
+  // `open -na <app>` does not fail synchronously for a missing app, so probe
+  // the two install locations instead of trusting the spawn.
+  const installed = candidates.find(
+    (app) =>
+      existsSync(`/Applications/${app}.app`) || existsSync(`${home}/Applications/${app}.app`),
+  );
+  if (!installed) return false;
+  const child = spawn("open", ["-na", installed, "--args", `--app=${url}`], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
   return true;
 };
 

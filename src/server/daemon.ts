@@ -421,6 +421,21 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
 
 const HUB_PROBE_TIMEOUT_MS = 500;
 
+/** True when a hub daemon answers its identity probe on `port`. */
+export const hubAlive = async (port = HUB_PORT): Promise<boolean> => {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HUB_PROBE_TIMEOUT_MS);
+    const probe = await loopbackFetch(port, "/hub/identity", { signal: controller.signal });
+    clearTimeout(timer);
+    if (!probe.ok) return false;
+    const who = (await probe.json()) as { lucid?: unknown };
+    return who.lucid === "hub";
+  } catch {
+    return false;
+  }
+};
+
 /** What `POST /hub/open` answers: where the session now lives on the hub. */
 export interface HubOpenResult {
   readonly ok: true;
@@ -440,13 +455,7 @@ export const hubOpen = async (
   port = process.env.LUCID_HUB_PORT ? Number.parseInt(process.env.LUCID_HUB_PORT, 10) : HUB_PORT,
 ): Promise<HubOpenResult | undefined> => {
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HUB_PROBE_TIMEOUT_MS);
-    const probe = await loopbackFetch(port, "/hub/identity", { signal: controller.signal });
-    clearTimeout(timer);
-    if (!probe.ok) return undefined;
-    const who = (await probe.json()) as { lucid?: unknown };
-    if (who.lucid !== "hub") return undefined;
+    if (!(await hubAlive(port))) return undefined;
     const res = await loopbackFetch(port, "/hub/open", {
       method: "POST",
       headers: { "content-type": "application/json" },

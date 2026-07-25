@@ -18,10 +18,17 @@ import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
-import { hubOpen, runDaemon } from "../server/daemon.ts";
+import { HUB_PORT, hubAlive, hubOpen, runDaemon } from "../server/daemon.ts";
 import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
-import { openBrowser, spawnServer, stopServer, waitForServer } from "./self.ts";
+import {
+  openBrowser,
+  openChromeApp,
+  spawnHub,
+  spawnServer,
+  stopServer,
+  waitForServer,
+} from "./self.ts";
 
 const print = (value: unknown): void => {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -383,6 +390,38 @@ export const runHub = async (options: { port?: number } = {}): Promise<void> => 
       void daemon.stop().then(resolve);
     });
   });
+};
+
+/**
+ * `lucid app` - the human's front door to the shell (Model B, Phase 4).
+ * Ensures the hub daemon is up (spawns it detached if not), then opens the
+ * ONE stable entry URL as a Chrome app window - a Dock icon that never goes
+ * stale on a rotating session port. Falls back to the default browser when
+ * no Chrome flavor is installed.
+ */
+export const runApp = async (): Promise<void> => {
+  const envPort = process.env.LUCID_HUB_PORT
+    ? Number.parseInt(process.env.LUCID_HUB_PORT, 10)
+    : undefined;
+  const port = envPort ?? HUB_PORT;
+
+  let alive = await hubAlive(port);
+  if (!alive) {
+    spawnHub(envPort);
+    const deadline = Date.now() + 8000;
+    while (!alive && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 150));
+      alive = await hubAlive(port);
+    }
+  }
+  if (!alive) {
+    throw new ServerError({ message: "hub daemon failed to start", detail: { port } });
+  }
+
+  const url = `http://127.0.0.1:${port}/`;
+  const asApp = openChromeApp(url);
+  if (!asApp) openBrowser(url);
+  print({ hub: url, app: asApp, status: "running" });
 };
 
 /** `lucid` (bare) - status over per-session server.json discovery (no global registry; D-065). */

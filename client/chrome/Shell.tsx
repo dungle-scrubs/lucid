@@ -184,6 +184,23 @@ const PickerRow = ({ row }: { readonly row: HubSession }) => {
   );
 };
 
+/** The hub listing stream's health. Self-clearing like a session's own
+ *  reconnect pill: EventSource retries by itself, so this states what is
+ *  happening rather than asking for anything. */
+const HubHealth = () => {
+  const connected = useHub((s) => s.connected);
+  if (connected) return null;
+  return (
+    <span
+      data-test="hub-reconnecting"
+      title="The hub connection dropped; retrying"
+      className="flex flex-none items-center self-center rounded-full bg-ink-700 px-2 py-px text-[10px] text-steel-400"
+    >
+      hub reconnecting…
+    </span>
+  );
+};
+
 const EmptyShell = () => {
   const sessions = useHub((s) => s.sessions);
   return (
@@ -282,6 +299,7 @@ export const Shell = () => {
           <Tab key={k} sessionKey={k} active={k === activeKey} />
         ))}
         <Picker />
+        <HubHealth />
         <button
           type="button"
           data-test="palette-hint"

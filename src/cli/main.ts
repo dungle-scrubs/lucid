@@ -4,6 +4,7 @@ import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Effect, Option } from "effect";
 import { toErrorJson, type LucidError } from "../errors.ts";
 import {
+  runApp,
   runAsk,
   runIntent,
   runProgress,
@@ -162,6 +163,8 @@ const hubCommand = Command.make("hub", { port: hubPortOpt }, ({ port }) =>
   runEffect(() => runHub({ port: Option.getOrUndefined(port) })),
 );
 
+const appCommand = Command.make("app", {}, () => runEffect(() => runApp()));
+
 // `lucid plan render|ingest` - the planner bridge.
 const docArg = Args.file({ name: "doc" });
 const outOpt = Options.file("out").pipe(Options.optional);
@@ -206,6 +209,7 @@ const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe
     contextCommand,
     serveCommand,
     hubCommand,
+    appCommand,
     planCommand,
   ]),
 );
