@@ -76,6 +76,10 @@ interface HubState {
    *  (or when no registry exists - the dialog then omits the field). */
   harnesses: readonly string[];
   defaultHarness: string | null;
+  /** The last create turn that DIED before its artifact surfaced, with the
+   *  log tail that says why. Keyed state, not a toast: the create dialog is
+   *  what must stop saying "authoring…". */
+  createFailed: { readonly artifact: string; readonly tail: string } | null;
 }
 
 export const useHub = create<HubState>(() => ({
@@ -87,6 +91,7 @@ export const useHub = create<HubState>(() => ({
   attend: null,
   harnesses: [],
   defaultHarness: null,
+  createFailed: null,
 }));
 
 export const setPaletteOpen = (open: boolean): void => useHub.setState({ paletteOpen: open });
@@ -275,6 +280,19 @@ export const connectHub = (): void => {
         /* the next snapshot still lists it; the human can open it by hand */
       }
     })();
+  });
+  // A create turn exited without producing its artifact: stop the dialog's
+  // "authoring…" wait NOW and say why (the log tail rides along).
+  es.addEventListener("create-failed", (e) => {
+    try {
+      const { artifact, tail } = JSON.parse((e as MessageEvent).data) as {
+        artifact: string;
+        tail: string;
+      };
+      useHub.setState({ createFailed: { artifact, tail } });
+    } catch {
+      /* malformed frame: the dialog's own timeout still reports */
+    }
   });
   es.onopen = () => {
     useHub.setState({ connected: true });

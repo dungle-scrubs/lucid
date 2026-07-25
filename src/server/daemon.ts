@@ -609,14 +609,31 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // Answer immediately: authoring is a whole agent turn, and the artifact
       // surfaces as a tab on its own `lucid open`. The claim is held until the
       // turn ends, so a retry while it runs is refused rather than doubled.
-      void runSpawn(argv, project, join(paths.sessionDir, "create.out.log"), {
+      const outLog = join(paths.sessionDir, "create.out.log");
+      // A dead create turn is knowable the moment the child exits - waiting
+      // out the dialog's own patience to report "check the log" turned a
+      // seconds-fast failure (a harness over its usage limit) into two
+      // minutes of mystery silence. Broadcast the exit with the log's tail
+      // so the dialog can say what actually happened, immediately.
+      const reportFailure = async (code: number | string): Promise<void> => {
+        const raw = await readFile(outLog, "utf8").catch(() => "");
+        const tail = raw.trim().split("\n").slice(-3).join("\n").slice(-500);
+        broadcast(`event: create-failed\ndata: ${JSON.stringify({ artifact, code, tail })}\n\n`);
+      };
+      void runSpawn(argv, project, outLog, {
         harness: resolved.name,
         sessionId: childSessionId,
       })
         .then((code) => {
-          if (code !== 0) log(`create ${name}: create turn exited ${code}`);
+          if (code !== 0) {
+            log(`create ${name}: create turn exited ${code}`);
+            void reportFailure(code);
+          }
         })
-        .catch((err) => log(`create ${name}: create turn failed: ${(err as Error).message}`))
+        .catch((err) => {
+          log(`create ${name}: create turn failed: ${(err as Error).message}`);
+          void reportFailure("spawn-error");
+        })
         .finally(() => creating.delete(artifact));
       handedOff = true;
 

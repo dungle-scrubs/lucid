@@ -49,6 +49,7 @@ const CreateDialogBody = () => {
   const attend = useHub((s) => s.attend);
   const harnesses = useHub((s) => s.harnesses);
   const defaultHarness = useHub((s) => s.defaultHarness);
+  const createFailed = useHub((s) => s.createFailed);
   const activeProject = useShell((s) => s.activeProject);
   const roots = useMemo(() => createRoots(sessions), [sessions]);
 
@@ -363,9 +364,34 @@ const CreateDialogBody = () => {
           // nothing to do but wait. The tab opens itself the moment the
           // session appears in the listing.
           <div data-test="create-authoring" className="flex flex-col gap-1 py-2">
-            <span className="shimmer text-[13px] text-fg/40">authoring {name}…</span>
-            <span className="text-[11px] text-fg-faint">{authoring}</span>
-            {timedOut ? (
+            {createFailed?.artifact === authoring ? (
+              <>
+                <span className="text-[13px] text-rust-300">
+                  The authoring turn failed before it produced {name}.
+                </span>
+                <span className="text-[11px] text-fg-faint">{authoring}</span>
+                {/* The harness's own last words: a usage limit, a missing
+                    binary - the reason is almost always right here. */}
+                <pre
+                  data-test="create-failed-tail"
+                  className="mt-1 overflow-x-auto rounded border border-ink-500 bg-ink-700 p-2 font-mono text-[11px] leading-snug text-fg"
+                >
+                  {createFailed.tail || "(the log is empty)"}
+                </pre>
+                <span className="text-[11px] text-fg-muted">
+                  Full log:{" "}
+                  <code className="bg-ink-700 px-1">
+                    .lucid/{name.replace(/\.html$/, "")}/create.out.log
+                  </code>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="shimmer text-[13px] text-fg/40">authoring {name}…</span>
+                <span className="text-[11px] text-fg-faint">{authoring}</span>
+              </>
+            )}
+            {timedOut && createFailed?.artifact !== authoring ? (
               <span data-test="create-timeout" className="pt-1 text-[11px] text-fg-muted">
                 Still nothing after two minutes. The turn may have failed - check{" "}
                 <code className="bg-ink-700 px-1">
