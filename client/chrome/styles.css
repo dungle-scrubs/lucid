@@ -172,6 +172,32 @@
     margin: 0;
     height: 100%;
   }
+  /* Scrollbars in the chrome's own ink, not the OS's light default - a wide
+     pale track beside the panel read as a foreign strip. Thin, square
+     (Spacemolt has no rounded corners), quiet until hovered. The artifact
+     iframe is untouched: what the agent paints there is its own. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-ink-500) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-ink-500);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-steel-500);
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
   body {
     background: var(--color-bg);
     color: var(--color-fg);
