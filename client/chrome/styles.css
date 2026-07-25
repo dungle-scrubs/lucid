@@ -90,10 +90,11 @@
   /* The artifact's ground. The chrome is dark and recedes; the artifact is
      paper and is the thing being looked at. We only supply the ground it
      renders on - what the agent paints there is its own (see the lucid-design
-     skill), and it must read as a document, not as more of this app. Snow
-     Storm is Nord's paper. */
-  --color-surface: var(--color-cream-50);
-  --color-surface-ink: hsl(220 16% 22%);
+     skill), and it must read as a document, not as more of this app. The
+     lucid-design skill's paper is WARM cream - the chrome went Nord, the
+     artifact did not, and this ground must match what artifacts assume. */
+  --color-surface: #faf6ec;
+  --color-surface-ink: #211d15;
 
   --color-fg: var(--color-cream-100);
   --color-fg-strong: var(--color-cream-50);
