@@ -247,6 +247,78 @@ test("a question can be skipped: it leaves the panel and the agent is told", asy
   expect(fb.questions?.[0]?.answer).toBeUndefined();
 });
 
+test("a question renders as Markdown and can be handed back for a clearer re-ask", async ({
+  page,
+}) => {
+  const { nextCursor } = await openViewer(page);
+
+  await cli.run([
+    "ask",
+    cli.artifact,
+    "--text",
+    [
+      "Which harness runs the phase?",
+      "",
+      "The subcommand validates the artifact against the schema:",
+      "",
+      "```",
+      "lucid ask plan.html --text 'batch or nightly?'",
+      "```",
+    ].join("\n"),
+  ]);
+  const q = page.locator('[data-test="question-text"]');
+  await expect(q).toBeVisible();
+  // Markdown, not literal source: the fence became a code block and its
+  // backticks are gone from the text.
+  await expect(q.locator("pre code")).toContainText("lucid ask plan.html");
+  await expect(q).not.toContainText("```");
+
+  // Short question, no disclosure: the fold only exists for walls.
+  await expect(page.locator('[data-test="question-fold"]')).toHaveCount(0);
+
+  // "I don't understand this" - the note says what was confusing.
+  await page.locator('[data-test="question"] .qinput').fill("which schema do you mean?");
+  await page.locator('[data-test="reask"]').click();
+  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
+
+  // The agent is told to ask again rather than that it was answered or declined.
+  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+    questions?: { answered: boolean; unclear?: boolean; skipped?: boolean; answer?: string }[];
+  };
+  expect(fb.questions?.[0]?.answered).toBe(true);
+  expect(fb.questions?.[0]?.unclear).toBe(true);
+  expect(fb.questions?.[0]?.skipped).toBeUndefined();
+  expect(fb.questions?.[0]?.answer).toContain("which schema");
+});
+
+test("a wall-of-text question clamps to a readable height with the rest one click away", async ({
+  page,
+}) => {
+  await openViewer(page);
+
+  const wall = Array.from(
+    { length: 12 },
+    (_, i) =>
+      `Paragraph ${i + 1}: the phase invokes its agent, writes the outbound artifact to a path, and the subcommand validates that file against the schema before the gate lets it through.`,
+  ).join("\n\n");
+  await cli.run(["ask", cli.artifact, "--text", wall]);
+
+  const text = page.locator('[data-test="question-text"]');
+  await expect(text).toBeVisible();
+  const clamped = await text.boundingBox();
+  expect(clamped?.height).toBeLessThan(240);
+
+  // The rest is one click away, and folds back.
+  await page.locator('[data-test="question-fold"]').click();
+  const opened = await text.boundingBox();
+  expect(opened?.height ?? 0).toBeGreaterThan(clamped?.height ?? 0);
+  await page.locator('[data-test="question-fold"]').click();
+  expect((await text.boundingBox())?.height).toBeLessThan(240);
+
+  // However tall the question, the panel never eats the composer that answers it.
+  await expect(page.locator('[data-test="message-input"]')).toBeVisible();
+});
+
 test("fork button spins the selection off; the request reaches wait as a fork", async ({
   page,
 }) => {

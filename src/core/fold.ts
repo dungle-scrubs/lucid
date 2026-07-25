@@ -55,6 +55,7 @@ export interface QuestionRecord {
   readonly multi?: boolean;
   readonly answered: boolean;
   readonly skipped?: boolean;
+  readonly unclear?: boolean;
   readonly answer?: string;
   readonly answerOptions?: readonly string[];
   readonly answerAnchor?: Anchor;
@@ -272,13 +273,18 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
         break;
       case "question_answered": {
         const q = questionMap.get(e.questionId);
-        if (q) {
+        // First answer wins. Answering is terminal - the card leaves the panel -
+        // but Answer, Skip and Re-ask stay live for the instant before the echo
+        // arrives, and merging a second outcome over the first is how a question
+        // ends up both skipped and answered, or declined and unclear at once.
+        if (q && !q.answered) {
           questionMap.set(e.questionId, {
             ...q,
             answered: true,
             answer: e.text,
             answerSeq: e.seq,
             ...(e.skipped ? { skipped: true } : {}),
+            ...(e.unclear ? { unclear: true } : {}),
             ...(e.options && e.options.length > 0 ? { answerOptions: e.options } : {}),
             ...(e.anchor ? { answerAnchor: e.anchor } : {}),
             ...(e.images && e.images.length > 0 ? { answerImages: e.images } : {}),

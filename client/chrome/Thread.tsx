@@ -8,9 +8,6 @@ import {
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
-import { defaultUrlTransform } from "react-markdown";
-import type { ReactNode } from "react";
-import { revealSection } from "./actions.ts";
 import { AnnotationPart } from "./AnnotationPart.tsx";
 import { FoldedText } from "./FoldedText.tsx";
 import { collapseTextPaste } from "./pastes.ts";
@@ -26,6 +23,7 @@ import {
 import { useLucid, warn } from "./store.ts";
 import { Questions } from "./Questions.tsx";
 import { Kbd } from "./ui/kbd.tsx";
+import { markdownComponents, prose, urlTransform } from "./ui/markdown.tsx";
 
 /**
  * The review record. assistant-ui owns the transcript, the composer and the
@@ -56,111 +54,6 @@ const parts = {
   Image: ({ image }: { readonly image: string }) => <Thumb src={image} alt="attachment" />,
 } as const;
 
-/** A `lucid:section/<id>` link is an in-artifact permalink: the agent stamps a
- *  `data-lucid-id` on a new section and links to it, so the reader jumps there
- *  once without hunting. Ephemeral by design - it's a live chip only while the
- *  overlay still reports that id, and degrades to plain text the moment a later
- *  version drops it (no dead links left in the log). */
-const SECTION_SCHEME = "lucid:section/";
-
-/** react-markdown's default sanitizer strips unknown protocols, which would
- *  blank our `lucid:` hrefs; allow that one scheme through and sanitize the
- *  rest exactly as before (no javascript:, no data:). */
-const urlTransform = (url: string): string =>
-  url.startsWith(SECTION_SCHEME) ? url : defaultUrlTransform(url);
-
-/** Lucide `locate-fixed` - "find this in the artifact". */
-const LocateGlyph = () => (
-  <svg
-    viewBox="0 0 24 24"
-    width="11"
-    height="11"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <line x1="2" x2="5" y1="12" y2="12" />
-    <line x1="19" x2="22" y1="12" y2="12" />
-    <line x1="12" x2="12" y1="2" y2="5" />
-    <line x1="12" x2="12" y1="19" y2="22" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>
-);
-
-/** Section permalinks scroll the artifact; every other agent-authored link
- *  opens away from the viewer and never navigates it. */
-const MarkdownLink = ({
-  href,
-  children,
-}: {
-  readonly href?: string;
-  readonly children?: ReactNode;
-}) => {
-  const sectionIds = useLucid((s) => s.sectionIds);
-  const sectionId = href?.startsWith(SECTION_SCHEME) ? href.slice(SECTION_SCHEME.length) : null;
-
-  if (sectionId !== null) {
-    // Live while the id set is unknown (optimistic, pre-first-report) or holds
-    // it; a dead permalink becomes plain text, not a chip that goes nowhere.
-    const live = sectionIds === null || sectionIds.includes(sectionId);
-    if (!live) return <span>{children}</span>;
-    return (
-      <button
-        type="button"
-        data-test="section-link"
-        onClick={() => revealSection(sectionId)}
-        title="Scroll the artifact to this section"
-        className="mx-px inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 align-baseline text-[0.9em] font-medium text-accent hover:bg-accent/20"
-      >
-        <LocateGlyph />
-        {children}
-      </button>
-    );
-  }
-
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer noopener"
-      className="text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
-    >
-      {children}
-    </a>
-  );
-};
-
-/** Markdown images never load. Agent-authored `![](url)` would auto-fetch an
- *  arbitrary URL - a tracking pixel, or a GET at a loopback dev service the
- *  viewer sits beside. Real attachments arrive as Image parts (Thumb), not
- *  markdown, so nothing is lost by showing the reference as inert text. */
-const MarkdownImage = ({ alt }: { readonly alt?: string }) => (
-  <span className="text-fg-faint italic">{alt ? `[image: ${alt}]` : "[image]"}</span>
-);
-
-/**
- * A "prose-lite" for the transcript: descendant utilities so one class carries
- * the whole document, sized down to the panel and pinned to the kit's tokens.
- * Block spacing lives on the container (`*+*`) so first children never inherit
- * a stray top margin. Fenced code gets an inset card; inline code a chip, with
- * the chip styling neutralised inside a fence so a block does not double up.
- */
-const md = [
-  "min-w-0 max-w-full text-fg leading-[1.45] [&>*+*]:mt-2 break-words",
-  "[&_strong]:font-semibold [&_strong]:text-fg-strong [&_em]:italic",
-  "[&_code]:rounded [&_code]:bg-ink-700 [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.92em]",
-  "[&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-ink-600 [&_pre]:bg-bg-inset [&_pre]:p-2.5 [&_pre]:font-mono [&_pre]:text-[12px] [&_pre]:leading-[1.5]",
-  "[&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-[1em]",
-  "[&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mt-0.5 [&_li]:marker:text-fg-faint",
-  "[&_:is(h1,h2,h3,h4)]:mt-3 [&_:is(h1,h2,h3,h4)]:text-[13px] [&_:is(h1,h2,h3,h4)]:font-semibold [&_:is(h1,h2,h3,h4)]:text-fg-strong",
-  "[&_blockquote]:border-l-2 [&_blockquote]:border-ink-500 [&_blockquote]:pl-3 [&_blockquote]:text-fg-muted [&_blockquote]:italic",
-  "[&_hr]:my-3 [&_hr]:border-ink-600",
-  "[&_table]:block [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-[12px] [&_:is(th,td)]:border [&_:is(th,td)]:border-ink-600 [&_:is(th,td)]:px-2 [&_:is(th,td)]:py-1 [&_th]:text-left [&_th]:font-semibold",
-].join(" ");
-
 /** The agent speaks in Markdown: code spans, lists, tables and emphasis render
  *  as themselves. `smooth` is off - the record replays completed turns, so a
  *  typing reveal on already-delivered prose would be a lie about liveness. */
@@ -169,8 +62,8 @@ const AgentMarkdown = () => (
     smooth={false}
     remarkPlugins={[remarkGfm]}
     urlTransform={urlTransform}
-    className={md}
-    components={{ a: MarkdownLink, img: MarkdownImage }}
+    className={prose}
+    components={markdownComponents}
   />
 );
 
