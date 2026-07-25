@@ -7,6 +7,7 @@ import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
 import { sessionPaths } from "../core/paths.ts";
 import type { WaitPayload } from "../core/payload.ts";
+import { registerSession } from "../core/registry.ts";
 import { sanitizeProgress } from "../core/progress.ts";
 import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { ensureSessionDirs, openSession } from "../core/session.ts";
@@ -17,6 +18,7 @@ import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
+import { runDaemon } from "../server/daemon.ts";
 import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { openBrowser, spawnServer, stopServer, waitForServer } from "./self.ts";
@@ -60,6 +62,14 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
 
   const url = `http://127.0.0.1:${identity.port}/__lucid/viewer`;
   if (options.open !== false) openBrowser(url);
+
+  // Register a pointer in the global hub registry (Model B, Phase 0). Advisory:
+  // a registry failure must never fail `open`.
+  try {
+    await registerSession(paths.artifactPath);
+  } catch {
+    /* registry is a discovery convenience, not part of the open contract */
+  }
 
   print({
     session: paths.artifactPath,
@@ -327,6 +337,21 @@ export const runServe = async (file: string): Promise<void> => {
   await runServer(paths, PORT_POOL, idleMs !== undefined ? { idleMs } : {});
 };
 
+/**
+ * `lucid hub` - the always-on hub daemon (Model B, Phase 0). Starts the shared
+ * loopback server in the foreground and logs its URL, then blocks until Ctrl-C.
+ * It runs alongside the per-session servers and only reads the registry/logs.
+ */
+export const runHub = async (): Promise<void> => {
+  const daemon = await runDaemon();
+  process.stdout.write(`lucid hub listening on http://127.0.0.1:${daemon.port}\n`);
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", () => {
+      void daemon.stop().then(resolve);
+    });
+  });
+};
+
 /** `lucid` (bare) - status over per-session server.json discovery (no global registry; D-065). */
 export const runStatus = async (): Promise<void> => {
   const sessions = (await listSessions(process.cwd())).map((summary) => ({
@@ -349,6 +374,7 @@ export const runStatus = async (): Promise<void> => {
       progress: "lucid progress <file> [--label <text>] [--total <n>] [--done <n>]",
       context: "lucid context <file> [--pct <n>] [--used <n>] [--total <m>]",
       end: "lucid end <file>",
+      hub: "lucid hub",
     },
   });
 };

@@ -9,6 +9,7 @@ import {
   runProgress,
   runContext,
   runEnd,
+  runHub,
   runLaunchCli,
   runOpen,
   runPlanIngest,
@@ -156,6 +157,8 @@ const serveCommand = Command.make("__serve", { file: fileArg }, ({ file }) =>
   runEffect(() => runServe(file)),
 );
 
+const hubCommand = Command.make("hub", {}, () => runEffect(() => runHub()));
+
 // `lucid plan render|ingest` - the planner bridge.
 const docArg = Args.file({ name: "doc" });
 const outOpt = Options.file("out").pipe(Options.optional);
@@ -199,6 +202,7 @@ const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe
     progressCommand,
     contextCommand,
     serveCommand,
+    hubCommand,
     planCommand,
   ]),
 );
