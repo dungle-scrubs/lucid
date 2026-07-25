@@ -8,7 +8,9 @@ import { expect, type FrameLocator, type Page } from "@playwright/test";
 const execFileAsync = promisify(execFile);
 
 const REPO = join(import.meta.dirname, "..", "..");
-const MAIN = join(REPO, "src", "cli", "main.ts");
+/** The CLI entrypoint, exported so a suite can spawn a long-running invocation
+ *  (a blocked `wait`) with an env of its own. */
+export const MAIN = join(REPO, "src", "cli", "main.ts");
 
 export interface Cli {
   readonly dir: string;
@@ -79,20 +81,35 @@ export interface Hub {
   stop(): Promise<void>;
 }
 
-export const startHub = async (): Promise<Hub> => {
+export interface HubOptions {
+  /** Run the attend engine, so `/hub/create` spawns instead of answering 403. */
+  readonly attend?: boolean;
+  /** A harness registry for this hub alone, written into the hub's dir and
+   *  pointed at by LUCID_HARNESSES - the user's own
+   *  `~/.config/lucid/harnesses.json` is never read by these tests. */
+  readonly harnesses?: unknown;
+}
+
+export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
   const dir = await mkdtemp(join(tmpdir(), "lucid-hub-e2e-"));
   const registry = join(dir, "registry.json");
+  const harnessesPath = join(dir, "harnesses.json");
+  if (options.harnesses !== undefined) {
+    await writeFile(harnessesPath, JSON.stringify(options.harnesses, null, 2));
+  }
   const env = {
     ...process.env,
     LUCID_REGISTRY: registry,
     // No scan of the real ~/dev: the isolated registry is the only source.
     LUCID_HUB_ROOTS: dir,
     LUCID_NO_OPEN: "1",
+    ...(options.harnesses !== undefined ? { LUCID_HARNESSES: harnessesPath } : {}),
   } as Record<string, string>;
-  const child: ChildProcess = spawn("bun", ["run", MAIN, "hub", "--port", "0"], {
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const child: ChildProcess = spawn(
+    "bun",
+    ["run", MAIN, "hub", "--port", "0", ...(options.attend ? ["--attend"] : [])],
+    { env, stdio: ["ignore", "pipe", "pipe"] },
+  );
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("hub did not start")), 15_000);
     let buf = "";

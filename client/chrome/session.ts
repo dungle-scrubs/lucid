@@ -1,5 +1,5 @@
 import type { LogEvent } from "../../src/core/events.ts";
-import type { ContextUsage } from "../../src/protocol/wire.ts";
+import type { ContextUsage, SelectionResponse } from "../../src/protocol/wire.ts";
 import { createActions, type SessionActions } from "./actions.ts";
 import { createPastes, type Pastes } from "./pastes.ts";
 import {
@@ -88,6 +88,28 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     }
   };
 
+  /**
+   * The sticky model/effort AND the vocabulary it is picked in. This route is
+   * the ONE source of both, even though the value also rides `/__lucid/state`:
+   * the vocabulary is only here (a server with no harness recipe answers
+   * without `info`, which is what leaves the pickers off), so folding the
+   * value in from a second place would only add a race in which a bootstrap
+   * fired before a pick lands after it.
+   */
+  const applySelection = (r: SelectionResponse): void => {
+    set({ selection: r.selection, selectionInfo: r.info ?? null });
+  };
+
+  /** Read once per (re)connect: a registry edited while this tab was open would
+   *  otherwise keep offering the vocabulary it started with. A server that
+   *  predates the route answers 404 and the pickers stay off. */
+  const loadSelection = async (): Promise<void> => {
+    const res = await fetch(`${config.base}/__lucid/selection`).catch(() => null);
+    if (!res?.ok) return;
+    const body = (await res.json().catch(() => null)) as SelectionResponse | null;
+    if (body) applySelection(body);
+  };
+
   let source: EventSource | null = null;
 
   const connect = (): void => {
@@ -104,7 +126,13 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     es.addEventListener("listeners", (e) => {
       try {
         const d = JSON.parse((e as MessageEvent).data) as { agents: number };
+        // An agent arriving flips the selection pickers to a readout of what
+        // THAT session runs, and its stamp only rides the folded state. Without
+        // this re-read the row would report the PREVIOUS attendant's model
+        // until some unrelated content event happened to land.
+        const arriving = d.agents > 0 && store.getState().agentsListening === 0;
         set({ agentsListening: d.agents });
+        if (arriving) void surface.bootstrap();
       } catch {
         /* ignore */
       }
@@ -124,6 +152,15 @@ export const createSession = (config: SessionConfig): SessionHandle => {
         /* ignore */
       }
     });
+    // Another window (or another tab on this session) changed the pick: every
+    // viewer of the artifact shows the same sticky selection.
+    es.addEventListener("selection", (e) => {
+      try {
+        applySelection(JSON.parse((e as MessageEvent).data) as SelectionResponse);
+      } catch {
+        /* ignore */
+      }
+    });
     // EventSource retries on its own, so a drop is a state to show, not a
     // warning to accumulate: warning per failed attempt spammed the panel and
     // told the human to reload, which was never true.
@@ -135,6 +172,7 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     es.onopen = () => {
       set({ live: true });
       void surface.bootstrap();
+      void loadSelection();
       // A live stream means the server is answering again, which is the only
       // thing an undelivered message was waiting on. Fires on the first open
       // too, so a message stranded by a closed tab leaves on the next load
@@ -145,6 +183,7 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     // First paint should not wait for the stream to open: fetch the folded
     // state immediately (seq-guarded, so the onopen re-fetch is harmless).
     void surface.bootstrap();
+    void loadSelection();
   };
 
   const disconnect = (): void => {

@@ -18,6 +18,7 @@ import {
   Notices,
   PendingComposer,
   QueuedCard,
+  SelectionPickers,
   SendQueueBar,
   UnsentMessages,
   Warnings,
@@ -133,6 +134,10 @@ const Composer = () => {
   return (
     <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-ink-600 bg-bg p-[14px]">
       <ListenerLine />
+      {/* Who the NEXT unattended turn runs as. It sits with the presence line
+          because it answers the same question - who is on the other end - and
+          carries the same weight, never a control block of its own. */}
+      <SelectionPickers />
       <div className="flex flex-wrap gap-1.5 empty:hidden">
         <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
       </div>

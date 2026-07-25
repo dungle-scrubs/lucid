@@ -61,6 +61,10 @@ const attendantStamp = (harness?: string): AttendantStamp | undefined => {
   const h = harness || process.env.LUCID_HARNESS;
   const sessionId = process.env.LUCID_SESSION_ID;
   if (!h && !sessionId) return undefined;
+  // Model/effort ride the same way (LUCID_MODEL / LUCID_EFFORT): the viewer's
+  // inherited pickers show what the attending session actually runs.
+  const model = process.env.LUCID_MODEL;
+  const effort = process.env.LUCID_EFFORT;
   // Through the shared normalizer even though we authored it: the direct-
   // append path bypasses the server, and the log's invariants (bounded,
   // control-free strings) must not depend on which writer was live.
@@ -68,6 +72,8 @@ const attendantStamp = (harness?: string): AttendantStamp | undefined => {
     harness: h || "agent",
     ...(sessionId ? { sessionId } : {}),
     cwd: process.cwd(),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
   });
 };
 
@@ -214,11 +220,19 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   // `--resume` without `--harness` still records identity, under a generic name.
   const harness = options.harness || (options.resume ? "agent" : undefined);
   if (harness !== undefined) {
+    // The sidecar carries the same env-declared model/effort as the stamps,
+    // through the same normalizer, so the viewer's inherited pickers and the
+    // log agree on what the attending session runs.
+    // The RESOLVED harness, not the flag: `--resume` alone still names an
+    // attendant, and its declared model/effort must reach the sidecar too.
+    const stamp = attendantStamp(harness);
     await writeAttendantSidecar(paths, {
       harness,
       nextCursor: payload.nextCursor,
       at: new Date().toISOString(),
       ...(options.resume ? { resume: options.resume } : {}),
+      ...(stamp?.model ? { model: stamp.model } : {}),
+      ...(stamp?.effort ? { effort: stamp.effort } : {}),
     });
   }
 

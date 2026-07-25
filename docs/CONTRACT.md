@@ -262,6 +262,53 @@ command that resumes its conversation (including any autonomy flag, e.g.
 and re-summon the original conversation themselves. It is display data only:
 Lucid never executes it, and re-invocation stays external (D-064).
 
+## Model and effort selection - additive
+
+The human picks which **model** and **effort/reasoning level** an artifact's
+UNATTENDED turns run on. The vocabulary is per harness and comes from the
+harness registry ([LAUNCHER.md](LAUNCHER.md)); Lucid never invents a model name
+or an effort level.
+
+The pick sticks to the artifact in `.lucid/<name>/selection.json`:
+
+```jsonc
+{ "harness": "claude-code", "model": "opus-4.8", "effort": "high" }
+```
+
+Every field is optional; an absent field means **pass nothing** and let the CLI
+apply its own default. Every later unattended resume reads this file back, so
+one choice governs the artifact's whole headless life. If the registry stops
+offering that model or level, the turn still runs on the CLI's defaults and a
+`SELECTION_INVALID` warning goes to any window open at the time (warnings are
+broadcast, not replayed, and a standing rejection warns once per hub mount) -
+delivery is never stalled over a preference.
+
+Three surfaces carry it, all additive:
+
+- `POST /hub/create` accepts optional `model` and `effort` beside `harness`.
+  An invalid pick is a `400` with the reason; a valid one is persisted and
+  applied to the create turn's argv.
+- `GET /hub/identity` reports `harnessInfo: [{ name, models?, defaultModel?,
+  efforts?, defaultEffort? }]` beside the unchanged `harnesses: string[]`.
+  Each `models[]` entry is `{ id, label?, efforts? }`.
+- `GET|POST {base}/__lucid/selection` reads and writes the artifact's own
+  pick. `POST { model?, effort? }` validates against the registry (`400 {
+  error }` when the harness cannot run it) and answers with the current state.
+  A POST **replaces the whole selection**, so send both fields - `POST
+  { "effort": "high" }` clears `model`. A parsed body with no usable fields
+  (`{}`, or `"default"` in both) clears the pick; a body that is not a JSON
+  object is a `400`, never a clear. Both methods answer
+  `{ harness?, selection: { harness?, model?, effort? }, info? }`, where `info`
+  is that harness's `harnessInfo` entry so a picker can render without a hub.
+  A `selection` SSE frame carries the same object to other open windows, and
+  `/__lucid/state` carries the current `selection` alongside `lastAttendant`.
+
+**Attended turns inherit instead.** While a harness is attending interactively
+the turn runs on THAT session's settings, so a pick would be ignored. Export
+`LUCID_MODEL` / `LUCID_EFFORT` alongside `LUCID_HARNESS` / `LUCID_SESSION_ID`
+and the `attendant` stamp carries them (`{ harness, sessionId?, cwd?, model?,
+effort? }`); the viewer displays them, subdued, in place of the pickers.
+
 ## Context-window usage (`lucid context`)
 
 `lucid context <file> [--pct <n>] [--used <n>] [--total <m>]` reports the

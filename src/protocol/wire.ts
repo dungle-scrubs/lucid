@@ -217,6 +217,54 @@ export interface AttendantRef {
   readonly harness: string;
   readonly at: string;
   readonly resume?: string;
+  /** Model the attending session runs on, when its environment declared it -
+   *  what the viewer's inherited (attended) pickers display. */
+  readonly model?: string;
+  /** Effort/reasoning level of the attending session, same provenance. */
+  readonly effort?: string;
+}
+
+/** One model a harness offers, as `/hub/identity` reports it (registry v2). */
+export interface HarnessModelInfo {
+  readonly id: string;
+  readonly label?: string;
+  /** Effort levels this model accepts; absent = the harness-wide `efforts`. */
+  readonly efforts?: readonly string[];
+}
+
+/**
+ * One spawn recipe's picker vocabulary, as `/hub/identity` reports it in
+ * `harnessInfo` (additive beside the legacy `harnesses` string[]). A harness
+ * with no `models` has no model picker; one with no effort lists anywhere has
+ * no effort picker.
+ */
+export interface HarnessInfo {
+  readonly name: string;
+  readonly models?: readonly HarnessModelInfo[];
+  readonly defaultModel?: string;
+  readonly efforts?: readonly string[];
+  readonly defaultEffort?: string;
+}
+
+/** An artifact's sticky model/effort selection, as `GET/POST
+ *  {base}/__lucid/selection` reads and writes it. Every unattended turn on
+ *  the artifact reuses it; "default" (or absent) = the CLI decides. */
+export interface SelectionState {
+  readonly harness?: string;
+  readonly model?: string;
+  readonly effort?: string;
+}
+
+/** `GET/POST {base}/__lucid/selection` response: the artifact's sticky pick
+ *  plus the vocabulary it is made in, so the picker renders without a hub
+ *  (a dedicated `lucid open` server has no `/hub/identity`). */
+export interface SelectionResponse {
+  /** The harness whose recipe validates this artifact's picks, when the
+   *  registry has one for it. Absent = no recipe, so no pickers. */
+  readonly harness?: string;
+  /** Empty object when nothing is picked: the CLI's own defaults apply. */
+  readonly selection: SelectionState;
+  readonly info?: HarnessInfo;
 }
 
 /** One session in a project, as `lucid` (bare) and `/__lucid/sessions` report it. */
@@ -280,6 +328,9 @@ export interface StateResponse extends WaitPayload {
   readonly lastAttendant?: AttendantRef;
   /** Last-reported context-window usage of the attending harness, if any. */
   readonly contextUsage?: ContextUsage;
+  /** The artifact's sticky model/effort for unattended turns, when one is
+   *  picked. The pickers' own vocabulary comes from `/__lucid/selection`. */
+  readonly selection?: SelectionState;
 }
 
 /** `/__lucid/sessions` response. */

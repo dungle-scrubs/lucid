@@ -66,6 +66,8 @@ export const listSessions = async (root: string): Promise<SessionSummary[]> => {
                 harness: attendant.harness,
                 at: attendant.at,
                 ...(attendant.resume ? { resume: attendant.resume } : {}),
+                ...(attendant.model ? { model: attendant.model } : {}),
+                ...(attendant.effort ? { effort: attendant.effort } : {}),
               },
             }
           : {}),

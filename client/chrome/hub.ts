@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
 import type { SessionHandle } from "./session.ts";
 import { dropSession, ensureSession, getSession, useShell } from "./shell.ts";
@@ -76,6 +77,10 @@ interface HubState {
    *  (or when no registry exists - the dialog then omits the field). */
   harnesses: readonly string[];
   defaultHarness: string | null;
+  /** Each recipe's curated model/effort vocabulary, when the registry declares
+   *  one. Runs parallel to `harnesses` (the hub reports both): a harness absent
+   *  from here, or present with neither list, simply gets no pickers. */
+  harnessInfo: readonly HarnessInfo[];
   /** The last create turn that DIED before its artifact surfaced, with the
    *  log tail that says why. Keyed state, not a toast: the create dialog is
    *  what must stop saying "authoring…". */
@@ -97,6 +102,7 @@ export const useHub = create<HubState>(() => ({
   attend: null,
   harnesses: [],
   defaultHarness: null,
+  harnessInfo: [],
   createFailed: null,
 }));
 
@@ -230,6 +236,7 @@ const refreshIdentity = (): void => {
             attend?: boolean;
             harnesses?: string[];
             defaultHarness?: string;
+            harnessInfo?: HarnessInfo[];
           }>)
         : null,
     )
@@ -239,6 +246,7 @@ const refreshIdentity = (): void => {
           attend: who.attend === true,
           harnesses: who.harnesses ?? [],
           defaultHarness: who.defaultHarness ?? null,
+          harnessInfo: who.harnessInfo ?? [],
         });
     })
     .catch(() => {

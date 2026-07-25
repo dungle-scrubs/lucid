@@ -152,6 +152,15 @@ Never fake the review loop, and never paste build instructions at the user.
    export LUCID_HARNESS=claude-code LUCID_SESSION_ID=<session-id>
    ```
 
+   Export `LUCID_MODEL` and `LUCID_EFFORT` alongside them when you know what
+   you are running on. While you are attending, the viewer's model and effort
+   pickers show YOUR values instead of offering a choice - an attended turn
+   runs on the attendant's own settings, so the pickers must display what the
+   attending session actually runs, not a pick that would be ignored:
+   ```sh
+   export LUCID_MODEL=opus-4.8 LUCID_EFFORT=high
+   ```
+
    Lucid only records and displays this command; running it is always the
    human's act, in their terminal.
    - `status: "feedback"` -> apply the `annotations` (each has a `note`, the target

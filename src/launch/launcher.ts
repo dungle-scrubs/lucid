@@ -186,14 +186,28 @@ export const runSpawn = async (
   argv: string[],
   cwd: string,
   logFile: string,
-  identity?: { harness: string; sessionId: string },
+  identity?: { harness: string; sessionId: string; model?: string; effort?: string },
 ): Promise<number> => {
   // The child is its OWN harness session: inheriting the launcher's
   // LUCID_SESSION_ID would stamp the child's events as the parent
-  // conversation (D18 misattribution).
+  // conversation (D18 misattribution). Model/effort follow the same rule -
+  // the child stamps what IT runs (the applied selection), never what the
+  // spawning process happened to inherit.
   const env = identity
-    ? { ...process.env, LUCID_HARNESS: identity.harness, LUCID_SESSION_ID: identity.sessionId }
-    : { ...process.env, LUCID_HARNESS: undefined, LUCID_SESSION_ID: undefined };
+    ? {
+        ...process.env,
+        LUCID_HARNESS: identity.harness,
+        LUCID_SESSION_ID: identity.sessionId,
+        LUCID_MODEL: identity.model,
+        LUCID_EFFORT: identity.effort,
+      }
+    : {
+        ...process.env,
+        LUCID_HARNESS: undefined,
+        LUCID_SESSION_ID: undefined,
+        LUCID_MODEL: undefined,
+        LUCID_EFFORT: undefined,
+      };
   const fd = openSync(logFile, "a");
   try {
     const proc = Bun.spawn(argv, {

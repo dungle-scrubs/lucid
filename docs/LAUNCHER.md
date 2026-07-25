@@ -46,6 +46,83 @@ fork: `{id}` (new harness session id), `{seed}` (fork seed file), `{artifact}`
 (the file the agent must write + `lucid open`), `{cwd}` (project root), `{prompt}`
 (the instruction Lucid composes).
 
+### Model and effort (optional, per harness)
+
+A recipe may also declare the **models** it may run headless turns on and the
+**effort/reasoning levels** those models accept. Lucid shows them as pickers
+(create dialog, chat panel); a recipe that declares neither simply has no
+pickers.
+
+```jsonc
+{
+  "harnesses": {
+    "claude-code": {
+      "spawn": ["claude", "-p", "--session-id", "{id}", "{prompt}", "--allowedTools", "..."],
+      "models": [
+        { "id": "opus-5", "label": "Opus 5" },
+        { "id": "opus-4.8" }
+      ],
+      "defaultModel": "opus-4.8",
+      // Harness-wide ladder: applies to every model that declares none itself.
+      "efforts": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "codex": {
+      "spawn": ["codex", "exec", "--sandbox", "workspace-write", "-C", "{cwd}", "{prompt}"],
+      "models": [
+        // codex's ladder is per model GENERATION - the API enforces the subset,
+        // so each model carries its own.
+        { "id": "gpt-5.6-sol", "efforts": ["medium", "high", "xhigh", "max", "ultra"] },
+        { "id": "gpt-5.5", "efforts": ["minimal", "low", "medium", "high"] }
+      ],
+      "defaultModel": "gpt-5.6-sol"
+    }
+  }
+}
+```
+
+- `models[].efforts` wins over the harness-wide `efforts` for that model.
+- `defaultModel`/`defaultEffort` are what the pickers preselect. Both must be
+  in the harness's own lists - the registry **fails to load** otherwise, with
+  the file path in the error, rather than offering a pick the CLI will reject.
+- These fields are optional and additive: a registry written before them keeps
+  working unchanged.
+
+**The flags Lucid composes**, per harness (nothing else is guessed at):
+
+| harness | model | effort |
+| --- | --- | --- |
+| `claude-code` | `--model <id>` | `--effort <level>` |
+| `codex` | `-c model="<id>"` | `-c model_reasoning_effort="<level>"` |
+| `pi` | `--model <id>` | `--thinking <level>` |
+
+A harness Lucid has no flags for cannot carry a selection. Declaring `models`,
+`efforts`, `defaultModel`, or `defaultEffort` on one **fails the registry
+load**, with the file path in the error: a picker whose every pick is refused
+at spawn is worse than no picker.
+
+**Where they are inserted:** right after `argv[0]` for `claude-code`/`pi`, and
+after the last `exec` (or `exec resume`) subcommand tokens for `codex`. Never
+appended - a trailing option lands inside claude's variadic `--allowedTools`
+(see the warning above) and is read as another tool name. The index is read off
+the argv TEMPLATE, before substitution, so a `{cwd}` or `{prompt}` holding the
+literal `exec` cannot move it.
+
+> **`argv[0]` must be the harness executable itself.** Insertion is positional,
+> so a recipe fronted by a wrapper (`env FOO=1 claude ...`, `bunx ...`) puts the
+> model/effort flags on the wrapper. Wrap with a shell script the recipe calls
+> directly instead. `codex` behind `direnv exec . codex exec ...` is the one
+> safe case - the scan takes the last `exec`.
+
+**No pick means no flag.** "Default" is not a value Lucid synthesizes; it
+passes nothing and the CLI's own configured default applies.
+
+**The pick sticks to the artifact.** It is written to
+`.lucid/<name>/selection.json` (`{ harness?, model?, effort? }`) by the create
+dialog and by `POST {base}/__lucid/selection`, and every later unattended
+resume reads it back. If the registry later stops offering that model or
+level, the turn still runs - on the CLI's own defaults - and the viewer says
+why (`SELECTION_INVALID`). A stalled delivery would be the worse failure.
+
 ### The allowlist is a security decision, not plumbing
 
 A headless agent has no terminal, so it cannot answer permission prompts - it

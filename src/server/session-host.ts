@@ -22,7 +22,19 @@ import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
 import { assemblePayload } from "../core/payload.ts";
 import { commitWatchedChange } from "../core/session.ts";
-import type { ContextUsage, SessionsResponse, StateResponse } from "../protocol/wire.ts";
+import { loadRegistry, resolveRecipe, type SpawnRecipe } from "../launch/recipes.ts";
+import {
+  readSelection,
+  sanitizeSelection,
+  selectionArgs,
+  writeSelection,
+} from "../launch/selection.ts";
+import type {
+  ContextUsage,
+  SelectionResponse,
+  SessionsResponse,
+  StateResponse,
+} from "../protocol/wire.ts";
 import { sanitizeProgress } from "../core/progress.ts";
 import {
   CHROME_BUNDLE,
@@ -180,6 +192,9 @@ export interface SessionHostOptions {
    *  "/s/<id>" under the daemon. Baked into the viewer page it serves so the
    *  chrome addresses THIS session's routes. */
   readonly base?: string;
+  /** Harness registry file backing the selection route (tests inject; default
+   *  is recipes.ts's own resolution). */
+  readonly harnessesPath?: string;
   /** session_ended just landed (already broadcast): stop the socket or evict
    *  the mount. The host has already shut its own internals down after this
    *  returns control via stop(). */
@@ -279,6 +294,12 @@ export const createSessionHost = (
    *  the header ring updates live without a full state re-fetch. */
   const broadcastContext = (usage: ContextUsage): void => {
     broadcastRaw(encoder.encode(`event: context\ndata: ${JSON.stringify(usage)}\n\n`));
+  };
+
+  /** Synthetic frame: the artifact's sticky model/effort just changed. Two
+   *  windows can be open on one session, and the picker is shared state. */
+  const broadcastSelection = (response: SelectionResponse): void => {
+    broadcastRaw(encoder.encode(`event: selection\ndata: ${JSON.stringify(response)}\n\n`));
   };
 
   // ---- request handling -----------------------------------------------------
@@ -705,6 +726,86 @@ export const createSessionHost = (
     return json({ ok: true });
   };
 
+  /**
+   * The harness whose model/effort vocabulary applies to THIS artifact: the
+   * one its own log records, else the registry default for an artifact that
+   * has not been attended yet. Exact match only, like the attend engine - a
+   * recorded harness the registry lacks has no vocabulary to offer, and the
+   * default is not a stand-in for it.
+   */
+  const selectionHarness = async (): Promise<
+    { readonly name: string; readonly recipe: SpawnRecipe } | undefined
+  > => {
+    const registry = await loadRegistry(options.harnessesPath).catch(() => null);
+    if (!registry) return undefined;
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const recorded = [...state.sessionHistory].reverse().find((r) => r.harness)?.harness;
+    const found = resolveRecipe(registry, recorded);
+    return found && (recorded === undefined || found.name === recorded) ? found : undefined;
+  };
+
+  /** The selection route's answer: the sticky pick plus the vocabulary it was
+   *  made in, so a picker can render without the hub's identity call (a
+   *  dedicated `lucid open` server has no hub). */
+  const selectionResponse = async (
+    resolved: { readonly name: string; readonly recipe: SpawnRecipe } | undefined,
+  ): Promise<SelectionResponse> => ({
+    selection: (await readSelection(paths)) ?? {},
+    ...(resolved
+      ? {
+          harness: resolved.name,
+          info: {
+            name: resolved.name,
+            ...(resolved.recipe.models ? { models: resolved.recipe.models } : {}),
+            ...(resolved.recipe.defaultModel !== undefined
+              ? { defaultModel: resolved.recipe.defaultModel }
+              : {}),
+            ...(resolved.recipe.efforts ? { efforts: resolved.recipe.efforts } : {}),
+            ...(resolved.recipe.defaultEffort !== undefined
+              ? { defaultEffort: resolved.recipe.defaultEffort }
+              : {}),
+          },
+        }
+      : {}),
+  });
+
+  /**
+   * `{base}/__lucid/selection`: the artifact's sticky model/effort, which
+   * every later UNATTENDED turn reuses. Validated against the registry the
+   * spawner will use, so a pick that cannot run is refused here with the
+   * adapter's own words instead of dying as a dead agent turn. A POST replaces
+   * the WHOLE selection, and a body with no usable fields CLEARS it -
+   * "default" means the CLI decides.
+   */
+  const handleSelection = async (req: Request): Promise<Response> => {
+    const resolved = await selectionHarness();
+    if (req.method === "GET") return json(await selectionResponse(resolved), 200, noStore);
+    // Clearing the pick is destructive and must be ASKED for: a body that did
+    // not parse as an object is a malformed request, not an empty selection,
+    // so a truncated or bodyless POST is refused instead of silently wiping
+    // what every later unattended turn reuses.
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body !== "object") {
+      return json({ error: "selection body must be a JSON object" }, 400);
+    }
+    const selection = sanitizeSelection({ model: body.model, effort: body.effort });
+    if (selection) {
+      if (!resolved) {
+        return json({ error: "this artifact has no harness recipe to validate a selection" }, 400);
+      }
+      const args = selectionArgs(resolved.name, resolved.recipe, selection);
+      if ("error" in args) return json({ error: args.error }, 400);
+    }
+    await writeSelection(paths, {
+      ...(selection && resolved ? { harness: resolved.name } : {}),
+      ...(selection ?? {}),
+    });
+    const response = await selectionResponse(resolved);
+    broadcastSelection(response);
+    touch();
+    return json(response);
+  };
+
   const handle = async (req: Request, pathnameOverride?: string): Promise<Response> => {
     const url = new URL(req.url);
     const pathname = pathnameOverride ?? url.pathname;
@@ -794,6 +895,7 @@ export const createSessionHost = (
       // the chrome's resume affordance, never something the server executes.
       const attendant = await readLastAttendant(paths);
       const contextUsage = await readContextSidecar(paths);
+      const selection = await readSelection(paths);
       const response: StateResponse = {
         ...payload,
         agentsListening: agentClients.size,
@@ -803,10 +905,13 @@ export const createSessionHost = (
                 harness: attendant.harness,
                 at: attendant.at,
                 ...(attendant.resume ? { resume: attendant.resume } : {}),
+                ...(attendant.model ? { model: attendant.model } : {}),
+                ...(attendant.effort ? { effort: attendant.effort } : {}),
               },
             }
           : {}),
         ...(contextUsage ? { contextUsage } : {}),
+        ...(selection ? { selection } : {}),
       };
       return json(response);
     }
@@ -818,6 +923,9 @@ export const createSessionHost = (
         sessions: await listSessions(root),
       };
       return json(response, 200, noStore);
+    }
+    if (pathname === "/__lucid/selection" && (req.method === "GET" || req.method === "POST")) {
+      return handleSelection(req);
     }
     if (pathname === "/__lucid/diff") return handleDiff(url);
     if (pathname === "/__lucid/version") return handleVersion(url);

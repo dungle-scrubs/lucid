@@ -15,6 +15,13 @@ import { projectRoot } from "../core/sessions.ts";
 import { detectUsageLimit } from "../launch/limits.ts";
 import { runSpawn } from "../launch/launcher.ts";
 import { buildArgv, loadRegistry, resolveRecipe } from "../launch/recipes.ts";
+import {
+  insertSelectionArgs,
+  sanitizeSelection,
+  selectionArgs,
+  writeSelection,
+} from "../launch/selection.ts";
+import type { HarnessInfo } from "../protocol/wire.ts";
 import { createArtifactPrompt, createAttendant, type Attendant } from "./attend.ts";
 import {
   CHROME_BUNDLE,
@@ -281,6 +288,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const host = createSessionHost(paths, {
       getPort: () => port,
       base,
+      // The mount's selection route validates against the SAME registry the
+      // hub's create and attend paths use (tests inject their own).
+      ...(opts.harnessesPath !== undefined ? { harnessesPath: opts.harnessesPath } : {}),
       onEnded: () => void evict(id),
     });
     const idleTimer = setInterval(
@@ -555,6 +565,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const name = typeof body?.name === "string" ? body.name : "";
     const prompt = typeof body?.prompt === "string" ? body.prompt : "";
     const harness = typeof body?.harness === "string" && body.harness ? body.harness : undefined;
+    // The human's model/effort pick for this artifact. Absent = the CLI
+    // decides, and nothing is persisted.
+    const selection = body
+      ? sanitizeSelection({ model: body.model, effort: body.effort })
+      : undefined;
 
     if (!CREATE_NAME.test(name)) {
       return json({ error: "name must be a plain .html filename" }, 400);
@@ -596,17 +611,32 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         return json({ error: `no spawn recipe for harness "${harness ?? "(default)"}"` }, 400);
       }
 
+      // A pick the recipe does not offer fails HERE, with the adapter's own
+      // words, rather than as an agent turn that dies on an unknown flag.
+      const selArgs = selection ? selectionArgs(resolved.name, resolved.recipe, selection) : [];
+      if ("error" in selArgs) return json({ error: selArgs.error }, 400);
+
       // The child is its own harness session from birth (D18): the id is minted
       // here so the stamps it writes name a conversation that can be resumed.
       const childSessionId = crypto.randomUUID();
       const paths = sessionPaths(artifact);
-      const argv = buildArgv(resolved.recipe.spawn, {
-        id: childSessionId,
-        artifact,
-        cwd: project,
-        prompt: createArtifactPrompt(artifact, prompt),
-      });
+      const argv = insertSelectionArgs(
+        resolved.name,
+        buildArgv(resolved.recipe.spawn, {
+          id: childSessionId,
+          artifact,
+          cwd: project,
+          prompt: createArtifactPrompt(artifact, prompt),
+        }),
+        selArgs,
+        resolved.recipe.spawn,
+      );
       await mkdir(paths.sessionDir, { recursive: true });
+      // The pick STICKS to the artifact: every later unattended resume reads
+      // this sidecar rather than re-deriving a model from the registry.
+      if (selection) {
+        await writeSelection(paths, { harness: resolved.name, ...selection });
+      }
       log(`create ${name}: spawning "${resolved.name}" in ${project}`);
       // Answer immediately: authoring is a whole agent turn, and the artifact
       // surfaces as a tab on its own `lucid open`. The claim is held until the
@@ -635,6 +665,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       void runSpawn(argv, project, outLog, {
         harness: resolved.name,
         sessionId: childSessionId,
+        ...(selection?.model !== undefined ? { model: selection.model } : {}),
+        ...(selection?.effort !== undefined ? { effort: selection.effort } : {}),
       })
         .then((code) => {
           if (code !== 0) {
@@ -707,8 +739,22 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // create dialog can OFFER them - a free-text harness field asked the
       // human to recall magic strings. Read fresh per call: identity is
       // fetched on (re)connect only, and the registry is a small local file.
+      // `harnessInfo` runs PARALLEL to `harnesses` (additive): the same names,
+      // plus each recipe's curated model/effort vocabulary so the create
+      // dialog can offer pickers. An older shell reads `harnesses` and never
+      // sees it; a recipe declaring neither reports name-only, and the dialog
+      // shows no pickers for it.
       const registry = await loadRegistry(opts.harnessesPath).catch(() => null);
       const harnesses = registry ? Object.keys(registry.harnesses) : [];
+      const harnessInfo: HarnessInfo[] = Object.entries(registry?.harnesses ?? {}).map(
+        ([name, recipe]) => ({
+          name,
+          ...(recipe.models ? { models: recipe.models } : {}),
+          ...(recipe.defaultModel !== undefined ? { defaultModel: recipe.defaultModel } : {}),
+          ...(recipe.efforts ? { efforts: recipe.efforts } : {}),
+          ...(recipe.defaultEffort !== undefined ? { defaultEffort: recipe.defaultEffort } : {}),
+        }),
+      );
       return json(
         {
           lucid: "hub",
@@ -716,6 +762,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           shells: sseClients.size,
           attend,
           harnesses,
+          harnessInfo,
           ...(registry?.default !== undefined ? { defaultHarness: registry.default } : {}),
         },
         200,

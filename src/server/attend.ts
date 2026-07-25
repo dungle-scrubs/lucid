@@ -9,7 +9,8 @@ import type { SessionPaths } from "../core/paths.ts";
 import { assemblePayload } from "../core/payload.ts";
 import { revisePrompt, runSpawn } from "../launch/launcher.ts";
 import { detectUsageLimit } from "../launch/limits.ts";
-import { buildArgv, loadRegistry, resolveRecipe } from "../launch/recipes.ts";
+import { buildArgv, loadRegistry, resolveRecipe, type SpawnRecipe } from "../launch/recipes.ts";
+import { insertSelectionArgs, readSelection, selectionArgs } from "../launch/selection.ts";
 
 /**
  * The attend engine (D15/D19): delivery is Lucid's job. When feedback sits
@@ -193,6 +194,9 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   /** Once-per-mount diagnostics: a missing recipe is a standing condition, not
    *  a per-poll event, so it must not fill the hub's output. */
   let saidUnattendable = false;
+  /** The last selection-rejection already warned about, so a standing stale
+   *  pick warns once instead of on every turn - but a NEW reason still does. */
+  let saidSelectionInvalid = "";
 
   const pauseFor = (ms: number): void => {
     pausedUntil = Date.now() + ms;
@@ -216,6 +220,47 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     fails = 0;
     pauseFor(ATTEND_COOLOFF_MS);
     log(`attend ${paths.name}: pausing attendance for ${ATTEND_COOLOFF_MS / 60000} minutes`);
+  };
+
+  /**
+   * The artifact's sticky selection as argv, or nothing when it no longer
+   * validates. A stale pick (the registry dropped the model, the artifact
+   * moved to another harness) DEGRADES: the turn runs on the CLI's own
+   * defaults and the human is told why, because a stalled delivery is a worse
+   * failure than a turn at the wrong effort.
+   */
+  const applicableSelection = async (
+    harnessName: string,
+    recipe: SpawnRecipe,
+  ): Promise<{ args: readonly string[]; model?: string; effort?: string }> => {
+    const selection = await readSelection(paths);
+    if (!selection) {
+      // Cleared: the next pick is a fresh condition, so it warns even when it
+      // repeats the message this mount already said.
+      saidSelectionInvalid = "";
+      return { args: [] };
+    }
+    const composed =
+      selection.harness !== undefined && selection.harness !== harnessName
+        ? {
+            error: `the saved pick was made for harness "${selection.harness}", but this artifact resumes under "${harnessName}"`,
+          }
+        : selectionArgs(harnessName, recipe, selection);
+    if ("error" in composed) {
+      const message = `Model/effort selection ignored: ${composed.error}. This turn runs on the harness's own defaults.`;
+      log(`attend ${paths.name}: ${message}`);
+      if (saidSelectionInvalid !== message) {
+        saidSelectionInvalid = message;
+        options.warn?.("SELECTION_INVALID", message);
+      }
+      return { args: [] };
+    }
+    saidSelectionInvalid = "";
+    return {
+      args: composed,
+      ...(selection.model ? { model: selection.model } : {}),
+      ...(selection.effort ? { effort: selection.effort } : {}),
+    };
   };
 
   /** Drive one revise turn for everything pending up to `state.highSeq`. */
@@ -269,12 +314,22 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // Resume is cwd-scoped (D10): the session's own directory, else the
     // artifact's. The child is that harness session, never the hub's.
     const cwd = await usableCwd(record.cwd, paths.artifactDir);
-    const argv = buildArgv(resolved.recipe.resume, {
-      id: record.sessionId,
-      artifact: paths.artifactPath,
-      cwd,
-      prompt,
-    });
+    // The artifact's sticky model/effort: read before EVERY resume, so a
+    // change takes effect on the next turn without remounting the session.
+    // Re-validated every time too - the registry is a file a human edits, and
+    // a pick it no longer offers must not reach the CLI as a dead flag.
+    const applied = await applicableSelection(resolved.name, resolved.recipe);
+    const argv = insertSelectionArgs(
+      resolved.name,
+      buildArgv(resolved.recipe.resume, {
+        id: record.sessionId,
+        artifact: paths.artifactPath,
+        cwd,
+        prompt,
+      }),
+      applied.args,
+      resolved.recipe.resume,
+    );
     await mkdir(paths.sessionDir, { recursive: true });
     // Last look before the process exists: everything above awaited, and an
     // interactive attendant that connected meanwhile owns this batch. The
@@ -303,6 +358,10 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const code = await runSpawn(argv, cwd, join(paths.sessionDir, "attend.out.log"), {
       harness: record.harness,
       sessionId: record.sessionId,
+      // Only what the argv actually carries: a dropped stale pick must not
+      // stamp the child as running a model it was never given.
+      ...(applied.model !== undefined ? { model: applied.model } : {}),
+      ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
     });
     if (code === 0) {
       // Advance only on a clean turn, so a failed one retries the batch

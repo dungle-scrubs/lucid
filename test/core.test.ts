@@ -13,7 +13,7 @@ import { parseCursor, renderCursor } from "../src/core/cursor.ts";
 import { foldLog } from "../src/core/fold.ts";
 import { sanitizeProgress } from "../src/core/progress.ts";
 import { sanitizeContext } from "../src/core/context.ts";
-import type { LogEvent } from "../src/core/events.ts";
+import { sanitizeAttendant, type LogEvent } from "../src/core/events.ts";
 import { hashContent, validateStructure } from "../src/core/version.ts";
 
 const rootOf = (html: string): DomRootLike => parseHTML(html).document as unknown as DomRootLike;
@@ -223,6 +223,41 @@ describe("sanitizeContext", () => {
     expect(sanitizeContext({ used: -1, total: 200000 })).toBeUndefined();
     expect(sanitizeContext({})).toBeUndefined();
     expect(sanitizeContext({ pct: Number.NaN })).toBeUndefined();
+  });
+});
+
+describe("sanitizeAttendant", () => {
+  test("keeps the identity fields and the model/effort a session declares", () => {
+    expect(
+      sanitizeAttendant({
+        harness: "claude-code",
+        sessionId: "sess-1",
+        cwd: "/proj",
+        model: "opus-4.8",
+        effort: "high",
+      }),
+    ).toEqual({
+      harness: "claude-code",
+      sessionId: "sess-1",
+      cwd: "/proj",
+      model: "opus-4.8",
+      effort: "high",
+    });
+  });
+
+  test("model/effort are bounded and control-stripped like every other field", () => {
+    const stamp = sanitizeAttendant({
+      harness: "codex",
+      model: `gpt${String.fromCharCode(0)}-5.6\n-sol`,
+      effort: "u".repeat(200),
+    });
+    expect(stamp?.model).toBe("gpt-5.6-sol");
+    expect(stamp?.effort?.length).toBe(32);
+  });
+
+  test("a stamp without them is unchanged (they are optional)", () => {
+    expect(sanitizeAttendant({ harness: "pi" })).toEqual({ harness: "pi" });
+    expect(sanitizeAttendant({ harness: "pi", model: 7, effort: null })).toEqual({ harness: "pi" });
   });
 });
 

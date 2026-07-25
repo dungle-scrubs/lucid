@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import type { SelectionResponse } from "../../src/protocol/wire.ts";
 import { QUICK_REPLIES } from "./actions.ts";
 import { TargetSnippet } from "./AnnotationPart.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
+import { effortLadder, withCurrent } from "./selection.ts";
 import { imagesFromPaste } from "./store.ts";
 import type { OutboxMessage, PastedImage } from "./types.ts";
 import { Kbd, KbdGroup } from "./ui/kbd.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { closeButtonSmall } from "./ui/close.ts";
 
 /**
@@ -350,6 +353,210 @@ export const SendQueueBar = () => {
           <Kbd className="border-on-accent/30 bg-on-accent/10 text-on-accent">↵</Kbd>
         </KbdGroup>
       </button>
+    </div>
+  );
+};
+
+/** Why the pickers go read-only while someone is attending: Lucid cannot move
+ *  a live conversation onto another model, and offering the choice would lie. */
+const INHERITED_WHY = "an interactive session runs its own model";
+
+/** One quiet picker in the composer's furniture: the same pill at the same
+ *  weight whether it is writable or a readout, minus the chevron when there is
+ *  nothing to open. A disabled Select would still advertise a menu. */
+const SelectionPicker = ({
+  label,
+  test,
+  value,
+  busy,
+  readOnly,
+  display,
+  options,
+  onPick,
+}: {
+  readonly label: string;
+  readonly test: string;
+  readonly value: string;
+  readonly busy: boolean;
+  readonly readOnly: boolean;
+  readonly display: (value: string) => string;
+  readonly options: readonly {
+    readonly value: string;
+    readonly label: string;
+    readonly hint?: string;
+  }[];
+  readonly onPick: (value: string) => void;
+}) => (
+  <span className="flex items-center gap-1.5">
+    <span className="text-fg-faint">{label}</span>
+    {readOnly ? (
+      <span
+        data-test={test}
+        data-readonly="true"
+        title={INHERITED_WHY}
+        className="cursor-default rounded-full border border-ink-500 bg-ink-800 px-[9px] py-px text-[11px] text-fg-faint"
+      >
+        {display(value)}
+      </span>
+    ) : (
+      <Select value={value} disabled={busy} onValueChange={(v) => onPick(v ?? "")}>
+        <SelectTrigger
+          data-test={test}
+          aria-label={label}
+          className={`disabled:opacity-60 ${value === "" ? "" : "text-accent-bright"}`}
+        >
+          <SelectValue>{(v: string) => display(v)}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+              {o.hint ? <span className="ml-2 text-[10px] text-fg-faint">{o.hint}</span> : null}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    )}
+  </span>
+);
+
+/**
+ * Which model and effort this artifact's UNATTENDED turns run on. The pick is
+ * sticky - it is written beside the artifact and every later headless resume
+ * reuses it - so this is a property of the ARTIFACT, not of this window, and
+ * every viewer of it sees the same pair.
+ *
+ * With an agent listening the pickers become a readout of what THAT session
+ * runs (its stamp, or "inherited" when its environment declared nothing).
+ * Presence is the only signal available here: a working window disconnects the
+ * agent, and the pick applies to the next turn either way, so the pickers stay
+ * writable through it rather than flickering.
+ */
+export const SelectionPickers = () => {
+  const { transport, store, notify } = useSessionHandle();
+  const info = useSession((s) => s.selectionInfo);
+  const selection = useSession((s) => s.selection);
+  const listening = useSession((s) => s.agentsListening);
+  const attendant = useSession((s) => s.lastAttendant);
+  const status = useSession((s) => s.status);
+  const [busy, setBusy] = useState(false);
+
+  // No recipe for this artifact's harness (or a server that predates the
+  // route): there is no vocabulary to pick from, so there is no picker.
+  if (info === null || status !== "active") return null;
+  const readOnly = listening > 0;
+  const models = info.models ?? [];
+  const ladder = effortLadder(info, selection.model ?? "") ?? [];
+  const modelValue = readOnly ? (attendant?.model ?? "") : (selection.model ?? "");
+  const effortValue = readOnly ? (attendant?.effort ?? "") : (selection.effort ?? "");
+  // A live effort keeps its row even when the ladder resolves empty (a sticky
+  // model the registry no longer lists has no per-model vocabulary), or the
+  // pick would be invisible and unclearable until the model changed.
+  const showEffort = ladder.length > 0 || effortValue !== "";
+  if (models.length === 0 && !showEffort) return null;
+
+  const harness = selection.harness ?? attendant?.harness ?? info.name;
+  const inherited = `inherited from ${harness}`;
+
+  /** A POST replaces the whole selection, so both fields ride every write. */
+  const commit = async (model: string, effort: string): Promise<void> => {
+    setBusy(true);
+    const res = await fetch(`${transport.base}/__lucid/selection`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, effort }),
+    }).catch(() => null);
+    setBusy(false);
+    if (!res) {
+      notify.warn("Couldn't reach the server - the selection is unchanged.");
+      return;
+    }
+    const body = (await res.json().catch(() => null)) as
+      | (Partial<SelectionResponse> & { error?: string })
+      | null;
+    // The adapter's own words: a pick the recipe refuses is named here rather
+    // than dying later as an agent turn on a flag the CLI never took.
+    if (!res.ok || !body?.selection) {
+      notify.warn(
+        typeof body?.error === "string"
+          ? body.error
+          : `The server refused the selection (${res.status}).`,
+      );
+      return;
+    }
+    store.setState({ selection: body.selection, selectionInfo: body.info ?? null });
+  };
+
+  // A model change re-picks the ladder, so an effort the new model does not
+  // accept falls back to default instead of being refused.
+  const pickModel = (v: string): void => {
+    const next = effortLadder(info, v);
+    const effort = selection.effort ?? "";
+    void commit(v, effort !== "" && next?.includes(effort) ? effort : "");
+  };
+
+  return (
+    <div
+      data-test="selection-pickers"
+      data-readonly={readOnly ? "true" : "false"}
+      className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px]"
+    >
+      {models.length > 0 ? (
+        <SelectionPicker
+          label="model"
+          test="selection-model"
+          value={modelValue}
+          busy={busy}
+          readOnly={readOnly}
+          display={(v) =>
+            v === ""
+              ? readOnly
+                ? inherited
+                : `default${info.defaultModel ? ` (${info.defaultModel})` : ""}`
+              : (models.find((m) => m.id === v)?.label ?? v)
+          }
+          options={[
+            {
+              value: "",
+              label: "default",
+              ...(info.defaultModel ? { hint: info.defaultModel } : {}),
+            },
+            ...withCurrent(
+              models.map((m) => m.id),
+              modelValue,
+            ).map((id) => {
+              const m = models.find((x) => x.id === id);
+              return { value: id, label: m?.label ?? id, ...(m?.label ? { hint: id } : {}) };
+            }),
+          ]}
+          onPick={pickModel}
+        />
+      ) : null}
+      {showEffort ? (
+        <SelectionPicker
+          label="effort"
+          test="selection-effort"
+          value={effortValue}
+          busy={busy}
+          readOnly={readOnly}
+          display={(v) =>
+            v === ""
+              ? readOnly
+                ? inherited
+                : `default${info.defaultEffort ? ` (${info.defaultEffort})` : ""}`
+              : v
+          }
+          options={[
+            {
+              value: "",
+              label: "default",
+              ...(info.defaultEffort ? { hint: info.defaultEffort } : {}),
+            },
+            ...withCurrent(ladder, effortValue).map((e) => ({ value: e, label: e })),
+          ]}
+          onPick={(v) => void commit(selection.model ?? "", v)}
+        />
+      ) : null}
     </div>
   );
 };

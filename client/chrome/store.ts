@@ -1,6 +1,12 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Anchor } from "../../src/anchors/anchor.ts";
-import type { AgentWorking, AttendantRef, ContextUsage } from "../../src/protocol/wire.ts";
+import type {
+  AgentWorking,
+  AttendantRef,
+  ContextUsage,
+  HarnessInfo,
+  SelectionState,
+} from "../../src/protocol/wire.ts";
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
 import type { GroupDraft } from "./question-draft.ts";
 import type {
@@ -230,6 +236,13 @@ export interface SessionState {
   /** Last-reported context-window usage of the attending harness (its
    *  statusline posts it). Presence, like lastAttendant: null = no ring. */
   contextUsage: ContextUsage | null;
+  /** The artifact's sticky model/effort: what every UNATTENDED turn runs on.
+   *  Empty = nothing picked, so the harness CLI decides. */
+  selection: SelectionState;
+  /** The vocabulary those picks are made in, from the artifact's own harness
+   *  recipe. Null = no recipe (or a server that predates the route), which is
+   *  what suppresses the pickers entirely. */
+  selectionInfo: HarnessInfo | null;
   /** SSE stream health. EventSource reconnects by itself, so this is a
    *  transient indicator, not an error the human has to act on. */
   live: boolean;
@@ -312,6 +325,8 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     agentsListening: 0,
     lastAttendant: null,
     contextUsage: null,
+    selection: {},
+    selectionInfo: null,
     live: true,
     sessions: null,
     sessionsLoading: false,

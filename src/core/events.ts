@@ -32,6 +32,11 @@ export interface AttendantStamp {
   readonly sessionId?: string;
   /** Working directory the session runs from - resume is cwd-scoped. */
   readonly cwd?: string;
+  /** Model the session runs on, when the environment declares it - what the
+   *  viewer's inherited (attended) pickers display. */
+  readonly model?: string;
+  /** Effort/reasoning level the session runs at, same provenance as `model`. */
+  readonly effort?: string;
 }
 
 /** Strip control characters (incl. the NUL a naive dedupe key would collide
@@ -64,7 +69,15 @@ export const sanitizeAttendant = (input: unknown): AttendantStamp | undefined =>
   if (!harness) return undefined;
   const sessionId = cleanStampField(o.sessionId, 128);
   const cwd = cleanStampField(o.cwd, 1024);
-  return { harness, ...(sessionId ? { sessionId } : {}), ...(cwd ? { cwd } : {}) };
+  const model = cleanStampField(o.model, 128);
+  const effort = cleanStampField(o.effort, 32);
+  return {
+    harness,
+    ...(sessionId ? { sessionId } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  };
 };
 
 /** Opens a lifecycle segment; carries the v1 snapshot reference. */

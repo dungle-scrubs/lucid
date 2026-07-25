@@ -629,6 +629,23 @@ describe("server routes + security", () => {
     expect(state.contextUsage.pct).toBe(71);
   });
 
+  test("the attendant's model/effort surface in /__lucid/state for the inherited pickers", async () => {
+    await startServer();
+    await writeAttendantSidecar(paths, {
+      harness: "claude-code",
+      nextCursor: "evt_00001",
+      at: "2026-07-16T10:00:00.000Z",
+      model: "opus-4.8",
+      effort: "high",
+    });
+    const state = await (await get("/__lucid/state")).json();
+    expect(state.lastAttendant).toMatchObject({
+      harness: "claude-code",
+      model: "opus-4.8",
+      effort: "high",
+    });
+  });
+
   test("structured question round-trips options and a rich answer", async () => {
     await startServer();
     const post = (path: string, body: unknown) =>
