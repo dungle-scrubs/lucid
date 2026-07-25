@@ -1,5 +1,6 @@
 import type { Anchor } from "../anchors/anchor.ts";
 import type { Warning } from "../errors.ts";
+import type { ItemAnswer, QuestionItem } from "../core/question-contract.ts";
 
 /**
  * The wire contract: every JSON shape that crosses a process or origin
@@ -129,14 +130,32 @@ export interface PayloadQuestion {
   readonly options?: readonly QuestionOption[];
   /** Whether more than one option may be chosen. */
   readonly multi?: boolean;
+  /**
+   * The rich grouped question (D12), when the agent asked one. Additive: the
+   * legacy `text`/`options`/`multi` above are projected from it, so a consumer
+   * that ignores this field still reads a usable question.
+   */
+  readonly group?: readonly QuestionItem[];
+  /** When the agent asked. */
+  readonly at?: string;
+  /** When the human answered (absent while outstanding). The transcript folds
+   *  question and answer into ONE item positioned here, not at `at` (D14). */
+  readonly answeredAt?: string;
   readonly answered: boolean;
   /** The human declined to answer (Skip): `answered` is true but there is no
    *  content - proceed without it rather than re-asking. */
   readonly skipped?: boolean;
-  /** Free-text answer (or the "Other" text alongside chosen options). */
+  /**
+   * The answer as one readable line. For a legacy question this is the human's
+   * free text (or the "Other" text alongside chosen options); for a grouped
+   * question it is the COMBINED SUMMARY derived from `answerItems` - what an
+   * agent reads without walking the structure.
+   */
   readonly answer?: string;
   /** Labels of the options the human chose. */
   readonly answerOptions?: readonly string[];
+  /** Per-question answers to a grouped question (D12), one per `group` item. */
+  readonly answerItems?: readonly ItemAnswer[];
   /** A region of the artifact the human pinned as the referent of their answer
    *  - the mirror of the agent's `ref`, captured like an annotation's target. */
   readonly answerAnchor?: Anchor;

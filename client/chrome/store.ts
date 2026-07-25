@@ -2,6 +2,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import type { AgentWorking, AttendantRef, ContextUsage } from "../../src/protocol/wire.ts";
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
+import type { GroupDraft } from "./question-draft.ts";
 import type {
   AgentQuestion,
   ConversationMessage,
@@ -233,9 +234,16 @@ export interface SessionState {
   lightboxImages: readonly MessageImage[] | null;
   lightboxIndex: number;
   questions: AgentQuestion[];
-  answerDrafts: Record<string, string>;
-  /** Option labels the human has selected per question (structured answers). */
-  answerOptions: Record<string, string[]>;
+  /** The drawer's in-progress answer per asked question (D11): selections,
+   *  custom text, reasons, deferrals and the active tab. Lives here, not in the
+   *  component, so lowering the drawer - or backgrounding the whole session -
+   *  cannot lose a draft. */
+  questionDrafts: Record<string, GroupDraft>;
+  /** The asks that were outstanding when the human lowered the drawer (Escape /
+   *  the close button). A LATER question - one not in this list - raises the
+   *  drawer again, because dismissing one ask is not a standing refusal to be
+   *  asked. Empty means the drawer is not lowered. */
+  questionDrawerDismissed: readonly string[];
   /** A pinned artifact region attached to a question's answer, by question id. */
   answerAnchors: Record<string, Anchor>;
   /** Images staged on a question's answer, by question id. */
@@ -291,8 +299,8 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     lightboxImages: null,
     lightboxIndex: 0,
     questions: [],
-    answerDrafts: {},
-    answerOptions: {},
+    questionDrafts: {},
+    questionDrawerDismissed: [],
     answerAnchors: {},
     answerImages: {},
     answerUploading: {},
@@ -344,11 +352,17 @@ export const createNotify = (store: SessionStore): Notify => {
  * anchor stops resolving - so filing orphans elsewhere moved a note out of
  * sequence exactly when it had been answered, stranding the reply above the
  * question it answered.
+ *
+ * A question enters the record ONLY once answered, as one question+answer item
+ * placed at the ANSWER moment (D14). An outstanding question is not history -
+ * it is work, and it lives in the drawer until it is settled; a card for it up
+ * here would drift ever further above the reply it eventually produced.
  */
 export const buildTimeline = (
   annotations: readonly PayloadAnnotationLike[],
   messages: readonly ConversationMessage[],
   queue: readonly QueuedAnnotation[],
+  questions: readonly AgentQuestion[] = [],
 ): TimelineItem[] => {
   let located = 0;
   return [
@@ -367,6 +381,15 @@ export const buildTimeline = (
     // were written - the same instant their sent form will occupy.
     ...queue.map((q, i) => ({ kind: "queued" as const, at: q.at, index: i + 1, id: q.id })),
     ...messages.map((message) => ({ kind: "message" as const, at: message.at, message })),
+    // `answeredAt` is the answer's own moment; older logs (and any server that
+    // predates the field) fall back to the ask time rather than vanishing.
+    ...questions
+      .filter((q) => q.answered)
+      .map((question) => ({
+        kind: "question" as const,
+        at: question.answeredAt ?? question.at ?? "",
+        question,
+      })),
   ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 };
 

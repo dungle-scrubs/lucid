@@ -141,22 +141,26 @@ test("structured question: choose an option and pin an artifact region as the an
     "SQLite|embedded, WAL",
   ]);
 
-  // The slide-up panel shows the choices as buttons.
-  await expect(page.locator('[data-test="questions-panel"]')).toBeVisible();
-  const options = page.locator('[data-test="option"]');
-  await expect(options).toHaveCount(2);
-  await options.first().click();
-  await expect(options.first()).toHaveAttribute("aria-pressed", "true");
+  // The drawer rises over the surface with the choices as rows.
+  await expect(page.locator('[data-test="question-drawer"]')).toBeVisible();
+  const choices = page.locator('[data-test="choice"]');
+  await expect(choices).toHaveCount(2);
+  await choices.first().click();
+  await expect(choices.first()).toHaveAttribute("aria-checked", "true");
 
-  // Pin a region of the artifact as the answer's referent.
+  // Pin a region of the artifact as the answer's referent - the surface stays
+  // live under the drawer, which is the point of a drawer rather than a modal.
   await page.locator('[data-test="pin-region"]').click();
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
   await expect(page.locator('[data-test="answer-anchor"]')).toBeVisible();
 
   // Send the answer; it reaches wait with the chosen option and the pinned region.
   await page.locator('[data-test="answer"]').click();
-  // Answered -> the panel clears (nothing outstanding).
-  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
+  // Answered -> the drawer lowers (nothing outstanding) and the exchange enters
+  // the record. An options-only answer has no free text, so the card has to read
+  // the chosen labels or it would print an empty answer over a real decision.
+  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="qa-answer"]')).toContainText("Postgres");
   const payload = (await cli.run([
     "wait",
     cli.artifact,
@@ -181,11 +185,11 @@ test("a question can be skipped: it leaves the panel and the agent is told", asy
   const { nextCursor } = await openViewer(page);
 
   await cli.run(["ask", cli.artifact, "--text", "Do you have the API keys?"]);
-  await expect(page.locator('[data-test="questions-panel"]')).toBeVisible();
+  await expect(page.locator('[data-test="question-drawer"]')).toBeVisible();
 
   // Decline without answering.
   await page.locator('[data-test="skip"]').click();
-  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
 
   // The agent learns it was declined, not answered with content.
   const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
@@ -1201,15 +1205,17 @@ test("agent question surfaces in the viewer and the answer reaches the agent", a
   // Agent poses a question.
   await cli.run(["ask", cli.artifact, "--text", "Should backfill run before the cutover?"]);
 
-  // It surfaces in the "Questions for you" panel.
+  // It surfaces in the drawer over the artifact.
   await expect(page.locator('[data-test="question"]')).toContainText("Should backfill run before");
 
   // Human answers it.
-  await page.locator('[data-test="question"] .qinput').fill("Yes - backfill must finish first.");
+  await page.locator('[data-test="free-text"]').fill("Yes - backfill must finish first.");
   await page.locator('[data-test="answer"]').click();
-  // Once answered, the question leaves the inbox: the panel is for outstanding
-  // work, so with nothing open it disappears rather than pinning the answer.
-  await expect(page.locator('[data-test="questions-panel"]')).toHaveCount(0);
+  // Answered -> the drawer goes away and the question enters the RECORD, as one
+  // question+answer item at the answer moment (D14).
+  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="qa"]')).toContainText("Should backfill run before");
+  await expect(page.locator('[data-test="qa-answer"]')).toContainText("backfill must finish first");
 
   // The answer reaches the agent as feedback.
   const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {

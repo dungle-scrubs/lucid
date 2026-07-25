@@ -323,6 +323,14 @@ const parseOption = (raw: string): { label: string; description?: string } | und
   return { label, ...(description.length > 0 ? { description } : {}) };
 };
 
+/**
+ * The most a question group's JSON may be before it is parsed. The normalizer
+ * bounds every FIELD, but only after `JSON.parse` has already materialized
+ * whatever a file or a pipe handed in; five questions of twelve choices fit in
+ * a fraction of this, so anything past it is not a group.
+ */
+const MAX_GROUP_CHARS = 512 * 1024;
+
 /** Read `--group`'s JSON: a file path, or "-" for stdin. */
 const readGroupSource = async (source: string): Promise<unknown> => {
   const raw =
@@ -333,6 +341,12 @@ const readGroupSource = async (source: string): Promise<unknown> => {
     throw new ValidationError({
       message:
         source === "-" ? "no question group on stdin" : `cannot read question group: ${source}`,
+      detail: { source },
+    });
+  }
+  if (raw.length > MAX_GROUP_CHARS) {
+    throw new ValidationError({
+      message: `question group is too large (max ${MAX_GROUP_CHARS} characters)`,
       detail: { source },
     });
   }
@@ -365,6 +379,14 @@ export const runAsk = async (
   // module the server accepts with, so a group this command takes is a group
   // the drawer can render and the server would re-accept.
   if (opts.group !== undefined) {
+    // The two ways to ask are exclusive. Accepting both and quietly preferring
+    // the group would drop flags the caller believed they had sent.
+    if (text !== undefined || (opts.options ?? []).length > 0 || opts.multi === true) {
+      throw new ValidationError({
+        message: "lucid ask takes --group or --text/--option/--multi, not both",
+        detail: { path: paths.artifactPath },
+      });
+    }
     const group = normalizeQuestionGroup(await readGroupSource(opts.group));
     const issues = validateGroup(group);
     if (issues.length > 0) {

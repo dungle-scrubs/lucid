@@ -1,5 +1,13 @@
 import { visibleEl } from "./dom.ts";
 import type { Pastes } from "./pastes.ts";
+import {
+  buildItems,
+  draftIssues,
+  type GroupDraft,
+  groupOf,
+  initialDraft,
+  legacyAnswerFields,
+} from "./question-draft.ts";
 import type { Notify, SessionStorage, SessionStore } from "./store.ts";
 import { uuid } from "./store.ts";
 import type { Surface } from "./surface.ts";
@@ -477,23 +485,34 @@ export const createActions = (ctx: ActionsCtx) => {
 
   // ---- agent questions ------------------------------------------------------
 
-  const setAnswerDraft = (id: string, value: string): void =>
-    set((s) => ({ answerDrafts: { ...s.answerDrafts, [id]: value } }));
+  /**
+   * Apply one pure reducer from the drawer's view-model to a question's draft.
+   * The store holds the draft (a lowered drawer must not lose it) and the
+   * view-model owns every rule about what a selection means, so this is the
+   * whole seam between them: no answer logic lives here, and no state lives
+   * there.
+   */
+  const updateQuestionDraft = (q: AgentQuestion, update: (draft: GroupDraft) => GroupDraft): void =>
+    set((s) => ({
+      questionDrafts: {
+        ...s.questionDrafts,
+        [q.id]: update(s.questionDrafts[q.id] ?? initialDraft(groupOf(q))),
+      },
+    }));
 
-  /** Select (single-choice) or toggle (multi) an option on a question's answer. */
-  const toggleAnswerOption = (q: AgentQuestion, label: string): void =>
-    set((s) => {
-      const current = s.answerOptions[q.id] ?? [];
-      const has = current.includes(label);
-      const next = q.multi
-        ? has
-          ? current.filter((l) => l !== label)
-          : [...current, label]
-        : has
-          ? []
-          : [label];
-      return { answerOptions: { ...s.answerOptions, [q.id]: next } };
-    });
+  /**
+   * Lower the drawer without touching any draft (Escape, and the drawer's own
+   * close). The dismissal names the asks OUTSTANDING RIGHT NOW, so a question
+   * that arrives afterwards raises the drawer again: lowering one ask is not a
+   * standing refusal to be asked. The reopen bar raises it in the meantime.
+   */
+  const dismissQuestionDrawer = (): void =>
+    set((s) => ({
+      questionDrawerDismissed: s.questions.filter((q) => !q.answered).map((q) => q.id),
+      answerPickFor: null,
+    }));
+
+  const raiseQuestionDrawer = (): void => set({ questionDrawerDismissed: [] });
 
   /** Enter "pin a region for this answer" mode; the next artifact pick attaches
    *  to this question (see the shell's target-picked handler). Ensures marks
@@ -559,52 +578,67 @@ export const createActions = (ctx: ActionsCtx) => {
       return { answerImages: { ...s.answerImages, [q.id]: list.filter((i) => i.id !== id) } };
     });
 
-  /** Drop all staged answer state for a question (draft, options, anchor,
-   *  images, and the upload counter) and exit its pick mode - shared by send
-   *  and skip. Clearing the upload counter is also how an in-flight
-   *  `addAnswerImage` detects the question was cleared and declines to
-   *  resurrect it. Object URLs the caller still holds are revoked by the
-   *  caller. */
+  /** Drop all staged answer state for a question (draft, anchor, images, and
+   *  the upload counter) and exit its pick mode - shared by submit and skip.
+   *  Clearing the upload counter is also how an in-flight `addAnswerImage`
+   *  detects the question was cleared and declines to resurrect it. Object URLs
+   *  the caller still holds are revoked by the caller. */
   const clearAnswerState = (st: ReturnType<typeof get>, id: string) => {
-    const drafts = { ...st.answerDrafts };
-    const opts = { ...st.answerOptions };
+    const drafts = { ...st.questionDrafts };
     const anchors = { ...st.answerAnchors };
     const imgs = { ...st.answerImages };
     const uploading = { ...st.answerUploading };
     delete drafts[id];
-    delete opts[id];
     delete anchors[id];
     delete imgs[id];
     delete uploading[id];
     return {
-      answerDrafts: drafts,
-      answerOptions: opts,
+      questionDrafts: drafts,
       answerAnchors: anchors,
       answerImages: imgs,
       answerUploading: uploading,
       answerPickFor: st.answerPickFor === id ? null : st.answerPickFor,
+      questionDrawerDismissed: st.questionDrawerDismissed.filter((qid) => qid !== id),
     };
   };
 
-  const sendAnswer = async (q: AgentQuestion): Promise<void> => {
+  /** Answer sends in flight, by question id. A second click would otherwise
+   *  append a second `question_answered` event for one decision - the fold
+   *  takes the last of them and `lucid wait` wakes twice. */
+  const answerSending = new Set<string>();
+
+  /**
+   * Submit the drawer's draft as the answer to one asked question (D12).
+   *
+   * Gated by the SHARED validator, so this can only post what the server would
+   * accept. Two wire shapes, one draft: a question the agent asked with a
+   * `group` takes per-item answers; a legacy one (text + options) has no stored
+   * contract to validate items against, so it takes the fields that wire has
+   * always carried. The pinned region and images ride the answer either way.
+   */
+  const submitAnswer = async (q: AgentQuestion): Promise<void> => {
     const s = get();
-    const text = (s.answerDrafts[q.id] ?? "").trim();
-    const options = s.answerOptions[q.id] ?? [];
-    const anchor = s.answerAnchors[q.id];
-    const images = s.answerImages[q.id] ?? [];
+    const group = groupOf(q);
+    const draft = s.questionDrafts[q.id] ?? initialDraft(group);
     // Never send with an image still uploading: it would be omitted, and the
     // send's cleanup could race the finishing upload. Enter is dropped here;
     // the button is disabled for the same reason.
     if ((s.answerUploading[q.id] ?? 0) > 0) return;
-    // A bare submission carries nothing to act on; the button is disabled for
-    // this too, but guard here so a stray Enter cannot post an empty answer.
-    if (text.length === 0 && options.length === 0 && !anchor && images.length === 0) return;
+    if (answerSending.has(q.id)) return;
+    const anchor = s.answerAnchors[q.id];
+    const images = s.answerImages[q.id] ?? [];
+    const hasAttachments = anchor !== undefined || images.length > 0;
+    if (draftIssues(group, draft, { hasAttachments }).length > 0) return;
+    const grouped = (q.group?.length ?? 0) > 0;
+    const legacy = grouped ? null : legacyAnswerFields(group, draft);
+    answerSending.add(q.id);
     try {
       await api("/__lucid/answer", {
         id: uuid(),
         questionId: q.id,
-        text,
-        ...(options.length > 0 ? { options } : {}),
+        text: legacy?.text ?? "",
+        ...(grouped ? { items: buildItems(group, draft) } : {}),
+        ...(legacy && legacy.options.length > 0 ? { options: legacy.options } : {}),
         ...(anchor ? { anchor } : {}),
         ...(images.length > 0
           ? { images: images.map(({ id, name, file }) => ({ id, name, file })) }
@@ -615,6 +649,8 @@ export const createActions = (ctx: ActionsCtx) => {
       set((st) => clearAnswerState(st, q.id));
     } catch {
       warn("Your answer didn't send - it's kept here, try again.");
+    } finally {
+      answerSending.delete(q.id);
     }
   };
 
@@ -622,6 +658,8 @@ export const createActions = (ctx: ActionsCtx) => {
    *  skipped it (so it proceeds without an answer rather than re-asking). Any
    *  staged draft/options/anchor/images for it are discarded. */
   const skipQuestion = async (q: AgentQuestion): Promise<void> => {
+    if (answerSending.has(q.id)) return;
+    answerSending.add(q.id);
     try {
       await api("/__lucid/answer", { id: uuid(), questionId: q.id, text: "", skipped: true });
       // Revoke any already-staged image URLs; a still-in-flight upload sees the
@@ -630,6 +668,8 @@ export const createActions = (ctx: ActionsCtx) => {
       set((st) => clearAnswerState(st, q.id));
     } catch {
       warn("Couldn't skip that question - try again.");
+    } finally {
+      answerSending.delete(q.id);
     }
   };
 
@@ -792,14 +832,15 @@ export const createActions = (ctx: ActionsCtx) => {
     reopenReview,
     loadSessions,
     switchToSession,
-    setAnswerDraft,
-    toggleAnswerOption,
+    updateQuestionDraft,
+    dismissQuestionDrawer,
+    raiseQuestionDrawer,
     startAnswerPick,
     cancelAnswerPick,
     clearAnswerAnchor,
     addAnswerImage,
     removeAnswerImage,
-    sendAnswer,
+    submitAnswer,
     skipQuestion,
     focusQuestionRef,
     revealSection,

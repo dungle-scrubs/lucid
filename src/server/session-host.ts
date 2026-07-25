@@ -7,6 +7,15 @@ import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../cor
 import { diffHtml } from "../diff/diff.ts";
 import { foldLog, versionRef } from "../core/fold.ts";
 import { sanitizeAttendant } from "../core/events.ts";
+import {
+  legacyProjection,
+  normalizeItemAnswers,
+  normalizeQuestionGroup,
+  projectLegacyAnswer,
+  summarizeAnswer,
+  validateAnswer,
+  validateGroup,
+} from "../core/question-contract.ts";
 import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/events.ts";
 import { appendEvents, readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
@@ -381,16 +390,41 @@ export const createSessionHost = (
 
   const handleQuestion = async (req: Request): Promise<Response> => {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (
-      !body ||
-      typeof body.id !== "string" ||
-      typeof body.text !== "string" ||
-      body.text.trim() === ""
-    ) {
+    if (!body || typeof body.id !== "string") {
+      return json({ error: "invalid question" }, 400);
+    }
+    const attendant = parseAttendant(body.attendant);
+    // The rich grouped form (D12), when the caller sent one. Normalized and
+    // re-validated HERE even though the CLI already did: the HTTP route is
+    // reachable without the CLI, so the log's invariant cannot depend on which
+    // writer was live. A malformed group is a 400 with the issue list, never a
+    // half-shaped question the drawer would have to guess at.
+    const rawGroup = body.group ?? body.questions;
+    if (rawGroup !== undefined) {
+      const group = normalizeQuestionGroup(rawGroup);
+      const issues = validateGroup(group);
+      if (issues.length > 0) return json({ error: "invalid question group", issues }, 400);
+      // The legacy fields are projected from the group, never taken from the
+      // caller: two sources for one question is how they drift apart.
+      const legacy = legacyProjection(group);
+      await serverAppend([
+        {
+          t: "question",
+          id: body.id,
+          text: legacy.text,
+          ...(typeof body.ref === "string" ? { ref: body.ref } : {}),
+          ...(legacy.options ? { options: legacy.options } : {}),
+          ...(legacy.multi ? { multi: true } : {}),
+          group,
+          ...(attendant ? { attendant } : {}),
+        },
+      ]);
+      return json({ ok: true });
+    }
+    if (typeof body.text !== "string" || body.text.trim() === "") {
       return json({ error: "invalid question" }, 400);
     }
     const options = parseQuestionOptions(body.options);
-    const attendant = parseAttendant(body.attendant);
     await serverAppend([
       {
         t: "question",
@@ -407,11 +441,15 @@ export const createSessionHost = (
 
   const handleAnswer = async (req: Request): Promise<Response> => {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    // `text` is the LEGACY answer's content, so it is required only when the
+    // answer has no `items`: a grouped answer carries its content there, and
+    // demanding a field it does not use would 400 a valid rich POST before the
+    // shared validator ever saw it.
     if (
       !body ||
       typeof body.id !== "string" ||
       typeof body.questionId !== "string" ||
-      typeof body.text !== "string"
+      (body.items === undefined && typeof body.text !== "string")
     ) {
       return json({ error: "invalid answer" }, 400);
     }
@@ -420,7 +458,7 @@ export const createSessionHost = (
     // never contradict the contract (skipped => no answer). A normal answer can
     // be text, chosen option labels, an artifact reference, and/or images -
     // options and anchor reuse the same validators as annotations.
-    const text = skipped ? "" : body.text;
+    const text = skipped || typeof body.text !== "string" ? "" : body.text;
     const options =
       !skipped && Array.isArray(body.options)
         ? body.options.filter((o): o is string => typeof o === "string" && o.length > 0)
@@ -428,12 +466,55 @@ export const createSessionHost = (
     const anchorIn = skipped || body.anchor === undefined ? undefined : parseAnchor(body.anchor);
     if (anchorIn && "error" in anchorIn) return json({ error: anchorIn.error }, 400);
     const images = skipped ? [] : parseImages(body.images);
+    // Per-item answers to a grouped question (D12), re-validated against the
+    // group the ASKING event recorded - the drawer gates its submit with the
+    // same validator, so this catches only a caller that bypassed it.
+    let items = skipped ? [] : normalizeItemAnswers(body.items);
+    // A grouped answer's content lives in `items`, and its legacy `text` is a
+    // DERIVED projection of them (below) - never the caller's own text beside
+    // them, which would be a second source for one answer.
+    let legacyText = text;
+    let grouped = false;
+    if (!skipped) {
+      const state = foldLog((await readEvents(paths.logPath)).events);
+      const asked = state.questions.find((q) => q.id === body.questionId);
+      const group = asked?.group ?? [];
+      if (group.length > 0) {
+        // A client that only speaks the legacy wire answered a one-question
+        // group it was shown losslessly: project rather than refuse it.
+        items =
+          (items.length === 0 ? projectLegacyAnswer(group, { text, options }) : items) ?? items;
+        const hasAttachments = anchorIn !== undefined || images.length > 0;
+        const issues = validateAnswer(group, { items }, { hasAttachments });
+        if (issues.length > 0) return json({ error: "invalid answer", issues }, 400);
+        grouped = true;
+        // The legacy projection of a rich answer. A reader that knows only
+        // `text`/`options` would otherwise see an answered question with no
+        // answer at all, which is not additive.
+        legacyText = summarizeAnswer(group, items);
+      } else if (items.length > 0) {
+        return json(
+          {
+            error: "invalid answer",
+            issues: [
+              {
+                code: "unknown_question",
+                message: `Question "${body.questionId}" has no grouped contract.`,
+                questionId: body.questionId,
+              },
+            ],
+          },
+          400,
+        );
+      }
+    }
     // Must carry something - UNLESS it is an explicit skip (the human declined).
     // A bare non-skip submission is rejected.
     if (
       !skipped &&
       text.trim() === "" &&
       options.length === 0 &&
+      items.length === 0 &&
       !anchorIn &&
       images.length === 0
     ) {
@@ -444,9 +525,10 @@ export const createSessionHost = (
         t: "question_answered",
         id: body.id,
         questionId: body.questionId,
-        text,
+        text: legacyText,
         ...(skipped ? { skipped: true } : {}),
-        ...(options.length > 0 ? { options } : {}),
+        ...(!grouped && options.length > 0 ? { options } : {}),
+        ...(items.length > 0 ? { items } : {}),
         ...(anchorIn ? { anchor: anchorIn } : {}),
         ...(images.length > 0 ? { images } : {}),
       },

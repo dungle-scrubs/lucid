@@ -6,6 +6,7 @@ import type {
   SessionHistoryRecord,
 } from "../protocol/wire.ts";
 import type { LogEvent, PromptImage } from "./events.ts";
+import type { ItemAnswer, QuestionItem } from "./question-contract.ts";
 import { maxSeq } from "./log.ts";
 
 export type SessionStatus = "none" | "active" | "suspended" | "ended";
@@ -58,14 +59,22 @@ export interface QuestionRecord {
   readonly ref?: string;
   readonly options?: readonly QuestionOption[];
   readonly multi?: boolean;
+  /** The rich grouped question (D12), when the agent asked one. */
+  readonly group?: readonly QuestionItem[];
   readonly answered: boolean;
   readonly skipped?: boolean;
   readonly answer?: string;
   readonly answerOptions?: readonly string[];
+  /** Per-question answers to a grouped question, in the group's order. */
+  readonly items?: readonly ItemAnswer[];
   readonly answerAnchor?: Anchor;
   readonly answerImages?: readonly PromptImage[];
   /** seq of the answer event (for delta detection). */
   readonly answerSeq?: number;
+  /** When the answer landed. The Q&A enters the transcript HERE, not at `at`
+   *  (D14): the question and its answer are one item, positioned at the moment
+   *  the human settled it. */
+  readonly answeredAt?: string;
   readonly at: string;
 }
 
@@ -319,6 +328,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
             ...(e.ref ? { ref: e.ref } : {}),
             ...(e.options && e.options.length > 0 ? { options: e.options } : {}),
             ...(e.multi ? { multi: true } : {}),
+            ...(e.group && e.group.length > 0 ? { group: e.group } : {}),
             answered: false,
             at: e.at,
           });
@@ -328,13 +338,25 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       case "question_answered": {
         const q = questionMap.get(e.questionId);
         if (q) {
+          // Rebuilt from the ASK-time fields, never spread over the previous
+          // record: a later answer REPLACES an earlier one, and spreading would
+          // leave a skip's flag (or its predecessor's items) on top of it.
           questionMap.set(e.questionId, {
-            ...q,
+            id: q.id,
+            seq: q.seq,
+            text: q.text,
+            at: q.at,
+            ...(q.ref ? { ref: q.ref } : {}),
+            ...(q.options ? { options: q.options } : {}),
+            ...(q.multi ? { multi: true } : {}),
+            ...(q.group ? { group: q.group } : {}),
             answered: true,
             answer: e.text,
             answerSeq: e.seq,
+            answeredAt: e.at,
             ...(e.skipped ? { skipped: true } : {}),
             ...(e.options && e.options.length > 0 ? { answerOptions: e.options } : {}),
+            ...(e.items && e.items.length > 0 ? { items: e.items } : {}),
             ...(e.anchor ? { answerAnchor: e.anchor } : {}),
             ...(e.images && e.images.length > 0 ? { answerImages: e.images } : {}),
           });

@@ -1,5 +1,6 @@
 import type { Anchor } from "../anchors/anchor.ts";
 import type { AgentProgress, QuestionOption } from "../protocol/wire.ts";
+import type { ItemAnswer, QuestionItem } from "./question-contract.ts";
 
 /**
  * Event log schema (RFC §7). The NDJSON log is the single source of truth.
@@ -227,6 +228,15 @@ export interface QuestionEvent extends BaseEvent {
   readonly options?: readonly QuestionOption[];
   /** Whether more than one option may be chosen. */
   readonly multi?: boolean;
+  /**
+   * The rich grouped form (D12): 1..5 questions with structured choices,
+   * normalized through `question-contract.ts`. Additive - `text`/`options`/
+   * `multi` above stay the legacy single question and are projected from the
+   * group when one is present, so old logs and stampless writers fold
+   * unchanged and a consumer that knows nothing about groups still reads a
+   * usable question.
+   */
+  readonly group?: readonly QuestionItem[];
   /** Which harness session asked (D18). */
   readonly attendant?: AttendantStamp;
 }
@@ -241,6 +251,12 @@ export interface QuestionAnsweredEvent extends BaseEvent {
   readonly text: string;
   /** Labels of the options the human chose. */
   readonly options?: readonly string[];
+  /**
+   * Per-question answers to a grouped question (D12), validated against the
+   * asking event's `group` by the shared validator. Additive alongside the
+   * legacy `text`/`options` above, which stay the single-question answer.
+   */
+  readonly items?: readonly ItemAnswer[];
   /** A region of the artifact the human pinned as their answer's referent. */
   readonly anchor?: Anchor;
   /** Images the human attached to their answer. */

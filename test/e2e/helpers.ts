@@ -1,8 +1,9 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { expect, type FrameLocator, type Page } from "@playwright/test";
 
 const execFileAsync = promisify(execFile);
 
@@ -65,6 +66,97 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
     },
   };
 };
+
+/**
+ * A real `lucid hub` on an ephemeral port with an isolated registry - the shell
+ * (Model B) as the human runs it. Shared by every suite that drives the shell,
+ * so the harness has one definition rather than a copy per file.
+ */
+export interface Hub {
+  readonly port: number;
+  readonly url: string;
+  readonly env: Record<string, string>;
+  stop(): Promise<void>;
+}
+
+export const startHub = async (): Promise<Hub> => {
+  const dir = await mkdtemp(join(tmpdir(), "lucid-hub-e2e-"));
+  const registry = join(dir, "registry.json");
+  const env = {
+    ...process.env,
+    LUCID_REGISTRY: registry,
+    // No scan of the real ~/dev: the isolated registry is the only source.
+    LUCID_HUB_ROOTS: dir,
+    LUCID_NO_OPEN: "1",
+  } as Record<string, string>;
+  const child: ChildProcess = spawn("bun", ["run", MAIN, "hub", "--port", "0"], {
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const port = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("hub did not start")), 15_000);
+    let buf = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      buf += chunk.toString();
+      const m = /listening on http:\/\/127\.0\.0\.1:(\d+)/.exec(buf);
+      if (m?.[1]) {
+        clearTimeout(timer);
+        resolve(Number.parseInt(m[1], 10));
+      }
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`hub exited early (${code}): ${buf}`));
+    });
+  });
+  return {
+    port,
+    url: `http://127.0.0.1:${port}/`,
+    env: { ...env, LUCID_HUB_PORT: String(port) },
+    // The temp dir dies with the hub that owns it: a test that stops the hub is
+    // done with its registry, and a leftover dir is a ghost session in someone
+    // else's listing.
+    stop: async () => {
+      child.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        const force = setTimeout(() => {
+          child.kill("SIGKILL");
+          resolve();
+        }, 4000);
+        child.once("exit", () => {
+          clearTimeout(force);
+          resolve();
+        });
+      });
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
+};
+
+/** `lucid open` against the hub: a CLI whose env routes discovery at it. */
+export const openIntoHub = async (
+  hub: Hub,
+  html: string,
+): Promise<{ cli: Cli; shellUrl: string }> => {
+  const c = await makeCli(html);
+  // Rebind the CLI's env to the hub (makeCli's own env has no LUCID_HUB_PORT).
+  const run = async (args: string[], timeoutMs = 30_000) => {
+    const { stdout } = await execFileAsync("bun", ["run", MAIN, ...args], {
+      cwd: c.dir,
+      timeout: timeoutMs,
+      env: { ...hub.env, LUCID_IDLE_MS: "0" },
+    });
+    return JSON.parse(stdout) as Record<string, unknown>;
+  };
+  const opened = (await run(["open", c.artifact])) as { url: string };
+  expect(opened.url).toContain(`127.0.0.1:${hub.port}/?s=`);
+  return { cli: { ...c, run } as Cli, shellUrl: opened.url };
+};
+
+/** The active session's artifact frame. `:visible` because every open tab's
+ *  view stays mounted, so N iframes exist and only one is showing. */
+export const surfaceOf = (page: Page): FrameLocator =>
+  page.frameLocator('iframe[title="artifact surface"]:visible');
 
 export const PLAN_V1 = `<!doctype html>
 <html lang="en">

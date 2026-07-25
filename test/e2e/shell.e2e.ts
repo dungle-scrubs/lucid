@@ -1,9 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { expect, test, type FrameLocator, type Page } from "@playwright/test";
-import { makeCli, PLAN_V1, type Cli } from "./helpers.ts";
+import { expect, test } from "@playwright/test";
+import { openIntoHub, PLAN_V1, startHub, surfaceOf, type Cli, type Hub } from "./helpers.ts";
 
 /**
  * The shell (Model B): one daemon window over every session. These tests run
@@ -11,95 +7,9 @@ import { makeCli, PLAN_V1, type Cli } from "./helpers.ts";
  * open` sessions into it, and drive the tab bar.
  */
 
-const REPO = join(import.meta.dirname, "..", "..");
-const MAIN = join(REPO, "src", "cli", "main.ts");
-
-interface Hub {
-  readonly port: number;
-  readonly url: string;
-  readonly env: Record<string, string>;
-  stop(): Promise<void>;
-}
-
 let hub: Hub | undefined;
 let cli: Cli | undefined;
 let cli2: Cli | undefined;
-let hubDir: string | undefined;
-
-const startHub = async (): Promise<Hub> => {
-  const dir = await mkdtemp(join(tmpdir(), "lucid-hub-e2e-"));
-  hubDir = dir;
-  const registry = join(dir, "registry.json");
-  const env = {
-    ...process.env,
-    LUCID_REGISTRY: registry,
-    // No scan of the real ~/dev: the isolated registry is the only source.
-    LUCID_HUB_ROOTS: dir,
-    LUCID_NO_OPEN: "1",
-  } as Record<string, string>;
-  const child: ChildProcess = spawn("bun", ["run", MAIN, "hub", "--port", "0"], {
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const port = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("hub did not start")), 15_000);
-    let buf = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      buf += chunk.toString();
-      const m = /listening on http:\/\/127\.0\.0\.1:(\d+)/.exec(buf);
-      if (m?.[1]) {
-        clearTimeout(timer);
-        resolve(Number.parseInt(m[1], 10));
-      }
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`hub exited early (${code}): ${buf}`));
-    });
-  });
-  return {
-    port,
-    url: `http://127.0.0.1:${port}/`,
-    env: { ...env, LUCID_HUB_PORT: String(port) },
-    stop: async () => {
-      child.kill("SIGTERM");
-      await new Promise<void>((resolve) => {
-        const force = setTimeout(() => {
-          child.kill("SIGKILL");
-          resolve();
-        }, 4000);
-        child.once("exit", () => {
-          clearTimeout(force);
-          resolve();
-        });
-      });
-    },
-  };
-};
-
-/** `lucid open` against the hub: a CLI whose env routes discovery at it. */
-const openIntoHub = async (theHub: Hub, html: string): Promise<{ cli: Cli; shellUrl: string }> => {
-  const c = await makeCli(html);
-  // Rebind the CLI's env to the hub (makeCli's own env has no LUCID_HUB_PORT).
-  const run = async (args: string[], timeoutMs = 30_000) => {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const { stdout } = await promisify(execFile)("bun", ["run", MAIN, ...args], {
-      cwd: c.dir,
-      timeout: timeoutMs,
-      env: { ...theHub.env, LUCID_IDLE_MS: "0" },
-    });
-    return JSON.parse(stdout) as Record<string, unknown>;
-  };
-  const opened = (await run(["open", c.artifact])) as { url: string };
-  expect(opened.url).toContain(`127.0.0.1:${theHub.port}/?s=`);
-  return { cli: { ...c, run } as Cli, shellUrl: opened.url };
-};
-
-// :visible - every open tab's view stays mounted, so N iframes exist and
-// only the active one is showing.
-const surfaceOf = (page: Page): FrameLocator =>
-  page.frameLocator('iframe[title="artifact surface"]:visible');
 
 test.afterEach(async () => {
   await cli?.cleanup();
@@ -107,8 +17,6 @@ test.afterEach(async () => {
   cli = cli2 = undefined;
   await hub?.stop();
   hub = undefined;
-  if (hubDir) await rm(hubDir, { recursive: true, force: true });
-  hubDir = undefined;
 });
 
 test("lucid open surfaces the session as a tab in the shell", async ({ page }) => {

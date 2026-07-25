@@ -127,6 +127,13 @@ export type TimelineItem =
       readonly index: number;
       readonly id: string;
     }
+  | {
+      /** An ANSWERED question and its answer, as one item at the moment the
+       *  human settled it (D14). Unanswered questions are not in the record. */
+      readonly kind: "question";
+      readonly at: string;
+      readonly question: AgentQuestion;
+    }
   | { readonly kind: "message"; readonly at: string; readonly message: ConversationMessage };
 
 export type { Anchor, PayloadAnnotationLike };

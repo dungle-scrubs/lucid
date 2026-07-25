@@ -24,7 +24,7 @@ import {
   UnsentMessages,
   Warnings,
 } from "./Panel.tsx";
-import { Questions } from "./Questions.tsx";
+import { QaPart } from "./QaPart.tsx";
 import { Kbd } from "./ui/kbd.tsx";
 
 /**
@@ -526,6 +526,10 @@ export const Thread = () => {
   // emits. Without it those parts fall through to the unknown-data fallback.
   useAssistantDataUI({ name: "annotation", render: AnnotationPart });
   useAssistantDataUI({ name: "queued", render: QueuedPart });
+  // An answered question and its answer, as one entry (D14). Outstanding
+  // questions never reach the transcript - they live in the drawer over the
+  // surface, which is why there is no questions panel above the composer.
+  useAssistantDataUI({ name: "qa", render: QaPart });
   return (
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
       <ThreadPrimitive.Viewport
@@ -567,7 +571,6 @@ export const Thread = () => {
         <ScrollToLatest />
       </ThreadPrimitive.Viewport>
       <SendQueueBar />
-      <Questions />
       <Composer />
     </ThreadPrimitive.Root>
   );

@@ -160,6 +160,30 @@ Annotation and message IDs are idempotent. Advance your persisted cursor only
 `wait` never drops or double-applies feedback. `wait` is safe to kill and re-run;
 it requires no always-running process of its own.
 
+## Grouped questions (`group`, `answerItems`) - additive
+
+A `question` event MAY carry a `group`: 1-5 structured questions asked as one
+unit (`lucid ask <file> --group <file|->`; see the `lucid` skill for the JSON).
+Each carries `question`, an optional `header`, `multiSelect`, `requiresReason`,
+`allowDefer`, and `choices` with `label`, `description`, `recommended`,
+`impact`, `risk`, `badges` and an optional `preview` (inert text, or an
+`{ html }` wireframe the viewer renders in a script-less sandboxed iframe).
+The legacy `text`/`options`/`multi` fields are **projected from** the group, so
+a consumer that ignores `group` still reads a usable question.
+
+The answer comes back on the same `questions[]` entry: `answerItems`, one entry
+per question (`selected`, `text`, `reason`, or `defer: true`), plus `answer` -
+the combined summary line, derived from the group and its items rather than
+stored, so it can never disagree with what was asked. The stored
+`question_answered` event carries that same summary in its legacy `text`, so a
+reader that knows only `text`/`options` sees an answer rather than an answered
+question with nothing in it. `at` and `answeredAt` carry the ask and answer
+moments. One shared validator gates the viewer's submit and the server's
+accept: a malformed group or answer is refused with an `issues` list naming
+each problem, never half-recorded. A pinned region or an attached image is
+itself an answer to a group of ONE free-text question - with several questions
+there is nothing to say which one it settles, so it does not stand in for any.
+
 ## Per-item delivery state (`delivered`, `answered`) - additive
 
 Each annotation and each **human** message MAY carry `"delivered": true` (an

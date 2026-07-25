@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { isOverlayMessage } from "../shared/protocol.ts";
 import { SessionProvider } from "./context.tsx";
 import { Header } from "./Header.tsx";
+import { QuestionDrawer, useQuestionDrawer } from "./QuestionDrawer.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
 import type { SessionHandle } from "./session.ts";
 import { Sessions } from "./Sessions.tsx";
@@ -199,6 +200,65 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
 };
 
 /**
+ * The artifact region: the surface itself plus everything that overlays it -
+ * the version banners and the question drawer. Its own component because it
+ * must read the session store (the drawer's raised state drives the parallax),
+ * and SessionView is the thing that PROVIDES that store.
+ */
+const SurfaceRegion = ({
+  session,
+  attachSurface,
+}: {
+  readonly session: SessionHandle;
+  readonly attachSurface: (el: HTMLIFrameElement | null) => void;
+}) => {
+  const { raised } = useQuestionDrawer();
+  return (
+    <div className="relative min-h-0 flex-1 overflow-hidden">
+      <NewerVersionBanner />
+      <DiffBar />
+      <VersionViewBanner />
+      <SurfaceUpdating />
+      {/* The surface parallaxes UP while the question drawer is raised - the
+          projects drawer's motion language, rotated. The artifact stays live
+          and targetable the whole time; the drawer covers only its own band. */}
+      <div
+        className={`h-full w-full transition-transform duration-200 ease-out ${
+          raised ? "-translate-y-3" : "translate-y-0"
+        }`}
+      >
+        <iframe
+          ref={attachSurface}
+          title="artifact surface"
+          src={`${session.config.base}/`}
+          // No allow-same-origin: the artifact runs on an opaque origin so
+          // its scripts cannot reach the control routes (D-020).
+          sandbox="allow-scripts"
+          // `ready` is a one-shot message and the listener is installed in
+          // an effect, i.e. after this element exists. Load fires only once
+          // the overlay's module has run, so treating it as ready too means
+          // a missed `ready` cannot leave the surface permanently unpainted.
+          onLoad={() => {
+            session.surface.markOverlayReady();
+            session.surface.pushHighlights();
+          }}
+          // bg-surface, not white: this is the paper the artifact renders
+          // on, and it is the one place the chrome admits what is inside it
+          // is a document rather than more app. It only shows before the
+          // artifact paints (or through a transparent one), so it must not
+          // be a different white than the paper the artifact assumes.
+          className="h-full w-full border-0 bg-surface"
+        />
+      </div>
+      {/* Over the SURFACE, never the review panel: a pending question is about
+          the artifact, and the artifact must stay visible while it is
+          answered (D11). */}
+      <QuestionDrawer />
+    </div>
+  );
+};
+
+/**
  * One session's whole screen: review panel, divider, header, artifact
  * surface. The single-session viewer IS this (Chrome below); the shell
  * renders it under a tab bar with `shell` set - which hides the panel's
@@ -273,34 +333,7 @@ export const SessionView = ({
       >
         <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
           <Header />
-          <div className="relative min-h-0 flex-1">
-            <NewerVersionBanner />
-            <DiffBar />
-            <VersionViewBanner />
-            <SurfaceUpdating />
-            <iframe
-              ref={attachSurface}
-              title="artifact surface"
-              src={`${session.config.base}/`}
-              // No allow-same-origin: the artifact runs on an opaque origin so
-              // its scripts cannot reach the control routes (D-020).
-              sandbox="allow-scripts"
-              // `ready` is a one-shot message and the listener is installed in
-              // an effect, i.e. after this element exists. Load fires only once
-              // the overlay's module has run, so treating it as ready too means
-              // a missed `ready` cannot leave the surface permanently unpainted.
-              onLoad={() => {
-                session.surface.markOverlayReady();
-                session.surface.pushHighlights();
-              }}
-              // bg-surface, not white: this is the paper the artifact renders
-              // on, and it is the one place the chrome admits what is inside it
-              // is a document rather than more app. It only shows before the
-              // artifact paints (or through a transparent one), so it must not
-              // be a different white than the paper the artifact assumes.
-              className="h-full w-full border-0 bg-surface"
-            />
-          </div>
+          <SurfaceRegion session={session} attachSurface={attachSurface} />
         </SidebarInset>
         {/* The window-splitter pattern: a separator carries the role, and arrow
             keys resize it for anything that cannot drag. Double-click asks the

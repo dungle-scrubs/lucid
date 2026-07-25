@@ -66,6 +66,17 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
             content: [{ type: "data-queued", data: { id: item.id, index: item.index } }],
           } as ThreadMessageLike;
         }
+        if (item.kind === "question") {
+          // Question + answer as ONE item (D14). `user`, like an annotation:
+          // it enters the record because the HUMAN answered, and the card
+          // renders both halves itself.
+          return {
+            role: "user",
+            id: `qa-${item.question.id}`,
+            createdAt: new Date(item.at),
+            content: [{ type: "data-qa", data: { id: item.question.id } }],
+          } as ThreadMessageLike;
+        }
         if (item.kind === "annotation") {
           return {
             role: "user",
@@ -148,9 +159,10 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
   const messages = useSession((s) => s.messages);
   const queue = useSession((s) => s.queue);
   const sending = useSession((s) => s.sending);
+  const questions = useSession((s) => s.questions);
   const timeline = useMemo(
-    () => buildTimeline(annotations, messages, queue),
-    [annotations, messages, queue],
+    () => buildTimeline(annotations, messages, queue, questions),
+    [annotations, messages, queue, questions],
   );
 
   /**

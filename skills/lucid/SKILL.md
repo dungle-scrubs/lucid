@@ -229,6 +229,57 @@ lucid ask <file> --text "Which store should the cutover target?" \
   arise **while parked in the review loop**. Outside a review, your normal
   question tool is fine.
 
+### Several decisions at once: `--group`
+
+When more than one decision blocks you at the same moment, ask them as **one
+group** (1-5 questions) rather than one at a time. The viewer tabs them into a
+single drawer, the human answers in one pass, and the whole exchange enters the
+record as one question-and-answer item.
+
+```
+lucid ask <file> --group questions.json     # or --group - to read stdin
+```
+
+```jsonc
+[
+  {
+    "id": "store",
+    "header": "Store",                       // short tab label
+    "question": "Which store for the cutover?",
+    "multiSelect": false,                    // true => pick any number
+    "requiresReason": false,                 // true => a justification is required
+    "allowDefer": false,                     // true => this one may be left unanswered
+    "choices": [
+      {
+        "id": "pg",
+        "label": "Postgres",
+        "description": "managed, boring, we know it",
+        "recommended": true,                 // pre-selected (single choice only)
+        "impact": "one migration, no new ops",
+        "risk": "connection limits at peak",
+        "badges": ["reversible"],
+        "preview": { "html": "<div>…wireframe of the result…</div>" }
+      },
+      { "id": "sqlite", "label": "SQLite", "preview": "+--------+\n| sketch |\n+--------+" }
+    ]
+  }
+]
+```
+
+- Omit `choices` for a free-text question. Every choice question also gets an
+  "Other" row, so the human is never boxed into your options.
+- `recommended` is worth setting: it makes the common case one keystroke. It is
+  ignored on a multi-select, where pre-picking would be answering for them.
+- `preview` shows what an option would *produce*: a string renders as inert
+  monospace text, `{ "html": … }` renders as a real wireframe in a **sandboxed,
+  script-less** iframe. Write markup and CSS only - no script runs, ever.
+- The answer arrives on the same `questions[]` entry: `answerItems` (one per
+  question, with `selected`, `text`, `reason`, or `defer: true`) plus `answer`,
+  one readable summary line for the whole group. A deferred question is an
+  explicit "not now" - proceed without it, do not re-ask.
+- A malformed group is refused with an `issues` list naming each problem, so
+  fix and re-ask rather than falling back to a vaguer question.
+
 ## Standing review (opt-in, never the default)
 
 The blocking loop above is the default and stays the default: a review is a

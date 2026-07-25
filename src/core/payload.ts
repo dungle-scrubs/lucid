@@ -8,9 +8,11 @@ import type {
   PayloadAnnotation,
   PayloadFork,
   PayloadMessage,
+  PayloadQuestion,
   PayloadStatus,
   WaitPayload,
 } from "../protocol/wire.ts";
+import { summarizeAnswer } from "./question-contract.ts";
 import { renderCursor } from "./cursor.ts";
 import type {
   AnnotationRecord,
@@ -77,6 +79,44 @@ const toMessage = (
   // An agent's own turn has nobody to be delivered to.
   ...(m.role === "human" ? deliveryOf(m.seq, state) : {}),
 });
+
+/**
+ * One question + its answer as the agent reads them. The `answer` line is the
+ * ONE readable summary either kind of question produces: a legacy question's
+ * free text, or a grouped question's combined summary derived from the stored
+ * group and per-item answers (Trevor's `ProviderQuestionAccept.answer`). It is
+ * derived here rather than stored on the answer event, so it can never disagree
+ * with the group it summarizes.
+ */
+const toQuestion = (q: QuestionRecord, assetAbsPath: (file: string) => string): PayloadQuestion => {
+  const grouped = q.group && q.group.length > 0 && q.items && q.items.length > 0 && !q.skipped;
+  const answer = grouped ? summarizeAnswer(q.group ?? [], q.items ?? []) : (q.answer ?? "");
+  return {
+    id: q.id,
+    text: q.text,
+    ...(q.ref ? { ref: q.ref } : {}),
+    ...(q.options && q.options.length > 0 ? { options: q.options } : {}),
+    ...(q.multi ? { multi: true } : {}),
+    ...(q.group && q.group.length > 0 ? { group: q.group } : {}),
+    at: q.at,
+    ...(q.answeredAt ? { answeredAt: q.answeredAt } : {}),
+    answered: q.answered,
+    ...(q.skipped ? { skipped: true } : {}),
+    ...(answer.length > 0 ? { answer } : {}),
+    ...(q.answerOptions && q.answerOptions.length > 0 ? { answerOptions: q.answerOptions } : {}),
+    ...(q.items && q.items.length > 0 ? { answerItems: q.items } : {}),
+    ...(q.answerAnchor ? { answerAnchor: q.answerAnchor } : {}),
+    ...(q.answerImages && q.answerImages.length > 0
+      ? {
+          answerImages: q.answerImages.map((img) => ({
+            name: img.name,
+            file: img.file,
+            path: assetAbsPath(img.file),
+          })),
+        }
+      : {}),
+  };
+};
 
 /** The fields the snapshot guard needs; annotations and forks both satisfy it. */
 type ResolvableRecord = Pick<AnnotationRecord, "id" | "version" | "target">;
@@ -242,29 +282,9 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
       : {}),
     ...(opts.questions && opts.questions.length > 0
       ? {
-          questions: opts.questions.map((q) => ({
-            id: q.id,
-            text: q.text,
-            ...(q.ref ? { ref: q.ref } : {}),
-            ...(q.options && q.options.length > 0 ? { options: q.options } : {}),
-            ...(q.multi ? { multi: true } : {}),
-            answered: q.answered,
-            ...(q.skipped ? { skipped: true } : {}),
-            ...(q.answer !== undefined && q.answer.length > 0 ? { answer: q.answer } : {}),
-            ...(q.answerOptions && q.answerOptions.length > 0
-              ? { answerOptions: q.answerOptions }
-              : {}),
-            ...(q.answerAnchor ? { answerAnchor: q.answerAnchor } : {}),
-            ...(q.answerImages && q.answerImages.length > 0
-              ? {
-                  answerImages: q.answerImages.map((img) => ({
-                    name: img.name,
-                    file: img.file,
-                    path: opts.snapshotAbsPath(pastedRelPath(img.file)),
-                  })),
-                }
-              : {}),
-          })),
+          questions: opts.questions.map((q) =>
+            toQuestion(q, (file) => opts.snapshotAbsPath(pastedRelPath(file))),
+          ),
         }
       : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
