@@ -187,3 +187,40 @@ test("two sessions are two tabs with isolated state; switching swaps the view", 
   await page.keyboard.press(process.platform === "darwin" ? "Meta+1" : "Control+1");
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
 });
+
+test("the command palette opens sessions and runs review actions", async ({ page }) => {
+  hub = await startHub();
+  const first = await openIntoHub(hub, PLAN_V1);
+  cli = first.cli;
+  const second = await openIntoHub(
+    hub,
+    PLAN_V1.replace("Database migration plan", "Rollout checklist"),
+  );
+  cli2 = second.cli;
+
+  await page.goto(first.shellUrl);
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
+
+  const cmdK = process.platform === "darwin" ? "Meta+k" : "Control+k";
+
+  // ⌘K -> fuzzy to the second session -> Enter opens it as a tab.
+  await page.keyboard.press(cmdK);
+  await expect(page.locator('[data-test="palette-input"]')).toBeFocused();
+  await page.locator('[data-test="palette-input"]').fill("open plan");
+  await page.locator('[data-test="palette"] [cmdk-item]', { hasText: "plan.html" }).first().click();
+  await expect(page.locator('[data-test="palette-overlay"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+  await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
+
+  // ⌘K -> "toggle marks" runs an action on the ACTIVE session.
+  await page.keyboard.press(cmdK);
+  await page.locator('[data-test="palette-input"]').fill("toggle");
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-test="palette-overlay"]')).toHaveCount(0);
+
+  // Escape closes a reopened palette without running anything.
+  await page.keyboard.press(cmdK);
+  await expect(page.locator('[data-test="palette-input"]')).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[data-test="palette-overlay"]')).toHaveCount(0);
+});

@@ -6,10 +6,12 @@ import {
   closeTab,
   connectHub,
   openTab,
+  setPaletteOpen,
   setPickerOpen,
   useHub,
   type HubSession,
 } from "./hub.ts";
+import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, useShell } from "./shell.ts";
 import { Kbd } from "./ui/kbd.tsx";
@@ -229,10 +231,16 @@ export const Shell = () => {
     }
   }, [sessions]);
 
-  // The shell's own keyboard: ⌘1-9 jump to tab N, ⌘⇧[ / ⌘⇧] step tabs.
+  // The shell's own keyboard: ⌘K palette, ⌘1-9 jump to tab N, ⌘⇧[ / ⌘⇧]
+  // step tabs.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (!e.shiftKey && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen(!useHub.getState().paletteOpen);
+        return;
+      }
       const { sessionKeys: keys, activeKey: current } = useShell.getState();
       const digit = Number.parseInt(e.key, 10);
       if (!e.shiftKey && Number.isInteger(digit) && digit >= 1 && digit <= 9) {
@@ -274,10 +282,17 @@ export const Shell = () => {
           <Tab key={k} sessionKey={k} active={k === activeKey} />
         ))}
         <Picker />
-        <div className="ml-auto flex flex-none items-center gap-1 pr-3 text-[10px] text-fg-faint">
-          <Kbd>⌘1–9</Kbd> tabs
-        </div>
+        <button
+          type="button"
+          data-test="palette-hint"
+          title="Command palette (⌘K)"
+          onClick={() => setPaletteOpen(true)}
+          className="ml-auto flex flex-none cursor-pointer items-center gap-1 pr-3 text-[10px] text-fg-faint hover:text-fg"
+        >
+          <Kbd>⌘K</Kbd> everywhere
+        </button>
       </div>
+      <Palette />
       {active ? (
         <div className="min-h-0 flex-1">
           <SessionView key={active.key} session={active} shell />

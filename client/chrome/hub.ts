@@ -24,15 +24,20 @@ interface HubState {
   connected: boolean;
   /** The "+" opener popover is showing. */
   pickerOpen: boolean;
+  /** The ⌘K palette is showing. */
+  paletteOpen: boolean;
 }
 
 export const useHub = create<HubState>(() => ({
   sessions: [],
   connected: false,
   pickerOpen: false,
+  paletteOpen: false,
 }));
 
 export const setPickerOpen = (open: boolean): void => useHub.setState({ pickerOpen: open });
+
+export const setPaletteOpen = (open: boolean): void => useHub.setState({ paletteOpen: open });
 
 /**
  * Open sessions hold a live SSE stream each; past this many, the least
