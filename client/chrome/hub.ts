@@ -17,7 +17,25 @@ export interface HubSession {
   readonly lastSeen: string;
   readonly id: string;
   readonly hosted: boolean;
+  /** Project root path - the grouping the shell displays sessions under. */
+  readonly project: string;
 }
+
+/** Display name of a project root ("lucid" for /Users/x/dev/lucid). */
+export const projectName = (project: string): string =>
+  project.split("/").filter(Boolean).pop() ?? project;
+
+/** Sessions grouped by project, insertion-ordered by the (name-sorted)
+ *  listing. A tab is a session; the PROJECT is how a human scans for it. */
+export const byProject = (sessions: readonly HubSession[]): Map<string, HubSession[]> => {
+  const groups = new Map<string, HubSession[]>();
+  for (const s of sessions) {
+    const list = groups.get(s.project);
+    if (list) list.push(s);
+    else groups.set(s.project, [s]);
+  }
+  return groups;
+};
 
 interface HubState {
   sessions: readonly HubSession[];

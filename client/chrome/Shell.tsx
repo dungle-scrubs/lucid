@@ -3,9 +3,11 @@ import { useStore } from "zustand";
 import { SessionView } from "./Chrome.tsx";
 import {
   activateTab,
+  byProject,
   closeTab,
   connectHub,
   openTab,
+  projectName,
   setPaletteOpen,
   useHub,
   type HubSession,
@@ -69,7 +71,17 @@ const TabAttention = ({ handle }: { readonly handle: SessionHandle }) => {
 
 const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly active: boolean }) => {
   const handle = getSession(sessionKey);
+  const openKeys = useShell((s) => s.sessionKeys);
+  const sessions = useHub((s) => s.sessions);
   if (!handle) return null;
+  // Two open tabs named plan.html are indistinguishable; when names collide,
+  // the tab carries its project (browser-style disambiguation). A tab stays
+  // a SESSION - the project is just the qualifier.
+  const collides = openKeys.some(
+    (k) => k !== sessionKey && getSession(k)?.config.name === handle.config.name,
+  );
+  const project = collides ? sessions.find((s) => s.artifact === handle.key)?.project : undefined;
+  const label = project ? `${handle.config.name} · ${projectName(project)}` : handle.config.name;
   return (
     <div
       data-test="shell-tab"
@@ -87,7 +99,7 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
         className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-[7px]"
       >
         <TabAttention handle={handle} />
-        <span className="truncate">{handle.config.name}</span>
+        <span className="truncate">{label}</span>
       </button>
       <button
         type="button"
@@ -125,7 +137,7 @@ const NewTabButton = () => (
   </button>
 );
 
-const PickerRow = ({ row }: { readonly row: HubSession }) => {
+const PickerRow = ({ row, subtitle }: { readonly row: HubSession; readonly subtitle?: string }) => {
   const [failed, setFailed] = useState(false);
   return (
     <button
@@ -143,7 +155,7 @@ const PickerRow = ({ row }: { readonly row: HubSession }) => {
     >
       <span className="truncate text-[12px] text-fg">{row.name}</span>
       <span className="truncate text-[10px] text-fg-faint">
-        {failed ? "couldn't open - is the session's log readable?" : row.artifact}
+        {failed ? "couldn't open - is the session's log readable?" : (subtitle ?? row.artifact)}
       </span>
     </button>
   );
@@ -186,9 +198,23 @@ const EmptyShell = () => {
       {sessions.length > 0 ? (
         <>
           <div className="text-[13px] text-fg-muted">Pick a session to review.</div>
-          <div className="flex max-h-[50vh] w-[560px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto border border-ink-600 bg-ink-800 py-1">
-            {sessions.map((s) => (
-              <PickerRow key={s.id} row={s} />
+          <div className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto border border-ink-600 bg-ink-800 py-1">
+            {[...byProject(sessions)].map(([project, rows]) => (
+              <div key={project} data-test="picker-project">
+                <div className="flex items-baseline gap-2 px-3 pt-2 pb-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-muted">
+                    {projectName(project)}
+                  </span>
+                  <span className="truncate text-[10px] text-fg-faint">{project}</span>
+                </div>
+                {rows.map((s) => (
+                  <PickerRow
+                    key={s.id}
+                    row={s}
+                    subtitle={s.artifact.slice(project.length + 1) || s.name}
+                  />
+                ))}
+              </div>
             ))}
           </div>
         </>

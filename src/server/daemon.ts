@@ -10,10 +10,12 @@ import {
   writeServerDescriptor,
 } from "./discovery.ts";
 import { escapeHtml } from "../core/escape.ts";
+import { projectRoot } from "../core/sessions.ts";
 import {
   CHROME_BUNDLE,
   CHROME_CSS,
   CLIENT_BUNDLE,
+  CLIENT_BUNDLE_HASH,
   FAVICON_SVG,
 } from "./client-bundle.generated.ts";
 import { devBundleStamp, readDevAsset } from "./dev-assets.ts";
@@ -79,11 +81,16 @@ const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response 
   });
 
 /** A hub-listed session as the shell consumes it: the registry pointer plus
- *  its opaque mount id and whether a dedicated server is currently live. */
+ *  its opaque mount id, its project, and whether a dedicated server is
+ *  currently live. */
 export interface HubSession extends RegistryEntry {
   readonly id: string;
   /** True when the daemon itself hosts it right now (stream + appends). */
   readonly hosted: boolean;
+  /** The session's project root (nearest .git, else the artifact's own
+   *  directory). A tab is a SESSION; the project is a grouping - this is
+   *  what the shell groups by. */
+  readonly project: string;
 }
 
 /** The shell page: boots the chrome bundle in shell mode. The client fetches
@@ -140,13 +147,27 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     for (const e of entries) idToArtifact.set(sessionId(e.artifact), e.artifact);
   };
 
+  /** Project roots are stable for a given artifact path; the listing runs
+   *  every poll tick, so the .git walk happens once per artifact, not per
+   *  tick. */
+  const projectCache = new Map<string, string>();
+  const projectOf = async (artifact: string): Promise<string> => {
+    const cached = projectCache.get(artifact);
+    if (cached !== undefined) return cached;
+    const root = await projectRoot(sessionPaths(artifact));
+    projectCache.set(artifact, root);
+    return root;
+  };
+
   const listHub = async (): Promise<HubSession[]> => {
     const entries = await listAll(roots, registryPath);
     rememberIds(entries);
-    return entries.map((e) => {
-      const id = sessionId(e.artifact);
-      return { ...e, id, hosted: mounts.has(id) };
-    });
+    return Promise.all(
+      entries.map(async (e) => {
+        const id = sessionId(e.artifact);
+        return { ...e, id, hosted: mounts.has(id), project: await projectOf(e.artifact) };
+      }),
+    );
   };
 
   /** Unmount a hosted session: close its streams/watchers and release the
@@ -298,11 +319,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   // ---- hub listing + events ---------------------------------------------------
 
   const snapshot = async (): Promise<string> => {
-    // The dev-mode bundle stamp rides the snapshot: when the watcher rewrites
-    // the bundle, the stamp moves, the snapshot differs, and connected shells
-    // reload themselves. Absent entirely outside dev mode.
-    const stamp = devBundleStamp();
-    return JSON.stringify({ sessions: await listHub(), ...(stamp ? { bundle: stamp } : {}) });
+    // The bundle stamp rides every snapshot: the watcher's file mtime in dev
+    // mode, the embedded build hash in production. Either way, when a shell
+    // reconnects to a hub running NEWER UI than it is, the stamp differs and
+    // the shell reloads itself - a hub restart updates live windows instead
+    // of leaving them on the old bundle.
+    const stamp = devBundleStamp() ?? CLIENT_BUNDLE_HASH;
+    return JSON.stringify({ sessions: await listHub(), bundle: stamp });
   };
 
   const broadcast = (frame: string): void => {
@@ -433,7 +456,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     }
 
     if (pathname === "/hub/identity" && req.method === "GET") {
-      return json({ lucid: "hub", port }, 200, noStore);
+      // `shells` = connected listing subscribers, i.e. open shell windows.
+      // `lucid app` uses it to update the live window instead of stacking
+      // a new one per invocation.
+      return json({ lucid: "hub", port, shells: sseClients.size }, 200, noStore);
     }
     if (pathname === "/hub/sessions" && req.method === "GET") {
       return json({ sessions: await listHub() }, 200, noStore);
@@ -515,20 +541,32 @@ export const parseHubPort = (raw: string | undefined): number | undefined => {
   return n >= 1 && n <= 65535 ? n : undefined;
 };
 
-/** True when a hub daemon answers its identity probe on `port`. */
-export const hubAlive = async (port = HUB_PORT): Promise<boolean> => {
+/** What a live hub reports about itself. */
+export interface HubInfo {
+  readonly port: number;
+  /** Connected shell windows (listing-stream subscribers). */
+  readonly shells: number;
+}
+
+/** The hub's identity on `port`, or undefined when none answers. */
+export const hubInfo = async (port = HUB_PORT): Promise<HubInfo | undefined> => {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HUB_PROBE_TIMEOUT_MS);
     const probe = await loopbackFetch(port, "/hub/identity", { signal: controller.signal });
     clearTimeout(timer);
-    if (!probe.ok) return false;
-    const who = (await probe.json()) as { lucid?: unknown };
-    return who.lucid === "hub";
+    if (!probe.ok) return undefined;
+    const who = (await probe.json()) as { lucid?: unknown; shells?: unknown };
+    if (who.lucid !== "hub") return undefined;
+    return { port, shells: typeof who.shells === "number" ? who.shells : 0 };
   } catch {
-    return false;
+    return undefined;
   }
 };
+
+/** True when a hub daemon answers its identity probe on `port`. */
+export const hubAlive = async (port = HUB_PORT): Promise<boolean> =>
+  (await hubInfo(port)) !== undefined;
 
 /** What `POST /hub/open` answers: where the session now lives on the hub. */
 export interface HubOpenResult {

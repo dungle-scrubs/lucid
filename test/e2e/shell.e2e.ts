@@ -176,8 +176,13 @@ test("two sessions are two tabs with isolated state; switching swaps the view", 
     return hit !== null && (el === hit || el.contains(hit));
   });
   expect(hittable).toBe(true);
-  // Both fixtures are named plan.html - pick by the second session's PATH.
-  await page.locator('[data-test="picker-row"]', { hasText: second.cli.dir }).first().click();
+  // Both fixtures are named plan.html - the pick screen groups by PROJECT
+  // (the tmp dir here), so select through the second session's group.
+  await page
+    .locator('[data-test="picker-project"]', { hasText: second.cli.dir })
+    .locator('[data-test="picker-row"]')
+    .first()
+    .click();
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
   await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
 

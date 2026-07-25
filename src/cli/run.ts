@@ -18,7 +18,7 @@ import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
-import { HUB_PORT, hubAlive, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
+import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
 import {
   discoverLiveServer,
   loopbackFetch,
@@ -418,20 +418,38 @@ export const runApp = async (): Promise<void> => {
   const envPort = parseHubPort(process.env.LUCID_HUB_PORT);
   const port = envPort ?? HUB_PORT;
 
-  let alive = await hubAlive(port);
-  if (!alive) {
+  let info = await hubInfo(port);
+  const hadHub = info !== undefined;
+  if (!info) {
     spawnHub(envPort);
     const deadline = Date.now() + 8000;
-    while (!alive && Date.now() < deadline) {
+    while (!info && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 150));
-      alive = await hubAlive(port);
+      info = await hubInfo(port);
     }
   }
-  if (!alive) {
+  if (!info) {
     throw new ServerError({ message: "hub daemon failed to start", detail: { port } });
   }
 
+  // A connected shell window IS the app - opening another would stack
+  // windows on every invocation. The window updates itself (the listing
+  // stream carries the hub's bundle stamp), so there is nothing to do.
+  // After a hub RESTART the surviving window needs a beat to reconnect
+  // before it shows up in `shells`; give it that beat instead of racing it.
+  if (hadHub && info.shells === 0) {
+    const deadline = Date.now() + 2500;
+    while (info && info.shells === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250));
+      info = await hubInfo(port);
+    }
+  }
+
   const url = `http://127.0.0.1:${port}/`;
+  if (info && info.shells > 0) {
+    print({ hub: url, app: "already-open", shells: info.shells, status: "running" });
+    return;
+  }
   const asApp = openChromeApp(url);
   if (!asApp) openBrowser(url);
   print({ hub: url, app: asApp, status: "running" });

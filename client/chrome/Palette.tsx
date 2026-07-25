@@ -1,7 +1,15 @@
 import { Command } from "cmdk";
 import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
-import { activateTab, closeTab, openTab, setPaletteOpen, useHub } from "./hub.ts";
+import {
+  activateTab,
+  byProject,
+  closeTab,
+  openTab,
+  projectName,
+  setPaletteOpen,
+  useHub,
+} from "./hub.ts";
 import type { SessionHandle } from "./session.ts";
 import { getSession, useShell } from "./shell.ts";
 
@@ -152,32 +160,40 @@ export const Palette = () => {
               {openRows.map((s) => (
                 <Command.Item
                   key={s.id}
-                  value={`tab ${s.name} ${s.artifact}`}
+                  value={`tab ${s.name} ${projectName(s.project)} ${s.artifact}`}
                   className={itemCls}
                   onSelect={run(() => activateTab(s.artifact))}
                 >
                   <span className="truncate">{s.name}</span>
-                  <span className="ml-auto truncate text-[10px] text-fg-faint">{s.artifact}</span>
+                  <span className="ml-auto truncate text-[10px] text-fg-faint">
+                    {projectName(s.project)}
+                  </span>
                 </Command.Item>
               ))}
             </Command.Group>
           ) : null}
 
-          {otherRows.length > 0 ? (
-            <Command.Group heading="Open a session" className={groupCls}>
-              {otherRows.map((s) => (
+          {/* Sessions to open, one group per PROJECT: a tab is a session, and
+              the project heading is how a human scans a long list. The
+              project name also rides each item's value, so typing "lucid"
+              narrows to that project's sessions. */}
+          {[...byProject(otherRows)].map(([project, rows]) => (
+            <Command.Group key={project} heading={projectName(project)} className={groupCls}>
+              {rows.map((s) => (
                 <Command.Item
                   key={s.id}
-                  value={`open ${s.name} ${s.artifact}`}
+                  value={`open ${s.name} ${projectName(s.project)} ${s.artifact}`}
                   className={itemCls}
                   onSelect={run(() => void openTab(s))}
                 >
                   <span className="truncate">{s.name}</span>
-                  <span className="ml-auto truncate text-[10px] text-fg-faint">{s.artifact}</span>
+                  <span className="ml-auto truncate text-[10px] text-fg-faint">
+                    {s.artifact.slice(project.length + 1) || s.name}
+                  </span>
                 </Command.Item>
               ))}
             </Command.Group>
-          ) : null}
+          ))}
         </Command.List>
       </Command>
     </div>
