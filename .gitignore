@@ -34,3 +34,4 @@ node_modules/
 
 # Bun build temp artifacts
 *.bun-build
+workspace-overview.html
