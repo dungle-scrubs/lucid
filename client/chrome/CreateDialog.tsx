@@ -174,7 +174,7 @@ const CreateDialogBody = () => {
         type="button"
         aria-label="Close the new-artifact dialog"
         onClick={close}
-        className="absolute inset-0 cursor-default bg-ink-900/60"
+        className="absolute inset-0 cursor-default bg-ink-900/85 backdrop-blur-[2px]"
       />
       <div
         data-test="create-dialog"
