@@ -10,10 +10,9 @@ import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import { defaultUrlTransform } from "react-markdown";
 import type { ReactNode } from "react";
-import { revealSection } from "./actions.ts";
 import { AnnotationPart } from "./AnnotationPart.tsx";
+import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
-import { collapseTextPaste } from "./pastes.ts";
 import { useEffect, useState } from "react";
 import {
   Notices,
@@ -23,7 +22,6 @@ import {
   UnsentMessages,
   Warnings,
 } from "./Panel.tsx";
-import { useLucid, warn } from "./store.ts";
 import { Questions } from "./Questions.tsx";
 import { Kbd } from "./ui/kbd.tsx";
 
@@ -99,7 +97,8 @@ const MarkdownLink = ({
   readonly href?: string;
   readonly children?: ReactNode;
 }) => {
-  const sectionIds = useLucid((s) => s.sectionIds);
+  const { revealSection } = useActions();
+  const sectionIds = useSession((s) => s.sectionIds);
   const sectionId = href?.startsWith(SECTION_SCHEME) ? href.slice(SECTION_SCHEME.length) : null;
 
   if (sectionId !== null) {
@@ -228,32 +227,35 @@ const ComposerAttachment = () => (
   </AttachmentPrimitive.Root>
 );
 
-const Composer = () => (
-  <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-ink-600 bg-bg p-[14px]">
-    <ListenerLine />
-    <div className="flex flex-wrap gap-1.5 empty:hidden">
-      <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
-    </div>
-    <ComposerPrimitive.Input
-      rows={2}
-      data-test="message-input"
-      placeholder="Message the agent, or paste an image… (Enter to send, Shift+Enter for a new line)"
-      // Large text pastes fold to `[Pasted text #N +L lines]` and expand back
-      // at send; image pastes fall through to the attachment adapter.
-      onPaste={collapseTextPaste}
-      className="resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
-    />
-    <div className="flex items-center justify-end gap-2">
-      <ComposerPrimitive.Send
-        data-test="send-message"
-        className="flex cursor-pointer items-center gap-1.5 rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Send message
-        <Kbd>↵</Kbd>
-      </ComposerPrimitive.Send>
-    </div>
-  </ComposerPrimitive.Root>
-);
+const Composer = () => {
+  const { pastes } = useSessionHandle();
+  return (
+    <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-ink-600 bg-bg p-[14px]">
+      <ListenerLine />
+      <div className="flex flex-wrap gap-1.5 empty:hidden">
+        <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
+      </div>
+      <ComposerPrimitive.Input
+        rows={2}
+        data-test="message-input"
+        placeholder="Message the agent, or paste an image… (Enter to send, Shift+Enter for a new line)"
+        // Large text pastes fold to `[Pasted text #N +L lines]` and expand back
+        // at send; image pastes fall through to the attachment adapter.
+        onPaste={pastes.collapseTextPaste}
+        className="resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
+      />
+      <div className="flex items-center justify-end gap-2">
+        <ComposerPrimitive.Send
+          data-test="send-message"
+          className="flex cursor-pointer items-center gap-1.5 rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Send message
+          <Kbd>↵</Kbd>
+        </ComposerPrimitive.Send>
+      </div>
+    </ComposerPrimitive.Root>
+  );
+};
 
 /** Ten minutes with no output stops being "working" and becomes a fact the
  *  human should see plainly: the feedback was picked up, nothing came back. */
@@ -267,8 +269,8 @@ const WORKING_STALE_MS = 10 * 60 * 1000;
  * agent, which is exactly what the stale state is for.
  */
 const WorkingIndicator = () => {
-  const working = useLucid((s) => s.agentWorking);
-  const status = useLucid((s) => s.status);
+  const working = useSession((s) => s.agentWorking);
+  const status = useSession((s) => s.status);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -354,9 +356,9 @@ const WorkingIndicator = () => {
  * contradicting it.
  */
 const ListenerLine = () => {
-  const listening = useLucid((s) => s.agentsListening);
-  const working = useLucid((s) => s.agentWorking);
-  const status = useLucid((s) => s.status);
+  const listening = useSession((s) => s.agentsListening);
+  const working = useSession((s) => s.agentWorking);
+  const status = useSession((s) => s.status);
   if (status !== "active" || working) return null;
   return (
     <div className="flex flex-col gap-1">
@@ -386,7 +388,8 @@ const ListenerLine = () => {
  * screen grants no power - Lucid displays the command, it never runs it.
  */
 const ResumeHint = () => {
-  const attendant = useLucid((s) => s.lastAttendant);
+  const { notify } = useSessionHandle();
+  const attendant = useSession((s) => s.lastAttendant);
   const [copied, setCopied] = useState(false);
   if (!attendant?.resume) return null;
   const cmd = attendant.resume;
@@ -401,7 +404,7 @@ const ResumeHint = () => {
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
           },
-          () => warn("Couldn't copy - the command is in this button's tooltip."),
+          () => notify.warn("Couldn't copy - the command is in this button's tooltip."),
         );
       }}
       className="flex cursor-pointer items-center gap-1.5 self-start text-[11px] text-fg-faint hover:text-fg"
@@ -464,7 +467,7 @@ const ScrollToLatest = () => {
   const [atBottom, setAtBottom] = useState(true);
   // Where "bottom" is changes when the record grows; these are the slices
   // that grow it.
-  const tick = useLucid((s) => s.messages.length + s.annotations.length + s.queue.length);
+  const tick = useSession((s) => s.messages.length + s.annotations.length + s.queue.length);
 
   useEffect(() => {
     // Reading `tick` is the point: the effect re-checks whenever the record

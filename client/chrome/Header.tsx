@@ -1,13 +1,5 @@
-import {
-  approveReview,
-  enterDiff,
-  reopenReview,
-  setSidebarOpen,
-  toggleTargets,
-  viewVersion,
-} from "./actions.ts";
-import { useLucid } from "./store.ts";
-import type { Config } from "./types.ts";
+import { useActions, useSession, useSessionHandle } from "./context.tsx";
+import { setSidebarOpen, useShell } from "./shell.ts";
 import { Kbd } from "./ui/kbd.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 
@@ -18,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
  * owns that shortcut); this is its visible handle. Lucide `panel-left`.
  */
 const PanelToggle = () => {
-  const open = useLucid((s) => s.sidebarOpen);
+  const open = useShell((s) => s.sidebarOpen);
   return (
     <button
       type="button"
@@ -46,8 +38,6 @@ const PanelToggle = () => {
     </button>
   );
 };
-
-const config = (): Config => (window as unknown as { __LUCID__: Config }).__LUCID__;
 
 /**
  * Lucide `crosshair` - the surface's targeting affordance. Brass while the
@@ -85,7 +75,7 @@ const fmtTokens = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k`
  * does not post it. Sage never appears here - that hue is the agent's voice.
  */
 const ContextRing = () => {
-  const usage = useLucid((s) => s.contextUsage);
+  const usage = useSession((s) => s.contextUsage);
   if (!usage) return null;
   const pct = Math.max(0, Math.min(100, usage.pct));
   const r = 7;
@@ -144,13 +134,14 @@ const ContextRing = () => {
  * stop the agent has already acted on and is never read.
  */
 const ApproveControls = () => {
-  const resolved = useLucid((s) => s.reviewResolved);
-  const queueLen = useLucid((s) => s.queue.length);
-  const pendingTarget = useLucid((s) => s.pendingTarget);
-  const composerNote = useLucid((s) => s.composerNote);
+  const { approveReview, reopenReview } = useActions();
+  const resolved = useSession((s) => s.reviewResolved);
+  const queueLen = useSession((s) => s.queue.length);
+  const pendingTarget = useSession((s) => s.pendingTarget);
+  const composerNote = useSession((s) => s.composerNote);
   // A message the server never took is unsent work too - approving over it
   // would strand it behind a stop the agent has already acted on.
-  const undelivered = useLucid((s) => s.outbox.length);
+  const undelivered = useSession((s) => s.outbox.length);
   const hasDraft = pendingTarget !== null && composerNote.trim().length > 0;
   const blocked = queueLen > 0 || hasDraft || undelivered > 0;
   const reason =
@@ -210,9 +201,10 @@ const ApproveControls = () => {
  * Disabled inside the change view, which owns its own version selector.
  */
 const VersionPicker = () => {
-  const version = useLucid((s) => s.version);
-  const viewing = useLucid((s) => s.viewingVersion);
-  const diffMode = useLucid((s) => s.diffMode);
+  const { viewVersion } = useActions();
+  const version = useSession((s) => s.version);
+  const viewing = useSession((s) => s.viewingVersion);
+  const diffMode = useSession((s) => s.diffMode);
 
   if (version <= 1) {
     return (
@@ -253,10 +245,12 @@ const VersionPicker = () => {
 };
 
 export const Header = () => {
-  const version = useLucid((s) => s.version);
-  const showTargets = useLucid((s) => s.showTargets);
-  const diffMode = useLucid((s) => s.diffMode);
-  const live = useLucid((s) => s.live);
+  const { enterDiff, toggleTargets } = useActions();
+  const name = useSessionHandle().config.name;
+  const version = useSession((s) => s.version);
+  const showTargets = useSession((s) => s.showTargets);
+  const diffMode = useSession((s) => s.diffMode);
+  const live = useSession((s) => s.live);
 
   return (
     <header className="relative flex items-center justify-between gap-2 border-b border-ink-600 px-4 py-[10px]">
@@ -265,7 +259,7 @@ export const Header = () => {
           controls out of the header; the controls themselves never shrink. */}
       <div className="min-w-0 flex-1 text-[13px] font-semibold text-fg-strong">
         Lucid review
-        <small className="ml-2 font-normal text-fg-muted">{config().name}</small>
+        <small className="ml-2 font-normal text-fg-muted">{name}</small>
       </div>
       {live ? null : (
         // Connection status sits in the true centre of the bar, independent of

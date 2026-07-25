@@ -1,10 +1,9 @@
-import { create } from "zustand";
+import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import type { AgentWorking, AttendantRef, ContextUsage } from "../../src/protocol/wire.ts";
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
 import type {
   AgentQuestion,
-  Config,
   ConversationMessage,
   DiffData,
   MessageImage,
@@ -18,55 +17,23 @@ import type {
 
 export const uuid = (): string => crypto.randomUUID();
 
-const config = (): Config => (window as unknown as { __LUCID__: Config }).__LUCID__;
-
-const CHROME_WIDTH_KEY = "lucid:chromeWidth";
-const SHOW_TARGETS_KEY = "lucid:showTargets";
-const SIDEBAR_OPEN_KEY = "lucid:sidebarOpen";
 /**
- * One storage key per undelivered message, namespaced by session.
- *
- * Per session, so two viewers on different artifacts never inherit each other's
- * messages. Per *message*, because the alternative - one key holding the whole
- * array - makes every write a read-modify-write that two tabs on the same
- * session will lose: tab B saves its array, silently erasing the message tab A
- * had just written. Independent keys make the writes disjoint, so no tab can
- * overwrite another's undelivered work.
+ * A session's identity as the store needs it. One instance of everything in
+ * this module exists PER SESSION - the shell can hold many at once - so
+ * nothing here may reach for module state or `window.__LUCID__` directly.
  */
-const OUTBOX_PREFIX = `lucid:outbox:${config().session}:`;
-const outboxKey = (id: string): string => `${OUTBOX_PREFIX}${id}`;
-export const DEFAULT_CHROME_WIDTH = 384;
-export const CHROME_MIN_WIDTH = 320;
+export interface SessionConfig {
+  /** Canonical artifact path = the session id. */
+  readonly session: string;
+  /** Artifact basename (display label). */
+  readonly name: string;
+  /** Artifact version at the time the viewer was served. */
+  readonly version: number;
+  /** URL prefix for this session's routes ("" or "/s/<id>"). */
+  readonly base: string;
+}
 
-const readStoredWidth = (): number => {
-  try {
-    const raw = localStorage.getItem(CHROME_WIDTH_KEY);
-    const n = raw ? Number.parseInt(raw, 10) : NaN;
-    return Number.isFinite(n) && n >= 300 ? n : DEFAULT_CHROME_WIDTH;
-  } catch {
-    return DEFAULT_CHROME_WIDTH;
-  }
-};
-
-/** Annotation marks are the point of the surface, so they are on unless the
- *  human has explicitly turned them off before. */
-const readStoredShowTargets = (): boolean => {
-  try {
-    return localStorage.getItem(SHOW_TARGETS_KEY) !== "0";
-  } catch {
-    return true;
-  }
-};
-
-/** The review panel is the reason the viewer exists, so it starts open unless
- *  the human closed it last time. */
-const readStoredSidebarOpen = (): boolean => {
-  try {
-    return localStorage.getItem(SIDEBAR_OPEN_KEY) !== "0";
-  } catch {
-    return true;
-  }
-};
+const SHOW_TARGETS_LEGACY_KEY = "lucid:showTargets";
 
 const isOutboxImage = (v: unknown): v is { id: string; name: string; file: string } => {
   const o = v as Record<string, unknown> | null;
@@ -88,35 +55,115 @@ const isOutboxMessage = (v: unknown): v is OutboxMessage => {
   );
 };
 
-/** Undelivered messages from a previous page life (this tab's or another's).
- *  They outlive the tab on purpose: the whole point is that hitting Enter can
- *  never destroy typing. Restored in authoring order, which is the order they
- *  must reach the agent in. */
-const readStoredOutbox = (): OutboxMessage[] => {
-  try {
-    const found: OutboxMessage[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key === null || !key.startsWith(OUTBOX_PREFIX)) continue;
-      try {
-        const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "");
-        // A malformed entry is skipped, not deleted: it is unreadable to us but
-        // it is still the only copy of something a human typed.
-        if (isOutboxMessage(parsed)) found.push(parsed);
-      } catch {
-        /* not ours to interpret */
+/**
+ * The localStorage-backed persistence for one session's own keys: undelivered
+ * messages and the show-marks preference. Keyed by session id (decision: marks
+ * are remembered per session; layout is the shell's).
+ */
+export interface SessionStorage {
+  readonly readOutbox: () => OutboxMessage[];
+  readonly persistOutboxMessage: (message: OutboxMessage, onFail: () => void) => void;
+  readonly forgetOutboxMessage: (id: string) => void;
+  readonly readShowTargets: () => boolean;
+  readonly persistShowTargets: (on: boolean) => void;
+}
+
+export const createSessionStorage = (sessionKey: string): SessionStorage => {
+  /**
+   * One storage key per undelivered message, namespaced by session.
+   *
+   * Per session, so two viewers on different artifacts never inherit each
+   * other's messages. Per *message*, because the alternative - one key holding
+   * the whole array - makes every write a read-modify-write that two tabs on
+   * the same session will lose: tab B saves its array, silently erasing the
+   * message tab A had just written. Independent keys make the writes disjoint,
+   * so no tab can overwrite another's undelivered work.
+   */
+  const outboxPrefix = `lucid:outbox:${sessionKey}:`;
+  const outboxKey = (id: string): string => `${outboxPrefix}${id}`;
+  const showTargetsKey = `lucid:showTargets:${sessionKey}`;
+
+  /** Undelivered messages from a previous page life (this tab's or another's).
+   *  They outlive the tab on purpose: the whole point is that hitting Enter can
+   *  never destroy typing. Restored in authoring order, which is the order they
+   *  must reach the agent in. */
+  const readOutbox = (): OutboxMessage[] => {
+    try {
+      const found: OutboxMessage[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key === null || !key.startsWith(outboxPrefix)) continue;
+        try {
+          const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "");
+          // A malformed entry is skipped, not deleted: it is unreadable to us
+          // but it is still the only copy of something a human typed.
+          if (isOutboxMessage(parsed)) found.push(parsed);
+        } catch {
+          /* not ours to interpret */
+        }
       }
+      return found.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    } catch {
+      return [];
     }
-    return found.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-  } catch {
-    return [];
-  }
+  };
+
+  /** Write one undelivered message to storage. Unlike the other persisters this
+   *  one guards real data, so a failure (quota, private mode) is reported to
+   *  the caller: the entry still lives in memory, but it will not survive a
+   *  reload and the human is the only one who can act on that. */
+  const persistOutboxMessage = (message: OutboxMessage, onFail: () => void): void => {
+    try {
+      localStorage.setItem(outboxKey(message.id), JSON.stringify(message));
+    } catch {
+      onFail();
+    }
+  };
+
+  /** Drop one message from storage: it reached the log, or the human discarded
+   *  it. Silent on failure - there is nothing at stake in a delete that no-ops. */
+  const forgetOutboxMessage = (id: string): void => {
+    try {
+      localStorage.removeItem(outboxKey(id));
+    } catch {
+      /* storage unavailable; the entry was never written either */
+    }
+  };
+
+  /** Annotation marks are the point of the surface, so they are on unless the
+   *  human has explicitly turned them off before. Falls back to the pre-shell
+   *  global key so an existing preference survives the per-session move. */
+  const readShowTargets = (): boolean => {
+    try {
+      const own = localStorage.getItem(showTargetsKey);
+      if (own !== null) return own !== "0";
+      return localStorage.getItem(SHOW_TARGETS_LEGACY_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  };
+
+  const persistShowTargets = (on: boolean): void => {
+    try {
+      localStorage.setItem(showTargetsKey, on ? "1" : "0");
+    } catch {
+      /* storage unavailable; the toggle simply resets next load */
+    }
+  };
+
+  return {
+    readOutbox,
+    persistOutboxMessage,
+    forgetOutboxMessage,
+    readShowTargets,
+    persistShowTargets,
+  };
 };
 
-interface LucidState {
+export interface SessionState {
   annotations: PayloadAnnotationLike[];
   messages: ConversationMessage[];
-  /** This viewer's own artifact path - the session identity, so the sessions
+  /** This session's own artifact path - the session identity, so the sessions
    *  list can tell which row is the one you are looking at. */
   session: string;
   version: number;
@@ -162,17 +209,11 @@ interface LucidState {
   /** SSE stream health. EventSource reconnects by itself, so this is a
    *  transient indicator, not an error the human has to act on. */
   live: boolean;
-  chromeWidth: number;
-  /** Panel open/closed. Closing collapses it out of flow, so the artifact
-   *  reflows to full width rather than being covered. */
-  sidebarOpen: boolean;
-  /** Which face of the panel is showing: the review, or the project's other
-   *  sessions. */
-  sidebarTab: "chat" | "sessions";
   /** Sibling sessions in this project, fetched lazily when the tab is first
    *  opened. Null means "not looked yet", which is distinct from "none found". */
   sessions: SessionSummary[] | null;
   sessionsLoading: boolean;
+  /** Show the annotation marks on the surface. Remembered per session. */
   showTargets: boolean;
   /** Every `data-lucid-id` in the current artifact, published by the overlay.
    *  Null until the first report: a section permalink renders as a live chip
@@ -207,61 +248,86 @@ interface LucidState {
   answerPickFor: string | null;
 }
 
-const initial: LucidState = {
-  annotations: [],
-  messages: [],
-  session: config().session,
-  version: config().version,
-  reviewResolved: false,
-  pendingTarget: null,
-  composerNote: "",
-  queue: [],
-  editingId: null,
-  editDraft: "",
-  sending: false,
-  forking: false,
-  forkId: null,
-  pastedImages: [],
-  outbox: readStoredOutbox(),
-  outboxSending: false,
-  newerVersion: null,
-  warnings: [],
-  notices: [],
-  status: "active",
-  agentWorking: null,
-  agentsListening: 0,
-  lastAttendant: null,
-  contextUsage: null,
-  live: true,
-  chromeWidth: readStoredWidth(),
-  sidebarOpen: readStoredSidebarOpen(),
-  sidebarTab: "chat",
-  sessions: null,
-  sessionsLoading: false,
-  showTargets: readStoredShowTargets(),
-  sectionIds: null,
-  hoveredId: null,
-  diffMode: false,
-  diffData: null,
-  diffIndex: 0,
-  diffBase: Math.max(1, config().version - 1),
-  viewingVersion: null,
-  revertWhy: "",
-  lightboxImages: null,
-  lightboxIndex: 0,
-  questions: [],
-  answerDrafts: {},
-  answerOptions: {},
-  answerAnchors: {},
-  answerImages: {},
-  answerUploading: {},
-  answerPickFor: null,
+export type SessionStore = StoreApi<SessionState>;
+
+export const createSessionStore = (config: SessionConfig, storage: SessionStorage): SessionStore =>
+  createStore<SessionState>(() => ({
+    annotations: [],
+    messages: [],
+    session: config.session,
+    version: config.version,
+    reviewResolved: false,
+    pendingTarget: null,
+    composerNote: "",
+    queue: [],
+    editingId: null,
+    editDraft: "",
+    sending: false,
+    forking: false,
+    forkId: null,
+    pastedImages: [],
+    outbox: storage.readOutbox(),
+    outboxSending: false,
+    newerVersion: null,
+    warnings: [],
+    notices: [],
+    status: "active",
+    agentWorking: null,
+    agentsListening: 0,
+    lastAttendant: null,
+    contextUsage: null,
+    live: true,
+    sessions: null,
+    sessionsLoading: false,
+    showTargets: storage.readShowTargets(),
+    sectionIds: null,
+    hoveredId: null,
+    diffMode: false,
+    diffData: null,
+    diffIndex: 0,
+    diffBase: Math.max(1, config.version - 1),
+    viewingVersion: null,
+    revertWhy: "",
+    lightboxImages: null,
+    lightboxIndex: 0,
+    questions: [],
+    answerDrafts: {},
+    answerOptions: {},
+    answerAnchors: {},
+    answerImages: {},
+    answerUploading: {},
+    answerPickFor: null,
+  }));
+
+/** The session's user-facing notifications, bound to its own store. */
+export interface Notify {
+  /** Capped: EventSource reconnects on its own and can report the same outage
+   *  repeatedly, so an unbounded list would grow state and DOM all through it.
+   *  The one way a warning enters the list, so the cap and the id cannot be
+   *  skipped by a caller appending directly (the SSE `warning` frame did, and
+   *  grew without bound). */
+  readonly pushWarning: (code: string, message: string) => void;
+  readonly warn: (message: string) => void;
+  /** A neutral, transient confirmation (distinct from a warning) - e.g.
+   *  "forked". Capped like warnings so it never grows unbounded; carries a
+   *  stable id so repeated identical messages still render as distinct rows. */
+  readonly notice: (message: string) => void;
+}
+
+export const createNotify = (store: SessionStore): Notify => {
+  const pushWarning = (code: string, message: string): void =>
+    store.setState((s) => ({
+      warnings: [...s.warnings.slice(-4), { id: crypto.randomUUID(), code, message }],
+    }));
+  return {
+    pushWarning,
+    warn: (message) => pushWarning("SEND_FAILED", message),
+    notice: (message) =>
+      store.setState((s) => ({
+        notices: [...s.notices.slice(-2), { id: crypto.randomUUID(), message }],
+      })),
+  };
 };
-
-export const useLucid = create<LucidState>(() => initial);
-
-export const set = useLucid.setState;
-export const get = useLucid.getState;
 
 /**
  * The review record: annotations and messages in one `at`-ordered stream.
@@ -304,138 +370,9 @@ export const buildTimeline = (
   ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 };
 
-/** Capped: EventSource reconnects on its own and can report the same outage
- *  repeatedly, so an unbounded list would grow state and DOM all through it.
- *  The one way a warning enters the list, so the cap and the id cannot be
- *  skipped by a caller appending directly (the SSE `warning` frame did, and
- *  grew without bound). */
-export const pushWarning = (code: string, message: string): void =>
-  set((s) => ({ warnings: [...s.warnings.slice(-4), { id: crypto.randomUUID(), code, message }] }));
-
-export const warn = (message: string): void => pushWarning("SEND_FAILED", message);
-
-/** A neutral, transient confirmation (distinct from a warning) - e.g. "forked".
- *  Capped like warnings so it never grows unbounded; carries a stable id so
- *  repeated identical messages still render as distinct rows. */
-export const notice = (message: string): void =>
-  set((s) => ({
-    notices: [...s.notices.slice(-2), { id: crypto.randomUUID(), message }],
-  }));
-
-export const api = async (path: string, body?: unknown): Promise<Response> => {
-  const isPost = body !== undefined;
-  const init: RequestInit = {
-    method: isPost ? "POST" : "GET",
-    ...(isPost
-      ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
-      : {}),
-  };
-  // POSTs retry with backoff so a brief server blip (e.g. a restart) doesn't
-  // lose the submission - every mutation carries a client-minted idempotent id,
-  // so a retry of one that landed is safe. A persistent failure throws so the
-  // caller can keep the human's input and surface an error.
-  const attempts = isPost ? 4 : 1;
-  let lastErr: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const res = await fetch(path, init);
-      if (res.ok) return res;
-      lastErr = new Error(`HTTP ${res.status}`);
-    } catch (e) {
-      lastErr = e;
-    }
-    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 200 * (i + 1)));
-  }
-  throw lastErr ?? new Error(`request to ${path} failed`);
-};
-
-/** What `POST /__lucid/asset` returns: the server-decided identity of a stored blob. */
-export interface UploadedAsset {
-  readonly id: string;
-  readonly name: string;
-  readonly file: string;
-}
-
-/**
- * Upload a blob to the session's pasted store. The one implementation of the
- * upload protocol (content-type + x-lucid-filename headers, raw body) - the
- * annotation composer and the message composer both route through it. The
- * bytes must land before the event referencing them does, because the agent
- * reads them off disk. Throws on failure so each caller keeps its own recovery.
- */
-export const uploadAsset = async (file: File): Promise<UploadedAsset> => {
-  const res = await fetch("/__lucid/asset", {
-    method: "POST",
-    headers: { "content-type": file.type, "x-lucid-filename": file.name || "pasted" },
-    body: file,
-  });
-  if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
-  return (await res.json()) as UploadedAsset;
-};
-
-/** Upload a pasted blob and stage it for the annotation composer. */
-export const uploadPaste = async (file: File): Promise<PastedImage | null> => {
-  try {
-    const meta = await uploadAsset(file);
-    return { ...meta, url: URL.createObjectURL(file) };
-  } catch {
-    warn("That image didn't upload - try again.");
-    return null;
-  }
-};
-
 /** Pull image files out of a paste, ignoring a normal text paste. */
 export const imagesFromPaste = (e: ClipboardEvent | React.ClipboardEvent): readonly File[] =>
   Array.from(("clipboardData" in e ? e.clipboardData : null)?.items ?? [])
     .filter((i) => i.kind === "file" && i.type.startsWith("image/"))
     .map((i) => i.getAsFile())
     .filter((f): f is File => f !== null);
-
-export const persistWidth = (w: number): void => {
-  try {
-    localStorage.setItem(CHROME_WIDTH_KEY, String(w));
-  } catch {
-    /* storage unavailable; width simply resets next load */
-  }
-};
-
-export const persistShowTargets = (on: boolean): void => {
-  try {
-    localStorage.setItem(SHOW_TARGETS_KEY, on ? "1" : "0");
-  } catch {
-    /* storage unavailable; the toggle simply resets next load */
-  }
-};
-
-/** Write one undelivered message to storage. Unlike the other persisters this
- *  one guards real data, so a failure (quota, private mode) is said out loud:
- *  the entry still lives in memory, but it will not survive a reload and the
- *  human is the only one who can act on that. */
-export const persistOutboxMessage = (message: OutboxMessage): void => {
-  try {
-    localStorage.setItem(outboxKey(message.id), JSON.stringify(message));
-  } catch {
-    pushWarning(
-      "DRAFT_AT_RISK",
-      "Couldn't save your unsent message to this browser - copy it before reloading.",
-    );
-  }
-};
-
-/** Drop one message from storage: it reached the log, or the human discarded
- *  it. Silent on failure - there is nothing at stake in a delete that no-ops. */
-export const forgetOutboxMessage = (id: string): void => {
-  try {
-    localStorage.removeItem(outboxKey(id));
-  } catch {
-    /* storage unavailable; the entry was never written either */
-  }
-};
-
-export const persistSidebarOpen = (open: boolean): void => {
-  try {
-    localStorage.setItem(SIDEBAR_OPEN_KEY, open ? "1" : "0");
-  } catch {
-    /* storage unavailable; the panel simply reopens next load */
-  }
-};

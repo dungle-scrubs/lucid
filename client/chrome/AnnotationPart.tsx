@@ -1,7 +1,7 @@
 import type { DataMessagePartComponent } from "@assistant-ui/react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
+import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
-import { set, useLucid } from "./store.ts";
 import type { MessageImage } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
 
@@ -74,15 +74,17 @@ const reveal = (id: string): void => {
  * pointed at is still what the note is about.
  */
 export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data }) => {
-  const hovered = useLucid((s) => s.hoveredId === data.id);
+  const { setHovered, openLightbox } = useActions();
+  const { transport } = useSessionHandle();
+  const hovered = useSession((s) => s.hoveredId === data.id);
   const images: readonly MessageImage[] = data.images ?? [];
   const orphaned = data.index === null;
   const enter = (): void => {
-    set({ hoveredId: data.id });
+    setHovered(data.id);
     focus(data.id);
   };
   const leave = (): void => {
-    set({ hoveredId: null });
+    setHovered(null);
     focus("");
   };
   return (
@@ -157,11 +159,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
               type="button"
               data-test="annotation-thumb"
               title={img.name}
-              onClick={() => set({ lightboxImages: images, lightboxIndex: i })}
+              onClick={() => openLightbox(images, i)}
               className="cursor-zoom-in rounded-md focus-visible:annot-outline"
             >
               <img
-                src={`/__lucid/asset/${img.file}`}
+                src={transport.assetUrl(img.file)}
                 alt={img.name}
                 className="block h-[66px] w-[88px] rounded-md border border-ink-600 object-cover hover:border-accent"
               />

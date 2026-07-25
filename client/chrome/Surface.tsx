@@ -1,13 +1,5 @@
 import { useEffect } from "react";
-import {
-  discardPending,
-  enterDiff,
-  exitDiff,
-  exitVersionView,
-  gotoHunk,
-  revertCurrentHunk,
-} from "./actions.ts";
-import { set, useLucid } from "./store.ts";
+import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import type { DiffHunk } from "./types.ts";
 
 const HUNK_SIGN: Readonly<Record<DiffHunk["kind"], string>> = {
@@ -26,12 +18,13 @@ const select =
  * the few places that earns one.
  */
 export const DiffBar = () => {
-  const diffMode = useLucid((s) => s.diffMode);
-  const diffData = useLucid((s) => s.diffData);
-  const diffIndex = useLucid((s) => s.diffIndex);
-  const diffBase = useLucid((s) => s.diffBase);
-  const version = useLucid((s) => s.version);
-  const revertWhy = useLucid((s) => s.revertWhy);
+  const { enterDiff, exitDiff, gotoHunk, revertCurrentHunk, setRevertWhy } = useActions();
+  const diffMode = useSession((s) => s.diffMode);
+  const diffData = useSession((s) => s.diffData);
+  const diffIndex = useSession((s) => s.diffIndex);
+  const diffBase = useSession((s) => s.diffBase);
+  const version = useSession((s) => s.version);
+  const revertWhy = useSession((s) => s.revertWhy);
 
   if (!diffMode) return null;
   const hunks = diffData?.hunks ?? [];
@@ -100,7 +93,7 @@ export const DiffBar = () => {
                 data-test="revert-why"
                 placeholder={`revert this to v${diffBase} - why?`}
                 value={revertWhy}
-                onChange={(e) => set({ revertWhy: e.target.value })}
+                onChange={(e) => setRevertWhy(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault();
@@ -140,8 +133,9 @@ export const DiffBar = () => {
  * which version is up, that it cannot be annotated, and offers the way back.
  */
 export const VersionViewBanner = () => {
-  const viewing = useLucid((s) => s.viewingVersion);
-  const version = useLucid((s) => s.version);
+  const { exitVersionView } = useActions();
+  const viewing = useSession((s) => s.viewingVersion);
+  const version = useSession((s) => s.version);
   if (viewing === null) return null;
   return (
     <div
@@ -171,10 +165,11 @@ export const VersionViewBanner = () => {
  * cleared by sending or removing card by card.
  */
 export const NewerVersionBanner = () => {
-  const newerVersion = useLucid((s) => s.newerVersion);
-  const queueLen = useLucid((s) => s.queue.length);
-  const pendingTarget = useLucid((s) => s.pendingTarget);
-  const composerNote = useLucid((s) => s.composerNote);
+  const { discardPending } = useActions();
+  const newerVersion = useSession((s) => s.newerVersion);
+  const queueLen = useSession((s) => s.queue.length);
+  const pendingTarget = useSession((s) => s.pendingTarget);
+  const composerNote = useSession((s) => s.composerNote);
   if (newerVersion === null) return null;
 
   const hasComposerDraft = pendingTarget !== null && composerNote.trim().length > 0;
@@ -213,8 +208,8 @@ export const NewerVersionBanner = () => {
  * update itself (live reload, version bump) remains the proof.
  */
 export const SurfaceUpdating = () => {
-  const working = useLucid((s) => s.agentWorking);
-  const status = useLucid((s) => s.status);
+  const working = useSession((s) => s.agentWorking);
+  const status = useSession((s) => s.status);
   if (working?.intent !== "revise" || status !== "active") return null;
   return (
     <div
@@ -243,15 +238,13 @@ export const SurfaceUpdating = () => {
 
 /** Full-bleed image view. Floats, so it gets a shadow. */
 export const Lightbox = () => {
-  const images = useLucid((s) => s.lightboxImages);
-  const index = useLucid((s) => s.lightboxIndex);
+  const { closeLightbox, stepLightbox } = useActions();
+  const { transport } = useSessionHandle();
+  const images = useSession((s) => s.lightboxImages);
+  const index = useSession((s) => s.lightboxIndex);
 
-  const close = (): void => set({ lightboxImages: null });
-  const step = (delta: number): void => {
-    const list = useLucid.getState().lightboxImages;
-    if (!list || list.length === 0) return;
-    set({ lightboxIndex: (((index + delta) % list.length) + list.length) % list.length });
-  };
+  const close = closeLightbox;
+  const step = stepLightbox;
 
   useEffect(() => {
     if (!images) return;
@@ -307,7 +300,7 @@ export const Lightbox = () => {
         </button>
       ) : null}
       <img
-        src={`/__lucid/asset/${img.file}`}
+        src={transport.assetUrl(img.file)}
         alt={img.name}
         className="max-h-[86vh] max-w-[90vw] rounded-lg bg-white shadow-[0_24px_70px_-20px_rgba(0,0,0,0.8)]"
       />

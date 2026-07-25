@@ -7,9 +7,8 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import { useMemo, type ReactNode } from "react";
-import { enqueueMessage, flushOutbox } from "./actions.ts";
-import { consumePastes, expandPastes } from "./pastes.ts";
-import { buildTimeline, uploadAsset, useLucid } from "./store.ts";
+import { useSession, useSessionHandle } from "./context.tsx";
+import { buildTimeline } from "./store.ts";
 import type { TimelineItem } from "./types.ts";
 
 /**
@@ -21,109 +20,126 @@ import type { TimelineItem } from "./types.ts";
  * renders whatever `messages` holds and never assumes `onNew` produces a reply.
  */
 
-/**
- * assistant-ui has no thread item that is not a message, so an annotation is
- * carried as a message with a custom `data-annotation` part.
- *
- * `user`, for two reasons. Semantically an annotation is the human pointing at
- * a thing and saying what they mean - it is their turn, not the agent's. And
- * mechanically the alternatives are closed: `system` messages are required to
- * hold exactly one *text* part (fromThreadMessageLike throws otherwise), and
- * adjacent `assistant` messages are merged for display, which would fuse an
- * annotation into a neighbouring agent reply.
- */
-const convertMessage = (item: TimelineItem): ThreadMessageLike => {
-  if (item.kind === "queued") {
-    // Client-side state riding the transcript: the card holds its authored
-    // place in the record before the log knows about it. The component reads
-    // the live queue by id, so edits re-render without reconverting.
-    return {
-      role: "user",
-      id: item.id,
-      createdAt: new Date(item.at),
-      content: [{ type: "data-queued", data: { id: item.id, index: item.index } }],
-    } as ThreadMessageLike;
-  }
-  if (item.kind === "annotation") {
-    return {
-      role: "user",
-      id: item.annotation.id,
-      createdAt: new Date(item.at),
-      content: [
-        {
-          type: "data-annotation",
-          data: {
-            id: item.annotation.id,
-            index: item.index,
-            version: item.annotation.version,
-            note: item.annotation.note,
-            target: item.annotation.target,
-            images: item.annotation.images,
-          },
-        },
-      ],
-    } as ThreadMessageLike;
-  }
-  const m = item.message;
-  return {
-    role: m.role === "human" ? "user" : "assistant",
-    id: `${m.role}-${m.at}`,
-    createdAt: new Date(m.at),
-    content: [
-      ...(m.text ? [{ type: "text" as const, text: m.text }] : []),
-      ...(m.images ?? []).map((img) => ({
-        type: "image" as const,
-        image: `/__lucid/asset/${img.file}`,
-      })),
-    ],
-  };
-};
-
-/**
- * Server-side filename per attachment id. The upload happens in `add` (the
- * agent reads bytes off disk, so they must land before the message does), and
- * `onNew` needs the stored filename back - which no field on Attachment
- * carries. Keyed by id rather than derived from contentType, because the
- * server decides the name and guessing it is how thumbs break.
- */
-const uploaded = new Map<string, { name: string; file: string }>();
-
-const attachmentAdapter: AttachmentAdapter = {
-  accept: "image/*",
-  async add({ file }): Promise<PendingAttachment> {
-    const meta = await uploadAsset(file);
-    uploaded.set(meta.id, { name: meta.name, file: meta.file });
-    return {
-      id: meta.id,
-      type: "image",
-      name: meta.name,
-      contentType: file.type,
-      file,
-      status: { type: "requires-action", reason: "composer-send" },
-    };
-  },
-  async remove(attachment) {
-    uploaded.delete(attachment.id);
-    /* the blob stays on disk; an unsent paste is not worth a delete round trip */
-  },
-  async send(attachment) {
-    const meta = uploaded.get(attachment.id);
-    return {
-      ...attachment,
-      status: { type: "complete" },
-      content: meta ? [{ type: "image", image: `/__lucid/asset/${meta.file}` }] : [],
-    };
-  },
-};
-
 export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNode }) => {
-  // Memoized on the two slices it reads: the runtime re-renders on every
+  const session = useSessionHandle();
+  const { transport, pastes, actions } = session;
+
+  /**
+   * Server-side filename per attachment id. The upload happens in `add` (the
+   * agent reads bytes off disk, so they must land before the message does),
+   * and `onNew` needs the stored filename back - which no field on Attachment
+   * carries. Keyed by id rather than derived from contentType, because the
+   * server decides the name and guessing it is how thumbs break. Per SESSION,
+   * not module-wide: an attachment uploaded to one session's store must never
+   * resolve through another session's transport and ride a message there.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `session` is the cache key, not a value read inside - a new session must start with an empty registry.
+  const uploaded = useMemo(() => new Map<string, { name: string; file: string }>(), [session]);
+
+  /**
+   * assistant-ui has no thread item that is not a message, so an annotation is
+   * carried as a message with a custom `data-annotation` part.
+   *
+   * `user`, for two reasons. Semantically an annotation is the human pointing
+   * at a thing and saying what they mean - it is their turn, not the agent's.
+   * And mechanically the alternatives are closed: `system` messages are
+   * required to hold exactly one *text* part (fromThreadMessageLike throws
+   * otherwise), and adjacent `assistant` messages are merged for display,
+   * which would fuse an annotation into a neighbouring agent reply.
+   *
+   * Bound to the session for its asset URLs; memoized so the runtime sees a
+   * stable function identity across renders.
+   */
+  const convertMessage = useMemo(
+    () =>
+      (item: TimelineItem): ThreadMessageLike => {
+        if (item.kind === "queued") {
+          // Client-side state riding the transcript: the card holds its
+          // authored place in the record before the log knows about it. The
+          // component reads the live queue by id, so edits re-render without
+          // reconverting.
+          return {
+            role: "user",
+            id: item.id,
+            createdAt: new Date(item.at),
+            content: [{ type: "data-queued", data: { id: item.id, index: item.index } }],
+          } as ThreadMessageLike;
+        }
+        if (item.kind === "annotation") {
+          return {
+            role: "user",
+            id: item.annotation.id,
+            createdAt: new Date(item.at),
+            content: [
+              {
+                type: "data-annotation",
+                data: {
+                  id: item.annotation.id,
+                  index: item.index,
+                  version: item.annotation.version,
+                  note: item.annotation.note,
+                  target: item.annotation.target,
+                  images: item.annotation.images,
+                },
+              },
+            ],
+          } as ThreadMessageLike;
+        }
+        const m = item.message;
+        return {
+          role: m.role === "human" ? "user" : "assistant",
+          id: `${m.role}-${m.at}`,
+          createdAt: new Date(m.at),
+          content: [
+            ...(m.text ? [{ type: "text" as const, text: m.text }] : []),
+            ...(m.images ?? []).map((img) => ({
+              type: "image" as const,
+              image: transport.assetUrl(img.file),
+            })),
+          ],
+        };
+      },
+    [transport],
+  );
+
+  const attachmentAdapter = useMemo(
+    (): AttachmentAdapter => ({
+      accept: "image/*",
+      async add({ file }): Promise<PendingAttachment> {
+        const meta = await transport.uploadAsset(file);
+        uploaded.set(meta.id, { name: meta.name, file: meta.file });
+        return {
+          id: meta.id,
+          type: "image",
+          name: meta.name,
+          contentType: file.type,
+          file,
+          status: { type: "requires-action", reason: "composer-send" },
+        };
+      },
+      async remove(attachment) {
+        uploaded.delete(attachment.id);
+        /* the blob stays on disk; an unsent paste is not worth a delete round trip */
+      },
+      async send(attachment) {
+        const meta = uploaded.get(attachment.id);
+        return {
+          ...attachment,
+          status: { type: "complete" },
+          content: meta ? [{ type: "image", image: transport.assetUrl(meta.file) }] : [],
+        };
+      },
+    }),
+    [transport, uploaded],
+  );
+
+  // Memoized on the slices it reads: the runtime re-renders on every
   // `messages` identity change, so a freshly-built array each render is an
   // infinite loop (React #185).
-  const annotations = useLucid((s) => s.annotations);
-  const messages = useLucid((s) => s.messages);
-  const queue = useLucid((s) => s.queue);
-  const sending = useLucid((s) => s.sending);
+  const annotations = useSession((s) => s.annotations);
+  const messages = useSession((s) => s.messages);
+  const queue = useSession((s) => s.queue);
+  const sending = useSession((s) => s.sending);
   const timeline = useMemo(
     () => buildTimeline(annotations, messages, queue),
     [annotations, messages, queue],
@@ -148,20 +164,20 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
       .filter((p): p is { type: "text"; text: string } => p.type === "text")
       .map((p) => p.text)
       .join("");
-    const text = expandPastes(raw).trim();
+    const text = pastes.expandPastes(raw).trim();
     const images = (message.attachments ?? []).flatMap((a) => {
       const meta = uploaded.get(a.id);
       return meta ? [{ id: a.id, name: meta.name, file: meta.file }] : [];
     });
     if (text.length === 0 && images.length === 0) return;
-    enqueueMessage(text, images);
+    actions.enqueueMessage(text, images);
     // Both are safe to retire now: the outbox holds the expanded text, and the
     // uploads it references are already on disk under their stored names. The
-    // paste map is tab-local, so keeping placeholders alive for a retry would
-    // only make the retry weaker than the entry it retries.
-    consumePastes(raw);
+    // paste map is session-local, so keeping placeholders alive for a retry
+    // would only make the retry weaker than the entry it retries.
+    pastes.consumePastes(raw);
     for (const a of message.attachments ?? []) uploaded.delete(a.id);
-    await flushOutbox();
+    await actions.flushOutbox();
   };
 
   const runtime = useExternalStoreRuntime({

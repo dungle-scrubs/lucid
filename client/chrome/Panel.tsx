@@ -1,24 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  addPastedImage,
-  addToQueue,
-  beginEdit,
-  cancelEdit,
-  commitEdit,
-  discardOutboxMessage,
-  discardPending,
-  flushOutbox,
-  forkPending,
-  QUICK_REPLIES,
-  queueQuickReply,
-  removePastedImage,
-  removeQueued,
-  sendQueue,
-} from "./actions.ts";
+import { QUICK_REPLIES } from "./actions.ts";
 import { TargetSnippet } from "./AnnotationPart.tsx";
+import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
-import { collapseTextPaste } from "./pastes.ts";
-import { imagesFromPaste, set, useLucid, warn } from "./store.ts";
+import { imagesFromPaste } from "./store.ts";
 import type { OutboxMessage, PastedImage } from "./types.ts";
 import { Kbd, KbdGroup } from "./ui/kbd.tsx";
 
@@ -83,7 +68,7 @@ const Chips = ({
 };
 
 export const Warnings = () => {
-  const warnings = useLucid((s) => s.warnings);
+  const warnings = useSession((s) => s.warnings);
   if (warnings.length === 0) return null;
   return (
     <section>
@@ -107,7 +92,9 @@ export const Warnings = () => {
  * goes away.
  */
 const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
-  const sending = useLucid((s) => s.outboxSending);
+  const { flushOutbox, discardOutboxMessage } = useActions();
+  const { transport, notify } = useSessionHandle();
+  const sending = useSession((s) => s.outboxSending);
   const [copied, setCopied] = useState(false);
   return (
     <article
@@ -121,7 +108,7 @@ const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
         </span>
       </div>
       {message.images.length > 0 ? (
-        <Chips images={message.images.map((i) => ({ ...i, url: `/__lucid/asset/${i.file}` }))} />
+        <Chips images={message.images.map((i) => ({ ...i, url: transport.assetUrl(i.file) }))} />
       ) : null}
       <div className="text-fg">
         <FoldedText text={message.text} />
@@ -145,7 +132,7 @@ const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
               },
-              () => warn("Couldn't copy - select the text above instead."),
+              () => notify.warn("Couldn't copy - select the text above instead."),
             );
           }}
           className={btn}
@@ -172,7 +159,7 @@ const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
  * normal send would make the common path stutter for the sake of the rare one.
  */
 export const UnsentMessages = () => {
-  const outbox = useLucid((s) => s.outbox);
+  const outbox = useSession((s) => s.outbox);
   const failed = outbox.filter((m) => m.failed);
   if (failed.length === 0) return null;
   return (
@@ -190,7 +177,7 @@ export const UnsentMessages = () => {
 /** Neutral, transient confirmations (e.g. a fork was recorded). Distinct from
  *  Warnings both in intent and colour so a success never reads as an error. */
 export const Notices = () => {
-  const notices = useLucid((s) => s.notices);
+  const notices = useSession((s) => s.notices);
   if (notices.length === 0) return null;
   return (
     <section className="flex flex-col gap-1">
@@ -213,11 +200,14 @@ export const Notices = () => {
  * re-render without the timeline rebuilding.
  */
 export const QueuedCard = ({ id, index }: { readonly id: string; readonly index: number }) => {
-  const q = useLucid((s) => s.queue.find((x) => x.id === id));
-  const editingId = useLucid((s) => s.editingId);
-  const editDraft = useLucid((s) => s.editDraft);
-  const sending = useLucid((s) => s.sending);
-  const hoveredId = useLucid((s) => s.hoveredId);
+  const { beginEdit, cancelEdit, commitEdit, removeQueued, setEditDraft, setHovered } =
+    useActions();
+  const { pastes } = useSessionHandle();
+  const q = useSession((s) => s.queue.find((x) => x.id === id));
+  const editingId = useSession((s) => s.editingId);
+  const editDraft = useSession((s) => s.editDraft);
+  const sending = useSession((s) => s.sending);
+  const hoveredId = useSession((s) => s.hoveredId);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const editing = editingId === id;
 
@@ -243,11 +233,11 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
           : "border-ink-500"
       }`}
       onMouseEnter={() => {
-        set({ hoveredId: q.id });
+        setHovered(q.id);
         window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: q.id }));
       }}
       onMouseLeave={() => {
-        set({ hoveredId: null });
+        setHovered(null);
         window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: "" }));
       }}
     >
@@ -267,7 +257,7 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
             data-test="edit-note"
             placeholder="Edit this annotation… (Enter to save, Shift+Enter for a new line, Esc to cancel)"
             value={editDraft}
-            onChange={(e) => set({ editDraft: e.target.value })}
+            onChange={(e) => setEditDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.preventDefault();
@@ -276,7 +266,7 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
               }
               onSubmitKey(e, () => commitEdit());
             }}
-            onPaste={collapseTextPaste}
+            onPaste={pastes.collapseTextPaste}
             className={field}
           />
           <div className="flex items-center gap-2">
@@ -332,8 +322,9 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
 /** The one queue-wide action. The cards live in the record; the send is a bar
  *  that stays visible above the composer however far the transcript scrolls. */
 export const SendQueueBar = () => {
-  const queueLen = useLucid((s) => s.queue.length);
-  const sending = useLucid((s) => s.sending);
+  const { sendQueue } = useActions();
+  const queueLen = useSession((s) => s.queue.length);
+  const sending = useSession((s) => s.sending);
   if (queueLen === 0) return null;
   return (
     <div className="border-t border-ink-600 bg-bg px-[14px] py-2">
@@ -362,10 +353,20 @@ export const SendQueueBar = () => {
  *  Renders nothing at all when idle - the pick gesture is taught once, by the
  *  empty-thread state, and a permanent placeholder was furniture after that. */
 export const PendingComposer = () => {
-  const pendingTarget = useLucid((s) => s.pendingTarget);
-  const composerNote = useLucid((s) => s.composerNote);
-  const pastedImages = useLucid((s) => s.pastedImages);
-  const forking = useLucid((s) => s.forking);
+  const {
+    addPastedImage,
+    addToQueue,
+    discardPending,
+    forkPending,
+    queueQuickReply,
+    removePastedImage,
+    setComposerNote,
+  } = useActions();
+  const { pastes } = useSessionHandle();
+  const pendingTarget = useSession((s) => s.pendingTarget);
+  const composerNote = useSession((s) => s.composerNote);
+  const pastedImages = useSession((s) => s.pastedImages);
+  const forking = useSession((s) => s.forking);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -387,7 +388,7 @@ export const PendingComposer = () => {
             disabled={forking}
             placeholder="What should change here? Paste an image to show it. (Enter to queue, Shift+Enter for a new line, Esc to discard)"
             value={composerNote}
-            onChange={(e) => set({ composerNote: e.target.value })}
+            onChange={(e) => setComposerNote(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.preventDefault();
@@ -398,7 +399,7 @@ export const PendingComposer = () => {
             }}
             onPaste={(e) => {
               const files = imagesFromPaste(e);
-              if (files.length === 0) return collapseTextPaste(e); // text: folds only if large
+              if (files.length === 0) return pastes.collapseTextPaste(e); // text: folds only if large
               e.preventDefault();
               for (const f of files) void addPastedImage(f);
             }}

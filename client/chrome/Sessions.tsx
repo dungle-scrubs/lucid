@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { loadSessions, switchToSession } from "./actions.ts";
-import { useLucid, warn } from "./store.ts";
+import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import type { SessionSummary } from "./types.ts";
 import {
   SidebarGroup,
@@ -35,6 +34,7 @@ const CopyButton = ({
   readonly label: string;
   readonly test: string;
 }) => {
+  const { notify } = useSessionHandle();
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -48,7 +48,7 @@ const CopyButton = ({
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
           },
-          () => warn("Couldn't copy - the command is in this button's tooltip."),
+          () => notify.warn("Couldn't copy - the command is in this button's tooltip."),
         );
       }}
       className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] text-fg-faint hover:bg-sidebar-accent hover:text-fg"
@@ -101,47 +101,51 @@ const StatusDot = ({ s }: { readonly s: SessionSummary }) => (
   />
 );
 
-const SessionRow = ({ s, current }: { readonly s: SessionSummary; readonly current: boolean }) => (
-  <SidebarMenuItem data-test="session-row" data-live={s.live ? "true" : "false"}>
-    <SidebarMenuButton
-      isActive={current}
-      disabled={current || !s.live}
-      title={s.session}
-      onClick={() => switchToSession(s)}
-      className={s.live && !current ? "cursor-pointer" : "cursor-default"}
-    >
-      <StatusDot s={s} />
-      <span className="truncate">{s.name}</span>
-    </SidebarMenuButton>
-    <SidebarMenuBadge>v{s.version}</SidebarMenuBadge>
-    <div className="pb-1 pl-2 text-[11px] text-fg-faint">
-      {current
-        ? "you are here"
-        : s.live
-          ? `${s.annotations} annotation${s.annotations === 1 ? "" : "s"}`
-          : s.status === "ended"
-            ? "ended"
-            : "dormant"}
-    </div>
-    {/* A dormant session cannot be opened from the browser - there is no server
+const SessionRow = ({ s, current }: { readonly s: SessionSummary; readonly current: boolean }) => {
+  const { switchToSession } = useActions();
+  return (
+    <SidebarMenuItem data-test="session-row" data-live={s.live ? "true" : "false"}>
+      <SidebarMenuButton
+        isActive={current}
+        disabled={current || !s.live}
+        title={s.session}
+        onClick={() => switchToSession(s)}
+        className={s.live && !current ? "cursor-pointer" : "cursor-default"}
+      >
+        <StatusDot s={s} />
+        <span className="truncate">{s.name}</span>
+      </SidebarMenuButton>
+      <SidebarMenuBadge>v{s.version}</SidebarMenuBadge>
+      <div className="pb-1 pl-2 text-[11px] text-fg-faint">
+        {current
+          ? "you are here"
+          : s.live
+            ? `${s.annotations} annotation${s.annotations === 1 ? "" : "s"}`
+            : s.status === "ended"
+              ? "ended"
+              : "dormant"}
+      </div>
+      {/* A dormant session cannot be opened from the browser - there is no server
         to answer. The way back is a terminal, so hand over the exact command. */}
-    {!s.live && s.status !== "ended" && s.resume ? (
-      <CopyButton cmd={s.resume} label="copy the command to reopen it" test="session-open-copy" />
-    ) : null}
-    {!current && s.lastAttendant?.resume ? (
-      <CopyButton
-        cmd={s.lastAttendant.resume}
-        label={`copy the command to resume the ${s.lastAttendant.harness} conversation`}
-        test="session-resume-copy"
-      />
-    ) : null}
-  </SidebarMenuItem>
-);
+      {!s.live && s.status !== "ended" && s.resume ? (
+        <CopyButton cmd={s.resume} label="copy the command to reopen it" test="session-open-copy" />
+      ) : null}
+      {!current && s.lastAttendant?.resume ? (
+        <CopyButton
+          cmd={s.lastAttendant.resume}
+          label={`copy the command to resume the ${s.lastAttendant.harness} conversation`}
+          test="session-resume-copy"
+        />
+      ) : null}
+    </SidebarMenuItem>
+  );
+};
 
 export const Sessions = () => {
-  const sessions = useLucid((s) => s.sessions);
-  const loading = useLucid((s) => s.sessionsLoading);
-  const current = useLucid((s) => s.session);
+  const { loadSessions } = useActions();
+  const sessions = useSession((s) => s.sessions);
+  const loading = useSession((s) => s.sessionsLoading);
+  const current = useSession((s) => s.session);
 
   if (loading && sessions === null) {
     return <div className="p-3 text-[12px] italic text-fg-faint">Looking for sessions…</div>;

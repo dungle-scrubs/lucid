@@ -1,17 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  addAnswerImage,
-  cancelAnswerPick,
-  clearAnswerAnchor,
-  focusQuestionRef,
-  removeAnswerImage,
-  sendAnswer,
-  setAnswerDraft,
-  skipQuestion,
-  startAnswerPick,
-  toggleAnswerOption,
-} from "./actions.ts";
-import { useLucid } from "./store.ts";
+import { useActions, useSession } from "./context.tsx";
 import type { AgentQuestion } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
 
@@ -28,12 +16,24 @@ const anchorLabel = (snippet: string): string => {
 /** One open question with its full answer surface: options, note, a pinned
  *  artifact region, and attached images. */
 const OpenQuestion = ({ q }: { q: AgentQuestion }) => {
-  const draft = useLucid((s) => s.answerDrafts[q.id] ?? "");
-  const chosen = useLucid((s) => s.answerOptions[q.id]);
-  const anchor = useLucid((s) => s.answerAnchors[q.id]);
-  const images = useLucid((s) => s.answerImages[q.id]);
-  const picking = useLucid((s) => s.answerPickFor === q.id);
-  const uploading = useLucid((s) => s.answerUploading[q.id] ?? 0) > 0;
+  const {
+    addAnswerImage,
+    cancelAnswerPick,
+    clearAnswerAnchor,
+    focusQuestionRef,
+    removeAnswerImage,
+    sendAnswer,
+    setAnswerDraft,
+    skipQuestion,
+    startAnswerPick,
+    toggleAnswerOption,
+  } = useActions();
+  const draft = useSession((s) => s.answerDrafts[q.id] ?? "");
+  const chosen = useSession((s) => s.answerOptions[q.id]);
+  const anchor = useSession((s) => s.answerAnchors[q.id]);
+  const images = useSession((s) => s.answerImages[q.id]);
+  const picking = useSession((s) => s.answerPickFor === q.id);
+  const uploading = useSession((s) => s.answerUploading[q.id] ?? 0) > 0;
   const options = chosen ?? [];
   const imgs = images ?? [];
   const hasContent =
@@ -209,8 +209,9 @@ const OpenQuestion = ({ q }: { q: AgentQuestion }) => {
  * materials as an annotation, gathered as a reply.
  */
 export const Questions = () => {
-  const questions = useLucid((s) => s.questions);
-  const pickFor = useLucid((s) => s.answerPickFor);
+  const { cancelAnswerPick } = useActions();
+  const questions = useSession((s) => s.questions);
+  const pickFor = useSession((s) => s.answerPickFor);
   // The panel is an inbox of OUTSTANDING questions, not a history: once answered,
   // a question leaves it (the answer is in the log, and the agent acts on it).
   // Keeping answered cards pinned here forever was just clutter above the composer.
@@ -241,7 +242,7 @@ export const Questions = () => {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pickFor]);
+  }, [pickFor, cancelAnswerPick]);
 
   if (!hasOpen) return null;
 
