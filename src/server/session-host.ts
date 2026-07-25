@@ -200,6 +200,10 @@ export interface SessionHost {
    *  viewer shows, read by the hub's attend engine: it only delivers a batch
    *  itself when NOTHING is listening. */
   readonly agentsListening: () => number;
+  /** Push a warning frame to this session's subscribers (the D-054 channel
+   *  missing assets already ride). The attend engine uses it to say WHY
+   *  delivery stalled - a usage-limited harness must not fail silently. */
+  readonly warn: (code: string, message: string) => void;
 }
 
 export const createSessionHost = (
@@ -984,5 +988,6 @@ export const createSessionHost = (
     stop,
     lastActivityAt: () => lastActivity,
     agentsListening: () => agentClients.size,
+    warn: broadcastWarning,
   };
 };

@@ -79,7 +79,13 @@ interface HubState {
   /** The last create turn that DIED before its artifact surfaced, with the
    *  log tail that says why. Keyed state, not a toast: the create dialog is
    *  what must stop saying "authoring…". */
-  createFailed: { readonly artifact: string; readonly tail: string } | null;
+  createFailed: {
+    readonly artifact: string;
+    readonly tail: string;
+    /** The harness's own usage-limit line, when that is what killed the
+     *  turn - the dialog names the wall instead of showing a bare tail. */
+    readonly usageLimit?: string;
+  } | null;
 }
 
 export const useHub = create<HubState>(() => ({
@@ -285,11 +291,14 @@ export const connectHub = (): void => {
   // "authoring…" wait NOW and say why (the log tail rides along).
   es.addEventListener("create-failed", (e) => {
     try {
-      const { artifact, tail } = JSON.parse((e as MessageEvent).data) as {
+      const { artifact, tail, usageLimit } = JSON.parse((e as MessageEvent).data) as {
         artifact: string;
         tail: string;
+        usageLimit?: string;
       };
-      useHub.setState({ createFailed: { artifact, tail } });
+      useHub.setState({
+        createFailed: { artifact, tail, ...(usageLimit ? { usageLimit } : {}) },
+      });
     } catch {
       /* malformed frame: the dialog's own timeout still reports */
     }

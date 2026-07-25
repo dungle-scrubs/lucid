@@ -367,8 +367,15 @@ const CreateDialogBody = () => {
             {createFailed?.artifact === authoring ? (
               <>
                 <span className="text-[13px] text-rust-300">
-                  The authoring turn failed before it produced {name}.
+                  {createFailed.usageLimit
+                    ? `The ${harness.trim() || defaultHarness || "default"} harness is over its usage limit - it cannot author anything right now.`
+                    : `The authoring turn failed before it produced ${name}.`}
                 </span>
+                {createFailed.usageLimit ? (
+                  <span data-test="create-usage-limit" className="text-[11px] text-amber-300">
+                    {createFailed.usageLimit} Pick a different harness and try again.
+                  </span>
+                ) : null}
                 <span className="text-[11px] text-fg-faint">{authoring}</span>
                 {/* The harness's own last words: a usage limit, a missing
                     binary - the reason is almost always right here. */}

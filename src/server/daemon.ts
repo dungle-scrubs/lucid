@@ -12,6 +12,7 @@ import {
 } from "./discovery.ts";
 import { escapeHtml } from "../core/escape.ts";
 import { projectRoot } from "../core/sessions.ts";
+import { detectUsageLimit } from "../launch/limits.ts";
 import { runSpawn } from "../launch/launcher.ts";
 import { buildArgv, loadRegistry, resolveRecipe } from "../launch/recipes.ts";
 import { createArtifactPrompt, createAttendant, type Attendant } from "./attend.ts";
@@ -302,6 +303,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       ? createAttendant({
           paths,
           agentsListening: () => host.agentsListening(),
+          warn: (code, message) => host.warn(code, message),
           ...(opts.harnessesPath !== undefined ? { harnessesPath: opts.harnessesPath } : {}),
           ...(opts.attendDebounceMs !== undefined ? { debounceMs: opts.attendDebounceMs } : {}),
           log,
@@ -618,7 +620,17 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       const reportFailure = async (code: number | string): Promise<void> => {
         const raw = await readFile(outLog, "utf8").catch(() => "");
         const tail = raw.trim().split("\n").slice(-3).join("\n").slice(-500);
-        broadcast(`event: create-failed\ndata: ${JSON.stringify({ artifact, code, tail })}\n\n`);
+        // A usage wall is the one failure the human can do nothing about in
+        // Lucid - name it as such rather than leaving them to read the tail.
+        const usageLimit = detectUsageLimit(raw);
+        broadcast(
+          `event: create-failed\ndata: ${JSON.stringify({
+            artifact,
+            code,
+            tail,
+            ...(usageLimit !== null ? { usageLimit } : {}),
+          })}\n\n`,
+        );
       };
       void runSpawn(argv, project, outLog, {
         harness: resolved.name,

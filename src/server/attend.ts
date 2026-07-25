@@ -1,4 +1,4 @@
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { deliver } from "../core/deliver.ts";
 import { shellArg } from "../core/escape.ts";
@@ -8,6 +8,7 @@ import { readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { assemblePayload } from "../core/payload.ts";
 import { revisePrompt, runSpawn } from "../launch/launcher.ts";
+import { detectUsageLimit } from "../launch/limits.ts";
 import { buildArgv, loadRegistry, resolveRecipe } from "../launch/recipes.ts";
 
 /**
@@ -136,6 +137,9 @@ export interface AttendantOptions {
   /** How long an unrefreshed working window keeps the hub out (tests). */
   readonly workingGraceMs?: number;
   readonly log: (message: string) => void;
+  /** Push a warning frame to the session's own subscribers - how a stalled
+   *  delivery says WHY in the viewer, not only in the hub's stdout. */
+  readonly warn?: (code: string, message: string) => void;
 }
 
 export interface Attendant {
@@ -309,11 +313,28 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       return;
     }
     fails += 1;
+    // A usage-limited harness is a WALL, not a flake: retrying burns nothing
+    // but time, and the human sees feedback stuck at "recorded" with no clue
+    // why. Name it in the viewer and stand down for the cool-off at once.
+    const output = await readFile(join(paths.sessionDir, "attend.out.log"), "utf8").catch(() => "");
+    const limit = detectUsageLimit(output);
+    if (limit !== null) {
+      fails = 0;
+      pauseFor(ATTEND_COOLOFF_MS);
+      const message = `Delivery is paused: the attending harness is over its usage limit. ${limit}`;
+      log(`attend ${paths.name}: ${message}`);
+      options.warn?.("HARNESS_USAGE_LIMIT", message);
+      return;
+    }
     if (fails >= MAX_ATTEND_FAILS) {
       fails = 0;
       pauseFor(ATTEND_COOLOFF_MS);
       log(
         `attend ${paths.name}: resume failed ${MAX_ATTEND_FAILS}x (exit ${code}); pausing attendance for ${ATTEND_COOLOFF_MS / 60000} minutes - see ${join(paths.sessionDir, "attend.out.log")}`,
+      );
+      options.warn?.(
+        "ATTEND_DELIVERY_FAILED",
+        `Delivery failed ${MAX_ATTEND_FAILS}x and is paused - see .lucid/${paths.name}/attend.out.log`,
       );
       return;
     }
