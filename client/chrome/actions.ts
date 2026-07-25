@@ -673,6 +673,29 @@ export const createActions = (ctx: ActionsCtx) => {
     }
   };
 
+  /** "I don't understand" (#40): clears the question with `unclear: true` so
+   *  the agent owes a shorter, plainer version of the SAME question. `note` is
+   *  what the human said was confusing - the one thing worth carrying, and a
+   *  bare re-ask is allowed (not understanding is the point). */
+  const reaskQuestion = async (q: AgentQuestion, note?: string): Promise<void> => {
+    if (answerSending.has(q.id)) return;
+    answerSending.add(q.id);
+    try {
+      await api("/__lucid/answer", {
+        id: uuid(),
+        questionId: q.id,
+        text: (note ?? "").trim(),
+        unclear: true,
+      });
+      for (const img of get().answerImages[q.id] ?? []) URL.revokeObjectURL(img.url);
+      set((st) => clearAnswerState(st, q.id));
+    } catch {
+      warn("Couldn't send that back - try again.");
+    } finally {
+      answerSending.delete(q.id);
+    }
+  };
+
   const focusQuestionRef = (ref?: string): void => {
     if (ref) toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: ref });
   };
@@ -842,6 +865,7 @@ export const createActions = (ctx: ActionsCtx) => {
     removeAnswerImage,
     submitAnswer,
     skipQuestion,
+    reaskQuestion,
     focusQuestionRef,
     revealSection,
     setHovered,

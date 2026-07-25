@@ -145,6 +145,10 @@ export interface PayloadQuestion {
   /** The human declined to answer (Skip): `answered` is true but there is no
    *  content - proceed without it rather than re-asking. */
   readonly skipped?: boolean;
+  /** The human did not understand the question (Re-ask): `answered` is true but
+   *  nothing was decided - ask the SAME question again, shorter and clearer.
+   *  `answer`, when present, is what they said was confusing. */
+  readonly unclear?: boolean;
   /**
    * The answer as one readable line. For a legacy question this is the human's
    * free text (or the "Other" text alongside chosen options); for a grouped

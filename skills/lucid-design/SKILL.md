@@ -25,7 +25,10 @@ for when nobody has said otherwise.
 **It is paper.** A warm cream ground with near-black type, not a dark app
 surface. Lucid's chrome is dark and recedes; the artifact is the thing being
 looked at, so it advances. A document that looks like the tool around it reads
-as a screenshot of software rather than something you'd send to someone.
+as a screenshot of software rather than something you'd send to someone. If you
+honour the reader's `prefers-color-scheme`, the dark variant is still paper - a
+warm, lifted ground that reads as a sheet, never the chrome's own near-black.
+See *Responding to dark mode* below.
 
 **It is self-contained, or it is not an artifact.** One inline `<style>` block.
 System font stacks. Zero external requests - no CDN, no Google Fonts, no remote
@@ -74,6 +77,35 @@ eyebrow labels, and washes; keep body copy at full ink. Always pair color with a
 non-color cue - a rule, a label, a weight change - so nothing depends on hue
 alone.
 
+## Responding to dark mode
+
+Optional. If you support it, follow the reader's system setting with a
+`@media (prefers-color-scheme: dark)` block - no toggle, no JS. A control and
+its persisted state are state the artifact is not allowed to carry: it must
+render identically from disk, offline, and a toggle breaks that. Route every
+color through a variable, then remap the variables in the media block; the rest
+of the stylesheet does not change.
+
+The dark variant is still **paper, not the app**. Keep the ground warm and
+*lifted* - a sheet resting on the chrome, distinctly above the chrome's own
+near-black, never equal to it, or the artifact dissolves into the tool. Keep the
+same accent and the same type; only the ground and ink invert. Re-check contrast
+after the flip: a deep brass that worked as an eyebrow on cream is too dark on a
+dark ground, so the accent lifts a step.
+
+```css
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper:     #211d15;  /* warm dark ground, lifted above the chrome */
+    --ink:       #ece3cf;  /* warm off-white, not pure white */
+    --ink-muted: #a89d84;
+    --rule:      rgba(236, 227, 207, 0.14);
+    --accent:    #d9bd7a;  /* the brass lifts so it reads on dark */
+    --accent-wash: rgba(203, 168, 90, 0.18);
+  }
+}
+```
+
 ## Make it reviewable
 
 These are not taste; they decide whether feedback can attach to what the reader
@@ -93,11 +125,37 @@ genuinely uniform matrix. Give text-bearing flex/grid children `min-width: 0`
 and `overflow-wrap: break-word`, or one long token wraps a column to one word
 per line and the review is wasted.
 
+## Diagrams are elements, not ASCII
+
+A box-and-arrow diagram, a layer stack, a flow, a timeline - build it from real
+elements: padded `div`s with a hairline border, placed with flex or grid, and
+inline SVG for anything curved or genuinely drawn. **Never draw one as
+box-drawing characters inside a `<pre>`.**
+
+ASCII art fails on every count that matters here. It is a single opaque text
+node, so the reviewer can only annotate the whole picture - the node, edge, or
+label they actually want to correct is not addressable. It is frozen at the
+width you typed it, so it overflows a narrow window instead of reflowing. And
+it opts out of the document's type, color, and spacing: a monospace drawing
+sitting inside a manuscript reads as a terminal screenshot pasted onto paper.
+
+Compose it from what the artifact already has: nodes are padded boxes with
+`--rule` borders and sans labels; the accent marks the one node the eye should
+land on; connectors are a border, a thin absolutely-positioned rule, or an
+`<svg>` line with `currentColor`. Give each node its own `data-lucid-id`. Reach
+for no diagram library - every one of them is an external request, and the
+artifact must open from disk.
+
+Mono and `<pre>` keep the work they are good at: code, file paths, a directory
+tree, a log line, a command. Those are literal text, not pictures.
+
 ## Checklist
 
 - Opens from disk, offline, and looks right
 - No emoji, no exclamation marks, no hype
 - Cream ground, ink type, one accent used to mean something
-- Serif prose, sans labels, mono literals
+- If it honours dark mode, the dark variant still reads as paper - warm, lifted, distinct from the chrome, and no toggle or JS
+- Serif prose, sans labels, mono literals - and mono only for literals, never for drawing a diagram
+- Diagrams built from elements or inline SVG, each node individually addressable
 - Every reviewable group padded and, where it matters, carrying a `data-lucid-id`
 - Nothing depends on color alone

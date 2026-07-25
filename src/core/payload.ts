@@ -102,6 +102,7 @@ const toQuestion = (q: QuestionRecord, assetAbsPath: (file: string) => string): 
     ...(q.answeredAt ? { answeredAt: q.answeredAt } : {}),
     answered: q.answered,
     ...(q.skipped ? { skipped: true } : {}),
+    ...(q.unclear ? { unclear: true } : {}),
     ...(answer.length > 0 ? { answer } : {}),
     ...(q.answerOptions && q.answerOptions.length > 0 ? { answerOptions: q.answerOptions } : {}),
     ...(q.items && q.items.length > 0 ? { answerItems: q.items } : {}),

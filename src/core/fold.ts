@@ -63,6 +63,7 @@ export interface QuestionRecord {
   readonly group?: readonly QuestionItem[];
   readonly answered: boolean;
   readonly skipped?: boolean;
+  readonly unclear?: boolean;
   readonly answer?: string;
   readonly answerOptions?: readonly string[];
   /** Per-question answers to a grouped question, in the group's order. */
@@ -341,6 +342,10 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
           // Rebuilt from the ASK-time fields, never spread over the previous
           // record: a later answer REPLACES an earlier one, and spreading would
           // leave a skip's flag (or its predecessor's items) on top of it.
+          // Last wins (a skip then a real answer shows the answer). The
+          // double-click race #40's first-wins guard existed for is stopped
+          // at the source now: the chrome holds an in-flight set across
+          // Answer/Skip/Re-ask, so one gesture appends one event.
           questionMap.set(e.questionId, {
             id: q.id,
             seq: q.seq,
@@ -355,6 +360,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
             answerSeq: e.seq,
             answeredAt: e.at,
             ...(e.skipped ? { skipped: true } : {}),
+            ...(e.unclear ? { unclear: true } : {}),
             ...(e.options && e.options.length > 0 ? { answerOptions: e.options } : {}),
             ...(e.items && e.items.length > 0 ? { items: e.items } : {}),
             ...(e.anchor ? { answerAnchor: e.anchor } : {}),

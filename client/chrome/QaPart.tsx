@@ -45,13 +45,21 @@ export const QaPart: DataMessagePartComponent<QaData> = ({ data }) => {
       className="flex flex-col gap-2 rounded-lg border border-ink-600 bg-ink-700 px-[11px] py-[10px]"
     >
       <span className="text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint">
-        {question.skipped ? "Question · declined" : "Question · answered"}
+        {question.skipped
+          ? "Question · declined"
+          : question.unclear
+            ? "Question · re-ask requested"
+            : "Question · answered"}
       </span>
-      {question.skipped ? (
+      {question.skipped || question.unclear ? (
         <>
           <div className="text-[12px] leading-[1.45] text-fg-muted">{question.text}</div>
           <div className="text-[12px] text-fg-faint italic" data-test="qa-answer">
-            Skipped - the agent was told to proceed without an answer.
+            {question.unclear
+              ? question.answer
+                ? `Unclear - "${question.answer}" - the agent owes a plainer version.`
+                : "Unclear - the agent owes a plainer version of this question."
+              : "Skipped - the agent was told to proceed without an answer."}
           </div>
         </>
       ) : (

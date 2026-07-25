@@ -21,6 +21,21 @@ cases:
       must_not_match: ['fonts\.googleapis|fonts\.gstatic|cdn\.|unpkg\.com|jsdelivr']
     trials: 1
 
+  - id: diagram-not-ascii
+    mode: generation
+    type: preference
+    rule: diagrams-are-elements
+    arms: [skill, baseline]
+    prompt: >-
+      Read ~/.agents/skills/lucid-design/SKILL.md if it exists and
+      follow it to write a standalone HTML artifact explaining a
+      three-tier architecture (browser, API server, database) for
+      review. Include a diagram of how the tiers connect. Save it as
+      artifact.html. Do it end to end without asking.
+    assert:
+      must_not_match: ['[─│┌┐└┘├┤┬┴┼━┃┏┓┗┛╭╮╯╰═║╔╗╚╝▼▲◀▶]']
+    trials: 1
+
   # Generic component styling is not Lucid-artifact design.
   - id: component-styling-negative
     mode: trigger

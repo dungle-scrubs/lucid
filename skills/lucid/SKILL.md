@@ -63,6 +63,14 @@ Never fake the review loop, and never paste build instructions at the user.
    no CDN, no remote assets. The artifact must render identically opened straight
    from disk with no network - it is content that outlives the review.
 
+   **Draw diagrams with elements, never ASCII.** A box-and-arrow diagram, a
+   layer stack, a flow - build it from padded `div`s with borders, laid out with
+   flex, or from inline SVG. Box-drawing characters in a `<pre>` collapse the
+   whole picture into one opaque text node, so the reviewer cannot annotate the
+   node or edge they mean, and it cannot reflow when the window narrows. Give
+   each node its own `data-lucid-id`. Keep `<pre>` for what is literally text:
+   code, file paths, a directory tree.
+
    For how it should *look*, invoke the **`lucid-design`** skill if it is
    installed: the artifact is a document (paper, one accent, editorial voice),
    not a copy of Lucid's own dark chrome. If the user has their own brand, use
@@ -216,6 +224,21 @@ lucid ask <file> --text "Which store should the cutover target?" \
   renders them as buttons. Omit options for a free-text question. `--multi`
   allows more than one choice; `--ref` points the "Show me where" link at an
   element.
+- **Write the question the way you would say it out loud.** The panel is a
+  narrow column above the composer, and a paragraph-long question is skipped,
+  not read. Lead with the ask in **one sentence**, then at most two or three
+  short lines of context. Anything past ~80 words is a briefing, not a question.
+  If you cannot say it short, you are asking two questions - ask the first one.
+- `--text` is **Markdown**, rendered: blank lines separate paragraphs, `-` makes
+  a list, backticks make code, and a ``` fence makes a code block. Put every
+  command, path, flag, type, or snippet in code - reading `claude -p` as prose
+  is what makes a question unreadable. Never inline a wall of alternatives as
+  "(A) … (B) …"; that is what `--option` is for.
+- Carry the weight in the **options**, not the prose: the label is the choice
+  ("Shell out to the harness"), the explanation is the one-line case for it
+  ("harness-agnostic, one adapter per phase"). Name your recommendation in a
+  final short line of `--text` ("I'd take shelling out - it keeps phases
+  harness-agnostic"), not in a paragraph of argument.
 - The answer comes back in the next `wait` payload under `questions`: `answer`
   (free text), `answerOptions` (the labels chosen), `answerAnchor` (a region the
   human **pinned in the artifact** as their referent - read its `snippet`), and
@@ -225,6 +248,12 @@ lucid ask <file> --text "Which store should the cutover target?" \
   content: the human **declined** to answer. Proceed without it and do **not**
   re-ask the same question - a decline is a decision. Design questions so a
   skip is safe (a good `--option "Not now|…"` is often kinder than forcing one).
+- A question may instead come back `answered: true` with **`unclear: true`**:
+  the human pressed **Re-ask** because they did not understand it. Nothing was
+  decided. Ask the **same** question again with `lucid ask` - shorter, plainer,
+  the alternatives moved into `--option`s - and never proceed as though it was
+  answered. `answer`, if present, is what they said was confusing; if it is
+  empty, assume the question was too long and cut it in half.
 - This is advisory forwarding, not interception: use it for questions that
   arise **while parked in the review loop**. Outside a review, your normal
   question tool is fine.
@@ -305,6 +334,8 @@ process instead, so the terminal conversation stays free while feedback flows.
   give every item explicit placement once any cell spans rows/columns. Give
   text-bearing flex/grid children `min-width:0` + `overflow-wrap` so no column
   collapses to one-word-per-line.
+- Diagrams are HTML elements or inline SVG, never ASCII art in a `<pre>`; mono
+  is for literal text only.
 - Reference assets with relative paths, colocated at or below the artifact's folder.
 - Persist `nextCursor` and pass it as `--since`; delivery is at-least-once with
   idempotent IDs, so advance the cursor only after you have applied a payload.

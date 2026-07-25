@@ -264,6 +264,10 @@ export interface QuestionAnsweredEvent extends BaseEvent {
   /** The human declined to answer (Skip). Clears the question without content;
    *  the agent should proceed without it rather than re-ask. */
   readonly skipped?: boolean;
+  /** The human did not understand the question (Re-ask). Clears it unanswered;
+   *  the agent owes a clearer, shorter version of the SAME question. `text`, if
+   *  present, is what they said was confusing. */
+  readonly unclear?: boolean;
 }
 
 export interface ReviewResolvedEvent extends BaseEvent {

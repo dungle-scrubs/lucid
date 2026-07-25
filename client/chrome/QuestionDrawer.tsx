@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   QuestionChoice,
   QuestionGroup,
@@ -23,6 +23,7 @@ import {
 } from "./question-draft.ts";
 import type { AgentQuestion } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
+import { Markdown } from "./ui/markdown.tsx";
 
 /**
  * The question drawer (D11-D13): a pending ask slides up from the bottom of the
@@ -377,6 +378,66 @@ const tabIndexFor = (item: QuestionItem, draft: GroupDraft, index: number): numb
   return d.selectedIds.includes(id) || (d.selectedIds.length === 0 && index === 0) ? 0 : -1;
 };
 
+/** Past this height a question is a wall, not a prompt: the drawer sits over
+ *  the artifact, so an unbounded one spends the very space D11 protects. */
+const CLAMP_PX = 200;
+
+/**
+ * The question itself, in the agent's Markdown (#40) - paragraphs, lists, and
+ * fenced code render as themselves, the same treatment the transcript gives
+ * agent prose. A long one clamps to a readable height with the rest one click
+ * away: the ask stays in view next to the controls that answer it.
+ */
+const QuestionText = ({ text }: { readonly text: string }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [long, setLong] = useState(false);
+
+  // Layout effect, and re-measured on resize: the drawer is width-fluid, so
+  // the same question is two lines at one width and ten at another - and
+  // measuring after paint would flash the wall it exists to prevent.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // scrollHeight is the full content height even while clamped, so this
+    // stays correct once folded. Tolerance: a few pixels over is not worth a
+    // disclosure, and late-loading fonts nudge the measurement.
+    const measure = (): void => setLong(el.scrollHeight > CLAMP_PX + 24);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="relative">
+        <div
+          ref={ref}
+          data-test="question-text"
+          className={long && !open ? "overflow-hidden" : undefined}
+          style={long && !open ? { maxHeight: CLAMP_PX } : undefined}
+        >
+          <Markdown text={text} />
+        </div>
+        {long && !open ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-850 to-transparent" />
+        ) : null}
+      </div>
+      {long ? (
+        <button
+          type="button"
+          data-test="question-fold"
+          onClick={() => setOpen((v) => !v)}
+          className="w-fit cursor-pointer text-[11px] text-fg-faint underline-offset-2 hover:text-fg-muted hover:underline"
+        >
+          {open ? "Show less" : "Show the rest"}
+        </button>
+      ) : null}
+    </div>
+  );
+};
+
 /** One question: its choices (or a free-text field), the required reason, and
  *  its own defer. */
 const QuestionCard = ({
@@ -436,7 +497,7 @@ const QuestionCard = ({
 
   return (
     <div className="flex flex-col gap-2" data-test="question" data-question-item={item.id}>
-      <div className="text-[13px] leading-[1.45] text-fg">{item.question}</div>
+      <QuestionText text={item.question} />
       <div className={d.deferred ? "flex flex-col gap-1.5 opacity-50" : "flex flex-col gap-1.5"}>
         {item.answerShape === "free_text" ? (
           <textarea
@@ -595,6 +656,7 @@ const Drawer = ({
   const {
     dismissQuestionDrawer,
     focusQuestionRef,
+    reaskQuestion,
     skipQuestion,
     submitAnswer,
     updateQuestionDraft,
@@ -813,6 +875,22 @@ const Drawer = ({
             </span>
           ) : null}
           <span className="flex-1" />
+          {/* "I don't understand" (#40): clears the ask with unclear:true so
+              the agent re-asks the SAME thing shorter and plainer. Whatever
+              was typed on the current question rides along as the note saying
+              what was confusing. */}
+          <button
+            type="button"
+            data-test="reask"
+            onClick={() => {
+              const active = group[draft.activeIndex];
+              const note = active ? (draft.byId[active.id]?.customText ?? "") : "";
+              void reaskQuestion(q, note);
+            }}
+            className="w-fit cursor-pointer text-[11px] text-fg-faint underline-offset-2 hover:text-fg-muted hover:underline"
+          >
+            Re-ask
+          </button>
           {/* Decline the whole ask: the agent is told to proceed without an
               answer rather than re-asking. */}
           <button

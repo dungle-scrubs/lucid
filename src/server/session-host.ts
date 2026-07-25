@@ -454,28 +454,36 @@ export const createSessionHost = (
       return json({ error: "invalid answer" }, 400);
     }
     const skipped = body.skipped === true;
-    // A skip is a content-free decline: discard any content so the payload can
-    // never contradict the contract (skipped => no answer). A normal answer can
-    // be text, chosen option labels, an artifact reference, and/or images -
-    // options and anchor reuse the same validators as annotations.
+    // "I don't understand" is not an answer and not a decline: it clears the
+    // question and puts a clearer re-ask on the agent (#40).
+    const unclear = !skipped && body.unclear === true;
+    // Neither skip nor re-ask decides anything, so neither may carry a
+    // decision: discard chosen options, the pinned region and images for both,
+    // so the payload can never contradict the contract (skipped/unclear =>
+    // nothing was chosen). A skip drops the text too; a re-ask keeps it,
+    // because there it is not an answer but the note saying what was
+    // confusing. A normal answer can be text, chosen option labels, an
+    // artifact reference, and/or images - options and anchor reuse the same
+    // validators as annotations.
+    const decided = !skipped && !unclear;
     const text = skipped || typeof body.text !== "string" ? "" : body.text;
     const options =
-      !skipped && Array.isArray(body.options)
+      decided && Array.isArray(body.options)
         ? body.options.filter((o): o is string => typeof o === "string" && o.length > 0)
         : [];
-    const anchorIn = skipped || body.anchor === undefined ? undefined : parseAnchor(body.anchor);
+    const anchorIn = decided && body.anchor !== undefined ? parseAnchor(body.anchor) : undefined;
     if (anchorIn && "error" in anchorIn) return json({ error: anchorIn.error }, 400);
-    const images = skipped ? [] : parseImages(body.images);
+    const images = decided ? parseImages(body.images) : [];
     // Per-item answers to a grouped question (D12), re-validated against the
     // group the ASKING event recorded - the drawer gates its submit with the
     // same validator, so this catches only a caller that bypassed it.
-    let items = skipped ? [] : normalizeItemAnswers(body.items);
+    let items = decided ? normalizeItemAnswers(body.items) : [];
     // A grouped answer's content lives in `items`, and its legacy `text` is a
     // DERIVED projection of them (below) - never the caller's own text beside
     // them, which would be a second source for one answer.
     let legacyText = text;
     let grouped = false;
-    if (!skipped) {
+    if (decided) {
       const state = foldLog((await readEvents(paths.logPath)).events);
       const asked = state.questions.find((q) => q.id === body.questionId);
       const group = asked?.group ?? [];
@@ -508,10 +516,11 @@ export const createSessionHost = (
         );
       }
     }
-    // Must carry something - UNLESS it is an explicit skip (the human declined).
-    // A bare non-skip submission is rejected.
+    // Must carry something - UNLESS the human declined (skip) or said the
+    // question was unclear (re-ask, where a bare one is allowed - not
+    // understanding is the point). A bare ordinary submission is rejected.
     if (
-      !skipped &&
+      decided &&
       text.trim() === "" &&
       options.length === 0 &&
       items.length === 0 &&
@@ -527,6 +536,7 @@ export const createSessionHost = (
         questionId: body.questionId,
         text: legacyText,
         ...(skipped ? { skipped: true } : {}),
+        ...(unclear ? { unclear: true } : {}),
         ...(!grouped && options.length > 0 ? { options } : {}),
         ...(items.length > 0 ? { items } : {}),
         ...(anchorIn ? { anchor: anchorIn } : {}),
