@@ -189,7 +189,7 @@ const ProjectsDrawer = () => {
       <aside
         data-test="projects-drawer"
         aria-hidden={!open}
-        className={`fixed bottom-0 left-0 top-(--lucid-shell-top,37px) z-40 flex w-[280px] flex-col overflow-y-auto border-r border-ink-500 bg-ink-800 py-2 shadow-[8px_0_30px_rgba(0,0,0,0.45)] transition-transform duration-200 ease-out ${
+        className={`fixed bottom-0 left-0 top-(--lucid-shell-top,37px) z-40 flex w-[340px] flex-col overflow-y-auto border-r border-ink-500 bg-ink-800 py-2 shadow-[8px_0_30px_rgba(0,0,0,0.45)] transition-transform duration-200 ease-out ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -563,7 +563,7 @@ export const Shell = () => {
           Only the active view takes window listeners. */}
       <div
         className={`flex min-h-0 flex-1 flex-col transition-transform duration-200 ease-out ${
-          drawerOpen ? "translate-x-6" : "translate-x-0"
+          drawerOpen ? "translate-x-12" : "translate-x-0"
         }`}
       >
         {sessionKeys.map((k) => {
