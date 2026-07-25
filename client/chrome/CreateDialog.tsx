@@ -47,6 +47,8 @@ const close = (): void => setCreateOpen(false);
 const CreateDialogBody = () => {
   const sessions = useHub((s) => s.sessions);
   const attend = useHub((s) => s.attend);
+  const harnesses = useHub((s) => s.harnesses);
+  const defaultHarness = useHub((s) => s.defaultHarness);
   const activeProject = useShell((s) => s.activeProject);
   const roots = useMemo(() => createRoots(sessions), [sessions]);
 
@@ -106,7 +108,15 @@ const CreateDialogBody = () => {
     return () => clearTimeout(timer);
   }, [authoring]);
 
-  const nameOk = CREATE_NAME.test(name);
+  // Typing `some-test` means `some-test.html`: there is exactly one legal
+  // extension, so demanding it typed was ceremony. A name with an explicit
+  // extension is left alone (a wrong one still fails, visibly).
+  const resolvedName = /\./.test(name.trim())
+    ? name.trim()
+    : name.trim().length > 0
+      ? `${name.trim()}.html`
+      : "";
+  const nameOk = CREATE_NAME.test(resolvedName);
   const promptOk = prompt.trim().length > 0 && prompt.length <= MAX_PROMPT;
   // A known-inert hub is stated up front but never blocks the button: the
   // flag is a cached answer, and a hub restarted with --attend while this
@@ -122,7 +132,7 @@ const CreateDialogBody = () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         project,
-        name,
+        name: resolvedName,
         prompt,
         ...(harness.trim() ? { harness: harness.trim() } : {}),
       }),
@@ -248,6 +258,10 @@ const CreateDialogBody = () => {
                 <span data-test="create-name-error" className="text-[10px] text-rust-300">
                   A plain .html filename - letters, digits, dot, dash, underscore. No directories.
                 </span>
+              ) : nameOk && resolvedName !== name.trim() ? (
+                <span data-test="create-name-resolved" className="text-[10px] text-fg-faint">
+                  {resolvedName}
+                </span>
               ) : null}
             </label>
 
@@ -265,19 +279,53 @@ const CreateDialogBody = () => {
               />
             </label>
 
-            <label className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1">
               <span className="text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint">
-                Harness <span className="font-normal normal-case tracking-normal">(optional)</span>
+                Harness
               </span>
-              <input
-                data-test="create-harness"
-                value={harness}
-                onChange={(e) => setHarness(e.target.value)}
-                placeholder="the harness registry's default"
-                spellCheck={false}
-                className={field}
-              />
-            </label>
+              {harnesses.length > 0 ? (
+                // The registry's own names, offered: DEFAULT is a real row
+                // (empty value - the hub resolves it), so the common case is
+                // no interaction and the exception is one pick, never typing.
+                <Select value={harness} onValueChange={(v) => setHarness(v ?? "")}>
+                  <SelectTrigger
+                    data-test="create-harness"
+                    aria-label="Harness"
+                    className="w-full justify-between rounded-md border-ink-600 bg-bg-inset px-2 py-1.5 text-[13px] text-fg"
+                  >
+                    <SelectValue>
+                      {(v: string) =>
+                        v === "" ? `default${defaultHarness ? ` (${defaultHarness})` : ""}` : v
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">
+                      default
+                      {defaultHarness ? (
+                        <span className="ml-2 text-[10px] text-fg-faint">{defaultHarness}</span>
+                      ) : null}
+                    </SelectItem>
+                    {harnesses.map((h) => (
+                      <SelectItem key={h} value={h}>
+                        {h}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                // No registry known (an older hub, or none on disk): the raw
+                // field stays as the escape hatch rather than a dead end.
+                <input
+                  data-test="create-harness"
+                  value={harness}
+                  onChange={(e) => setHarness(e.target.value)}
+                  placeholder="the harness registry's default"
+                  spellCheck={false}
+                  className={field}
+                />
+              )}
+            </div>
 
             {attend === false ? (
               <div data-test="create-attend-hint" className="flex flex-col gap-1">

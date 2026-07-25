@@ -674,7 +674,24 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // a new one per invocation.
       // `attend` tells a shell whether this hub spawns at all - the create
       // affordance is pointless (and 403s) on a review-only hub.
-      return json({ lucid: "hub", port, shells: sseClients.size, attend }, 200, noStore);
+      // `harnesses`/`defaultHarness` name the registry's spawn recipes so the
+      // create dialog can OFFER them - a free-text harness field asked the
+      // human to recall magic strings. Read fresh per call: identity is
+      // fetched on (re)connect only, and the registry is a small local file.
+      const registry = await loadRegistry(opts.harnessesPath).catch(() => null);
+      const harnesses = registry ? Object.keys(registry.harnesses) : [];
+      return json(
+        {
+          lucid: "hub",
+          port,
+          shells: sseClients.size,
+          attend,
+          harnesses,
+          ...(registry?.default !== undefined ? { defaultHarness: registry.default } : {}),
+        },
+        200,
+        noStore,
+      );
     }
     if (pathname === "/hub/sessions" && req.method === "GET") {
       return json({ sessions: await listHub() }, 200, noStore);

@@ -71,6 +71,11 @@ interface HubState {
   /** The hub runs the attend engine, so it can author a new artifact
    *  (D15). Null until `/hub/identity` answers - unknown is not "no". */
   attend: boolean | null;
+  /** The harness registry's recipe names, so the create dialog can OFFER
+   *  them instead of asking for magic strings. Empty until identity answers
+   *  (or when no registry exists - the dialog then omits the field). */
+  harnesses: readonly string[];
+  defaultHarness: string | null;
 }
 
 export const useHub = create<HubState>(() => ({
@@ -80,6 +85,8 @@ export const useHub = create<HubState>(() => ({
   paletteOpen: false,
   createOpen: false,
   attend: null,
+  harnesses: [],
+  defaultHarness: null,
 }));
 
 export const setPaletteOpen = (open: boolean): void => useHub.setState({ paletteOpen: open });
@@ -206,9 +213,22 @@ let bundleStamp: string | null = null;
  */
 const refreshIdentity = (): void => {
   void fetch("/hub/identity")
-    .then((r) => (r.ok ? (r.json() as Promise<{ attend?: boolean }>) : null))
+    .then((r) =>
+      r.ok
+        ? (r.json() as Promise<{
+            attend?: boolean;
+            harnesses?: string[];
+            defaultHarness?: string;
+          }>)
+        : null,
+    )
     .then((who) => {
-      if (who) useHub.setState({ attend: who.attend === true });
+      if (who)
+        useHub.setState({
+          attend: who.attend === true,
+          harnesses: who.harnesses ?? [],
+          defaultHarness: who.defaultHarness ?? null,
+        });
     })
     .catch(() => {
       /* the stream's own connected flag already reports an unreachable hub */
