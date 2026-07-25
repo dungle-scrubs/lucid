@@ -444,13 +444,35 @@ export const Shell = () => {
           ☰
         </button>
         {activeProject !== null ? (
-          <span
+          // A scope BADGE, not a tab cell: pill-shaped, frost-tinted, floating
+          // in the bar rather than filling it - nothing about it may read as a
+          // disabled sibling of the tabs. It names the project, so it opens
+          // the drawer that switches projects.
+          <button
+            type="button"
             data-test="scope-label"
-            title={activeProject}
-            className="flex flex-none items-center border-r border-ink-600 px-2.5 text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint"
+            title={`${activeProject} - switch project`}
+            onClick={(e) => {
+              e.currentTarget.blur();
+              setDrawerOpen(true);
+            }}
+            className="mx-2 flex flex-none cursor-pointer items-center gap-1 self-center rounded-full border border-accent/40 bg-accent/10 px-2.5 py-px text-[10px] font-semibold uppercase tracking-[0.8px] text-accent-bright outline-none hover:border-accent hover:bg-accent/20"
           >
             {projectName(activeProject)}
-          </span>
+            <svg
+              viewBox="0 0 24 24"
+              width="9"
+              height="9"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
         ) : null}
         {visibleKeys.map((k) => (
           <Tab key={k} sessionKey={k} active={k === activeKey} />
