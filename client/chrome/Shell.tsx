@@ -111,7 +111,9 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
         aria-label={`Close ${handle.config.name}`}
         title="Close tab (the session keeps running)"
         onClick={() => closeTab(sessionKey)}
-        className="cursor-pointer rounded-full px-[3px] text-fg-faint opacity-0 hover:text-fg group-hover:opacity-100"
+        className={`cursor-pointer rounded-full px-[3px] text-fg-faint hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 ${
+          active ? "opacity-100" : "opacity-0"
+        }`}
       >
         ×
       </button>
