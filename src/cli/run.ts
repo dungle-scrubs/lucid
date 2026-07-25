@@ -13,6 +13,7 @@ import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { ensureSessionDirs, openSession } from "../core/session.ts";
 import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
+import { sanitizeAttendant } from "../core/events.ts";
 import type { AttendantStamp } from "../core/events.ts";
 import { ArtifactError, NotFoundError, ServerError, ValidationError } from "../errors.ts";
 import { runLaunch } from "../launch/launcher.ts";
@@ -55,11 +56,14 @@ const attendantStamp = (harness?: string): AttendantStamp | undefined => {
   const h = harness || process.env.LUCID_HARNESS;
   const sessionId = process.env.LUCID_SESSION_ID;
   if (!h && !sessionId) return undefined;
-  return {
+  // Through the shared normalizer even though we authored it: the direct-
+  // append path bypasses the server, and the log's invariants (bounded,
+  // control-free strings) must not depend on which writer was live.
+  return sanitizeAttendant({
     harness: h || "agent",
     ...(sessionId ? { sessionId } : {}),
     cwd: process.cwd(),
-  };
+  });
 };
 
 export interface OpenOptions {

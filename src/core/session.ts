@@ -149,6 +149,11 @@ export const openSession = async (
           version: nextVersion,
           hash: commit.hash,
           path: commit.path,
+          // The opener made this revision happen (their edit is what differs
+          // from current.html), so the reconciliation version keeps their
+          // provenance. Watcher-driven commits stay unstamped until attend
+          // mode knows whose turn produced them.
+          ...(opts?.attendant ? { attendant: opts.attendant } : {}),
         });
       } else {
         warnings.push({

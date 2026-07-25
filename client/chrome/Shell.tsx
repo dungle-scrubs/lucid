@@ -6,6 +6,7 @@ import {
   byProject,
   closeTab,
   connectHub,
+  latestTabIn,
   openTab,
   projectName,
   setPaletteOpen,
@@ -14,7 +15,7 @@ import {
 } from "./hub.ts";
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
-import { getSession, useShell } from "./shell.ts";
+import { getSession, setDrawerOpen, useShell } from "./shell.ts";
 import { Kbd } from "./ui/kbd.tsx";
 
 /**
@@ -115,6 +116,85 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
   );
 };
 
+/**
+ * The projects drawer (D7): GTM-style - slides in from the left, OVERLAYS
+ * the content, and parallaxes it right while open. Projects list with
+ * session counts; worktrees group under their main repo with a qualifier.
+ * Selecting a project scopes the tab strip (D8) and lands on its most
+ * recent open tab, or the pick screen scoped to it.
+ */
+const ProjectsDrawer = () => {
+  const open = useShell((s) => s.drawerOpen);
+  const activeProject = useShell((s) => s.activeProject);
+  const sessions = useHub((s) => s.sessions);
+
+  const pick = (project: string): void => {
+    const recent = latestTabIn(project);
+    if (recent) {
+      activateTab(recent);
+    } else {
+      useShell.setState({ activeProject: project, activeKey: null });
+    }
+    setDrawerOpen(false);
+  };
+
+  return (
+    <>
+      {open ? (
+        <button
+          type="button"
+          aria-label="Close the projects drawer"
+          onClick={() => setDrawerOpen(false)}
+          className="fixed inset-x-0 bottom-0 top-(--lucid-shell-top,37px) z-30 cursor-default bg-ink-900/40"
+        />
+      ) : null}
+      <aside
+        data-test="projects-drawer"
+        aria-hidden={!open}
+        className={`fixed bottom-0 left-0 top-(--lucid-shell-top,37px) z-40 flex w-[280px] flex-col overflow-y-auto border-r border-ink-500 bg-ink-800 py-2 shadow-[8px_0_30px_rgba(0,0,0,0.45)] transition-transform duration-200 ease-out ${
+          open ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint">
+          Projects
+        </div>
+        {[...byProject(sessions)].map(([project, rows]) => {
+          const isActive = project === activeProject;
+          const worktrees = new Set(rows.map((r) => r.worktree).filter(Boolean));
+          return (
+            <button
+              key={project}
+              type="button"
+              data-test="drawer-project"
+              data-active={isActive ? "true" : "false"}
+              title={project}
+              onClick={() => pick(project)}
+              className={`flex w-full cursor-pointer flex-col gap-0.5 px-3 py-2 text-left ${
+                isActive
+                  ? "bg-ink-700 shadow-[inset_2px_0_0_var(--color-accent)]"
+                  : "hover:bg-ink-700"
+              }`}
+            >
+              <span className="flex items-baseline gap-2">
+                <span className="text-[12px] font-semibold text-fg">{projectName(project)}</span>
+                <span className="text-[10px] tabular-nums text-fg-faint">
+                  {rows.length} artifact{rows.length === 1 ? "" : "s"}
+                </span>
+              </span>
+              <span className="truncate text-[10px] text-fg-faint">{project}</span>
+              {worktrees.size > 0 ? (
+                <span className="text-[10px] text-accent-bright">
+                  +{worktrees.size} worktree{worktrees.size === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </aside>
+    </>
+  );
+};
+
 /** The "+" opener: a NEW-TAB gesture, not a dropdown. It deselects the
  *  current tab, which lands the shell on the full-screen pick-a-session
  *  page (the same screen a fresh shell shows) - the way a browser's + gives
@@ -179,8 +259,13 @@ const HubHealth = () => {
 };
 
 const EmptyShell = () => {
-  const sessions = useHub((s) => s.sessions);
+  const allSessions = useHub((s) => s.sessions);
   const loaded = useHub((s) => s.loaded);
+  const activeProject = useShell((s) => s.activeProject);
+  // Scoped like the strip (D8): inside a project, its artifacts; the way out
+  // is explicit, not implied.
+  const sessions =
+    activeProject === null ? allSessions : allSessions.filter((s) => s.project === activeProject);
   // Until the first listing lands the truthful state is LOOKING, not empty -
   // claiming "no sessions" mid-scan told the human to go run a command.
   // pt-[12vh], not vertical centering: this screen and the ⌘K palette are
@@ -197,7 +282,23 @@ const EmptyShell = () => {
     <div className="flex min-h-0 flex-1 flex-col items-center gap-4 bg-ink-850 pt-[12vh]">
       {sessions.length > 0 ? (
         <>
-          <div className="text-[13px] text-fg-muted">Pick a session to review.</div>
+          <div className="flex items-baseline gap-3">
+            <div className="text-[13px] text-fg-muted">
+              {activeProject === null
+                ? "Pick a session to review."
+                : `Pick an artifact in ${projectName(activeProject)}.`}
+            </div>
+            {activeProject !== null ? (
+              <button
+                type="button"
+                data-test="scope-clear"
+                onClick={() => useShell.setState({ activeProject: null })}
+                className="cursor-pointer text-[11px] text-fg-faint underline-offset-2 hover:text-fg hover:underline"
+              >
+                all projects
+              </button>
+            ) : null}
+          </div>
           <div className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto border border-ink-600 bg-ink-800 py-1">
             {[...byProject(sessions)].map(([project, rows]) => (
               <div key={project} data-test="picker-project">
@@ -239,8 +340,19 @@ const EmptyShell = () => {
 export const Shell = () => {
   const sessionKeys = useShell((s) => s.sessionKeys);
   const activeKey = useShell((s) => s.activeKey);
+  const activeProject = useShell((s) => s.activeProject);
+  const drawerOpen = useShell((s) => s.drawerOpen);
   const sessions = useHub((s) => s.sessions);
   const bootHandled = useRef(false);
+
+  // The strip is project-scoped (D8): only the active project's tabs show.
+  // A tab whose project the listing does not know yet stays visible rather
+  // than vanishing mid-load.
+  const projectOf = new Map(sessions.map((s) => [s.artifact, s.project]));
+  const visibleKeys =
+    activeProject === null
+      ? sessionKeys
+      : sessionKeys.filter((k) => (projectOf.get(k) ?? activeProject) === activeProject);
 
   useEffect(() => {
     connectHub();
@@ -275,7 +387,11 @@ export const Shell = () => {
         setPaletteOpen(!useHub.getState().paletteOpen);
         return;
       }
-      const { sessionKeys: keys, activeKey: current } = useShell.getState();
+      // ⌘digits index the VISIBLE (project-scoped) strip, like the pointer.
+      const { sessionKeys: all, activeKey: current, activeProject: proj } = useShell.getState();
+      const rows = useHub.getState().sessions;
+      const pOf = new Map(rows.map((r) => [r.artifact, r.project]));
+      const keys = proj === null ? all : all.filter((k) => (pOf.get(k) ?? proj) === proj);
       const digit = Number.parseInt(e.key, 10);
       if (!e.shiftKey && Number.isInteger(digit) && digit >= 1 && digit <= 9) {
         const key = keys[digit - 1];
@@ -312,7 +428,31 @@ export const Shell = () => {
         data-test="shell-tabbar"
         className="flex h-9 flex-none items-stretch overflow-x-auto border-b border-ink-600 bg-ink-900"
       >
-        {sessionKeys.map((k) => (
+        <button
+          type="button"
+          data-test="drawer-toggle"
+          title="Projects"
+          aria-expanded={drawerOpen}
+          onClick={(e) => {
+            e.currentTarget.blur();
+            setDrawerOpen(!drawerOpen);
+          }}
+          className={`cursor-pointer border-r border-ink-600 px-3 text-[13px] leading-none outline-none hover:bg-ink-800 ${
+            drawerOpen ? "text-accent-bright" : "text-fg-muted hover:text-fg"
+          }`}
+        >
+          ☰
+        </button>
+        {activeProject !== null ? (
+          <span
+            data-test="scope-label"
+            title={activeProject}
+            className="flex flex-none items-center border-r border-ink-600 px-2.5 text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint"
+          >
+            {projectName(activeProject)}
+          </span>
+        ) : null}
+        {visibleKeys.map((k) => (
           <Tab key={k} sessionKey={k} active={k === activeKey} />
         ))}
         <NewTabButton />
@@ -328,22 +468,29 @@ export const Shell = () => {
         </button>
       </div>
       <Palette />
-      {/* EVERY open tab's view stays mounted; the inactive ones hide with
-          display:none. This is what makes switching instant and what keeps
-          assistant-ui's composer draft and pending attachments alive - that
-          state is component-local and would die with an unmount. Only the
-          active view takes window listeners (SessionView's `active`). */}
-      {sessionKeys.map((k) => {
-        const handle = getSession(k);
-        if (!handle) return null;
-        const isActive = k === activeKey;
-        return (
-          <div key={k} className={isActive ? "min-h-0 flex-1" : "hidden"}>
-            <SessionView session={handle} shell active={isActive} />
-          </div>
-        );
-      })}
-      {active ? null : <EmptyShell />}
+      {/* GTM-drawer parallax (D7): the drawer OVERLAYS this region, and the
+          region also eases right while it is open - motion says "shifted
+          aside", not "replaced". EVERY open tab's view stays mounted; the
+          inactive ones hide with display:none (drafts survive switching).
+          Only the active view takes window listeners. */}
+      <div
+        className={`flex min-h-0 flex-1 flex-col transition-transform duration-200 ease-out ${
+          drawerOpen ? "translate-x-6" : "translate-x-0"
+        }`}
+      >
+        {sessionKeys.map((k) => {
+          const handle = getSession(k);
+          if (!handle) return null;
+          const isActive = k === activeKey;
+          return (
+            <div key={k} className={isActive ? "min-h-0 flex-1" : "hidden"}>
+              <SessionView session={handle} shell active={isActive} />
+            </div>
+          );
+        })}
+        {active ? null : <EmptyShell />}
+      </div>
+      <ProjectsDrawer />
     </div>
   );
 };

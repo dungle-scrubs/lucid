@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { join, resolve as resolvePath } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import { canonicalArtifactPath, sessionPaths, type SessionPaths } from "../core/paths.ts";
 import { defaultRoots, listAll, registerSession, type RegistryEntry } from "../core/registry.ts";
@@ -88,9 +89,12 @@ export interface HubSession extends RegistryEntry {
   /** True when the daemon itself hosts it right now (stream + appends). */
   readonly hosted: boolean;
   /** The session's project root (nearest .git, else the artifact's own
-   *  directory). A tab is a SESSION; the project is a grouping - this is
-   *  what the shell groups by. */
+   *  directory; a worktree resolves to its MAIN repo). A tab is a SESSION;
+   *  the project is a grouping - this is what the shell groups by. */
   readonly project: string;
+  /** Present when the session lives in a git worktree: that checkout's
+   *  root, shown as a qualifier under its main project. */
+  readonly worktree?: string;
 }
 
 /** The shell page: boots the chrome bundle in shell mode. The client fetches
@@ -147,16 +151,41 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     for (const e of entries) idToArtifact.set(sessionId(e.artifact), e.artifact);
   };
 
-  /** Project roots are stable for a given artifact path; the listing runs
-   *  every poll tick, so the .git walk happens once per artifact, not per
-   *  tick. */
-  const projectCache = new Map<string, string>();
-  const projectOf = async (artifact: string): Promise<string> => {
+  /** Project identity is stable for a given artifact path; the listing runs
+   *  every poll tick, so the .git resolution happens once per artifact, not
+   *  per tick. */
+  const projectCache = new Map<string, { project: string; worktree?: string }>();
+
+  /**
+   * A session's project, worktree-aware: a git WORKTREE's `.git` is a file
+   * pointing at `<main>/.git/worktrees/<name>`, and the drawer groups
+   * worktrees under their MAIN repo even though they live in other
+   * directories. `project` is always the grouping root; `worktree` names the
+   * checkout when it differs.
+   */
+  const resolveProject = async (
+    artifact: string,
+  ): Promise<{ project: string; worktree?: string }> => {
     const cached = projectCache.get(artifact);
     if (cached !== undefined) return cached;
     const root = await projectRoot(sessionPaths(artifact));
-    projectCache.set(artifact, root);
-    return root;
+    let resolved: { project: string; worktree?: string } = { project: root };
+    try {
+      const gitPath = join(root, ".git");
+      if ((await stat(gitPath)).isFile()) {
+        const raw = await readFile(gitPath, "utf8");
+        const m = /^gitdir:\s*(.+)$/m.exec(raw);
+        if (m?.[1]) {
+          const gitdir = resolvePath(root, m[1].trim());
+          const wt = /^(.*)[/]\.git[/]worktrees[/][^/]+[/]?$/.exec(gitdir);
+          if (wt?.[1]) resolved = { project: wt[1], worktree: root };
+        }
+      }
+    } catch {
+      /* plain .git directory, or unreadable: the root is the project */
+    }
+    projectCache.set(artifact, resolved);
+    return resolved;
   };
 
   const listHub = async (): Promise<HubSession[]> => {
@@ -165,7 +194,14 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     return Promise.all(
       entries.map(async (e) => {
         const id = sessionId(e.artifact);
-        return { ...e, id, hosted: mounts.has(id), project: await projectOf(e.artifact) };
+        const proj = await resolveProject(e.artifact);
+        return {
+          ...e,
+          id,
+          hosted: mounts.has(id),
+          project: proj.project,
+          ...(proj.worktree ? { worktree: proj.worktree } : {}),
+        };
       }),
     );
   };

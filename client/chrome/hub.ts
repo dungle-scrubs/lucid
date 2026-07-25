@@ -17,8 +17,11 @@ export interface HubSession {
   readonly lastSeen: string;
   readonly id: string;
   readonly hosted: boolean;
-  /** Project root path - the grouping the shell displays sessions under. */
+  /** Project root path - the grouping the shell displays sessions under
+   *  (a worktree resolves to its MAIN repo). */
   readonly project: string;
+  /** Present when the session lives in a git worktree: that checkout's root. */
+  readonly worktree?: string;
 }
 
 /** Display name of a project root ("lucid" for /Users/x/dev/lucid). */
@@ -70,7 +73,19 @@ const lastActivated = new Map<string, number>();
 
 const activate = (key: string): void => {
   lastActivated.set(key, Date.now());
-  useShell.setState({ activeKey: key });
+  // Activating a tab follows it to its project: the strip is project-scoped
+  // (D8), so landing on a tab from elsewhere (⌘K, ?s boot) rescopes.
+  const project = useHub.getState().sessions.find((s) => s.artifact === key)?.project;
+  useShell.setState({ activeKey: key, ...(project ? { activeProject: project } : {}) });
+};
+
+/** The most recently activated OPEN tab in a project, if any. */
+export const latestTabIn = (project: string): string | undefined => {
+  const rows = useHub.getState().sessions;
+  const inProject = new Set(rows.filter((s) => s.project === project).map((s) => s.artifact));
+  return [...useShell.getState().sessionKeys]
+    .filter((k) => inProject.has(k))
+    .sort((a, b) => (lastActivated.get(b) ?? 0) - (lastActivated.get(a) ?? 0))[0];
 };
 
 const enforceStreamCap = (): void => {

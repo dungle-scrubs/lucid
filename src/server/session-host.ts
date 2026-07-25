@@ -6,6 +6,7 @@ import { readLastAttendant } from "../core/attendant.ts";
 import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
 import { foldLog, versionRef } from "../core/fold.ts";
+import { sanitizeAttendant } from "../core/events.ts";
 import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/events.ts";
 import { appendEvents, readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
@@ -76,26 +77,10 @@ const parseImages = (input: unknown): PromptImage[] => {
   return out;
 };
 
-/** Validate an untrusted attendant provenance stamp (D18): bounded strings
- *  or nothing - a malformed stamp is dropped, never trusted. */
-const parseAttendant = (input: unknown): AttendantStamp | undefined => {
-  if (!input || typeof input !== "object") return undefined;
-  const o = input as Record<string, unknown>;
-  if (typeof o.harness !== "string" || o.harness.length === 0 || o.harness.length > 64) {
-    return undefined;
-  }
-  const sessionId =
-    typeof o.sessionId === "string" && o.sessionId.length > 0 && o.sessionId.length <= 128
-      ? o.sessionId
-      : undefined;
-  const cwd =
-    typeof o.cwd === "string" && o.cwd.length > 0 && o.cwd.length <= 1024 ? o.cwd : undefined;
-  return {
-    harness: o.harness,
-    ...(sessionId ? { sessionId } : {}),
-    ...(cwd ? { cwd } : {}),
-  };
-};
+/** Validate an untrusted attendant provenance stamp (D18): the shared
+ *  normalizer bounds and control-strips it - a malformed stamp is dropped,
+ *  never trusted. */
+const parseAttendant = (input: unknown): AttendantStamp | undefined => sanitizeAttendant(input);
 
 /** Validate an untrusted structured-question `options` array into clean
  *  choices, dropping any without a non-empty string label. */

@@ -177,7 +177,7 @@ produced them. The CLI stamps automatically when the environment provides
 identity:
 
 ```sh
-export LUCID_HARNESS=claude_code     # harness name (or use wait --harness)
+export LUCID_HARNESS=claude-code     # harness name (or use wait --harness)
 export LUCID_SESSION_ID=<uuid>       # the harness's own conversation id
 ```
 

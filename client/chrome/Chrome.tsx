@@ -242,9 +242,10 @@ export const SessionView = ({
     const startW = useShell.getState().chromeWidth;
     const onMove = (ev: PointerEvent): void => {
       if (!dragging.current) return;
+      // Right-side panel: pointer moving LEFT grows the panel.
       const w = Math.max(
         CHROME_MIN_WIDTH,
-        Math.min(window.innerWidth - 320, startW + (ev.clientX - startX)),
+        Math.min(window.innerWidth - 320, startW + (startX - ev.clientX)),
       );
       setChromeWidth(w);
     };
@@ -270,12 +271,87 @@ export const SessionView = ({
         style={{ "--sidebar-width": `${chromeWidth}px` } as React.CSSProperties}
         className="h-full min-h-0"
       >
-        {/* No border of its own: the divider draws the single boundary line, and
-            two of them stacked read as one thick band. The variant prefix has to
-            match the component's own `group-data-[side=left]:border-r` - a bare
-            `border-r-0` is a different tailwind-merge group, so both would
-            survive and the variant would win on specificity. */}
-        <Sidebar collapsible="offcanvas" className="group-data-[side=left]:border-r-0">
+        <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
+          <Header />
+          <div className="relative min-h-0 flex-1">
+            <NewerVersionBanner />
+            <DiffBar />
+            <VersionViewBanner />
+            <SurfaceUpdating />
+            <iframe
+              ref={attachSurface}
+              title="artifact surface"
+              src={`${session.config.base}/`}
+              // No allow-same-origin: the artifact runs on an opaque origin so
+              // its scripts cannot reach the control routes (D-020).
+              sandbox="allow-scripts"
+              // `ready` is a one-shot message and the listener is installed in
+              // an effect, i.e. after this element exists. Load fires only once
+              // the overlay's module has run, so treating it as ready too means
+              // a missed `ready` cannot leave the surface permanently unpainted.
+              onLoad={() => {
+                session.surface.markOverlayReady();
+                session.surface.pushHighlights();
+              }}
+              // bg-surface, not white: this is the paper the artifact renders
+              // on, and it is the one place the chrome admits what is inside it
+              // is a document rather than more app. It only shows before the
+              // artifact paints (or through a transparent one), so it must not
+              // be a different white than the paper the artifact assumes.
+              className="h-full w-full border-0 bg-surface"
+            />
+          </div>
+        </SidebarInset>
+        {/* The window-splitter pattern: a separator carries the role, and arrow
+            keys resize it for anything that cannot drag. Double-click asks the
+            overlay to measure, because the parent cannot - the surface is on an
+            opaque origin, so contentDocument is null from here. Hidden while
+            collapsed: there is no panel edge to drag. */}
+        {sidebarOpen ? (
+          <hr
+            aria-orientation="vertical"
+            aria-label="Resize the review panel"
+            aria-valuenow={chromeWidth}
+            aria-valuemin={CHROME_MIN_WIDTH}
+            tabIndex={0}
+            onPointerDown={onPointerDown}
+            onDoubleClick={() =>
+              session.surface.toOverlay({ source: "lucid-chrome", type: "measure-content" })
+            }
+            onKeyDown={(e) => {
+              const step = e.shiftKey ? 64 : 16;
+              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+              e.preventDefault();
+              // The panel sits on the RIGHT: moving the divider left grows it.
+              const next = Math.max(
+                CHROME_MIN_WIDTH,
+                Math.min(
+                  window.innerWidth - 320,
+                  chromeWidth + (e.key === "ArrowLeft" ? step : -step),
+                ),
+              );
+              setChromeWidth(next);
+              persistWidth(next);
+            }}
+            title="Drag to resize · double-click to fit the document"
+            // The boundary is the 1px RIGHT BORDER (the panel's edge), same
+            // border-box trick as before the flip: fixed footprint, line
+            // thickens on hover without shifting the artifact.
+            //
+            // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so
+            // without it the divider collapses to nothing - invisible and undraggable.
+            style={{ width: DIVIDER_WIDTH }}
+            className="m-0 h-full shrink-0 cursor-col-resize border-0 border-r-[1px] border-r-ink-600 bg-ink-850 hover:border-r-[2px] hover:border-r-accent-bright focus-visible:border-r-[2px] focus-visible:border-r-accent-bright"
+          />
+        ) : null}
+        {/* The review panel, RIGHT (artifact-first D9): the surface is the
+            primary concern in the center, the inference source at the edge.
+            No border of its own: the divider draws the single boundary line. */}
+        <Sidebar
+          side="right"
+          collapsible="offcanvas"
+          className="group-data-[side=right]:border-l-0"
+        >
           {shell ? (
             /* Under the shell the panel has one face: the review. The Sessions
                list is subsumed by the tab bar + the hub picker, so the tab
@@ -334,80 +410,6 @@ export const SessionView = ({
             </Tabs>
           )}
         </Sidebar>
-        {/* The window-splitter pattern: a separator carries the role, and arrow
-            keys resize it for anything that cannot drag. Double-click asks the
-            overlay to measure, because the parent cannot - the surface is on an
-            opaque origin, so contentDocument is null from here. Hidden while
-            collapsed: there is no panel edge to drag. */}
-        {sidebarOpen ? (
-          <hr
-            aria-orientation="vertical"
-            aria-label="Resize the review panel"
-            aria-valuenow={chromeWidth}
-            aria-valuemin={CHROME_MIN_WIDTH}
-            tabIndex={0}
-            onPointerDown={onPointerDown}
-            onDoubleClick={() =>
-              session.surface.toOverlay({ source: "lucid-chrome", type: "measure-content" })
-            }
-            onKeyDown={(e) => {
-              const step = e.shiftKey ? 64 : 16;
-              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-              e.preventDefault();
-              const next = Math.max(
-                CHROME_MIN_WIDTH,
-                Math.min(
-                  window.innerWidth - 320,
-                  chromeWidth + (e.key === "ArrowRight" ? step : -step),
-                ),
-              );
-              setChromeWidth(next);
-              persistWidth(next);
-            }}
-            title="Drag to resize · double-click to fit the document"
-            // The boundary is the 1px LEFT BORDER, not the element: the element
-            // stays DIVIDER_WIDTH wide as a grabbable target, filled with the
-            // artifact side's own ground so it disappears into that edge. Hover
-            // thickens the line inside that fixed footprint (border-box), so the
-            // artifact never shifts under the pointer.
-            //
-            // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so
-            // without it the divider collapses to nothing - invisible and undraggable.
-            style={{ width: DIVIDER_WIDTH }}
-            className="m-0 h-full shrink-0 cursor-col-resize border-0 border-l-[1px] border-l-ink-600 bg-ink-850 hover:border-l-[2px] hover:border-l-accent-bright focus-visible:border-l-[2px] focus-visible:border-l-accent-bright"
-          />
-        ) : null}
-        <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
-          <Header />
-          <div className="relative min-h-0 flex-1">
-            <NewerVersionBanner />
-            <DiffBar />
-            <VersionViewBanner />
-            <SurfaceUpdating />
-            <iframe
-              ref={attachSurface}
-              title="artifact surface"
-              src={`${session.config.base}/`}
-              // No allow-same-origin: the artifact runs on an opaque origin so
-              // its scripts cannot reach the control routes (D-020).
-              sandbox="allow-scripts"
-              // `ready` is a one-shot message and the listener is installed in
-              // an effect, i.e. after this element exists. Load fires only once
-              // the overlay's module has run, so treating it as ready too means
-              // a missed `ready` cannot leave the surface permanently unpainted.
-              onLoad={() => {
-                session.surface.markOverlayReady();
-                session.surface.pushHighlights();
-              }}
-              // bg-surface, not white: this is the paper the artifact renders
-              // on, and it is the one place the chrome admits what is inside it
-              // is a document rather than more app. It only shows before the
-              // artifact paints (or through a transparent one), so it must not
-              // be a different white than the paper the artifact assumes.
-              className="h-full w-full border-0 bg-surface"
-            />
-          </div>
-        </SidebarInset>
         <Lightbox />
       </SidebarProvider>
     </SessionProvider>

@@ -147,9 +147,7 @@ test("the review loop works through the daemon mount", async ({ page }) => {
   expect(feedback.annotations.some((a) => a.note.includes("One batch"))).toBe(true);
 });
 
-test("two sessions are two tabs with isolated state; switching swaps the view", async ({
-  page,
-}) => {
+test("tabs scope to a project; the drawer switches; drafts survive", async ({ page }) => {
   hub = await startHub();
   const first = await openIntoHub(hub, PLAN_V1);
   cli = first.cli;
@@ -161,13 +159,15 @@ test("two sessions are two tabs with isolated state; switching swaps the view", 
 
   await page.goto(first.shellUrl);
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
+  // The strip is project-scoped: the scope label names the boot session's project.
+  await expect(page.locator('[data-test="scope-label"]')).toBeVisible();
 
-  // "+" is a NEW-TAB gesture: it deselects the current tab and shows the
-  // full-screen pick-a-session page. The row must be truly HITTABLE, not
-  // merely in the DOM (the old popover rendered inside the tab bar's scroll
-  // clip, where playwright's auto-scroll could reach it but a human's
-  // pointer could not - elementFromPoint sees what a human sees).
+  // "+" shows the pick screen SCOPED to this project; the second session
+  // lives in another project, so widen to all projects first. The row must
+  // be truly HITTABLE (elementFromPoint sees what a human sees - a clipped
+  // popover once passed playwright's auto-scroll and failed a real pointer).
   await page.locator('[data-test="tab-add"]').click();
+  await page.locator('[data-test="scope-clear"]').click();
   const row = page.locator('[data-test="picker-row"]').first();
   await expect(row).toBeVisible();
   const hittable = await row.evaluate((el) => {
@@ -176,48 +176,47 @@ test("two sessions are two tabs with isolated state; switching swaps the view", 
     return hit !== null && (el === hit || el.contains(hit));
   });
   expect(hittable).toBe(true);
-  // Both fixtures are named plan.html - the pick screen groups by PROJECT
-  // (the tmp dir here), so select through the second session's group.
   await page
     .locator('[data-test="picker-project"]', { hasText: second.cli.dir })
     .locator('[data-test="picker-row"]')
     .first()
     .click();
-  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+
+  // Opening it rescopes the strip to ITS project: one visible tab, the other
+  // project's tab hidden, not gone.
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
   await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
 
-  // Draft an annotation note AND a message in tab 2, switch to tab 1: both
-  // drafts are tab 2's alone, and tab 1 shows its own artifact. Every open
-  // tab's view stays mounted (hidden), so assertions scope to :visible.
+  // Draft an annotation note AND a message here, then switch projects via
+  // the drawer. Views stay mounted (display:none), so assertions use :visible.
   await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
   await page
     .locator('textarea[placeholder^="What should change here?"]:visible')
     .fill("only for the checklist");
   await page
     .locator('[data-test="message-input"]:visible')
-    .fill("an unsent message must survive a tab switch");
+    .fill("an unsent message must survive a project switch");
 
-  await page.locator('[data-test="shell-tab"]').first().locator("button").first().click();
+  await page.locator('[data-test="drawer-toggle"]').click();
+  await expect(page.locator('[data-test="projects-drawer"]')).toBeVisible();
+  await page.locator('[data-test="drawer-project"]', { hasText: cli.dir }).click();
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
   await expect(
     page.locator('textarea[placeholder^="What should change here?"]:visible'),
   ).toHaveCount(0);
   await expect(page.locator('[data-test="message-input"]:visible')).toHaveValue("");
 
-  // Back to tab 2: BOTH drafts survived the switch - the annotation note
-  // lives in the session store, the message draft in assistant-ui's own
-  // component state, which is exactly why the hidden view stays mounted.
-  await page.locator('[data-test="shell-tab"]').nth(1).locator("button").first().click();
+  // Back via the drawer: BOTH drafts survived - the annotation note in the
+  // session store, the message draft in assistant-ui component state, which
+  // is exactly why hidden views stay mounted.
+  await page.locator('[data-test="drawer-toggle"]').click();
+  await page.locator('[data-test="drawer-project"]', { hasText: second.cli.dir }).click();
   await expect(
     page.locator('textarea[placeholder^="What should change here?"]:visible'),
   ).toHaveValue("only for the checklist");
   await expect(page.locator('[data-test="message-input"]:visible')).toHaveValue(
-    "an unsent message must survive a tab switch",
+    "an unsent message must survive a project switch",
   );
-
-  // ⌘1 jumps back to the first tab.
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+1" : "Control+1");
-  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
 });
 
 test("the command palette opens sessions and runs review actions", async ({ page }) => {
@@ -241,7 +240,8 @@ test("the command palette opens sessions and runs review actions", async ({ page
   await page.locator('[data-test="palette-input"]').fill("open plan");
   await page.locator('[data-test="palette"] [cmdk-item]', { hasText: "plan.html" }).first().click();
   await expect(page.locator('[data-test="palette-overlay"]')).toHaveCount(0);
-  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+  // Cross-project open rescopes the strip: one visible tab in the new project.
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
   await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
 
   // ⌘K -> "toggle marks" runs an action on the ACTIVE session.

@@ -144,10 +144,19 @@ const deriveSessionHistory = (events: readonly LogEvent[]): SessionHistoryRecord
   for (const e of events) {
     const stamp = "attendant" in e ? e.attendant : undefined;
     if (!stamp) continue;
-    const key = `${stamp.harness}\u0000${stamp.sessionId ?? ""}`;
+    // JSON tuple key: collision-free even if a stamp smuggled a separator
+    // (the writers strip control chars, but the fold must not depend on it).
+    const key = JSON.stringify([stamp.harness, stamp.sessionId ?? ""]);
     const existing = byKey.get(key);
     if (existing) {
-      byKey.set(key, { ...existing, lastAt: e.at, events: existing.events + 1 });
+      byKey.set(key, {
+        ...existing,
+        // A later stamp may know details an earlier one lacked (cwd from a
+        // fuller writer): first-known wins, absent fills in.
+        ...(existing.cwd === undefined && stamp.cwd ? { cwd: stamp.cwd } : {}),
+        lastAt: e.at,
+        events: existing.events + 1,
+      });
     } else {
       byKey.set(key, {
         harness: stamp.harness,

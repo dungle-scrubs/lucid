@@ -25,13 +25,46 @@ interface BaseEvent {
  * has no harness session).
  */
 export interface AttendantStamp {
-  /** Harness identity, e.g. "claude_code", "codex". */
+  /** Harness identity, e.g. "claude-code", "codex". */
   readonly harness: string;
   /** The harness's own conversation/session id (stable across resumes). */
   readonly sessionId?: string;
   /** Working directory the session runs from - resume is cwd-scoped. */
   readonly cwd?: string;
 }
+
+/** Strip control characters (incl. the NUL a naive dedupe key would collide
+ *  on) and bound the length. Empty after cleaning = absent. */
+const cleanStampField = (value: unknown, max: number): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  // Code-point filter rather than a control-char regex (which lint rejects
+  // for good reason elsewhere): C0 controls and DEL are dropped.
+  const cleaned = [...value]
+    .filter((ch) => {
+      const c = ch.charCodeAt(0);
+      return c > 0x1f && c !== 0x7f;
+    })
+    .join("")
+    .trim()
+    .slice(0, max);
+  return cleaned.length > 0 ? cleaned : undefined;
+};
+
+/**
+ * The ONE attendant normalizer (D18), shared by the CLI's direct-append path
+ * and the server's HTTP handlers, so the persistent-log invariant (bounded,
+ * control-free strings) cannot depend on which writer was live. Returns
+ * undefined when no usable harness identity remains.
+ */
+export const sanitizeAttendant = (input: unknown): AttendantStamp | undefined => {
+  if (!input || typeof input !== "object") return undefined;
+  const o = input as Record<string, unknown>;
+  const harness = cleanStampField(o.harness, 64);
+  if (!harness) return undefined;
+  const sessionId = cleanStampField(o.sessionId, 128);
+  const cwd = cleanStampField(o.cwd, 1024);
+  return { harness, ...(sessionId ? { sessionId } : {}), ...(cwd ? { cwd } : {}) };
+};
 
 /** Opens a lifecycle segment; carries the v1 snapshot reference. */
 export interface SessionOpenedEvent extends BaseEvent {

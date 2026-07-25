@@ -139,12 +139,23 @@ const revisePrompt = (payload: WaitPayload, artifact: string): string | null => 
 /** Run a recipe argv to completion. Returns the exit code; a spawn that cannot
  *  even start (missing executable -> synchronous throw) returns 127 rather than
  *  throwing, so one bad recipe never crashes the launcher. */
-const runSpawn = async (argv: string[], cwd: string, logFile: string): Promise<number> => {
+const runSpawn = async (
+  argv: string[],
+  cwd: string,
+  logFile: string,
+  identity?: { harness: string; sessionId: string },
+): Promise<number> => {
+  // The child is its OWN harness session: inheriting the launcher's
+  // LUCID_SESSION_ID would stamp the child's events as the parent
+  // conversation (D18 misattribution).
+  const env = identity
+    ? { ...process.env, LUCID_HARNESS: identity.harness, LUCID_SESSION_ID: identity.sessionId }
+    : { ...process.env, LUCID_HARNESS: undefined, LUCID_SESSION_ID: undefined };
   const fd = openSync(logFile, "a");
   try {
     const proc = Bun.spawn(argv, {
       cwd,
-      env: process.env,
+      env,
       stdin: "ignore",
       stdout: fd,
       stderr: fd,
@@ -230,7 +241,10 @@ const createChild = async (
   );
   const short = safeForkId(fork.id).slice(0, 8);
   log(`fork ${short}: spawning "${resolved.name}" -> ${childArtifact}`);
-  const code = await runSpawn(argv, parent.artifactDir, join(forkDir, "create.out.log"));
+  const code = await runSpawn(argv, parent.artifactDir, join(forkDir, "create.out.log"), {
+    harness: resolved.name,
+    sessionId: childSessionId,
+  });
   if (code !== 0) log(`fork ${short}: create turn exited ${code} (see ${forkDir}/create.out.log)`);
 
   const open = opts.openChild ?? ensureChildOpen;
@@ -241,7 +255,7 @@ const createChild = async (
   log(`fork ${short}: opened ${childPaths.name}`);
   // Shape-C liveness runs for the loop's lifetime; a failure here never aborts
   // the parent watch, but it must be observable rather than silently swallowed.
-  void attendChild(childPaths, childSessionId, resolved.recipe, opts).catch((err) =>
+  void attendChild(childPaths, childSessionId, resolved.recipe, opts, resolved.name).catch((err) =>
     log(`${childPaths.name}: attend loop errored: ${(err as Error).message}`),
   );
   return { forkId: fork.id, childArtifact, childSessionId, harness, status: "created" };
@@ -291,6 +305,7 @@ export const attendChild = async (
   sessionId: string,
   recipe: SpawnRecipe,
   opts: LaunchOptions,
+  harnessName = "agent",
 ): Promise<void> => {
   const log = opts.log ?? ((m) => process.stdout.write(`${m}\n`));
   if (!recipe.resume) {
@@ -345,9 +360,13 @@ export const attendChild = async (
       nextCursor: payload.nextCursor,
       at: new Date().toISOString(),
     });
-    await deliver(child, { t: "agent_ack", id: crypto.randomUUID(), intent: "revise" }).catch(
-      () => {},
-    );
+    await deliver(child, {
+      t: "agent_ack",
+      id: crypto.randomUUID(),
+      intent: "revise",
+      // The CHILD session's identity (D18): the launcher acts on its behalf.
+      attendant: { harness: harnessName, sessionId, cwd: child.artifactDir },
+    }).catch(() => {});
     const argv = buildArgv(recipe.resume, {
       id: sessionId,
       artifact: child.artifactPath,
@@ -355,7 +374,10 @@ export const attendChild = async (
       prompt,
     });
     log(`${child.name}: applying feedback via resume`);
-    const code = await runSpawn(argv, child.artifactDir, join(child.sessionDir, "revise.out.log"));
+    const code = await runSpawn(argv, child.artifactDir, join(child.sessionDir, "revise.out.log"), {
+      harness: harnessName,
+      sessionId,
+    });
     // Consume the batch (advance the cursor) only on a clean turn, so a failed
     // resume is retried rather than silently dropping the feedback. Bounded, so a
     // persistently broken recipe can't spin forever.

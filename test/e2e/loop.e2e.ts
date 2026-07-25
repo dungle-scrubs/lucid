@@ -1036,9 +1036,10 @@ test("double-clicking the divider fits the surface to the document", async ({ pa
   const fitted = await settledWidth();
   expect(fitted).toBeGreaterThanOrEqual(320); // never below the panel minimum
 
-  // Arrow keys resize too, so the divider is not pointer-only.
+  // Arrow keys resize too, so the divider is not pointer-only. The panel
+  // sits on the RIGHT (artifact-first D9), so ArrowLeft grows it.
   await divider.focus();
-  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowLeft");
   await expect.poll(settledWidth).toBe(fitted + 16);
 });
 

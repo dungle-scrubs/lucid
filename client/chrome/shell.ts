@@ -63,6 +63,11 @@ interface ShellState {
   sessionKeys: readonly string[];
   /** The session driving the render, or null before boot. */
   activeKey: string | null;
+  /** The project scoping the tab strip (artifact-first D8), or null for
+   *  all projects (fresh shell, nothing opened yet). */
+  activeProject: string | null;
+  /** The projects drawer (D7) is showing. */
+  drawerOpen: boolean;
 }
 
 export const useShell = create<ShellState>(() => ({
@@ -71,7 +76,11 @@ export const useShell = create<ShellState>(() => ({
   sidebarTab: "chat",
   sessionKeys: [],
   activeKey: null,
+  activeProject: null,
+  drawerOpen: false,
 }));
+
+export const setDrawerOpen = (open: boolean): void => useShell.setState({ drawerOpen: open });
 
 export const setChromeWidth = (w: number): void => useShell.setState({ chromeWidth: w });
 
