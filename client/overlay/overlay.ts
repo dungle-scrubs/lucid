@@ -121,12 +121,12 @@ export class LucidOverlay extends LitElement {
       inset: 0;
       pointer-events: none;
       z-index: 2147483646;
-      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     .hover {
       position: fixed;
-      border: 1.5px dashed rgba(99, 179, 237, 0.9);
-      background: rgba(99, 179, 237, 0.08);
+      border: 1.5px dashed rgba(94, 129, 172, 0.9);
+      background: rgba(94, 129, 172, 0.08);
       border-radius: 3px;
       pointer-events: none;
       transition: all 0.04s linear;
@@ -138,25 +138,27 @@ export class LucidOverlay extends LitElement {
       box-sizing: border-box;
       transition: background 0.1s linear, box-shadow 0.1s linear;
     }
-    /* committed = sent (brass solid); queued = composed-but-unsent (brass dashed);
-       pending = the anchor being composed right now (blue, active). */
+    /* Nord frost carries the mark language on the paper (matching the chrome's
+       SMUI theme): committed = sent (frost solid); queued = composed-but-unsent
+       (frost dashed); pending = the anchor being composed right now (Nord
+       purple - active, distinct from the frost of settled marks). */
     .marker.committed {
-      background: rgba(246, 224, 94, 0.20);
-      border: 1.5px solid rgba(214, 158, 46, 0.85);
-      box-shadow: 0 0 0 1px rgba(214, 158, 46, 0.22);
+      background: rgba(136, 192, 208, 0.22);
+      border: 1.5px solid rgba(94, 129, 172, 0.85);
+      box-shadow: 0 0 0 1px rgba(94, 129, 172, 0.22);
     }
     .marker.queued {
-      background: rgba(203, 168, 90, 0.12);
-      border: 1.5px dashed rgba(203, 168, 90, 0.9);
+      background: rgba(136, 192, 208, 0.12);
+      border: 1.5px dashed rgba(129, 161, 193, 0.9);
     }
     .marker.pending {
-      background: rgba(99, 179, 237, 0.16);
-      border: 1.5px solid rgba(99, 179, 237, 0.95);
-      box-shadow: 0 0 0 2px rgba(99, 179, 237, 0.22);
+      background: rgba(180, 142, 173, 0.16);
+      border: 1.5px solid rgba(180, 142, 173, 0.95);
+      box-shadow: 0 0 0 2px rgba(180, 142, 173, 0.22);
     }
     .marker.focused {
-      background: rgba(246, 224, 94, 0.42);
-      box-shadow: 0 0 0 2px rgba(214, 158, 46, 0.55);
+      background: rgba(136, 192, 208, 0.45);
+      box-shadow: 0 0 0 2px rgba(94, 129, 172, 0.55);
     }
     .badge {
       position: fixed;
@@ -177,14 +179,14 @@ export class LucidOverlay extends LitElement {
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
     }
     .badge.committed {
-      background: rgba(214, 158, 46, 0.97);
+      background: rgba(129, 161, 193, 0.97);
     }
     .badge.queued {
-      background: rgba(203, 168, 90, 0.95);
-      border: 1px dashed rgba(110, 84, 28, 0.7);
+      background: rgba(136, 192, 208, 0.95);
+      border: 1px dashed rgba(76, 104, 140, 0.7);
     }
     .badge.focused {
-      box-shadow: 0 0 0 3px rgba(214, 158, 46, 0.5);
+      box-shadow: 0 0 0 3px rgba(94, 129, 172, 0.5);
       filter: brightness(1.08);
     }
   `;
@@ -288,16 +290,16 @@ export class LucidOverlay extends LitElement {
     const style = document.createElement("style");
     style.id = "__lucid_diff_style";
     style.textContent = `
-      [data-diff="added"] { box-shadow: inset 3px 0 0 #7d8e63; background: rgba(125,142,99,0.10); border-radius: 3px; }
-      [data-diff="changed"] { box-shadow: inset 3px 0 0 #97a67e; }
+      [data-diff="added"] { box-shadow: inset 3px 0 0 #8aa872; background: rgba(163,190,140,0.12); border-radius: 3px; }
+      [data-diff="changed"] { box-shadow: inset 3px 0 0 #a3be8c; }
       .lucid-diff-was, .lucid-diff-now { display: block; border-radius: 3px; padding: 2px 6px; }
-      .lucid-diff-was { text-decoration: line-through; opacity: 0.7; background: rgba(192,97,63,0.12); }
-      .lucid-diff-now { margin-top: 3px; background: rgba(125,142,99,0.12); }
+      .lucid-diff-was { text-decoration: line-through; opacity: 0.7; background: rgba(191,97,106,0.12); }
+      .lucid-diff-now { margin-top: 3px; background: rgba(163,190,140,0.14); }
       .lucid-diff-was::before, .lucid-diff-now::before { display: block; font-size: 9px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; text-decoration: none; opacity: 0.8; }
-      .lucid-diff-was::before { content: "was"; color: #c0613f; }
-      .lucid-diff-now::before { content: "now"; color: #7d8e63; }
-      .lucid-ghost { display: block; opacity: 0.55; text-decoration: line-through; background: rgba(192,97,63,0.08); box-shadow: inset 3px 0 0 #c0613f; border-radius: 3px; }
-      [data-hunk].lucid-active { outline: 2px solid #bd9a4e; outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; }
+      .lucid-diff-was::before { content: "was"; color: #bf616a; }
+      .lucid-diff-now::before { content: "now"; color: #6f8d59; }
+      .lucid-ghost { display: block; opacity: 0.55; text-decoration: line-through; background: rgba(191,97,106,0.08); box-shadow: inset 3px 0 0 #bf616a; border-radius: 3px; }
+      [data-hunk].lucid-active { outline: 2px solid #5e81ac; outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; }
     `;
     document.head.appendChild(style);
   }
@@ -314,8 +316,8 @@ export class LucidOverlay extends LitElement {
     const style = document.createElement("style");
     style.id = "__lucid_section_style";
     style.textContent = `
-      @keyframes __lucid_section_flash { from { outline-color: rgba(189,154,78,0.9); } to { outline-color: rgba(189,154,78,0); } }
-      .__lucid_section_target { outline: 2px solid rgba(189,154,78,0.9); outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
+      @keyframes __lucid_section_flash { from { outline-color: rgba(94,129,172,0.9); } to { outline-color: rgba(94,129,172,0); } }
+      .__lucid_section_target { outline: 2px solid rgba(94,129,172,0.9); outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
     `;
     document.head.appendChild(style);
   }

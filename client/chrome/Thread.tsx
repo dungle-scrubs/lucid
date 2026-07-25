@@ -192,7 +192,7 @@ const UserMessage = () => {
   if (isCard) return <MessagePrimitive.Parts components={parts} />;
   return (
     <div className="flex justify-end" data-role="human">
-      <div className="flex min-w-0 max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tr-[4px] border border-cream-100/10 bg-[rgba(226,165,65,0.16)] px-3 py-2">
+      <div className="flex min-w-0 max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tr-[4px] border border-cream-100/10 bg-user/16 px-3 py-2">
         <MessagePrimitive.Parts components={parts} />
       </div>
     </div>
