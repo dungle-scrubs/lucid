@@ -18,8 +18,13 @@ import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
-import { HUB_PORT, hubAlive, hubOpen, runDaemon } from "../server/daemon.ts";
-import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
+import { HUB_PORT, hubAlive, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
+import {
+  discoverLiveServer,
+  loopbackFetch,
+  removeServerDescriptor,
+  viewerUrl,
+} from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import {
   openBrowser,
@@ -67,7 +72,18 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     const viaHub = await hubOpen(paths.artifactPath);
     if (viaHub) {
       url = viaHub.shell;
-      identity = await discoverLiveServer(paths);
+      // The hub accepted this session - it owns it now. A transient miss on
+      // the follow-up handshake must NOT fall through to spawning a
+      // dedicated server: the hub's mount stays alive, and two appenders is
+      // the split-brain the coexistence rule exists to prevent. Retry the
+      // discovery instead, and fail loudly if the hub truly died mid-open.
+      identity = await waitForServer(paths, 4000);
+      if (!identity) {
+        throw new ServerError({
+          message: "the hub accepted the session but its mount never answered",
+          detail: { path: paths.artifactPath, shell: viaHub.shell },
+        });
+      }
     }
   }
 
@@ -83,7 +99,7 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     });
   }
 
-  url ??= `http://127.0.0.1:${identity.port}/__lucid/viewer`;
+  url ??= viewerUrl(identity);
   if (options.open !== false) openBrowser(url);
 
   // Register a pointer in the global hub registry (Model B, Phase 0). Advisory:
@@ -368,10 +384,9 @@ export const runServe = async (file: string): Promise<void> => {
  * double-hosted. `LUCID_HUB_PORT` overrides the default (tests).
  */
 export const runHub = async (options: { port?: number } = {}): Promise<void> => {
-  const envPort = process.env.LUCID_HUB_PORT
-    ? Number.parseInt(process.env.LUCID_HUB_PORT, 10)
-    : undefined;
-  const port = options.port ?? envPort;
+  // options.port is CLI-validated (Options.integer); only the env needs the
+  // strict parse. `--port 0` stays allowed for tests (ephemeral bind).
+  const port = options.port ?? parseHubPort(process.env.LUCID_HUB_PORT);
   // Comma-separated scan roots override (tests, or a machine whose projects
   // do not live under ~/dev).
   const roots = process.env.LUCID_HUB_ROOTS?.split(",")
@@ -400,9 +415,7 @@ export const runHub = async (options: { port?: number } = {}): Promise<void> => 
  * no Chrome flavor is installed.
  */
 export const runApp = async (): Promise<void> => {
-  const envPort = process.env.LUCID_HUB_PORT
-    ? Number.parseInt(process.env.LUCID_HUB_PORT, 10)
-    : undefined;
+  const envPort = parseHubPort(process.env.LUCID_HUB_PORT);
   const port = envPort ?? HUB_PORT;
 
   let alive = await hubAlive(port);

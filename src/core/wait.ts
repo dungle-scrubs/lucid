@@ -46,7 +46,7 @@ interface Waker {
 const RECONNECT_BASE_MS = 200;
 const RECONNECT_MAX_MS = 3000;
 
-const createWaker = (port: number): Waker => {
+const createWaker = (port: number, base = ""): Waker => {
   let pending = false;
   let resolveWake: (() => void) | null = null;
   let closed = false;
@@ -65,10 +65,13 @@ const createWaker = (port: number): Waker => {
     let backoff = RECONNECT_BASE_MS;
     while (!closed) {
       try {
-        const res = await loopbackFetch(port, "/__lucid/events?role=agent", {
+        // `base` scopes the stream to the session's mount on a shared server
+        // (the hub daemon); a bare path there would be a JSON 404 whose body
+        // closes immediately - read as an endless wake/reconnect loop.
+        const res = await loopbackFetch(port, `${base}/__lucid/events?role=agent`, {
           signal: controller.signal,
         });
-        if (!res.body) throw new Error("no body");
+        if (!res.ok || !res.body) throw new Error(`no stream (HTTP ${res.status})`);
         const reader = res.body.getReader();
         for (;;) {
           const { done } = await reader.read();
@@ -204,7 +207,7 @@ export const runWait = async (
       if (wakes % LIVENESS_EVERY === 0) {
         const live = await discoverLiveServer(paths);
         liveKnown = live !== undefined;
-        if (live && !waker) waker = createWaker(live.port);
+        if (live && !waker) waker = createWaker(live.port, live.base ?? "");
       }
       if (!liveKnown) {
         return buildFromState(

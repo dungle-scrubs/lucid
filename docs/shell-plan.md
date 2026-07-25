@@ -121,10 +121,26 @@ a pointer registry (`~/.lucid/registry.json`) is central.
   `--app` window; hub-reconnect indicator; focus routing on tab switch;
   keyboard map complete (⌘K · ⌘1–9 · ⌘⇧[ / ⌘⇧] · ⌘B · ⌘. · ⌘⏎ / ⌘⇧⏎).
 
-Still open (deliberately deferred): `lucid open` does not yet auto-START the
-daemon when none is running (decision 7's end state) — it prefers a running
-hub and otherwise keeps the exact per-session behavior, so every existing
-harness flow is untouched until the shell has real mileage.
+Still open (deliberately deferred):
+
+- `lucid open` does not yet auto-START the daemon when none is running
+  (decision 7's end state) — it prefers a running hub and otherwise keeps the
+  exact per-session behavior, so every existing harness flow is untouched
+  until the shell has real mileage.
+- Session ownership (dedicated server vs hub mount) is descriptor-based, not
+  an atomic lease: a dedicated server publishing its descriptor in the same
+  instant the hub mounts can briefly double-host. The append path itself
+  stays serialized under the log lock, so the log cannot corrupt; the risk is
+  duplicate watchers/broadcasts until one side idles out. An atomic ownership
+  token shared by both server types is the fix when per-session servers are
+  retired anyway.
+- Root-relative asset URLs (`/logo.png`) inside an artifact break under a
+  `/s/<id>` mount. Relative paths (already what self-contained artifacts use)
+  work everywhere; the contract will be narrowed rather than rewriting HTML,
+  CSS, and script-generated URLs.
+- A hub-hosted session with an open browser tab never idle-evicts (the
+  EventSource reconnect counts as activity, and a retry would lazily remount
+  anyway). Accepted: an attended session staying hot is close to intent.
 
 Note: the chrome adopted the SMUI "Spacemolt" theme (Nord frost) on Tailwind
 v4 in `97d9bed`, replacing the ink/brass palette; the mark language on the

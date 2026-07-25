@@ -233,7 +233,9 @@ export const Shell = () => {
   }, []);
 
   // `?s=<id>`: the tab `lucid open` asked for, honored once the listing
-  // names it. One-shot - after that the human owns the tab set.
+  // names it. Consumed only on SUCCESS - a transient identity miss leaves it
+  // pending, so the next listing snapshot retries instead of stranding an
+  // empty shell. After it lands, the human owns the tab set.
   useEffect(() => {
     if (bootHandled.current) return;
     const wanted = new URLSearchParams(window.location.search).get("s");
@@ -243,8 +245,9 @@ export const Shell = () => {
     }
     const row = sessions.find((s) => s.id === wanted);
     if (row) {
-      bootHandled.current = true;
-      void openTab(row);
+      void openTab(row).then((handle) => {
+        if (handle) bootHandled.current = true;
+      });
     }
   }, [sessions]);
 
@@ -311,13 +314,22 @@ export const Shell = () => {
         </button>
       </div>
       <Palette />
-      {active ? (
-        <div className="min-h-0 flex-1">
-          <SessionView key={active.key} session={active} shell />
-        </div>
-      ) : (
-        <EmptyShell />
-      )}
+      {/* EVERY open tab's view stays mounted; the inactive ones hide with
+          display:none. This is what makes switching instant and what keeps
+          assistant-ui's composer draft and pending attachments alive - that
+          state is component-local and would die with an unmount. Only the
+          active view takes window listeners (SessionView's `active`). */}
+      {sessionKeys.map((k) => {
+        const handle = getSession(k);
+        if (!handle) return null;
+        const isActive = k === activeKey;
+        return (
+          <div key={k} className={isActive ? "min-h-0 flex-1" : "hidden"}>
+            <SessionView session={handle} shell active={isActive} />
+          </div>
+        );
+      })}
+      {active ? null : <EmptyShell />}
     </div>
   );
 };

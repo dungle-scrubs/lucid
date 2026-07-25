@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { canonicalArtifactPath, sessionPaths, type SessionPaths } from "../core/paths.ts";
 import { defaultRoots, listAll, registerSession, type RegistryEntry } from "../core/registry.ts";
 import {
@@ -9,7 +10,13 @@ import {
   writeServerDescriptor,
 } from "./discovery.ts";
 import { escapeHtml } from "../core/escape.ts";
-import { CHROME_BUNDLE, CHROME_CSS, FAVICON_SVG } from "./client-bundle.generated.ts";
+import {
+  CHROME_BUNDLE,
+  CHROME_CSS,
+  CLIENT_BUNDLE,
+  FAVICON_SVG,
+} from "./client-bundle.generated.ts";
+import { injectOverlay } from "./inject.ts";
 import { validateHeaders } from "./security.ts";
 import { createSessionHost, type SessionHost } from "./session-host.ts";
 
@@ -158,6 +165,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   /** Host a session in-process (idempotent). The caller has already ruled out
    *  a live dedicated server. */
   const mount = async (id: string, artifact: string): Promise<Mount> => {
+    if (stopped) throw new Error("daemon is stopping");
     const existing = mounts.get(id);
     if (existing) return existing;
     const paths = sessionPaths(artifact);
@@ -193,10 +201,27 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     return created;
   };
 
+  /** Hop-by-hop and trust-bearing headers that must not travel through the
+   *  proxy: loopbackFetch sets its own Host, and a forwarded Origin would
+   *  make the inner server's gate reject the shell's legitimate writes
+   *  (its port differs) while a forged one could smuggle trust. */
+  const sanitizedProxyHeaders = (req: Request): Headers => {
+    const headers = new Headers(req.headers);
+    for (const h of ["host", "origin", "connection", "keep-alive", "transfer-encoding"]) {
+      headers.delete(h);
+    }
+    return headers;
+  };
+
   /**
    * Route a `/s/<id>/…` request: to our own mount, or - when a dedicated
    * server is live for that session - proxied to it, so one origin shows
    * every session without ever creating a second appender.
+   *
+   * The caller has already gated the request (Host/Origin) against the HUB
+   * port; the mount gates again with the same rules, and the proxy forwards
+   * only sanitized headers, so the inner server never sees a Host or Origin
+   * this daemon did not vouch for.
    */
   const handleSessionRoute = async (
     req: Request,
@@ -216,18 +241,32 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (mounted) return mounted.host.handle(req, subPath);
 
     const paths = sessionPaths(artifact);
-    const live = await discoverLiveServer(paths);
+
+    // A descriptor naming OUR port with no mount behind it is a leftover from
+    // a previous hub life on this port. Handshaking it would call back into
+    // this very route and recurse; mounting simply replaces it.
+    const stale = await readServerDescriptor(paths);
+    const live = stale && stale.port === port ? undefined : await discoverLiveServer(paths);
+
     if (live && live.port !== port) {
       // A dedicated server owns this session - proxy, never double-host.
-      // The one exception is the viewer page: it must carry base "/s/<id>"
-      // to address the daemon origin, and the dedicated server would render
-      // base "". Serve it ourselves from the shared renderer via the mount
-      // path? No - the viewer is exactly what the SHELL replaces; under the
-      // daemon the chrome loads once at "/" and talks to `/s/<id>` routes.
+      // Two routes are answered locally even then, because the inner server
+      // renders them for base "" and they would break under the mount, and
+      // both are pure reads of shared state:
+      // - the artifact document (its overlay bootstrap must resolve to
+      //   /s/<id>/__lucid/client.js, not the hub root);
+      // - the overlay bundle itself (served at the router, pre-resolution).
+      if (subPath === "/" && req.method === "GET") {
+        const html = await readFile(paths.currentHtml, "utf8").catch(() => null);
+        if (html === null) return json({ error: "artifact not available" }, 404);
+        return new Response(injectOverlay(html, `/s/${id}`), {
+          headers: { "content-type": "text/html; charset=utf-8", ...noStore },
+        });
+      }
       const url = new URL(req.url);
       const init: RequestInit = {
         method: req.method,
-        headers: req.headers,
+        headers: sanitizedProxyHeaders(req),
         ...(req.method === "GET" || req.method === "HEAD" ? {} : { body: req.body }),
       };
       return loopbackFetch(live.port, `${subPath}${url.search}`, init);
@@ -329,23 +368,44 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const handle = async (req: Request): Promise<Response> => {
     const { pathname } = new URL(req.url);
 
-    // Session mounts do their own gating (identical logic) and must serve the
-    // overlay bundle pre-gate; route to them before the hub's own gate.
     const sessionMatch = /^\/s\/([a-f0-9]{16})(\/.*)?$/.exec(pathname);
+
+    // The overlay bundle is the ONE pre-gate route (the sandboxed artifact
+    // iframe loads it from an opaque origin). It is the same static bytes
+    // for every session, so it is served here at the router - reaching it
+    // must never resolve ids, scan the registry, or mount anything.
+    if (sessionMatch && sessionMatch[2] === "/__lucid/client.js") {
+      const headers: Record<string, string> = {
+        "content-type": "text/javascript; charset=utf-8",
+        "access-control-allow-origin": req.headers.get("origin") ?? "*",
+        "access-control-allow-credentials": "true",
+        ...noStore,
+      };
+      if (req.headers.get("origin") !== null) headers.vary = "Origin";
+      return new Response(CLIENT_BUNDLE, { headers });
+    }
+
+    // EVERYTHING else - hub routes and session mounts alike - sits behind
+    // the Host/Origin gate. Session routes are gated here, before any id
+    // resolution or mounting: the proxy branch rewrites Host for loopback
+    // delivery, so an ungated pass-through would let a DNS-rebound request
+    // ride that rewrite past the inner server's own gate.
+    const headerCheck = validateHeaders(req, port);
+    if (!headerCheck.ok) return json({ error: `forbidden: ${headerCheck.reason}` }, 403);
+
     if (sessionMatch?.[1]) {
       // A slashless mount URL would make the document's RELATIVE references
-      // resolve against /s/ instead of /s/<id>/ - normalize before serving.
+      // resolve against /s/ instead of /s/<id>/ - normalize before serving,
+      // keeping the query string.
       if (sessionMatch[2] === undefined) {
+        const { search } = new URL(req.url);
         return new Response(null, {
           status: 308,
-          headers: { location: `/s/${sessionMatch[1]}/` },
+          headers: { location: `/s/${sessionMatch[1]}/${search}` },
         });
       }
       return handleSessionRoute(req, sessionMatch[1], sessionMatch[2] || "/");
     }
-
-    const headerCheck = validateHeaders(req, port);
-    if (!headerCheck.ok) return json({ error: `forbidden: ${headerCheck.reason}` }, 403);
 
     if (pathname === "/hub/identity" && req.method === "GET") {
       return json({ lucid: "hub", port }, 200, noStore);
@@ -421,6 +481,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
 
 const HUB_PROBE_TIMEOUT_MS = 500;
 
+/** Strict LUCID_HUB_PORT parse: full-string digits in the TCP range, or
+ *  nothing. `parseInt` would accept "17428garbage" and NaN would reach
+ *  fetch/Bun.serve as a port. */
+export const parseHubPort = (raw: string | undefined): number | undefined => {
+  if (!raw || !/^\d{1,5}$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return n >= 1 && n <= 65535 ? n : undefined;
+};
+
 /** True when a hub daemon answers its identity probe on `port`. */
 export const hubAlive = async (port = HUB_PORT): Promise<boolean> => {
   try {
@@ -452,7 +521,7 @@ export interface HubOpenResult {
  */
 export const hubOpen = async (
   artifact: string,
-  port = process.env.LUCID_HUB_PORT ? Number.parseInt(process.env.LUCID_HUB_PORT, 10) : HUB_PORT,
+  port = parseHubPort(process.env.LUCID_HUB_PORT) ?? HUB_PORT,
 ): Promise<HubOpenResult | undefined> => {
   try {
     if (!(await hubAlive(port))) return undefined;

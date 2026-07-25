@@ -52,8 +52,12 @@ const isTextEntry = (node: EventTarget | null): boolean =>
  * single-session viewer, but under the shell those digits belong to the
  * session tab bar and the Sessions panel does not exist.
  */
-const useSessionWiring = (session: SessionHandle, panelDigits: boolean): void => {
+const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: boolean): void => {
   useEffect(() => {
+    // A hidden tab's view stays mounted (drafts survive switching), but only
+    // the ACTIVE session may own the window: N sets of keyboard/postMessage
+    // listeners would all fire on one gesture.
+    if (!active) return;
     const { store, surface, actions } = session;
     const get = store.getState;
     const set = store.setState;
@@ -191,7 +195,7 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean): void =>
       window.removeEventListener("keydown", onSendKey);
       window.removeEventListener("keydown", onPanelKey);
     };
-  }, [session, panelDigits]);
+  }, [session, panelDigits, active]);
 };
 
 /**
@@ -204,16 +208,20 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean): void =>
 export const SessionView = ({
   session,
   shell = false,
+  active = true,
 }: {
   readonly session: SessionHandle;
   readonly shell?: boolean;
+  /** False for a hidden-but-mounted background tab: its DOM and component
+   *  state persist, but it takes no window listeners and answers no keys. */
+  readonly active?: boolean;
 }) => {
   const chromeWidth = useShell((s) => s.chromeWidth);
   const sidebarOpen = useShell((s) => s.sidebarOpen);
   const sidebarTab = useShell((s) => s.sidebarTab);
   const dragging = useRef(false);
 
-  useSessionWiring(session, !shell);
+  useSessionWiring(session, !shell, active);
 
   // A callback ref, not an effect: attach must be synchronous with the
   // element entering the DOM, so a fast iframe `load` can never fire into a
@@ -258,6 +266,7 @@ export const SessionView = ({
       <SidebarProvider
         open={sidebarOpen}
         onOpenChange={setSidebarOpen}
+        hotkey={active}
         style={{ "--sidebar-width": `${chromeWidth}px` } as React.CSSProperties}
         className="h-full min-h-0"
       >

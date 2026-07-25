@@ -12,6 +12,7 @@ import { defaultUrlTransform } from "react-markdown";
 import type { ReactNode } from "react";
 import { AnnotationPart } from "./AnnotationPart.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
+import { visibleEl } from "./dom.ts";
 import { FoldedText } from "./FoldedText.tsx";
 import { useEffect, useState } from "react";
 import {
@@ -473,7 +474,7 @@ const ScrollToLatest = () => {
     // Reading `tick` is the point: the effect re-checks whenever the record
     // grows, since growth moves where "bottom" is without any scroll event.
     if (tick < 0) return;
-    const el = document.querySelector('[data-test="thread-viewport"]');
+    const el = visibleEl('[data-test="thread-viewport"]');
     if (!el) return;
     const check = (): void =>
       setAtBottom(
@@ -492,7 +493,7 @@ const ScrollToLatest = () => {
         title="Scroll to the latest"
         disabled={atBottom}
         onClick={() => {
-          const el = document.querySelector('[data-test="thread-viewport"]');
+          const el = visibleEl('[data-test="thread-viewport"]');
           el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
         }}
         className="pointer-events-auto flex size-8 cursor-pointer items-center justify-center rounded-full border border-ink-400 bg-ink-800/95 text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)] hover:bg-ink-700 disabled:invisible"

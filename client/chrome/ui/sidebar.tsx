@@ -52,6 +52,7 @@ const SidebarProvider = ({
   defaultOpen = true,
   open: openProp,
   onOpenChange: setOpenProp,
+  hotkey = true,
   className,
   style,
   children,
@@ -60,6 +61,10 @@ const SidebarProvider = ({
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Whether THIS provider answers ⌘B. Under the shell every open tab's view
+   *  stays mounted (hidden), and N providers each toggling on one keypress
+   *  cancel each other out on even counts - only the active view listens. */
+  hotkey?: boolean;
 }) => {
   const [_open, _setOpen] = React.useState(defaultOpen);
   const open = openProp ?? _open;
@@ -75,6 +80,7 @@ const SidebarProvider = ({
   const toggleSidebar = React.useCallback(() => setOpen((o) => !o), [setOpen]);
 
   React.useEffect(() => {
+    if (!hotkey) return;
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === SIDEBAR_KEYBOARD_SHORTCUT && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
@@ -83,7 +89,7 @@ const SidebarProvider = ({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleSidebar]);
+  }, [toggleSidebar, hotkey]);
 
   const state = open ? "expanded" : "collapsed";
   const contextValue = React.useMemo<SidebarContextProps>(

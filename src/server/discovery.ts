@@ -106,3 +106,17 @@ export const discoverLiveServer = async (
   if (!descriptor) return undefined;
   return handshake(descriptor.port, paths.artifactPath, descriptor.base ?? "");
 };
+
+/**
+ * The URL a human opens for a live session. A dedicated server has its own
+ * viewer page; a hub-mounted session (base "/s/<id>") is a TAB in the shell -
+ * `<hub>/?s=<id>` - because `<hub>/s/<id>/__lucid/viewer` would render a
+ * second chrome inside the one window.
+ */
+export const viewerUrl = (identity: IdentityResponse): string => {
+  const base = identity.base ?? "";
+  const mountId = /^\/s\/([a-f0-9]+)$/.exec(base)?.[1];
+  return mountId
+    ? `http://127.0.0.1:${identity.port}/?s=${mountId}`
+    : `http://127.0.0.1:${identity.port}/__lucid/viewer`;
+};

@@ -2,7 +2,7 @@ import { Glob } from "bun";
 import { stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { SessionSummary } from "../protocol/wire.ts";
-import { discoverLiveServer, readServerDescriptor } from "../server/discovery.ts";
+import { discoverLiveServer, readServerDescriptor, viewerUrl } from "../server/discovery.ts";
 import { readLastAttendant } from "./attendant.ts";
 import { foldLog } from "./fold.ts";
 import { readEvents } from "./log.ts";
@@ -59,9 +59,7 @@ export const listSessions = async (root: string): Promise<SessionSummary[]> => {
         segment: state.segment,
         annotations: state.annotations.length,
         live: identity !== undefined,
-        ...(identity
-          ? { viewer: `http://127.0.0.1:${identity.port}/__lucid/viewer` }
-          : { resume: `lucid open ${artifactPath}` }),
+        ...(identity ? { viewer: viewerUrl(identity) } : { resume: `lucid open ${artifactPath}` }),
         ...(attendant
           ? {
               lastAttendant: {

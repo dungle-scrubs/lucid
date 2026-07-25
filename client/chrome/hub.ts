@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { visibleEl } from "./dom.ts";
 import type { SessionHandle } from "./session.ts";
 import { dropSession, ensureSession, getSession, useShell } from "./shell.ts";
 
@@ -103,9 +104,10 @@ export const activateTab = (key: string): void => {
   activate(key);
   enforceStreamCap();
   // Focus routing: landing on a tab should land the keyboard with it. The
-  // composer is where typing goes next; rAF waits for the view to mount.
+  // composer is where typing goes next; rAF waits for the view to show
+  // (visibleEl, because every open tab's view stays mounted).
   requestAnimationFrame(() => {
-    document.querySelector<HTMLTextAreaElement>('[data-test="message-input"]')?.focus();
+    visibleEl<HTMLTextAreaElement>('[data-test="message-input"]')?.focus();
   });
 };
 
@@ -115,6 +117,8 @@ export const closeTab = (key: string): void => {
   const handle = getSession(key);
   handle?.disconnect();
   lastActivated.delete(key);
+  const wasActive = useShell.getState().activeKey === key;
+  let promoted: string | null = null;
   useShell.setState((s) => {
     const keys = s.sessionKeys.filter((k) => k !== key);
     const nextActive =
@@ -122,9 +126,14 @@ export const closeTab = (key: string): void => {
         ? // The neighbor that took the closed tab's place, else the last tab.
           (keys[Math.min(s.sessionKeys.indexOf(key), keys.length - 1)] ?? null)
         : s.activeKey;
+    promoted = s.activeKey === key ? nextActive : null;
     return { sessionKeys: keys, activeKey: nextActive };
   });
   dropSession(key);
+  // Promote through activateTab, not by index alone: the neighbor may be an
+  // LRU-disconnected background tab, and landing on a dead stream would show
+  // a frozen review until the human clicked it again.
+  if (wasActive && promoted !== null) activateTab(promoted);
 };
 
 let hubSource: EventSource | null = null;

@@ -1,3 +1,4 @@
+import { visibleEl } from "./dom.ts";
 import type { Pastes } from "./pastes.ts";
 import type { Notify, SessionStorage, SessionStore } from "./store.ts";
 import { uuid } from "./store.ts";
@@ -91,8 +92,8 @@ export const createActions = (ctx: ActionsCtx) => {
     // a message or another pick, and a pick never needed keyboard focus. And a
     // manual submit is an explicit "take me back down", even from a scroll-up.
     requestAnimationFrame(() => {
-      document.querySelector<HTMLTextAreaElement>('[data-test="message-input"]')?.focus();
-      const vp = document.querySelector('[data-test="thread-viewport"]');
+      visibleEl<HTMLTextAreaElement>('[data-test="message-input"]')?.focus();
+      const vp = visibleEl('[data-test="thread-viewport"]');
       vp?.scrollTo({ top: vp.scrollHeight, behavior: "smooth" });
     });
   };

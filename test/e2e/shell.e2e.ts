@@ -96,8 +96,10 @@ const openIntoHub = async (theHub: Hub, html: string): Promise<{ cli: Cli; shell
   return { cli: { ...c, run } as Cli, shellUrl: opened.url };
 };
 
+// :visible - every open tab's view stays mounted, so N iframes exist and
+// only the active one is showing.
 const surfaceOf = (page: Page): FrameLocator =>
-  page.frameLocator('iframe[title="artifact surface"]');
+  page.frameLocator('iframe[title="artifact surface"]:visible');
 
 test.afterEach(async () => {
   await cli?.cleanup();
@@ -166,21 +168,33 @@ test("two sessions are two tabs with isolated state; switching swaps the view", 
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
   await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
 
-  // Draft an annotation note in tab 2, switch to tab 1: the draft is tab 2's
-  // alone, and tab 1 shows its own artifact.
+  // Draft an annotation note AND a message in tab 2, switch to tab 1: both
+  // drafts are tab 2's alone, and tab 1 shows its own artifact. Every open
+  // tab's view stays mounted (hidden), so assertions scope to :visible.
   await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
   await page
-    .locator('textarea[placeholder^="What should change here?"]')
+    .locator('textarea[placeholder^="What should change here?"]:visible')
     .fill("only for the checklist");
+  await page
+    .locator('[data-test="message-input"]:visible')
+    .fill("an unsent message must survive a tab switch");
 
   await page.locator('[data-test="shell-tab"]').first().locator("button").first().click();
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveCount(0);
+  await expect(
+    page.locator('textarea[placeholder^="What should change here?"]:visible'),
+  ).toHaveCount(0);
+  await expect(page.locator('[data-test="message-input"]:visible')).toHaveValue("");
 
-  // Back to tab 2: the draft survived the switch (its store never unmounted).
+  // Back to tab 2: BOTH drafts survived the switch - the annotation note
+  // lives in the session store, the message draft in assistant-ui's own
+  // component state, which is exactly why the hidden view stays mounted.
   await page.locator('[data-test="shell-tab"]').nth(1).locator("button").first().click();
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveValue(
-    "only for the checklist",
+  await expect(
+    page.locator('textarea[placeholder^="What should change here?"]:visible'),
+  ).toHaveValue("only for the checklist");
+  await expect(page.locator('[data-test="message-input"]:visible')).toHaveValue(
+    "an unsent message must survive a tab switch",
   );
 
   // ⌘1 jumps back to the first tab.
