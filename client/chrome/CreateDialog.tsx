@@ -110,6 +110,19 @@ const CreateDialogBody = () => {
     return () => clearTimeout(timer);
   }, [authoring]);
 
+  // A headless turn prints NOTHING until it finishes, so the log stays empty
+  // and the dialog has no evidence of life to show. The clock is that
+  // evidence: a failure now arrives on its own (create-failed), so a running
+  // clock means the turn is still going, not that anything is wedged.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (authoring === null) return;
+    setElapsed(0);
+    const started = Date.now();
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [authoring]);
+
   // Typing `some-test` means `some-test.html`: there is exactly one legal
   // extension, so demanding it typed was ceremony. A name with an explicit
   // extension is left alone (a wrong one still fails, visibly).
@@ -395,8 +408,15 @@ const CreateDialogBody = () => {
               </>
             ) : (
               <>
-                <span className="shimmer text-[13px] text-fg/40">authoring {name}…</span>
+                <span className="shimmer text-[13px] text-fg/40">
+                  authoring {name}… {Math.floor(elapsed / 60)}:
+                  {String(elapsed % 60).padStart(2, "0")}
+                </span>
                 <span className="text-[11px] text-fg-faint">{authoring}</span>
+                <span className="pt-1 text-[11px] text-fg-faint">
+                  A headless turn prints nothing until it finishes, so there is no progress to show.
+                  A few minutes is normal; a failure interrupts this on its own.
+                </span>
               </>
             )}
             {timedOut && createFailed?.artifact !== authoring ? (
