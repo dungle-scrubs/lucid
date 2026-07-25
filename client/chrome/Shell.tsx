@@ -112,8 +112,14 @@ const NewTabButton = () => (
     type="button"
     data-test="tab-add"
     title="New tab - pick a session (⌘K also works)"
-    onClick={() => useShell.setState({ activeKey: null })}
-    className="cursor-pointer px-3 py-[7px] text-[14px] leading-none text-fg-muted hover:bg-ink-800 hover:text-fg"
+    // Blur on activation: the pick screen takes over, and a focus ring left
+    // burning on the + reads as a stuck state. The keyboard path to this
+    // screen is ⌘K, so nothing is lost by not holding focus here.
+    onClick={(e) => {
+      e.currentTarget.blur();
+      useShell.setState({ activeKey: null });
+    }}
+    className="cursor-pointer px-3 py-[7px] text-[14px] leading-none text-fg-muted outline-none hover:bg-ink-800 hover:text-fg"
   >
     +
   </button>
@@ -165,19 +171,22 @@ const EmptyShell = () => {
   const loaded = useHub((s) => s.loaded);
   // Until the first listing lands the truthful state is LOOKING, not empty -
   // claiming "no sessions" mid-scan told the human to go run a command.
+  // pt-[12vh], not vertical centering: this screen and the ⌘K palette are
+  // the same gesture (pick a session), so they hold the same eye line - and
+  // a list anchored near the top does not jump around as it grows.
   if (!loaded) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-ink-850">
+      <div className="flex min-h-0 flex-1 justify-center bg-ink-850 pt-[12vh]">
         <div className="text-[12px] italic text-fg-faint">Looking for sessions…</div>
       </div>
     );
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 bg-ink-850">
+    <div className="flex min-h-0 flex-1 flex-col items-center gap-4 bg-ink-850 pt-[12vh]">
       {sessions.length > 0 ? (
         <>
           <div className="text-[13px] text-fg-muted">Pick a session to review.</div>
-          <div className="flex max-h-[50vh] w-[380px] flex-col overflow-y-auto border border-ink-600 bg-ink-800 py-1">
+          <div className="flex max-h-[50vh] w-[560px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto border border-ink-600 bg-ink-800 py-1">
             {sessions.map((s) => (
               <PickerRow key={s.id} row={s} />
             ))}
