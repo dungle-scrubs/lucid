@@ -37,6 +37,8 @@ export interface SessionHandle {
   /** Close the stream (eviction/teardown). State stays; reconnecting
    *  re-bootstraps. */
   readonly disconnect: () => void;
+  /** Whether the SSE stream is currently open (the cap counts these). */
+  readonly connected: () => boolean;
 }
 
 export const createSession = (config: SessionConfig): SessionHandle => {
@@ -164,5 +166,6 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     notify,
     connect,
     disconnect,
+    connected: () => source !== null,
   };
 };

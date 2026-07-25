@@ -63,6 +63,10 @@ export const waitForServer = async (
 export const stopServer = async (paths: SessionPaths, timeoutMs = 5000): Promise<boolean> => {
   const descriptor = await readServerDescriptor(paths);
   if (!descriptor || !(await discoverLiveServer(paths))) return false; // nothing live to stop
+  // A descriptor with a base belongs to the shared hub daemon, which hosts
+  // OTHER sessions too - killing that pid would take down every one of them.
+  // Restarting the hub is `lucid hub`'s own concern, not `open --restart`'s.
+  if (descriptor.base) return false;
   const kill = (signal: "SIGTERM" | "SIGKILL"): void => {
     try {
       process.kill(descriptor.pid, signal);

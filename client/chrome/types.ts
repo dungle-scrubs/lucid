@@ -15,6 +15,9 @@ export interface Config {
   readonly name: string;
   readonly port: number;
   readonly version: number;
+  /** URL prefix of this session's routes ("" on a dedicated server,
+   *  "/s/<id>" under the daemon). Older servers omit it; treat as "". */
+  readonly base?: string;
 }
 
 /** An image on a message already in the log. The thumb and lightbox address it

@@ -157,7 +157,10 @@ const serveCommand = Command.make("__serve", { file: fileArg }, ({ file }) =>
   runEffect(() => runServe(file)),
 );
 
-const hubCommand = Command.make("hub", {}, () => runEffect(() => runHub()));
+const hubPortOpt = Options.integer("port").pipe(Options.optional);
+const hubCommand = Command.make("hub", { port: hubPortOpt }, ({ port }) =>
+  runEffect(() => runHub({ port: Option.getOrUndefined(port) })),
+);
 
 // `lucid plan render|ingest` - the planner bridge.
 const docArg = Args.file({ name: "doc" });

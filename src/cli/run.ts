@@ -18,7 +18,7 @@ import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload } from "../plan/ingest.ts";
 import { renderPlanDoc } from "../plan/render.ts";
-import { runDaemon } from "../server/daemon.ts";
+import { hubOpen, runDaemon } from "../server/daemon.ts";
 import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { openBrowser, spawnServer, stopServer, waitForServer } from "./self.ts";
@@ -45,9 +45,25 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
   // reattaches to it, so a rebuild is invisible until the process is replaced.
   // --restart stops the live one first without touching the session (no
   // session_ended), so the spawn below starts fresh on the current binary.
+  // (A hub-hosted session is left alone: its descriptor names the shared
+  // daemon, and stopServer refuses to kill that.)
   if (options.restart) await stopServer(paths);
 
   let identity = await discoverLiveServer(paths);
+  let url: string | undefined;
+
+  // Model B: a running hub daemon is preferred - the session surfaces as a
+  // TAB in the one shell window instead of spawning another process on
+  // another port. No hub, or a session already served by a dedicated
+  // server, keeps the exact pre-daemon behavior.
+  if (!identity) {
+    const viaHub = await hubOpen(paths.artifactPath);
+    if (viaHub) {
+      url = viaHub.shell;
+      identity = await discoverLiveServer(paths);
+    }
+  }
+
   if (!identity) {
     await removeServerDescriptor(paths); // clear any stale descriptor
     spawnServer(paths);
@@ -60,7 +76,7 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     });
   }
 
-  const url = `http://127.0.0.1:${identity.port}/__lucid/viewer`;
+  url ??= `http://127.0.0.1:${identity.port}/__lucid/viewer`;
   if (options.open !== false) openBrowser(url);
 
   // Register a pointer in the global hub registry (Model B, Phase 0). Advisory:
@@ -181,7 +197,7 @@ export const runContext = async (
   const live = await discoverLiveServer(paths);
   if (live) {
     try {
-      const res = await loopbackFetch(live.port, "/__lucid/context", {
+      const res = await loopbackFetch(live.port, `${live.base ?? ""}/__lucid/context`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(usage),
@@ -338,15 +354,32 @@ export const runServe = async (file: string): Promise<void> => {
 };
 
 /**
- * `lucid hub` - the always-on hub daemon (Model B, Phase 0). Starts the shared
- * loopback server in the foreground and logs its URL, then blocks until Ctrl-C.
- * It runs alongside the per-session servers and only reads the registry/logs.
+ * `lucid hub [--port <n>]` - the always-on hub daemon (Model B). Starts the
+ * shared loopback server in the foreground and logs its URL, then blocks
+ * until Ctrl-C. Hosts every session in-process under `/s/<id>` and serves
+ * the shell at `/`; sessions with a live dedicated server are proxied, never
+ * double-hosted. `LUCID_HUB_PORT` overrides the default (tests).
  */
-export const runHub = async (): Promise<void> => {
-  const daemon = await runDaemon();
+export const runHub = async (options: { port?: number } = {}): Promise<void> => {
+  const envPort = process.env.LUCID_HUB_PORT
+    ? Number.parseInt(process.env.LUCID_HUB_PORT, 10)
+    : undefined;
+  const port = options.port ?? envPort;
+  // Comma-separated scan roots override (tests, or a machine whose projects
+  // do not live under ~/dev).
+  const roots = process.env.LUCID_HUB_ROOTS?.split(",")
+    .map((r) => r.trim())
+    .filter((r) => r.length > 0);
+  const daemon = await runDaemon({
+    ...(port !== undefined ? { port } : {}),
+    ...(roots && roots.length > 0 ? { roots } : {}),
+  });
   process.stdout.write(`lucid hub listening on http://127.0.0.1:${daemon.port}\n`);
   await new Promise<void>((resolve) => {
     process.once("SIGINT", () => {
+      void daemon.stop().then(resolve);
+    });
+    process.once("SIGTERM", () => {
       void daemon.stop().then(resolve);
     });
   });

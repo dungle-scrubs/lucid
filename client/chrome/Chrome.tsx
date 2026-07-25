@@ -42,13 +42,17 @@ const isTextEntry = (node: EventTarget | null): boolean =>
 /**
  * Everything window-level for the ACTIVE session: the overlay postMessage
  * bridge, the chrome's custom events, and the keyboard map. A hook rather
- * than inline in Chrome so the wiring reads as what it is - the active
+ * than inline in the view so the wiring reads as what it is - the active
  * session's connection to the window - and tears down whole when another
  * session takes the screen. The SSE stream is deliberately NOT here: it
- * belongs to the handle's roster lifetime (see entry.chrome.tsx), so a
+ * belongs to the handle's roster lifetime (entry boot or tab open), so a
  * backgrounded session keeps folding events and draining its outbox.
+ *
+ * `panelDigits` guards ⌘1/⌘2: they switch the panel's own tabs in the
+ * single-session viewer, but under the shell those digits belong to the
+ * session tab bar and the Sessions panel does not exist.
  */
-const useSessionWiring = (session: SessionHandle): void => {
+const useSessionWiring = (session: SessionHandle, panelDigits: boolean): void => {
   useEffect(() => {
     const { store, surface, actions } = session;
     const get = store.getState;
@@ -161,10 +165,10 @@ const useSessionWiring = (session: SessionHandle): void => {
     // own guard rather than duplicating the unsent-work rule here.
     const onPanelKey = (e: KeyboardEvent): void => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      if (e.key === "1") {
+      if (panelDigits && e.key === "1") {
         e.preventDefault();
         setSidebarTab("chat");
-      } else if (e.key === "2") {
+      } else if (panelDigits && e.key === "2") {
         e.preventDefault();
         setSidebarTab("sessions");
         void actions.loadSessions();
@@ -187,16 +191,29 @@ const useSessionWiring = (session: SessionHandle): void => {
       window.removeEventListener("keydown", onSendKey);
       window.removeEventListener("keydown", onPanelKey);
     };
-  }, [session]);
+  }, [session, panelDigits]);
 };
 
-export const Chrome = ({ session }: { readonly session: SessionHandle }) => {
+/**
+ * One session's whole screen: review panel, divider, header, artifact
+ * surface. The single-session viewer IS this (Chrome below); the shell
+ * renders it under a tab bar with `shell` set - which hides the panel's
+ * Review/Sessions tab strip (the tab bar and ⌘K subsume the Sessions panel)
+ * and cedes ⌘1-9 to the session tabs.
+ */
+export const SessionView = ({
+  session,
+  shell = false,
+}: {
+  readonly session: SessionHandle;
+  readonly shell?: boolean;
+}) => {
   const chromeWidth = useShell((s) => s.chromeWidth);
   const sidebarOpen = useShell((s) => s.sidebarOpen);
   const sidebarTab = useShell((s) => s.sidebarTab);
   const dragging = useRef(false);
 
-  useSessionWiring(session);
+  useSessionWiring(session, !shell);
 
   // A callback ref, not an effect: attach must be synchronous with the
   // element entering the DOM, so a fast iframe `load` can never fire into a
@@ -242,7 +259,7 @@ export const Chrome = ({ session }: { readonly session: SessionHandle }) => {
         open={sidebarOpen}
         onOpenChange={setSidebarOpen}
         style={{ "--sidebar-width": `${chromeWidth}px` } as React.CSSProperties}
-        className="h-screen"
+        className="h-full min-h-0"
       >
         {/* No border of its own: the divider draws the single boundary line, and
             two of them stacked read as one thick band. The variant prefix has to
@@ -250,54 +267,63 @@ export const Chrome = ({ session }: { readonly session: SessionHandle }) => {
             `border-r-0` is a different tailwind-merge group, so both would
             survive and the variant would win on specificity. */}
         <Sidebar collapsible="offcanvas" className="group-data-[side=left]:border-r-0">
-          {/* One Tabs root spanning header and content: the triggers live in the
-              header, their panels fill the body. */}
-          <Tabs
-            value={sidebarTab}
-            onValueChange={(v) => {
-              setSidebarTab(v as "chat" | "sessions");
-              // Fetch on first look rather than at boot: a review that never
-              // opens the tab should never pay for a project-wide directory
-              // scan. Refetch on every visit after that, because liveness is
-              // exactly the thing that goes stale.
-              if (v === "sessions") void session.actions.loadSessions();
-            }}
-            className="flex min-h-0 flex-1 flex-col gap-0"
-          >
-            {/* No border and no fill of its own: the strip sits on the panel's
-                own ground so it reads as a control in the panel, not a titlebar
-                above it. The segmented track is the only thing drawn here. */}
-            <SidebarHeader className="p-2 pb-1">
-              <TabsList className="w-full">
-                <TabsTrigger value="chat" data-test="tab-chat">
-                  Review
-                  <Kbd className="ml-1">⌘1</Kbd>
-                </TabsTrigger>
-                <TabsTrigger value="sessions" data-test="tab-sessions">
-                  Sessions
-                  <Kbd className="ml-1">⌘2</Kbd>
-                </TabsTrigger>
-              </TabsList>
-            </SidebarHeader>
-            {/* keepMounted is load-bearing: Base UI unmounts a hidden panel by
-                default, which would throw away the composer draft, the unsent
-                queue and the scroll position every time the human glanced at the
-                sessions list. */}
-            <TabsContent
-              value="chat"
-              keepMounted
-              className="flex min-h-0 flex-1 flex-col data-[hidden]:hidden"
-            >
+          {shell ? (
+            /* Under the shell the panel has one face: the review. The Sessions
+               list is subsumed by the tab bar + the hub picker, so the tab
+               strip would be a control with nothing to switch. */
+            <div className="flex min-h-0 flex-1 flex-col pt-1">
               <LucidRuntimeProvider>
                 <Thread />
               </LucidRuntimeProvider>
-            </TabsContent>
-            <TabsContent value="sessions" className="flex min-h-0 flex-1 flex-col">
-              <SidebarContent>
-                <Sessions />
-              </SidebarContent>
-            </TabsContent>
-          </Tabs>
+            </div>
+          ) : (
+            <Tabs
+              value={sidebarTab}
+              onValueChange={(v) => {
+                setSidebarTab(v as "chat" | "sessions");
+                // Fetch on first look rather than at boot: a review that never
+                // opens the tab should never pay for a project-wide directory
+                // scan. Refetch on every visit after that, because liveness is
+                // exactly the thing that goes stale.
+                if (v === "sessions") void session.actions.loadSessions();
+              }}
+              className="flex min-h-0 flex-1 flex-col gap-0"
+            >
+              {/* No border and no fill of its own: the strip sits on the panel's
+                own ground so it reads as a control in the panel, not a titlebar
+                above it. The segmented track is the only thing drawn here. */}
+              <SidebarHeader className="p-2 pb-1">
+                <TabsList className="w-full">
+                  <TabsTrigger value="chat" data-test="tab-chat">
+                    Review
+                    <Kbd className="ml-1">⌘1</Kbd>
+                  </TabsTrigger>
+                  <TabsTrigger value="sessions" data-test="tab-sessions">
+                    Sessions
+                    <Kbd className="ml-1">⌘2</Kbd>
+                  </TabsTrigger>
+                </TabsList>
+              </SidebarHeader>
+              {/* keepMounted is load-bearing: Base UI unmounts a hidden panel by
+                default, which would throw away the composer draft, the unsent
+                queue and the scroll position every time the human glanced at the
+                sessions list. */}
+              <TabsContent
+                value="chat"
+                keepMounted
+                className="flex min-h-0 flex-1 flex-col data-[hidden]:hidden"
+              >
+                <LucidRuntimeProvider>
+                  <Thread />
+                </LucidRuntimeProvider>
+              </TabsContent>
+              <TabsContent value="sessions" className="flex min-h-0 flex-1 flex-col">
+                <SidebarContent>
+                  <Sessions />
+                </SidebarContent>
+              </TabsContent>
+            </Tabs>
+          )}
         </Sidebar>
         {/* The window-splitter pattern: a separator carries the role, and arrow
             keys resize it for anything that cannot drag. Double-click asks the
@@ -378,3 +404,11 @@ export const Chrome = ({ session }: { readonly session: SessionHandle }) => {
     </SessionProvider>
   );
 };
+
+/** The single-session viewer page (a dedicated per-session server's
+ *  `/__lucid/viewer`): one SessionView filling the window. */
+export const Chrome = ({ session }: { readonly session: SessionHandle }) => (
+  <div className="h-screen">
+    <SessionView session={session} />
+  </div>
+);

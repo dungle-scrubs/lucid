@@ -107,6 +107,12 @@ export const ensureSession = (config: SessionConfig): SessionHandle => {
 
 export const getSession = (key: string): SessionHandle | undefined => handles.get(key);
 
+/** Forget a handle entirely (a closed tab). The caller has disconnected it;
+ *  its on-disk state is untouched and reopening builds a fresh handle. */
+export const dropSession = (key: string): void => {
+  handles.delete(key);
+};
+
 /** The handle driving the render right now, for window-level handlers that
  *  fire outside React (keyboard, postMessage). Null only before boot. */
 export const activeSession = (): SessionHandle | null => {

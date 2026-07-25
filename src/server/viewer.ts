@@ -13,23 +13,30 @@ export interface ViewerConfig {
   readonly name: string;
   readonly port: number;
   readonly version: number;
+  /** URL prefix of this session's routes: "" on a dedicated server, "/s/<id>"
+   *  under the daemon. Baked into the page so the chrome's transport and the
+   *  static hrefs below address THIS session, whichever server mounts it. */
+  readonly base?: string;
 }
 
 const escapeJson = (value: unknown): string =>
   JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
 
-export const renderViewer = (config: ViewerConfig): string => `<!doctype html>
+export const renderViewer = (config: ViewerConfig): string => {
+  const base = config.base ?? "";
+  return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="icon" type="image/svg+xml" href="/favicon.ico" />
+<link rel="icon" type="image/svg+xml" href="${base}/favicon.ico" />
 <title>Lucid · ${escapeHtml(config.name)}</title>
-<link rel="stylesheet" href="/__lucid/chrome.css" />
+<link rel="stylesheet" href="${base}/__lucid/chrome.css" />
 </head>
 <body>
-<script>window.__LUCID__ = Object.assign({ mode: "chrome" }, ${escapeJson(config)});</script>
+<script>window.__LUCID__ = Object.assign({ mode: "chrome", base: "" }, ${escapeJson({ ...config, base })});</script>
 <div id="lucid-root"></div>
-<script type="module" src="/__lucid/chrome.js"></script>
+<script type="module" src="${base}/__lucid/chrome.js"></script>
 </body>
 </html>`;
+};

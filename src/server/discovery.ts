@@ -14,6 +14,10 @@ export interface ServerDescriptor {
   readonly pid: number;
   readonly session: string;
   readonly startedAt: string;
+  /** URL prefix of the session's routes on that server: absent/"" on a
+   *  dedicated per-session server, "/s/<id>" when the hub daemon hosts it.
+   *  Every out-of-process caller must prepend it. */
+  readonly base?: string;
 }
 
 /**
@@ -60,6 +64,9 @@ export interface IdentityResponse {
   readonly session: string;
   readonly port: number;
   readonly version: number;
+  /** The session's route prefix on the answering server ("" when absent).
+   *  Carried from the descriptor so callers address `${base}/__lucid/...`. */
+  readonly base?: string;
 }
 
 const HANDSHAKE_TIMEOUT_MS = 800;
@@ -67,20 +74,24 @@ const HANDSHAKE_TIMEOUT_MS = 800;
 /**
  * Handshake the recorded port. Returns the identity if a live Lucid server for
  * THIS session answers, else undefined. Matching on the session path guards
- * against a different process having taken the port.
+ * against a different process having taken the port. `base` scopes the probe
+ * to the session's mount on a shared server (the hub daemon).
  */
 export const handshake = async (
   port: number,
   expectedSession: string,
+  base = "",
 ): Promise<IdentityResponse | undefined> => {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
-    const res = await loopbackFetch(port, "/__lucid/identity", { signal: controller.signal });
+    const res = await loopbackFetch(port, `${base}/__lucid/identity`, {
+      signal: controller.signal,
+    });
     clearTimeout(timer);
     if (!res.ok) return undefined;
     const body = (await res.json()) as IdentityResponse;
-    if (body.lucid === true && body.session === expectedSession) return body;
+    if (body.lucid === true && body.session === expectedSession) return { ...body, base };
     return undefined;
   } catch {
     return undefined;
@@ -93,5 +104,5 @@ export const discoverLiveServer = async (
 ): Promise<IdentityResponse | undefined> => {
   const descriptor = await readServerDescriptor(paths);
   if (!descriptor) return undefined;
-  return handshake(descriptor.port, paths.artifactPath);
+  return handshake(descriptor.port, paths.artifactPath, descriptor.base ?? "");
 };
