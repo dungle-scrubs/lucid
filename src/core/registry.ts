@@ -162,10 +162,33 @@ const logMtimeIso = async (artifact: string): Promise<string> => {
   }
 };
 
+/** A pointer is alive while ANYTHING of the session remains: its log, or at
+ *  least the artifact file. Neither means the session was deleted out from
+ *  under the pointer (a cleaned temp dir, an rm -rf'd project). */
+const pointerAlive = async (artifact: string): Promise<boolean> => {
+  const paths = sessionPaths(artifact);
+  try {
+    await stat(paths.logPath);
+    return true;
+  } catch {
+    /* no log; the artifact alone still counts */
+  }
+  try {
+    await stat(artifact);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Union of the registry file and a fresh `scanRoots` pass, deduped by artifact
  * path. Each entry carries a basename `name` and the best-known `lastSeen` (the
  * later of the registry stamp and the log mtime). Sorted by name.
+ *
+ * Self-healing: registry pointers whose session no longer exists on disk are
+ * dropped from the listing AND pruned from the file (best-effort, atomic) -
+ * a pointer index must never make the shell offer sessions that cannot open.
  */
 export const listAll = async (
   roots: readonly string[] = defaultRoots(),
@@ -177,7 +200,26 @@ export const listAll = async (
     // ISO strings in the same format compare lexicographically in time order.
     if (!existing || entry.lastSeen > existing.lastSeen) byArtifact.set(entry.artifact, entry);
   };
-  for (const entry of await readRegistry(registryPath)) consider(entry);
+
+  const recorded = await readRegistry(registryPath);
+  const survivors: RegistryEntry[] = [];
+  for (const entry of recorded) {
+    if (await pointerAlive(entry.artifact)) {
+      survivors.push(entry);
+      consider(entry);
+    }
+  }
+  // Prune dead pointers so they stop haunting every later listing. Best
+  // effort: a concurrent registerSession can win the race (unlocked
+  // read-modify-write, documented), in which case the next pass prunes again.
+  if (survivors.length < recorded.length) {
+    try {
+      await writeRegistry(registryFilePath(registryPath), survivors);
+    } catch {
+      /* read-only registry: the listing is still clean */
+    }
+  }
+
   for (const artifact of await scanRoots(roots)) {
     consider({ artifact, name: basename(artifact), lastSeen: await logMtimeIso(artifact) });
   }

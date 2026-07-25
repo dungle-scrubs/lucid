@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { canonicalArtifactPath, sessionPaths, type SessionPaths } from "../core/paths.ts";
 import { defaultRoots, listAll, registerSession, type RegistryEntry } from "../core/registry.ts";
 import {
@@ -163,7 +163,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   };
 
   /** Host a session in-process (idempotent). The caller has already ruled out
-   *  a live dedicated server. */
+   *  a live dedicated server. All-or-nothing: a mount that cannot finish
+   *  (say, a descriptor write into a deleted session dir) must not stay half
+   *  registered - that made the first request 500 and the retry "work". */
   const mount = async (id: string, artifact: string): Promise<Mount> => {
     if (stopped) throw new Error("daemon is stopping");
     const existing = mounts.get(id);
@@ -191,13 +193,20 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     );
     const created: Mount = { paths, host, idleTimer };
     mounts.set(id, created);
-    await writeServerDescriptor(paths, {
-      port,
-      pid: process.pid,
-      session: paths.artifactPath,
-      startedAt: new Date().toISOString(),
-      base,
-    });
+    try {
+      await writeServerDescriptor(paths, {
+        port,
+        pid: process.pid,
+        session: paths.artifactPath,
+        startedAt: new Date().toISOString(),
+        base,
+      });
+    } catch (err) {
+      mounts.delete(id);
+      clearInterval(idleTimer);
+      host.stop();
+      throw err;
+    }
     return created;
   };
 
@@ -241,6 +250,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (mounted) return mounted.host.handle(req, subPath);
 
     const paths = sessionPaths(artifact);
+
+    // No session data on disk = nothing to host. A registry pointer can
+    // outlive its session (self-healed on the next listing pass); mounting
+    // the husk would serve empty state as if it were real.
+    const hasLog = await stat(paths.logPath).then(
+      () => true,
+      () => false,
+    );
+    if (!hasLog) return json({ error: "session data is gone from disk" }, 404);
 
     // A descriptor naming OUR port with no mount behind it is a leftover from
     // a previous hub life on this port. Handshaking it would call back into

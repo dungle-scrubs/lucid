@@ -162,8 +162,19 @@ test("two sessions are two tabs with isolated state; switching swaps the view", 
   await page.goto(first.shellUrl);
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
 
-  // Open the second session from the "+" picker.
+  // Open the second session from the "+" picker. The popover must be truly
+  // HITTABLE, not merely in the DOM: it once rendered inside the tab bar's
+  // scroll clip, where playwright's auto-scroll could still reach it but a
+  // human's pointer could not. elementFromPoint sees what a human sees.
   await page.locator('[data-test="tab-add"]').click();
+  const row = page.locator('[data-test="picker-row"]').first();
+  await expect(row).toBeVisible();
+  const hittable = await row.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return hit !== null && (el === hit || el.contains(hit));
+  });
+  expect(hittable).toBe(true);
   await page.locator('[data-test="picker-row"]', { hasText: "plan.html" }).first().click();
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
   await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");

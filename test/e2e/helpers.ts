@@ -27,7 +27,22 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
     const { stdout } = await execFileAsync("bun", ["run", MAIN, ...args], {
       cwd: dir,
       timeout: timeoutMs,
-      env: { ...process.env, LUCID_NO_OPEN: "1", LUCID_IDLE_MS: "0" },
+      env: {
+        ...process.env,
+        LUCID_NO_OPEN: "1",
+        LUCID_IDLE_MS: "0",
+        // Isolated: `open` registers every session in the hub registry, and
+        // without this each e2e run leaves dead /tmp pointers in the REAL
+        // ~/.lucid/registry.json - which the user's shell then lists as
+        // ghost sessions.
+        LUCID_REGISTRY: join(dir, "registry.json"),
+        // A hub the USER happens to be running would hijack `open` into
+        // daemon mode (a tab in their shell) and change what these tests
+        // see. Point discovery at a dead port so the dedicated-server path
+        // is taken deterministically; shell.e2e.ts overrides this with its
+        // own isolated hub.
+        LUCID_HUB_PORT: "1",
+      },
     });
     return JSON.parse(stdout) as Record<string, unknown>;
   };

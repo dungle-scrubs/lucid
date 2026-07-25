@@ -112,6 +112,12 @@ const Picker = () => {
   const open = useHub((s) => s.pickerOpen);
   const openKeys = useShell((s) => s.sessionKeys);
   const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  // The popover is FIXED-positioned: the tab bar scrolls horizontally, and a
+  // scroll container clips vertical overflow too - an absolute popover
+  // rendered "below" the bar sat invisible inside that clip, so the button
+  // looked dead. Fixed escapes the clip; the anchor is read at open time.
+  const [anchorLeft, setAnchorLeft] = useState(0);
 
   useEffect(() => {
     if (!open) return;
@@ -134,11 +140,16 @@ const Picker = () => {
   return (
     <div ref={ref} className="relative flex flex-none items-center">
       <button
+        ref={buttonRef}
         type="button"
         data-test="tab-add"
         title="Open a session"
         aria-expanded={open}
-        onClick={() => setPickerOpen(!open)}
+        onClick={() => {
+          const rect = buttonRef.current?.getBoundingClientRect();
+          setAnchorLeft(Math.max(0, Math.min(rect?.left ?? 0, window.innerWidth - 356)));
+          setPickerOpen(!open);
+        }}
         className="cursor-pointer px-3 py-[7px] text-[14px] leading-none text-fg-muted hover:bg-ink-800 hover:text-fg"
       >
         +
@@ -146,7 +157,8 @@ const Picker = () => {
       {open ? (
         <div
           data-test="session-picker"
-          className="absolute left-0 top-full z-20 max-h-[60vh] w-[340px] overflow-y-auto border border-ink-500 bg-ink-800 py-1 shadow-[0_10px_30px_rgba(0,0,0,0.5)]"
+          style={{ left: anchorLeft }}
+          className="fixed top-(--lucid-shell-top,37px) z-30 max-h-[60vh] w-[340px] overflow-y-auto border border-ink-500 bg-ink-800 py-1 shadow-[0_10px_30px_rgba(0,0,0,0.5)]"
         >
           {candidates.length === 0 ? (
             <div className="px-3 py-2 text-[12px] italic text-fg-faint">

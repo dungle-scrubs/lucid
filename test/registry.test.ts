@@ -100,7 +100,10 @@ describe("listAll", () => {
     // Register the SAME artifact that the scan will also find, plus a second
     // artifact that only exists in the registry.
     await registerSession(scanned, registryPath);
+    // A registry-only pointer must point at something that EXISTS - dead
+    // pointers are pruned (self-healing), so give it a real artifact file.
     const registryOnly = join(dir, "loose.html");
+    await writeFile(registryOnly, "<h1>loose</h1>");
     await registerSession(registryOnly, registryPath);
 
     const all = await listAll([root], registryPath);
@@ -109,6 +112,23 @@ describe("listAll", () => {
     // The shared artifact appears exactly once.
     expect(all.filter((e) => e.artifact === scanned)).toHaveLength(1);
     expect(all.every((e) => e.name === e.artifact.split("/").pop())).toBe(true);
+  });
+
+  test("a dead pointer is dropped from the listing AND pruned from the file", async () => {
+    const root = join(dir, "tree");
+    const scanned = await seedSession(root, "proj", "notes");
+    // Register a session whose files then vanish (a cleaned temp dir).
+    const ghost = join(dir, "ghost.html");
+    await writeFile(ghost, "<h1>ghost</h1>");
+    await registerSession(ghost, registryPath);
+    await rm(ghost);
+
+    const all = await listAll([root], registryPath);
+    expect(all.map((e) => e.artifact)).toEqual([scanned]);
+    // Self-healed: the pointer is gone from the registry file too, so it
+    // cannot haunt the next listing.
+    const remaining = await readRegistry(registryPath);
+    expect(remaining.some((e) => e.artifact === canonicalArtifactPath(ghost))).toBe(false);
   });
 
   test("includes a scan-only session the registry never saw", async () => {

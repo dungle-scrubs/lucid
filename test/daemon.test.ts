@@ -49,7 +49,9 @@ afterEach(async () => {
 describe("hub daemon", () => {
   test("GET /hub/sessions returns the seeded sessions", async () => {
     const scanned = await seedSession("proj", "notes");
+    // Alive pointer: dead ones (no log, no artifact) are pruned by design.
     const registered = join(dir, "loose.html");
+    await writeFile(registered, "<h1>loose</h1>");
     await registerSession(registered, registryPath);
 
     daemon = await runDaemon({ port: 0, roots: [root], registryPath });

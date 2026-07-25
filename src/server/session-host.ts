@@ -701,7 +701,21 @@ export const createSessionHost = (
     // ---- artifact document route (fixed; D-054) ----
     if (pathname === "/") {
       const html = await readFile(paths.currentHtml, "utf8").catch(() => null);
-      if (html === null) return json({ error: "artifact not available" }, 404);
+      if (html === null) {
+        // This renders INSIDE the surface iframe - raw JSON there reads as a
+        // broken app. Say what is actually wrong, as a document.
+        return new Response(
+          `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Artifact missing</title></head>
+<body style="font-family:ui-monospace,monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#4c566a;background:#eceff4">
+<div style="max-width:420px;text-align:center;font-size:13px;line-height:1.6">
+<p style="font-weight:600">This session's artifact file is missing.</p>
+<p>Nothing is served for it right now - the file may have been moved or deleted. Reopening it (<code>lucid open</code> on the artifact) rebuilds this view.</p>
+</div>
+</body></html>`,
+          { status: 404, headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
+        );
+      }
       return new Response(injectOverlay(html, base), {
         headers: { "content-type": "text/html; charset=utf-8", ...noStore },
       });
