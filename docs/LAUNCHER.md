@@ -23,21 +23,23 @@ JSON file at `$LUCID_HARNESSES`, or `$XDG_CONFIG_HOME/lucid/harnesses.json`
     "claude_code": {
       // CREATE turn: a fresh headless session authors the new artifact.
       "spawn": [
-        "claude", "-p", "--session-id", "{id}",
-        "--allowedTools", "Bash(lucid *) Write Edit Read",
-        "{prompt}"
+        "claude", "-p", "--session-id", "{id}", "{prompt}",
+        "--allowedTools", "Bash(lucid *) Write Edit Read"
       ],
       // REVISE turn (shape-C liveness): re-drive the SAME session on feedback.
       // Omit it and a forked artifact is one-shot (created, not re-driven).
       "resume": [
-        "claude", "--resume", "{id}", "-p",
-        "--allowedTools", "Bash(lucid *) Write Edit Read",
-        "{prompt}"
+        "claude", "--resume", "{id}", "-p", "{prompt}",
+        "--allowedTools", "Bash(lucid *) Write Edit Read"
       ]
     }
   }
 }
 ```
+
+`{prompt}` sits BEFORE `--allowedTools`: claude's tools flag is variadic
+(`<tools...>`), so a trailing prompt gets swallowed as another tool name and
+the turn dies with "input must be provided".
 
 `spawn`/`resume` are argv arrays (no shell, no quoting). Placeholders, filled per
 fork: `{id}` (new harness session id), `{seed}` (fork seed file), `{artifact}`
