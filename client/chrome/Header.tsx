@@ -33,7 +33,7 @@ const PanelToggle = () => {
         aria-hidden="true"
       >
         <rect width="18" height="18" x="3" y="3" rx="2" />
-        <path d="M9 3v18" />
+        <path d="M15 3v18" />
       </svg>
     </button>
   );
@@ -254,7 +254,6 @@ export const Header = () => {
 
   return (
     <header className="relative flex items-center justify-between gap-2 border-b border-ink-600 px-4 py-[10px]">
-      <PanelToggle />
       {/* min-w-0 lets a long artifact name truncate instead of shoving the
           controls out of the header; the controls themselves never shrink. */}
       <div className="min-w-0 flex-1 text-[13px] font-semibold text-fg-strong">
@@ -308,6 +307,9 @@ export const Header = () => {
         <ContextRing />
         <VersionPicker />
         <ApproveControls />
+        {/* Beside the panel it controls: the panel lives on the RIGHT (D9),
+            so its toggle holds the header's right edge, not the left. */}
+        <PanelToggle />
       </div>
     </header>
   );
