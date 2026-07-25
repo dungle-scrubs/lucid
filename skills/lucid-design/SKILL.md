@@ -125,12 +125,37 @@ genuinely uniform matrix. Give text-bearing flex/grid children `min-width: 0`
 and `overflow-wrap: break-word`, or one long token wraps a column to one word
 per line and the review is wasted.
 
+## Diagrams are elements, not ASCII
+
+A box-and-arrow diagram, a layer stack, a flow, a timeline - build it from real
+elements: padded `div`s with a hairline border, placed with flex or grid, and
+inline SVG for anything curved or genuinely drawn. **Never draw one as
+box-drawing characters inside a `<pre>`.**
+
+ASCII art fails on every count that matters here. It is a single opaque text
+node, so the reviewer can only annotate the whole picture - the node, edge, or
+label they actually want to correct is not addressable. It is frozen at the
+width you typed it, so it overflows a narrow window instead of reflowing. And
+it opts out of the document's type, color, and spacing: a monospace drawing
+sitting inside a manuscript reads as a terminal screenshot pasted onto paper.
+
+Compose it from what the artifact already has: nodes are padded boxes with
+`--rule` borders and sans labels; the accent marks the one node the eye should
+land on; connectors are a border, a thin absolutely-positioned rule, or an
+`<svg>` line with `currentColor`. Give each node its own `data-lucid-id`. Reach
+for no diagram library - every one of them is an external request, and the
+artifact must open from disk.
+
+Mono and `<pre>` keep the work they are good at: code, file paths, a directory
+tree, a log line, a command. Those are literal text, not pictures.
+
 ## Checklist
 
 - Opens from disk, offline, and looks right
 - No emoji, no exclamation marks, no hype
 - Cream ground, ink type, one accent used to mean something
 - If it honours dark mode, the dark variant still reads as paper - warm, lifted, distinct from the chrome, and no toggle or JS
-- Serif prose, sans labels, mono literals
+- Serif prose, sans labels, mono literals - and mono only for literals, never for drawing a diagram
+- Diagrams built from elements or inline SVG, each node individually addressable
 - Every reviewable group padded and, where it matters, carrying a `data-lucid-id`
 - Nothing depends on color alone
