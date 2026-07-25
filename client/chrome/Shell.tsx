@@ -20,6 +20,7 @@ import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, setDrawerOpen, useShell } from "./shell.ts";
 import { Kbd } from "./ui/kbd.tsx";
+import { closeButton, closeButtonSmall } from "./ui/close.ts";
 
 /**
  * The shell: one window over every session (Model B). A tab bar across the
@@ -111,7 +112,7 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
         aria-label={`Close ${handle.config.name}`}
         title="Close tab (the session keeps running)"
         onClick={() => closeTab(sessionKey)}
-        className={`cursor-pointer rounded-full px-[3px] text-fg-faint hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 ${
+        className={`${closeButtonSmall} group-hover:opacity-100 focus-visible:opacity-100 ${
           active ? "opacity-100" : "opacity-0"
         }`}
       >
@@ -207,7 +208,7 @@ const ProjectsDrawer = () => {
             aria-label="Close the projects drawer"
             title="Close"
             onClick={() => setDrawerOpen(false)}
-            className="cursor-pointer rounded-full px-1.5 text-[13px] leading-none text-fg-faint hover:text-fg"
+            className={closeButton}
           >
             ×
           </button>

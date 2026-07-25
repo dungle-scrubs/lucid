@@ -25,6 +25,7 @@ import {
 import { QaPart } from "./QaPart.tsx";
 import { Kbd } from "./ui/kbd.tsx";
 import { markdownComponents, prose, urlTransform } from "./ui/markdown.tsx";
+import { closeButtonSmall } from "./ui/close.ts";
 
 /**
  * The review record. assistant-ui owns the transcript, the composer and the
@@ -120,7 +121,7 @@ const ComposerAttachment = () => (
     </span>
     <AttachmentPrimitive.Remove
       title="Remove"
-      className="cursor-pointer px-[3px] text-fg-muted hover:text-rust-300"
+      className={`${closeButtonSmall} hover:text-rust-300`}
     >
       ×
     </AttachmentPrimitive.Remove>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoots, openTab, projectName, setCreateOpen, useHub } from "./hub.ts";
 import { useShell } from "./shell.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
+import { closeButton } from "./ui/close.ts";
 
 /**
  * Create from nothing (D3/D16): the shell mints a NEW artifact by asking the
@@ -191,7 +192,7 @@ const CreateDialogBody = () => {
             data-test="create-close"
             aria-label="Close the new-artifact dialog"
             onClick={close}
-            className="cursor-pointer rounded-full px-1.5 text-[13px] leading-none text-fg-faint hover:text-fg"
+            className={closeButton}
           >
             ×
           </button>

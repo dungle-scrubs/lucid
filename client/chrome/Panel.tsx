@@ -6,6 +6,7 @@ import { FoldedText } from "./FoldedText.tsx";
 import { imagesFromPaste } from "./store.ts";
 import type { OutboxMessage, PastedImage } from "./types.ts";
 import { Kbd, KbdGroup } from "./ui/kbd.tsx";
+import { closeButtonSmall } from "./ui/close.ts";
 
 /**
  * The parts of the panel that are not transcript: work staged but not yet in
@@ -56,7 +57,7 @@ const Chips = ({
               type="button"
               title="Remove"
               onClick={() => onRemove(img.id)}
-              className="cursor-pointer px-[3px] text-fg-muted hover:text-rust-300"
+              className={`${closeButtonSmall} hover:text-rust-300`}
             >
               ×
             </button>
@@ -407,7 +408,7 @@ export const PendingComposer = () => {
                     aria-label={`Remove spot ${i + 1}`}
                     title="Remove this spot"
                     onClick={() => removePendingTarget(i)}
-                    className="cursor-pointer px-[3px] pt-1 text-fg-muted hover:text-rust-300"
+                    className={`${closeButtonSmall} hover:text-rust-300`}
                   >
                     ×
                   </button>

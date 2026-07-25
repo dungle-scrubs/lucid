@@ -24,6 +24,7 @@ import {
 import type { AgentQuestion } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
 import { Markdown } from "./ui/markdown.tsx";
+import { closeButton, closeButtonSmall } from "./ui/close.ts";
 
 /**
  * The question drawer (D11-D13): a pending ask slides up from the bottom of the
@@ -546,7 +547,7 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
             type="button"
             aria-label="Remove pinned region"
             onClick={() => removeAnswerAnchor(q, i)}
-            className="cursor-pointer text-fg-faint hover:text-fg"
+            className={closeButtonSmall}
           >
             ×
           </button>
@@ -591,7 +592,7 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
             type="button"
             aria-label={`Remove ${img.name}`}
             onClick={() => removeAnswerImage(q, img.id)}
-            className="absolute -right-1.5 -top-1.5 flex h-4 w-4 cursor-pointer items-center justify-center rounded-full border border-ink-400 bg-ink-850 text-[10px] text-fg-muted hover:text-fg"
+            className="absolute -right-2 -top-2 flex size-5 cursor-pointer items-center justify-center rounded-full border border-ink-400 bg-ink-850 text-[12px] leading-none text-fg-muted hover:text-fg focus-visible:annot-outline"
           >
             ×
           </button>
@@ -748,7 +749,7 @@ const Drawer = ({
             title="Lower the drawer (Esc) - your draft is kept"
             aria-label="Lower the question drawer"
             onClick={() => dismissQuestionDrawer()}
-            className="cursor-pointer rounded-full px-1.5 text-[13px] leading-none text-fg-faint hover:text-fg"
+            className={closeButton}
           >
             ×
           </button>
