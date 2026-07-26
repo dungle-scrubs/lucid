@@ -359,7 +359,7 @@ const PickerRow = ({ row, subtitle }: { readonly row: HubSession; readonly subti
                 if (!h) setFailed(true);
               });
             }}
-            className="flex w-full cursor-pointer flex-col gap-0.5 px-3 py-1.5 text-left hover:bg-ink-700"
+            className="flex w-full snap-start cursor-pointer flex-col gap-0.5 px-3 py-1.5 text-left hover:bg-ink-700"
           >
             <span className="truncate text-[12px] text-fg">{sessionLabel(row)}</span>
             <span className="truncate text-[10px] text-fg-faint">
@@ -434,7 +434,7 @@ const EmptyShell = () => {
             ) : null}
             <NewArtifactButton testId="new-artifact" className={emptyAction} />
           </div>
-          <div className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto border border-ink-600 bg-ink-800 py-1">
+          <div className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] snap-y snap-proximity scroll-pt-9 flex-col overflow-y-auto border border-ink-600 bg-ink-800">
             {[...byProject(sessions)].map(([project, rows], group) => (
               <div
                 key={project}
