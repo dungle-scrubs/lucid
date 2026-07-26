@@ -5,6 +5,7 @@ import { DeliveryLabel } from "./Delivery.tsx";
 import { FoldedText } from "./FoldedText.tsx";
 import type { MessageImage } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 export interface AnnotationData {
   readonly id: string;
@@ -50,7 +51,7 @@ export const TargetSnippet = ({ target }: { readonly target: Anchor }) => {
     // prose on anything larger than a phrase, and it fired on every pass of the
     // pointer over the card. The mark on the surface is the real referent - this
     // is a two-line reminder of what was pointed at, not a way to read it.
-    <div className="rounded-md bg-brass-400/10 px-2 py-1.5 text-[12px] leading-[1.45] text-cream-200">
+    <div className="bg-brass-400/10 px-2 py-1.5 text-[12px] leading-[1.45] text-cream-200">
       <span className="line-clamp-2">{text}</span>
     </div>
   );
@@ -122,31 +123,31 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
               }
             }
       }
-      className={`group relative flex flex-col gap-[7px] rounded-lg border bg-ink-700 px-[11px] py-[10px] focus-visible:annot-outline ${
+      className={`group relative flex flex-col gap-[7px] border bg-ink-700 px-[11px] py-[10px] focus-visible:annot-outline ${
         hovered ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]" : "border-ink-600"
       }`}
     >
       {orphaned ? null : (
-        <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+        <span className="absolute -top-px -left-px z-1 flex size-5 -translate-x-[33%] -translate-y-[33%] items-center justify-center bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           {data.index}
         </span>
       )}
       {/* Straddles the top edge like the number chip, but stays inside the
           card horizontally: hung off the right corner it landed a few px from
-          the panel's own border and read as tucked under it, rounded end and
+          the panel's own border and read as tucked under it, end and
           all. Nothing needs to hang into that gutter. */}
       {orphaned ? (
-        <span className="absolute -top-[9px] right-2 z-1 rounded-full bg-rust-500/30 px-[7px] py-px text-[10px] text-rust-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+        <span className="absolute bottom-full right-2 mb-px z-1 bg-rust-500/30 px-[7px] py-px text-[10px] text-rust-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           Orphaned anchor
         </span>
       ) : (
-        <span className="absolute -top-[9px] right-2 z-1 rounded-full bg-sage-600/25 px-[7px] py-px text-[10px] text-sage-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+        <span className="absolute bottom-full right-2 mb-px z-1 bg-sage-600/25 px-[7px] py-px text-[10px] text-sage-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           located · v{data.version}
         </span>
       )}
       {/* Only on keyboard focus: a pointer user is already at the mark, and a
           per-card hint on every read would be furniture. */}
-      <span className="pointer-events-none absolute -top-[9px] left-1/2 hidden -translate-x-1/2 items-center gap-1 rounded-full border border-ink-500 bg-ink-800 px-2 py-px text-[10px] text-fg-muted shadow-[0_1px_3px_rgba(0,0,0,0.4)] group-focus-visible:flex">
+      <span className="pointer-events-none absolute bottom-full left-1/2 mb-px hidden -translate-x-1/2 items-center gap-1 border border-ink-500 bg-ink-800 px-2 py-px text-[10px] text-fg-muted shadow-[0_1px_3px_rgba(0,0,0,0.4)] group-focus-visible:flex">
         <Kbd>↵</Kbd> reveal
       </span>
       {/* Every spot the note covers, first (the numbered one) to last. */}
@@ -162,20 +163,26 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
       {images.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {images.map((img, i) => (
-            <button
-              key={img.file}
-              type="button"
-              data-test="annotation-thumb"
-              title={img.name}
-              onClick={() => openLightbox(images, i)}
-              className="cursor-zoom-in rounded-md focus-visible:annot-outline"
-            >
-              <img
-                src={transport.assetUrl(img.file)}
-                alt={img.name}
-                className="block h-[66px] w-[88px] rounded-md border border-ink-600 object-cover hover:border-accent"
+            <Tooltip key={img.file}>
+              <TooltipTrigger
+                render={
+                  <button
+                    key={img.file}
+                    type="button"
+                    data-test="annotation-thumb"
+                    onClick={() => openLightbox(images, i)}
+                    className="cursor-zoom-in focus-visible:annot-outline"
+                  >
+                    <img
+                      src={transport.assetUrl(img.file)}
+                      alt={img.name}
+                      className="block h-[66px] w-[88px] border border-ink-600 object-cover hover:border-accent"
+                    />
+                  </button>
+                }
               />
-            </button>
+              <TooltipContent>{img.name}</TooltipContent>
+            </Tooltip>
           ))}
         </div>
       ) : null}

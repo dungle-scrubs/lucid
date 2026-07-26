@@ -2,6 +2,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import type {
   AgentWorking,
+  AttendantPresence,
   AttendantRef,
   ContextUsage,
   HarnessInfo,
@@ -233,6 +234,15 @@ export interface SessionState {
    *  that resumes their conversation when the harness recorded one. Display
    *  data only: resuming is the human's act, in their terminal. */
   lastAttendant: AttendantRef | null;
+  /** That conversation as it exists RIGHT NOW, when the harness lets us see
+   *  it. `interactive` means a human has it open in a terminal, which changes
+   *  what this panel is: a place to watch, not a place to drive from. Null =
+   *  not open, or a harness with no such signal - the same thing here. */
+  attendantPresence: AttendantPresence | null;
+  /** A harness conversation exists that a turn could resume. False for an
+   *  artifact nobody has attended - a hand-written or recovered document -
+   *  where announcing "spawn mode" would promise a turn that can never run. */
+  resumable: boolean;
   /** Last-reported context-window usage of the attending harness (its
    *  statusline posts it). Presence, like lastAttendant: null = no ring. */
   contextUsage: ContextUsage | null;
@@ -324,6 +334,8 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     agentWorking: null,
     agentsListening: 0,
     lastAttendant: null,
+    attendantPresence: null,
+    resumable: false,
     contextUsage: null,
     selection: {},
     selectionInfo: null,
@@ -423,7 +435,15 @@ export const buildTimeline = (
     })),
     // Unsent queue items hold their place in the record from the moment they
     // were written - the same instant their sent form will occupy.
-    ...queue.map((q, i) => ({ kind: "queued" as const, at: q.at, index: i + 1, id: q.id })),
+    // CONTINUES the located count: a queued note is the next number, not a
+    // second number 1. Restarting the count put two "1" badges on the same
+    // element and two cards labelled "1" in the panel.
+    ...queue.map((q, i) => ({
+      kind: "queued" as const,
+      at: q.at,
+      index: located + i + 1,
+      id: q.id,
+    })),
     ...messages.map((message) => ({ kind: "message" as const, at: message.at, message })),
     // `answeredAt` is the answer's own moment; older logs (and any server that
     // predates the field) fall back to the ask time rather than vanishing.

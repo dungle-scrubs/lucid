@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import type { DiffHunk } from "./types.ts";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 const HUNK_SIGN: Readonly<Record<DiffHunk["kind"], string>> = {
   added: "+",
@@ -9,9 +10,9 @@ const HUNK_SIGN: Readonly<Record<DiffHunk["kind"], string>> = {
 };
 
 const iconBtn =
-  "cursor-pointer rounded-md border border-ink-400 bg-ink-800/80 px-1.5 py-px text-[12px] text-fg hover:bg-ink-700";
+  "cursor-pointer border border-ink-400 bg-ink-800/80 px-1.5 py-px text-[12px] text-fg hover:bg-ink-700";
 const select =
-  "rounded-md border border-ink-400 bg-ink-800 px-1.5 py-px text-[11px] text-fg focus-visible:annot-outline";
+  "border border-ink-400 bg-ink-800 px-1.5 py-px text-[11px] text-fg focus-visible:annot-outline";
 
 /**
  * A floating pill over the artifact. Shadows mean "this floats"; it is one of
@@ -35,7 +36,7 @@ export const DiffBar = () => {
   return (
     <div
       data-test="diff-bar"
-      className="absolute top-3 left-1/2 z-5 flex max-w-[calc(100%-32px)] -translate-x-1/2 flex-wrap items-center gap-3 rounded-lg border border-ink-400 bg-ink-900/95 px-3 py-1.5 text-[11px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+      className="absolute top-3 left-1/2 z-5 flex max-w-[calc(100%-32px)] -translate-x-1/2 flex-wrap items-center gap-3 border border-ink-400 bg-ink-900/95 px-3 py-1.5 text-[11px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
     >
       <span className="flex items-center gap-1.5">
         Changes since
@@ -56,25 +57,39 @@ export const DiffBar = () => {
       ) : (
         <>
           <span className="flex items-center gap-1.5">
-            <button
-              type="button"
-              title="Previous change"
-              onClick={() => gotoHunk(diffIndex - 1)}
-              className={iconBtn}
-            >
-              ◀
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Previous change"
+                    onClick={() => gotoHunk(diffIndex - 1)}
+                    className={iconBtn}
+                  >
+                    ◀
+                  </button>
+                }
+              />
+              <TooltipContent>Previous change</TooltipContent>
+            </Tooltip>
             <span data-test="diff-count" className="tabular-nums">
               {diffIndex + 1} / {total}
             </span>
-            <button
-              type="button"
-              title="Next change"
-              onClick={() => gotoHunk(diffIndex + 1)}
-              className={iconBtn}
-            >
-              ▶
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Next change"
+                    onClick={() => gotoHunk(diffIndex + 1)}
+                    className={iconBtn}
+                  >
+                    ▶
+                  </button>
+                }
+              />
+              <TooltipContent>Next change</TooltipContent>
+            </Tooltip>
           </span>
           <select
             value={String(diffIndex)}
@@ -91,7 +106,7 @@ export const DiffBar = () => {
             <span className="flex items-center gap-1.5">
               <input
                 data-test="revert-why"
-                placeholder={`revert this to v${diffBase} - why?`}
+                placeholder={`revert to v${diffBase} - why? (optional)`}
                 value={revertWhy}
                 onChange={(e) => setRevertWhy(e.target.value)}
                 onKeyDown={(e) => {
@@ -100,17 +115,30 @@ export const DiffBar = () => {
                     void revertCurrentHunk();
                   }
                 }}
-                className="w-[190px] rounded-md border border-ink-400 bg-bg-inset px-1.5 py-px text-[11px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
+                className="w-[190px] border border-ink-400 bg-bg-inset px-1.5 py-px text-[11px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
               />
-              <button
-                type="button"
-                data-test="revert"
-                disabled={revertWhy.trim().length === 0}
-                onClick={() => void revertCurrentHunk()}
-                className="cursor-pointer rounded-md border border-rust-500 bg-rust-500/80 px-2 py-px text-[11px] font-semibold text-cream-50 hover:bg-rust-400 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Revert
-              </button>
+              {/* What "revert" means here, on the control that does it. Lucid
+                  holds no power over the file: the button sends a REQUEST, and
+                  the box beside it is that request's content. Without this, the
+                  word promises an undo the viewer cannot perform. */}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      data-test="revert"
+                      onClick={() => void revertCurrentHunk()}
+                      className="cursor-pointer border border-rust-500 bg-rust-500/80 px-2 py-px text-[11px] font-semibold text-cream-50 hover:bg-rust-400 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Revert
+                    </button>
+                  }
+                />
+                <TooltipContent>
+                  Forward-only: Lucid never rewinds the file. This asks the agent to undo that hunk,
+                  and your reason is the content of the request - blank just asks for the undo.
+                </TooltipContent>
+              </Tooltip>
             </span>
           ) : null}
         </>
@@ -140,10 +168,10 @@ export const VersionViewBanner = () => {
   return (
     <div
       data-test="version-view"
-      className="absolute top-3 left-1/2 z-5 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-amber-500/50 bg-ink-900/95 px-3 py-1.5 text-[11px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+      className="absolute top-3 left-1/2 z-5 flex -translate-x-1/2 items-center gap-3 border border-amber-500/50 bg-ink-900/95 px-3 py-1.5 text-[11px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
     >
       <span className="flex items-center gap-1.5">
-        <span className="size-1.5 rounded-full bg-amber-400" />
+        <span className="size-1.5 bg-amber-400" />
         Viewing <span className="font-semibold tabular-nums text-amber-300">v{viewing}</span> ·
         read-only
       </span>
@@ -151,7 +179,7 @@ export const VersionViewBanner = () => {
         type="button"
         data-test="version-view-exit"
         onClick={() => void exitVersionView()}
-        className="cursor-pointer rounded-md border border-ink-400 bg-ink-800/80 px-2 py-px text-[11px] text-fg hover:bg-ink-700"
+        className="cursor-pointer border border-ink-400 bg-ink-800/80 px-2 py-px text-[11px] text-fg hover:bg-ink-700"
       >
         Back to current v{version}
       </button>
@@ -184,7 +212,7 @@ export const NewerVersionBanner = () => {
   return (
     <div
       data-test="newer-version"
-      className="absolute top-3 left-1/2 z-5 flex -translate-x-1/2 items-center gap-2 rounded-lg bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-on-accent shadow-[0_4px_14px_rgba(0,0,0,0.3)]"
+      className="absolute top-3 left-1/2 z-5 flex -translate-x-1/2 items-center gap-2 bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-on-accent shadow-[0_4px_14px_rgba(0,0,0,0.3)]"
     >
       Newer version (v{newerVersion}) available · {blocker}
       {hasComposerDraft ? (
@@ -192,7 +220,7 @@ export const NewerVersionBanner = () => {
           type="button"
           data-test="discard-draft"
           onClick={discardPending}
-          className="cursor-pointer rounded-md bg-ink-900 px-2 py-1 text-cream-50"
+          className="cursor-pointer bg-ink-900 px-2 py-1 text-cream-50"
         >
           Discard draft
         </button>
@@ -202,9 +230,10 @@ export const NewerVersionBanner = () => {
 };
 
 /**
- * The agent has declared its next output will revise this document. Upper-left
- * of the surface, where reading starts. Declared intent is a promise, not a
- * fact - which is why it only ever says an update is on the way, and the
+ * The agent has declared its next output will revise this document. Upper-RIGHT
+ * of the surface: it is a status about the document, not part of it, and where
+ * reading starts is the document's own business. Declared intent is a promise,
+ * not a fact - which is why it only ever says an update is on the way, and the
  * update itself (live reload, version bump) remains the proof.
  */
 export const SurfaceUpdating = () => {
@@ -214,7 +243,7 @@ export const SurfaceUpdating = () => {
   return (
     <div
       data-test="surface-updating"
-      className="absolute top-3 left-3 z-5 flex items-center gap-2 rounded-full border border-ink-400 bg-ink-900/95 py-1 pr-3 pl-2 text-[12px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+      className="absolute top-3 right-3 z-5 flex items-center gap-2 border border-ink-400 bg-ink-900/95 py-1 pr-3 pl-2 text-[12px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
     >
       {/* lucide loader-circle */}
       <svg
@@ -280,40 +309,61 @@ export const Lightbox = () => {
         onClick={close}
         className="absolute inset-0 cursor-zoom-out"
       />
-      <button
-        type="button"
-        title="Close (Esc)"
-        onClick={close}
-        className="absolute top-4 right-5 cursor-pointer text-[26px] leading-none text-cream-200 hover:text-cream-50"
-      >
-        ×
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label="Close (Esc)"
+              onClick={close}
+              className="absolute top-4 right-5 cursor-pointer text-[26px] leading-none text-cream-200 hover:text-cream-50"
+            >
+              ×
+            </button>
+          }
+        />
+        <TooltipContent>Close (Esc)</TooltipContent>
+      </Tooltip>
       {multi ? (
-        <button
-          type="button"
-          data-test="lb-prev"
-          title="Previous (←)"
-          onClick={() => step(-1)}
-          className="absolute left-5 cursor-pointer text-[34px] leading-none text-cream-200 hover:text-cream-50"
-        >
-          ‹
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-test="lb-prev"
+                aria-label="Previous (←)"
+                onClick={() => step(-1)}
+                className="absolute left-5 cursor-pointer text-[34px] leading-none text-cream-200 hover:text-cream-50"
+              >
+                ‹
+              </button>
+            }
+          />
+          <TooltipContent>Previous (←)</TooltipContent>
+        </Tooltip>
       ) : null}
       <img
         src={transport.assetUrl(img.file)}
         alt={img.name}
-        className="max-h-[86vh] max-w-[90vw] rounded-lg bg-white shadow-[0_24px_70px_-20px_rgba(0,0,0,0.8)]"
+        className="max-h-[86vh] max-w-[90vw] bg-white shadow-[0_24px_70px_-20px_rgba(0,0,0,0.8)]"
       />
       {multi ? (
-        <button
-          type="button"
-          data-test="lb-next"
-          title="Next (→)"
-          onClick={() => step(1)}
-          className="absolute right-5 cursor-pointer text-[34px] leading-none text-cream-200 hover:text-cream-50"
-        >
-          ›
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-test="lb-next"
+                aria-label="Next (→)"
+                onClick={() => step(1)}
+                className="absolute right-5 cursor-pointer text-[34px] leading-none text-cream-200 hover:text-cream-50"
+              >
+                ›
+              </button>
+            }
+          />
+          <TooltipContent>Next (→)</TooltipContent>
+        </Tooltip>
       ) : null}
       {multi ? (
         <div

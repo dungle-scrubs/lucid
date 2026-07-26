@@ -882,8 +882,12 @@ export const createActions = (ctx: ActionsCtx) => {
   const revertCurrentHunk = async (): Promise<void> => {
     const s = get();
     const hunk = s.diffData?.hunks[s.diffIndex];
-    const why = s.revertWhy.trim();
-    if (!hunk || why.length === 0) return;
+    // The RFC wants a revert to be self-justifying (it reaches the agent
+    // without the surrounding conversation). That is a requirement on the
+    // RECORD, not on the human: an undo is unambiguous without prose, so a
+    // blank box gets the plain instruction rather than a disabled button.
+    const why = s.revertWhy.trim() || `Undo this change - restore to v${s.diffBase}.`;
+    if (!hunk) return;
     try {
       await api("/__lucid/revert", {
         id: uuid(),
