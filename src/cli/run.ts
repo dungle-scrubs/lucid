@@ -7,6 +7,7 @@ import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
 import { sessionPaths } from "../core/paths.ts";
 import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
+import { themeReadiness, themeWarning } from "../core/theme.ts";
 import type { WaitPayload } from "../core/payload.ts";
 import { registerSession } from "../core/registry.ts";
 import { sanitizeProgress } from "../core/progress.ts";
@@ -180,13 +181,25 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     /* registry is a discovery convenience, not part of the open contract */
   }
 
+  // Said at author time, where it can still be acted on: the viewer's
+  // light/dark choice only reaches an artifact whose colors run through the
+  // standard tokens, and the alternative is a human at midnight wondering why
+  // one document stayed bright. Advisory - fixed colors are sometimes correct.
+  const theme = await readFile(paths.artifactPath, "utf8")
+    .then((html) => themeWarning(themeReadiness(html)))
+    .catch(() => undefined);
+  const warnings = [
+    ...result.warnings,
+    ...(theme ? [{ code: "THEME_NOT_ADAPTIVE", message: theme }] : []),
+  ];
+
   print({
     session: paths.artifactPath,
     version: result.state.version,
     status: "active",
     nextCursor: renderCursor(result.cursor),
     url,
-    ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
   });
 };
 

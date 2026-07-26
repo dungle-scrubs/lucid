@@ -88,7 +88,19 @@ export type ChromeMessage =
   | { readonly source: "lucid-chrome"; readonly type: "diff-goto"; readonly hunkId: string }
   | { readonly source: "lucid-chrome"; readonly type: "clear-pending" }
   /** Ask the overlay to measure the artifact's content width. */
-  | { readonly source: "lucid-chrome"; readonly type: "measure-content" };
+  | { readonly source: "lucid-chrome"; readonly type: "measure-content" }
+  /**
+   * Which palette the artifact renders in. The DECISION is the human's and
+   * belongs to the tool, not the document: an artifact must render identically
+   * from disk, offline, so it may not carry a toggle or its persisted state
+   * (see the lucid-design skill). Lucid holds the preference and tells every
+   * open artifact at once.
+   */
+  | {
+      readonly source: "lucid-chrome";
+      readonly type: "theme";
+      readonly theme: "light" | "dark";
+    };
 
 export const isOverlayMessage = (data: unknown): data is OverlayMessage =>
   typeof data === "object" &&

@@ -1,6 +1,7 @@
 import type { StateResponse } from "../../src/protocol/wire.ts";
 import type { ChromeMessage } from "../shared/protocol.ts";
 import type { SessionStore } from "./store.ts";
+import { currentTheme } from "./theme.ts";
 import type { Transport } from "./transport.ts";
 
 /**
@@ -86,6 +87,13 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
 
   const markOverlayReady = (): void => {
     readyEl = iframeEl;
+    // The palette FIRST: an artifact that painted in the wrong theme and
+    // corrected itself a frame later is a flash on every tab switch.
+    toOverlay({
+      source: "lucid-chrome",
+      type: "theme",
+      theme: currentTheme(),
+    });
     // Pull the section-id set now the overlay is up: its own one-shot push at
     // connectedCallback can beat React installing the chrome's message
     // listener, so we ask again from this reliable point (fires on `ready` and
