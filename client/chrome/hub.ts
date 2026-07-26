@@ -15,6 +15,10 @@ import { dropSession, ensureSession, getSession, useShell } from "./shell.ts";
 export interface HubSession {
   readonly artifact: string;
   readonly name: string;
+  /** The artifact's own `<title>`, when it has one. What a tab, the palette
+   *  and the pick screen show: "Units that got away" says what a session
+   *  holds, "test2.html" says where it lives. */
+  readonly title?: string;
   readonly lastSeen: string;
   readonly id: string;
   readonly hosted: boolean;
@@ -24,6 +28,9 @@ export interface HubSession {
   /** Present when the session lives in a git worktree: that checkout's root. */
   readonly worktree?: string;
 }
+
+/** What to call a session on screen: its document's title, else its file. */
+export const sessionLabel = (row: HubSession): string => row.title ?? row.name;
 
 /** Display name of a project root ("lucid" for /Users/x/dev/lucid). */
 export const projectName = (project: string): string =>
@@ -169,7 +176,7 @@ export const openTab = async (row: HubSession): Promise<SessionHandle | null> =>
   if (!identity) return null;
   const handle = ensureSession({
     session: identity.session,
-    name: row.name,
+    name: sessionLabel(row),
     version: identity.version,
     base,
   });

@@ -11,6 +11,7 @@ import {
   latestTabIn,
   openTab,
   projectName,
+  sessionLabel,
   setCreateOpen,
   setPaletteOpen,
   useHub,
@@ -295,7 +296,7 @@ const PickerRow = ({ row, subtitle }: { readonly row: HubSession; readonly subti
       }}
       className="flex w-full cursor-pointer flex-col gap-0.5 px-3 py-1.5 text-left hover:bg-ink-700"
     >
-      <span className="truncate text-[12px] text-fg">{row.name}</span>
+      <span className="truncate text-[12px] text-fg">{sessionLabel(row)}</span>
       <span className="truncate text-[10px] text-fg-faint">
         {failed ? "couldn't open - is the session's log readable?" : (subtitle ?? row.artifact)}
       </span>

@@ -134,10 +134,6 @@ const Composer = () => {
   return (
     <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-ink-600 bg-bg p-[14px]">
       <ListenerLine />
-      {/* Who the NEXT unattended turn runs as. It sits with the presence line
-          because it answers the same question - who is on the other end - and
-          carries the same weight, never a control block of its own. */}
-      <SelectionPickers />
       <div className="flex flex-wrap gap-1.5 empty:hidden">
         <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
       </div>
@@ -150,7 +146,11 @@ const Composer = () => {
         onPaste={pastes.collapseTextPaste}
         className="resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
       />
-      <div className="flex items-center justify-end gap-2">
+      {/* Under the input, on the send line: who the NEXT unattended turn runs
+          as belongs beside the act of sending it, not above the box. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <SelectionPickers />
+        <span className="flex-1" />
         <ComposerPrimitive.Send
           data-test="send-message"
           className="flex cursor-pointer items-center gap-1.5 rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"

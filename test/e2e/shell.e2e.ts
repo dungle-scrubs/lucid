@@ -27,7 +27,9 @@ test("lucid open surfaces the session as a tab in the shell", async ({ page }) =
   await page.goto(opened.shellUrl);
   // The ?s= tab opens itself once the listing names it.
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
-  await expect(page.locator('[data-test="shell-tab"]')).toContainText("plan.html");
+  // A tab is named by the DOCUMENT, not the file: the fixture's <title> is
+  // "Migration plan", which is what a reader recognizes.
+  await expect(page.locator('[data-test="shell-tab"]')).toContainText("Migration plan");
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
 });
 

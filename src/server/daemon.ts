@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { join, resolve as resolvePath } from "node:path";
-import { lstat, mkdir, readFile, stat } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, stat } from "node:fs/promises";
 import { canonicalArtifactPath, sessionPaths, type SessionPaths } from "../core/paths.ts";
 import { defaultRoots, listAll, registerSession, type RegistryEntry } from "../core/registry.ts";
 import {
@@ -12,6 +12,7 @@ import {
 } from "./discovery.ts";
 import { escapeHtml } from "../core/escape.ts";
 import { projectRoot } from "../core/sessions.ts";
+import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
 import { detectUsageLimit } from "../launch/limits.ts";
 import { runSpawn } from "../launch/launcher.ts";
 import { buildArgv, loadRegistry, resolveRecipe } from "../launch/recipes.ts";
@@ -128,6 +129,9 @@ const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response 
  *  currently live. */
 export interface HubSession extends RegistryEntry {
   readonly id: string;
+  /** The artifact's own `<title>`, when it has one: what the shell puts on a
+   *  tab. Absent for an artifact with no title (the filename stands in). */
+  readonly title?: string;
   /** True when the daemon itself hosts it right now (stream + appends). */
   readonly hosted: boolean;
   /** The session's project root (nearest .git, else the artifact's own
@@ -241,6 +245,39 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     return resolved;
   };
 
+  /**
+   * An artifact's `<title>`, cached against its mtime: the listing re-scans
+   * every POLL_MS, and re-reading every artifact's head each time would make
+   * a quiet hub do steady disk work for a string that only changes when the
+   * agent revises the file.
+   */
+  const titleCache = new Map<string, { readonly mtimeMs: number; readonly title: string | null }>();
+  const readTitle = async (artifact: string): Promise<string | null> => {
+    let mtimeMs: number;
+    try {
+      mtimeMs = (await stat(artifact)).mtimeMs;
+    } catch {
+      return null; // an artifact that is not there has no title to show
+    }
+    const hit = titleCache.get(artifact);
+    if (hit && hit.mtimeMs === mtimeMs) return hit.title;
+    let title: string | null = null;
+    try {
+      const fd = await open(artifact, "r");
+      try {
+        const buf = Buffer.alloc(TITLE_SCAN_BYTES);
+        const { bytesRead } = await fd.read(buf, 0, TITLE_SCAN_BYTES, 0);
+        title = parseTitle(buf.subarray(0, bytesRead).toString("utf8"));
+      } finally {
+        await fd.close();
+      }
+    } catch {
+      title = null;
+    }
+    titleCache.set(artifact, { mtimeMs, title });
+    return title;
+  };
+
   const listHub = async (): Promise<HubSession[]> => {
     const entries = await listAll(roots, registryPath);
     rememberIds(entries);
@@ -248,11 +285,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       entries.map(async (e) => {
         const id = sessionId(e.artifact);
         const proj = await resolveProject(e.artifact);
+        const title = await readTitle(e.artifact);
         return {
           ...e,
           id,
           hosted: mounts.has(id),
           project: proj.project,
+          ...(title !== null ? { title } : {}),
           ...(proj.worktree ? { worktree: proj.worktree } : {}),
         };
       }),
@@ -564,6 +603,20 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const project = typeof body?.project === "string" ? body.project : "";
     const name = typeof body?.name === "string" ? body.name : "";
     const prompt = typeof body?.prompt === "string" ? body.prompt : "";
+    // The document's own name, bounded and control-stripped like every other
+    // human string that rides into a spawn argv.
+    const title =
+      typeof body?.title === "string"
+        ? body.title
+            .split("")
+            .filter((ch) => {
+              const c = ch.codePointAt(0) ?? 0;
+              return c >= 0x20 && c !== 0x7f;
+            })
+            .join("")
+            .trim()
+            .slice(0, 120)
+        : "";
     const harness = typeof body?.harness === "string" && body.harness ? body.harness : undefined;
     // The human's model/effort pick for this artifact. Absent = the CLI
     // decides, and nothing is persisted.
@@ -626,7 +679,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           id: childSessionId,
           artifact,
           cwd: project,
-          prompt: createArtifactPrompt(artifact, prompt),
+          prompt: createArtifactPrompt(artifact, prompt, title || undefined),
         }),
         selArgs,
         resolved.recipe.spawn,

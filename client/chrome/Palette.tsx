@@ -7,6 +7,7 @@ import {
   closeTab,
   openTab,
   projectName,
+  sessionLabel,
   setPaletteOpen,
   useHub,
 } from "./hub.ts";
@@ -160,11 +161,11 @@ export const Palette = () => {
               {openRows.map((s) => (
                 <Command.Item
                   key={s.id}
-                  value={`tab ${s.name} ${projectName(s.project)} ${s.artifact}`}
+                  value={`tab ${sessionLabel(s)} ${s.name} ${projectName(s.project)} ${s.artifact}`}
                   className={itemCls}
                   onSelect={run(() => activateTab(s.artifact))}
                 >
-                  <span className="truncate">{s.name}</span>
+                  <span className="truncate">{sessionLabel(s)}</span>
                   <span className="ml-auto truncate text-[10px] text-fg-faint">
                     {projectName(s.project)}
                   </span>
@@ -182,11 +183,11 @@ export const Palette = () => {
               {rows.map((s) => (
                 <Command.Item
                   key={s.id}
-                  value={`open ${s.name} ${projectName(s.project)} ${s.artifact}`}
+                  value={`open ${sessionLabel(s)} ${s.name} ${projectName(s.project)} ${s.artifact}`}
                   className={itemCls}
                   onSelect={run(() => void openTab(s))}
                 >
-                  <span className="truncate">{s.name}</span>
+                  <span className="truncate">{sessionLabel(s)}</span>
                   <span className="ml-auto truncate text-[10px] text-fg-faint">
                     {s.artifact.slice(project.length + 1) || s.name}
                   </span>

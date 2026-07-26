@@ -493,10 +493,15 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
  *  reaches the harness as argv - nothing is ever shell-interpolated. The one
  *  command line inside the prompt is quoted for the shell the AGENT will run it
  *  in, which is the only shell in this path. */
-export const createArtifactPrompt = (artifact: string, request: string): string =>
+export const createArtifactPrompt = (artifact: string, request: string, title?: string): string =>
   [
     "You are authoring a new Lucid artifact for human review.",
     `Write a single self-contained HTML document to exactly ${artifact}.`,
+    // The human named the document; the shell shows that name on its tab by
+    // reading the artifact's own <title>, so the agent must not retitle it.
+    ...(title
+      ? [`Its <title> must be exactly: ${title}`, "Use that as the document's heading too."]
+      : []),
     "It must answer this request from the human:",
     request,
     "Then open it for review by running:",

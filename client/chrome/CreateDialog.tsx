@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoots, openTab, projectName, setCreateOpen, useHub } from "./hub.ts";
 import { effortLadder, harnessInfoFor } from "./selection.ts";
 import { useShell } from "./shell.ts";
+import { handleize } from "../../src/core/title.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { closeButton } from "./ui/close.ts";
 
@@ -66,7 +67,12 @@ const CreateDialogBody = () => {
   const roots = useMemo(() => createRoots(sessions), [sessions]);
 
   const [project, setProject] = useState("");
+  const [title, setTitle] = useState("");
   const [name, setName] = useState("");
+  /** The human edited the filename directly, so the title stops driving it.
+   *  Typing a title first and then correcting the filename is a deliberate
+   *  divergence; retitling afterwards must not silently undo that. */
+  const [nameOwned, setNameOwned] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [harness, setHarness] = useState("");
   /** "" = the "default" row: pass nothing and let the CLI decide. */
@@ -147,6 +153,11 @@ const CreateDialogBody = () => {
     return () => clearInterval(t);
   }, [authoring]);
 
+  const onTitle = (value: string): void => {
+    setTitle(value);
+    if (!nameOwned) setName(handleize(value));
+  };
+
   // Typing `some-test` means `some-test.html`: there is exactly one legal
   // extension, so demanding it typed was ceremony. A name with an explicit
   // extension is left alone (a wrong one still fails, visibly).
@@ -187,6 +198,7 @@ const CreateDialogBody = () => {
         project,
         name: resolvedName,
         prompt,
+        ...(title.trim() ? { title: title.trim() } : {}),
         ...(harness.trim() ? { harness: harness.trim() } : {}),
         ...(model ? { model } : {}),
         ...(effort ? { effort } : {}),
@@ -291,12 +303,29 @@ const CreateDialogBody = () => {
             </div>
 
             <label className="flex flex-col gap-1">
-              <span className={fieldLabel}>Filename</span>
+              <span className={fieldLabel}>Title</span>
               <input
                 ref={nameRef}
+                data-test="create-title"
+                value={title}
+                onChange={(e) => onTitle(e.target.value)}
+                placeholder="Rollout plan for the billing service"
+                className={field}
+              />
+              <span className="text-[10px] text-fg-faint">
+                What the tab is called, and the document's own title.
+              </span>
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className={fieldLabel}>Filename</span>
+              <input
                 data-test="create-name"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setNameOwned(true);
+                  setName(e.target.value);
+                }}
                 placeholder="rollout-plan.html"
                 spellCheck={false}
                 className={field}

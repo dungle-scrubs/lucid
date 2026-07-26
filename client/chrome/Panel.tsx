@@ -388,13 +388,13 @@ const SelectionPicker = ({
   readonly onPick: (value: string) => void;
 }) => (
   <span className="flex items-center gap-1.5">
-    <span className="text-fg-faint">{label}</span>
+    <span className="text-[11px] text-fg-muted">{label}</span>
     {readOnly ? (
       <span
         data-test={test}
         data-readonly="true"
         title={INHERITED_WHY}
-        className="cursor-default rounded-full border border-ink-500 bg-ink-800 px-[9px] py-px text-[11px] text-fg-faint"
+        className="cursor-default rounded-[5px] border border-ink-500 bg-ink-800 px-2 py-[2px] text-[12px] text-fg-muted"
       >
         {display(value)}
       </span>
@@ -403,7 +403,12 @@ const SelectionPicker = ({
         <SelectTrigger
           data-test={test}
           aria-label={label}
-          className={`disabled:opacity-60 ${value === "" ? "" : "text-accent-bright"}`}
+          // The vendored trigger is the header's round, faint version PILL.
+          // Here it is a control the human reads and changes, so it takes the
+          // field shape and full-contrast text the rest of the composer uses.
+          className={`rounded-[5px] border-ink-500 bg-ink-800 px-2 py-[2px] text-[12px] disabled:opacity-60 ${
+            value === "" ? "text-fg-muted" : "text-accent-bright"
+          }`}
         >
           <SelectValue>{(v: string) => display(v)}</SelectValue>
         </SelectTrigger>
@@ -499,7 +504,7 @@ export const SelectionPickers = () => {
     <div
       data-test="selection-pickers"
       data-readonly={readOnly ? "true" : "false"}
-      className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px]"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1"
     >
       {models.length > 0 ? (
         <SelectionPicker
