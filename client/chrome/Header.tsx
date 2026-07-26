@@ -1,5 +1,6 @@
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
-import { setSidebarOpen, useShell } from "./shell.ts";
+import { setArtifactTheme, setSidebarOpen, useShell } from "./shell.ts";
+import { useTheme } from "./theme.ts";
 import { Kbd } from "./ui/kbd.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
@@ -10,6 +11,60 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
  * artifact fills the window. Cmd/Ctrl+B toggles the same state (the sidebar
  * owns that shortcut); this is its visible handle. Lucide `panel-left`.
  */
+/**
+ * Light or dark PAPER, for every open artifact at once.
+ *
+ * Not per-artifact and not per-tab: the artifact is a document that must render
+ * the same from disk, so the preference is the tool's to hold (see the
+ * lucid-design skill). The chrome does not change - only the paper does.
+ */
+const ThemeToggle = () => {
+  const theme = useTheme((s) => s.theme);
+  const dark = theme === "dark";
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            data-test="theme-toggle"
+            data-theme={theme}
+            aria-pressed={dark}
+            aria-label={dark ? "Light paper" : "Dark paper"}
+            onClick={() => setArtifactTheme(dark ? "light" : "dark")}
+            className="inline-flex flex-none cursor-pointer items-center border border-ink-400 p-[3px] text-fg-muted hover:border-accent-bright hover:text-fg"
+          >
+            {/* Lucide sun / moon */}
+            <svg
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              {dark ? (
+                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+              ) : (
+                <>
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4" />
+                </>
+              )}
+            </svg>
+          </button>
+        }
+      />
+      <TooltipContent>
+        {dark ? "Light paper" : "Dark paper"} - applies to every open artifact
+      </TooltipContent>
+    </Tooltip>
+  );
+};
+
 const PanelToggle = () => {
   const open = useShell((s) => s.sidebarOpen);
   return (
@@ -349,6 +404,7 @@ export const Header = () => {
         <ApproveControls />
         {/* Beside the panel it controls: the panel lives on the RIGHT (D9),
             so its toggle holds the header's right edge, not the left. */}
+        <ThemeToggle />
         <PanelToggle />
       </div>
     </header>

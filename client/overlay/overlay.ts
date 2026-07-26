@@ -285,6 +285,47 @@ export class LucidOverlay extends LitElement {
 
   // ---- diff view (RFC §8) ---------------------------------------------------
 
+  /**
+   * The human's palette choice, applied to the artifact document.
+   *
+   * Two parts: an attribute on `<html>`, and a stylesheet that remaps the six
+   * standard design-system tokens for each theme. The attribute selector
+   * (`:root[data-lucid-theme=…]`) outranks both the artifact's own `:root`
+   * block and its `@media (prefers-color-scheme: dark)` remap - a media query
+   * carries no specificity of its own - so the choice holds even on an artifact
+   * written before Lucid had a toggle, and even when it disagrees with the OS.
+   *
+   * Only the standard tokens are declared. An artifact's own extra variables,
+   * and anything it derives from these, follow automatically.
+   */
+  private applyTheme(theme: "light" | "dark"): void {
+    document.documentElement.dataset.lucidTheme = theme;
+    if (document.getElementById("__lucid_theme_style")) return;
+    const style = document.createElement("style");
+    style.id = "__lucid_theme_style";
+    style.textContent = `
+      :root[data-lucid-theme="light"] {
+        --paper: #faf6ec;
+        --ink: #211d15;
+        --ink-muted: #5e6773;
+        --rule: rgba(33, 29, 21, 0.12);
+        --accent: #7b6228;
+        --accent-wash: rgba(203, 168, 90, 0.16);
+        color-scheme: light;
+      }
+      :root[data-lucid-theme="dark"] {
+        --paper: #211d15;
+        --ink: #ece3cf;
+        --ink-muted: #a89d84;
+        --rule: rgba(236, 227, 207, 0.14);
+        --accent: #d9bd7a;
+        --accent-wash: rgba(203, 168, 90, 0.18);
+        color-scheme: dark;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
   /** Inject the redline stylesheet into the artifact realm (sage/rust/brass). */
   private injectDiffStyles(): void {
     if (document.getElementById("__lucid_diff_style")) return;
@@ -491,6 +532,8 @@ export class LucidOverlay extends LitElement {
       this.publishSectionIds();
     } else if (msg.type === "measure-content") {
       post({ source: "lucid-overlay", type: "content-width", width: this.measureContent() });
+    } else if (msg.type === "theme") {
+      this.applyTheme(msg.theme);
     } else if (msg.type === "clear-pending") {
       this.focusedId = null;
     }

@@ -1439,3 +1439,37 @@ test("diff view shows changes since a version and revert reaches the agent", asy
   await page.locator('[data-test="diff-done"]').click();
   await expect(page.locator('[data-test="diff-bar"]')).toHaveCount(0);
 });
+
+test("the paper toggle re-themes the artifact itself, and the choice survives a reload", async ({
+  page,
+}) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+  const root = surface.locator("html");
+
+  // Light is the default: paper is the ground every artifact is designed on.
+  await expect(page.locator('[data-test="theme-toggle"]')).toHaveAttribute("data-theme", "light");
+  await expect(root).toHaveAttribute("data-lucid-theme", "light");
+
+  // The toggle reaches INSIDE the artifact document - the tokens it remaps are
+  // what an artifact's own colors resolve through.
+  await page.locator('[data-test="theme-toggle"]').click();
+  await expect(root).toHaveAttribute("data-lucid-theme", "dark");
+  const dark = await surface
+    .locator("html")
+    .evaluate((el) => getComputedStyle(el).getPropertyValue("--paper").trim());
+  expect(dark).toBe("#211d15");
+
+  // A theme belongs to the eyes reading, so it outlives the page.
+  await page.reload();
+  await expect(page.locator('[data-test="theme-toggle"]')).toHaveAttribute("data-theme", "dark");
+  await expect(surfaceOf(page).locator("html")).toHaveAttribute("data-lucid-theme", "dark");
+
+  // And back, without leaving the artifact on the wrong palette.
+  await page.locator('[data-test="theme-toggle"]').click();
+  await expect(surfaceOf(page).locator("html")).toHaveAttribute("data-lucid-theme", "light");
+  const light = await surfaceOf(page)
+    .locator("html")
+    .evaluate((el) => getComputedStyle(el).getPropertyValue("--paper").trim());
+  expect(light).toBe("#faf6ec");
+});

@@ -79,12 +79,18 @@ alone.
 
 ## Responding to dark mode
 
-Optional. If you support it, follow the reader's system setting with a
-`@media (prefers-color-scheme: dark)` block - no toggle, no JS. A control and
+**Required, and it costs you one block.** Follow the reader's system setting with
+a `@media (prefers-color-scheme: dark)` block - no toggle, no JS. A control and
 its persisted state are state the artifact is not allowed to carry: it must
 render identically from disk, offline, and a toggle breaks that. Route every
 color through a variable, then remap the variables in the media block; the rest
 of the stylesheet does not change.
+
+Lucid itself owns the *choice*. The viewer has a paper toggle that applies to
+every open artifact at once, and it drives your artifact by setting
+`data-lucid-theme` on `<html>` and remapping the six tokens below - which is why
+routing every color through them is not a style preference. Hardcode `#fff` and
+your artifact ignores the reader; `lucid open` will tell you so at author time.
 
 The dark variant is still **paper, not the app**. Keep the ground warm and
 *lifted* - a sheet resting on the chrome, distinctly above the chrome's own

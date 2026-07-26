@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { storeTheme, type ArtifactTheme } from "./theme.ts";
 import { createSession, type SessionHandle } from "./session.ts";
 import type { SessionConfig } from "./store.ts";
 
@@ -58,6 +59,18 @@ const readStoredSidebarOpen = (): boolean => {
     return localStorage.getItem(SIDEBAR_OPEN_KEY) !== "0";
   } catch {
     return true;
+  }
+};
+
+/**
+ * Set the artifact palette and tell EVERY open session at once - a theme that
+ * only reached the foreground tab would leave the others to flash the old
+ * palette when you switched to them.
+ */
+export const setArtifactTheme = (theme: ArtifactTheme): void => {
+  storeTheme(theme);
+  for (const key of useShell.getState().sessionKeys) {
+    getSession(key)?.surface.toOverlay({ source: "lucid-chrome", type: "theme", theme });
   }
 };
 
