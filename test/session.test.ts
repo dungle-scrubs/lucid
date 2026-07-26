@@ -564,25 +564,34 @@ describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
 });
 
 describe("the session dir ignores itself", () => {
-  test("a fresh .lucid carries a .gitignore", async () => {
+  test("a fresh session folder carries a .gitignore", async () => {
     const paths = sessionPaths(artifact);
-    expect(existsSync(join(dir, ".lucid"))).toBe(false);
+    expect(existsSync(paths.sessionDir)).toBe(false);
     await openSession(paths);
-    // The machinery lands in whatever directory the artifact lives in - often a
+    // The record lands in whatever directory the artifact lives in - often a
     // repo - so it must not show up in `git status` unasked.
-    expect(await readFile(join(dir, ".lucid", ".gitignore"), "utf8")).toBe("*\n");
+    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("*\n");
   });
 
-  test("a .lucid that predates the behaviour gets one on the next open", async () => {
+  test("the ignore file goes INSIDE the folder, never beside it", async () => {
+    // One level up is the folder holding the ARTIFACTS. A `*` there would
+    // quietly ignore the very documents the record exists to protect - which is
+    // exactly what the old layout did once artifacts moved into `lucid/`.
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    expect(existsSync(join(paths.artifactDir, ".gitignore"))).toBe(false);
+  });
+
+  test("a session that predates the behaviour gets one on the next open", async () => {
     // The sessions already polluting someone's repo are precisely the ones that
     // were created before this existed; writing only for a brand-new directory
     // would miss every one of them.
     const paths = sessionPaths(artifact);
-    await mkdir(join(dir, ".lucid", "plan"), { recursive: true });
-    expect(existsSync(join(dir, ".lucid", ".gitignore"))).toBe(false);
+    await mkdir(paths.sessionDir, { recursive: true });
+    expect(existsSync(join(paths.sessionDir, ".gitignore"))).toBe(false);
 
     await openSession(paths);
-    expect(await readFile(join(dir, ".lucid", ".gitignore"), "utf8")).toBe("*\n");
+    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("*\n");
   });
 
   test("an edited .gitignore is never overwritten", async () => {
@@ -590,10 +599,25 @@ describe("the session dir ignores itself", () => {
     // has to survive every subsequent open.
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await writeFile(join(dir, ".lucid", ".gitignore"), "*\n!log.ndjson\n");
+    await writeFile(join(paths.sessionDir, ".gitignore"), "*\n!log.ndjson\n");
 
     await openSession(paths);
-    expect(await readFile(join(dir, ".lucid", ".gitignore"), "utf8")).toBe("*\n!log.ndjson\n");
+    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("*\n!log.ndjson\n");
+  });
+
+  test("an existing session moves out of the old .lucid container, once", async () => {
+    // The whole point of the move: `lucid/plan.html` next to `lucid/plan/`,
+    // rather than a second hidden `.lucid/` inside the folder artifacts live in.
+    const paths = sessionPaths(artifact);
+    await mkdir(paths.legacySessionDir, { recursive: true });
+    await writeFile(join(paths.legacySessionDir, "log.ndjson"), "", "utf8");
+    await writeFile(join(paths.legacySessionDir, "marker"), "kept", "utf8");
+
+    await openSession(paths);
+    expect(await readFile(join(paths.sessionDir, "marker"), "utf8")).toBe("kept");
+    expect(existsSync(paths.legacySessionDir)).toBe(false);
+    // The emptied container goes with it, so nothing hidden is left behind.
+    expect(existsSync(join(dir, ".lucid"))).toBe(false);
   });
 });
 

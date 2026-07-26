@@ -12,8 +12,20 @@ export interface SessionPaths {
   readonly artifactDir: string;
   /** Slug derived from the artifact filename, e.g. `migration-plan`. */
   readonly name: string;
-  /** `<artifactDir>/.lucid/<name>` */
+  /**
+   * `<artifactDir>/<name>` - the session's own folder, beside its artifact.
+   *
+   * Visible, and named after the artifact it belongs to: `lucid/plan.html` is
+   * reviewed, `lucid/plan/` is its record. The old layout nested a SECOND
+   * `.lucid/` inside the `lucid/` folder artifacts already live in - two
+   * directories one character apart, one of them hidden, and a project folder
+   * that looked empty in Finder because the only thing left in it was the
+   * dotted one.
+   */
   readonly sessionDir: string;
+  /** Where a session's folder used to live, `<artifactDir>/.lucid/<name>`.
+   *  Kept so an existing session can be found and moved forward exactly once. */
+  readonly legacySessionDir: string;
   /** Append-only NDJSON source of truth. */
   readonly logPath: string;
   /** Lucid's served copy of `<file>` (serve + live-reload target). */
@@ -47,12 +59,13 @@ export const sessionPaths = (input: string): SessionPaths => {
   const artifactPath = canonicalArtifactPath(input);
   const artifactDir = dirname(artifactPath);
   const name = sessionName(artifactPath);
-  const sessionDir = resolve(artifactDir, ".lucid", name);
+  const sessionDir = resolve(artifactDir, name);
   return {
     artifactPath,
     artifactDir,
     name,
     sessionDir,
+    legacySessionDir: resolve(artifactDir, ".lucid", name),
     logPath: resolve(sessionDir, "log.ndjson"),
     currentHtml: resolve(sessionDir, "current.html"),
     versionsDir: resolve(sessionDir, "versions"),
