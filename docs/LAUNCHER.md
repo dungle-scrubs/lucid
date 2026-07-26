@@ -37,6 +37,13 @@ JSON file at `$LUCID_HARNESSES`, or `$XDG_CONFIG_HOME/lucid/harnesses.json`
 }
 ```
 
+Model ids are the harness's OWN spelling, and a wrong one is only discoverable
+by running it: `claude --model` takes `claude-opus-5` or the moving alias
+`opus`, never a bare `opus-5`. Verify an id against the CLI before adding it
+to a registry (`claude -p --model <id> "say ok"`); Lucid validates that a pick
+is in your list, not that your list is real, and a bad id surfaces as the
+CLI's own refusal in the create dialog.
+
 `{prompt}` sits BEFORE `--allowedTools`: claude's tools flag is variadic
 (`<tools...>`), so a trailing prompt gets swallowed as another tool name and
 the turn dies with "input must be provided".

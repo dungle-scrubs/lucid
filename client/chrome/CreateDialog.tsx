@@ -301,13 +301,13 @@ const CreateDialogBody = () => {
                 spellCheck={false}
                 className={field}
               />
+              {/* A bare word is validated as itself and given `.html` on the
+                  way out - silently, because there is one legal extension and
+                  echoing the name back is noise, not information. Only a name
+                  that cannot be fixed says anything. */}
               {name.length > 0 && !nameOk ? (
                 <span data-test="create-name-error" className="text-[10px] text-rust-300">
-                  A plain .html filename - letters, digits, dot, dash, underscore. No directories.
-                </span>
-              ) : nameOk && resolvedName !== name.trim() ? (
-                <span data-test="create-name-resolved" className="text-[10px] text-fg-faint">
-                  {resolvedName}
+                  Letters, digits, dot, dash, underscore - no directories.
                 </span>
               ) : null}
             </label>
@@ -467,7 +467,20 @@ const CreateDialogBody = () => {
               </div>
             ) : null}
 
-            <div className="flex justify-end">
+            <div className="flex items-center justify-end gap-2">
+              {/* A dead button with no stated reason is the same complaint the
+                  question drawer's answer-blocked line answers. */}
+              {!canSubmit && !sending ? (
+                <span data-test="create-blocked" className="text-[10px] text-fg-faint">
+                  {project === ""
+                    ? "Pick a project"
+                    : name.trim() === ""
+                      ? "Name the file"
+                      : !nameOk
+                        ? "Fix the filename"
+                        : "Say what it should be"}
+                </span>
+              ) : null}
               <button
                 type="submit"
                 data-test="create-submit"
