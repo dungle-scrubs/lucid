@@ -2,7 +2,9 @@ import { statSync, mkdirSync, watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
-import { readLastAttendant } from "../core/attendant.ts";
+import { harnessSessionId, interactiveResumeCommand, presenceFor } from "../core/presence.ts";
+import { readSettingsCached } from "../core/settings.ts";
+import { artifactAttendant, readLastAttendant } from "../core/attendant.ts";
 import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
 import { foldLog, versionRef } from "../core/fold.ts";
@@ -22,7 +24,12 @@ import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
 import { assemblePayload } from "../core/payload.ts";
 import { commitWatchedChange } from "../core/session.ts";
-import { loadRegistry, resolveRecipe, type SpawnRecipe } from "../launch/recipes.ts";
+import {
+  loadRegistry,
+  normalizeHarness,
+  resolveRecipe,
+  type SpawnRecipe,
+} from "../launch/recipes.ts";
 import {
   readSelection,
   sanitizeSelection,
@@ -741,7 +748,14 @@ export const createSessionHost = (
     const state = foldLog((await readEvents(paths.logPath)).events);
     const recorded = [...state.sessionHistory].reverse().find((r) => r.harness)?.harness;
     const found = resolveRecipe(registry, recorded);
-    return found && (recorded === undefined || found.name === recorded) ? found : undefined;
+    // Normalized: a registry keyed `claude_code` IS the `claude-code` an
+    // artifact records. Comparing raw meant a fresh artifact stamped by an
+    // agent had no vocabulary at all - no model picker, no effort picker -
+    // purely because of a separator.
+    return found &&
+      (recorded === undefined || normalizeHarness(found.name) === normalizeHarness(recorded))
+      ? found
+      : undefined;
   };
 
   /** The selection route's answer: the sticky pick plus the vocabulary it was
@@ -894,22 +908,72 @@ export const createSessionHost = (
       // Who last took delivery, from the advisory sidecars: display data for
       // the chrome's resume affordance, never something the server executes.
       const attendant = await readLastAttendant(paths);
+      // Is that conversation open in a terminal right now? Resolved per
+      // request (the panel polls state, and a human resuming in a terminal
+      // must flip the mode within a beat, not on a restart).
+      // The SAME resolution the attend engine uses, so the panel's idea of
+      // whose conversation this is can never differ from the hub's.
+      const target = await artifactAttendant(paths, state.sessionHistory);
+      const stampedHarness = [...state.sessionHistory].reverse().find((r) => r.harness);
+      const presence = await presenceFor(target, paths.artifactDir);
       const contextUsage = await readContextSidecar(paths);
       const selection = await readSelection(paths);
+      // Resumable = the engine has something to re-enter. Same resolution the
+      // attend engine uses, so the panel cannot promise a turn it will refuse.
+      const knownSessionId =
+        target?.sessionId ??
+        harnessSessionId({
+          ...(target?.resume ? { resume: target.resume } : {}),
+          artifactDir: paths.artifactDir,
+        });
+      const resumable = knownSessionId !== undefined;
+      // A command the human can paste, offered whenever the session is KNOWN -
+      // not only when an agent happened to write one down. Recorded first: it
+      // carries the agent's own flags.
+      const settings = await readSettingsCached();
+      const resumeCommand =
+        attendant?.resume ??
+        (target?.harness && knownSessionId
+          ? interactiveResumeCommand(target.harness, knownSessionId, {
+              yolo: settings.resumeYolo,
+            })
+          : undefined);
       const response: StateResponse = {
         ...payload,
         agentsListening: agentClients.size,
+        resumable,
+        ...(presence
+          ? {
+              attendantPresence: {
+                interactive: presence.interactive,
+                ...(presence.status ? { status: presence.status } : {}),
+                ...(presence.cwd ? { cwd: presence.cwd } : {}),
+              },
+            }
+          : {}),
+        // The sidecar when there is one (it carries the resume command and the
+        // attending session's model/effort); otherwise the harness the LOG
+        // records, so a fresh artifact still NAMES its agent. Without this the
+        // panel called a stamped claude-code session "the agent".
         ...(attendant
           ? {
               lastAttendant: {
                 harness: attendant.harness,
                 at: attendant.at,
-                ...(attendant.resume ? { resume: attendant.resume } : {}),
+                ...(resumeCommand ? { resume: resumeCommand } : {}),
                 ...(attendant.model ? { model: attendant.model } : {}),
                 ...(attendant.effort ? { effort: attendant.effort } : {}),
               },
             }
-          : {}),
+          : stampedHarness
+            ? {
+                lastAttendant: {
+                  harness: stampedHarness.harness,
+                  at: stampedHarness.lastAt,
+                  ...(resumeCommand ? { resume: resumeCommand } : {}),
+                },
+              }
+            : {}),
         ...(contextUsage ? { contextUsage } : {}),
         ...(selection ? { selection } : {}),
       };
@@ -1067,6 +1131,41 @@ export const createSessionHost = (
     }
   }, 1000);
 
+  /**
+   * Synthetic frame (like `listeners`): whether the artifact's own harness
+   * conversation is open in a terminal right now.
+   *
+   * Polled, because nothing writes to the LOG when a human opens or closes a
+   * terminal - and without a push the panel kept saying "open in claude-code"
+   * at a session that had exited, or offered a resume command for one already
+   * running, until some unrelated event happened to land. Only broadcast on
+   * CHANGE, and the sweep behind it is cached, so a quiet session costs a
+   * directory read every few seconds.
+   */
+  let lastPresence = "";
+  const presenceTimer = setInterval(() => {
+    void (async () => {
+      if (sseClients.size === 0) return; // nobody is looking
+      try {
+        const state = foldLog((await readEvents(paths.logPath)).events);
+        const target = await artifactAttendant(paths, state.sessionHistory);
+        const live = await presenceFor(target, paths.artifactDir);
+        const frame = live
+          ? JSON.stringify({
+              interactive: live.interactive,
+              ...(live.status ? { status: live.status } : {}),
+              ...(live.cwd ? { cwd: live.cwd } : {}),
+            })
+          : "null";
+        if (frame === lastPresence) return;
+        lastPresence = frame;
+        broadcastRaw(encoder.encode(`event: presence\ndata: ${frame}\n\n`));
+      } catch {
+        /* a presence sweep that fails is not worth tearing the stream down */
+      }
+    })();
+  }, 3000);
+
   const suspend = async (): Promise<void> => {
     // Route through serverAppend so subscribers learn of the suspend before
     // the owner closes the streams.
@@ -1074,6 +1173,7 @@ export const createSessionHost = (
   };
 
   const stop = (): void => {
+    clearInterval(presenceTimer);
     if (stopped) return;
     stopped = true;
     if (watcher) watcher.close();

@@ -90,10 +90,26 @@ export const stopServer = async (paths: SessionPaths, timeoutMs = 5000): Promise
   return true;
 };
 
-/** Spawn the detached hub daemon (`hub`) that outlives this process. */
-export const spawnHub = (port?: number): void => {
+/**
+ * Spawn the detached hub daemon (`hub`) that outlives this process.
+ *
+ * `attend` opts the spawned hub into driving delivery itself. `lucid app`
+ * passes it: the app is a human sitting down to review, and feedback that
+ * silently waits for someone to go re-summon a conversation is the failure
+ * that mode exists to fix. The hub still steps aside for a live interactive
+ * session (attend.ts checks harness presence before every turn), so this
+ * never types into a window somebody is sitting at.
+ *
+ * Bare `lucid hub` keeps the D-064 default of spawning nothing.
+ */
+export const spawnHub = (port?: number, attend = false): void => {
   const { command, prefix } = selfInvocation();
-  const args = [...prefix, "hub", ...(port !== undefined ? ["--port", String(port)] : [])];
+  const args = [
+    ...prefix,
+    "hub",
+    ...(port !== undefined ? ["--port", String(port)] : []),
+    ...(attend ? ["--attend"] : []),
+  ];
   const child = spawn(command, args, {
     detached: true,
     stdio: "ignore",

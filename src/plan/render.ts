@@ -109,7 +109,7 @@ const STYLE = `
   * { box-sizing: border-box; }
   body { margin:0; background:var(--surface); color:var(--ink); font-family:var(--sans); font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; }
   .doc { max-width:860px; margin:0 auto; padding:48px 24px 120px; }
-  .plan-section { padding:14px 20px; margin:6px 0; border-radius:10px; transition:background .12s; }
+  .plan-section { padding:14px 20px; margin:6px 0; transition:background .12s; }
   .plan-section:hover { background:var(--hover); }
   .plan-section > :first-child { margin-top:8px; }
   .eyebrow { font-size:12px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--brass-deep); }
@@ -119,8 +119,8 @@ const STYLE = `
   h3 { font-size:20px; margin:26px 0 8px; }
   p,li { margin:8px 0; }
   ul,ol { padding-left:22px; }
-  code { font-family:var(--mono); font-size:.86em; background:var(--code-bg); padding:1px 5px; border-radius:4px; }
-  pre { background:var(--pre-bg); color:var(--pre-fg); padding:14px 16px; border-radius:8px; overflow:auto; }
+  code { font-family:var(--mono); font-size:.86em; background:var(--code-bg); padding:1px 5px; }
+  pre { background:var(--pre-bg); color:var(--pre-fg); padding:14px 16px; overflow:auto; }
   pre code { background:none; padding:0; color:inherit; }
   blockquote { border-left:3px solid var(--brass); margin:12px 0; padding:4px 0 4px 16px; color:var(--soft); font-style:italic; }
   table { border-collapse:collapse; width:100%; margin:14px 0; font-size:14px; }
@@ -129,7 +129,7 @@ const STYLE = `
   [data-lucid-decision] { position:relative; }
   [data-lucid-question] {
     list-style:none; position:relative; margin-left:-8px; padding:8px 12px 8px 34px;
-    background:var(--q-bg); border-left:3px solid var(--amber); border-radius:6px;
+    background:var(--q-bg); border-left:3px solid var(--amber);
   }
   [data-lucid-question]::before { content:"?"; position:absolute; left:11px; top:8px; font-weight:700; color:var(--amber); }
   footer { margin-top:48px; color:var(--soft); font-size:13px; font-family:var(--serif); font-style:italic; }
