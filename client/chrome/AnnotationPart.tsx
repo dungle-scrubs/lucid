@@ -123,7 +123,10 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
               }
             }
       }
-      className={`group relative flex flex-col gap-[7px] border bg-ink-700 px-[11px] py-[10px] focus-visible:annot-outline ${
+      // mt-3: the located/orphaned badge straddles the top edge, so the card
+      // reserves room for it. Without that reserve it sat on the previous
+      // item's own footer - two labels colliding across a card boundary.
+      className={`group relative mt-3 flex flex-col gap-[7px] border bg-ink-700 px-[11px] py-[10px] focus-visible:annot-outline ${
         hovered ? "border-accent shadow-[inset_0_0_0_1px_var(--color-accent)]" : "border-ink-600"
       }`}
     >
