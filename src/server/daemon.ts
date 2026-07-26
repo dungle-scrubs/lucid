@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { migrateLegacySessionDir } from "../core/session.ts";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, readFile, stat } from "node:fs/promises";
 import { canonicalArtifactPath, sessionPaths, type SessionPaths } from "../core/paths.ts";
@@ -356,6 +357,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const existing = mounts.get(id);
     if (existing) return existing;
     const paths = sessionPaths(artifact);
+    // Sessions recorded before the record moved out of `.lucid/` are listed by
+    // the scan and must OPEN, not just appear: mounting one moves it forward.
+    migrateLegacySessionDir(paths);
     const base = `/s/${id}`;
     const host = createSessionHost(paths, {
       getPort: () => port,

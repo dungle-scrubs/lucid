@@ -300,6 +300,7 @@ export class LucidOverlay extends LitElement {
    */
   private applyTheme(theme: "light" | "dark"): void {
     document.documentElement.dataset.lucidTheme = theme;
+    this.retuneColorSchemeQueries(theme);
     if (document.getElementById("__lucid_theme_style")) return;
     const style = document.createElement("style");
     style.id = "__lucid_theme_style";
@@ -324,6 +325,66 @@ export class LucidOverlay extends LitElement {
       }
     `;
     document.head.appendChild(style);
+  }
+
+  /** Each `prefers-color-scheme` media rule with its ORIGINAL condition, so
+   *  toggling back and forth stays lossless. */
+  private schemeQueries = new WeakMap<CSSMediaRule, string>();
+
+  /**
+   * Hand the artifact's OWN dark block to the human instead of to the OS.
+   *
+   * Injecting the six standard tokens is not enough: a good artifact remaps a
+   * dozen (`--surface`, `--sunken`, `--muted`, `--faint`…) inside
+   * `@media (prefers-color-scheme: dark)`, and that query keeps matching on a
+   * dark machine no matter what the reader picked. The result was the worst of
+   * both - light paper with dark code chips, dark panels and pale grey body
+   * text, all technically token-driven.
+   *
+   * So the color-scheme FEATURE is rewritten to a condition that is simply true
+   * or false: `(min-width: 0px)` / `(max-width: 0px)`. Only that feature is
+   * touched, so `(prefers-color-scheme: dark) and (min-width: 60em)` keeps its
+   * width test. Nothing about the artifact's own CSS has to change, and an
+   * artifact opened straight from disk still follows the OS as its author
+   * intended - this only applies while Lucid is the one rendering it.
+   */
+  private retuneColorSchemeQueries(theme: "light" | "dark"): void {
+    const rewrite = (rules: CSSRuleList): void => {
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSMediaRule) {
+          const original = this.schemeQueries.get(rule) ?? rule.conditionText;
+          if (/prefers-color-scheme/i.test(original)) {
+            this.schemeQueries.set(rule, original);
+            // A block written for the theme in force is switched ON, the other
+            // OFF - whichever way round the author wrote it.
+            const wantsDark = /dark/i.test(original);
+            const on = wantsDark === (theme === "dark");
+            try {
+              rule.media.mediaText = original.replace(
+                /\(\s*prefers-color-scheme\s*:\s*(?:dark|light)\s*\)/gi,
+                on ? "(min-width: 0px)" : "(max-width: 0px)",
+              );
+            } catch {
+              /* some engines refuse the write; the token floor still applies */
+            }
+          }
+          rewrite(rule.cssRules);
+          continue;
+        }
+        // @supports and @layer can wrap a color-scheme block.
+        if (rule instanceof CSSSupportsRule || rule instanceof CSSLayerBlockRule) {
+          rewrite(rule.cssRules);
+        }
+      }
+    };
+
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        rewrite(sheet.cssRules);
+      } catch {
+        /* a sheet we may not read (cross-origin): nothing to retune */
+      }
+    }
   }
 
   /** Inject the redline stylesheet into the artifact realm (sage/rust/brass). */

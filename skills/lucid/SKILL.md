@@ -61,7 +61,8 @@ Never fake the review loop, and never paste build instructions at the user.
 
    **Write it into the PROJECT, at `<project>/lucid/<name>.html` - never your
    scratchpad, never `/tmp`.** This is not tidiness. A session's whole history -
-   every annotation, version and reply - lives in `.lucid/` beside its artifact,
+   every annotation, version and reply - lives in a folder named after the
+   artifact beside it (`lucid/plan.html` -> `lucid/plan/`),
    so the artifact's location decides where the review is stored. macOS clears
    `/private/tmp` on every boot, and a scratchpad artifact takes weeks of
    accumulated review with it when the machine restarts. `lucid open` refuses a

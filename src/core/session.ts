@@ -1,5 +1,5 @@
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { ArtifactError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
@@ -25,11 +25,39 @@ import { hashContent, validateStructure, writeSnapshot } from "./version.ts";
  * An existing file is never touched, so a team that wants part of the record
  * committed edits it (`!log.ndjson`) and keeps that forever.
  */
+/**
+ * Move a session's folder out of the old `.lucid/` container, once.
+ *
+ * The record now sits beside its artifact (`lucid/plan.html` + `lucid/plan/`)
+ * instead of inside a second, hidden `.lucid/` within the same folder. Sessions
+ * that predate that keep working: the first open renames the folder forward.
+ *
+ * Never merges. If both exist, something already wrote the new location and
+ * guessing which log is authoritative would be worse than leaving the old one
+ * on disk untouched.
+ */
+export const migrateLegacySessionDir = (paths: SessionPaths): void => {
+  if (existsSync(paths.sessionDir) || !existsSync(paths.legacySessionDir)) return;
+  try {
+    renameSync(paths.legacySessionDir, paths.sessionDir);
+  } catch {
+    return; // leave it where it is; nothing is lost, and the next open retries
+  }
+  try {
+    rmdirSync(dirname(paths.legacySessionDir)); // only if now empty
+  } catch {
+    /* other sessions still live there */
+  }
+};
+
 export const ensureSessionDirs = (paths: SessionPaths): void => {
-  const lucidRoot = dirname(paths.sessionDir);
+  migrateLegacySessionDir(paths);
   mkdirSync(paths.sessionDir, { recursive: true });
   mkdirSync(paths.versionsDir, { recursive: true });
-  const ignore = join(lucidRoot, ".gitignore");
+  // The ignore file goes INSIDE the session folder, not beside it. One level up
+  // is now the folder holding the ARTIFACTS - a `*` there would have quietly
+  // ignored the very documents this is meant to protect.
+  const ignore = join(paths.sessionDir, ".gitignore");
   if (!existsSync(ignore)) {
     try {
       writeFileSync(ignore, "*\n");

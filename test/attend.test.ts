@@ -8,7 +8,7 @@ import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
 import type { HarnessInfo, SelectionResponse } from "../src/protocol/wire.ts";
-import { resetPresenceCache } from "../src/core/presence.ts";
+import { resetPresenceCache, resetSessionCwdCache } from "../src/core/presence.ts";
 import { attendDecision, createAttendant, pendingHumanSeqs } from "../src/server/attend.ts";
 import { runDaemon, sessionId, type DaemonHandle } from "../src/server/daemon.ts";
 import { createSessionHost } from "../src/server/session-host.ts";
@@ -27,7 +27,13 @@ const elementTarget = {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Wait for a stub harness to write its marker, or give up. */
-const readMarker = async (path: string, timeoutMs = 10_000): Promise<Record<string, unknown>> => {
+/**
+ * 30s, not 10: the stub is a real `bun` process, and the whole suite spawns
+ * dozens of them. Under load a cold start alone can eat several seconds, which
+ * made these three tests fail intermittently on a busy machine while passing
+ * every time in isolation - flakiness that says nothing about the code.
+ */
+const readMarker = async (path: string, timeoutMs = 30_000): Promise<Record<string, unknown>> => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const file = Bun.file(path);
@@ -177,7 +183,9 @@ describe("session host presence", () => {
       join(sessionsDir, `${proc.pid}.json`),
       JSON.stringify({ pid: proc.pid, sessionId: id, kind: "interactive", status: "idle" }),
     );
+    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
     resetPresenceCache();
+    resetSessionCwdCache();
 
     const host = createSessionHost(stampedPaths, { getPort: () => 0, onEnded: () => {} });
     try {
@@ -196,7 +204,9 @@ describe("session host presence", () => {
       host.stop();
       await proc.kill();
       delete process.env.LUCID_CLAUDE_SESSIONS;
+      process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
       resetPresenceCache();
+      resetSessionCwdCache();
     }
   });
 
@@ -211,7 +221,9 @@ describe("session host presence", () => {
     const sessionsDir = join(dir, "claude-sessions-empty");
     await mkdir(sessionsDir, { recursive: true });
     process.env.LUCID_CLAUDE_SESSIONS = sessionsDir;
+    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
     resetPresenceCache();
+    resetSessionCwdCache();
 
     const host = createSessionHost(stampedPaths, { getPort: () => 0, onEnded: () => {} });
     try {
@@ -223,7 +235,9 @@ describe("session host presence", () => {
     } finally {
       host.stop();
       delete process.env.LUCID_CLAUDE_SESSIONS;
+      process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
       resetPresenceCache();
+      resetSessionCwdCache();
     }
   });
 
@@ -275,7 +289,11 @@ describe("hub attend mode", () => {
     // added to their OWN shell (`~/.lucid/roots.json`), on top of this tree.
     process.env.LUCID_ROOTS = join(dir, "roots.json");
     process.env.LUCID_CLAUDE_SESSIONS = join(dir, "no-claude-sessions");
+    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
+    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
     resetPresenceCache();
+    resetSessionCwdCache();
+    resetSessionCwdCache();
     harnessesPath = join(dir, "harnesses.json");
     attendMarker = join(dir, "attend-marker.json");
     createMarker = join(dir, "create-marker.json");
@@ -311,7 +329,9 @@ describe("hub attend mode", () => {
     daemon = undefined;
     delete process.env.LUCID_ROOTS;
     delete process.env.LUCID_CLAUDE_SESSIONS;
+    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
     resetPresenceCache();
+    resetSessionCwdCache();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -774,7 +794,9 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
     // added to their OWN shell (`~/.lucid/roots.json`), on top of this tree.
     process.env.LUCID_ROOTS = join(dir, "roots.json");
     process.env.LUCID_CLAUDE_SESSIONS = join(dir, "no-claude-sessions");
+    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
     resetPresenceCache();
+    resetSessionCwdCache();
     harnessesPath = join(dir, "harnesses.json");
     attendMarker = join(dir, "attend-marker.json");
     createMarker = join(dir, "create-marker.json");
@@ -811,7 +833,9 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
     daemon = undefined;
     delete process.env.LUCID_ROOTS;
     delete process.env.LUCID_CLAUDE_SESSIONS;
+    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
     resetPresenceCache();
+    resetSessionCwdCache();
     await rm(dir, { recursive: true, force: true });
   });
 

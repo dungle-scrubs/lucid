@@ -184,6 +184,18 @@ export const scanRoots = async (roots: readonly string[] = defaultRoots()): Prom
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const name = entry.name;
+      if (!name.startsWith(".")) {
+        // `<artifactDir>/<stem>/log.ndjson` - a session folder beside the
+        // artifact it belongs to. Not recursed into: what is inside is its own
+        // record (versions, pasted bytes), never another session.
+        try {
+          await stat(join(dir, name, "log.ndjson"));
+          found.add(await resolveArtifactPath(dir, name));
+          continue;
+        } catch {
+          /* no log here: an ordinary directory, keep walking */
+        }
+      }
       if (name === ".lucid") {
         // <artifactDir>/.lucid/<stem>/log.ndjson - one level, no recursion.
         const lucidDir = join(dir, name);

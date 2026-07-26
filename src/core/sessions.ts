@@ -29,17 +29,25 @@ export const projectRoot = async (paths: SessionPaths): Promise<string> => {
 
 export const listSessions = async (root: string): Promise<SessionSummary[]> => {
   const scanRoot = resolve(root);
-  const glob = new Glob("**/.lucid/*/log.ndjson");
+  // Every log, in either layout: `<dir>/<stem>/log.ndjson` (a session folder
+  // beside its artifact) and `<dir>/.lucid/<stem>/log.ndjson` (the old nested
+  // container, until that session is next opened and moves forward).
+  const glob = new Glob("**/log.ndjson");
   const sessions: SessionSummary[] = [];
 
   for await (const rel of glob.scan({ cwd: scanRoot, dot: true, onlyFiles: true })) {
     const parts = rel.split("/");
-    const idx = parts.lastIndexOf(".lucid");
-    if (idx === -1 || parts[idx + 1] === undefined) continue;
-    const artifactDir = resolve(scanRoot, ...parts.slice(0, idx));
+    const stem = parts.at(-2);
+    if (stem === undefined) continue;
+    // Drop the `.lucid` level when it is there, so both layouts resolve to the
+    // same artifact directory.
+    const dirParts = parts.slice(0, -2);
+    const artifactDir = resolve(
+      scanRoot,
+      ...(dirParts.at(-1) === ".lucid" ? dirParts.slice(0, -1) : dirParts),
+    );
 
     try {
-      const stem = parts[idx + 1];
       const probe = sessionPaths(resolve(artifactDir, `${stem}.html`));
       const state = foldLog((await readEvents(probe.logPath)).events);
       if (state.status === "none") continue;

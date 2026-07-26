@@ -179,11 +179,31 @@ export const claudeProjectsDir = (dir?: string): string => {
  * every turn - fifteen silent failures behind an "update on the way…" that
  * never cleared.
  */
+const sessionCwdCache = new Map<string, string | undefined>();
+
+/** Drop the memoized cwd lookups (tests, and anything that must not read a
+ *  stale one). */
+export const resetSessionCwdCache = (): void => sessionCwdCache.clear();
+
+/**
+ * Memoized: a conversation's cwd is fixed for its lifetime, and the lookup
+ * walks every project directory the harness has ever recorded - hundreds of
+ * stats, which an attend pass was paying on every single turn.
+ */
 export const harnessSessionCwd = async (
   sessionId: string,
   dir?: string,
 ): Promise<string | undefined> => {
   const root = claudeProjectsDir(dir);
+  const key = `${root}\u0000${sessionId}`;
+  const hit = sessionCwdCache.get(key);
+  if (hit !== undefined || sessionCwdCache.has(key)) return hit;
+  const answer = await findSessionCwd(root, sessionId);
+  sessionCwdCache.set(key, answer);
+  return answer;
+};
+
+const findSessionCwd = async (root: string, sessionId: string): Promise<string | undefined> => {
   let names: string[];
   try {
     names = await readdir(root);

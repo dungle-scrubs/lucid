@@ -14,7 +14,8 @@ let daemon: DaemonHandle | undefined;
 
 const seedSession = async (proj: string, name: string): Promise<string> => {
   const artifact = join(root, proj, `${name}.html`);
-  const sessionDir = join(root, proj, ".lucid", name);
+  // The record sits beside its artifact: `notes.html` -> `notes/`.
+  const sessionDir = join(root, proj, name);
   await mkdir(sessionDir, { recursive: true });
   const opened = {
     seq: 1,
