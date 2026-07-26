@@ -44,6 +44,22 @@ const loadFlock = (): FlockFn | undefined => {
 
 const flock: FlockFn | undefined = loadFlock();
 
+/** Which of the two append-lock implementations this process selected. */
+export type LockBackend = "flock" | "lockfile";
+
+/**
+ * Inspectable state: the lock implementation actually in force here.
+ *
+ * The choice is made once at import, silently, from whether `dlopen` found a
+ * libc - so on a machine where FFI is unavailable every append still succeeds
+ * and nothing in the output says the guarantees changed underneath it. The two
+ * differ where it matters: real `flock` releases when the holder's fd closes or
+ * its process dies, while the fallback can only infer a dead holder from a
+ * staleness window and steal the lock. Anything asserting concurrent-append
+ * behaviour needs to know which one it is talking about.
+ */
+export const lockBackend = (): LockBackend => (flock ? "flock" : "lockfile");
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 const RETRY_MS = 3;

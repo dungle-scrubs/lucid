@@ -1,0 +1,73 @@
+name: Nightly e2e soak
+
+# The admission gate for flakiness (D-019).
+#
+# The PR job runs each test once, and once is not a measurement: a test that
+# fails one run in twenty passes every PR it gates and then fails on someone
+# else's unrelated change, where it reads as their breakage. Five repeats a night
+# is what turns "it seems fine" into a number, and the no-flake reporter means a
+# single retry-pass anywhere in those five is a red build with the failing
+# attempt attached.
+#
+# Both platforms, because the PR gate runs on Linux and Lucid ships on macOS.
+# ubuntu-latest here is the soak of the gate itself; macos-latest is the only
+# scheduled run on the platform users actually have, and the only place a
+# darwin-only regression - a path, a signal, a libc, a font metric - can surface
+# before a user finds it.
+#
+# Two caveats while this is new. `workflow_dispatch` only appears once the file is
+# on the default branch, so the PR that adds this cannot exercise it - the first
+# real evidence is the first scheduled run. And nothing here announces a red
+# result: someone has to look, until a notification step earns its place.
+on:
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC - the small hours in the Americas.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    strategy:
+      # One platform's flake is not a reason to stop measuring the other. Both
+      # results are wanted every night, especially when one of them is red.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      - run: bun install --frozen-lockfile
+
+      # Same line on both runners: `installDeps` dispatches on linux and win32
+      # only, so on macOS `--with-deps` is a no-op rather than an error, and the
+      # matrix does not need a branch to say so.
+      - run: bunx playwright install --with-deps chromium
+
+      - run: bun run build
+
+      - name: Record the environment this run is judged by
+        run: bun run scripts/e2e-stamp.ts
+
+      - run: bunx playwright test --repeat-each=5
+
+      - name: Upload the run's evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-report-${{ matrix.os }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
