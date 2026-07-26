@@ -1,6 +1,6 @@
 {
   "name": "lucid",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agent-agnostic CLI for addressable HTML artifacts and located agent-human review",
   "license": "MIT",
   "author": "Kevin Frilot",
