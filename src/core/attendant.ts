@@ -15,6 +15,11 @@ export interface Attendant {
   readonly at: string;
   /** Ready-to-paste command that resumes the harness conversation. */
   readonly resume?: string;
+  /** Model the attending session runs on (from its environment), display data
+   *  for the viewer's inherited pickers. */
+  readonly model?: string;
+  /** Effort/reasoning level the attending session runs at, same provenance. */
+  readonly effort?: string;
 }
 
 export const writeAttendantSidecar = async (

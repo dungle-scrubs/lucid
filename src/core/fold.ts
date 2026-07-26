@@ -1,6 +1,12 @@
 import type { Anchor } from "../anchors/anchor.ts";
-import type { AgentProgress, AgentWorking, QuestionOption } from "../protocol/wire.ts";
+import type {
+  AgentProgress,
+  AgentWorking,
+  QuestionOption,
+  SessionHistoryRecord,
+} from "../protocol/wire.ts";
 import type { LogEvent, PromptImage } from "./events.ts";
+import type { ItemAnswer, QuestionItem } from "./question-contract.ts";
 import { maxSeq } from "./log.ts";
 
 export type SessionStatus = "none" | "active" | "suspended" | "ended";
@@ -10,6 +16,8 @@ export interface AnnotationRecord {
   readonly seq: number;
   readonly version: number;
   readonly target: Anchor;
+  /** Every spot the note covers when there are several; `target` is the first. */
+  readonly targets?: readonly Anchor[];
   readonly note: string;
   readonly at: string;
   /** Authorship time when the client supplied one; display-order metadata. */
@@ -53,15 +61,25 @@ export interface QuestionRecord {
   readonly ref?: string;
   readonly options?: readonly QuestionOption[];
   readonly multi?: boolean;
+  /** The rich grouped question (D12), when the agent asked one. */
+  readonly group?: readonly QuestionItem[];
   readonly answered: boolean;
   readonly skipped?: boolean;
   readonly unclear?: boolean;
   readonly answer?: string;
   readonly answerOptions?: readonly string[];
+  /** Per-question answers to a grouped question, in the group's order. */
+  readonly items?: readonly ItemAnswer[];
   readonly answerAnchor?: Anchor;
+  /** Every pinned region when there are several; `answerAnchor` is the first. */
+  readonly answerAnchors?: readonly Anchor[];
   readonly answerImages?: readonly PromptImage[];
   /** seq of the answer event (for delta detection). */
   readonly answerSeq?: number;
+  /** When the answer landed. The Q&A enters the transcript HERE, not at `at`
+   *  (D14): the question and its answer are one item, positioned at the moment
+   *  the human settled it. */
+  readonly answeredAt?: string;
   readonly at: string;
 }
 
@@ -73,6 +91,9 @@ export interface VersionRef {
 }
 
 export interface FoldedState {
+  /** Every harness session that ever touched this artifact, in first-touch
+   *  order (D18: derived from event stamps, oldest association first). */
+  readonly sessionHistory: readonly SessionHistoryRecord[];
   readonly status: SessionStatus;
   /** Current lifecycle segment number (1-based). */
   readonly segment: number;
@@ -100,6 +121,15 @@ export interface FoldedState {
   readonly highSeq: number;
   /** Last seq that is not an agent_ack: `wait` blocks past ack-only deltas. */
   readonly lastNonAckSeq: number;
+  /** Highest seq an agent has CLAIMED delivery of in the current segment (0 if
+   *  none): the largest `covers` on any ack. An item at or below it was in a
+   *  batch someone took (D20). An ack that claims no range - a presence-only
+   *  `intent`/`progress` re-ack, or a pre-D20 writer - moves nothing. */
+  readonly deliveredThroughSeq: number;
+  /** Highest agent OUTPUT seq in the current segment - version, agent_reply,
+   *  question (0 if none). An item strictly below it was already followed by
+   *  something the agent produced (D20). */
+  readonly lastAgentOutputSeq: number;
   /** Open "agent is working" window: set by agent_ack, closed by any agent
    *  output (version, reply, question) within the segment. A re-ack may add
    *  declared intent; the window's `since` stays the first ack's time. */
@@ -129,6 +159,41 @@ const statusFromLifecycle = (t: string): SessionStatus => {
   }
 };
 
+/** Derive the artifact's session history from attendant stamps (D18):
+ *  whole-log, not segment-scoped - provenance is the artifact's lifetime
+ *  story, and there is no second store to drift. */
+const deriveSessionHistory = (events: readonly LogEvent[]): SessionHistoryRecord[] => {
+  const byKey = new Map<string, SessionHistoryRecord>();
+  for (const e of events) {
+    const stamp = "attendant" in e ? e.attendant : undefined;
+    if (!stamp) continue;
+    // JSON tuple key: collision-free even if a stamp smuggled a separator
+    // (the writers strip control chars, but the fold must not depend on it).
+    const key = JSON.stringify([stamp.harness, stamp.sessionId ?? ""]);
+    const existing = byKey.get(key);
+    if (existing) {
+      byKey.set(key, {
+        ...existing,
+        // A later stamp may know details an earlier one lacked (cwd from a
+        // fuller writer): first-known wins, absent fills in.
+        ...(existing.cwd === undefined && stamp.cwd ? { cwd: stamp.cwd } : {}),
+        lastAt: e.at,
+        events: existing.events + 1,
+      });
+    } else {
+      byKey.set(key, {
+        harness: stamp.harness,
+        ...(stamp.sessionId ? { sessionId: stamp.sessionId } : {}),
+        ...(stamp.cwd ? { cwd: stamp.cwd } : {}),
+        firstAt: e.at,
+        lastAt: e.at,
+        events: 1,
+      });
+    }
+  }
+  return [...byKey.values()];
+};
+
 /**
  * Fold the event log to current state. Lifecycle status derives from the latest
  * lifecycle event across the whole log (D-049); current version, reviewResolved,
@@ -142,6 +207,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   if (events.length === 0) {
     return {
       status: "none",
+      sessionHistory: [],
       segment: 0,
       version: 0,
       reviewResolved: false,
@@ -155,6 +221,8 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       artifact: "",
       highSeq,
       lastNonAckSeq,
+      deliveredThroughSeq: 0,
+      lastAgentOutputSeq: 0,
       agentWorking: null,
       segmentStartSeq: 0,
     };
@@ -215,6 +283,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
           seq: e.seq,
           version: e.version,
           target: e.target,
+          ...(e.targets && e.targets.length > 0 ? { targets: e.targets } : {}),
           note: e.note,
           at: e.at,
           ...(e.authoredAt ? { authoredAt: e.authoredAt } : {}),
@@ -265,6 +334,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
             ...(e.ref ? { ref: e.ref } : {}),
             ...(e.options && e.options.length > 0 ? { options: e.options } : {}),
             ...(e.multi ? { multi: true } : {}),
+            ...(e.group && e.group.length > 0 ? { group: e.group } : {}),
             answered: false,
             at: e.at,
           });
@@ -273,20 +343,33 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
         break;
       case "question_answered": {
         const q = questionMap.get(e.questionId);
-        // First answer wins. Answering is terminal - the card leaves the panel -
-        // but Answer, Skip and Re-ask stay live for the instant before the echo
-        // arrives, and merging a second outcome over the first is how a question
-        // ends up both skipped and answered, or declined and unclear at once.
-        if (q && !q.answered) {
+        if (q) {
+          // Rebuilt from the ASK-time fields, never spread over the previous
+          // record: a later answer REPLACES an earlier one, and spreading would
+          // leave a skip's flag (or its predecessor's items) on top of it.
+          // Last wins (a skip then a real answer shows the answer). The
+          // double-click race #40's first-wins guard existed for is stopped
+          // at the source now: the chrome holds an in-flight set across
+          // Answer/Skip/Re-ask, so one gesture appends one event.
           questionMap.set(e.questionId, {
-            ...q,
+            id: q.id,
+            seq: q.seq,
+            text: q.text,
+            at: q.at,
+            ...(q.ref ? { ref: q.ref } : {}),
+            ...(q.options ? { options: q.options } : {}),
+            ...(q.multi ? { multi: true } : {}),
+            ...(q.group ? { group: q.group } : {}),
             answered: true,
             answer: e.text,
             answerSeq: e.seq,
+            answeredAt: e.at,
             ...(e.skipped ? { skipped: true } : {}),
             ...(e.unclear ? { unclear: true } : {}),
             ...(e.options && e.options.length > 0 ? { answerOptions: e.options } : {}),
+            ...(e.items && e.items.length > 0 ? { items: e.items } : {}),
             ...(e.anchor ? { answerAnchor: e.anchor } : {}),
+            ...(e.anchors && e.anchors.length > 0 ? { answerAnchors: e.anchors } : {}),
             ...(e.images && e.images.length > 0 ? { answerImages: e.images } : {}),
           });
         }
@@ -310,8 +393,17 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   let workingSince: string | null = null;
   let workingIntent: "revise" | "reply" | undefined;
   let workingProgress: AgentProgress | undefined;
+  // Delivery cursors (D20). They are NOT the working window: that opens and
+  // closes, while these only ever advance within the segment.
+  let deliveredThroughSeq = 0;
+  let lastAgentOutputSeq = 0;
   for (const e of segmentEvents) {
     if (e.t === "agent_ack") {
+      // The claimed range, never the ack's own position: an ack lands AFTER
+      // the read it acknowledges, so feedback in between was not delivered.
+      if (typeof e.covers === "number" && Number.isInteger(e.covers)) {
+        deliveredThroughSeq = Math.max(deliveredThroughSeq, e.covers);
+      }
       // A re-ack refines the open window (declared intent + fan-out progress)
       // without restarting its clock; the first ack's time is when delivery
       // happened. Progress is last-writer-wins so `done` can climb across acks.
@@ -322,6 +414,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       // wiping the ones it omits.
       if (e.progress) workingProgress = { ...workingProgress, ...e.progress };
     } else if (e.t === "version" || e.t === "agent_reply" || e.t === "question") {
+      lastAgentOutputSeq = e.seq;
       workingSince = null;
       workingIntent = undefined;
       workingProgress = undefined;
@@ -337,6 +430,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
 
   return {
     status,
+    sessionHistory: deriveSessionHistory(events),
     segment,
     version,
     reviewResolved,
@@ -350,6 +444,8 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     artifact,
     highSeq,
     lastNonAckSeq,
+    deliveredThroughSeq,
+    lastAgentOutputSeq,
     agentWorking,
     segmentStartSeq,
   };

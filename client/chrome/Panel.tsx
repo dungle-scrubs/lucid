@@ -1,26 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  addPastedImage,
-  addToQueue,
-  beginEdit,
-  cancelEdit,
-  commitEdit,
-  discardOutboxMessage,
-  discardPending,
-  flushOutbox,
-  forkPending,
-  QUICK_REPLIES,
-  queueQuickReply,
-  removePastedImage,
-  removeQueued,
-  sendQueue,
-} from "./actions.ts";
+import type { SelectionResponse } from "../../src/protocol/wire.ts";
+import { QUICK_REPLIES } from "./actions.ts";
 import { TargetSnippet } from "./AnnotationPart.tsx";
+import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
-import { collapseTextPaste } from "./pastes.ts";
-import { imagesFromPaste, set, useLucid, warn } from "./store.ts";
+import { effortLadder, withCurrent } from "./selection.ts";
+import { imagesFromPaste } from "./store.ts";
 import type { OutboxMessage, PastedImage } from "./types.ts";
 import { Kbd, KbdGroup } from "./ui/kbd.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
+import { closeButtonSmall } from "./ui/close.ts";
 
 /**
  * The parts of the panel that are not transcript: work staged but not yet in
@@ -71,7 +60,7 @@ const Chips = ({
               type="button"
               title="Remove"
               onClick={() => onRemove(img.id)}
-              className="cursor-pointer px-[3px] text-fg-muted hover:text-rust-300"
+              className={`${closeButtonSmall} hover:text-rust-300`}
             >
               ×
             </button>
@@ -83,7 +72,7 @@ const Chips = ({
 };
 
 export const Warnings = () => {
-  const warnings = useLucid((s) => s.warnings);
+  const warnings = useSession((s) => s.warnings);
   if (warnings.length === 0) return null;
   return (
     <section>
@@ -107,7 +96,9 @@ export const Warnings = () => {
  * goes away.
  */
 const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
-  const sending = useLucid((s) => s.outboxSending);
+  const { flushOutbox, discardOutboxMessage } = useActions();
+  const { transport, notify } = useSessionHandle();
+  const sending = useSession((s) => s.outboxSending);
   const [copied, setCopied] = useState(false);
   return (
     <article
@@ -121,7 +112,7 @@ const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
         </span>
       </div>
       {message.images.length > 0 ? (
-        <Chips images={message.images.map((i) => ({ ...i, url: `/__lucid/asset/${i.file}` }))} />
+        <Chips images={message.images.map((i) => ({ ...i, url: transport.assetUrl(i.file) }))} />
       ) : null}
       <div className="text-fg">
         <FoldedText text={message.text} />
@@ -145,7 +136,7 @@ const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
               },
-              () => warn("Couldn't copy - select the text above instead."),
+              () => notify.warn("Couldn't copy - select the text above instead."),
             );
           }}
           className={btn}
@@ -172,7 +163,7 @@ const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
  * normal send would make the common path stutter for the sake of the rare one.
  */
 export const UnsentMessages = () => {
-  const outbox = useLucid((s) => s.outbox);
+  const outbox = useSession((s) => s.outbox);
   const failed = outbox.filter((m) => m.failed);
   if (failed.length === 0) return null;
   return (
@@ -190,7 +181,7 @@ export const UnsentMessages = () => {
 /** Neutral, transient confirmations (e.g. a fork was recorded). Distinct from
  *  Warnings both in intent and colour so a success never reads as an error. */
 export const Notices = () => {
-  const notices = useLucid((s) => s.notices);
+  const notices = useSession((s) => s.notices);
   if (notices.length === 0) return null;
   return (
     <section className="flex flex-col gap-1">
@@ -213,11 +204,14 @@ export const Notices = () => {
  * re-render without the timeline rebuilding.
  */
 export const QueuedCard = ({ id, index }: { readonly id: string; readonly index: number }) => {
-  const q = useLucid((s) => s.queue.find((x) => x.id === id));
-  const editingId = useLucid((s) => s.editingId);
-  const editDraft = useLucid((s) => s.editDraft);
-  const sending = useLucid((s) => s.sending);
-  const hoveredId = useLucid((s) => s.hoveredId);
+  const { beginEdit, cancelEdit, commitEdit, removeQueued, setEditDraft, setHovered } =
+    useActions();
+  const { pastes } = useSessionHandle();
+  const q = useSession((s) => s.queue.find((x) => x.id === id));
+  const editingId = useSession((s) => s.editingId);
+  const editDraft = useSession((s) => s.editDraft);
+  const sending = useSession((s) => s.sending);
+  const hoveredId = useSession((s) => s.hoveredId);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const editing = editingId === id;
 
@@ -243,11 +237,11 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
           : "border-ink-500"
       }`}
       onMouseEnter={() => {
-        set({ hoveredId: q.id });
+        setHovered(q.id);
         window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: q.id }));
       }}
       onMouseLeave={() => {
-        set({ hoveredId: null });
+        setHovered(null);
         window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: "" }));
       }}
     >
@@ -257,7 +251,11 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
       <span className="absolute -top-[9px] -right-[9px] z-1 rounded-full bg-ink-600 px-[7px] py-px text-[10px] text-steel-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
         queued
       </span>
-      <TargetSnippet target={q.target} />
+      {/* Every collected spot, first to last - the one note below covers them all. */}
+      {q.targets.map((t, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: anchors have no id and the list only ever shrinks from a fixed pick order.
+        <TargetSnippet key={i} target={t} />
+      ))}
       <Chips images={q.images} />
       {editing ? (
         <>
@@ -267,7 +265,7 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
             data-test="edit-note"
             placeholder="Edit this annotation… (Enter to save, Shift+Enter for a new line, Esc to cancel)"
             value={editDraft}
-            onChange={(e) => set({ editDraft: e.target.value })}
+            onChange={(e) => setEditDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.preventDefault();
@@ -276,7 +274,7 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
               }
               onSubmitKey(e, () => commitEdit());
             }}
-            onPaste={collapseTextPaste}
+            onPaste={pastes.collapseTextPaste}
             className={field}
           />
           <div className="flex items-center gap-2">
@@ -332,8 +330,9 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
 /** The one queue-wide action. The cards live in the record; the send is a bar
  *  that stays visible above the composer however far the transcript scrolls. */
 export const SendQueueBar = () => {
-  const queueLen = useLucid((s) => s.queue.length);
-  const sending = useLucid((s) => s.sending);
+  const { sendQueue } = useActions();
+  const queueLen = useSession((s) => s.queue.length);
+  const sending = useSession((s) => s.sending);
   if (queueLen === 0) return null;
   return (
     <div className="border-t border-ink-600 bg-bg px-[14px] py-2">
@@ -358,14 +357,235 @@ export const SendQueueBar = () => {
   );
 };
 
+/** Why the pickers go read-only while someone is attending: Lucid cannot move
+ *  a live conversation onto another model, and offering the choice would lie. */
+const INHERITED_WHY = "an interactive session runs its own model";
+
+/** One quiet picker in the composer's furniture: the same pill at the same
+ *  weight whether it is writable or a readout, minus the chevron when there is
+ *  nothing to open. A disabled Select would still advertise a menu. */
+const SelectionPicker = ({
+  label,
+  test,
+  value,
+  busy,
+  readOnly,
+  display,
+  options,
+  onPick,
+}: {
+  readonly label: string;
+  readonly test: string;
+  readonly value: string;
+  readonly busy: boolean;
+  readonly readOnly: boolean;
+  readonly display: (value: string) => string;
+  readonly options: readonly {
+    readonly value: string;
+    readonly label: string;
+    readonly hint?: string;
+  }[];
+  readonly onPick: (value: string) => void;
+}) => (
+  <span className="flex items-center gap-1.5">
+    <span className="text-[11px] text-fg-muted">{label}</span>
+    {readOnly ? (
+      <span
+        data-test={test}
+        data-readonly="true"
+        title={INHERITED_WHY}
+        className="cursor-default rounded-[5px] border border-ink-500 bg-ink-800 px-2 py-[2px] text-[12px] text-fg-muted"
+      >
+        {display(value)}
+      </span>
+    ) : (
+      <Select value={value} disabled={busy} onValueChange={(v) => onPick(v ?? "")}>
+        <SelectTrigger
+          data-test={test}
+          aria-label={label}
+          // The vendored trigger is the header's round, faint version PILL.
+          // Here it is a control the human reads and changes, so it takes the
+          // field shape and full-contrast text the rest of the composer uses.
+          className={`rounded-[5px] border-ink-500 bg-ink-800 px-2 py-[2px] text-[12px] disabled:opacity-60 ${
+            value === "" ? "text-fg-muted" : "text-accent-bright"
+          }`}
+        >
+          <SelectValue>{(v: string) => display(v)}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+              {o.hint ? <span className="ml-2 text-[10px] text-fg-faint">{o.hint}</span> : null}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    )}
+  </span>
+);
+
+/**
+ * Which model and effort this artifact's UNATTENDED turns run on. The pick is
+ * sticky - it is written beside the artifact and every later headless resume
+ * reuses it - so this is a property of the ARTIFACT, not of this window, and
+ * every viewer of it sees the same pair.
+ *
+ * With an agent listening the pickers become a readout of what THAT session
+ * runs (its stamp, or "inherited" when its environment declared nothing).
+ * Presence is the only signal available here: a working window disconnects the
+ * agent, and the pick applies to the next turn either way, so the pickers stay
+ * writable through it rather than flickering.
+ */
+export const SelectionPickers = () => {
+  const { transport, store, notify } = useSessionHandle();
+  const info = useSession((s) => s.selectionInfo);
+  const selection = useSession((s) => s.selection);
+  const listening = useSession((s) => s.agentsListening);
+  const attendant = useSession((s) => s.lastAttendant);
+  const status = useSession((s) => s.status);
+  const [busy, setBusy] = useState(false);
+
+  // No recipe for this artifact's harness (or a server that predates the
+  // route): there is no vocabulary to pick from, so there is no picker.
+  if (info === null || status !== "active") return null;
+  const readOnly = listening > 0;
+  const models = info.models ?? [];
+  const ladder = effortLadder(info, selection.model ?? "") ?? [];
+  const modelValue = readOnly ? (attendant?.model ?? "") : (selection.model ?? "");
+  const effortValue = readOnly ? (attendant?.effort ?? "") : (selection.effort ?? "");
+  // A live effort keeps its row even when the ladder resolves empty (a sticky
+  // model the registry no longer lists has no per-model vocabulary), or the
+  // pick would be invisible and unclearable until the model changed.
+  const showEffort = ladder.length > 0 || effortValue !== "";
+  if (models.length === 0 && !showEffort) return null;
+
+  const harness = selection.harness ?? attendant?.harness ?? info.name;
+  const inherited = `inherited from ${harness}`;
+
+  /** A POST replaces the whole selection, so both fields ride every write. */
+  const commit = async (model: string, effort: string): Promise<void> => {
+    setBusy(true);
+    const res = await fetch(`${transport.base}/__lucid/selection`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, effort }),
+    }).catch(() => null);
+    setBusy(false);
+    if (!res) {
+      notify.warn("Couldn't reach the server - the selection is unchanged.");
+      return;
+    }
+    const body = (await res.json().catch(() => null)) as
+      | (Partial<SelectionResponse> & { error?: string })
+      | null;
+    // The adapter's own words: a pick the recipe refuses is named here rather
+    // than dying later as an agent turn on a flag the CLI never took.
+    if (!res.ok || !body?.selection) {
+      notify.warn(
+        typeof body?.error === "string"
+          ? body.error
+          : `The server refused the selection (${res.status}).`,
+      );
+      return;
+    }
+    store.setState({ selection: body.selection, selectionInfo: body.info ?? null });
+  };
+
+  // A model change re-picks the ladder, so an effort the new model does not
+  // accept falls back to default instead of being refused.
+  const pickModel = (v: string): void => {
+    const next = effortLadder(info, v);
+    const effort = selection.effort ?? "";
+    void commit(v, effort !== "" && next?.includes(effort) ? effort : "");
+  };
+
+  return (
+    <div
+      data-test="selection-pickers"
+      data-readonly={readOnly ? "true" : "false"}
+      className="flex flex-wrap items-center gap-x-3 gap-y-1"
+    >
+      {models.length > 0 ? (
+        <SelectionPicker
+          label="model"
+          test="selection-model"
+          value={modelValue}
+          busy={busy}
+          readOnly={readOnly}
+          display={(v) =>
+            v === ""
+              ? readOnly
+                ? inherited
+                : `default${info.defaultModel ? ` (${info.defaultModel})` : ""}`
+              : (models.find((m) => m.id === v)?.label ?? v)
+          }
+          options={[
+            {
+              value: "",
+              label: "default",
+              ...(info.defaultModel ? { hint: info.defaultModel } : {}),
+            },
+            ...withCurrent(
+              models.map((m) => m.id),
+              modelValue,
+            ).map((id) => {
+              const m = models.find((x) => x.id === id);
+              return { value: id, label: m?.label ?? id, ...(m?.label ? { hint: id } : {}) };
+            }),
+          ]}
+          onPick={pickModel}
+        />
+      ) : null}
+      {showEffort ? (
+        <SelectionPicker
+          label="effort"
+          test="selection-effort"
+          value={effortValue}
+          busy={busy}
+          readOnly={readOnly}
+          display={(v) =>
+            v === ""
+              ? readOnly
+                ? inherited
+                : `default${info.defaultEffort ? ` (${info.defaultEffort})` : ""}`
+              : v
+          }
+          options={[
+            {
+              value: "",
+              label: "default",
+              ...(info.defaultEffort ? { hint: info.defaultEffort } : {}),
+            },
+            ...withCurrent(ladder, effortValue).map((e) => ({ value: e, label: e })),
+          ]}
+          onPick={(v) => void commit(selection.model ?? "", v)}
+        />
+      ) : null}
+    </div>
+  );
+};
+
 /** The in-flight pick: an element chosen on the surface, awaiting its note.
  *  Renders nothing at all when idle - the pick gesture is taught once, by the
  *  empty-thread state, and a permanent placeholder was furniture after that. */
 export const PendingComposer = () => {
-  const pendingTarget = useLucid((s) => s.pendingTarget);
-  const composerNote = useLucid((s) => s.composerNote);
-  const pastedImages = useLucid((s) => s.pastedImages);
-  const forking = useLucid((s) => s.forking);
+  const {
+    addPastedImage,
+    addToQueue,
+    discardPending,
+    forkPending,
+    queueQuickReply,
+    removePastedImage,
+    removePendingTarget,
+    setComposerNote,
+  } = useActions();
+  const { pastes } = useSessionHandle();
+  const pendingTarget = useSession((s) => s.pendingTarget);
+  const pendingTargets = useSession((s) => s.pendingTargets);
+  const composerNote = useSession((s) => s.composerNote);
+  const pastedImages = useSession((s) => s.pastedImages);
+  const forking = useSession((s) => s.forking);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -375,10 +595,41 @@ export const PendingComposer = () => {
   if (!pendingTarget) return null;
   return (
     <section>
-      <h3 className={heading}>New annotation</h3>
+      <h3 className={heading}>
+        New annotation
+        {/* The gesture taught where its result appears; normal-case so the
+            hint reads as an aside, not part of the heading. */}
+        <span className="ml-2 font-normal normal-case tracking-normal text-fg-faint">
+          ⌘-click adds more spots
+        </span>
+      </h3>
       {
         <div className="flex flex-col gap-[7px] rounded-lg border border-ink-600 bg-ink-700 px-[11px] py-[10px]">
-          <TargetSnippet target={pendingTarget} />
+          {pendingTargets.length > 1 ? (
+            /* One chip per collected spot - the note below covers them all,
+               and any spot can leave without discarding the draft. */
+            <div className="flex flex-col gap-1" data-test="pending-targets">
+              {pendingTargets.map((t, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: anchors have no id and the list only ever shrinks from a fixed pick order.
+                <div key={i} data-test="target-chip" className="flex items-start gap-1.5">
+                  <div className="min-w-0 flex-1">
+                    <TargetSnippet target={t} />
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`Remove spot ${i + 1}`}
+                    title="Remove this spot"
+                    onClick={() => removePendingTarget(i)}
+                    className={`${closeButtonSmall} hover:text-rust-300`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <TargetSnippet target={pendingTarget} />
+          )}
           <Chips images={pastedImages} onRemove={removePastedImage} />
           <textarea
             ref={ref}
@@ -387,7 +638,7 @@ export const PendingComposer = () => {
             disabled={forking}
             placeholder="What should change here? Paste an image to show it. (Enter to queue, Shift+Enter for a new line, Esc to discard)"
             value={composerNote}
-            onChange={(e) => set({ composerNote: e.target.value })}
+            onChange={(e) => setComposerNote(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.preventDefault();
@@ -398,7 +649,7 @@ export const PendingComposer = () => {
             }}
             onPaste={(e) => {
               const files = imagesFromPaste(e);
-              if (files.length === 0) return collapseTextPaste(e); // text: folds only if large
+              if (files.length === 0) return pastes.collapseTextPaste(e); // text: folds only if large
               e.preventDefault();
               for (const f of files) void addPastedImage(f);
             }}
@@ -440,8 +691,15 @@ export const PendingComposer = () => {
               type="button"
               data-test="fork"
               onClick={forkPending}
-              disabled={forking}
-              title="Spin this selection off into a new artifact and agent session"
+              // A fork's seed is ONE selection; the fork wire carries one
+              // target, and silently forking only the first collected spot
+              // would drop the rest of the draft. Disabled beats lossy.
+              disabled={forking || pendingTargets.length > 1}
+              title={
+                pendingTargets.length > 1
+                  ? "Fork takes a single spot - remove the extra chips first"
+                  : "Spin this selection off into a new artifact and agent session"
+              }
               className={`${btn} ml-auto disabled:cursor-default disabled:opacity-50`}
             >
               {forking ? "Forking…" : "Fork"}

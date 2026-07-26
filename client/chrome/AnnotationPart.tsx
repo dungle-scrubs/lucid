@@ -1,7 +1,8 @@
 import type { DataMessagePartComponent } from "@assistant-ui/react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
+import { useActions, useSession, useSessionHandle } from "./context.tsx";
+import { DeliveryLabel } from "./Delivery.tsx";
 import { FoldedText } from "./FoldedText.tsx";
-import { set, useLucid } from "./store.ts";
 import type { MessageImage } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
 
@@ -12,6 +13,9 @@ export interface AnnotationData {
   readonly version: number;
   readonly note: string;
   readonly target: Anchor;
+  /** Every spot the note covers when several were cmd-collected; `target` is
+   *  always the first (the wire's rule, src/protocol/wire.ts). */
+  readonly targets?: readonly Anchor[];
   readonly images?: readonly { readonly name: string; readonly file: string }[];
 }
 
@@ -74,15 +78,17 @@ const reveal = (id: string): void => {
  * pointed at is still what the note is about.
  */
 export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data }) => {
-  const hovered = useLucid((s) => s.hoveredId === data.id);
+  const { setHovered, openLightbox } = useActions();
+  const { transport } = useSessionHandle();
+  const hovered = useSession((s) => s.hoveredId === data.id);
   const images: readonly MessageImage[] = data.images ?? [];
   const orphaned = data.index === null;
   const enter = (): void => {
-    set({ hoveredId: data.id });
+    setHovered(data.id);
     focus(data.id);
   };
   const leave = (): void => {
-    set({ hoveredId: null });
+    setHovered(null);
     focus("");
   };
   return (
@@ -143,7 +149,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
       <span className="pointer-events-none absolute -top-[9px] left-1/2 hidden -translate-x-1/2 items-center gap-1 rounded-full border border-ink-500 bg-ink-800 px-2 py-px text-[10px] text-fg-muted shadow-[0_1px_3px_rgba(0,0,0,0.4)] group-focus-visible:flex">
         <Kbd>↵</Kbd> reveal
       </span>
-      <TargetSnippet target={data.target} />
+      {/* Every spot the note covers, first (the numbered one) to last. */}
+      {(data.targets ?? [data.target]).map((t: Anchor, i: number) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: anchors have no id and a sent annotation's list never reorders.
+        <TargetSnippet key={i} target={t} />
+      ))}
       {/* Verbatim like a message turn - an expanded paste in a note comes
           back from the log as its full self, so a wall of it folds. */}
       <div className="text-fg">
@@ -157,11 +167,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
               type="button"
               data-test="annotation-thumb"
               title={img.name}
-              onClick={() => set({ lightboxImages: images, lightboxIndex: i })}
+              onClick={() => openLightbox(images, i)}
               className="cursor-zoom-in rounded-md focus-visible:annot-outline"
             >
               <img
-                src={`/__lucid/asset/${img.file}`}
+                src={transport.assetUrl(img.file)}
                 alt={img.name}
                 className="block h-[66px] w-[88px] rounded-md border border-ink-600 object-cover hover:border-accent"
               />
@@ -169,6 +179,9 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
           ))}
         </div>
       ) : null}
+      {/* Bottom-right, under the note: the last thing read on the card is
+          where it got to. */}
+      <DeliveryLabel className="self-end" />
     </section>
   );
 };

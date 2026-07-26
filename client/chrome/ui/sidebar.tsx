@@ -52,6 +52,7 @@ const SidebarProvider = ({
   defaultOpen = true,
   open: openProp,
   onOpenChange: setOpenProp,
+  hotkey = true,
   className,
   style,
   children,
@@ -60,6 +61,10 @@ const SidebarProvider = ({
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Whether THIS provider answers ⌘B. Under the shell every open tab's view
+   *  stays mounted (hidden), and N providers each toggling on one keypress
+   *  cancel each other out on even counts - only the active view listens. */
+  hotkey?: boolean;
 }) => {
   const [_open, _setOpen] = React.useState(defaultOpen);
   const open = openProp ?? _open;
@@ -75,6 +80,7 @@ const SidebarProvider = ({
   const toggleSidebar = React.useCallback(() => setOpen((o) => !o), [setOpen]);
 
   React.useEffect(() => {
+    if (!hotkey) return;
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === SIDEBAR_KEYBOARD_SHORTCUT && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
@@ -83,7 +89,7 @@ const SidebarProvider = ({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleSidebar]);
+  }, [toggleSidebar, hotkey]);
 
   const state = open ? "expanded" : "collapsed";
   const contextValue = React.useMemo<SidebarContextProps>(
@@ -154,7 +160,7 @@ const Sidebar = ({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative h-svh w-(--sidebar-width) bg-transparent",
+          "relative h-full w-(--sidebar-width) bg-transparent",
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
           variant === "floating" || variant === "inset"
@@ -166,7 +172,11 @@ const Sidebar = ({
         data-slot="sidebar-container"
         data-side={side}
         className={cn(
-          "fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width) data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
+          // Anchored below the shell's tab bar when one exists: the bar sets
+          // --lucid-shell-top to its own height, and 0px keeps the standalone
+          // viewer full-bleed. h-svh would ignore that offset and lay the
+          // panel OVER the bar, swallowing its clicks.
+          "fixed bottom-0 top-(--lucid-shell-top,0px) z-10 flex w-(--sidebar-width) data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
           variant === "floating" || variant === "inset"
             ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
             : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",

@@ -34,3 +34,10 @@ node_modules/
 
 # Bun build temp artifacts
 *.bun-build
+workspace-overview.html
+
+# Artifacts authored into the repo root while testing the shell. They are
+# review material, not source - each keeps its own .lucid/ log beside it.
+/yo-yo.html
+/test*.html
+/asdf.html

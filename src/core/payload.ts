@@ -8,9 +8,11 @@ import type {
   PayloadAnnotation,
   PayloadFork,
   PayloadMessage,
+  PayloadQuestion,
   PayloadStatus,
   WaitPayload,
 } from "../protocol/wire.ts";
+import { summarizeAnswer } from "./question-contract.ts";
 import { renderCursor } from "./cursor.ts";
 import type {
   AnnotationRecord,
@@ -37,7 +39,31 @@ export type {
   WaitPayload,
 } from "../protocol/wire.ts";
 
-const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): PayloadMessage => ({
+/**
+ * Where one piece of human feedback got to (D20): `delivered` once an agent
+ * acked a batch whose claimed range included it, `answered` once agent output
+ * landed after it. Both derive from log seqs alone, so the panel can never
+ * claim a delivery that did not happen - and "does it see it?" is answered
+ * without asking. Absent rather than false: the wire stays additive, and an
+ * old consumer sees the payload it always saw.
+ *
+ * `answered` implies `delivered`: output that happens to land after an item
+ * nobody took delivery of answered something else, and saying otherwise would
+ * be the strongest chip on the weakest evidence.
+ */
+const deliveryOf = (seq: number, state: FoldedState): { delivered?: true; answered?: true } => {
+  const delivered = seq <= state.deliveredThroughSeq;
+  return {
+    ...(delivered ? { delivered: true as const } : {}),
+    ...(delivered && state.lastAgentOutputSeq > seq ? { answered: true as const } : {}),
+  };
+};
+
+const toMessage = (
+  m: MessageRecord,
+  assetAbsPath: (file: string) => string,
+  state: FoldedState,
+): PayloadMessage => ({
   role: m.role,
   text: m.text,
   at: m.at,
@@ -50,10 +76,53 @@ const toMessage = (m: MessageRecord, assetAbsPath: (file: string) => string): Pa
         })),
       }
     : {}),
+  // An agent's own turn has nobody to be delivered to.
+  ...(m.role === "human" ? deliveryOf(m.seq, state) : {}),
 });
 
-/** The fields the snapshot guard needs; annotations and forks both satisfy it. */
-type ResolvableRecord = Pick<AnnotationRecord, "id" | "version" | "target">;
+/**
+ * One question + its answer as the agent reads them. The `answer` line is the
+ * ONE readable summary either kind of question produces: a legacy question's
+ * free text, or a grouped question's combined summary derived from the stored
+ * group and per-item answers (Trevor's `ProviderQuestionAccept.answer`). It is
+ * derived here rather than stored on the answer event, so it can never disagree
+ * with the group it summarizes.
+ */
+const toQuestion = (q: QuestionRecord, assetAbsPath: (file: string) => string): PayloadQuestion => {
+  const grouped = q.group && q.group.length > 0 && q.items && q.items.length > 0 && !q.skipped;
+  const answer = grouped ? summarizeAnswer(q.group ?? [], q.items ?? []) : (q.answer ?? "");
+  return {
+    id: q.id,
+    text: q.text,
+    ...(q.ref ? { ref: q.ref } : {}),
+    ...(q.options && q.options.length > 0 ? { options: q.options } : {}),
+    ...(q.multi ? { multi: true } : {}),
+    ...(q.group && q.group.length > 0 ? { group: q.group } : {}),
+    at: q.at,
+    ...(q.answeredAt ? { answeredAt: q.answeredAt } : {}),
+    answered: q.answered,
+    ...(q.skipped ? { skipped: true } : {}),
+    ...(q.unclear ? { unclear: true } : {}),
+    ...(answer.length > 0 ? { answer } : {}),
+    ...(q.answerOptions && q.answerOptions.length > 0 ? { answerOptions: q.answerOptions } : {}),
+    ...(q.items && q.items.length > 0 ? { answerItems: q.items } : {}),
+    ...(q.answerAnchor ? { answerAnchor: q.answerAnchor } : {}),
+    ...(q.answerAnchors && q.answerAnchors.length > 0 ? { answerAnchors: q.answerAnchors } : {}),
+    ...(q.answerImages && q.answerImages.length > 0
+      ? {
+          answerImages: q.answerImages.map((img) => ({
+            name: img.name,
+            file: img.file,
+            path: assetAbsPath(img.file),
+          })),
+        }
+      : {}),
+  };
+};
+
+/** The fields the snapshot guard needs; annotations and forks both satisfy it.
+ *  `targets` rides along so a multi-target annotation resolves per spot. */
+type ResolvableRecord = Pick<AnnotationRecord, "id" | "version" | "target" | "targets">;
 
 /**
  * Resolve a single located record (annotation or fork) against the current
@@ -100,8 +169,10 @@ const resolveAnnotation = async (
       return false;
     }
   }
-  // Carry forward: does the anchor still attach to the current version?
-  return anchorResolves(record.target, currentRoot);
+  // Carry forward: does the anchor still attach to the current version? A
+  // multi-target record stays live while ANY spot survives - the overlay
+  // simply paints no mark for the spots that were edited away.
+  return (record.targets ?? [record.target]).some((t) => anchorResolves(t, currentRoot));
 };
 
 export interface BuildPayloadOptions {
@@ -145,6 +216,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
       version: a.version,
       resolved,
       target: a.target,
+      ...(a.targets && a.targets.length > 0 ? { targets: a.targets } : {}),
       note: a.note,
       at: a.at,
       ...(a.authoredAt ? { authoredAt: a.authoredAt } : {}),
@@ -157,6 +229,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
             })),
           }
         : {}),
+      ...deliveryOf(a.seq, opts.state),
     });
   }
 
@@ -197,10 +270,11 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     nextCursor: renderCursor(opts.nextSeq),
     reviewResolved: opts.state.reviewResolved,
     ...(opts.state.agentWorking ? { agentWorking: opts.state.agentWorking } : {}),
+    ...(opts.state.sessionHistory.length > 0 ? { sessionHistory: opts.state.sessionHistory } : {}),
     annotations,
     ...(forks.length > 0 ? { forks } : {}),
     messages: opts.messages.map((m) =>
-      toMessage(m, (file) => opts.snapshotAbsPath(pastedRelPath(file))),
+      toMessage(m, (file) => opts.snapshotAbsPath(pastedRelPath(file)), opts.state),
     ),
     ...(opts.reverts && opts.reverts.length > 0
       ? {
@@ -214,30 +288,9 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
       : {}),
     ...(opts.questions && opts.questions.length > 0
       ? {
-          questions: opts.questions.map((q) => ({
-            id: q.id,
-            text: q.text,
-            ...(q.ref ? { ref: q.ref } : {}),
-            ...(q.options && q.options.length > 0 ? { options: q.options } : {}),
-            ...(q.multi ? { multi: true } : {}),
-            answered: q.answered,
-            ...(q.skipped ? { skipped: true } : {}),
-            ...(q.unclear ? { unclear: true } : {}),
-            ...(q.answer !== undefined && q.answer.length > 0 ? { answer: q.answer } : {}),
-            ...(q.answerOptions && q.answerOptions.length > 0
-              ? { answerOptions: q.answerOptions }
-              : {}),
-            ...(q.answerAnchor ? { answerAnchor: q.answerAnchor } : {}),
-            ...(q.answerImages && q.answerImages.length > 0
-              ? {
-                  answerImages: q.answerImages.map((img) => ({
-                    name: img.name,
-                    file: img.file,
-                    path: opts.snapshotAbsPath(pastedRelPath(img.file)),
-                  })),
-                }
-              : {}),
-          })),
+          questions: opts.questions.map((q) =>
+            toQuestion(q, (file) => opts.snapshotAbsPath(pastedRelPath(file))),
+          ),
         }
       : {}),
     ...(warnings.length > 0 ? { warnings } : {}),

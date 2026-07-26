@@ -4,11 +4,13 @@ import { BunContext, BunRuntime } from "@effect/platform-bun";
 import { Effect, Option } from "effect";
 import { toErrorJson, type LucidError } from "../errors.ts";
 import {
+  runApp,
   runAsk,
   runIntent,
   runProgress,
   runContext,
   runEnd,
+  runHub,
   runLaunchCli,
   runOpen,
   runPlanIngest,
@@ -90,19 +92,31 @@ const launchCommand = Command.make("launch", { file: fileArg, poll: pollOpt }, (
   runEffect(() => runLaunchCli(file, { ...(Option.isSome(poll) ? { pollMs: poll.value } : {}) })),
 );
 
-const askText = Options.text("text");
+// `--text` is optional only because `--group` is the other way to ask; runAsk
+// requires one of them and says so.
+const askText = Options.text("text").pipe(Options.optional);
 const askRef = Options.text("ref").pipe(Options.optional);
 const askOption = Options.text("option").pipe(Options.repeated);
 const askMulti = Options.boolean("multi").pipe(Options.withDefault(false));
+/** Path to the grouped-question JSON (D12), or "-" to read it from stdin. */
+const askGroup = Options.text("group").pipe(Options.optional);
 const askCommand = Command.make(
   "ask",
-  { file: fileArg, text: askText, ref: askRef, option: askOption, multi: askMulti },
-  ({ file, text, ref, option, multi }) =>
+  {
+    file: fileArg,
+    text: askText,
+    ref: askRef,
+    option: askOption,
+    multi: askMulti,
+    group: askGroup,
+  },
+  ({ file, text, ref, option, multi, group }) =>
     runEffect(() =>
-      runAsk(file, text, {
+      runAsk(file, Option.getOrUndefined(text), {
         ref: Option.getOrUndefined(ref),
         options: option,
         multi,
+        group: Option.getOrUndefined(group),
       }),
     ),
 );
@@ -156,6 +170,16 @@ const serveCommand = Command.make("__serve", { file: fileArg }, ({ file }) =>
   runEffect(() => runServe(file)),
 );
 
+const hubPortOpt = Options.integer("port").pipe(Options.optional);
+const hubAttendOpt = Options.boolean("attend").pipe(Options.withDefault(false));
+const hubCommand = Command.make(
+  "hub",
+  { port: hubPortOpt, attend: hubAttendOpt },
+  ({ port, attend }) => runEffect(() => runHub({ port: Option.getOrUndefined(port), attend })),
+);
+
+const appCommand = Command.make("app", {}, () => runEffect(() => runApp()));
+
 // `lucid plan render|ingest` - the planner bridge.
 const docArg = Args.file({ name: "doc" });
 const outOpt = Options.file("out").pipe(Options.optional);
@@ -199,6 +223,8 @@ const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe
     progressCommand,
     contextCommand,
     serveCommand,
+    hubCommand,
+    appCommand,
     planCommand,
   ]),
 );

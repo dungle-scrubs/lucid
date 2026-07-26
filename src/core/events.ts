@@ -1,5 +1,6 @@
 import type { Anchor } from "../anchors/anchor.ts";
 import type { AgentProgress, QuestionOption } from "../protocol/wire.ts";
+import type { ItemAnswer, QuestionItem } from "./question-contract.ts";
 
 /**
  * Event log schema (RFC §7). The NDJSON log is the single source of truth.
@@ -15,6 +16,70 @@ interface BaseEvent {
   readonly at: string;
 }
 
+/**
+ * Provenance: which harness conversation produced an agent-originated event
+ * (D18, artifact-first). The artifact is the durable object; a harness
+ * session is an inference source temporarily associated with it - so agent
+ * events carry WHO, and the fold derives the artifact's session history from
+ * stamps already on the record. Optional everywhere: old logs and stampless
+ * writers fold unchanged, and human-authored events never carry one (a human
+ * has no harness session).
+ */
+export interface AttendantStamp {
+  /** Harness identity, e.g. "claude-code", "codex". */
+  readonly harness: string;
+  /** The harness's own conversation/session id (stable across resumes). */
+  readonly sessionId?: string;
+  /** Working directory the session runs from - resume is cwd-scoped. */
+  readonly cwd?: string;
+  /** Model the session runs on, when the environment declares it - what the
+   *  viewer's inherited (attended) pickers display. */
+  readonly model?: string;
+  /** Effort/reasoning level the session runs at, same provenance as `model`. */
+  readonly effort?: string;
+}
+
+/** Strip control characters (incl. the NUL a naive dedupe key would collide
+ *  on) and bound the length. Empty after cleaning = absent. */
+const cleanStampField = (value: unknown, max: number): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  // Code-point filter rather than a control-char regex (which lint rejects
+  // for good reason elsewhere): C0 controls and DEL are dropped.
+  const cleaned = [...value]
+    .filter((ch) => {
+      const c = ch.charCodeAt(0);
+      return c > 0x1f && c !== 0x7f;
+    })
+    .join("")
+    .trim()
+    .slice(0, max);
+  return cleaned.length > 0 ? cleaned : undefined;
+};
+
+/**
+ * The ONE attendant normalizer (D18), shared by the CLI's direct-append path
+ * and the server's HTTP handlers, so the persistent-log invariant (bounded,
+ * control-free strings) cannot depend on which writer was live. Returns
+ * undefined when no usable harness identity remains.
+ */
+export const sanitizeAttendant = (input: unknown): AttendantStamp | undefined => {
+  if (!input || typeof input !== "object") return undefined;
+  const o = input as Record<string, unknown>;
+  const harness = cleanStampField(o.harness, 64);
+  if (!harness) return undefined;
+  const sessionId = cleanStampField(o.sessionId, 128);
+  const cwd = cleanStampField(o.cwd, 1024);
+  const model = cleanStampField(o.model, 128);
+  const effort = cleanStampField(o.effort, 32);
+  return {
+    harness,
+    ...(sessionId ? { sessionId } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  };
+};
+
 /** Opens a lifecycle segment; carries the v1 snapshot reference. */
 export interface SessionOpenedEvent extends BaseEvent {
   readonly t: "session_opened";
@@ -23,6 +88,8 @@ export interface SessionOpenedEvent extends BaseEvent {
   readonly version: number;
   readonly hash: string;
   readonly path: string;
+  /** The session the artifact was born in / reopened under (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 /** A new artifact version (watcher-driven). */
@@ -31,6 +98,9 @@ export interface VersionEvent extends BaseEvent {
   readonly version: number;
   readonly hash: string;
   readonly path: string;
+  /** The session whose turn produced this revision, when the writer knows it
+   *  (the attend-mode hub does; a dedicated server's watcher may not). */
+  readonly attendant?: AttendantStamp;
 }
 
 /** A located human annotation (browser POST; client-minted id). */
@@ -40,6 +110,13 @@ export interface AnnotationEvent extends BaseEvent {
   /** Artifact version the annotation was authored against (server-validated; D-066). */
   readonly version: number;
   readonly target: Anchor;
+  /**
+   * The FULL ordered list of spots one note covers, when the human collected
+   * several (cmd-click). Present only with two or more entries, and `target`
+   * MUST equal `targets[0]`, so a reader that knows only `target` still sees
+   * the first spot; a single pick stays in the canonical single form.
+   */
+  readonly targets?: readonly Anchor[];
   readonly note: string;
   /**
    * When the human wrote the note (client-minted, ISO-8601). `at` is when the
@@ -102,6 +179,8 @@ export interface AgentReplyEvent extends BaseEvent {
   readonly t: "agent_reply";
   readonly id: string;
   readonly text: string;
+  /** Which harness session spoke (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 /**
@@ -129,6 +208,16 @@ export interface AgentAckEvent extends BaseEvent {
    * still only closes on real output, and a crashed orchestrator goes stale.
    */
   readonly progress?: AgentProgress;
+  /**
+   * The highest seq the acknowledged batch covered - the cursor the taker had
+   * just read (D20). Delivery is a claim about a RANGE, not about the ack's own
+   * position: feedback can land between the read and the ack, and a presence-only
+   * re-ack (`lucid intent`, `lucid progress`) takes delivery of nothing at all.
+   * Absent on those and on pre-D20 logs, which therefore claim no delivery.
+   */
+  readonly covers?: number;
+  /** Which harness session took delivery (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 /**
@@ -159,6 +248,17 @@ export interface QuestionEvent extends BaseEvent {
   readonly options?: readonly QuestionOption[];
   /** Whether more than one option may be chosen. */
   readonly multi?: boolean;
+  /**
+   * The rich grouped form (D12): 1..5 questions with structured choices,
+   * normalized through `question-contract.ts`. Additive - `text`/`options`/
+   * `multi` above stay the legacy single question and are projected from the
+   * group when one is present, so old logs and stampless writers fold
+   * unchanged and a consumer that knows nothing about groups still reads a
+   * usable question.
+   */
+  readonly group?: readonly QuestionItem[];
+  /** Which harness session asked (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 /** The human's answer to a question (browser POST). */
@@ -171,8 +271,22 @@ export interface QuestionAnsweredEvent extends BaseEvent {
   readonly text: string;
   /** Labels of the options the human chose. */
   readonly options?: readonly string[];
+  /**
+   * Per-question answers to a grouped question (D12), validated against the
+   * asking event's `group` by the shared validator. Additive alongside the
+   * legacy `text`/`options` above, which stay the single-question answer.
+   */
+  readonly items?: readonly ItemAnswer[];
   /** A region of the artifact the human pinned as their answer's referent. */
   readonly anchor?: Anchor;
+  /**
+   * The FULL ordered list of pinned regions, when the human pinned several
+   * (shift+cmd-click). Same rule as an annotation's `targets`: present only
+   * with two or more entries, and `anchor` MUST equal `anchors[0]`, so a
+   * single pin stays in the canonical single form. Decided answers only -
+   * skip/unclear discard pins like every other decision field.
+   */
+  readonly anchors?: readonly Anchor[];
   /** Images the human attached to their answer. */
   readonly images?: readonly PromptImage[];
   /** The human declined to answer (Skip). Clears the question without content;
@@ -199,6 +313,8 @@ export interface SessionSuspendedEvent extends BaseEvent {
 export interface SessionResumedEvent extends BaseEvent {
   readonly t: "session_resumed";
   readonly segment: number;
+  /** Who resumed it (D18). */
+  readonly attendant?: AttendantStamp;
 }
 
 export interface SessionEndedEvent extends BaseEvent {

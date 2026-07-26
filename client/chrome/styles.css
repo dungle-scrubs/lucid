@@ -3,11 +3,16 @@
    embedded in the binary alongside the JS (D-034) - there is no CSS file on
    disk at runtime and no CDN, so the viewer works offline.
 
-   This is Lucid's palette, not a stock theme: dark ink ground, cream type, a
-   single brass accent. Brass means "attention is here" (annotations, focus).
-   Sage means the agent, amber means the human - attribution, never decoration.
-   Steel recedes. Any assistant-ui component reading --color-muted et al gets
-   Lucid's values because the bridge below points them at our ramps.
+   The palette is SMUI "Spacemolt" (https://smui.statico.io/) - a Nord-derived
+   terminal theme: deep polar-night ground, snow-storm type, the FROST blues
+   as the one accent, monospace-first type, sharp corners. The values below
+   come from its registry item (r/spacemolt-theme.json) and the Nord ramps it
+   draws on. Lucid's semantic layer is unchanged: accent means "attention is
+   here" (annotations, focus), agent/user hues mean attribution (Nord green /
+   Nord yellow), steel recedes. The ramp NAMES (ink, cream, brass...) are kept
+   as the stable seam every component classes against - what changed is what
+   they resolve to. Any assistant-ui component reading --color-muted et al
+   gets these values because the bridge below points them at our ramps.
    ========================================================================== */
 
 /* `source(none)` disables Tailwind v4's automatic source detection, which would
@@ -26,56 +31,69 @@
    importing from Google Fonts. */
 
 @theme {
-  /* ---- Raw ramps ------------------------------------------------------- */
-  --color-ink-900: #131210;
-  --color-ink-850: #17150f;
-  --color-ink-800: #1b1813;
-  --color-ink-700: #232019;
-  --color-ink-600: #2d2920;
-  --color-ink-500: #393327;
-  --color-ink-400: #4b4334;
+  /* ---- Raw ramps -------------------------------------------------------
+     Polar-night ramp, anchored to the SMUI registry's own stops:
+     bg 213 16% 12%, card 217 16% 15.5%, secondary 216 15% 19%,
+     border/input 217 17% 28%. The steps between are Nord-consistent. */
+  --color-ink-900: hsl(213 18% 10%);
+  --color-ink-850: hsl(213 16% 12%);
+  --color-ink-800: hsl(217 16% 15.5%);
+  --color-ink-700: hsl(216 15% 19%);
+  --color-ink-600: hsl(217 16% 23.5%);
+  --color-ink-500: hsl(217 17% 28%);
+  --color-ink-400: hsl(218 17% 35%);
 
-  --color-cream-50: #faf6ec;
-  --color-cream-100: #f2ecdc;
-  --color-cream-200: #e6dbc3;
-  --color-cream-300: #d3c5a7;
+  /* Snow Storm (nord6 -> nord4, plus a dimmed fourth step). */
+  --color-cream-50: #eceff4;
+  --color-cream-100: #e5e9f0;
+  --color-cream-200: #d8dee9;
+  --color-cream-300: #b8c0d0;
 
-  --color-brass-200: #e7d3a0;
-  --color-brass-300: #d9bd7a;
-  --color-brass-400: #cba85a;
-  --color-brass-500: #bd9a4e;
-  --color-brass-600: #9f8038;
-  --color-brass-700: #7b6228;
+  /* FROST - the accent the human asked for by name. brass-400 is the SMUI
+     primary (193 44% 67%, nord8); the ramp walks the frost set around it
+     (nord7 above, nord9/nord10 below). */
+  --color-brass-200: #b8dbe4;
+  --color-brass-300: #8fbcbb;
+  --color-brass-400: hsl(193 44% 67%);
+  --color-brass-500: #81a1c1;
+  --color-brass-600: #5e81ac;
+  --color-brass-700: #4c688c;
 
-  --color-sage-300: #b4c0a2;
-  --color-sage-400: #97a67e;
-  --color-sage-500: #7d8e63;
-  --color-sage-600: #61714b;
+  /* Aurora green - the agent's voice (nord14). */
+  --color-sage-300: #b9cfa4;
+  --color-sage-400: #a3be8c;
+  --color-sage-500: #8aa872;
+  --color-sage-600: #6f8d59;
 
-  --color-amber-300: #efc684;
-  --color-amber-400: #e2a541;
-  --color-amber-500: #c8862a;
-  --color-amber-600: #a06a20;
+  /* Aurora yellow - the human's voice (nord13). */
+  --color-amber-300: #f0d9a3;
+  --color-amber-400: #ebcb8b;
+  --color-amber-500: #d9b264;
+  --color-amber-600: #b7924a;
 
-  --color-rust-300: #d68a6b;
-  --color-rust-400: #c0613f;
-  --color-rust-500: #a4502f;
+  /* Aurora red - danger. rust-400 is the SMUI destructive (355 52% 64%). */
+  --color-rust-300: #dd8e97;
+  --color-rust-400: hsl(355 52% 64%);
+  --color-rust-500: #bf616a;
 
-  --color-steel-300: #9aa3b0;
-  --color-steel-400: #7b8593;
-  --color-steel-500: #5e6773;
-  --color-steel-600: #454d58;
+  /* Receding blue-grays between polar night and snow storm. */
+  --color-steel-300: #9fabbe;
+  --color-steel-400: #7f8ca1;
+  --color-steel-500: #616d80;
+  --color-steel-600: #495364;
 
   /* ---- Semantic ------------------------------------------------------- */
   --color-bg: var(--color-ink-900);
   --color-bg-raised: var(--color-ink-850);
-  --color-bg-inset: #0d0c0a;
+  --color-bg-inset: hsl(213 19% 8%);
   --color-bg-overlay: var(--color-ink-700);
   /* The artifact's ground. The chrome is dark and recedes; the artifact is
      paper and is the thing being looked at. We only supply the ground it
      renders on - what the agent paints there is its own (see the lucid-design
-     skill), and it must read as a document, not as more of this app. */
-  --color-surface: var(--color-cream-50);
+     skill), and it must read as a document, not as more of this app. The
+     lucid-design skill's paper is WARM cream - the chrome went Nord, the
+     artifact did not, and this ground must match what artifacts assume. */
+  --color-surface: #faf6ec;
   --color-surface-ink: #211d15;
 
   --color-fg: var(--color-cream-100);
@@ -83,26 +101,36 @@
   --color-fg-muted: var(--color-steel-400);
   --color-fg-faint: var(--color-steel-500);
 
+  /* Frost carries attention. on-accent is the polar ground, per the SMUI
+     primary-foreground (213 16% 12%). */
   --color-accent: var(--color-brass-500);
   --color-accent-bright: var(--color-brass-400);
   --color-accent-dim: var(--color-brass-700);
-  --color-on-accent: #1a1610;
+  --color-on-accent: hsl(213 16% 12%);
 
   --color-agent: var(--color-sage-400);
   --color-user: var(--color-amber-400);
   --color-danger: var(--color-rust-400);
   --color-meta: var(--color-steel-400);
 
-  --color-border: rgba(242, 236, 220, 0.1);
-  --color-border-strong: rgba(242, 236, 220, 0.17);
+  --color-border: rgba(216, 222, 233, 0.1);
+  --color-border-strong: rgba(216, 222, 233, 0.17);
 
-  /* ---- Type: serif for prose, sans for chrome, mono for the literal ---- */
+  /* ---- Type: monospace-first, per SMUI's terminal aesthetic ------------
+     Self-hosted-or-bust still holds: no font is fetched, so every stack
+     degrades to faces the machine already has. JetBrains Mono leads when
+     installed; ui-monospace (SF Mono on macOS) is the everyday fallback. */
   --font-serif: "EB Garamond", Georgia, "Times New Roman", serif;
-  --font-sans: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "JetBrains Mono", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: "JetBrains Mono", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --radius-md: 7px;
-  --radius-lg: 12px;
+  /* SMUI is sharp-edged (radius 0). Full-round pills and the circular
+     annotation badges keep their geometry - those are marks, not corners. */
+  --radius-xs: 0rem;
+  --radius-sm: 0rem;
+  --radius-md: 0rem;
+  --radius-lg: 0rem;
+  --radius-xl: 0rem;
 }
 
 /* assistant-ui's copied components are authored against shadcn's variable
@@ -144,6 +172,32 @@
   body {
     margin: 0;
     height: 100%;
+  }
+  /* Scrollbars in the chrome's own ink, not the OS's light default - a wide
+     pale track beside the panel read as a foreign strip. Thin, square
+     (Spacemolt has no rounded corners), quiet until hovered. The artifact
+     iframe is untouched: what the agent paints there is its own. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-ink-500) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-ink-500);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-steel-500);
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
   }
   body {
     background: var(--color-bg);

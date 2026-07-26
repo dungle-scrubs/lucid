@@ -125,29 +125,96 @@ genuinely uniform matrix. Give text-bearing flex/grid children `min-width: 0`
 and `overflow-wrap: break-word`, or one long token wraps a column to one word
 per line and the review is wasted.
 
-## Diagrams are elements, not ASCII
+## Anything visual is markup, never ASCII
 
-A box-and-arrow diagram, a layer stack, a flow, a timeline - build it from real
-elements: padded `div`s with a hairline border, placed with flex or grid, and
-inline SVG for anything curved or genuinely drawn. **Never draw one as
-box-drawing characters inside a `<pre>`.**
+Diagrams, flows, charts, timelines, hierarchies, screens, tables of shape and
+size - **every** picture in an artifact is built from real elements: padded
+`div`s with hairline borders placed by flex or grid, and inline SVG for
+anything curved or genuinely drawn. **Never draw one as box-drawing or ASCII
+characters inside a `<pre>`.** This is the rule for the whole class, not for
+box-and-arrow diagrams alone.
 
 ASCII art fails on every count that matters here. It is a single opaque text
-node, so the reviewer can only annotate the whole picture - the node, edge, or
-label they actually want to correct is not addressable. It is frozen at the
-width you typed it, so it overflows a narrow window instead of reflowing. And
-it opts out of the document's type, color, and spacing: a monospace drawing
-sitting inside a manuscript reads as a terminal screenshot pasted onto paper.
+node, so the reviewer can only annotate the whole picture - the node, bar,
+region, or label they actually want to correct is not addressable, which
+defeats the one thing the artifact exists for. It is frozen at the width you
+typed it, so it overflows a narrow window instead of reflowing. And it opts out
+of the document's type, color, and spacing: a monospace drawing sitting inside
+a manuscript reads as a terminal screenshot pasted onto paper.
 
-Compose it from what the artifact already has: nodes are padded boxes with
-`--rule` borders and sans labels; the accent marks the one node the eye should
-land on; connectors are a border, a thin absolutely-positioned rule, or an
-`<svg>` line with `currentColor`. Give each node its own `data-lucid-id`. Reach
-for no diagram library - every one of them is an external request, and the
-artifact must open from disk.
+Compose from what the artifact already has:
+
+- **Diagrams and flows** - nodes are padded boxes with `--rule` borders and
+  sans labels; the accent marks the one node the eye should land on; connectors
+  are a border, a thin absolutely-positioned rule, or an `<svg>` line with
+  `currentColor`.
+- **Charts** - a bar is a `div` with a width or height percentage and a hairline
+  border, in a labelled row; a series of them is a flex column with the axis as
+  a rule and the values as real text beside each bar. A line or area chart is a
+  small inline `<svg>` with a `polyline`. Never a row of `█` or `#` characters,
+  and never a chart library: every one is an external request, and the artifact
+  must open from disk.
+- **Hierarchies and timelines** - nested lists or a grid with rules, not indented
+  `├──` runs.
+- **Screens** - see *Mockups are wireframes* below.
+
+Give every part a reviewer might point at its own `data-lucid-id`.
 
 Mono and `<pre>` keep the work they are good at: code, file paths, a directory
-tree, a log line, a command. Those are literal text, not pictures.
+tree from a real command's output, a log line, a command to run. Those are
+literal text being quoted, not pictures being drawn.
+
+## Mockups are wireframes, not designs
+
+When the artifact shows a **screen** - a layout, a page, a component, an app
+view - draw it as a **wireframe**, not as finished visual design. The decision
+under review is arrangement: what is on the screen, how it is grouped, what
+order it reads in, what each region is for. Colour, imagery, and type
+personality are a different decision, made somewhere else, and a mockup that
+looks finished collects feedback on the wrong one.
+
+The vocabulary, all built from the artifact's own tokens:
+
+- **Regions** are boxes with a `--rule` hairline and a mono label naming what
+  goes there, not a rendering of it: `header · logo, primary nav`, `results ·
+  12 per page`.
+- **Images and media** are a placeholder box carrying its own spec, never a
+  real picture and never a grey slab. Fill it with faint diagonal hatching and
+  label it with what it must be:
+
+  ```css
+  .placeholder {
+    border: 1px solid var(--rule);
+    background: repeating-linear-gradient(
+      45deg, transparent 0 6px, rgba(33, 29, 21, 0.06) 6px 7px
+    );
+  }
+  ```
+
+  ```html
+  <div class="placeholder" data-lucid-id="hero-image">portrait · 3:4 · b&amp;w preferred</div>
+  ```
+
+- **Text** is either the real words, when the words are the point, or a few
+  neutral lines at the right length. Never lorem ipsum: nobody can review copy
+  that means nothing, and it hides how long the real thing runs.
+- **Controls** are labelled outlines - a bordered box reading `Search`, a pill
+  reading `Filter ▾` - at the size and position they will really occupy.
+- **State and behaviour** are said in words beside the region, not animated:
+  `empty state: "no results yet"`, `collapses under 640px`.
+
+Greyscale plus the artifact's single accent, and the accent only where it
+carries meaning (the primary action, the region under discussion). No shadows,
+no gradients, no rounded-corner styling choices, no brand colour, no icon sets.
+
+**Unless the human asks for a specific visual design.** If they name a brand, a
+palette, an existing product's look, or say they want to see the real thing,
+build that instead - the general rule is a default for when the design is not
+yet the subject, not a refusal to render one.
+
+Every region and placeholder gets its own `data-lucid-id`, so a reviewer can
+say "this block goes above the fold" about that block rather than about the
+whole screen.
 
 ## Checklist
 
@@ -155,7 +222,11 @@ tree, a log line, a command. Those are literal text, not pictures.
 - No emoji, no exclamation marks, no hype
 - Cream ground, ink type, one accent used to mean something
 - If it honours dark mode, the dark variant still reads as paper - warm, lifted, distinct from the chrome, and no toggle or JS
-- Serif prose, sans labels, mono literals - and mono only for literals, never for drawing a diagram
-- Diagrams built from elements or inline SVG, each node individually addressable
+- Serif prose, sans labels, mono literals - and mono only for literals being quoted, never for drawing anything
+- Every picture - diagram, flow, chart, timeline, screen - built from elements
+  or inline SVG, each part individually addressable; no ASCII art anywhere
+- Screens drawn as wireframes - labelled regions, hatched image placeholders
+  carrying their spec, greyscale plus the one accent - unless a specific visual
+  design was asked for
 - Every reviewable group padded and, where it matters, carrying a `data-lucid-id`
 - Nothing depends on color alone

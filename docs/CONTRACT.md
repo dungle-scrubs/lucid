@@ -160,11 +160,96 @@ Annotation and message IDs are idempotent. Advance your persisted cursor only
 `wait` never drops or double-applies feedback. `wait` is safe to kill and re-run;
 it requires no always-running process of its own.
 
+## Grouped questions (`group`, `answerItems`) - additive
+
+A `question` event MAY carry a `group`: 1-5 structured questions asked as one
+unit (`lucid ask <file> --group <file|->`; see the `lucid` skill for the JSON).
+Each carries `question`, an optional `header`, `multiSelect`, `requiresReason`,
+`allowDefer`, and `choices` with `label`, `description`, `recommended`,
+`impact`, `risk`, `badges` and an optional `preview` (inert text, or an
+`{ html }` wireframe the viewer renders in a script-less sandboxed iframe).
+The legacy `text`/`options`/`multi` fields are **projected from** the group, so
+a consumer that ignores `group` still reads a usable question.
+
+The answer comes back on the same `questions[]` entry: `answerItems`, one entry
+per question (`selected`, `text`, `reason`, or `defer: true`), plus `answer` -
+the combined summary line, derived from the group and its items rather than
+stored, so it can never disagree with what was asked. The stored
+`question_answered` event carries that same summary in its legacy `text`, so a
+reader that knows only `text`/`options` sees an answer rather than an answered
+question with nothing in it. `at` and `answeredAt` carry the ask and answer
+moments. One shared validator gates the viewer's submit and the server's
+accept: a malformed group or answer is refused with an `issues` list naming
+each problem, never half-recorded. A pinned region or an attached image is
+itself an answer to a group of ONE free-text question - with several questions
+there is nothing to say which one it settles, so it does not stand in for any.
+
+## Multi-spot feedback (`targets`, `answerAnchors`) - additive
+
+An annotation MAY carry `targets`: the full ordered list of anchors one note
+covers, when the human collected several spots into a single draft. `target`
+is **always** `targets[0]`, so a consumer that knows only `target` still reads
+the first spot; `resolved` is true while **any** of the spots still attaches
+(reconstruct the edited-away ones from their snippets). The field appears only
+with two or more entries - a single-spot annotation stays in the shape it has
+always had - and the list is capped at 8 per annotation.
+
+A question's answer MAY likewise carry `answerAnchors`: every region the human
+pinned as their answer's referent, under the same rules - `answerAnchor` is
+always `answerAnchors[0]`, the field appears only with two or more pins, and
+the cap is 8. Pins are decisions, so a skipped or unclear answer never carries
+them. Both fields are additive and optional: old logs, single-spot writers,
+and existing integrations are unaffected. An explicitly empty list is treated
+exactly as an absent field, never as "no spots".
+
+## Per-item delivery state (`delivered`, `answered`) - additive
+
+Each annotation and each **human** message MAY carry `"delivered": true` (an
+`agent_ack` claimed a batch it was in) and/or `"answered": true` (that batch
+was delivered *and* a `version`, `agent_reply`, or `question` landed after the
+item). Both are derived from log seqs within the current segment and are
+omitted rather than false, so nothing existing changes shape. The viewer shows
+them per item, which is what makes "does the agent see this?" answerable
+without asking (D20). Agents may ignore them: they are state Lucid derives,
+never state an agent reports.
+
+The claim comes from the ack's optional `covers` seq - **the cursor its taker
+had just read**, not the ack's own position. `lucid wait --since` writes it for
+you. Two consequences the shapes above depend on: feedback that lands between
+the read and the ack belongs to the *next* batch and is not marked delivered,
+and a presence-only re-ack (`lucid intent`, `lucid progress`) claims nothing.
+An ack without `covers` - a pre-D20 writer - delivers nothing rather than
+everything.
+
 ## Resuming someone else's session
 
 Any harness can resume by calling `lucid wait <file>` with **no** `--since`,
 which returns the full folded state of the current segment (annotations,
 conversation, current version, status). Then advance your own cursor from there.
+
+## Provenance stamps (`attendant`, D18) - additive
+
+The artifact is the durable object; a harness session (a Claude Code / Codex
+conversation) is an inference source temporarily associated with it. Agent-
+originated events (`session_opened`, `session_resumed`, `version`,
+`agent_ack`, `agent_reply`, `question`) MAY carry an optional `attendant`
+stamp - `{ harness, sessionId?, cwd? }` - naming the harness session that
+produced them. The CLI stamps automatically when the environment provides
+identity:
+
+```sh
+export LUCID_HARNESS=claude-code     # harness name (or use wait --harness)
+export LUCID_SESSION_ID=<uuid>       # the harness's own conversation id
+```
+
+`cwd` is recorded because resuming a harness session is scoped to its
+original directory (or a worktree of the same repo). The fold derives the
+artifact's whole-log **session history** from these stamps - every harness
+session that ever touched it, `firstAt`/`lastAt`/event counts - and the wait
+payload exposes it as `sessionHistory` (omitted when no event is stamped).
+Everything here is additive and optional: old logs, stampless writers, and
+existing integrations are unaffected. Payload field names (e.g. `session` for
+the artifact path) are unchanged for compatibility.
 
 ## Attendant identity (`--harness`, `--resume`)
 
@@ -176,6 +261,53 @@ command that resumes its conversation (including any autonomy flag, e.g.
 `lucid` listing surface it as `lastAttendant` so a human can copy the command
 and re-summon the original conversation themselves. It is display data only:
 Lucid never executes it, and re-invocation stays external (D-064).
+
+## Model and effort selection - additive
+
+The human picks which **model** and **effort/reasoning level** an artifact's
+UNATTENDED turns run on. The vocabulary is per harness and comes from the
+harness registry ([LAUNCHER.md](LAUNCHER.md)); Lucid never invents a model name
+or an effort level.
+
+The pick sticks to the artifact in `.lucid/<name>/selection.json`:
+
+```jsonc
+{ "harness": "claude-code", "model": "opus-4.8", "effort": "high" }
+```
+
+Every field is optional; an absent field means **pass nothing** and let the CLI
+apply its own default. Every later unattended resume reads this file back, so
+one choice governs the artifact's whole headless life. If the registry stops
+offering that model or level, the turn still runs on the CLI's defaults and a
+`SELECTION_INVALID` warning goes to any window open at the time (warnings are
+broadcast, not replayed, and a standing rejection warns once per hub mount) -
+delivery is never stalled over a preference.
+
+Three surfaces carry it, all additive:
+
+- `POST /hub/create` accepts optional `model` and `effort` beside `harness`.
+  An invalid pick is a `400` with the reason; a valid one is persisted and
+  applied to the create turn's argv.
+- `GET /hub/identity` reports `harnessInfo: [{ name, models?, defaultModel?,
+  efforts?, defaultEffort? }]` beside the unchanged `harnesses: string[]`.
+  Each `models[]` entry is `{ id, label?, efforts? }`.
+- `GET|POST {base}/__lucid/selection` reads and writes the artifact's own
+  pick. `POST { model?, effort? }` validates against the registry (`400 {
+  error }` when the harness cannot run it) and answers with the current state.
+  A POST **replaces the whole selection**, so send both fields - `POST
+  { "effort": "high" }` clears `model`. A parsed body with no usable fields
+  (`{}`, or `"default"` in both) clears the pick; a body that is not a JSON
+  object is a `400`, never a clear. Both methods answer
+  `{ harness?, selection: { harness?, model?, effort? }, info? }`, where `info`
+  is that harness's `harnessInfo` entry so a picker can render without a hub.
+  A `selection` SSE frame carries the same object to other open windows, and
+  `/__lucid/state` carries the current `selection` alongside `lastAttendant`.
+
+**Attended turns inherit instead.** While a harness is attending interactively
+the turn runs on THAT session's settings, so a pick would be ignored. Export
+`LUCID_MODEL` / `LUCID_EFFORT` alongside `LUCID_HARNESS` / `LUCID_SESSION_ID`
+and the `attendant` stamp carries them (`{ harness, sessionId?, cwd?, model?,
+effort? }`); the viewer displays them, subdued, in place of the pickers.
 
 ## Context-window usage (`lucid context`)
 

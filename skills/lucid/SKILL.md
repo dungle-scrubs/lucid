@@ -63,13 +63,24 @@ Never fake the review loop, and never paste build instructions at the user.
    no CDN, no remote assets. The artifact must render identically opened straight
    from disk with no network - it is content that outlives the review.
 
-   **Draw diagrams with elements, never ASCII.** A box-and-arrow diagram, a
-   layer stack, a flow - build it from padded `div`s with borders, laid out with
-   flex, or from inline SVG. Box-drawing characters in a `<pre>` collapse the
-   whole picture into one opaque text node, so the reviewer cannot annotate the
-   node or edge they mean, and it cannot reflow when the window narrows. Give
-   each node its own `data-lucid-id`. Keep `<pre>` for what is literally text:
-   code, file paths, a directory tree.
+   **Every picture is markup, never ASCII.** Diagrams, flows, charts,
+   timelines, hierarchies, screen mockups - build each from padded `div`s with
+   borders laid out with flex or grid, or from inline SVG. A bar is a `div`
+   with a percentage width and its value as real text beside it; a hierarchy is
+   nested lists. Box-drawing or ASCII characters in a `<pre>` collapse the whole
+   picture into one opaque text node, so the reviewer cannot annotate the node,
+   bar, or region they mean, and it cannot reflow when the window narrows. This
+   is a fact about the MEDIUM, not a style preference: in a terminal an ASCII
+   diagram is the right answer, and an artifact is a browser document where
+   markup exists and addressability is the entire point. Give each part its own
+   `data-lucid-id`. Keep `<pre>` for what is literally text being quoted: code,
+   file paths, a command, a log line.
+
+   **A mockup of a screen is a wireframe**, not finished visual design -
+   labelled regions, placeholder boxes carrying their spec (`portrait · 3:4`),
+   real words rather than lorem, greyscale plus one accent. Arrangement is what
+   is under review; a mockup that looks finished collects feedback on the wrong
+   decision. Build the real design only when the human asks for one.
 
    For how it should *look*, invoke the **`lucid-design`** skill if it is
    installed: the artifact is a document (paper, one accent, editorial voice),
@@ -127,9 +138,13 @@ Never fake the review loop, and never paste build instructions at the user.
    whole review - you have nothing better to do during a review-moment than wait on
    the human - until `suspended`, `ended`, or `reviewResolved`.
    ```sh
-   lucid wait <file> --since <cursor> --timeout 120 \
+   lucid wait <file> --since <cursor> --timeout 3600 \
      --harness <name> --resume "<command that resumes this conversation>"
    ```
+   Hold the window for the full hour: an interactive attendant is the human's
+   fastest path. An attend-mode hub only takes over a batch nobody is listening
+   for, nobody acked, and nobody is mid-turn on - so a `wait` that returns is
+   still yours while you work on it, without holding anything open.
    **Always pass `--harness` and `--resume`.** They record who is attending and
    the exact terminal command that puts this conversation back behind the
    artifact, so a human returning to a dormant review can copy it from the
@@ -139,6 +154,23 @@ Never fake the review loop, and never paste build instructions at the user.
    - Claude Code: `--harness claude-code --resume "claude --resume <session-id> --dangerously-skip-permissions"`
      (your session id is the UUID naming your transcript and scratchpad paths)
    - Codex: `--harness codex --resume "codex resume <session-id> --yolo"`
+
+   **Also export your identity once, before the first lucid command** - every
+   event you write is then provenance-stamped, and the artifact accumulates
+   its session history (which harness conversations touched it, resumable
+   from where):
+   ```sh
+   export LUCID_HARNESS=claude-code LUCID_SESSION_ID=<session-id>
+   ```
+
+   Export `LUCID_MODEL` and `LUCID_EFFORT` alongside them when you know what
+   you are running on. While you are attending, the viewer's model and effort
+   pickers show YOUR values instead of offering a choice - an attended turn
+   runs on the attendant's own settings, so the pickers must display what the
+   attending session actually runs, not a pick that would be ignored:
+   ```sh
+   export LUCID_MODEL=opus-4.8 LUCID_EFFORT=high
+   ```
 
    Lucid only records and displays this command; running it is always the
    human's act, in their terminal.
@@ -245,6 +277,57 @@ lucid ask <file> --text "Which store should the cutover target?" \
 - This is advisory forwarding, not interception: use it for questions that
   arise **while parked in the review loop**. Outside a review, your normal
   question tool is fine.
+
+### Several decisions at once: `--group`
+
+When more than one decision blocks you at the same moment, ask them as **one
+group** (1-5 questions) rather than one at a time. The viewer tabs them into a
+single drawer, the human answers in one pass, and the whole exchange enters the
+record as one question-and-answer item.
+
+```
+lucid ask <file> --group questions.json     # or --group - to read stdin
+```
+
+```jsonc
+[
+  {
+    "id": "store",
+    "header": "Store",                       // short tab label
+    "question": "Which store for the cutover?",
+    "multiSelect": false,                    // true => pick any number
+    "requiresReason": false,                 // true => a justification is required
+    "allowDefer": false,                     // true => this one may be left unanswered
+    "choices": [
+      {
+        "id": "pg",
+        "label": "Postgres",
+        "description": "managed, boring, we know it",
+        "recommended": true,                 // pre-selected (single choice only)
+        "impact": "one migration, no new ops",
+        "risk": "connection limits at peak",
+        "badges": ["reversible"],
+        "preview": { "html": "<div>…wireframe of the result…</div>" }
+      },
+      { "id": "sqlite", "label": "SQLite", "preview": "+--------+\n| sketch |\n+--------+" }
+    ]
+  }
+]
+```
+
+- Omit `choices` for a free-text question. Every choice question also gets an
+  "Other" row, so the human is never boxed into your options.
+- `recommended` is worth setting: it makes the common case one keystroke. It is
+  ignored on a multi-select, where pre-picking would be answering for them.
+- `preview` shows what an option would *produce*: a string renders as inert
+  monospace text, `{ "html": … }` renders as a real wireframe in a **sandboxed,
+  script-less** iframe. Write markup and CSS only - no script runs, ever.
+- The answer arrives on the same `questions[]` entry: `answerItems` (one per
+  question, with `selected`, `text`, `reason`, or `defer: true`) plus `answer`,
+  one readable summary line for the whole group. A deferred question is an
+  explicit "not now" - proceed without it, do not re-ask.
+- A malformed group is refused with an `issues` list naming each problem, so
+  fix and re-ask rather than falling back to a vaguer question.
 
 ## Standing review (opt-in, never the default)
 

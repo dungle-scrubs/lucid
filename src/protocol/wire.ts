@@ -1,5 +1,6 @@
 import type { Anchor } from "../anchors/anchor.ts";
 import type { Warning } from "../errors.ts";
+import type { ItemAnswer, QuestionItem } from "../core/question-contract.ts";
 
 /**
  * The wire contract: every JSON shape that crosses a process or origin
@@ -56,6 +57,13 @@ export interface PayloadAnnotation {
   readonly version: number;
   readonly resolved: boolean;
   readonly target: Anchor;
+  /**
+   * Every spot the note covers, when the human collected several with one
+   * draft (additive). `target` is always `targets[0]`, so a consumer that
+   * knows only `target` reads the first spot; `resolved` is true while ANY
+   * of them still attaches. Omitted for the single-target annotation.
+   */
+  readonly targets?: readonly Anchor[];
   readonly note: string;
   readonly at: string;
   /** When the human wrote it; `at` is when it reached the log. */
@@ -64,6 +72,11 @@ export interface PayloadAnnotation {
    *  message. Drop `file` and the viewer's thumbs 404; drop `path` and the
    *  agent cannot read the bytes. */
   readonly images?: readonly PayloadImage[];
+  /** An agent acked delivery of a batch this item was in (D20). */
+  readonly delivered?: true;
+  /** Agent output - a new version, reply, or question - landed after this
+   *  item (D20). */
+  readonly answered?: true;
 }
 
 /**
@@ -91,6 +104,11 @@ export interface PayloadMessage {
   readonly text: string;
   readonly at: string;
   readonly images?: readonly PayloadImage[];
+  /** Human turns only: an agent acked delivery of a batch this message was
+   *  in (D20). An agent's own turn is never "delivered" to anyone. */
+  readonly delivered?: true;
+  /** Human turns only: agent output landed after this message (D20). */
+  readonly answered?: true;
 }
 
 export interface PayloadRevert {
@@ -119,6 +137,17 @@ export interface PayloadQuestion {
   readonly options?: readonly QuestionOption[];
   /** Whether more than one option may be chosen. */
   readonly multi?: boolean;
+  /**
+   * The rich grouped question (D12), when the agent asked one. Additive: the
+   * legacy `text`/`options`/`multi` above are projected from it, so a consumer
+   * that ignores this field still reads a usable question.
+   */
+  readonly group?: readonly QuestionItem[];
+  /** When the agent asked. */
+  readonly at?: string;
+  /** When the human answered (absent while outstanding). The transcript folds
+   *  question and answer into ONE item positioned here, not at `at` (D14). */
+  readonly answeredAt?: string;
   readonly answered: boolean;
   /** The human declined to answer (Skip): `answered` is true but there is no
    *  content - proceed without it rather than re-asking. */
@@ -127,13 +156,23 @@ export interface PayloadQuestion {
    *  nothing was decided - ask the SAME question again, shorter and clearer.
    *  `answer`, when present, is what they said was confusing. */
   readonly unclear?: boolean;
-  /** Free-text answer (or the "Other" text alongside chosen options). */
+  /**
+   * The answer as one readable line. For a legacy question this is the human's
+   * free text (or the "Other" text alongside chosen options); for a grouped
+   * question it is the COMBINED SUMMARY derived from `answerItems` - what an
+   * agent reads without walking the structure.
+   */
   readonly answer?: string;
   /** Labels of the options the human chose. */
   readonly answerOptions?: readonly string[];
+  /** Per-question answers to a grouped question (D12), one per `group` item. */
+  readonly answerItems?: readonly ItemAnswer[];
   /** A region of the artifact the human pinned as the referent of their answer
    *  - the mirror of the agent's `ref`, captured like an annotation's target. */
   readonly answerAnchor?: Anchor;
+  /** Every pinned region, when the human pinned several (additive).
+   *  `answerAnchor` is always `answerAnchors[0]`; omitted for a single pin. */
+  readonly answerAnchors?: readonly Anchor[];
   /** Images the human attached to their answer. */
   readonly answerImages?: readonly PayloadImage[];
 }
@@ -153,6 +192,23 @@ export interface WaitPayload {
   readonly warnings?: readonly Warning[];
   /** Open "agent is working" window (ack received, no output yet). */
   readonly agentWorking?: AgentWorking;
+  /** Every harness session that ever touched this artifact (D18); omitted
+   *  when no event carries a stamp (old logs, stampless writers). */
+  readonly sessionHistory?: readonly SessionHistoryRecord[];
+}
+
+/**
+ * One harness session's association with an artifact, derived from attendant
+ * stamps on the log events (D18). The artifact's lifetime provenance: born-in
+ * first, every later attendant after, oldest association first.
+ */
+export interface SessionHistoryRecord {
+  readonly harness: string;
+  readonly sessionId?: string;
+  readonly cwd?: string;
+  readonly firstAt: string;
+  readonly lastAt: string;
+  readonly events: number;
 }
 
 /** Who last took delivery of feedback (advisory sidecar): display data with
@@ -161,6 +217,54 @@ export interface AttendantRef {
   readonly harness: string;
   readonly at: string;
   readonly resume?: string;
+  /** Model the attending session runs on, when its environment declared it -
+   *  what the viewer's inherited (attended) pickers display. */
+  readonly model?: string;
+  /** Effort/reasoning level of the attending session, same provenance. */
+  readonly effort?: string;
+}
+
+/** One model a harness offers, as `/hub/identity` reports it (registry v2). */
+export interface HarnessModelInfo {
+  readonly id: string;
+  readonly label?: string;
+  /** Effort levels this model accepts; absent = the harness-wide `efforts`. */
+  readonly efforts?: readonly string[];
+}
+
+/**
+ * One spawn recipe's picker vocabulary, as `/hub/identity` reports it in
+ * `harnessInfo` (additive beside the legacy `harnesses` string[]). A harness
+ * with no `models` has no model picker; one with no effort lists anywhere has
+ * no effort picker.
+ */
+export interface HarnessInfo {
+  readonly name: string;
+  readonly models?: readonly HarnessModelInfo[];
+  readonly defaultModel?: string;
+  readonly efforts?: readonly string[];
+  readonly defaultEffort?: string;
+}
+
+/** An artifact's sticky model/effort selection, as `GET/POST
+ *  {base}/__lucid/selection` reads and writes it. Every unattended turn on
+ *  the artifact reuses it; "default" (or absent) = the CLI decides. */
+export interface SelectionState {
+  readonly harness?: string;
+  readonly model?: string;
+  readonly effort?: string;
+}
+
+/** `GET/POST {base}/__lucid/selection` response: the artifact's sticky pick
+ *  plus the vocabulary it is made in, so the picker renders without a hub
+ *  (a dedicated `lucid open` server has no `/hub/identity`). */
+export interface SelectionResponse {
+  /** The harness whose recipe validates this artifact's picks, when the
+   *  registry has one for it. Absent = no recipe, so no pickers. */
+  readonly harness?: string;
+  /** Empty object when nothing is picked: the CLI's own defaults apply. */
+  readonly selection: SelectionState;
+  readonly info?: HarnessInfo;
 }
 
 /** One session in a project, as `lucid` (bare) and `/__lucid/sessions` report it. */
@@ -224,6 +328,9 @@ export interface StateResponse extends WaitPayload {
   readonly lastAttendant?: AttendantRef;
   /** Last-reported context-window usage of the attending harness, if any. */
   readonly contextUsage?: ContextUsage;
+  /** The artifact's sticky model/effort for unattended turns, when one is
+   *  picked. The pickers' own vocabulary comes from `/__lucid/selection`. */
+  readonly selection?: SelectionState;
 }
 
 /** `/__lucid/sessions` response. */

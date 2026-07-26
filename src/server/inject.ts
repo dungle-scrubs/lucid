@@ -6,21 +6,25 @@
  * subtree-only live-reload preserves it.
  */
 
-const OVERLAY_MARKUP = `
+/** The bootstrap markup, addressed at the session's own mount: `base` is ""
+ *  on a dedicated server and "/s/<id>" under the daemon - an absolute
+ *  `/__lucid/client.js` would 404 against the daemon's root. */
+const overlayMarkup = (base: string): string => `
 <div id="__lucid_overlay_root" data-lucid-ignore="true"></div>
 <script>window.__LUCID__={mode:"overlay"};</script>
-<script type="module" src="/__lucid/client.js"></script>
+<script type="module" src="${base}/__lucid/client.js"></script>
 `;
 
 /** Inject the overlay bootstrap into an artifact HTML document. */
-export const injectOverlay = (artifactHtml: string): string => {
+export const injectOverlay = (artifactHtml: string, base = ""): string => {
+  const markup = overlayMarkup(base);
   const closingBody = /<\/body\s*>/i;
   if (closingBody.test(artifactHtml)) {
-    return artifactHtml.replace(closingBody, `${OVERLAY_MARKUP}</body>`);
+    return artifactHtml.replace(closingBody, `${markup}</body>`);
   }
   const closingHtml = /<\/html\s*>/i;
   if (closingHtml.test(artifactHtml)) {
-    return artifactHtml.replace(closingHtml, `${OVERLAY_MARKUP}</html>`);
+    return artifactHtml.replace(closingHtml, `${markup}</html>`);
   }
-  return artifactHtml + OVERLAY_MARKUP;
+  return artifactHtml + markup;
 };

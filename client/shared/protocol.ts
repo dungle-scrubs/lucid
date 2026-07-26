@@ -20,12 +20,23 @@ export type PayloadAnnotationLike = PayloadAnnotation;
 export interface QueuedAnchorLike {
   readonly id: string;
   readonly target: Anchor;
+  /** Every spot a cmd-collected item covers; `target` is always the first.
+   *  Absent on a single-target item (and from older chromes). */
+  readonly targets?: readonly Anchor[];
 }
 
 /** overlay -> chrome */
 export type OverlayMessage =
   | { readonly source: "lucid-overlay"; readonly type: "ready" }
-  | { readonly source: "lucid-overlay"; readonly type: "target-picked"; readonly anchor: Anchor }
+  | {
+      readonly source: "lucid-overlay";
+      readonly type: "target-picked";
+      readonly anchor: Anchor;
+      /** Held modifier keys at pick time (additive - an old overlay omits it).
+       *  The CHROME owns what they mean: meta collects into one draft, shift
+       *  pins onto the open question's answer. The overlay only reports. */
+      readonly modifiers?: { readonly meta: boolean; readonly shift: boolean };
+    }
   | {
       readonly source: "lucid-overlay";
       readonly type: "annotation-hover";
@@ -55,6 +66,9 @@ export type ChromeMessage =
       readonly annotations: readonly PayloadAnnotationLike[];
       readonly queued: readonly QueuedAnchorLike[];
       readonly pending: Anchor | null;
+      /** Every spot of a cmd-collected draft, first entry == `pending`. An
+       *  overlay that predates it paints `pending` alone (additive). */
+      readonly pendingList?: readonly Anchor[];
       /**
        * False puts the surface in read mode: the overlay paints nothing and
        * stops targeting, so the artifact reads as plain document. It still

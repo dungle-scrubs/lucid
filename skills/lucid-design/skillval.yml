@@ -3,16 +3,19 @@
 skill: lucid-design
 class: preference
 cases:
+  # Held out: names the skill (not a path, which contaminated the baseline
+  # arm) and drops "standalone" (which led the witness). The task is an
+  # ordinary artifact; self-containment - inline style, no external
+  # requests - is what the skill must add by default.
   - id: self-contained-artifact
     mode: generation
     type: preference
     rule: self-contained
-    arms: [skill, baseline]
+    arms: [solo, baseline]
     prompt: >-
-      Read ~/.agents/skills/lucid-design/SKILL.md if it exists and
-      follow it to write a standalone HTML artifact presenting a
-      three-phase database migration plan for review. Save it as
-      artifact.html. Do it end to end without asking.
+      Using the lucid-design skill, create artifact.html presenting a
+      three-phase database migration plan for review. Do it end to end
+      without asking.
     assert:
       must_match: ['<style']
       must_not_match: ['fonts\.googleapis|fonts\.gstatic|cdn\.|unpkg\.com|jsdelivr']
@@ -31,6 +34,23 @@ cases:
       artifact.html. Do it end to end without asking.
     assert:
       must_not_match: ['[─│┌┐└┘├┤┬┴┼━┃┏┓┗┛╭╮╯╰═║╔╗╚╝▼▲◀▶]']
+    trials: 1
+
+  # A screen mockup defaults to a WIREFRAME: placeholder boxes carrying their
+  # spec, no lorem ipsum, no invented brand palette. Asserted on what a
+  # finished-looking mockup reaches for (image tags, lorem, gradients) rather
+  # than on the hatching itself, which has many valid spellings.
+  - id: mockup-is-wireframe
+    mode: generation
+    type: preference
+    rule: mockups-are-wireframes
+    arms: [solo, baseline]
+    prompt: >-
+      Using the lucid-design skill, create artifact.html showing a mockup
+      of a product detail page (image, title, price, add to cart, reviews)
+      for review. Do it end to end without asking.
+    assert:
+      must_not_match: ['lorem ipsum', '<img\\s', 'linear-gradient\\((?!\\s*45deg)', 'unsplash|placehold']
     trials: 1
 
   # Generic component styling is not Lucid-artifact design.

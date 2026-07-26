@@ -1,37 +1,22 @@
-import { useEffect, useRef } from "react";
-import type { LogEvent } from "../../src/core/events.ts";
-import type { ContextUsage } from "../../src/protocol/wire.ts";
+import { useCallback, useEffect, useRef } from "react";
+import type { Anchor } from "../../src/anchors/anchor.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
-import {
-  approveReview,
-  exitDiff,
-  flushOutbox,
-  gotoHunk,
-  sendAll,
-  setSidebarOpen,
-  setSidebarTab,
-  toggleTargets,
-} from "./actions.ts";
+import { SessionProvider, useActions, useSession } from "./context.tsx";
+import { MAX_PICK_TARGETS, toggleAnchor } from "./store.ts";
 import { Header } from "./Header.tsx";
+import { QuestionDrawer, useQuestionDrawer } from "./QuestionDrawer.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
+import type { SessionHandle } from "./session.ts";
 import { Sessions } from "./Sessions.tsx";
 import {
-  get,
-  persistWidth,
-  pushWarning,
-  set,
-  useLucid,
   CHROME_MIN_WIDTH,
   DEFAULT_CHROME_WIDTH,
-} from "./store.ts";
-import {
-  bootstrap,
-  markOverlayReady,
-  onNewVersion,
-  pushHighlights,
-  setSurfaceIframe,
-  toOverlay,
-} from "./surface.ts";
+  persistWidth,
+  setChromeWidth,
+  setSidebarOpen,
+  setSidebarTab,
+  useShell,
+} from "./shell.ts";
 import {
   DiffBar,
   Lightbox,
@@ -57,88 +42,124 @@ const DIVIDER_WIDTH = 5;
 const isTextEntry = (node: EventTarget | null): boolean =>
   node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement;
 
-const onLogEvent = (ev: LogEvent): void => {
-  switch (ev.t) {
-    // Every content event re-reads the folded state rather than patching it
-    // locally. The log is the source of truth and the fold does real work
-    // (anchor carry-forward, orphaning, image paths); a local append would be a
-    // second, worse copy of it - and could be silently dropped by a bootstrap
-    // that started before the append landed.
-    case "annotation":
-    case "revert":
-    case "question":
-    case "question_answered":
-    case "prompt":
-    case "agent_reply":
-    case "agent_ack":
-      void bootstrap();
-      break;
-    case "version":
-      void onNewVersion(ev.version);
-      break;
-    case "review_resolved":
-      set({ reviewResolved: true });
-      break;
-    case "review_reopened":
-      set({ reviewResolved: false });
-      break;
-    case "session_ended":
-      set({ status: "ended" });
-      break;
-    case "session_suspended":
-      set({ status: "suspended" });
-      break;
-    default:
-      break;
-  }
-};
-
-export const Chrome = () => {
-  const chromeWidth = useLucid((s) => s.chromeWidth);
-  const sidebarOpen = useLucid((s) => s.sidebarOpen);
-  const sidebarTab = useLucid((s) => s.sidebarTab);
-  const dragging = useRef(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-
+/**
+ * Everything window-level for the ACTIVE session: the overlay postMessage
+ * bridge, the chrome's custom events, and the keyboard map. A hook rather
+ * than inline in the view so the wiring reads as what it is - the active
+ * session's connection to the window - and tears down whole when another
+ * session takes the screen. The SSE stream is deliberately NOT here: it
+ * belongs to the handle's roster lifetime (entry boot or tab open), so a
+ * backgrounded session keeps folding events and draining its outbox.
+ *
+ * `panelDigits` guards ⌘1/⌘2: they switch the panel's own tabs in the
+ * single-session viewer, but under the shell those digits belong to the
+ * session tab bar and the Sessions panel does not exist.
+ */
+const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: boolean): void => {
   useEffect(() => {
-    setSurfaceIframe(iframeRef.current);
+    // A hidden tab's view stays mounted (drafts survive switching), but only
+    // the ACTIVE session may own the window: N sets of keyboard/postMessage
+    // listeners would all fire on one gesture.
+    if (!active) return;
+    const { store, surface, actions, notify } = session;
+    const get = store.getState;
+    const set = store.setState;
+
+    // The cmd-collect cap mirrors the server's (it rejects longer lists), so
+    // the ninth pick is refused HERE, where the human can still see why,
+    // rather than at send time. toggleAnchor returns the list untouched (same
+    // reference) only in that case.
+    const droppedAtCap = (cur: readonly Anchor[], next: readonly Anchor[]): boolean =>
+      next === cur && cur.length >= MAX_PICK_TARGETS;
+    const capNotice = (): void =>
+      notify.notice(`Up to ${MAX_PICK_TARGETS} spots per note - that pick was not added.`);
 
     const onMessage = (e: MessageEvent): void => {
       if (!isOverlayMessage(e.data)) return;
+      // Only this session's own iframe may speak for the surface: any frame
+      // can forge an overlay-shaped payload, and under tabs a stale surface
+      // must not mutate the active session's state.
+      if (!surface.ownsSource(e.source)) return;
       const msg = e.data;
       if (msg.type === "ready") {
-        markOverlayReady();
-        pushHighlights();
+        surface.markOverlayReady();
+        surface.pushHighlights();
       } else if (msg.type === "target-picked") {
         // A historical snapshot is read-only: its DOM is not the live artifact,
         // so an anchor captured against it would point at nothing on return.
         if (get().viewingVersion !== null) return;
-        // Pinning a region for an open question's answer wins over starting a
-        // new annotation: the pick attaches to that answer and exits pick mode.
-        const pickFor = get().answerPickFor;
-        if (pickFor !== null) {
-          set((s) => ({
-            answerAnchors: { ...s.answerAnchors, [pickFor]: msg.anchor },
-            answerPickFor: null,
-          }));
+        const meta = msg.modifiers?.meta ?? false;
+        const shift = msg.modifiers?.shift ?? false;
+        // Pinning a region onto an answer wins over starting a new annotation:
+        // an armed pick mode ("Pin a spot"), or shift held while a question is
+        // outstanding - the same pin without arming first. Shift+cmd collects
+        // several pins (a repeat pick removes its spot); otherwise the pick
+        // replaces. Shift with NO outstanding question falls through to the
+        // composer below - never a dead gesture.
+        const s0 = get();
+        const pinFor =
+          s0.answerPickFor ?? (shift ? (s0.questions.find((q) => !q.answered)?.id ?? null) : null);
+        if (pinFor !== null) {
+          const cur = s0.answerAnchorLists[pinFor] ?? [];
+          const next = meta && shift ? toggleAnchor(cur, msg.anchor) : [msg.anchor];
+          if (droppedAtCap(cur, next)) {
+            capNotice();
+            return;
+          }
+          set((s) => {
+            const anchors = { ...s.answerAnchors };
+            const lists = { ...s.answerAnchorLists };
+            const first = next[0];
+            if (first === undefined) {
+              delete anchors[pinFor];
+              delete lists[pinFor];
+            } else {
+              anchors[pinFor] = first;
+              lists[pinFor] = next;
+            }
+            return {
+              answerAnchors: anchors,
+              answerAnchorLists: lists,
+              answerPickFor: null,
+              // A shift-pin lands on the drawer's question even while the
+              // drawer is lowered, so raise it: the gesture must produce a
+              // visible chip, not a silent attachment.
+              questionDrawerDismissed: [],
+            };
+          });
           return;
         }
-        // A new pick is a new fork: drop any stable fork id held for the prior pick.
-        set({ pendingTarget: msg.anchor, forkId: null });
-        pushHighlights();
+        // Cmd collects: several picks accumulate into ONE draft whose note
+        // covers them all (a repeat pick removes its spot - the multi-select
+        // toggle). A plain pick replaces, as ever. Either way this is a new
+        // fork candidate: drop any stable fork id held for the prior pick.
+        const cur = s0.pendingTargets;
+        const next = meta ? toggleAnchor(cur, msg.anchor) : [msg.anchor];
+        if (droppedAtCap(cur, next)) {
+          capNotice();
+          return;
+        }
+        // Toggling the LAST spot off ends the draft, same as the chip path:
+        // a bare set would unmount the composer but keep its note and images,
+        // resurrecting them (and their un-revoked object URLs) on the next pick.
+        if (next.length === 0) {
+          actions.discardPending();
+          return;
+        }
+        set({ pendingTargets: next, pendingTarget: next[0] ?? null, forkId: null });
+        surface.pushHighlights();
       } else if (msg.type === "annotation-hover") {
         set({ hoveredId: msg.id });
       } else if (msg.type === "content-width") {
         // Size the surface to the content and give the rest to the review,
         // keeping the panel at or above its minimum. Fall back to the default
         // when there is nothing measurable.
-        set({
-          chromeWidth:
-            msg.width <= 0
-              ? DEFAULT_CHROME_WIDTH
-              : Math.max(CHROME_MIN_WIDTH, window.innerWidth - DIVIDER_WIDTH - msg.width),
-        });
-        persistWidth(get().chromeWidth);
+        const width =
+          msg.width <= 0
+            ? DEFAULT_CHROME_WIDTH
+            : Math.max(CHROME_MIN_WIDTH, window.innerWidth - DIVIDER_WIDTH - msg.width);
+        setChromeWidth(width);
+        persistWidth(width);
       } else if (msg.type === "annotation-activate") {
         set({ hoveredId: msg.id });
         document
@@ -153,26 +174,21 @@ export const Chrome = () => {
     // The chrome's own cards ask the overlay to light up their mark.
     const onFocusAnnotation = (e: Event): void => {
       const id = (e as CustomEvent<string>).detail;
-      toOverlay({ source: "lucid-chrome", type: "focus-annotation", id });
+      surface.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id });
     };
     window.addEventListener("lucid:focus-annotation", onFocusAnnotation);
 
     // Enter on a focused card: light the mark AND scroll the surface to it.
     const onRevealAnnotation = (e: Event): void => {
       const id = (e as CustomEvent<string>).detail;
-      toOverlay({ source: "lucid-chrome", type: "reveal-annotation", id });
+      surface.toOverlay({ source: "lucid-chrome", type: "reveal-annotation", id });
     };
     window.addEventListener("lucid:reveal-annotation", onRevealAnnotation);
 
-    // A thumb asks for the lightbox by URL; resolve it back to the message's
-    // image list so the arrows can step through the set it came from.
+    // A thumb asks for the lightbox by URL; the action resolves it back to the
+    // message's image list so the arrows can step through the set it came from.
     const onLightbox = (e: Event): void => {
-      const src = (e as CustomEvent<string>).detail;
-      const file = src.split("/").pop() ?? "";
-      const owner = get().messages.find((m) => m.images?.some((i) => i.file === file));
-      const images = owner?.images;
-      if (!images) return;
-      set({ lightboxImages: images, lightboxIndex: images.findIndex((i) => i.file === file) });
+      actions.openLightboxForSrc((e as CustomEvent<string>).detail);
     };
     window.addEventListener("lucid:lightbox", onLightbox);
 
@@ -183,12 +199,12 @@ export const Chrome = () => {
       if (isTextEntry(e.target)) return;
       if (e.key === "ArrowRight" || e.key === "ArrowDown") {
         e.preventDefault();
-        gotoHunk(get().diffIndex + 1);
+        actions.gotoHunk(get().diffIndex + 1);
       } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();
-        gotoHunk(get().diffIndex - 1);
+        actions.gotoHunk(get().diffIndex - 1);
       } else if (e.key === "Escape") {
-        void exitDiff();
+        void actions.exitDiff();
       }
     };
     window.addEventListener("keydown", onDiffKey);
@@ -202,7 +218,7 @@ export const Chrome = () => {
       if (e.shiftKey) return; // ⌘⇧↵ is Approve, handled below
       if (get().queue.length === 0 && !get().pendingTarget) return;
       e.preventDefault();
-      void sendAll();
+      void actions.sendAll();
     };
     window.addEventListener("keydown", onSendKey);
 
@@ -212,73 +228,23 @@ export const Chrome = () => {
     // own guard rather than duplicating the unsent-work rule here.
     const onPanelKey = (e: KeyboardEvent): void => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      if (e.key === "1") {
+      if (panelDigits && e.key === "1") {
         e.preventDefault();
         setSidebarTab("chat");
-      } else if (e.key === "2") {
+      } else if (panelDigits && e.key === "2") {
         e.preventDefault();
         setSidebarTab("sessions");
+        void actions.loadSessions();
       } else if (!e.shiftKey && e.key === ".") {
         e.preventDefault();
-        toggleTargets();
+        actions.toggleTargets();
       } else if (e.key === "Enter" && e.shiftKey && !e.isComposing) {
         e.preventDefault();
-        void approveReview();
+        void actions.approveReview();
       }
     };
     window.addEventListener("keydown", onPanelKey);
 
-    const source = new EventSource("/__lucid/events");
-    source.onmessage = (e) => {
-      try {
-        onLogEvent(JSON.parse(e.data) as LogEvent);
-      } catch {
-        /* a frame we cannot parse is not worth tearing the stream down for */
-      }
-    };
-    source.addEventListener("listeners", (e) => {
-      try {
-        const d = JSON.parse((e as MessageEvent).data) as { agents: number };
-        set({ agentsListening: d.agents });
-      } catch {
-        /* ignore */
-      }
-    });
-    source.addEventListener("warning", (e) => {
-      try {
-        const w = JSON.parse((e as MessageEvent).data) as { code: string; message: string };
-        pushWarning(w.code, w.message);
-      } catch {
-        /* ignore */
-      }
-    });
-    source.addEventListener("context", (e) => {
-      try {
-        set({ contextUsage: JSON.parse((e as MessageEvent).data) as ContextUsage });
-      } catch {
-        /* ignore */
-      }
-    });
-    // EventSource retries on its own, so a drop is a state to show, not a
-    // warning to accumulate: warning per failed attempt spammed the panel and
-    // told the human to reload, which was never true.
-    // Re-fetch on every (re)open: synthetic presence frames (listeners,
-    // context) are broadcast only to connected clients and never replayed, so
-    // anything reported while the stream was down would otherwise stay stale
-    // until the next report. bootstrap() is seq-guarded, so the extra fetch at
-    // first open is harmless.
-    source.onopen = () => {
-      set({ live: true });
-      void bootstrap();
-      // A live stream means the server is answering again, which is the only
-      // thing an undelivered message was waiting on. Fires on the first open
-      // too, so a message stranded by a closed tab leaves on the next load
-      // without the human having to notice it.
-      void flushOutbox();
-    };
-    source.onerror = () => set({ live: false });
-
-    void bootstrap();
     return () => {
       window.removeEventListener("message", onMessage);
       window.removeEventListener("lucid:focus-annotation", onFocusAnnotation);
@@ -287,9 +253,138 @@ export const Chrome = () => {
       window.removeEventListener("keydown", onDiffKey);
       window.removeEventListener("keydown", onSendKey);
       window.removeEventListener("keydown", onPanelKey);
-      source.close();
     };
-  }, []);
+  }, [session, panelDigits, active]);
+};
+
+/**
+ * The artifact region: the surface itself plus everything that overlays it -
+ * the version banners and the question drawer. Its own component because it
+ * must read the session store (the drawer's raised state drives the parallax),
+ * and SessionView is the thing that PROVIDES that store.
+ */
+/**
+ * Cancel every staged pick in one gesture: the composer's collected spots and
+ * all answer pins across questions. Chrome furniture on the SURFACE corner,
+ * because that is where the marks it cancels are lit - by the time spots are
+ * scattered across a draft and two answers, per-chip × is bookkeeping.
+ */
+const CancelPicksButton = () => {
+  const { cancelAllPicks } = useActions();
+  const composer = useSession((s) =>
+    s.pendingTargets.length > 0 ? s.pendingTargets.length : s.pendingTarget ? 1 : 0,
+  );
+  const pins = useSession((s) =>
+    s.questions
+      .filter((q) => !q.answered)
+      .reduce(
+        (n, q) => n + (s.answerAnchorLists[q.id]?.length ?? (s.answerAnchors[q.id] ? 1 : 0)),
+        0,
+      ),
+  );
+  const count = composer + pins;
+  if (count === 0) return null;
+  return (
+    <button
+      type="button"
+      data-test="cancel-picks"
+      onClick={cancelAllPicks}
+      title="Cancel every collected spot - the annotation draft and all answer pins"
+      className="absolute right-3 top-3 z-30 flex cursor-pointer items-center gap-1 rounded-[5px] border border-ink-500 bg-ink-850/95 px-2.5 py-1 text-[11px] text-fg-muted shadow-[0_2px_10px_rgba(0,0,0,0.35)] hover:border-rust-300/60 hover:text-fg"
+    >
+      × Cancel picks ({count})
+    </button>
+  );
+};
+
+const SurfaceRegion = ({
+  session,
+  attachSurface,
+}: {
+  readonly session: SessionHandle;
+  readonly attachSurface: (el: HTMLIFrameElement | null) => void;
+}) => {
+  const { raised } = useQuestionDrawer();
+  return (
+    <div className="relative min-h-0 flex-1 overflow-hidden">
+      <NewerVersionBanner />
+      <DiffBar />
+      <VersionViewBanner />
+      <SurfaceUpdating />
+      <CancelPicksButton />
+      {/* The surface parallaxes UP while the question drawer is raised - the
+          projects drawer's motion language, rotated. The artifact stays live
+          and targetable the whole time; the drawer covers only its own band. */}
+      <div
+        className={`h-full w-full transition-transform duration-200 ease-out ${
+          raised ? "-translate-y-3" : "translate-y-0"
+        }`}
+      >
+        <iframe
+          ref={attachSurface}
+          title="artifact surface"
+          src={`${session.config.base}/`}
+          // No allow-same-origin: the artifact runs on an opaque origin so
+          // its scripts cannot reach the control routes (D-020).
+          sandbox="allow-scripts"
+          // `ready` is a one-shot message and the listener is installed in
+          // an effect, i.e. after this element exists. Load fires only once
+          // the overlay's module has run, so treating it as ready too means
+          // a missed `ready` cannot leave the surface permanently unpainted.
+          onLoad={() => {
+            session.surface.markOverlayReady();
+            session.surface.pushHighlights();
+          }}
+          // bg-surface, not white: this is the paper the artifact renders
+          // on, and it is the one place the chrome admits what is inside it
+          // is a document rather than more app. It only shows before the
+          // artifact paints (or through a transparent one), so it must not
+          // be a different white than the paper the artifact assumes.
+          className="h-full w-full border-0 bg-surface"
+        />
+      </div>
+      {/* Over the SURFACE, never the review panel: a pending question is about
+          the artifact, and the artifact must stay visible while it is
+          answered (D11). */}
+      <QuestionDrawer />
+    </div>
+  );
+};
+
+/**
+ * One session's whole screen: review panel, divider, header, artifact
+ * surface. The single-session viewer IS this (Chrome below); the shell
+ * renders it under a tab bar with `shell` set - which hides the panel's
+ * Review/Sessions tab strip (the tab bar and ⌘K subsume the Sessions panel)
+ * and cedes ⌘1-9 to the session tabs.
+ */
+export const SessionView = ({
+  session,
+  shell = false,
+  active = true,
+}: {
+  readonly session: SessionHandle;
+  readonly shell?: boolean;
+  /** False for a hidden-but-mounted background tab: its DOM and component
+   *  state persist, but it takes no window listeners and answers no keys. */
+  readonly active?: boolean;
+}) => {
+  const chromeWidth = useShell((s) => s.chromeWidth);
+  const sidebarOpen = useShell((s) => s.sidebarOpen);
+  const sidebarTab = useShell((s) => s.sidebarTab);
+  const dragging = useRef(false);
+
+  useSessionWiring(session, !shell, active);
+
+  // A callback ref, not an effect: attach must be synchronous with the
+  // element entering the DOM, so a fast iframe `load` can never fire into a
+  // null attachment (readiness would bind to nothing and the recovery path -
+  // onLoad-as-ready - would be lost). Stable per session so React does not
+  // detach/re-attach on every render.
+  const attachSurface = useCallback(
+    (el: HTMLIFrameElement | null) => session.surface.attach(el),
+    [session],
+  );
 
   // Divider drag. Pointer capture routes move/up to the divider even over the
   // iframe, which would otherwise swallow them.
@@ -297,18 +392,19 @@ export const Chrome = () => {
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     dragging.current = true;
     const startX = e.clientX;
-    const startW = get().chromeWidth;
+    const startW = useShell.getState().chromeWidth;
     const onMove = (ev: PointerEvent): void => {
       if (!dragging.current) return;
+      // Right-side panel: pointer moving LEFT grows the panel.
       const w = Math.max(
         CHROME_MIN_WIDTH,
-        Math.min(window.innerWidth - 320, startW + (ev.clientX - startX)),
+        Math.min(window.innerWidth - 320, startW + (startX - ev.clientX)),
       );
-      set({ chromeWidth: w });
+      setChromeWidth(w);
     };
     const onUp = (): void => {
       dragging.current = false;
-      persistWidth(get().chromeWidth);
+      persistWidth(useShell.getState().chromeWidth);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
@@ -317,136 +413,139 @@ export const Chrome = () => {
   };
 
   return (
-    // The sidebar owns its width through --sidebar-width, so pointing that at
-    // the dragged width keeps the resize and the collapse as one mechanism
-    // instead of two fighting over the same edge.
-    <SidebarProvider
-      open={sidebarOpen}
-      onOpenChange={setSidebarOpen}
-      style={{ "--sidebar-width": `${chromeWidth}px` } as React.CSSProperties}
-      className="h-screen"
-    >
-      {/* No border of its own: the divider draws the single boundary line, and
-          two of them stacked read as one thick band. The variant prefix has to
-          match the component's own `group-data-[side=left]:border-r` - a bare
-          `border-r-0` is a different tailwind-merge group, so both would
-          survive and the variant would win on specificity. */}
-      <Sidebar collapsible="offcanvas" className="group-data-[side=left]:border-r-0">
-        {/* One Tabs root spanning header and content: the triggers live in the
-            header, their panels fill the body. */}
-        <Tabs
-          value={sidebarTab}
-          onValueChange={(v) => setSidebarTab(v as "chat" | "sessions")}
-          className="flex min-h-0 flex-1 flex-col gap-0"
-        >
-          {/* No border and no fill of its own: the strip sits on the panel's
-              own ground so it reads as a control in the panel, not a titlebar
-              above it. The segmented track is the only thing drawn here. */}
-          <SidebarHeader className="p-2 pb-1">
-            <TabsList className="w-full">
-              <TabsTrigger value="chat" data-test="tab-chat">
-                Review
-                <Kbd className="ml-1">⌘1</Kbd>
-              </TabsTrigger>
-              <TabsTrigger value="sessions" data-test="tab-sessions">
-                Sessions
-                <Kbd className="ml-1">⌘2</Kbd>
-              </TabsTrigger>
-            </TabsList>
-          </SidebarHeader>
-          {/* keepMounted is load-bearing: Base UI unmounts a hidden panel by
-              default, which would throw away the composer draft, the unsent
-              queue and the scroll position every time the human glanced at the
-              sessions list. */}
-          <TabsContent
-            value="chat"
-            keepMounted
-            className="flex min-h-0 flex-1 flex-col data-[hidden]:hidden"
-          >
-            <LucidRuntimeProvider>
-              <Thread />
-            </LucidRuntimeProvider>
-          </TabsContent>
-          <TabsContent value="sessions" className="flex min-h-0 flex-1 flex-col">
-            <SidebarContent>
-              <Sessions />
-            </SidebarContent>
-          </TabsContent>
-        </Tabs>
-      </Sidebar>
-      {/* The window-splitter pattern: a separator carries the role, and arrow
-          keys resize it for anything that cannot drag. Double-click asks the
-          overlay to measure, because the parent cannot - the surface is on an
-          opaque origin, so contentDocument is null from here. Hidden while
-          collapsed: there is no panel edge to drag. */}
-      {sidebarOpen ? (
-        <hr
-          aria-orientation="vertical"
-          aria-label="Resize the review panel"
-          aria-valuenow={chromeWidth}
-          aria-valuemin={CHROME_MIN_WIDTH}
-          tabIndex={0}
-          onPointerDown={onPointerDown}
-          onDoubleClick={() => toOverlay({ source: "lucid-chrome", type: "measure-content" })}
-          onKeyDown={(e) => {
-            const step = e.shiftKey ? 64 : 16;
-            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-            e.preventDefault();
-            const next = Math.max(
-              CHROME_MIN_WIDTH,
-              Math.min(
-                window.innerWidth - 320,
-                chromeWidth + (e.key === "ArrowRight" ? step : -step),
-              ),
-            );
-            set({ chromeWidth: next });
-            persistWidth(next);
-          }}
-          title="Drag to resize · double-click to fit the document"
-          // The boundary is the 1px LEFT BORDER, not the element: the element
-          // stays DIVIDER_WIDTH wide as a grabbable target, filled with the
-          // artifact side's own ground so it disappears into that edge. Hover
-          // thickens the line inside that fixed footprint (border-box), so the
-          // artifact never shifts under the pointer.
-          //
-          // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so
-          // without it the divider collapses to nothing - invisible and undraggable.
-          style={{ width: DIVIDER_WIDTH }}
-          className="m-0 h-full shrink-0 cursor-col-resize border-0 border-l-[1px] border-l-ink-600 bg-ink-850 hover:border-l-[2px] hover:border-l-accent-bright focus-visible:border-l-[2px] focus-visible:border-l-accent-bright"
-        />
-      ) : null}
-      <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
-        <Header />
-        <div className="relative min-h-0 flex-1">
-          <NewerVersionBanner />
-          <DiffBar />
-          <VersionViewBanner />
-          <SurfaceUpdating />
-          <iframe
-            ref={iframeRef}
-            title="artifact surface"
-            src="/"
-            // No allow-same-origin: the artifact runs on an opaque origin so its
-            // scripts cannot reach the control routes (D-020).
-            sandbox="allow-scripts"
-            // `ready` is a one-shot message and the listener is installed in an
-            // effect, i.e. after this element exists. Load fires only once the
-            // overlay's module has run, so treating it as ready too means a
-            // missed `ready` cannot leave the surface permanently unpainted.
-            onLoad={() => {
-              markOverlayReady();
-              pushHighlights();
+    <SessionProvider session={session}>
+      {/* The sidebar owns its width through --sidebar-width, so pointing that
+          at the dragged width keeps the resize and the collapse as one
+          mechanism instead of two fighting over the same edge. */}
+      <SidebarProvider
+        open={sidebarOpen}
+        onOpenChange={setSidebarOpen}
+        hotkey={active}
+        style={{ "--sidebar-width": `${chromeWidth}px` } as React.CSSProperties}
+        className="h-full min-h-0"
+      >
+        <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
+          <Header />
+          <SurfaceRegion session={session} attachSurface={attachSurface} />
+        </SidebarInset>
+        {/* The window-splitter pattern: a separator carries the role, and arrow
+            keys resize it for anything that cannot drag. Double-click asks the
+            overlay to measure, because the parent cannot - the surface is on an
+            opaque origin, so contentDocument is null from here. Hidden while
+            collapsed: there is no panel edge to drag. */}
+        {sidebarOpen ? (
+          <hr
+            aria-orientation="vertical"
+            aria-label="Resize the review panel"
+            aria-valuenow={chromeWidth}
+            aria-valuemin={CHROME_MIN_WIDTH}
+            tabIndex={0}
+            onPointerDown={onPointerDown}
+            onDoubleClick={() =>
+              session.surface.toOverlay({ source: "lucid-chrome", type: "measure-content" })
+            }
+            onKeyDown={(e) => {
+              const step = e.shiftKey ? 64 : 16;
+              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+              e.preventDefault();
+              // The panel sits on the RIGHT: moving the divider left grows it.
+              const next = Math.max(
+                CHROME_MIN_WIDTH,
+                Math.min(
+                  window.innerWidth - 320,
+                  chromeWidth + (e.key === "ArrowLeft" ? step : -step),
+                ),
+              );
+              setChromeWidth(next);
+              persistWidth(next);
             }}
-            // bg-surface, not white: this is the paper the artifact renders on,
-            // and it is the one place the chrome admits what is inside it is a
-            // document rather than more app. It only shows before the artifact
-            // paints (or through a transparent one), so it must not be a
-            // different white than the paper the artifact assumes.
-            className="h-full w-full border-0 bg-surface"
+            title="Drag to resize · double-click to fit the document"
+            // The boundary is the 1px RIGHT BORDER (the panel's edge), same
+            // border-box trick as before the flip: fixed footprint, line
+            // thickens on hover without shifting the artifact.
+            //
+            // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so
+            // without it the divider collapses to nothing - invisible and undraggable.
+            style={{ width: DIVIDER_WIDTH }}
+            className="m-0 h-full shrink-0 cursor-col-resize border-0 border-r-[1px] border-r-ink-600 bg-ink-850 hover:border-r-[2px] hover:border-r-accent-bright focus-visible:border-r-[2px] focus-visible:border-r-accent-bright"
           />
-        </div>
-      </SidebarInset>
-      <Lightbox />
-    </SidebarProvider>
+        ) : null}
+        {/* The review panel, RIGHT (artifact-first D9): the surface is the
+            primary concern in the center, the inference source at the edge.
+            No border of its own: the divider draws the single boundary line. */}
+        <Sidebar
+          side="right"
+          collapsible="offcanvas"
+          className="group-data-[side=right]:border-l-0"
+        >
+          {shell ? (
+            /* Under the shell the panel has one face: the review. The Sessions
+               list is subsumed by the tab bar + the hub picker, so the tab
+               strip would be a control with nothing to switch. */
+            <div className="flex min-h-0 flex-1 flex-col pt-1">
+              <LucidRuntimeProvider>
+                <Thread />
+              </LucidRuntimeProvider>
+            </div>
+          ) : (
+            <Tabs
+              value={sidebarTab}
+              onValueChange={(v) => {
+                setSidebarTab(v as "chat" | "sessions");
+                // Fetch on first look rather than at boot: a review that never
+                // opens the tab should never pay for a project-wide directory
+                // scan. Refetch on every visit after that, because liveness is
+                // exactly the thing that goes stale.
+                if (v === "sessions") void session.actions.loadSessions();
+              }}
+              className="flex min-h-0 flex-1 flex-col gap-0"
+            >
+              {/* No border and no fill of its own: the strip sits on the panel's
+                own ground so it reads as a control in the panel, not a titlebar
+                above it. The segmented track is the only thing drawn here. */}
+              <SidebarHeader className="p-2 pb-1">
+                <TabsList className="w-full">
+                  <TabsTrigger value="chat" data-test="tab-chat">
+                    Review
+                    <Kbd className="ml-1">⌘1</Kbd>
+                  </TabsTrigger>
+                  <TabsTrigger value="sessions" data-test="tab-sessions">
+                    Sessions
+                    <Kbd className="ml-1">⌘2</Kbd>
+                  </TabsTrigger>
+                </TabsList>
+              </SidebarHeader>
+              {/* keepMounted is load-bearing: Base UI unmounts a hidden panel by
+                default, which would throw away the composer draft, the unsent
+                queue and the scroll position every time the human glanced at the
+                sessions list. */}
+              <TabsContent
+                value="chat"
+                keepMounted
+                className="flex min-h-0 flex-1 flex-col data-[hidden]:hidden"
+              >
+                <LucidRuntimeProvider>
+                  <Thread />
+                </LucidRuntimeProvider>
+              </TabsContent>
+              <TabsContent value="sessions" className="flex min-h-0 flex-1 flex-col">
+                <SidebarContent>
+                  <Sessions />
+                </SidebarContent>
+              </TabsContent>
+            </Tabs>
+          )}
+        </Sidebar>
+        <Lightbox />
+      </SidebarProvider>
+    </SessionProvider>
   );
 };
+
+/** The single-session viewer page (a dedicated per-session server's
+ *  `/__lucid/viewer`): one SessionView filling the window. */
+export const Chrome = ({ session }: { readonly session: SessionHandle }) => (
+  <div className="h-screen">
+    <SessionView session={session} />
+  </div>
+);

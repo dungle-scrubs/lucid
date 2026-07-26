@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { ArtifactError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
 import { appendEvent, appendEventsIf, readEvents } from "./log.ts";
-import type { LogEvent } from "./events.ts";
+import type { AttendantStamp, LogEvent } from "./events.ts";
 import { foldLog, type FoldedState } from "./fold.ts";
 import type { SessionPaths } from "./paths.ts";
 import { snapshotPath, snapshotRelPath } from "./paths.ts";
@@ -105,7 +105,10 @@ export interface OpenResult {
  *  - resume on SUSPENDED: reconcile file vs current.html, session_resumed (D-061)
  *  - idempotent open on ACTIVE: reconcile only
  */
-export const openSession = async (paths: SessionPaths): Promise<OpenResult> => {
+export const openSession = async (
+  paths: SessionPaths,
+  opts?: { readonly attendant?: AttendantStamp },
+): Promise<OpenResult> => {
   ensureSessionDirs(paths);
   const warnings: Warning[] = [];
   const before = foldLog((await readEvents(paths.logPath)).events);
@@ -130,6 +133,7 @@ export const openSession = async (paths: SessionPaths): Promise<OpenResult> => {
       version: 1,
       hash: commit.hash,
       path: commit.path,
+      ...(opts?.attendant ? { attendant: opts.attendant } : {}),
     });
     startedSegment = true;
   } else {
@@ -145,6 +149,11 @@ export const openSession = async (paths: SessionPaths): Promise<OpenResult> => {
           version: nextVersion,
           hash: commit.hash,
           path: commit.path,
+          // The opener made this revision happen (their edit is what differs
+          // from current.html), so the reconciliation version keeps their
+          // provenance. Watcher-driven commits stay unstamped until attend
+          // mode knows whose turn produced them.
+          ...(opts?.attendant ? { attendant: opts.attendant } : {}),
         });
       } else {
         warnings.push({
@@ -155,7 +164,11 @@ export const openSession = async (paths: SessionPaths): Promise<OpenResult> => {
       }
     }
     if (before.status === "suspended") {
-      await appendEvent(paths.logPath, { t: "session_resumed", segment: before.segment });
+      await appendEvent(paths.logPath, {
+        t: "session_resumed",
+        segment: before.segment,
+        ...(opts?.attendant ? { attendant: opts.attendant } : {}),
+      });
     }
   }
 

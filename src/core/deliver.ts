@@ -33,7 +33,7 @@ export const deliver = async (paths: SessionPaths, input: EventInput): Promise<D
   const live = await discoverLiveServer(paths);
   if (live) {
     const { t: _t, ...body } = input;
-    await loopbackFetch(live.port, route, {
+    await loopbackFetch(live.port, `${live.base ?? ""}${route}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

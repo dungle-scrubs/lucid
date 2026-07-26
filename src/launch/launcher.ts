@@ -1,13 +1,15 @@
 import { closeSync, openSync } from "node:fs";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { Anchor } from "../anchors/anchor.ts";
 import { readLastAttendant, writeAttendantSidecar } from "../core/attendant.ts";
-import { renderCursor } from "../core/cursor.ts";
+import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver } from "../core/deliver.ts";
+import { shellArg } from "../core/escape.ts";
 import { foldLog, type ForkRecord } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
 import { sessionPaths, type SessionPaths } from "../core/paths.ts";
-import type { WaitPayload } from "../core/payload.ts";
+import type { PayloadImage, WaitPayload } from "../core/payload.ts";
 import { openSession } from "../core/session.ts";
 import { runWait } from "../core/wait.ts";
 import { openBrowser, spawnServer, waitForServer } from "../cli/self.ts";
@@ -111,23 +113,63 @@ const createPrompt = (seedPath: string, artifact: string): string =>
     `Read the fork seed at ${seedPath}.`,
     `Author the artifact it describes as a single self-contained HTML file written to exactly ${artifact}.`,
     "Then open it for review by running:",
-    `  lucid open ${artifact}`,
+    `  lucid open ${shellArg(artifact)}`,
     `Write only ${artifact}; do not modify other files.`,
   ].join("\n");
 
 /** The revise instruction for a feedback batch, or null when the batch carries
- *  nothing to act on (e.g. only an approval) - so the launcher never drives an
- *  empty resume turn. Mirrors the signals `runWait` counts as feedback. */
-const revisePrompt = (payload: WaitPayload, artifact: string): string | null => {
+ *  nothing to act on (e.g. only an approval) - so no caller ever drives an
+ *  empty resume turn. Mirrors the signals `runWait` counts as feedback. Shared
+ *  with the hub's attend engine: one wording for every headless revise Lucid
+ *  drives, launcher or hub. */
+export const revisePrompt = (payload: WaitPayload, artifact: string): string | null => {
   const lines: string[] = [];
+  // Attachments ride as absolute paths the agent can read. A screenshot with
+  // no words is a whole piece of feedback; dropping it turned an image-only
+  // item into an empty bullet, or into "nothing to act on".
+  const withImages = (text: string, images?: readonly PayloadImage[]): string =>
+    images && images.length > 0
+      ? `${text}${text ? " " : ""}(images: ${images.map((i) => i.path).join(", ")})`
+      : text;
+  // One clipped location per anchor. A multi-target annotation lists every
+  // spot its note covers; dropping the tail would apply the note to only the
+  // first of the places the human pointed at.
+  const clip = (t: Anchor): string =>
+    (t.kind === "range" ? t.quote.exact : t.snippet).replace(/\s+/g, " ").trim().slice(0, 100);
   for (const a of payload.annotations) {
-    const where = a.target.kind === "range" ? a.target.quote.exact : a.target.snippet;
-    lines.push(`- ${a.note} (at: ${where.replace(/\s+/g, " ").trim().slice(0, 100)})`);
+    const where = (a.targets ?? [a.target]).map(clip).join("; ");
+    lines.push(`- ${withImages(a.note, a.images)} (at: ${where})`);
   }
-  for (const m of payload.messages) if (m.role === "human") lines.push(`- ${m.text}`);
+  for (const m of payload.messages) {
+    if (m.role !== "human") continue;
+    const text = withImages(m.text, m.images);
+    if (text) lines.push(`- ${text}`);
+  }
   for (const r of payload.reverts ?? []) lines.push(`- revert to v${r.targetVersion}: ${r.why}`);
-  for (const q of payload.questions ?? [])
-    if (q.answered && q.answer) lines.push(`- answer to "${q.text}": ${q.answer}`);
+  for (const q of payload.questions ?? []) {
+    if (!q.answered || q.skipped) continue;
+    // A re-ask is an instruction, not an answer: the human did not understand.
+    // Reading it as an answer delivered their confusion note AS the decision,
+    // and a bare one (no note) made the whole turn look non-actionable.
+    if (q.unclear) {
+      const note = q.answer ? ` They said: "${q.answer}".` : "";
+      lines.push(
+        `- the question "${q.text}" was UNCLEAR to the human.${note} Ask it again with lucid ask - the same question, shorter and plainer. Do not treat this as an answer.`,
+      );
+      continue;
+    }
+    // Chosen options ARE the answer when the human picked rather than typed;
+    // reading only the free text silently dropped the whole reply.
+    const answer = [...(q.answerOptions ?? []), ...(q.answer ? [q.answer] : [])].join("; ");
+    // Pinned regions are part of the answer too - a pin says WHERE the words
+    // apply, and a pin alone is a whole answer (pointing instead of typing).
+    const pins = q.answerAnchors ?? (q.answerAnchor ? [q.answerAnchor] : []);
+    const pinned = pins.length > 0 ? `(pinned: ${pins.map(clip).join("; ")})` : "";
+    const said = withImages(answer, q.answerImages);
+    if (said || pinned) {
+      lines.push(`- answer to "${q.text}": ${[said, pinned].filter(Boolean).join(" ")}`);
+    }
+  }
   if (lines.length === 0) return null;
   return [
     `Review feedback arrived on ${artifact}. Apply it and save the file (the viewer live-reloads):`,
@@ -138,13 +180,39 @@ const revisePrompt = (payload: WaitPayload, artifact: string): string | null => 
 
 /** Run a recipe argv to completion. Returns the exit code; a spawn that cannot
  *  even start (missing executable -> synchronous throw) returns 127 rather than
- *  throwing, so one bad recipe never crashes the launcher. */
-const runSpawn = async (argv: string[], cwd: string, logFile: string): Promise<number> => {
+ *  throwing, so one bad recipe never crashes the caller. Shared with the hub's
+ *  attend engine so both spawners carry the same identity + logging discipline. */
+export const runSpawn = async (
+  argv: string[],
+  cwd: string,
+  logFile: string,
+  identity?: { harness: string; sessionId: string; model?: string; effort?: string },
+): Promise<number> => {
+  // The child is its OWN harness session: inheriting the launcher's
+  // LUCID_SESSION_ID would stamp the child's events as the parent
+  // conversation (D18 misattribution). Model/effort follow the same rule -
+  // the child stamps what IT runs (the applied selection), never what the
+  // spawning process happened to inherit.
+  const env = identity
+    ? {
+        ...process.env,
+        LUCID_HARNESS: identity.harness,
+        LUCID_SESSION_ID: identity.sessionId,
+        LUCID_MODEL: identity.model,
+        LUCID_EFFORT: identity.effort,
+      }
+    : {
+        ...process.env,
+        LUCID_HARNESS: undefined,
+        LUCID_SESSION_ID: undefined,
+        LUCID_MODEL: undefined,
+        LUCID_EFFORT: undefined,
+      };
   const fd = openSync(logFile, "a");
   try {
     const proc = Bun.spawn(argv, {
       cwd,
-      env: process.env,
+      env,
       stdin: "ignore",
       stdout: fd,
       stderr: fd,
@@ -230,7 +298,10 @@ const createChild = async (
   );
   const short = safeForkId(fork.id).slice(0, 8);
   log(`fork ${short}: spawning "${resolved.name}" -> ${childArtifact}`);
-  const code = await runSpawn(argv, parent.artifactDir, join(forkDir, "create.out.log"));
+  const code = await runSpawn(argv, parent.artifactDir, join(forkDir, "create.out.log"), {
+    harness: resolved.name,
+    sessionId: childSessionId,
+  });
   if (code !== 0) log(`fork ${short}: create turn exited ${code} (see ${forkDir}/create.out.log)`);
 
   const open = opts.openChild ?? ensureChildOpen;
@@ -241,7 +312,7 @@ const createChild = async (
   log(`fork ${short}: opened ${childPaths.name}`);
   // Shape-C liveness runs for the loop's lifetime; a failure here never aborts
   // the parent watch, but it must be observable rather than silently swallowed.
-  void attendChild(childPaths, childSessionId, resolved.recipe, opts).catch((err) =>
+  void attendChild(childPaths, childSessionId, resolved.recipe, opts, resolved.name).catch((err) =>
     log(`${childPaths.name}: attend loop errored: ${(err as Error).message}`),
   );
   return { forkId: fork.id, childArtifact, childSessionId, harness, status: "created" };
@@ -291,6 +362,7 @@ export const attendChild = async (
   sessionId: string,
   recipe: SpawnRecipe,
   opts: LaunchOptions,
+  harnessName = "agent",
 ): Promise<void> => {
   const log = opts.log ?? ((m) => process.stdout.write(`${m}\n`));
   if (!recipe.resume) {
@@ -345,9 +417,17 @@ export const attendChild = async (
       nextCursor: payload.nextCursor,
       at: new Date().toISOString(),
     });
-    await deliver(child, { t: "agent_ack", id: crypto.randomUUID(), intent: "revise" }).catch(
-      () => {},
-    );
+    // What this turn takes delivery of (D20) - the batch just read, not
+    // whatever has landed by the time the ack appends.
+    const covers = parseCursor(payload.nextCursor);
+    await deliver(child, {
+      t: "agent_ack",
+      id: crypto.randomUUID(),
+      intent: "revise",
+      ...(covers !== undefined ? { covers } : {}),
+      // The CHILD session's identity (D18): the launcher acts on its behalf.
+      attendant: { harness: harnessName, sessionId, cwd: child.artifactDir },
+    }).catch(() => {});
     const argv = buildArgv(recipe.resume, {
       id: sessionId,
       artifact: child.artifactPath,
@@ -355,7 +435,10 @@ export const attendChild = async (
       prompt,
     });
     log(`${child.name}: applying feedback via resume`);
-    const code = await runSpawn(argv, child.artifactDir, join(child.sessionDir, "revise.out.log"));
+    const code = await runSpawn(argv, child.artifactDir, join(child.sessionDir, "revise.out.log"), {
+      harness: harnessName,
+      sessionId,
+    });
     // Consume the batch (advance the cursor) only on a clean turn, so a failed
     // resume is retried rather than silently dropping the feedback. Bounded, so a
     // persistently broken recipe can't spin forever.

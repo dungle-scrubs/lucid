@@ -242,6 +242,191 @@ describe("buildWaitPayload resolution", () => {
     expect(a?.resolved).toBe(false); // orphaned, not re-pointed at v2
     expect(payload.warnings?.some((w) => w.code === "SNAPSHOT_MISSING")).toBe(true);
   });
+
+  test("a multi-target annotation stays resolved while ANY spot survives", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    const gone = {
+      kind: "element" as const,
+      fingerprint: 'li#zzzz·"gone"',
+      domPath: "article:nth-child(1)>ol:nth-child(1)>li:nth-child(9)",
+      snippet: "<li>gone</li>",
+    };
+    const alive = {
+      kind: "element" as const,
+      fingerprint: 'li#0000·"two"',
+      domPath: "article:nth-child(1)>ol:nth-child(1)>li:nth-child(2)",
+      snippet: "<li>two</li>",
+    };
+    await appendEvents(paths.logPath, [
+      {
+        t: "annotation",
+        id: "a-multi",
+        version: 1,
+        target: gone,
+        targets: [gone, alive],
+        note: "these two",
+      },
+      {
+        t: "annotation",
+        id: "a-all-gone",
+        version: 1,
+        target: gone,
+        targets: [gone, gone],
+        note: "nothing left",
+      },
+    ]);
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const payload = await buildWaitPayload({
+      session: paths.artifactPath,
+      state,
+      status: "feedback",
+      currentHtml: await readFile(paths.currentHtml, "utf8"),
+      snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
+      annotations: state.annotations,
+      messages: state.messages,
+      nextSeq: state.highSeq,
+    });
+    const multi = payload.annotations.find((a) => a.id === "a-multi");
+    // The first spot no longer attaches, but the second does: the card stays
+    // live and the wire carries the full list beside the legacy first.
+    expect(multi?.resolved).toBe(true);
+    expect(multi?.targets).toHaveLength(2);
+    expect(multi?.target).toEqual(gone);
+    const allGone = payload.annotations.find((a) => a.id === "a-all-gone");
+    expect(allGone?.resolved).toBe(false);
+  });
+});
+
+describe("per-item delivery state (D20)", () => {
+  const payloadOf = async (paths: ReturnType<typeof sessionPaths>) => {
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    return buildWaitPayload({
+      session: paths.artifactPath,
+      state,
+      status: "feedback",
+      currentHtml: await readFile(paths.currentHtml, "utf8"),
+      snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
+      annotations: state.annotations,
+      messages: state.messages,
+      nextSeq: state.highSeq,
+    });
+  };
+
+  test("recorded -> delivered -> answered, per item, from the log alone", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvents(paths.logPath, [
+      { t: "prompt", id: "m-1", refs: [], text: "first" },
+      {
+        t: "annotation",
+        id: "a-1",
+        version: 1,
+        target: {
+          kind: "element",
+          fingerprint: 'li#0000·"two"',
+          domPath: "article:nth-child(1)>ol:nth-child(1)>li:nth-child(2)",
+          snippet: "<li>two</li>",
+        },
+        note: "tighten this",
+      },
+    ]);
+
+    // Nothing has taken it: both flags absent (never `false` - the wire stays
+    // additive).
+    const recorded = await payloadOf(paths);
+    expect(recorded.messages[0]?.delivered).toBeUndefined();
+    expect(recorded.messages[0]?.answered).toBeUndefined();
+    expect(recorded.annotations[0]?.delivered).toBeUndefined();
+
+    // An ack delivers the range it CLAIMS - the cursor its taker had read.
+    const beforeAck = foldLog((await readEvents(paths.logPath)).events);
+    await appendEvent(paths.logPath, {
+      t: "agent_ack",
+      id: "ack-1",
+      covers: beforeAck.highSeq,
+    });
+    const delivered = await payloadOf(paths);
+    expect(delivered.messages[0]?.delivered).toBe(true);
+    expect(delivered.annotations[0]?.delivered).toBe(true);
+    expect(delivered.messages[0]?.answered).toBeUndefined();
+
+    // Agent output answers what came BEFORE it, and nothing after.
+    await appendEvent(paths.logPath, { t: "agent_reply", id: "r-1", text: "on it" });
+    await appendEvent(paths.logPath, { t: "prompt", id: "m-2", refs: [], text: "second" });
+    const answered = await payloadOf(paths);
+    expect(answered.messages[0]?.answered).toBe(true);
+    expect(answered.annotations[0]?.answered).toBe(true);
+    const later = answered.messages.find((m) => m.text === "second");
+    expect(later?.answered).toBeUndefined();
+    expect(later?.delivered).toBeUndefined();
+    // The agent's own turn is never delivered or answered to anyone.
+    const reply = answered.messages.find((m) => m.role === "agent");
+    expect(reply?.delivered).toBeUndefined();
+    expect(reply?.answered).toBeUndefined();
+  });
+
+  test("the fold's delivery cursors only advance, unlike the working window", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvent(paths.logPath, { t: "prompt", id: "m-1", refs: [], text: "hi" });
+    const read = foldLog((await readEvents(paths.logPath)).events);
+    await appendEvent(paths.logPath, { t: "agent_ack", id: "ack-1", covers: read.highSeq });
+    const acked = foldLog((await readEvents(paths.logPath)).events);
+    expect(acked.deliveredThroughSeq).toBe(read.highSeq);
+    expect(acked.lastAgentOutputSeq).toBe(0);
+    expect(acked.agentWorking).not.toBeNull();
+
+    await appendEvent(paths.logPath, { t: "agent_reply", id: "r-1", text: "done" });
+    const replied = foldLog((await readEvents(paths.logPath)).events);
+    // The output CLOSES the working window but does not clear the delivery
+    // cursor: the message stays delivered as well as answered.
+    expect(replied.agentWorking).toBeNull();
+    expect(replied.deliveredThroughSeq).toBe(acked.deliveredThroughSeq);
+    expect(replied.lastAgentOutputSeq).toBeGreaterThan(acked.deliveredThroughSeq);
+  });
+
+  test("an ack delivers what it read, not what landed while it was appending", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvent(paths.logPath, { t: "prompt", id: "m-1", refs: [], text: "read this" });
+    // The cursor the waiter is holding when its payload returns.
+    const read = foldLog((await readEvents(paths.logPath)).events);
+    // The human keeps typing while the agent's ack is in flight.
+    await appendEvent(paths.logPath, { t: "prompt", id: "m-2", refs: [], text: "and this" });
+    await appendEvent(paths.logPath, { t: "agent_ack", id: "ack-1", covers: read.highSeq });
+
+    const payload = await payloadOf(paths);
+    const first = payload.messages.find((m) => m.text === "read this");
+    const second = payload.messages.find((m) => m.text === "and this");
+    expect(first?.delivered).toBe(true);
+    expect(second?.delivered).toBeUndefined();
+
+    // Output now lands. It answers the batch that was taken - and says nothing
+    // about the message nobody has taken yet.
+    await appendEvent(paths.logPath, { t: "agent_reply", id: "r-1", text: "done" });
+    const after = await payloadOf(paths);
+    expect(after.messages.find((m) => m.text === "read this")?.answered).toBe(true);
+    expect(after.messages.find((m) => m.text === "and this")?.answered).toBeUndefined();
+  });
+
+  test("a presence-only re-ack (intent, progress) delivers nothing", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvent(paths.logPath, { t: "prompt", id: "m-1", refs: [], text: "look at this" });
+    // What `lucid intent` and `lucid progress` write: presence, no claim.
+    await appendEvent(paths.logPath, { t: "agent_ack", id: "ack-1", intent: "revise" });
+    await appendEvent(paths.logPath, {
+      t: "agent_ack",
+      id: "ack-2",
+      progress: { total: 3, done: 1 },
+    });
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.deliveredThroughSeq).toBe(0);
+    expect(state.agentWorking).not.toBeNull();
+    const payload = await payloadOf(paths);
+    expect(payload.messages[0]?.delivered).toBeUndefined();
+  });
 });
 
 describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {

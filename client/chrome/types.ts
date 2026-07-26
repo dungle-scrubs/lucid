@@ -15,7 +15,17 @@ export interface Config {
   readonly name: string;
   readonly port: number;
   readonly version: number;
+  /** URL prefix of this session's routes ("" on a dedicated server,
+   *  "/s/<id>" under the daemon). Older servers omit it; treat as "". */
+  readonly base?: string;
 }
+
+/**
+ * Where a piece of sent feedback got to (D20), strongest known state last:
+ * `recorded` (in the log, nothing has taken it yet) -> `delivered` (an agent
+ * acked the batch it was in) -> `answered` (agent output followed it).
+ */
+export type DeliveryState = "recorded" | "delivered" | "answered";
 
 /** An image on a message already in the log. The thumb and lightbox address it
  *  as `/__lucid/asset/<file>` via its `file` field. */
@@ -36,6 +46,9 @@ export interface PastedImage {
 export interface QueuedAnnotation {
   readonly id: string;
   readonly target: Anchor;
+  /** Every spot the note covers, in pick order; `target` is always the first.
+   *  A singleton for the ordinary single-click annotation. */
+  readonly targets: readonly Anchor[];
   readonly note: string;
   /** When the note was queued - its place in the record. */
   readonly at: string;
@@ -116,6 +129,13 @@ export type TimelineItem =
       readonly at: string;
       readonly index: number;
       readonly id: string;
+    }
+  | {
+      /** An ANSWERED question and its answer, as one item at the moment the
+       *  human settled it (D14). Unanswered questions are not in the record. */
+      readonly kind: "question";
+      readonly at: string;
+      readonly question: AgentQuestion;
     }
   | { readonly kind: "message"; readonly at: string; readonly message: ConversationMessage };
 

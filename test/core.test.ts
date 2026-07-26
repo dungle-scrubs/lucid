@@ -13,7 +13,7 @@ import { parseCursor, renderCursor } from "../src/core/cursor.ts";
 import { foldLog } from "../src/core/fold.ts";
 import { sanitizeProgress } from "../src/core/progress.ts";
 import { sanitizeContext } from "../src/core/context.ts";
-import type { LogEvent } from "../src/core/events.ts";
+import { sanitizeAttendant, type LogEvent } from "../src/core/events.ts";
 import { hashContent, validateStructure } from "../src/core/version.ts";
 
 const rootOf = (html: string): DomRootLike => parseHTML(html).document as unknown as DomRootLike;
@@ -226,9 +226,96 @@ describe("sanitizeContext", () => {
   });
 });
 
+describe("sanitizeAttendant", () => {
+  test("keeps the identity fields and the model/effort a session declares", () => {
+    expect(
+      sanitizeAttendant({
+        harness: "claude-code",
+        sessionId: "sess-1",
+        cwd: "/proj",
+        model: "opus-4.8",
+        effort: "high",
+      }),
+    ).toEqual({
+      harness: "claude-code",
+      sessionId: "sess-1",
+      cwd: "/proj",
+      model: "opus-4.8",
+      effort: "high",
+    });
+  });
+
+  test("model/effort are bounded and control-stripped like every other field", () => {
+    const stamp = sanitizeAttendant({
+      harness: "codex",
+      model: `gpt${String.fromCharCode(0)}-5.6\n-sol`,
+      effort: "u".repeat(200),
+    });
+    expect(stamp?.model).toBe("gpt-5.6-sol");
+    expect(stamp?.effort?.length).toBe(32);
+  });
+
+  test("a stamp without them is unchanged (they are optional)", () => {
+    expect(sanitizeAttendant({ harness: "pi" })).toEqual({ harness: "pi" });
+    expect(sanitizeAttendant({ harness: "pi", model: 7, effort: null })).toEqual({ harness: "pi" });
+  });
+});
+
 describe("foldLog segments", () => {
   const ev = (e: Partial<LogEvent> & { t: LogEvent["t"]; seq: number }): LogEvent =>
     ({ at: "2026-01-01T00:00:00Z", ...e }) as LogEvent;
+
+  test("derives session history from attendant stamps, whole-log (D18)", () => {
+    const events: LogEvent[] = [
+      ev({
+        t: "session_opened",
+        seq: 1,
+        segment: 1,
+        artifact: "a.html",
+        version: 1,
+        hash: "h",
+        path: "versions/s1/v1.html",
+        attendant: { harness: "claude_code", sessionId: "sess-1", cwd: "/proj" },
+      } as never),
+      ev({
+        t: "agent_reply",
+        seq: 2,
+        at: "2026-01-01T01:00:00Z",
+        id: "r1",
+        text: "hello",
+        attendant: { harness: "claude_code", sessionId: "sess-1", cwd: "/proj" },
+      } as never),
+      // A different session takes over later - and an unstamped human event
+      // in between contributes nothing to the history.
+      ev({
+        t: "prompt",
+        seq: 3,
+        id: "p1",
+        refs: [],
+        text: "human words",
+      } as never),
+      ev({
+        t: "agent_ack",
+        seq: 4,
+        at: "2026-01-01T02:00:00Z",
+        id: "a1",
+        attendant: { harness: "codex", sessionId: "sess-2" },
+      } as never),
+    ];
+    const s = foldLog(events);
+    expect(s.sessionHistory).toHaveLength(2);
+    const [born, second] = s.sessionHistory;
+    expect(born?.harness).toBe("claude_code");
+    expect(born?.sessionId).toBe("sess-1");
+    expect(born?.cwd).toBe("/proj");
+    expect(born?.events).toBe(2);
+    expect(born?.firstAt).toBe("2026-01-01T00:00:00Z");
+    expect(born?.lastAt).toBe("2026-01-01T01:00:00Z");
+    expect(second?.harness).toBe("codex");
+    expect(second?.events).toBe(1);
+    // Old logs without stamps fold to an empty history, not a failure.
+    expect(foldLog([events[2] as LogEvent]).sessionHistory).toEqual([]);
+  });
 
   test("folds a single segment", () => {
     const events: LogEvent[] = [
@@ -262,6 +349,50 @@ describe("foldLog segments", () => {
     expect(s.version).toBe(2);
     expect(s.annotations.length).toBe(1);
     expect(s.highSeq).toBe(3);
+  });
+
+  test("carries an annotation's targets and an answer's anchors, first-element rule intact", () => {
+    const spot = (n: number) => ({
+      kind: "element" as const,
+      fingerprint: `f${n}`,
+      domPath: `p:nth-child(${n})`,
+      snippet: `<p>${n}</p>`,
+    });
+    const events: LogEvent[] = [
+      ev({
+        t: "session_opened",
+        seq: 1,
+        segment: 1,
+        artifact: "a.html",
+        version: 1,
+        hash: "h",
+        path: "versions/s1/v1.html",
+      } as never),
+      ev({
+        t: "annotation",
+        seq: 2,
+        id: "a1",
+        version: 1,
+        target: spot(1),
+        targets: [spot(1), spot(2)],
+        note: "both of these",
+      } as never),
+      ev({ t: "question", seq: 3, id: "q1", text: "where?" } as never),
+      ev({
+        t: "question_answered",
+        seq: 4,
+        id: "ans1",
+        questionId: "q1",
+        text: "here and here",
+        anchor: spot(1),
+        anchors: [spot(1), spot(3)],
+      } as never),
+    ];
+    const s = foldLog(events);
+    expect(s.annotations[0]?.targets).toEqual([spot(1), spot(2)]);
+    expect(s.annotations[0]?.target).toEqual(spot(1)); // legacy readers see the first
+    expect(s.questions[0]?.answerAnchors).toEqual([spot(1), spot(3)]);
+    expect(s.questions[0]?.answerAnchor).toEqual(spot(1));
   });
 
   test("agent_ack progress accumulates last-writer-wins and closes on output", () => {

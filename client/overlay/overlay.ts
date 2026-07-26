@@ -27,14 +27,16 @@ interface Rect {
 
 type MarkerState = "committed" | "queued" | "pending";
 
-/** The id of the single in-flight (pending) composer anchor marker. */
+/** Id prefix of the in-flight (pending) composer anchor markers - one per
+ *  collected spot, suffixed by position. */
 const PENDING_ID = "__lucid_pending";
 
 interface Marker {
   readonly id: string;
   /** Lifecycle state of the annotation this marker anchors; drives its style. */
   readonly state: MarkerState;
-  /** 1-based number shared with the left-panel card; 0 = no badge (pending). */
+  /** 1-based number shared with the left-panel card; 0 = no badge (a pending
+   *  spot, or a multi-target item's secondary spots). */
   readonly index: number;
   readonly rects: readonly Rect[];
   /** How many earlier badges land on this same corner. Annotating one element
@@ -98,7 +100,7 @@ export class LucidOverlay extends LitElement {
 
   private committed: PayloadAnnotationLike[] = [];
   private queuedAnchors: QueuedAnchorLike[] = [];
-  private pendingAnchor: Anchor | null = null;
+  private pendingAnchors: readonly Anchor[] = [];
   /** Read mode when false: no marks painted, no targeting. The chrome owns this
    *  and restates it on every highlight, so the two can never drift. */
   private showTargets = true;
@@ -121,12 +123,12 @@ export class LucidOverlay extends LitElement {
       inset: 0;
       pointer-events: none;
       z-index: 2147483646;
-      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     .hover {
       position: fixed;
-      border: 1.5px dashed rgba(99, 179, 237, 0.9);
-      background: rgba(99, 179, 237, 0.08);
+      border: 1.5px dashed rgba(94, 129, 172, 0.9);
+      background: rgba(94, 129, 172, 0.08);
       border-radius: 3px;
       pointer-events: none;
       transition: all 0.04s linear;
@@ -138,25 +140,27 @@ export class LucidOverlay extends LitElement {
       box-sizing: border-box;
       transition: background 0.1s linear, box-shadow 0.1s linear;
     }
-    /* committed = sent (brass solid); queued = composed-but-unsent (brass dashed);
-       pending = the anchor being composed right now (blue, active). */
+    /* Nord frost carries the mark language on the paper (matching the chrome's
+       SMUI theme): committed = sent (frost solid); queued = composed-but-unsent
+       (frost dashed); pending = the anchor being composed right now (Nord
+       purple - active, distinct from the frost of settled marks). */
     .marker.committed {
-      background: rgba(246, 224, 94, 0.20);
-      border: 1.5px solid rgba(214, 158, 46, 0.85);
-      box-shadow: 0 0 0 1px rgba(214, 158, 46, 0.22);
+      background: rgba(136, 192, 208, 0.22);
+      border: 1.5px solid rgba(94, 129, 172, 0.85);
+      box-shadow: 0 0 0 1px rgba(94, 129, 172, 0.22);
     }
     .marker.queued {
-      background: rgba(203, 168, 90, 0.12);
-      border: 1.5px dashed rgba(203, 168, 90, 0.9);
+      background: rgba(136, 192, 208, 0.12);
+      border: 1.5px dashed rgba(129, 161, 193, 0.9);
     }
     .marker.pending {
-      background: rgba(99, 179, 237, 0.16);
-      border: 1.5px solid rgba(99, 179, 237, 0.95);
-      box-shadow: 0 0 0 2px rgba(99, 179, 237, 0.22);
+      background: rgba(180, 142, 173, 0.16);
+      border: 1.5px solid rgba(180, 142, 173, 0.95);
+      box-shadow: 0 0 0 2px rgba(180, 142, 173, 0.22);
     }
     .marker.focused {
-      background: rgba(246, 224, 94, 0.42);
-      box-shadow: 0 0 0 2px rgba(214, 158, 46, 0.55);
+      background: rgba(136, 192, 208, 0.45);
+      box-shadow: 0 0 0 2px rgba(94, 129, 172, 0.55);
     }
     .badge {
       position: fixed;
@@ -177,14 +181,14 @@ export class LucidOverlay extends LitElement {
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
     }
     .badge.committed {
-      background: rgba(214, 158, 46, 0.97);
+      background: rgba(129, 161, 193, 0.97);
     }
     .badge.queued {
-      background: rgba(203, 168, 90, 0.95);
-      border: 1px dashed rgba(110, 84, 28, 0.7);
+      background: rgba(136, 192, 208, 0.95);
+      border: 1px dashed rgba(76, 104, 140, 0.7);
     }
     .badge.focused {
-      box-shadow: 0 0 0 3px rgba(214, 158, 46, 0.5);
+      box-shadow: 0 0 0 3px rgba(94, 129, 172, 0.5);
       filter: brightness(1.08);
     }
   `;
@@ -192,6 +196,7 @@ export class LucidOverlay extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener("mousemove", this.onMouseMove, true);
+    document.addEventListener("mousedown", this.onMouseDown, true);
     document.addEventListener("click", this.onClick, true);
     document.addEventListener("mouseup", this.onMouseUp, true);
     document.addEventListener("mouseleave", this.onMouseLeaveDoc);
@@ -205,6 +210,7 @@ export class LucidOverlay extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     document.removeEventListener("mousemove", this.onMouseMove, true);
+    document.removeEventListener("mousedown", this.onMouseDown, true);
     document.removeEventListener("click", this.onClick, true);
     document.removeEventListener("mouseup", this.onMouseUp, true);
     document.removeEventListener("mouseleave", this.onMouseLeaveDoc);
@@ -288,16 +294,16 @@ export class LucidOverlay extends LitElement {
     const style = document.createElement("style");
     style.id = "__lucid_diff_style";
     style.textContent = `
-      [data-diff="added"] { box-shadow: inset 3px 0 0 #7d8e63; background: rgba(125,142,99,0.10); border-radius: 3px; }
-      [data-diff="changed"] { box-shadow: inset 3px 0 0 #97a67e; }
+      [data-diff="added"] { box-shadow: inset 3px 0 0 #8aa872; background: rgba(163,190,140,0.12); border-radius: 3px; }
+      [data-diff="changed"] { box-shadow: inset 3px 0 0 #a3be8c; }
       .lucid-diff-was, .lucid-diff-now { display: block; border-radius: 3px; padding: 2px 6px; }
-      .lucid-diff-was { text-decoration: line-through; opacity: 0.7; background: rgba(192,97,63,0.12); }
-      .lucid-diff-now { margin-top: 3px; background: rgba(125,142,99,0.12); }
+      .lucid-diff-was { text-decoration: line-through; opacity: 0.7; background: rgba(191,97,106,0.12); }
+      .lucid-diff-now { margin-top: 3px; background: rgba(163,190,140,0.14); }
       .lucid-diff-was::before, .lucid-diff-now::before { display: block; font-size: 9px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; text-decoration: none; opacity: 0.8; }
-      .lucid-diff-was::before { content: "was"; color: #c0613f; }
-      .lucid-diff-now::before { content: "now"; color: #7d8e63; }
-      .lucid-ghost { display: block; opacity: 0.55; text-decoration: line-through; background: rgba(192,97,63,0.08); box-shadow: inset 3px 0 0 #c0613f; border-radius: 3px; }
-      [data-hunk].lucid-active { outline: 2px solid #bd9a4e; outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; }
+      .lucid-diff-was::before { content: "was"; color: #bf616a; }
+      .lucid-diff-now::before { content: "now"; color: #6f8d59; }
+      .lucid-ghost { display: block; opacity: 0.55; text-decoration: line-through; background: rgba(191,97,106,0.08); box-shadow: inset 3px 0 0 #bf616a; border-radius: 3px; }
+      [data-hunk].lucid-active { outline: 2px solid #5e81ac; outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; }
     `;
     document.head.appendChild(style);
   }
@@ -314,8 +320,8 @@ export class LucidOverlay extends LitElement {
     const style = document.createElement("style");
     style.id = "__lucid_section_style";
     style.textContent = `
-      @keyframes __lucid_section_flash { from { outline-color: rgba(189,154,78,0.9); } to { outline-color: rgba(189,154,78,0); } }
-      .__lucid_section_target { outline: 2px solid rgba(189,154,78,0.9); outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
+      @keyframes __lucid_section_flash { from { outline-color: rgba(94,129,172,0.9); } to { outline-color: rgba(94,129,172,0); } }
+      .__lucid_section_target { outline: 2px solid rgba(94,129,172,0.9); outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
     `;
     document.head.appendChild(style);
   }
@@ -407,7 +413,16 @@ export class LucidOverlay extends LitElement {
     e.preventDefault();
     e.stopPropagation();
     const anchor = captureElement(target);
-    post({ source: "lucid-overlay", type: "target-picked", anchor });
+    post({
+      source: "lucid-overlay",
+      type: "target-picked",
+      anchor,
+      // ctrl counts as meta, the chrome's own ⌘/ctrl equivalence: Meta is the
+      // Super key on Windows/Linux, so metaKey alone would leave those viewers
+      // with no collect gesture. No collision on macOS - ctrl-click fires
+      // contextmenu there, never click.
+      modifiers: { meta: e.metaKey || e.ctrlKey, shift: e.shiftKey },
+    });
   };
 
   /** The ✎ badge is the existing annotation's handle: click it to jump to its card. */
@@ -416,10 +431,39 @@ export class LucidOverlay extends LitElement {
     post({ source: "lucid-overlay", type: "annotation-activate", id });
   };
 
-  private readonly onMouseUp = (): void => {
+  /** Where the press started, and whether a selection already existed there:
+   *  a stationary shift-click over a LEFTOVER selection extends it natively,
+   *  and the extended range would ride out as the pick - a spot the human
+   *  never chose. Only a real drag may speak for a range. */
+  private downAt: { x: number; y: number } | null = null;
+  private hadSelectionAtDown = false;
+
+  private readonly onMouseDown = (e: MouseEvent): void => {
+    const sel = window.getSelection();
+    this.hadSelectionAtDown = sel !== null && !sel.isCollapsed;
+    this.downAt = { x: e.clientX, y: e.clientY };
+  };
+
+  private readonly onMouseUp = (e: MouseEvent): void => {
     if (!this.showTargets) return; // read mode: selecting text is just selecting text
+    const stationary =
+      this.downAt !== null && Math.hypot(e.clientX - this.downAt.x, e.clientY - this.downAt.y) < 4;
+    if (e.shiftKey && stationary && this.hadSelectionAtDown) {
+      // Shift-click is the PIN gesture here, but the browser just extended the
+      // leftover selection to the click point. Collapse it so the click
+      // handler makes the element pick the human actually aimed at.
+      window.getSelection()?.removeAllRanges();
+      return;
+    }
     const anchor = captureRangeAnchor();
-    if (anchor) post({ source: "lucid-overlay", type: "target-picked", anchor });
+    if (anchor)
+      post({
+        source: "lucid-overlay",
+        type: "target-picked",
+        anchor,
+        // ctrl-as-meta for the same reason as onClick above.
+        modifiers: { meta: e.metaKey || e.ctrlKey, shift: e.shiftKey },
+      });
   };
 
   private readonly onMessage = (e: MessageEvent): void => {
@@ -428,7 +472,7 @@ export class LucidOverlay extends LitElement {
     if (msg.type === "highlight") {
       this.committed = [...msg.annotations];
       this.queuedAnchors = [...msg.queued];
-      this.pendingAnchor = msg.pending;
+      this.pendingAnchors = msg.pendingList ?? (msg.pending ? [msg.pending] : []);
       this.showTargets = msg.showTargets;
       this.reposition();
     } else if (msg.type === "swap") {
@@ -479,28 +523,51 @@ export class LucidOverlay extends LitElement {
       return;
     }
     const markers: Omit<Marker, "stackIndex">[] = [];
+    // A multi-spot item paints one marker PER target, all sharing the item's
+    // id (so focus lights every spot), but only ONE carries the number - the
+    // badge names the item, and numbering every spot would fake N items. The
+    // badge goes to the first spot that still RESOLVES, not positionally to
+    // targets[0]: a spot edited away drops out (the intended any-survives
+    // degradation), and the item must keep its badge - it is the click-to-jump
+    // handle and the card's number on the surface.
+    const pushAll = (
+      id: string,
+      state: MarkerState,
+      index: number,
+      targets: readonly Anchor[],
+    ): void => {
+      let badged = false;
+      for (const t of targets) {
+        const rects = this.rectsFor(t);
+        if (rects.length === 0) continue;
+        markers.push({ id, state, index: badged ? 0 : index, rects });
+        badged = true;
+      }
+    };
     let n = 0;
     for (const a of this.committed) {
       if (!a.resolved) continue; // orphaned annotations have no live anchor to paint
-      n += 1;
-      const rects = this.rectsFor(a.target);
-      if (rects.length > 0) markers.push({ id: a.id, state: "committed", index: n, rects });
+      n += 1; // per annotation, never per target: the badge matches the card's number
+      pushAll(a.id, "committed", n, a.targets ?? [a.target]);
     }
     this.queuedAnchors.forEach((q, i) => {
-      const rects = this.rectsFor(q.target);
-      if (rects.length > 0) markers.push({ id: q.id, state: "queued", index: i + 1, rects });
+      pushAll(q.id, "queued", i + 1, q.targets ?? [q.target]);
     });
-    if (this.pendingAnchor) {
-      const rects = this.rectsFor(this.pendingAnchor);
-      if (rects.length > 0) markers.push({ id: PENDING_ID, state: "pending", index: 0, rects });
-    }
+    this.pendingAnchors.forEach((t, i) => {
+      const rects = this.rectsFor(t);
+      if (rects.length > 0)
+        markers.push({ id: `${PENDING_ID}_${i}`, state: "pending", index: 0, rects });
+    });
     // Two annotations on one element resolve to the same rect, so their badges
     // would sit exactly on top of each other. Count the earlier ones per corner
     // and let render step each into a cascade.
     const perCorner = new Map<string, number>();
     this.markers = markers.map((m) => {
       const r = m.rects[0];
-      if (!r) return { ...m, stackIndex: 0 };
+      // Only badge-bearing markers join the cascade: an unnumbered secondary
+      // spot draws no badge, so counting it would float a later badge off its
+      // corner for a neighbour nobody can see.
+      if (!r || m.index === 0) return { ...m, stackIndex: 0 };
       const corner = `${Math.round(r.left)}:${Math.round(r.top)}`;
       const stackIndex = perCorner.get(corner) ?? 0;
       perCorner.set(corner, stackIndex + 1);
@@ -599,7 +666,9 @@ export class LucidOverlay extends LitElement {
               style=${`left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;`}
             ></div>
             ${
-              i === 0 && m.state !== "pending"
+              /* index 0 = no badge: the pending draft, and the secondary spots
+                 of a multi-target item (only its first spot names it). */
+              i === 0 && m.index > 0
                 ? html`<div
                     class=${`badge ${m.state} ${this.focusedId === m.id ? "focused" : ""}`}
                     title="Jump to this annotation in the panel"

@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lucid Shell — one window over every session</title>
+<style>
+  :root {
+    --paper: #faf6ec;
+    --paper-raised: #f4eede;
+    --ink: #211d15;
+    --ink-muted: #5e6773;
+    --rule: rgba(33, 29, 21, 0.12);
+    --accent: #7b6228;
+    --accent-wash: rgba(203, 168, 90, 0.16);
+    --shipped: #4a6b3a;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: 17px;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 64px 32px 120px; }
+  .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  code, .mono, pre {
+    font-family: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+  }
+  code {
+    background: var(--accent-wash);
+    padding: 0.08em 0.34em;
+    border-radius: 4px;
+    overflow-wrap: anywhere;
+  }
+  h1 {
+    font-size: 40px;
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    margin: 0 0 12px;
+  }
+  h2 {
+    font-size: 13px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--accent);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0 0 18px;
+  }
+  h3 { font-size: 21px; margin: 0 0 6px; letter-spacing: -0.005em; }
+  p { margin: 0 0 14px; }
+  .lede { font-size: 20px; color: var(--ink); margin-bottom: 8px; }
+  .meta {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    color: var(--ink-muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin: 20px 0 0;
+  }
+  .meta b { color: var(--ink); font-weight: 600; }
+  .divide { height: 1px; background: var(--rule); border: 0; margin: 40px 0; }
+  section { margin: 0 0 22px; }
+  .card {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    padding: 22px 24px;
+  }
+  .muted { color: var(--ink-muted); }
+  .small { font-size: 14px; }
+  ul { margin: 8px 0 0; padding-left: 20px; }
+  li { margin: 5px 0; }
+  li::marker { color: var(--accent); }
+  pre {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    line-height: 1.45;
+    color: var(--ink);
+  }
+  .eyebrow {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .phase-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
+  .phase-num {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+  }
+  .tag {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 2px 9px;
+    color: var(--ink-muted);
+    white-space: nowrap;
+  }
+  .tag.dep { border-color: rgba(123, 98, 40, 0.4); color: var(--accent); }
+  .row { display: flex; gap: 20px; align-items: flex-start; }
+  .row > * { min-width: 0; }
+  .risk-q {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--ink);
+    margin: 0 0 4px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Lucid · implementation plan</p>
+    <h1>One window over every session</h1>
+    <p class="lede">Collapse Lucid from N independent single-session tabs into a single shell: every session across <code>~/dev</code>, tabbed and navigable, with a <code>⌘K</code> palette to jump anywhere.</p>
+    <div class="meta">
+      <span>branch <b>feat/lucid-shell</b></span>
+      <span>server <b>one daemon (B)</b></span>
+      <span>render model <b>unified multi-session chrome</b></span>
+      <span>discovery <b>~/dev (recursive) + register-on-open</b></span>
+      <span>hub port <b>17428</b></span>
+    </div>
+  </header>
+
+  <hr class="divide" />
+
+  <section class="card" data-lucid-id="architecture">
+    <h2>The shape</h2>
+    <p class="small muted">One long-running daemon on <code>17428</code> hosts every session in-process, keyed by artifact path, and serves the shell. The shell is the chrome — it swaps the active session's review panel and artifact iframe. Session data is read and written <b>in place</b> — the daemon opens, appends to, and watches each log <b>where it already lives</b> (<code>&lt;project&gt;/.lucid/&lt;name&gt;/log.ndjson</code>), exactly as the per-session server does today. No copy, no migration, no central database; only a pointer registry is central.</p>
+    <pre>  install THIS as the Chrome app  ─────────────┐
+                                                ▼
+  ┌──────────────────────────────────────────────────────┐
+  │  Lucid daemon       one server · 127.0.0.1:17428      │
+  │  shell: ⌘K   [ plan ][ sdlc-flow ][ support ]  + tab  │
+  │  ┌────────────────────────────────────────────────┐  │
+  │  │  active session: review panel + artifact iframe │  │
+  │  └────────────────────────────────────────────────┘  │
+  │  hosts every session in-process, keyed by path        │
+  └──────────────────────────────────────────────────────┘
+        │ reads + writes in place — data never leaves the project
+        ▼
+   ~/dev/proj-a/.lucid/plan/log.ndjson
+   ~/dev/proj-b/.lucid/sdlc-flow/log.ndjson
+   ~/.lucid/registry.json   (pointers + last-seen, not data)</pre>
+  </section>
+
+  <section class="card" data-lucid-id="server-model" style="border-color: rgba(123,98,40,0.45);">
+    <h2>Server model — decided: B, one running server</h2>
+    <p class="small"><b>Chosen:</b> a single long-running daemon on <code>17428</code> hosts every session. No per-session processes, no port rotation, one origin — so the cross-origin edge below is gone. A is kept here only as the road not taken.</p>
+    <div class="row" style="margin-top:12px; gap:18px; flex-wrap:wrap;">
+      <div style="flex:1 1 240px; min-width:0; opacity:0.5;">
+        <p class="eyebrow" style="color: var(--ink-muted);">A · additive hub &nbsp;·&nbsp; not taken</p>
+        <p class="small muted">Keep today's per-session processes untouched; the hub is a thin coordinator that registers them and serves the shell. Least change to the server core. But the shell then talks <b>cross-origin</b> to N session ports — needs a proxy or an allow-list.</p>
+      </div>
+      <div style="flex:1 1 240px; min-width:0; background: var(--accent-wash); border: 1px solid rgba(123,98,40,0.45); border-radius: 10px; padding: 14px 16px;">
+        <p class="eyebrow">B · one running server &nbsp;·&nbsp; <span style="border:1px solid var(--accent); border-radius:999px; padding:1px 7px;">chosen</span></p>
+        <p class="small muted">Fold every session into a single long-running daemon on <code>17428</code> — no per-session processes, no port rotation, one origin. <code>lucid open</code> <b>registers</b> a session with the daemon instead of spawning one. Dissolves the cross-origin problem entirely and makes the multi-session store natural. Cost: a deeper refactor of the session lifecycle, and shared fate — one daemon owns every session's liveness, watcher, and log.</p>
+      </div>
+    </div>
+    <p class="small" style="margin-top:14px;">The shell and the server become one thing, and the rotating-port problem disappears rather than being worked around. The one trade-off accepted with B: crash isolation — today a wedged session can't take the others down; under B they share a process, so the daemon's own robustness matters more.</p>
+  </section>
+
+  <section class="card" data-lucid-id="isolation">
+    <h2>Isolation &amp; lifecycle — nothing bleeds</h2>
+    <p class="small">The key that keeps sessions apart today carries over unchanged: <b>a session is its canonical artifact path</b>. The log lives at <code>&lt;artifactDir&gt;/.lucid/&lt;name&gt;/log.ndjson</code>, and every command already names its file. Two artifacts — same project or different — are different paths, so they cannot collide.</p>
+    <ul class="small">
+      <li data-lucid-id="iso-crossproject"><b>Cross-project:</b> the boundary is the path, not the project. A project is just a directory grouping (how the shell clusters tabs). Different projects are different paths, isolated by construction.</li>
+      <li data-lucid-id="iso-cli"><b>CLI addressing:</b> <code>lucid wait &lt;file&gt;</code>, <code>lucid ask &lt;file&gt;</code> each name an artifact. Under B the CLI talks to the one daemon and addresses the session <b>by path</b> — there is no ambient "current session" to leak into. A command touches exactly the path it names, as it does now.</li>
+      <li data-lucid-id="iso-truth"><b>The daemon is a cache, not the truth.</b> Each session's on-disk log stays the source of truth (as today). The daemon loads a session's folded state + watcher on demand and evicts it when idle; restarting it loses nothing.</li>
+      <li data-lucid-id="iso-routing"><b>One origin, still boxed per project</b> (grilled). Every artifact and asset route is namespaced by an opaque session id — <code>/s/&lt;id&gt;/…</code> — and the daemon resolves each against that session's own <code>artifactDir</code> with the exact <code>resolveAsset</code> confinement used today (traversal / dotfile / symlink-escape rejected). One session's page can never read another's project files; there is never a shared filesystem root, and raw absolute paths never appear in URLs.</li>
+      <li data-lucid-id="iso-storage"><b>Data stays in the project folders.</b> Under B only the server relocates — the artifact and its <code>.lucid/&lt;name&gt;/</code> (log, versions, pasted images) stay colocated in each project, exactly where they are now. The daemon reads and writes them in place. The only central file is <code>~/.lucid/registry.json</code>, and it holds <b>pointers only</b> (paths, last-seen), never session data. Nothing is centralized or copied out of the project.</li>
+      <li data-lucid-id="iso-lifecycle"><b>Lifecycle maps one-to-one</b> with what you already handle — folded from each log, plus liveness: <b>active</b> (loaded, attended) · <b>suspended</b> (known, evicted from memory; reactivate = reload) · <b>ended</b> (<code>lucid end</code>) · <b>dormant</b> (on disk, surfaced by the <code>~/dev</code> scan). Under A "live" means a bound port; under B it means "loaded in the daemon" — same states, different signal.</li>
+    </ul>
+    <p class="small muted" style="margin-top:10px;">Net: B relocates the server; it does not change the data model or the isolation key. Everything already reasoned about — multiple per project, stale, reactivated — holds, because it all lives in the per-session logs.</p>
+  </section>
+
+  <section class="card" data-lucid-id="decisions">
+    <h2>Decisions locked</h2>
+    <ul class="small">
+      <li><b>Unified multi-session chrome</b> — the shell is the chrome, not an iframe host. One header, real tabs, shared state. Accepts the single-session store refactor.</li>
+      <li><b>Discovery</b> — scan <code>~/dev</code> recursively for dormant sessions; live sessions <b>register on open</b> for instant updates. Roots configurable, <code>~/dev</code> the default.</li>
+      <li><b>Command bar</b> — <code>cmdk</code> (the headless engine behind shadcn's <code>Command</code>), styled to Lucid's ink/brass tokens rather than importing shadcn wholesale.</li>
+      <li><b>One entry URL</b> — <code>127.0.0.1:17428</code> installed as a Chrome app gives a permanent Dock icon that never goes stale on a rotating session port.</li>
+      <li data-lucid-id="dec-agentdx"><b>Agent interaction — unchanged</b> (grilled). The consuming agent keeps the tiny per-file loop (<code>open → wait → ask → end</code>); multi-session is the human's shell only, never the agent's concern. B's payoff for the agent is invisible: no per-session server to spawn, instant resume against the always-up daemon, and <code>open</code> surfaces the session as a new <b>tab</b> in the running shell instead of a new browser window.</li>
+      <li data-lucid-id="dec-uistate"><b>UI state — layout global, marks per-session</b> (grilled). Panel width and sidebar open/closed are one shell-level setting shared across tabs; the show-marks toggle is remembered per session, keyed by session id in the store.</li>
+      <li data-lucid-id="dec-spawn"><b>The daemon never spawns agents</b> (grilled). D-064 holds: the daemon only hosts sessions and serves the shell; it never re-invokes an agent. Agent-spawning stays in the separate, opt-in, human-run fork launcher. A fork under B just registers its child session with the daemon, so the new artifact appears as a tab — spawning is unchanged and never migrates into the always-on server.</li>
+      <li data-lucid-id="dec-lifecycle"><b>Daemon lifecycle — self-managed, supervision out of scope</b> (grilled). First <code>lucid open</code> auto-starts the daemon if it is down; it stays up (does not idle-exit the way per-session servers do), while individual sessions still evict from memory when idle. Service supervision (LaunchAgent, systemd, etc.) is deliberately <b>kept out of the codebase</b> — the daemon is a plain long-lived process anyone can supervise however they like. Nothing machine-specific ships in Lucid; the operator wires their own supervisor externally if they want one.</li>
+    </ul>
+  </section>
+
+  <hr class="divide" />
+
+  <h2 style="margin-bottom:24px;">The roadmap — five phases</h2>
+
+  <section class="card" data-lucid-id="phase-0" style="margin-bottom:16px;">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 0</span>
+      <h3>The daemon &amp; registry</h3>
+      <span class="tag" style="border-color: rgba(74,107,58,0.5); color: var(--shipped);">shipped</span>
+    </div>
+    <p class="small muted">The backbone — independently useful, and it powers the Chrome-app Dock icon even before the shell exists.</p>
+    <ul class="small">
+      <li>One daemon on <code>17428</code> that <b>hosts sessions in-process</b> (folded state + file watcher per open session, keyed by artifact path), serves the shell, a <code>/sessions</code> list, and an SSE stream of registry changes.</li>
+      <li><code>lucid open &lt;file&gt;</code> registers the artifact path with the daemon, which loads it from its on-disk log; <code>~/.lucid/registry.json</code> persists the pointer index. No ports or pids to spawn or prune.</li>
+      <li>Seeds from a recursive scan of <code>~/dev</code> so dormant sessions are listed too.</li>
+      <li><b>Exit:</b> <code>curl</code> the daemon and see every live and dormant session across the machine, each hosting from its own project folder.</li>
+    </ul>
+  </section>
+
+  <section class="card" data-lucid-id="phase-1" style="margin-bottom:16px;">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 1</span>
+      <h3>Session-keyed chrome</h3>
+      <span class="tag dep">the hard core</span>
+    </div>
+    <p class="small muted">Turn the single-session store into a multi-session one. This is the load-bearing refactor; everything visual rides on it.</p>
+    <ul class="small">
+      <li>Store becomes a map <code>sessionId → { … }</code>, with one <b>active</b> session driving the render. Per session it holds the <b>folded state</b> — the current view derived by folding that session's event log (its annotations, conversation, current version, status) — and its <b>stream</b>, the live SSE connection that pushes new events into that fold — plus staged highlights and drafts.</li>
+      <li>Actions and the <code>EventSource</code> (the stream) become session-scoped rather than module-global singletons.</li>
+      <li><b>Exit:</b> same single-window experience as today, but internally multi-session-ready (still one session shown).</li>
+    </ul>
+  </section>
+
+  <section class="card" data-lucid-id="phase-2" style="margin-bottom:16px;">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 2</span>
+      <h3>Tabs &amp; multi-stream lifecycle</h3>
+      <span class="tag dep">needs 0 + 1</span>
+    </div>
+    <ul class="small">
+      <li>A tab bar bound to the registry. Opening a tab connects that session's SSE + REST; closing disconnects.</li>
+      <li>Switching tabs swaps the active session — state already loaded, so the switch is instant.</li>
+      <li>Manage live streams with a <b>hard cap of 10</b> open sessions (decided); beyond that, evict the least-recently-used stream from memory (its log is untouched, so reopening refolds instantly).</li>
+      <li data-lucid-id="phase2-attention"><b>Per-session attention tags in the tab list</b> (requested) — each tab shows when something is new or waiting on you: an unanswered question, a fresh agent reply, a new version. You can tell at a glance which review needs you without opening it.</li>
+      <li><b>Exit:</b> multiple sessions open at once, one window, switch without a reload, and attention tags that pull you to the tab that needs input.</li>
+    </ul>
+  </section>
+
+  <section class="card" data-lucid-id="phase-3" style="margin-bottom:16px;">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 3</span>
+      <h3>⌘K command palette</h3>
+      <span class="tag dep">needs 0</span>
+    </div>
+    <ul class="small">
+      <li><code>cmdk</code>, fuzzy over every registry session plus actions: open a tab, new session, approve, jump to an annotation.</li>
+      <li>Styled to Lucid's tokens — cream-on-dark palette, mono for paths, no second accent.</li>
+      <li><b>Exit:</b> <code>⌘K</code> from anywhere finds and opens any session on the machine.</li>
+    </ul>
+  </section>
+
+  <section class="card" data-lucid-id="phase-4" style="margin-bottom:16px;">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 4</span>
+      <h3>Polish &amp; the Dock app</h3>
+      <span class="tag">finish</span>
+    </div>
+    <ul class="small">
+      <li>Install <code>17428</code> as a Chrome app; icon, empty states, keyboard model, focus routing, reconnection.</li>
+      <li>Cross-session niceties: unread/attention badges per tab, "N agents listening" across sessions.</li>
+      <li><b>Exit:</b> a Dock icon that opens one window onto everything.</li>
+    </ul>
+  </section>
+
+  <hr class="divide" />
+
+  <section class="card" data-lucid-id="risks">
+    <h2>Risks — settled</h2>
+
+    <div style="margin-bottom:16px;" data-lucid-id="risk-cors">
+      <p class="risk-q"><span style="text-decoration: line-through; text-decoration-color: var(--accent);">Cross-origin is the sharpest edge.</span> &nbsp;Resolved by B.</p>
+      <p class="small muted">Would have been the sharpest edge under A (strict <code>validateHeaders</code> host/origin checks blocking the shell's cross-port fetches). B is one origin, so it never arises. No longer an open question.</p>
+    </div>
+
+    <div style="margin-bottom:16px;" data-lucid-id="risk-keyboard">
+      <p class="risk-q">Keyboard model — recommended map.</p>
+      <p class="small muted">The in-session <code>Sessions</code> panel is subsumed by the shell's tab bar + <code>⌘K</code>, so it goes away and frees its shortcut. Proposed map: <code>⌘K</code> command palette · <code>⌘1</code>–<code>⌘9</code> jump to tab N (editor convention) · <code>⌘⇧[</code> / <code>⌘⇧]</code> prev/next tab · <code>⌘B</code> toggle the review panel (unchanged) · <code>⌘.</code> toggle marks (unchanged) · <code>⌘⏎</code> send / approve (unchanged). No collision, since <code>⌘1</code>/<code>⌘2</code> are no longer panel-switchers.</p>
+    </div>
+
+    <div style="margin-bottom:16px;" data-lucid-id="risk-streams">
+      <p class="risk-q"><span style="text-decoration: line-through; text-decoration-color: var(--accent);">N live SSE streams.</span> &nbsp;Decided: cap at 10.</p>
+      <p class="small muted">Open tabs are capped at <b>10</b>. Beyond that, the least-recently-used session's stream is evicted from memory; its on-disk log is untouched, so reopening refolds instantly. You won't hit the cap, but it bounds the process.</p>
+    </div>
+
+    <div data-lucid-id="risk-scope">
+      <p class="risk-q">Everything in one surface — a risk with a recommendation, not an open question.</p>
+      <p class="small muted">One window over every project is a bigger blast radius (a stray approve on the wrong tab; unrelated repos side by side). Recommendation, not a decision I need from you: a per-tab confirm on destructive actions (Approve, End), and clear project labeling on every tab so the active session is never ambiguous. I'll build it that way unless you object.</p>
+    </div>
+  </section>
+
+  <section class="card" data-lucid-id="next" style="margin-top:16px; border-color: rgba(123,98,40,0.4);">
+    <h2>What I'd build first</h2>
+    <p class="small">Start with <b>Phase 0</b> — the hub and registry. It is self-contained, low-risk, independently useful (it fixes the rotating-port Dock-icon problem on its own), and it unblocks everything else. I would settle the <b>cross-origin</b> question in parallel, since it decides the phase-1 store design.</p>
+  </section>
+
+</div>
+</body>
+</html>

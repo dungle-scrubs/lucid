@@ -9,21 +9,24 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import { AnnotationPart } from "./AnnotationPart.tsx";
+import { useSession, useSessionHandle } from "./context.tsx";
+import { DeliveryLabel } from "./Delivery.tsx";
+import { visibleEl } from "./dom.ts";
 import { FoldedText } from "./FoldedText.tsx";
-import { collapseTextPaste } from "./pastes.ts";
 import { useEffect, useState } from "react";
 import {
   Notices,
   PendingComposer,
   QueuedCard,
+  SelectionPickers,
   SendQueueBar,
   UnsentMessages,
   Warnings,
 } from "./Panel.tsx";
-import { useLucid, warn } from "./store.ts";
-import { Questions } from "./Questions.tsx";
+import { QaPart } from "./QaPart.tsx";
 import { Kbd } from "./ui/kbd.tsx";
 import { markdownComponents, prose, urlTransform } from "./ui/markdown.tsx";
+import { closeButtonSmall } from "./ui/close.ts";
 
 /**
  * The review record. assistant-ui owns the transcript, the composer and the
@@ -55,8 +58,10 @@ const parts = {
 } as const;
 
 /** The agent speaks in Markdown: code spans, lists, tables and emphasis render
- *  as themselves. `smooth` is off - the record replays completed turns, so a
- *  typing reveal on already-delivered prose would be a lie about liveness. */
+ *  as themselves, through the one shared treatment (ui/markdown.tsx) so a
+ *  question and a transcript turn read identically. `smooth` is off - the
+ *  record replays completed turns, so a typing reveal on already-delivered
+ *  prose would be a lie about liveness. */
 const AgentMarkdown = () => (
   <MarkdownTextPrimitive
     smooth={false}
@@ -85,10 +90,13 @@ const UserMessage = () => {
   const isCard = useMessage((m) => m.content.some((p) => p.type === "data"));
   if (isCard) return <MessagePrimitive.Parts components={parts} />;
   return (
-    <div className="flex justify-end" data-role="human">
-      <div className="flex min-w-0 max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tr-[4px] border border-cream-100/10 bg-[rgba(226,165,65,0.16)] px-3 py-2">
+    // items-end, not justify-end: the delivery state sits under the bubble on
+    // the speaker's side, and both stay right-aligned as the bubble wraps.
+    <div className="flex flex-col items-end gap-1" data-role="human">
+      <div className="flex min-w-0 max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tr-[4px] border border-cream-100/10 bg-user/16 px-3 py-2">
         <MessagePrimitive.Parts components={parts} />
       </div>
+      <DeliveryLabel />
     </div>
   );
 };
@@ -114,39 +122,46 @@ const ComposerAttachment = () => (
     </span>
     <AttachmentPrimitive.Remove
       title="Remove"
-      className="cursor-pointer px-[3px] text-fg-muted hover:text-rust-300"
+      className={`${closeButtonSmall} hover:text-rust-300`}
     >
       ×
     </AttachmentPrimitive.Remove>
   </AttachmentPrimitive.Root>
 );
 
-const Composer = () => (
-  <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-ink-600 bg-bg p-[14px]">
-    <ListenerLine />
-    <div className="flex flex-wrap gap-1.5 empty:hidden">
-      <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
-    </div>
-    <ComposerPrimitive.Input
-      rows={2}
-      data-test="message-input"
-      placeholder="Message the agent, or paste an image… (Enter to send, Shift+Enter for a new line)"
-      // Large text pastes fold to `[Pasted text #N +L lines]` and expand back
-      // at send; image pastes fall through to the attachment adapter.
-      onPaste={collapseTextPaste}
-      className="resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
-    />
-    <div className="flex items-center justify-end gap-2">
-      <ComposerPrimitive.Send
-        data-test="send-message"
-        className="flex cursor-pointer items-center gap-1.5 rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Send message
-        <Kbd>↵</Kbd>
-      </ComposerPrimitive.Send>
-    </div>
-  </ComposerPrimitive.Root>
-);
+const Composer = () => {
+  const { pastes } = useSessionHandle();
+  return (
+    <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-ink-600 bg-bg p-[14px]">
+      <ListenerLine />
+      <div className="flex flex-wrap gap-1.5 empty:hidden">
+        <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
+      </div>
+      <ComposerPrimitive.Input
+        rows={2}
+        data-test="message-input"
+        placeholder="Message the agent, or paste an image… (Enter to send, Shift+Enter for a new line)"
+        // Large text pastes fold to `[Pasted text #N +L lines]` and expand back
+        // at send; image pastes fall through to the attachment adapter.
+        onPaste={pastes.collapseTextPaste}
+        className="resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
+      />
+      {/* Under the input, on the send line: who the NEXT unattended turn runs
+          as belongs beside the act of sending it, not above the box. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <SelectionPickers />
+        <span className="flex-1" />
+        <ComposerPrimitive.Send
+          data-test="send-message"
+          className="flex cursor-pointer items-center gap-1.5 rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Send message
+          <Kbd>↵</Kbd>
+        </ComposerPrimitive.Send>
+      </div>
+    </ComposerPrimitive.Root>
+  );
+};
 
 /** Ten minutes with no output stops being "working" and becomes a fact the
  *  human should see plainly: the feedback was picked up, nothing came back. */
@@ -160,8 +175,8 @@ const WORKING_STALE_MS = 10 * 60 * 1000;
  * agent, which is exactly what the stale state is for.
  */
 const WorkingIndicator = () => {
-  const working = useLucid((s) => s.agentWorking);
-  const status = useLucid((s) => s.status);
+  const working = useSession((s) => s.agentWorking);
+  const status = useSession((s) => s.status);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -247,9 +262,9 @@ const WorkingIndicator = () => {
  * contradicting it.
  */
 const ListenerLine = () => {
-  const listening = useLucid((s) => s.agentsListening);
-  const working = useLucid((s) => s.agentWorking);
-  const status = useLucid((s) => s.status);
+  const listening = useSession((s) => s.agentsListening);
+  const working = useSession((s) => s.agentWorking);
+  const status = useSession((s) => s.status);
   if (status !== "active" || working) return null;
   return (
     <div className="flex flex-col gap-1">
@@ -279,7 +294,8 @@ const ListenerLine = () => {
  * screen grants no power - Lucid displays the command, it never runs it.
  */
 const ResumeHint = () => {
-  const attendant = useLucid((s) => s.lastAttendant);
+  const { notify } = useSessionHandle();
+  const attendant = useSession((s) => s.lastAttendant);
   const [copied, setCopied] = useState(false);
   if (!attendant?.resume) return null;
   const cmd = attendant.resume;
@@ -294,7 +310,7 @@ const ResumeHint = () => {
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
           },
-          () => warn("Couldn't copy - the command is in this button's tooltip."),
+          () => notify.warn("Couldn't copy - the command is in this button's tooltip."),
         );
       }}
       className="flex cursor-pointer items-center gap-1.5 self-start text-[11px] text-fg-faint hover:text-fg"
@@ -357,13 +373,13 @@ const ScrollToLatest = () => {
   const [atBottom, setAtBottom] = useState(true);
   // Where "bottom" is changes when the record grows; these are the slices
   // that grow it.
-  const tick = useLucid((s) => s.messages.length + s.annotations.length + s.queue.length);
+  const tick = useSession((s) => s.messages.length + s.annotations.length + s.queue.length);
 
   useEffect(() => {
     // Reading `tick` is the point: the effect re-checks whenever the record
     // grows, since growth moves where "bottom" is without any scroll event.
     if (tick < 0) return;
-    const el = document.querySelector('[data-test="thread-viewport"]');
+    const el = visibleEl('[data-test="thread-viewport"]');
     if (!el) return;
     const check = (): void =>
       setAtBottom(
@@ -382,7 +398,7 @@ const ScrollToLatest = () => {
         title="Scroll to the latest"
         disabled={atBottom}
         onClick={() => {
-          const el = document.querySelector('[data-test="thread-viewport"]');
+          const el = visibleEl('[data-test="thread-viewport"]');
           el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
         }}
         className="pointer-events-auto flex size-8 cursor-pointer items-center justify-center rounded-full border border-ink-400 bg-ink-800/95 text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)] hover:bg-ink-700 disabled:invisible"
@@ -411,6 +427,10 @@ export const Thread = () => {
   // emits. Without it those parts fall through to the unknown-data fallback.
   useAssistantDataUI({ name: "annotation", render: AnnotationPart });
   useAssistantDataUI({ name: "queued", render: QueuedPart });
+  // An answered question and its answer, as one entry (D14). Outstanding
+  // questions never reach the transcript - they live in the drawer over the
+  // surface, which is why there is no questions panel above the composer.
+  useAssistantDataUI({ name: "qa", render: QaPart });
   return (
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
       <ThreadPrimitive.Viewport
@@ -452,7 +472,6 @@ export const Thread = () => {
         <ScrollToLatest />
       </ThreadPrimitive.Viewport>
       <SendQueueBar />
-      <Questions />
       <Composer />
     </ThreadPrimitive.Root>
   );
