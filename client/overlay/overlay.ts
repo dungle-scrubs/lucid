@@ -299,8 +299,13 @@ export class LucidOverlay extends LitElement {
    * and anything it derives from these, follow automatically.
    */
   private applyTheme(theme: "light" | "dark"): void {
-    document.documentElement.dataset.lucidTheme = theme;
-    this.retuneColorSchemeQueries(theme);
+    // An artifact with NO dark form must not be forced into one. Declaring
+    // `color-scheme: dark` flips the browser's own canvas to near-black while
+    // the document's hardcoded ink stays dark - dark text on a dark ground,
+    // which is worse than the light page the author actually designed.
+    const wanted = theme === "dark" && !this.canRenderDark() ? "light" : theme;
+    document.documentElement.dataset.lucidTheme = wanted;
+    this.retuneColorSchemeQueries(wanted);
     if (document.getElementById("__lucid_theme_style")) return;
     const style = document.createElement("style");
     style.id = "__lucid_theme_style";
@@ -325,6 +330,33 @@ export class LucidOverlay extends LitElement {
       }
     `;
     document.head.appendChild(style);
+  }
+
+  /**
+   * Can this document be rendered dark at all?
+   *
+   * Two ways to qualify: it routes colour through the standard tokens (so
+   * Lucid's injected dark values reach it), or it ships its own
+   * `prefers-color-scheme` block (so retuning the query reaches it). An
+   * artifact with neither has exactly one appearance, and honouring that is
+   * more useful than a dark rectangle full of invisible text.
+   */
+  private canRenderDark(): boolean {
+    const root = getComputedStyle(document.documentElement);
+    if (root.getPropertyValue("--paper").trim() !== "") return true;
+    if (root.getPropertyValue("--ink").trim() !== "") return true;
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        for (const rule of Array.from(sheet.cssRules)) {
+          if (rule instanceof CSSMediaRule && /prefers-color-scheme/i.test(rule.conditionText)) {
+            return true;
+          }
+        }
+      } catch {
+        /* unreadable sheet: cannot judge from here */
+      }
+    }
+    return false;
   }
 
   /** Each `prefers-color-scheme` media rule with its ORIGINAL condition, so
