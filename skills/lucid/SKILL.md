@@ -63,13 +63,24 @@ Never fake the review loop, and never paste build instructions at the user.
    no CDN, no remote assets. The artifact must render identically opened straight
    from disk with no network - it is content that outlives the review.
 
-   **Draw diagrams with elements, never ASCII.** A box-and-arrow diagram, a
-   layer stack, a flow - build it from padded `div`s with borders, laid out with
-   flex, or from inline SVG. Box-drawing characters in a `<pre>` collapse the
-   whole picture into one opaque text node, so the reviewer cannot annotate the
-   node or edge they mean, and it cannot reflow when the window narrows. Give
-   each node its own `data-lucid-id`. Keep `<pre>` for what is literally text:
-   code, file paths, a directory tree.
+   **Every picture is markup, never ASCII.** Diagrams, flows, charts,
+   timelines, hierarchies, screen mockups - build each from padded `div`s with
+   borders laid out with flex or grid, or from inline SVG. A bar is a `div`
+   with a percentage width and its value as real text beside it; a hierarchy is
+   nested lists. Box-drawing or ASCII characters in a `<pre>` collapse the whole
+   picture into one opaque text node, so the reviewer cannot annotate the node,
+   bar, or region they mean, and it cannot reflow when the window narrows. This
+   is a fact about the MEDIUM, not a style preference: in a terminal an ASCII
+   diagram is the right answer, and an artifact is a browser document where
+   markup exists and addressability is the entire point. Give each part its own
+   `data-lucid-id`. Keep `<pre>` for what is literally text being quoted: code,
+   file paths, a command, a log line.
+
+   **A mockup of a screen is a wireframe**, not finished visual design -
+   labelled regions, placeholder boxes carrying their spec (`portrait · 3:4`),
+   real words rather than lorem, greyscale plus one accent. Arrangement is what
+   is under review; a mockup that looks finished collects feedback on the wrong
+   decision. Build the real design only when the human asks for one.
 
    For how it should *look*, invoke the **`lucid-design`** skill if it is
    installed: the artifact is a document (paper, one accent, editorial voice),
