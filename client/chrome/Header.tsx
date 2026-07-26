@@ -2,6 +2,7 @@ import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { setSidebarOpen, useShell } from "./shell.ts";
 import { Kbd } from "./ui/kbd.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
  * Open/close the review panel. It lives in the header, on the artifact side,
@@ -12,30 +13,40 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 const PanelToggle = () => {
   const open = useShell((s) => s.sidebarOpen);
   return (
-    <button
-      type="button"
-      data-test="panel-toggle"
-      aria-pressed={open}
-      aria-label={open ? "Hide the review panel" : "Show the review panel"}
-      title={open ? "Hide the review panel (⌘B)" : "Show the review panel (⌘B)"}
-      onClick={() => setSidebarOpen(!open)}
-      className="inline-flex flex-none cursor-pointer items-center rounded-md border border-ink-400 p-[3px] text-fg-muted hover:border-accent-bright hover:text-fg"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        width="15"
-        height="15"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <rect width="18" height="18" x="3" y="3" rx="2" />
-        <path d="M15 3v18" />
-      </svg>
-    </button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            data-test="panel-toggle"
+            aria-pressed={open}
+            aria-label={open ? "Hide the review panel" : "Show the review panel"}
+            onClick={() => setSidebarOpen(!open)}
+            // ml-3/mr-0: grouped with the panel edge on its right, separated
+            // from Approve on its left - the gap says which thing it belongs to.
+            className="ml-3 mr-0 inline-flex flex-none cursor-pointer items-center border border-ink-400 p-[3px] text-fg-muted hover:border-accent-bright hover:text-fg"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <rect width="18" height="18" x="3" y="3" rx="2" />
+              <path d="M15 3v18" />
+            </svg>
+          </button>
+        }
+      />
+      <TooltipContent>
+        {open ? "Hide the review panel (⌘B)" : "Show the review panel (⌘B)"}
+      </TooltipContent>
+    </Tooltip>
   );
 };
 
@@ -91,38 +102,44 @@ const ContextRing = () => {
       ? ` · ${fmtTokens(usage.used)}/${fmtTokens(usage.total)} tokens`
       : "";
   return (
-    <span
-      data-test="context-ring"
-      data-pct={Math.round(pct)}
-      role="img"
-      aria-label={`Agent context: ${Math.round(pct)}% used${tokens}`}
-      title={`Agent context: ${Math.round(pct)}% used${tokens}`}
-      className="inline-flex flex-none items-center"
-    >
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-        <circle
-          cx="9"
-          cy="9"
-          r={r}
-          fill="none"
-          stroke="var(--color-steel-600)"
-          strokeOpacity="0.5"
-          strokeWidth="2.5"
-        />
-        <circle
-          cx="9"
-          cy="9"
-          r={r}
-          fill="none"
-          stroke={color}
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - pct / 100)}
-          transform="rotate(-90 9 9)"
-        />
-      </svg>
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            data-test="context-ring"
+            data-pct={Math.round(pct)}
+            role="img"
+            aria-label={`Agent context: ${Math.round(pct)}% used${tokens}`}
+            className="inline-flex flex-none items-center"
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+              <circle
+                cx="9"
+                cy="9"
+                r={r}
+                fill="none"
+                stroke="var(--color-steel-600)"
+                strokeOpacity="0.5"
+                strokeWidth="2.5"
+              />
+              <circle
+                cx="9"
+                cy="9"
+                r={r}
+                fill="none"
+                stroke={color}
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeDasharray={circumference}
+                strokeDashoffset={circumference * (1 - pct / 100)}
+                transform="rotate(-90 9 9)"
+              />
+            </svg>
+          </span>
+        }
+      />
+      <TooltipContent>{`Agent context: ${Math.round(pct)}% used${tokens}`}</TooltipContent>
+    </Tooltip>
   );
 };
 
@@ -159,7 +176,7 @@ const ApproveControls = () => {
           type="button"
           data-test="reopen"
           onClick={() => void reopenReview()}
-          className="cursor-pointer rounded-full border border-ink-400 px-2.5 py-px text-[11px] font-semibold text-fg hover:bg-ink-700"
+          className="cursor-pointer border border-ink-400 px-2.5 py-px text-[11px] font-semibold text-fg hover:bg-ink-700"
         >
           Reopen review
         </button>
@@ -168,28 +185,39 @@ const ApproveControls = () => {
   }
   return (
     <span data-test="review-bar" className="flex min-w-0 items-center gap-1.5">
-      {blocked ? (
-        // Amber: the human's own unsent work, not an error. Truncates on a
-        // narrow surface; the button's title always carries the full reason.
-        <span className="min-w-0 max-w-[280px] truncate text-[11px] text-user">{reason}</span>
-      ) : null}
-      <button
-        type="button"
-        data-test="approve"
-        disabled={blocked}
-        title={
-          blocked
+      {/* No status text in the header. Why Approve is unavailable belongs to
+          the thing that is unfinished - the queue bar and the outbox card in
+          the panel, which already say it and can act on it - and to this
+          button's own tooltip. A sentence wedged between two controls in the
+          tightest row of the UI could only ever be truncated prose. */}
+      <Tooltip>
+        {/* The trigger is the WRAPPER, not the button. A disabled button emits
+            no pointer events, so a tooltip attached to it can never open -
+            which is precisely when its explanation is needed. */}
+        <TooltipTrigger
+          render={
+            <span data-test="approve-wrap" className="inline-flex">
+              <button
+                type="button"
+                data-test="approve"
+                disabled={blocked}
+                onClick={() => void approveReview()}
+                className="flex cursor-pointer items-center gap-1.5 border border-sage-600 bg-sage-600 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-cream-50 hover:bg-sage-500 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Approve review
+                {/* Keycaps borrow the label's cream so they don't punch a dark
+                    hole in the sage fill. Kept compact - the header is tight. */}
+                <Kbd className="border-cream-50/30 bg-cream-50/10 text-cream-50">⌘⇧↵</Kbd>
+              </button>
+            </span>
+          }
+        />
+        <TooltipContent>
+          {blocked
             ? `${reason} - the agent stops reading once you approve`
-            : "End the review; the agent stops until re-invoked"
-        }
-        onClick={() => void approveReview()}
-        className="flex cursor-pointer items-center gap-1.5 rounded-md border border-sage-600 bg-sage-600 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-cream-50 hover:bg-sage-500 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Approve review
-        {/* Keycaps borrow the label's cream so they don't punch a dark hole in
-            the sage fill. Kept compact - the header is a tight row. */}
-        <Kbd className="border-cream-50/30 bg-cream-50/10 text-cream-50">⌘⇧↵</Kbd>
-      </button>
+            : "End the review; the agent stops until re-invoked"}
+        </TooltipContent>
+      </Tooltip>
     </span>
   );
 };
@@ -208,13 +236,19 @@ const VersionPicker = () => {
 
   if (version <= 1) {
     return (
-      <div
-        data-test="version"
-        className="rounded-full bg-ink-700 px-[9px] py-px text-[11px] tabular-nums text-steel-300"
-        title="current artifact version"
-      >
-        v{version}
-      </div>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <div
+              data-test="version"
+              className="bg-ink-700 px-[9px] py-px text-[11px] tabular-nums text-steel-300"
+            >
+              v{version}
+            </div>
+          }
+        />
+        <TooltipContent>current artifact version</TooltipContent>
+      </Tooltip>
     );
   }
 
@@ -225,13 +259,21 @@ const VersionPicker = () => {
       onValueChange={(v) => void viewVersion(Number(v))}
       disabled={diffMode}
     >
-      <SelectTrigger
-        data-test="version"
-        title={viewing === null ? "Browse versions" : `Viewing v${viewing} - back to current`}
-        className={viewing === null ? undefined : "border-amber-500 text-amber-300"}
-      >
-        <SelectValue>{(v: string) => `v${v}`}</SelectValue>
-      </SelectTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <SelectTrigger
+              data-test="version"
+              className={viewing === null ? undefined : "border-amber-500 text-amber-300"}
+            >
+              <SelectValue>{(v: string) => `v${v}`}</SelectValue>
+            </SelectTrigger>
+          }
+        />
+        <TooltipContent>
+          {viewing === null ? "Browse versions" : `Viewing v${viewing} - back to current`}
+        </TooltipContent>
+      </Tooltip>
       <SelectContent>
         {versions.map((v) => (
           <SelectItem key={v} value={String(v)}>
@@ -250,60 +292,58 @@ export const Header = () => {
   const version = useSession((s) => s.version);
   const showTargets = useSession((s) => s.showTargets);
   const diffMode = useSession((s) => s.diffMode);
-  const live = useSession((s) => s.live);
 
   return (
-    <header className="relative flex items-center justify-between gap-2 border-b border-ink-600 px-4 py-[10px]">
+    <header className="relative flex items-center justify-between gap-2 border-b border-ink-600 pl-4 pr-2 py-[10px]">
       {/* min-w-0 lets a long artifact name truncate instead of shoving the
           controls out of the header; the controls themselves never shrink. */}
       <div className="min-w-0 flex-1 text-[13px] font-semibold text-fg-strong">
         Lucid review
         <small className="ml-2 font-normal text-fg-muted">{name}</small>
       </div>
-      {live ? null : (
-        // Connection status sits in the true centre of the bar, independent of
-        // how wide the controls on either side grow. Self-clearing: EventSource
-        // is already retrying, so this states what is happening rather than
-        // asking the human to do anything.
-        <span
-          data-test="reconnecting"
-          title="The live connection dropped; retrying"
-          className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-ink-700 px-[9px] py-px text-[11px] text-steel-400"
-        >
-          reconnecting…
-        </span>
-      )}
       <div className="flex flex-none items-center gap-1.5">
         {version > 1 && !diffMode ? (
-          <button
-            type="button"
-            data-test="enter-diff"
-            title="Show what changed"
-            onClick={() => void enterDiff()}
-            className="cursor-pointer rounded-full border border-ink-400 px-2.5 py-px text-[11px] font-semibold text-accent-bright hover:border-accent-bright hover:bg-ink-700"
-          >
-            changes
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  data-test="enter-diff"
+                  onClick={() => void enterDiff()}
+                  className="cursor-pointer border border-ink-400 px-2.5 py-px text-[11px] font-semibold text-accent-bright hover:border-accent-bright hover:bg-ink-700"
+                >
+                  changes
+                </button>
+              }
+            />
+            <TooltipContent>Show what changed</TooltipContent>
+          </Tooltip>
         ) : null}
-        <button
-          type="button"
-          data-test="toggle-targets"
-          aria-pressed={showTargets}
-          aria-label={showTargets ? "Hide annotation targets" : "Show annotation targets"}
-          title={
-            showTargets
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-test="toggle-targets"
+                aria-pressed={showTargets}
+                aria-label={showTargets ? "Hide annotation targets" : "Show annotation targets"}
+                onClick={toggleTargets}
+                className={`inline-flex cursor-pointer items-center border p-[3px] ${
+                  showTargets
+                    ? "border-ink-400 text-accent-bright hover:border-accent-bright"
+                    : "border-steel-600/60 text-steel-400 hover:border-steel-600 hover:text-steel-300"
+                }`}
+              >
+                <Crosshair on={showTargets} />
+              </button>
+            }
+          />
+          <TooltipContent>
+            {showTargets
               ? "Hide annotation targets - read the artifact without marks (⌘.)"
-              : "Show annotation targets (⌘.)"
-          }
-          onClick={toggleTargets}
-          className={`inline-flex cursor-pointer items-center rounded-full border p-[3px] ${
-            showTargets
-              ? "border-ink-400 text-accent-bright hover:border-accent-bright"
-              : "border-steel-600/60 text-steel-400 hover:border-steel-600 hover:text-steel-300"
-          }`}
-        >
-          <Crosshair on={showTargets} />
-        </button>
+              : "Show annotation targets (⌘.)"}
+          </TooltipContent>
+        </Tooltip>
         <ContextRing />
         <VersionPicker />
         <ApproveControls />

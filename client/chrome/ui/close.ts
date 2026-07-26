@@ -10,9 +10,9 @@
 
 /** Panel and dialog dismissal - 24px, the standard control size. */
 export const closeButton =
-  "flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-[16px] leading-none text-fg-faint hover:bg-ink-700 hover:text-fg focus-visible:annot-outline";
+  "flex size-6 shrink-0 cursor-pointer items-center justify-center text-[16px] leading-none text-fg-faint hover:bg-ink-700 hover:text-fg focus-visible:annot-outline";
 
 /** Removal INSIDE a row (a chip, a queued card, a tab): 20px, so it sits in
  *  a line of 12-13px text without setting the row's height. */
 export const closeButtonSmall =
-  "flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-[14px] leading-none text-fg-faint hover:bg-ink-700 hover:text-fg focus-visible:annot-outline";
+  "flex size-5 shrink-0 cursor-pointer items-center justify-center text-[14px] leading-none text-fg-faint hover:bg-ink-700 hover:text-fg focus-visible:annot-outline";

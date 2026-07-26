@@ -6,6 +6,7 @@ import { FoldedText } from "./FoldedText.tsx";
 import { groupOf } from "./question-draft.ts";
 import type { MessageImage } from "./types.ts";
 import { Markdown } from "./ui/markdown.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 export interface QaData {
   /** The asked question's id; the card reads it live from the store, so a
@@ -43,7 +44,7 @@ export const QaPart: DataMessagePartComponent<QaData> = ({ data }) => {
       data-test="qa"
       data-question-id={question.id}
       aria-label="Question and answer"
-      className="flex flex-col gap-2 rounded-lg border border-ink-600 bg-ink-800 px-[11px] py-[10px]"
+      className="flex flex-col gap-2 border border-ink-600 bg-ink-800 px-[11px] py-[10px]"
     >
       <span className="text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint">
         {question.skipped
@@ -100,20 +101,27 @@ export const QaPart: DataMessagePartComponent<QaData> = ({ data }) => {
       {images.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {images.map((img, i) => (
-            <button
-              key={img.file}
-              type="button"
-              data-test="qa-thumb"
-              title={img.name}
-              onClick={() => openLightbox(images, i)}
-              className="cursor-zoom-in rounded-md focus-visible:annot-outline"
-            >
-              <img
-                src={transport.assetUrl(img.file)}
-                alt={img.name}
-                className="block h-[66px] w-[88px] rounded-md border border-ink-600 object-cover hover:border-accent"
+            // The key rides the Tooltip root: it is the mapped element now,
+            // and Base UI's root renders no DOM of its own.
+            <Tooltip key={img.file}>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    data-test="qa-thumb"
+                    onClick={() => openLightbox(images, i)}
+                    className="cursor-zoom-in focus-visible:annot-outline"
+                  >
+                    <img
+                      src={transport.assetUrl(img.file)}
+                      alt={img.name}
+                      className="block h-[66px] w-[88px] border border-ink-600 object-cover hover:border-accent"
+                    />
+                  </button>
+                }
               />
-            </button>
+              <TooltipContent>{img.name}</TooltipContent>
+            </Tooltip>
           ))}
         </div>
       ) : null}

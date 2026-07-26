@@ -12,6 +12,7 @@ import { AnnotationPart } from "./AnnotationPart.tsx";
 import { useSession, useSessionHandle } from "./context.tsx";
 import { DeliveryLabel } from "./Delivery.tsx";
 import { visibleEl } from "./dom.ts";
+import { useHub } from "./hub.ts";
 import { FoldedText } from "./FoldedText.tsx";
 import { useEffect, useState } from "react";
 import {
@@ -24,9 +25,9 @@ import {
   Warnings,
 } from "./Panel.tsx";
 import { QaPart } from "./QaPart.tsx";
-import { Kbd } from "./ui/kbd.tsx";
 import { markdownComponents, prose, urlTransform } from "./ui/markdown.tsx";
 import { closeButtonSmall } from "./ui/close.ts";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
  * The review record. assistant-ui owns the transcript, the composer and the
@@ -34,19 +35,25 @@ import { closeButtonSmall } from "./ui/close.ts";
  */
 
 const Thumb = ({ src, alt }: { readonly src: string; readonly alt: string }) => (
-  <button
-    type="button"
-    data-test="thumb"
-    title={alt}
-    className="cursor-zoom-in rounded-md focus-visible:annot-outline"
-    onClick={() => window.dispatchEvent(new CustomEvent("lucid:lightbox", { detail: src }))}
-  >
-    <img
-      className="block h-[66px] w-[88px] rounded-md border border-ink-600 object-cover hover:border-accent"
-      src={src}
-      alt={alt}
+  <Tooltip>
+    <TooltipTrigger
+      render={
+        <button
+          type="button"
+          data-test="thumb"
+          className="cursor-zoom-in focus-visible:annot-outline"
+          onClick={() => window.dispatchEvent(new CustomEvent("lucid:lightbox", { detail: src }))}
+        >
+          <img
+            className="block h-[66px] w-[88px] border border-ink-600 object-cover hover:border-accent"
+            src={src}
+            alt={alt}
+          />
+        </button>
+      }
     />
-  </button>
+    <TooltipContent>{alt}</TooltipContent>
+  </Tooltip>
 );
 
 /** The human's own turns stay verbatim: what they typed is a quote, not a
@@ -93,7 +100,7 @@ const UserMessage = () => {
     // items-end, not justify-end: the delivery state sits under the bubble on
     // the speaker's side, and both stay right-aligned as the bubble wraps.
     <div className="flex flex-col items-end gap-1" data-role="human">
-      <div className="flex min-w-0 max-w-[85%] flex-wrap gap-1.5 rounded-md rounded-tr-[4px] border border-cream-100/10 bg-user/16 px-3 py-2">
+      <div className="flex min-w-0 max-w-[85%] flex-wrap gap-1.5 border border-cream-100/10 bg-user/16 px-3 py-2">
         <MessagePrimitive.Parts components={parts} />
       </div>
       <DeliveryLabel />
@@ -114,18 +121,25 @@ const AssistantMessage = () => (
 const ComposerAttachment = () => (
   <AttachmentPrimitive.Root
     data-test="image-chip"
-    className="inline-flex items-center gap-1.5 rounded-full border border-ink-600 bg-ink-800 py-[3px] pr-[6px] pl-[3px]"
+    className="inline-flex items-center gap-1.5 border border-ink-600 bg-ink-800 py-[3px] pr-[6px] pl-[3px]"
   >
-    <AttachmentPrimitive.unstable_Thumb className="size-[22px] rounded-full object-cover" />
+    <AttachmentPrimitive.unstable_Thumb className="size-[22px] object-cover" />
     <span className="max-w-[150px] truncate text-[11px] text-cream-300">
       <AttachmentPrimitive.Name />
     </span>
-    <AttachmentPrimitive.Remove
-      title="Remove"
-      className={`${closeButtonSmall} hover:text-rust-300`}
-    >
-      ×
-    </AttachmentPrimitive.Remove>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <AttachmentPrimitive.Remove
+            aria-label="Remove"
+            className={`${closeButtonSmall} hover:text-rust-300`}
+          >
+            ×
+          </AttachmentPrimitive.Remove>
+        }
+      />
+      <TooltipContent>Remove</TooltipContent>
+    </Tooltip>
   </AttachmentPrimitive.Root>
 );
 
@@ -144,21 +158,26 @@ const Composer = () => {
         // Large text pastes fold to `[Pasted text #N +L lines]` and expand back
         // at send; image pastes fall through to the attachment adapter.
         onPaste={pastes.collapseTextPaste}
-        className="resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
+        className="resize-y border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline"
       />
       {/* Under the input, on the send line: who the NEXT unattended turn runs
-          as belongs beside the act of sending it, not above the box. */}
-      <div className="flex flex-wrap items-center gap-2">
+          as belongs beside the act of sending it, not above the box.
+          wrap-REVERSE: when the pickers and the button stop fitting side by
+          side, the button takes the line ABOVE them rather than being pushed
+          below the panel's own footer. */}
+      <div className="flex flex-wrap-reverse items-center gap-2">
         <SelectionPickers />
-        <span className="flex-1" />
+        {/* No ↵ badge: the placeholder in the box above already says Enter
+            sends, and the button repeating it was the same fact twice. */}
         <ComposerPrimitive.Send
           data-test="send-message"
-          className="flex cursor-pointer items-center gap-1.5 rounded-md border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
+          className="ml-auto flex cursor-pointer items-center border border-ink-600 bg-ink-700 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Send message
-          <Kbd>↵</Kbd>
         </ComposerPrimitive.Send>
       </div>
+      <ConnectionLine />
+      <AttendanceFooter />
     </ComposerPrimitive.Root>
   );
 };
@@ -263,27 +282,203 @@ const WorkingIndicator = () => {
  */
 const ListenerLine = () => {
   const listening = useSession((s) => s.agentsListening);
+  // Does the hub drive delivery itself? Null in the standalone viewer, where
+  // there is no hub and nothing spawns - the same as false, for this line.
+  const attend = useHub((s) => s.attend) === true;
+  const resumable = useSession((s) => s.resumable);
   const working = useSession((s) => s.agentWorking);
   const status = useSession((s) => s.status);
-  if (status !== "active" || working) return null;
-  return (
-    <div className="flex flex-col gap-1">
+  const presence = useSession((s) => s.attendantPresence);
+  const attendant = useSession((s) => s.lastAttendant);
+  if (status !== "active") return null;
+
+  // A turn is RUNNING. This line used to blank itself here and defer to the
+  // working indicator in the transcript - but that indicator scrolls away with
+  // the record, so the one place the human is looking (the box they just typed
+  // into) said nothing at all about a response being on the way.
+  if (working) {
+    return (
       <div
         data-test="listener-line"
-        data-listening={listening > 0 ? "true" : "false"}
-        className="flex items-center justify-center text-center text-[11px]"
+        data-mode="working"
+        className="flex items-center justify-center text-center"
       >
-        {listening > 0 ? (
-          <span className="text-agent">
-            {listening === 1 ? "agent listening" : `${listening} agents listening`}
-          </span>
-        ) : (
-          <span className="text-fg-faint">
-            no agent connected · feedback is recorded and delivered when one checks in
-          </span>
-        )}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              // The shimmer, not a term with a dot: everywhere else this panel
+              // reports a STATE that is simply true right now, and a sweep
+              // across the words is how the chrome already says "in progress"
+              // (tw-shimmer clips to the text, so the /40 base is what makes
+              // the sweep visible - their documented idiom).
+              <span data-test="mode-term" className="shimmer text-[11px] text-fg/40">
+                Response on the way…
+              </span>
+            }
+          />
+          <TooltipContent>
+            Your feedback was picked up and a turn is running. The artifact updates itself when it
+            lands - anything you send now joins the next turn.
+          </TooltipContent>
+        </Tooltip>
       </div>
-      {listening === 0 ? <ResumeHint /> : null}
+    );
+  }
+
+  // Someone has this conversation OPEN in a terminal. That outranks the
+  // listener count, which only sees an agent blocked in `wait` and so reads
+  // zero for a human mid-thought - the state where the old line said "no
+  // agent connected" about a session running two windows away.
+  if (presence?.interactive) {
+    const harness = attendant?.harness ?? "the agent";
+    return (
+      <div
+        data-test="listener-line"
+        data-presence="interactive"
+        className="flex items-center justify-center gap-1.5 text-center"
+      >
+        <span className="size-1.5 flex-none bg-agent" aria-hidden="true" />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                data-test="mode-term"
+                className="border-b border-dotted border-agent/40 text-[10px] uppercase tracking-[0.08em] text-agent"
+              >
+                {`open in ${harness}`}
+                {presence.status ? ` · ${presence.status}` : ""}
+              </span>
+            }
+          />
+          <TooltipContent>
+            {`That conversation is open in a terminal${presence.cwd ? ` (${presence.cwd})` : ""}. `}
+            Your message goes to it - Lucid will not start a second process on the same session.
+          </TooltipContent>
+        </Tooltip>
+      </div>
+    );
+  }
+
+  if (listening > 0) {
+    return (
+      <div
+        data-test="listener-line"
+        data-listening="true"
+        className="flex items-center justify-center text-center text-[11px] text-agent"
+      >
+        {listening === 1 ? "agent listening" : `${listening} agents listening`}
+      </div>
+    );
+  }
+
+  // Nothing is running. What happens when you send depends entirely on whether
+  // this hub attends: with attend on it RESUMES the recorded session headlessly
+  // for one turn, which is a thing Lucid does - not a thing it waits for. The
+  // old line ("delivered when one checks in") described the review-only hub and
+  // was simply untrue here, implying some agent would wander back on its own.
+  //
+  // Named as a TERM with the explanation on hover, not a sentence: this sits
+  // above the composer on every turn, and a line of prose that never changes
+  // is a line of prose nobody reads after the first time.
+  const harness = attendant?.harness ?? "the agent";
+  // "Spawn mode" is a promise that sending starts a turn. It can only be kept
+  // when a harness conversation exists to resume - an artifact nobody has
+  // attended (hand-written, recovered from a backup) has none, and the engine
+  // declines every time with "no harness session recorded". Announcing spawn
+  // mode there left feedback sitting under a claim that a reply was coming.
+  const spawnable = attend && resumable;
+  return (
+    <div
+      data-test="listener-line"
+      data-listening="false"
+      data-mode={spawnable ? "spawn" : attend ? "unattached" : "recorded"}
+      className="flex items-center justify-center text-center"
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              data-test="mode-term"
+              className="border-b border-dotted border-ink-500 text-[10px] uppercase tracking-[0.08em] text-fg-faint hover:text-fg"
+            >
+              {spawnable ? "spawn mode" : attend ? "no agent session" : "recording only"}
+            </span>
+          }
+        />
+        <TooltipContent>
+          {spawnable
+            ? `Nothing is running. Sending resumes ${harness} headlessly - one turn per send, on the model and effort picked below.`
+            : attend
+              ? "No agent conversation is recorded on this artifact, so there is nothing to resume - it was written by hand, or recovered from a backup. Your feedback is saved and the next agent that opens it reads everything waiting."
+              : `Nothing is running, and this hub does not spawn agents. Feedback is recorded and delivered the next time ${harness} checks in. Start the hub with --attend to have it drive turns itself.`}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+};
+
+/**
+ * The bottom of the panel, under the send button: who is on the other end, and
+ * - when nobody is - the way to become them.
+ *
+ * The harness is named here ALWAYS, because it is standing information rather
+ * than news: it belongs at the foot of the panel, not competing with the line
+ * that reports what is happening right now. The resume command sits below it,
+ * and only in the mode where resuming is a thing to do - with the conversation
+ * already open, the command would offer a second process on one session.
+ */
+/**
+ * The one place connection state is reported: at the composer, which is what a
+ * dropped stream actually costs you - a submitted message that cannot land.
+ *
+ * It was in two places before (the artifact header AND the tab strip), which
+ * described a single dropped stream twice, in the two corners furthest from the
+ * box you had just typed into. Self-clearing: both streams retry themselves, so
+ * this states what is happening and asks for nothing.
+ */
+const ConnectionLine = () => {
+  const live = useSession((s) => s.live);
+  const hubConnected = useHub((s) => s.connected);
+  // A standalone per-session viewer has NO hub - its transport base is "",
+  // where the shell's is "/s/<id>". Reporting a hub that was never there would
+  // put a permanent "reconnecting" under every standalone composer.
+  const hubHosted = useSessionHandle().transport.base !== "";
+  // The session stream is the one that carries a turn, so it is named first;
+  // the hub only matters here when the session itself is healthy.
+  const what = !live ? "the live connection" : hubHosted && !hubConnected ? "the hub" : null;
+  if (what === null) return null;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            data-test="reconnecting"
+            data-scope={live ? "hub" : "session"}
+            className="flex items-center justify-center gap-1.5 border-t border-ink-700 pt-2 text-[10px] text-steel-400"
+          >
+            <span className="inline-block size-1.5 flex-none bg-steel-400" />
+            reconnecting to {what}…
+          </span>
+        }
+      />
+      <TooltipContent>{what} dropped; retrying automatically</TooltipContent>
+    </Tooltip>
+  );
+};
+
+const AttendanceFooter = () => {
+  const status = useSession((s) => s.status);
+  const presence = useSession((s) => s.attendantPresence);
+  const attendant = useSession((s) => s.lastAttendant);
+  if (status !== "active" || !attendant?.harness) return null;
+  const interactive = presence?.interactive === true;
+  return (
+    <div className="flex flex-col items-center gap-1 border-t border-ink-700 pt-2">
+      <span data-test="harness-line" className="text-[10px] text-fg-faint">
+        {attendant.harness}
+        {interactive ? " · interactive" : " · headless turns"}
+      </span>
+      {interactive ? null : <ResumeHint />}
     </div>
   );
 };
@@ -300,60 +495,69 @@ const ResumeHint = () => {
   if (!attendant?.resume) return null;
   const cmd = attendant.resume;
   return (
-    <button
-      type="button"
-      data-test="resume-copy"
-      title={cmd}
-      onClick={() => {
-        navigator.clipboard.writeText(cmd).then(
-          () => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-          },
-          () => notify.warn("Couldn't copy - the command is in this button's tooltip."),
-        );
-      }}
-      className="flex cursor-pointer items-center gap-1.5 self-start text-[11px] text-fg-faint hover:text-fg"
-    >
-      {copied ? (
-        // lucide check
-        <svg
-          viewBox="0 0 24 24"
-          width="12"
-          height="12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-          className="text-agent"
-        >
-          <path d="M20 6 9 17l-5-5" />
-        </svg>
-      ) : (
-        // lucide copy
-        <svg
-          viewBox="0 0 24 24"
-          width="12"
-          height="12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-          <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-        </svg>
-      )}
-      <span data-test="resume-copy-label">
-        {copied
-          ? "copied - paste it in a terminal"
-          : `copy the command to resume the ${attendant.harness} conversation`}
-      </span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            data-test="resume-copy"
+            aria-label="Copy the command that resumes this conversation"
+            onClick={() => {
+              navigator.clipboard.writeText(cmd).then(
+                () => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                },
+                () => notify.warn("Couldn't copy - the command is in this button's tooltip."),
+              );
+            }}
+            // Centred with the footer, and quieter than the harness line above it:
+            // this is an escape hatch to a terminal, not the way to use the panel.
+            className="flex cursor-pointer items-center gap-1 self-center border border-ink-700 bg-ink-800 px-1.5 py-px font-mono text-[9px] tracking-tight text-fg-faint hover:border-ink-600 hover:text-fg"
+          >
+            {copied ? (
+              // lucide check
+              <svg
+                viewBox="0 0 24 24"
+                width="10"
+                height="10"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                className="text-agent"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            ) : (
+              // lucide copy
+              <svg
+                viewBox="0 0 24 24"
+                width="10"
+                height="10"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect width="14" height="14" x="8" y="8" />
+                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+              </svg>
+            )}
+            <span data-test="resume-copy-label">
+              {copied ? "copied - paste it in a terminal" : "copy resume command"}
+            </span>
+          </button>
+        }
+      />
+      {/* The command itself, which the chip's label no longer spells out - so
+          it is readable before copying, not only after pasting. */}
+      <TooltipContent className="font-mono">{cmd}</TooltipContent>
+    </Tooltip>
   );
 };
 
@@ -392,32 +596,39 @@ const ScrollToLatest = () => {
 
   return (
     <div className="pointer-events-none sticky bottom-0 z-10 flex justify-center">
-      <button
-        type="button"
-        data-test="scroll-bottom"
-        title="Scroll to the latest"
-        disabled={atBottom}
-        onClick={() => {
-          const el = visibleEl('[data-test="thread-viewport"]');
-          el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-        }}
-        className="pointer-events-auto flex size-8 cursor-pointer items-center justify-center rounded-full border border-ink-400 bg-ink-800/95 text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)] hover:bg-ink-700 disabled:invisible"
-      >
-        {/* lucide chevron-down */}
-        <svg
-          viewBox="0 0 24 24"
-          width="15"
-          height="15"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              data-test="scroll-bottom"
+              aria-label="Scroll to the latest"
+              disabled={atBottom}
+              onClick={() => {
+                const el = visibleEl('[data-test="thread-viewport"]');
+                el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+              }}
+              className="pointer-events-auto flex size-8 cursor-pointer items-center justify-center border border-ink-400 bg-ink-800/95 text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)] hover:bg-ink-700 disabled:invisible"
+            >
+              {/* lucide chevron-down */}
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+          }
+        />
+        <TooltipContent>Scroll to the latest</TooltipContent>
+      </Tooltip>
     </div>
   );
 };

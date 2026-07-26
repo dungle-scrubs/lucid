@@ -10,6 +10,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "./ui/sidebar.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
  * The project's other reviews. Every session is its own server on its own port,
@@ -37,65 +38,71 @@ const CopyButton = ({
   const { notify } = useSessionHandle();
   const [copied, setCopied] = useState(false);
   return (
-    <button
-      type="button"
-      data-test={test}
-      title={cmd}
-      onClick={(e) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(cmd).then(
-          () => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-          },
-          () => notify.warn("Couldn't copy - the command is in this button's tooltip."),
-        );
-      }}
-      className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] text-fg-faint hover:bg-sidebar-accent hover:text-fg"
-    >
-      {copied ? (
-        // lucide check
-        <svg
-          viewBox="0 0 24 24"
-          width="12"
-          height="12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-          className="shrink-0 text-agent"
-        >
-          <path d="M20 6 9 17l-5-5" />
-        </svg>
-      ) : (
-        // lucide copy
-        <svg
-          viewBox="0 0 24 24"
-          width="12"
-          height="12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-          className="shrink-0"
-        >
-          <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-          <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-        </svg>
-      )}
-      <span className="truncate">{copied ? "copied - paste it in a terminal" : label}</span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            data-test={test}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigator.clipboard.writeText(cmd).then(
+                () => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                },
+                () => notify.warn("Couldn't copy - the command is in this button's tooltip."),
+              );
+            }}
+            className="flex w-full cursor-pointer items-center gap-1.5 px-2 py-1 text-left text-[11px] text-fg-faint hover:bg-sidebar-accent hover:text-fg"
+          >
+            {copied ? (
+              // lucide check
+              <svg
+                viewBox="0 0 24 24"
+                width="12"
+                height="12"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                className="shrink-0 text-agent"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            ) : (
+              // lucide copy
+              <svg
+                viewBox="0 0 24 24"
+                width="12"
+                height="12"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                className="shrink-0"
+              >
+                <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+              </svg>
+            )}
+            <span className="truncate">{copied ? "copied - paste it in a terminal" : label}</span>
+          </button>
+        }
+      />
+      <TooltipContent>{cmd}</TooltipContent>
+    </Tooltip>
   );
 };
 
 const StatusDot = ({ s }: { readonly s: SessionSummary }) => (
   <span
     aria-hidden="true"
-    className={`size-1.5 shrink-0 rounded-full ${
+    className={`size-1.5 shrink-0 ${
       s.live ? "bg-agent" : s.status === "ended" ? "bg-steel-600" : "bg-brass-600"
     }`}
   />
@@ -105,16 +112,22 @@ const SessionRow = ({ s, current }: { readonly s: SessionSummary; readonly curre
   const { switchToSession } = useActions();
   return (
     <SidebarMenuItem data-test="session-row" data-live={s.live ? "true" : "false"}>
-      <SidebarMenuButton
-        isActive={current}
-        disabled={current || !s.live}
-        title={s.session}
-        onClick={() => switchToSession(s)}
-        className={s.live && !current ? "cursor-pointer" : "cursor-default"}
-      >
-        <StatusDot s={s} />
-        <span className="truncate">{s.name}</span>
-      </SidebarMenuButton>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <SidebarMenuButton
+              isActive={current}
+              disabled={current || !s.live}
+              onClick={() => switchToSession(s)}
+              className={s.live && !current ? "cursor-pointer" : "cursor-default"}
+            >
+              <StatusDot s={s} />
+              <span className="truncate">{s.name}</span>
+            </SidebarMenuButton>
+          }
+        />
+        <TooltipContent>{s.session}</TooltipContent>
+      </Tooltip>
       <SidebarMenuBadge>v{s.version}</SidebarMenuBadge>
       <div className="pb-1 pl-2 text-[11px] text-fg-faint">
         {current
@@ -162,32 +175,39 @@ export const Sessions = () => {
     <SidebarGroup data-test="sessions-list">
       <SidebarGroupLabel className="justify-between">
         <span>This project</span>
-        <button
-          type="button"
-          data-test="sessions-refresh"
-          title="Refresh"
-          onClick={() => void loadSessions()}
-          className="cursor-pointer rounded p-0.5 text-fg-faint hover:text-fg"
-        >
-          {/* lucide refresh-cw */}
-          <svg
-            viewBox="0 0 24 24"
-            width="13"
-            height="13"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-            className={loading ? "animate-spin" : ""}
-          >
-            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-            <path d="M21 3v5h-5" />
-            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-            <path d="M8 16H3v5" />
-          </svg>
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-test="sessions-refresh"
+                aria-label="Refresh"
+                onClick={() => void loadSessions()}
+                className="cursor-pointer p-0.5 text-fg-faint hover:text-fg"
+              >
+                {/* lucide refresh-cw */}
+                <svg
+                  viewBox="0 0 24 24"
+                  width="13"
+                  height="13"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                  className={loading ? "animate-spin" : ""}
+                >
+                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                  <path d="M21 3v5h-5" />
+                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                  <path d="M8 16H3v5" />
+                </svg>
+              </button>
+            }
+          />
+          <TooltipContent>Refresh</TooltipContent>
+        </Tooltip>
       </SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>

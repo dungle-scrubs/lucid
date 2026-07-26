@@ -25,6 +25,7 @@ import type { AgentQuestion } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
 import { Markdown } from "./ui/markdown.tsx";
 import { closeButton, closeButtonSmall } from "./ui/close.ts";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
  * The question drawer (D11-D13): a pending ask slides up from the bottom of the
@@ -86,7 +87,7 @@ export const useQuestionDrawer = (): {
 type DraftUpdate = (draft: GroupDraft) => GroupDraft;
 
 const FIELD =
-  "w-full resize-y rounded-md border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline";
+  "w-full resize-y border border-ink-600 bg-bg-inset p-2 font-sans text-[13px] text-fg placeholder:text-fg-faint focus-visible:annot-outline";
 
 /** Move focus to the panel's active target: the tabbable choice row, or the
  *  first field on a free-text question. */
@@ -135,7 +136,7 @@ const ChoicePreview = ({
     {preview.text ? (
       <pre
         data-test="preview-text"
-        className="overflow-x-auto rounded border border-ink-600 bg-bg-inset p-2 font-mono text-[11px] leading-snug text-fg-muted"
+        className="overflow-x-auto border border-ink-600 bg-bg-inset p-2 font-mono text-[11px] leading-snug text-fg-muted"
       >
         {preview.text}
       </pre>
@@ -185,7 +186,7 @@ const Indicator = ({ multi, on }: { readonly multi: boolean; readonly on: boolea
   <span
     aria-hidden
     className={`mt-0.5 flex size-4 shrink-0 items-center justify-center border text-[10px] ${
-      multi ? "rounded-[3px]" : "rounded-full"
+      multi ? "" : ""
     } ${on ? "border-accent bg-accent text-on-accent" : "border-ink-400 text-transparent"}`}
   >
     ✓
@@ -228,7 +229,7 @@ const ChoiceRow = ({
     onFocus={onActivate}
     onMouseEnter={onActivate}
     onKeyDown={onKeyNav}
-    className={`flex w-full cursor-pointer items-start gap-2.5 rounded-md border px-2.5 py-1.5 text-left ${
+    className={`flex w-full cursor-pointer items-start gap-2.5 border px-2.5 py-1.5 text-left ${
       selected
         ? "border-accent bg-accent/15"
         : active
@@ -243,15 +244,12 @@ const ChoiceRow = ({
           <span className="tabular-nums text-fg-faint">{index + 1}.</span> {choice.label}
         </span>
         {choice.recommended ? (
-          <span className="rounded-full border border-accent/50 bg-accent/10 px-1.5 text-[10px] text-accent-bright">
+          <span className="border border-accent/50 bg-accent/10 px-1.5 text-[10px] text-accent-bright">
             Recommended
           </span>
         ) : null}
         {(choice.badges ?? []).map((b) => (
-          <span
-            key={b}
-            className="rounded-full border border-ink-500 px-1.5 text-[10px] text-fg-muted"
-          >
+          <span key={b} className="border border-ink-500 px-1.5 text-[10px] text-fg-muted">
             {b}
           </span>
         ))}
@@ -297,7 +295,7 @@ const CustomRow = ({
   return (
     // A label, so a click anywhere in the row focuses the field natively.
     <label
-      className={`flex w-full cursor-pointer items-start gap-2.5 rounded-md border px-2.5 py-1.5 ${
+      className={`flex w-full cursor-pointer items-start gap-2.5 border px-2.5 py-1.5 ${
         d.customSelected ? "border-accent bg-accent/15" : "border-ink-600 bg-bg-inset"
       }`}
     >
@@ -539,7 +537,7 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
           // biome-ignore lint/suspicious/noArrayIndexKey: anchors have no id and the list only ever shrinks from a fixed pick order.
           key={i}
           data-test="answer-anchor"
-          className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/10 px-2 py-px text-[11px] text-fg"
+          className="inline-flex items-center gap-1 border border-accent/50 bg-accent/10 px-2 py-px text-[11px] text-fg"
         >
           <span className="text-accent-bright">◎</span>
           {anchorLabel(anchor.snippet)}
@@ -554,21 +552,29 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
         </span>
       ))}
       {pins.length === 0 ? (
-        <button
-          type="button"
-          data-test="pin-region"
-          title="Or shift-click the artifact - shift+⌘-click pins several spots"
-          onClick={() => (picking ? cancelAnswerPick() : startAnswerPick(q))}
-          className={`inline-flex cursor-pointer items-center gap-1 rounded-full border px-2 py-px text-[11px] ${
-            picking
-              ? "border-accent-bright bg-ink-700 text-accent-bright"
-              : "border-ink-400 text-fg-muted hover:border-accent-bright hover:text-fg"
-          }`}
-        >
-          {picking ? "Click a spot in the artifact · Esc to cancel" : "◎ Pin a spot"}
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-test="pin-region"
+                onClick={() => (picking ? cancelAnswerPick() : startAnswerPick(q))}
+                className={`inline-flex cursor-pointer items-center gap-1 border px-2 py-px text-[11px] ${
+                  picking
+                    ? "border-accent-bright bg-ink-700 text-accent-bright"
+                    : "border-ink-400 text-fg-muted hover:border-accent-bright hover:text-fg"
+                }`}
+              >
+                {picking ? "Click a spot in the artifact · Esc to cancel" : "◎ Pin a spot"}
+              </button>
+            }
+          />
+          <TooltipContent>
+            Or shift-click the artifact - shift+⌘-click pins several spots
+          </TooltipContent>
+        </Tooltip>
       ) : null}
-      <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-ink-400 px-2 py-px text-[11px] text-fg-muted hover:border-accent-bright hover:text-fg">
+      <label className="inline-flex cursor-pointer items-center gap-1 border border-ink-400 px-2 py-px text-[11px] text-fg-muted hover:border-accent-bright hover:text-fg">
         Attach image
         <input
           type="file"
@@ -586,13 +592,13 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
           <img
             src={img.url}
             alt={img.name}
-            className="h-10 w-10 rounded border border-ink-600 object-cover"
+            className="h-10 w-10 border border-ink-600 object-cover"
           />
           <button
             type="button"
             aria-label={`Remove ${img.name}`}
             onClick={() => removeAnswerImage(q, img.id)}
-            className="absolute -right-2 -top-2 flex size-5 cursor-pointer items-center justify-center rounded-full border border-ink-400 bg-ink-850 text-[12px] leading-none text-fg-muted hover:text-fg focus-visible:annot-outline"
+            className="absolute -right-2 -top-2 flex size-5 cursor-pointer items-center justify-center border border-ink-400 bg-ink-850 text-[12px] leading-none text-fg-muted hover:text-fg focus-visible:annot-outline"
           >
             ×
           </button>
@@ -743,16 +749,22 @@ const Drawer = ({
             </button>
           ) : null}
           <span className="flex-1" />
-          <button
-            type="button"
-            data-test="drawer-lower"
-            title="Lower the drawer (Esc) - your draft is kept"
-            aria-label="Lower the question drawer"
-            onClick={() => dismissQuestionDrawer()}
-            className={closeButton}
-          >
-            ×
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  data-test="drawer-lower"
+                  aria-label="Lower the question drawer"
+                  onClick={() => dismissQuestionDrawer()}
+                  className={closeButton}
+                >
+                  ×
+                </button>
+              }
+            />
+            <TooltipContent>Lower the drawer (Esc) - your draft is kept</TooltipContent>
+          </Tooltip>
         </div>
 
         {grouped ? (
@@ -773,7 +785,7 @@ const Drawer = ({
                   aria-selected={on}
                   tabIndex={on ? 0 : -1}
                   onClick={() => onChange((d) => goToTab(d, i, group.length))}
-                  className={`flex max-w-[16rem] cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[11px] ${
+                  className={`flex max-w-[16rem] cursor-pointer items-center gap-1 border px-2 py-1 text-[11px] ${
                     on
                       ? "border-accent bg-accent/15 text-fg"
                       : "border-ink-600 bg-bg-inset text-fg-muted hover:border-ink-400"
@@ -781,9 +793,16 @@ const Drawer = ({
                 >
                   <span className="min-w-0 truncate">{g.header || `Question ${i + 1}`}</span>
                   {valid ? (
-                    <span title="answered" className="text-accent-bright">
-                      ✓
-                    </span>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span role="img" aria-label="answered" className="text-accent-bright">
+                            ✓
+                          </span>
+                        }
+                      />
+                      <TooltipContent>answered</TooltipContent>
+                    </Tooltip>
                   ) : null}
                 </button>
               );
@@ -810,7 +829,7 @@ const Drawer = ({
             // unanswerable - you could never reach the questions it waits on.
             disabled={uploading || (isFinal ? !ready : !tabValid)}
             onClick={confirmOrAdvance}
-            className="flex w-fit cursor-pointer items-center gap-1.5 rounded-md border border-accent bg-accent px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-on-accent hover:bg-accent-bright disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex w-fit cursor-pointer items-center gap-1.5 border border-accent bg-accent px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-on-accent hover:bg-accent-bright disabled:cursor-not-allowed disabled:opacity-40"
           >
             {uploading
               ? "Uploading…"
@@ -830,7 +849,7 @@ const Drawer = ({
               type="button"
               data-test="goto-incomplete"
               onClick={() => onChange((d) => goToTab(d, firstInvalid, group.length))}
-              className="w-fit max-w-[16rem] cursor-pointer truncate rounded-md border border-ink-500 px-2 py-[3px] text-[11px] text-fg-muted hover:border-accent-bright hover:text-fg"
+              className="w-fit max-w-[16rem] cursor-pointer truncate border border-ink-500 px-2 py-[3px] text-[11px] text-fg-muted hover:border-accent-bright hover:text-fg"
             >
               Go to {group[firstInvalid]?.header || `Question ${firstInvalid + 1}`}
             </button>

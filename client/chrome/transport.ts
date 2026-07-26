@@ -26,6 +26,16 @@ export interface Transport {
   readonly assetUrl: (file: string) => string;
 }
 
+/**
+ * Every request gets a deadline. Without one a socket that accepts and then
+ * never answers - a hub caught mid-restart - leaves the await pending forever,
+ * and any flag the caller set around it is stuck on: `sending` stayed true,
+ * which disabled the composer, which made Enter insert a newline instead of
+ * sending. A hang must become a failed attempt so the retry can run and the
+ * caller can keep the human's text and say so.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 export const createTransport = (base: string): Transport => {
   const api = async (path: string, body?: unknown): Promise<Response> => {
     const isPost = body !== undefined;
@@ -43,7 +53,10 @@ export const createTransport = (base: string): Transport => {
     let lastErr: unknown;
     for (let i = 0; i < attempts; i++) {
       try {
-        const res = await fetch(`${base}${path}`, init);
+        const res = await fetch(`${base}${path}`, {
+          ...init,
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
         if (res.ok) return res;
         lastErr = new Error(`HTTP ${res.status}`);
       } catch (e) {

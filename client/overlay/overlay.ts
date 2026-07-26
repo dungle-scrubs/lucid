@@ -129,13 +129,11 @@ export class LucidOverlay extends LitElement {
       position: fixed;
       border: 1.5px dashed rgba(94, 129, 172, 0.9);
       background: rgba(94, 129, 172, 0.08);
-      border-radius: 3px;
       pointer-events: none;
       transition: all 0.04s linear;
     }
     .marker {
       position: fixed;
-      border-radius: 3px;
       pointer-events: none;
       box-sizing: border-box;
       transition: background 0.1s linear, box-shadow 0.1s linear;
@@ -168,7 +166,6 @@ export class LucidOverlay extends LitElement {
       transform: translate(-50%, -50%);
       width: 20px;
       height: 20px;
-      border-radius: 999px;
       color: #1a202c;
       font-size: 11px;
       font-weight: 700;
@@ -294,16 +291,16 @@ export class LucidOverlay extends LitElement {
     const style = document.createElement("style");
     style.id = "__lucid_diff_style";
     style.textContent = `
-      [data-diff="added"] { box-shadow: inset 3px 0 0 #8aa872; background: rgba(163,190,140,0.12); border-radius: 3px; }
+      [data-diff="added"] { box-shadow: inset 3px 0 0 #8aa872; background: rgba(163,190,140,0.12); }
       [data-diff="changed"] { box-shadow: inset 3px 0 0 #a3be8c; }
-      .lucid-diff-was, .lucid-diff-now { display: block; border-radius: 3px; padding: 2px 6px; }
+      .lucid-diff-was, .lucid-diff-now { display: block; padding: 2px 6px; }
       .lucid-diff-was { text-decoration: line-through; opacity: 0.7; background: rgba(191,97,106,0.12); }
       .lucid-diff-now { margin-top: 3px; background: rgba(163,190,140,0.14); }
       .lucid-diff-was::before, .lucid-diff-now::before { display: block; font-size: 9px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; text-decoration: none; opacity: 0.8; }
       .lucid-diff-was::before { content: "was"; color: #bf616a; }
       .lucid-diff-now::before { content: "now"; color: #6f8d59; }
-      .lucid-ghost { display: block; opacity: 0.55; text-decoration: line-through; background: rgba(191,97,106,0.08); box-shadow: inset 3px 0 0 #bf616a; border-radius: 3px; }
-      [data-hunk].lucid-active { outline: 2px solid #5e81ac; outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; }
+      .lucid-ghost { display: block; opacity: 0.55; text-decoration: line-through; background: rgba(191,97,106,0.08); box-shadow: inset 3px 0 0 #bf616a; }
+      [data-hunk].lucid-active { outline: 2px solid #5e81ac; outline-offset: 3px; scroll-margin: 80px; }
     `;
     document.head.appendChild(style);
   }
@@ -321,7 +318,7 @@ export class LucidOverlay extends LitElement {
     style.id = "__lucid_section_style";
     style.textContent = `
       @keyframes __lucid_section_flash { from { outline-color: rgba(94,129,172,0.9); } to { outline-color: rgba(94,129,172,0); } }
-      .__lucid_section_target { outline: 2px solid rgba(94,129,172,0.9); outline-offset: 3px; border-radius: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
+      .__lucid_section_target { outline: 2px solid rgba(94,129,172,0.9); outline-offset: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
     `;
     document.head.appendChild(style);
   }

@@ -49,7 +49,7 @@ const AnnotationItems = ({ handle }: { readonly handle: SessionHandle }) => {
               ?.scrollIntoView({ behavior: "smooth", block: "center" });
           }}
         >
-          <span className="flex size-4 flex-none items-center justify-center rounded-full bg-accent text-[10px] font-bold text-on-accent">
+          <span className="flex size-4 flex-none items-center justify-center bg-accent text-[10px] font-bold text-on-accent">
             {i + 1}
           </span>
           <span className="truncate">{a.note}</span>

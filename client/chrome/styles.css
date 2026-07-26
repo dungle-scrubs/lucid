@@ -124,8 +124,11 @@
   --font-sans: "JetBrains Mono", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-mono: "JetBrains Mono", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* SMUI is sharp-edged (radius 0). Full-round pills and the circular
-     annotation badges keep their geometry - those are marks, not corners. */
+  /* SMUI is sharp-edged: radius 0, with NO exceptions. Pills and the
+     annotation badges used to keep their full-round geometry as "marks, not
+     corners"; they are squared now too - one rule beats a carve-out nobody
+     can see the boundary of. Keep these at 0 rather than deleting them: the
+     vendored components ask for `--radius-*` by name. */
   --radius-xs: 0rem;
   --radius-sm: 0rem;
   --radius-md: 0rem;

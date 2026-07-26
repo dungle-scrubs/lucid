@@ -37,6 +37,17 @@ export const projectName = (project: string): string =>
   project.split("/").filter(Boolean).pop() ?? project;
 
 /**
+ * Where an artifact sits, said as briefly as it can be truthfully said: the
+ * path under its project, or - when it lives OUTSIDE the project, as every
+ * artifact in an agent's scratchpad does - just its filename. Slicing the
+ * project prefix off unconditionally produced sliced-up nonsense for those.
+ */
+export const artifactLabel = (artifact: string, project: string): string =>
+  artifact.startsWith(`${project}/`)
+    ? artifact.slice(project.length + 1)
+    : (artifact.split("/").pop() ?? artifact);
+
+/**
  * Every root `POST /hub/create` would accept: the grouping project of each
  * listed session, plus any worktree checkout - the hub lists a worktree as a
  * root of its own, so both are legitimate places to put a new artifact. The
@@ -79,6 +90,10 @@ interface HubState {
   /** The hub runs the attend engine, so it can author a new artifact
    *  (D15). Null until `/hub/identity` answers - unknown is not "no". */
   attend: boolean | null;
+  /** Folders the hub scans for sessions. What an empty shell names when it
+   *  reports having found nothing: "looked here" is correctable, "no reviews
+   *  yet" is a dead end. Empty until `/hub/identity` answers. */
+  roots: readonly string[];
   /** The harness registry's recipe names, so the create dialog can OFFER
    *  them instead of asking for magic strings. Empty until identity answers
    *  (or when no registry exists - the dialog then omits the field). */
@@ -107,6 +122,7 @@ export const useHub = create<HubState>(() => ({
   paletteOpen: false,
   createOpen: false,
   attend: null,
+  roots: [],
   harnesses: [],
   defaultHarness: null,
   harnessInfo: [],
@@ -132,7 +148,36 @@ const activate = (key: string): void => {
   // Activating a tab follows it to its project: the strip is project-scoped
   // (D8), so landing on a tab from elsewhere (⌘K, ?s boot) rescopes.
   const project = useHub.getState().sessions.find((s) => s.artifact === key)?.project;
-  useShell.setState({ activeKey: key, ...(project ? { activeProject: project } : {}) });
+  // Unknown project (the listing has not caught up with this tab yet): widen
+  // to all projects rather than keeping a scope this tab is not in. A stale
+  // scope over a foreign artifact is the confusing state; no scope is honest.
+  useShell.setState({ activeKey: key, activeProject: project ?? null });
+};
+
+/**
+ * Which open tabs the strip shows: the ones in the active project's scope, plus
+ * the ACTIVE tab always.
+ *
+ * The active tab's presence is not a nicety - it is what makes the strip a way
+ * out. Scope and active tab CAN disagree (a burst of `lucid open` activates
+ * tabs faster than the listing names their projects), and a strip that filtered
+ * the active tab away left the shell showing one project's artifact under
+ * another project's badge, with no tab to click and no scope change that helped.
+ *
+ * A tab whose project the listing does not know yet also stays, rather than
+ * vanishing mid-load.
+ */
+export const visibleTabKeys = (
+  sessionKeys: readonly string[],
+  sessions: readonly Pick<HubSession, "artifact" | "project">[],
+  activeProject: string | null,
+  activeKey: string | null,
+): string[] => {
+  if (activeProject === null) return [...sessionKeys];
+  const projectOf = new Map(sessions.map((s) => [s.artifact, s.project]));
+  return sessionKeys.filter(
+    (k) => k === activeKey || (projectOf.get(k) ?? activeProject) === activeProject,
+  );
 };
 
 /** The most recently activated OPEN tab in a project, if any. */
@@ -186,6 +231,33 @@ export const openTab = async (row: HubSession): Promise<SessionHandle | null> =>
   return handle;
 };
 
+/**
+ * Open a whole project: every artifact in it becomes a tab, oldest first, so
+ * the strip reads chronologically and the NEWEST ends up active.
+ *
+ * Picking a project used to land on a pick screen scoped to that project - a
+ * second list to choose from, when choosing the project was already the
+ * choice. A project is a body of work; opening it means opening its reviews.
+ *
+ * Sequential, not parallel: tab ORDER is the point, and these are loopback
+ * requests. Background streams past the connection cap are dropped as usual -
+ * the tabs stay, only their streams sleep.
+ */
+export const openProject = async (project: string): Promise<void> => {
+  const rows = useHub.getState().sessions.filter((s) => s.project === project);
+  // Scope the strip first: tabs appear as they open, rather than after.
+  useShell.setState({ activeProject: project });
+  if (rows.length === 0) {
+    // Nothing to open (a project whose sessions just vanished): leave the
+    // scoped pick screen to say so rather than a blank window.
+    useShell.setState({ activeKey: null });
+    return;
+  }
+  for (const row of [...rows].sort((a, b) => a.lastSeen.localeCompare(b.lastSeen))) {
+    await openTab(row);
+  }
+};
+
 export const activateTab = (key: string): void => {
   const handle = getSession(key);
   if (!handle) return;
@@ -230,10 +302,11 @@ let hubSource: EventSource | null = null;
 let bundleStamp: string | null = null;
 
 /**
- * Who the hub is. Only `attend` is kept: it decides whether authoring a new
- * artifact is on the table at all. Re-read on every (re)connect, because a
- * hub restarted with `--attend` would otherwise leave the shell repeating the
- * old answer for as long as the window stays open.
+ * Who the hub is: whether authoring is on the table (`attend`), which folders
+ * it scans (`roots`), and the spawn recipes it knows. Re-read on every
+ * (re)connect, because a hub restarted with `--attend` - or pointed at a new
+ * folder - would otherwise leave the shell repeating the old answer for as
+ * long as the window stays open.
  */
 const refreshIdentity = (): void => {
   void fetch("/hub/identity")
@@ -241,6 +314,7 @@ const refreshIdentity = (): void => {
       r.ok
         ? (r.json() as Promise<{
             attend?: boolean;
+            roots?: string[];
             harnesses?: string[];
             defaultHarness?: string;
             harnessInfo?: HarnessInfo[];
@@ -251,6 +325,7 @@ const refreshIdentity = (): void => {
       if (who)
         useHub.setState({
           attend: who.attend === true,
+          roots: who.roots ?? [],
           harnesses: who.harnesses ?? [],
           defaultHarness: who.defaultHarness ?? null,
           harnessInfo: who.harnessInfo ?? [],
@@ -259,6 +334,53 @@ const refreshIdentity = (): void => {
     .catch(() => {
       /* the stream's own connected flag already reports an unreachable hub */
     });
+};
+
+/** What `POST /hub/roots` answers: the folder added, the whole scanned set,
+ *  and how many sessions that folder turned out to hold. */
+export interface AddedRoot {
+  readonly root: string;
+  readonly roots: readonly string[];
+  readonly found: number;
+}
+
+/**
+ * Point the hub at a folder: the OS chooser with no `path`, that path when
+ * given. Returns the outcome for the caller to state - `cancelled` when the
+ * human backed out, `needsPath` where no native chooser exists (type one
+ * instead), an `error` string when the hub refused it.
+ *
+ * The listing refreshes itself: the hub broadcasts a new snapshot to every
+ * connected window, so nothing here touches `sessions`.
+ */
+export const addRoot = async (
+  path?: string,
+): Promise<
+  | { readonly added: AddedRoot }
+  | { readonly cancelled: true }
+  | { readonly needsPath: true }
+  | { readonly error: string }
+> => {
+  const res = await fetch("/hub/roots", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(path !== undefined && path !== "" ? { path } : {}),
+  }).catch(() => null);
+  if (!res) return { error: "The hub did not answer." };
+  const body = (await res.json().catch(() => null)) as
+    | (Partial<AddedRoot> & {
+        cancelled?: boolean;
+        error?: string;
+      })
+    | null;
+  if (body?.cancelled === true) return { cancelled: true };
+  if (res.status === 501) return { needsPath: true };
+  if (!res.ok || typeof body?.root !== "string") {
+    return { error: typeof body?.error === "string" ? body.error : `Refused (${res.status}).` };
+  }
+  // Identity carries `roots`; a fresh add makes the shell's copy stale.
+  useHub.setState({ roots: body.roots ?? [] });
+  return { added: { root: body.root, roots: body.roots ?? [], found: body.found ?? 0 } };
 };
 
 /** Open the hub listing stream (idempotent). Each frame is a full snapshot. */
