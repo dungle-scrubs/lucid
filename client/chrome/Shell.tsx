@@ -22,7 +22,6 @@ import {
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, setDrawerOpen, useShell } from "./shell.ts";
-import { Kbd } from "./ui/kbd.tsx";
 import { closeButton, closeButtonSmall } from "./ui/close.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
@@ -683,21 +682,6 @@ export const Shell = () => {
           <Tab key={k} sessionKey={k} active={k === activeKey} />
         ))}
         <NewTabButton />
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                data-test="palette-hint"
-                onClick={() => setPaletteOpen(true)}
-                className="ml-auto flex flex-none cursor-pointer items-center gap-1 pr-3 text-[10px] text-fg-faint hover:text-fg"
-              >
-                <Kbd>⌘K</Kbd> everywhere
-              </button>
-            }
-          />
-          <TooltipContent>Command palette (⌘K)</TooltipContent>
-        </Tooltip>
       </div>
       <Palette />
       <CreateDialog />

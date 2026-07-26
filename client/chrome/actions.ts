@@ -404,20 +404,40 @@ export const createActions = (ctx: ActionsCtx) => {
       // already in flight) appends to the outbox, and a snapshot would leave
       // it sitting there unsent - and invisible, since it has not failed yet.
       for (let m = get().outbox[0]; m !== undefined; m = get().outbox[0]) {
+        set({ outboxSendingId: m.id });
         try {
           // Ids are client-minted and deduped server-side, so re-sending one
           // that actually landed (a lost response) appends nothing.
-          await api("/__lucid/message", { id: m.id, text: m.text, refs: [], images: m.images });
-        } catch {
+          await api("/__lucid/message", {
+            id: m.id,
+            text: m.text,
+            refs: [],
+            images: m.images,
+            // Addressed, not just posted: the server rejects it if this address
+            // now belongs to another artifact.
+            session: get().session,
+          });
+        } catch (e) {
           markOutboxFailed();
-          warn("Your message didn't send - it's kept below, and you can retry it.");
+          // The reason, not just the fact. "It didn't send" gave nothing to act
+          // on - the difference between a busy log (retry works) and a hub that
+          // is gone (retry never will) is the whole decision.
+          const reason = e instanceof Error ? e.message : "";
+          if (/different session/i.test(reason)) {
+            warn(
+              "A different session is running at this address now - your message was not sent to it. Copy it and paste it into the right viewer.",
+            );
+            return;
+          }
+          const why = reason === "" ? "" : ` (${reason})`;
+          warn(`Your message didn't send${why} - it's kept below, and you can retry it.`);
           return;
         }
         discardOutboxMessage(m.id);
       }
     } finally {
       draining = false;
-      set({ outboxSending: false });
+      set({ outboxSending: false, outboxSendingId: null });
     }
   };
 

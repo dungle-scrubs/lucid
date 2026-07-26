@@ -431,6 +431,9 @@ export const createSessionHost = (
     if (body.text.trim() === "" && images.length === 0) {
       return json({ error: "empty message" }, 400);
     }
+    if (typeof body.session === "string" && body.session !== paths.artifactPath) {
+      return json({ error: "a different session is running at this address" }, 409);
+    }
     await serverAppend([
       { t: "prompt", id: body.id, refs, text: body.text, ...(images.length > 0 ? { images } : {}) },
     ]);

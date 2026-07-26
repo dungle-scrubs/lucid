@@ -36,6 +36,18 @@ export interface Transport {
  */
 const REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * A POST waits far longer than a GET, and retries over a much wider window.
+ *
+ * Appends serialize on one lock per artifact. An agent rewriting a 100KB
+ * artifact holds it for seconds at a time, and the old schedule (4 attempts
+ * inside 1.2s, 15s each) put every attempt in the SAME burst - so a human
+ * message was refused outright while the agent worked, which is the wrong way
+ * round: the person is waiting at the keyboard, the agent is not.
+ */
+const POST_TIMEOUT_MS = 30_000;
+const POST_BACKOFF_MS = [500, 1500, 4000, 8000];
+
 export const createTransport = (base: string): Transport => {
   const api = async (path: string, body?: unknown): Promise<Response> => {
     const isPost = body !== undefined;
@@ -49,20 +61,42 @@ export const createTransport = (base: string): Transport => {
     // lose the submission - every mutation carries a client-minted idempotent
     // id, so a retry of one that landed is safe. A persistent failure throws so
     // the caller can keep the human's input and surface an error.
-    const attempts = isPost ? 4 : 1;
+    const attempts = isPost ? POST_BACKOFF_MS.length + 1 : 1;
     let lastErr: unknown;
     for (let i = 0; i < attempts; i++) {
       try {
         const res = await fetch(`${base}${path}`, {
           ...init,
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: AbortSignal.timeout(isPost ? POST_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
         });
         if (res.ok) return res;
-        lastErr = new Error(`HTTP ${res.status}`);
+        // The body carries the server's own reason ("the log is busy"), which
+        // is the difference between a message a human can act on and "it
+        // didn't send".
+        const detail = await res
+          .clone()
+          .json()
+          .then((b: unknown) =>
+            b !== null &&
+            typeof b === "object" &&
+            typeof (b as { error?: unknown }).error === "string"
+              ? ` - ${(b as { error: string }).error}`
+              : "",
+          )
+          .catch(() => "");
+        lastErr = new Error(`HTTP ${res.status}${detail}`);
+        // A 4xx is the server's VERDICT, not a hiccup: this address belongs to
+        // another session (409), the body is malformed (400). Retrying it just
+        // spends the human's patience to be told the same thing five times.
+        if (res.status >= 400 && res.status < 500) throw lastErr;
       } catch (e) {
+        if (e === lastErr) throw e;
         lastErr = e;
       }
-      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+      const backoff = POST_BACKOFF_MS[i];
+      if (i < attempts - 1 && backoff !== undefined) {
+        await new Promise((r) => setTimeout(r, backoff));
+      }
     }
     throw lastErr ?? new Error(`request to ${base}${path} failed`);
   };

@@ -106,7 +106,9 @@ export const Warnings = () => {
 const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
   const { flushOutbox, discardOutboxMessage } = useActions();
   const { transport, notify } = useSessionHandle();
-  const sending = useSession((s) => s.outboxSending);
+  // This entry's own state, not the outbox's: a flush stuck on one message must
+  // never disable the retry that would clear another.
+  const sending = useSession((s) => s.outboxSendingId) === message.id;
   const [copied, setCopied] = useState(false);
   return (
     <article
@@ -114,7 +116,9 @@ const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
       className="flex flex-col gap-[7px] border border-dashed border-rust-400/60 bg-ink-700 px-[11px] py-[10px]"
     >
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[11px] text-rust-300">not delivered</span>
+        <span className={`text-[11px] ${message.failed ? "text-rust-300" : "text-fg-faint"}`}>
+          {message.failed ? "not delivered" : "sending…"}
+        </span>
         <span className="text-[10px] text-fg-faint tabular-nums">
           {new Date(message.at).toLocaleTimeString()}
         </span>
@@ -154,7 +158,6 @@ const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
         <button
           type="button"
           data-test="discard-unsent"
-          disabled={sending}
           onClick={() => discardOutboxMessage(message.id)}
           className={`${btn} ml-auto`}
         >
@@ -165,20 +168,42 @@ const UnsentMessage = ({ message }: { readonly message: OutboxMessage }) => {
   );
 };
 
+/** How long a send may take before it must become VISIBLE. Long enough that the
+ *  common path (a fast append) never flashes a card, short enough that nobody
+ *  wonders where their typing went. */
+const SLOW_SEND_MS = 1200;
+
 /**
- * Messages the server has not taken yet. Only failed ones show: an in-flight
- * message is about to become a real bubble, and a card flashing up for every
- * normal send would make the common path stutter for the sake of the rare one.
+ * Messages the server has not taken yet.
+ *
+ * A failed one always shows. An in-flight one shows once it has been trying for
+ * longer than a beat: the composer empties on Enter, so this card is the only
+ * place the human's typing still exists, and appends can queue behind an agent
+ * rewriting the artifact. Hiding every in-flight entry meant a slow send looked
+ * exactly like a swallowed one.
  */
 export const UnsentMessages = () => {
   const outbox = useSession((s) => s.outbox);
-  const failed = outbox.filter((m) => m.failed);
-  if (failed.length === 0) return null;
+  const [now, setNow] = useState(() => Date.now());
+  const inFlight = outbox.some((m) => !m.failed);
+
+  useEffect(() => {
+    if (!inFlight) return;
+    const t = setInterval(() => setNow(Date.now()), 400);
+    return () => clearInterval(t);
+  }, [inFlight]);
+
+  const shown = outbox.filter((m) => m.failed || now - new Date(m.at).getTime() > SLOW_SEND_MS);
+  if (shown.length === 0) return null;
+  const anyFailed = shown.some((m) => m.failed);
   return (
     <section data-test="unsent-messages">
-      <h3 className={heading}>Not sent{failed.length > 1 ? ` (${failed.length})` : ""}</h3>
+      <h3 className={heading}>
+        {anyFailed ? "Not sent" : "Sending"}
+        {shown.length > 1 ? ` (${shown.length})` : ""}
+      </h3>
       <div className="flex flex-col gap-[7px]">
-        {failed.map((m) => (
+        {shown.map((m) => (
           <UnsentMessage key={m.id} message={m} />
         ))}
       </div>
