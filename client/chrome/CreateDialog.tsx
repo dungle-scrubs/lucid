@@ -64,7 +64,60 @@ const CreateDialogBody = () => {
   const harnessInfo = useHub((s) => s.harnessInfo);
   const createFailed = useHub((s) => s.createFailed);
   const activeProject = useShell((s) => s.activeProject);
-  const roots = useMemo(() => createRoots(sessions), [sessions]);
+  /** Projects named through the folder chooser this session. The hub only
+   *  lists projects that already hold a session, so without these a brand new
+   *  folder is unreachable until something else puts an artifact in it. */
+  const [added, setAdded] = useState<readonly string[]>([]);
+  /** The chooser is unavailable (not macOS, or it failed): take a path. */
+  const [typing, setTyping] = useState(false);
+  const [typedPath, setTypedPath] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const roots = useMemo(
+    () => [...new Set([...createRoots(sessions), ...added])].sort(),
+    [sessions, added],
+  );
+
+  /**
+   * Name a project the listing does not know. The hub resolves it exactly as
+   * it resolves a listed one, so a WORKTREE arrives as its main repo: pick
+   * either checkout and the artifact lands under the same project.
+   */
+  const addProject = async (path?: string): Promise<void> => {
+    setAddError(null);
+    const res = await fetch("/hub/project", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(path ? { path } : {}),
+    }).catch(() => null);
+    if (!res) {
+      setAddError("The hub did not answer.");
+      return;
+    }
+    const body = (await res.json().catch(() => null)) as {
+      project?: string;
+      worktree?: string;
+      cancelled?: boolean;
+      error?: string;
+    } | null;
+    if (body?.cancelled === true) return;
+    if (res.status === 501) {
+      setTyping(true); // no native chooser here: take a typed path instead
+      return;
+    }
+    if (!res.ok || typeof body?.project !== "string") {
+      setAddError(typeof body?.error === "string" ? body.error : `Refused (${res.status}).`);
+      return;
+    }
+    // A worktree is offered as ITSELF (that is where the file goes) while the
+    // listing groups it under its main repo - the same relationship git
+    // already defines, never a second one for the human to maintain.
+    const target = body.worktree ?? body.project;
+    setAdded((prev) => [...new Set([...prev, target])]);
+    setProject(target);
+    setTyping(false);
+    setTypedPath("");
+  };
 
   const [project, setProject] = useState("");
   const [title, setTitle] = useState("");
@@ -282,30 +335,88 @@ const CreateDialogBody = () => {
                 carries its own aria-label instead. */}
             <div className="flex flex-col gap-1">
               <span className={fieldLabel}>Project</span>
-              {roots.length === 0 ? (
-                <span className="text-[12px] text-fg-muted">
-                  The hub only knows projects that already hold a session, so there is nowhere to
-                  put this yet.
-                </span>
-              ) : (
-                <Select value={project} onValueChange={(v) => setProject(v ?? "")}>
-                  <SelectTrigger
-                    data-test="create-project"
-                    aria-label="Project"
-                    className={selectField}
+              <div className="flex items-center gap-1.5">
+                {roots.length === 0 ? (
+                  <span className="flex-1 text-[12px] text-fg-muted">
+                    No project holds a session yet - choose a folder to put this in.
+                  </span>
+                ) : (
+                  <Select value={project} onValueChange={(v) => setProject(v ?? "")}>
+                    <SelectTrigger
+                      data-test="create-project"
+                      aria-label="Project"
+                      className={`flex-1 ${selectField}`}
+                    >
+                      <SelectValue>{(v: string) => projectName(v)}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roots.map((r) => (
+                        <SelectItem key={r} value={r}>
+                          {projectName(r)}
+                          <span className={hint}>{r}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {/* The listing only knows projects that already hold a
+                    session; this is how a brand new folder becomes one. */}
+                <button
+                  type="button"
+                  data-test="create-add-project"
+                  title="Choose a project folder"
+                  aria-label="Choose a project folder"
+                  onClick={() => void addProject()}
+                  className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-[5px] border border-ink-600 bg-ink-800 text-fg-muted hover:border-accent-bright hover:text-fg focus-visible:annot-outline"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
                   >
-                    <SelectValue>{(v: string) => projectName(v)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {roots.map((r) => (
-                      <SelectItem key={r} value={r}>
-                        {projectName(r)}
-                        <span className={hint}>{r}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
+                    <path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v3" />
+                    <path d="M18 14v6" />
+                    <path d="M15 17h6" />
+                  </svg>
+                </button>
+              </div>
+              {typing ? (
+                <div className="flex items-center gap-1.5 pt-1">
+                  <input
+                    data-test="create-project-path"
+                    value={typedPath}
+                    onChange={(e) => setTypedPath(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void addProject(typedPath);
+                      }
+                    }}
+                    placeholder="/Users/you/dev/project"
+                    spellCheck={false}
+                    className={`flex-1 ${field}`}
+                  />
+                  <button
+                    type="button"
+                    data-test="create-project-path-add"
+                    onClick={() => void addProject(typedPath)}
+                    className="cursor-pointer rounded-[5px] border border-ink-600 bg-ink-700 px-2 py-1.5 text-[11px] text-fg hover:bg-ink-600"
+                  >
+                    Add
+                  </button>
+                </div>
+              ) : null}
+              {addError !== null ? (
+                <span data-test="create-project-error" className="text-[10px] text-rust-300">
+                  {addError}
+                </span>
+              ) : null}
             </div>
 
             <label className="flex flex-col gap-1">

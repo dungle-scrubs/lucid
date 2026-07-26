@@ -504,6 +504,15 @@ export const createArtifactPrompt = (artifact: string, request: string, title?: 
       : []),
     "It must answer this request from the human:",
     request,
+    // The one flow Lucid itself commissions a document in, so it says the
+    // house rules outright rather than trusting the skill to trigger: an
+    // artifact is read as paper, and a SCREEN is reviewed as a wireframe
+    // (labelled regions, hatched placeholders) until someone asks for a
+    // finished design.
+    "Follow the lucid-design skill if it is available. Otherwise: a warm cream",
+    "ground with near-black type, one accent, no external requests, and any",
+    "mockup of a screen drawn as a wireframe - labelled regions and hatched",
+    "placeholders carrying their spec - not finished visual design.",
     "Then open it for review by running:",
     `  lucid open ${shellArg(artifact)}`,
     `Write only ${artifact}; do not modify other files.`,

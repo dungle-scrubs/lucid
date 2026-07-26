@@ -149,6 +149,58 @@ artifact must open from disk.
 Mono and `<pre>` keep the work they are good at: code, file paths, a directory
 tree, a log line, a command. Those are literal text, not pictures.
 
+## Mockups are wireframes, not designs
+
+When the artifact shows a **screen** - a layout, a page, a component, an app
+view - draw it as a **wireframe**, not as finished visual design. The decision
+under review is arrangement: what is on the screen, how it is grouped, what
+order it reads in, what each region is for. Colour, imagery, and type
+personality are a different decision, made somewhere else, and a mockup that
+looks finished collects feedback on the wrong one.
+
+The vocabulary, all built from the artifact's own tokens:
+
+- **Regions** are boxes with a `--rule` hairline and a mono label naming what
+  goes there, not a rendering of it: `header · logo, primary nav`, `results ·
+  12 per page`.
+- **Images and media** are a placeholder box carrying its own spec, never a
+  real picture and never a grey slab. Fill it with faint diagonal hatching and
+  label it with what it must be:
+
+  ```css
+  .placeholder {
+    border: 1px solid var(--rule);
+    background: repeating-linear-gradient(
+      45deg, transparent 0 6px, rgba(33, 29, 21, 0.06) 6px 7px
+    );
+  }
+  ```
+
+  ```html
+  <div class="placeholder" data-lucid-id="hero-image">portrait · 3:4 · b&amp;w preferred</div>
+  ```
+
+- **Text** is either the real words, when the words are the point, or a few
+  neutral lines at the right length. Never lorem ipsum: nobody can review copy
+  that means nothing, and it hides how long the real thing runs.
+- **Controls** are labelled outlines - a bordered box reading `Search`, a pill
+  reading `Filter ▾` - at the size and position they will really occupy.
+- **State and behaviour** are said in words beside the region, not animated:
+  `empty state: "no results yet"`, `collapses under 640px`.
+
+Greyscale plus the artifact's single accent, and the accent only where it
+carries meaning (the primary action, the region under discussion). No shadows,
+no gradients, no rounded-corner styling choices, no brand colour, no icon sets.
+
+**Unless the human asks for a specific visual design.** If they name a brand, a
+palette, an existing product's look, or say they want to see the real thing,
+build that instead - the general rule is a default for when the design is not
+yet the subject, not a refusal to render one.
+
+Every region and placeholder gets its own `data-lucid-id`, so a reviewer can
+say "this block goes above the fold" about that block rather than about the
+whole screen.
+
 ## Checklist
 
 - Opens from disk, offline, and looks right
@@ -157,5 +209,8 @@ tree, a log line, a command. Those are literal text, not pictures.
 - If it honours dark mode, the dark variant still reads as paper - warm, lifted, distinct from the chrome, and no toggle or JS
 - Serif prose, sans labels, mono literals - and mono only for literals, never for drawing a diagram
 - Diagrams built from elements or inline SVG, each node individually addressable
+- Screens drawn as wireframes - labelled regions, hatched image placeholders
+  carrying their spec, greyscale plus the one accent - unless a specific visual
+  design was asked for
 - Every reviewable group padded and, where it matters, carrying a `data-lucid-id`
 - Nothing depends on color alone

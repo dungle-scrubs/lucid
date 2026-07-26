@@ -740,6 +740,63 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     }
   };
 
+  /**
+   * `POST /hub/project {path?}` - name a project the listing does not know
+   * yet, so a new artifact can be authored somewhere with no sessions in it.
+   *
+   * With no `path`, the hub opens the OS folder chooser (macOS only) and the
+   * human picks; with one, that path is validated instead, which is the
+   * fallback anywhere the chooser is unavailable. Either way the answer runs
+   * through the same `resolveProject` the listing uses, so a WORKTREE comes
+   * back as its main repo with the checkout named beside it - the two are
+   * related by git itself, not by anything the human has to declare.
+   *
+   * Attend-only, like create: this route runs a subprocess, and a review-only
+   * hub stays a process that spawns nothing (D-064). It is also the only
+   * consumer - picking a folder is pointless where authoring is refused.
+   */
+  const handleHubProject = async (req: Request): Promise<Response> => {
+    if (!attend) {
+      return json({ error: "this hub does not author artifacts (start it with --attend)" }, 403);
+    }
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    let picked = typeof body?.path === "string" ? body.path.trim() : "";
+    if (picked === "") {
+      if (process.platform !== "darwin") {
+        return json({ error: "no folder chooser here - type or paste a path instead" }, 501);
+      }
+      // AppleScript returns an alias; POSIX path makes it a real path. A
+      // cancel exits non-zero, which is not an error to report - the human
+      // simply changed their mind.
+      const proc = Bun.spawn(
+        [
+          "osascript",
+          "-e",
+          'POSIX path of (choose folder with prompt "Choose a project folder for the new artifact")',
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+      if (code !== 0) return json({ cancelled: true }, 200, noStore);
+      picked = out.trim();
+    }
+    if (!picked.startsWith("/")) return json({ error: "an absolute path, please" }, 400);
+    const dir = resolvePath(picked);
+    try {
+      if (!(await stat(dir)).isDirectory()) return json({ error: "not a directory" }, 400);
+    } catch {
+      return json({ error: "no such directory" }, 400);
+    }
+    // resolveProject reads an ARTIFACT's location, so ask it about a file that
+    // would live directly in this folder. Nothing is created or written.
+    const proj = await resolveProject(join(dir, "artifact.html"));
+    return json(
+      { project: proj.project, ...(proj.worktree ? { worktree: proj.worktree } : {}), chosen: dir },
+      200,
+      noStore,
+    );
+  };
+
   const handle = async (req: Request): Promise<Response> => {
     const { pathname } = new URL(req.url);
 
@@ -830,6 +887,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     }
     if (pathname === "/hub/create" && req.method === "POST") {
       return handleHubCreate(req);
+    }
+    if (pathname === "/hub/project" && req.method === "POST") {
+      return handleHubProject(req);
     }
     if (pathname === "/hub/events" && req.method === "GET") {
       return handleEvents();
