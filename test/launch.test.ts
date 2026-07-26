@@ -126,6 +126,12 @@ describe("recipes registry", () => {
     expect(resolveRecipe(reg, "unlisted")?.name).toBe("claude_code");
     const resolved = resolveRecipe(reg, "claude_code");
     expect(resolved?.name).toBe("claude_code");
+    // The SAME harness spelled the other way resolves to the same recipe.
+    // Artifacts are stamped `claude-code` while registries are commonly keyed
+    // `claude_code`, and treating those as different harnesses made every
+    // recorded session unresumable ("not in the registry") on such a machine.
+    expect(resolveRecipe(reg, "claude-code")?.name).toBe("claude_code");
+    expect(resolveRecipe(reg, "Claude-Code")?.name).toBe("claude_code");
     const argv = buildArgv(resolved?.recipe.spawn ?? [], { id: "abc", prompt: "do it" });
     expect(argv).toEqual(["claude", "-p", "--session-id", "abc", "do it"]);
   });

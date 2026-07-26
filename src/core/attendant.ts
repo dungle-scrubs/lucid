@@ -62,3 +62,54 @@ export const readLastAttendant = async (paths: SessionPaths): Promise<Attendant 
   }
   return latest;
 };
+
+/**
+ * The harness conversation an artifact belongs to, from the best source it
+ * has. Two sources, because an artifact can carry either:
+ *
+ * 1. the LOG's session history - stamped by an agent that exported its
+ *    identity (D18), and exact;
+ * 2. the cursor sidecar an agent writes when it takes delivery, which names
+ *    the harness and carries the resume command with the session id inside it.
+ *
+ * ONE resolver, used by the attend engine to know what to resume and by the
+ * viewer to know whose presence to look for. They must never disagree: when
+ * they did, the hub resumed a session the panel did not believe existed, and
+ * the panel offered a resume command for a conversation already open.
+ */
+export const artifactAttendant = async (
+  paths: SessionPaths,
+  sessionHistory: readonly {
+    readonly harness: string;
+    readonly sessionId?: string;
+    readonly cwd?: string;
+  }[],
+): Promise<
+  | {
+      readonly harness: string;
+      readonly sessionId?: string;
+      readonly cwd?: string;
+      readonly resume?: string;
+    }
+  | undefined
+> => {
+  const stamped = [...sessionHistory].reverse().find((r) => r.sessionId !== undefined);
+  if (stamped?.sessionId) {
+    return {
+      harness: stamped.harness,
+      sessionId: stamped.sessionId,
+      ...(stamped.cwd ? { cwd: stamped.cwd } : {}),
+    };
+  }
+  const sidecar = await readLastAttendant(paths);
+  if (!sidecar?.harness) {
+    // No stamp with an id, no sidecar: the harness alone is still worth
+    // reporting (the panel names it), even with nothing to resume.
+    const named = [...sessionHistory].reverse().find((r) => r.harness)?.harness;
+    return named ? { harness: named } : undefined;
+  }
+  return {
+    harness: sidecar.harness,
+    ...(sidecar.resume ? { resume: sidecar.resume } : {}),
+  };
+};

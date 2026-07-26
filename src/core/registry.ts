@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { foldLog } from "./fold.ts";
 import { readEvents } from "./log.ts";
 import { canonicalArtifactPath, sessionPaths } from "./paths.ts";
+import { agentScratchpadRoots } from "./scratchpad.ts";
 
 /**
  * The global pointer registry (Model B, Phase 0). A session is identified by the
@@ -33,8 +34,65 @@ export const registryFilePath = (registryPath?: string): string => {
   return resolve(homedir(), ".lucid", "registry.json");
 };
 
-/** Default discovery roots: `~/dev` expanded via the home directory. */
-export const defaultRoots = (): string[] => [resolve(homedir(), "dev")];
+/**
+ * Default discovery roots: `~/dev` for project checkouts, plus this user's
+ * agent scratchpads - which is where nearly every artifact actually lives. A
+ * project-only default made a machine with a hundred past reviews report none.
+ */
+export const defaultRoots = (): string[] => [resolve(homedir(), "dev"), ...agentScratchpadRoots()];
+
+/** Resolve the added-roots file path: explicit override, then env, then default. */
+export const rootsFilePath = (rootsPath?: string): string => {
+  if (rootsPath) return rootsPath;
+  if (process.env.LUCID_ROOTS) return process.env.LUCID_ROOTS;
+  return resolve(homedir(), ".lucid", "roots.json");
+};
+
+/**
+ * Folders a human added by hand, scanned ON TOP of `defaultRoots`. The default
+ * root is a guess about where projects live; this file is the human's answer
+ * when the guess is wrong - an artifact under a scratchpad, a checkout outside
+ * `~/dev`. Persisted, because a folder named once must survive a hub restart.
+ */
+export const readRoots = async (rootsPath?: string): Promise<string[]> => {
+  try {
+    const parsed = JSON.parse(await readFile(rootsFilePath(rootsPath), "utf8")) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    // Absolute paths only: a relative entry would resolve against whatever
+    // cwd the hub happens to have been started in.
+    return parsed.filter((v): v is string => typeof v === "string" && v.startsWith("/"));
+  } catch {
+    // missing or corrupt: no added roots, never a failure
+    return [];
+  }
+};
+
+/** Add a folder to the scanned set, returning the new set. Idempotent.
+ *
+ *  Unlocked read-modify-write, like `registerSession`: two windows adding
+ *  different folders in the same instant can leave one of them unrecorded.
+ *  Adding a root is a deliberate, rare human action, so the cost of a lock
+ *  outweighs a race nobody has hit - and re-adding it works. */
+export const addRoot = async (dir: string, rootsPath?: string): Promise<string[]> => {
+  const path = rootsFilePath(rootsPath);
+  const root = resolve(dir);
+  const existing = await readRoots(path);
+  if (existing.includes(root)) return existing;
+  const next = [...existing, root].sort();
+  await writeJson(path, next);
+  return next;
+};
+
+/** Stop scanning a folder, returning the new set. */
+export const removeRoot = async (dir: string, rootsPath?: string): Promise<string[]> => {
+  const path = rootsFilePath(rootsPath);
+  const root = resolve(dir);
+  const existing = await readRoots(path);
+  if (!existing.includes(root)) return existing;
+  const next = existing.filter((r) => r !== root);
+  await writeJson(path, next);
+  return next;
+};
 
 const isEntry = (value: unknown): value is RegistryEntry =>
   typeof value === "object" &&
@@ -56,14 +114,18 @@ export const readRegistry = async (registryPath?: string): Promise<RegistryEntry
   }
 };
 
-/** Atomic write: serialize to a sibling temp file, then rename into place. */
-const writeRegistry = async (path: string, entries: readonly RegistryEntry[]): Promise<void> => {
+/** Atomic write: serialize to a sibling temp file, then rename into place, so a
+ *  concurrent reader sees either the old file or the new one - never a partial. */
+const writeJson = async (path: string, value: unknown): Promise<void> => {
   const dir = dirname(path);
   await mkdir(dir, { recursive: true });
-  const tmp = join(dir, `.registry.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
-  await writeFile(tmp, `${JSON.stringify(entries, null, 2)}\n`);
+  const tmp = join(dir, `.${basename(path)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`);
   await rename(tmp, path);
 };
+
+const writeRegistry = (path: string, entries: readonly RegistryEntry[]): Promise<void> =>
+  writeJson(path, entries);
 
 /**
  * Upsert a pointer for `artifactPath`, keyed by its canonical path, stamping

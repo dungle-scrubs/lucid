@@ -3,14 +3,24 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalArtifactPath } from "../src/core/paths.ts";
-import { listAll, readRegistry, registerSession, scanRoots } from "../src/core/registry.ts";
+import {
+  addRoot,
+  listAll,
+  readRegistry,
+  readRoots,
+  registerSession,
+  removeRoot,
+  scanRoots,
+} from "../src/core/registry.ts";
 
 let dir: string;
 let registryPath: string;
+let rootsPath: string;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "lucid-reg-"));
   registryPath = join(dir, "registry.json");
+  rootsPath = join(dir, "roots.json");
 });
 
 afterEach(async () => {
@@ -73,6 +83,59 @@ describe("registry read/write", () => {
   test("a non-array registry reads as []", async () => {
     await writeFile(registryPath, JSON.stringify({ not: "an array" }));
     expect(await readRegistry(registryPath)).toEqual([]);
+  });
+});
+
+describe("added roots", () => {
+  test("a missing roots file reads as []", async () => {
+    expect(await readRoots(join(dir, "nope.json"))).toEqual([]);
+  });
+
+  test("a corrupt roots file reads as []", async () => {
+    await writeFile(rootsPath, "{ not json");
+    expect(await readRoots(rootsPath)).toEqual([]);
+  });
+
+  test("add persists a folder, and adding it twice is a no-op", async () => {
+    await addRoot(dir, rootsPath);
+    expect(await readRoots(rootsPath)).toEqual([dir]);
+    await addRoot(dir, rootsPath);
+    expect(await readRoots(rootsPath)).toEqual([dir]);
+  });
+
+  test("relative entries are ignored - they would resolve against the hub's cwd", async () => {
+    await writeFile(rootsPath, JSON.stringify(["../sneaky", "not/absolute", dir]));
+    expect(await readRoots(rootsPath)).toEqual([dir]);
+  });
+
+  test("remove stops scanning a folder, and removing an absent one is a no-op", async () => {
+    const other = join(dir, "other");
+    await mkdir(other, { recursive: true });
+    await addRoot(dir, rootsPath);
+    await addRoot(other, rootsPath);
+    expect(await removeRoot(dir, rootsPath)).toEqual([other]);
+    expect(await removeRoot(dir, rootsPath)).toEqual([other]);
+    expect(await readRoots(rootsPath)).toEqual([other]);
+  });
+
+  test("an added folder's existing sessions are discoverable - the point of adding it", async () => {
+    // The folder holds a session BEFORE it is ever added: this is the "my old
+    // reviews are invisible" case, where the default root never covered them.
+    const root = join(dir, "elsewhere");
+    const artifact = await seedSession(root, "proj", "old-plan");
+    await addRoot(root, rootsPath);
+
+    const roots = await readRoots(rootsPath);
+    expect(await scanRoots(roots)).toEqual([artifact]);
+  });
+
+  test("a session directly in the added folder counts, not only one nested under it", async () => {
+    // `<folder>/.lucid/<stem>/log.ndjson` - what a human means by "add this
+    // project", where the artifact sits at the project root.
+    const root = join(dir, "flat");
+    const artifact = await seedSession(root, ".", "notes");
+    await addRoot(root, rootsPath);
+    expect(await scanRoots(await readRoots(rootsPath))).toEqual([artifact]);
   });
 });
 

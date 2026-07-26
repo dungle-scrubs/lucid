@@ -252,14 +252,30 @@ export const loadRegistry = async (path = registryPath()): Promise<HarnessRegist
 
 /** The recipe for a harness: the named one if listed, else the registry
  *  default. Returns the resolved name alongside so callers can log which ran. */
+/**
+ * One harness, one identity, however it is spelled. A registry key of
+ * `claude_code` and an artifact stamped `claude-code` are the same harness -
+ * and treating them as different meant a recorded session could never be
+ * resumed ("harness claude-code is not in the registry") on a machine whose
+ * registry happened to use the other separator. Matches `canonicalHarness`.
+ */
+export const normalizeHarness = (name: string): string =>
+  name.trim().toLowerCase().replace(/_/g, "-");
+
 export const resolveRecipe = (
   registry: HarnessRegistry,
   harness?: string,
 ): { readonly name: string; readonly recipe: SpawnRecipe } | undefined => {
   // hasOwn, not truthiness: a registry object that still carries Object.prototype
   // would otherwise resolve "constructor" or "toString" as a harness.
-  const named = harness !== undefined && Object.hasOwn(registry.harnesses, harness);
-  const name = named ? harness : registry.default;
+  let name = harness !== undefined && Object.hasOwn(registry.harnesses, harness) ? harness : "";
+  if (!name && harness !== undefined) {
+    // Exact miss: try the same harness spelled the other way before falling
+    // back to the default, which would resolve to a DIFFERENT agent.
+    const wanted = normalizeHarness(harness);
+    name = Object.keys(registry.harnesses).find((key) => normalizeHarness(key) === wanted) ?? "";
+  }
+  if (!name) name = registry.default ?? "";
   if (!name || !Object.hasOwn(registry.harnesses, name)) return undefined;
   const recipe = registry.harnesses[name];
   return recipe ? { name, recipe } : undefined;
