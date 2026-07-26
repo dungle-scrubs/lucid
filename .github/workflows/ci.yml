@@ -70,14 +70,22 @@ jobs:
   #   - The two darwin-only branches in the product are not reachable from this
   #     suite anyway: `openChromeApp` (src/cli/self.ts) returns false whenever
   #     LUCID_NO_OPEN=1, which the harness sets on every invocation, and the
-  #     AppleScript folder chooser (src/server/daemon.ts) is only reached by a
-  #     POST /hub/project carrying an empty path, which no test sends. Running
-  #     the gate on macOS would not exercise them either - that gap belongs to
-  #     the suite, and the LUCID_OPEN_LOG seam is what closes it.
+  #     AppleScript folder chooser (src/server/daemon.ts) needs one of the two
+  #     folder routes - POST /hub/project or POST /hub/roots - with an empty
+  #     path, which no test sends. Running the gate on macOS would not exercise
+  #     them either: that gap belongs to the suite, and the LUCID_OPEN_LOG seam
+  #     is what closes it. Worth knowing for the soak, though - off darwin the
+  #     chooser answers 501 at once, while on darwin it blocks on a modal until
+  #     the test times out, so a future test that forgets `path` is fast and
+  #     green here and a 60s hang there.
   #   - `lock.ts` does not pick a different ALGORITHM off darwin, only a
   #     different libc to find `flock(2)` in. The real hazard is a silent
-  #     fall-through to the lockfile mutex when dlopen fails on a runner image,
-  #     and the stamp step below fails the job rather than let that pass.
+  #     fall-through to the lockfile mutex when dlopen fails on a runner image;
+  #     the stamp step below puts the selected backend in the record and warns on
+  #     the fallback. It does not fail the job - there are no concurrency
+  #     assertions to protect yet, and blocking every unrelated test over a
+  #     runner-image change would be the wrong trade. M5.4 owns the hard gate,
+  #     alongside the scenarios that depend on it.
   # Darwin is still the platform Lucid ships on, so the nightly soak runs the
   # same suite on macos-latest as well - see nightly-e2e.yml.
   e2e:
@@ -97,14 +105,23 @@ jobs:
       # Same reason as `verify`: src/server imports the generated client bundle,
       # and the suite drives the shell that bundle IS. Building it here is what
       # makes "the tests passed" a statement about this commit.
+      #
+      # This also builds dist/lucid, which nothing under test/ runs yet - every
+      # harness spawn goes through `bun run src/cli/main.ts`. So a green job says
+      # the binary COMPILES and nothing more; M0.2 owns building it once per run
+      # deliberately, and the compiled-binary scenario is Phase 5's.
       - run: bun run build
 
       - name: Record the environment this run is judged by
         run: bun run scripts/e2e-stamp.ts
 
-      # Today this is the whole suite. Once the regression / parallel / serial
-      # projects exist, the PR gate narrows to `regression` plus the parallel
-      # tests under 3s and the rest moves to the nightly job (D-026).
+      # Today this is the whole suite. D-026 narrows the gate to `regression` plus
+      # the fast parallel tests once those projects exist - but note the mechanism
+      # is not settled: Playwright can scope `workers` per project, so the
+      # parallel/serial split is expressible, while "every parallel test under 3s"
+      # is not - there is no duration selector, only title and tag matching. That
+      # set has to become a tag some test declares, which M6.2 decides once cost
+      # is measured.
       - run: bunx playwright test
 
       # A CI failure is not reproducible by re-reading the log - nobody has the

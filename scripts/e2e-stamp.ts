@@ -11,10 +11,18 @@
  * lockfile mutex if `dlopen` fails for any reason. The two are not equivalent:
  * `flock` auto-releases when the holding process dies, while the fallback has to
  * infer death from a 10s staleness window. Every concurrency scenario in the
- * catalogue is a statement about the first one. If the runner image quietly took
- * the second, those scenarios would still go green - and would be measuring code
- * no user ever runs. That is worth failing the job over, loudly, rather than
- * discovering it the first time a concurrent append tears a log line in the wild.
+ * catalogue is a statement about the first one, so on the fallback those
+ * scenarios would still go green while measuring code no user runs.
+ *
+ * A warning here, not a refusal. The suite has no concurrency assertions yet -
+ * they arrive with `concurrent-cli` in M5.4 - and failing this step would block
+ * every unrelated test in the gate to protect assertions that do not exist,
+ * hostage to a runner-image change. The hard refusal belongs with the scenarios
+ * it protects; M5.4 owns it. What matters today is that the choice is in the
+ * record instead of being invisible.
+ *
+ * Note it measures THIS process. Every append happens in a `bun run …/main.ts`
+ * child, on the same Bun and platform - a sound proxy, not the run itself.
  */
 import { lockBackend } from "../src/core/lock.ts";
 
@@ -32,9 +40,10 @@ console.log(
 );
 
 if (backend !== "flock") {
-  console.error(
-    "::error::append lock fell back to the lockfile mutex - bun:ffi could not open libc on this runner. " +
-      "Concurrency results from this run would describe an implementation production does not use.",
-  );
-  process.exit(1);
+  // GitHub's annotation syntax only where GitHub is reading; a bare sentence is
+  // what a human at a terminal wants.
+  const message =
+    "append lock fell back to the lockfile mutex - bun:ffi could not open libc here. " +
+    "Concurrency behaviour on this run is NOT the implementation production uses.";
+  console.error(process.env.GITHUB_ACTIONS === "true" ? `::warning::${message}` : message);
 }

@@ -14,11 +14,14 @@ name: Nightly e2e soak
 # scheduled run on the platform users actually have, and the only place a
 # darwin-only regression - a path, a signal, a libc, a font metric - can surface
 # before a user finds it.
+#
+# Two caveats while this is new. `workflow_dispatch` only appears once the file is
+# on the default branch, so the PR that adds this cannot exercise it - the first
+# real evidence is the first scheduled run. And nothing here announces a red
+# result: someone has to look, until a notification step earns its place.
 on:
   schedule:
-    # 08:00 UTC, which is the small hours in the Americas: a red nightly is read
-    # at the start of a working day, not discovered halfway through one.
-    - cron: "0 8 * * *"
+    - cron: "0 8 * * *" # 08:00 UTC - the small hours in the Americas.
   workflow_dispatch:
 
 concurrency:
