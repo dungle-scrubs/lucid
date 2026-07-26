@@ -722,3 +722,35 @@ describe("listSessions", () => {
     });
   });
 });
+
+describe("a session folder never colonises someone else's directory", () => {
+  test("refuses when <stem>/ already exists and is not a Lucid session", async () => {
+    // The record is named after its artifact, so `plan.html` claims `plan/`.
+    // A human may already keep a `plan/` folder right there - writing a log, a
+    // versions tree and a `*` .gitignore into it would bury their files and
+    // take them out of git without a word.
+    const paths = sessionPaths(artifact);
+    await mkdir(paths.sessionDir, { recursive: true });
+    await writeFile(join(paths.sessionDir, "notes.md"), "mine", "utf8");
+
+    await expect(openSession(paths)).rejects.toThrow(/not a Lucid session/);
+    // Untouched: no log, no ignore file, their file still there.
+    expect(existsSync(paths.logPath)).toBe(false);
+    expect(existsSync(join(paths.sessionDir, ".gitignore"))).toBe(false);
+    expect(await readFile(join(paths.sessionDir, "notes.md"), "utf8")).toBe("mine");
+  });
+
+  test("an EMPTY directory of that name is fine to adopt", async () => {
+    const paths = sessionPaths(artifact);
+    await mkdir(paths.sessionDir, { recursive: true });
+    await openSession(paths);
+    expect(existsSync(paths.logPath)).toBe(true);
+  });
+
+  test("reopening its own session folder is not a collision", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await openSession(paths);
+    expect(existsSync(paths.logPath)).toBe(true);
+  });
+});

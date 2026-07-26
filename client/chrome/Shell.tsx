@@ -21,7 +21,7 @@ import {
 } from "./hub.ts";
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
-import { getSession, setDrawerOpen, useShell } from "./shell.ts";
+import { getSession, persistTabs, readStoredTabs, setDrawerOpen, useShell } from "./shell.ts";
 import { closeButton, closeButtonSmall } from "./ui/close.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
@@ -546,6 +546,7 @@ export const Shell = () => {
   const drawerOpen = useShell((s) => s.drawerOpen);
   const sessions = useHub((s) => s.sessions);
   const bootHandled = useRef(false);
+  const restoreHandled = useRef(false);
 
   // The strip is project-scoped (D8), and always includes the ACTIVE tab -
   // see visibleTabKeys for why that second half matters.
@@ -554,6 +555,34 @@ export const Shell = () => {
   useEffect(() => {
     connectHub();
   }, []);
+
+  // A reload restores the window you had: the tabs that were open, the one in
+  // front, and the scope. Held in memory alone, ⌘R - the most ordinary gesture
+  // there is - threw all of it away and dropped you on the pick screen.
+  // Sessions that no longer exist are simply not reopened.
+  useEffect(() => {
+    if (restoreHandled.current || sessions.length === 0) return;
+    restoreHandled.current = true;
+    const stored = readStoredTabs();
+    if (stored.keys.length === 0) return;
+    const byArtifact = new Map(sessions.map((s) => [s.artifact, s]));
+    void (async () => {
+      for (const key of stored.keys) {
+        const row = byArtifact.get(key);
+        if (row) await openTab(row);
+      }
+      const active = stored.active !== null && byArtifact.has(stored.active) ? stored.active : null;
+      if (active !== null) activateTab(active);
+      // The scope is restored AFTER activation, which would otherwise rewrite it.
+      if (stored.project !== null) useShell.setState({ activeProject: stored.project });
+    })();
+  }, [sessions]);
+
+  // Any change to the tab set is worth remembering, including the restore above.
+  useEffect(() => {
+    if (!restoreHandled.current) return;
+    persistTabs({ keys: sessionKeys, active: activeKey, project: activeProject });
+  }, [sessionKeys, activeKey, activeProject]);
 
   // `?s=<id>`: the tab `lucid open` asked for, honored once the listing
   // names it. Consumed only on SUCCESS - a transient identity miss leaves it

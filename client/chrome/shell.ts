@@ -74,6 +74,40 @@ export const setArtifactTheme = (theme: ArtifactTheme): void => {
   }
 };
 
+const TABS_KEY = "lucid.openTabs";
+
+interface PersistedTabs {
+  readonly keys: readonly string[];
+  readonly active: string | null;
+  readonly project: string | null;
+}
+
+export const readStoredTabs = (): PersistedTabs => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TABS_KEY) ?? "") as Partial<PersistedTabs>;
+    return {
+      keys: Array.isArray(raw?.keys)
+        ? raw.keys.filter((k): k is string => typeof k === "string")
+        : [],
+      active: typeof raw?.active === "string" ? raw.active : null,
+      project: typeof raw?.project === "string" ? raw.project : null,
+    };
+  } catch {
+    return { keys: [], active: null, project: null };
+  }
+};
+
+/** Remember which tabs are open, so a reload restores the window you had.
+ *  Takes the snapshot rather than reading the store, so a caller can depend on
+ *  exactly the values it is persisting. */
+export const persistTabs = (tabs: PersistedTabs): void => {
+  try {
+    localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+  } catch {
+    /* storage unavailable; the window simply reopens empty */
+  }
+};
+
 export const persistWidth = (w: number): void => {
   try {
     localStorage.setItem(CHROME_WIDTH_KEY, String(w));

@@ -1,7 +1,7 @@
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { ArtifactError } from "../errors.ts";
+import { ArtifactError, ValidationError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
 import { appendEvent, appendEventsIf, readEvents } from "./log.ts";
 import type { AttendantStamp, LogEvent } from "./events.ts";
@@ -50,8 +50,57 @@ export const migrateLegacySessionDir = (paths: SessionPaths): void => {
   }
 };
 
+/**
+ * Is `<dir>/<stem>/` somebody ELSE's directory?
+ *
+ * The record is named after its artifact, so `plan.html` claims `plan/` - and a
+ * human may already keep a `plan/` folder of their own right there. Writing a
+ * log, a versions tree and a `*` .gitignore into it would bury their files and
+ * take them out of git without a word.
+ *
+ * A directory Lucid already owns (it holds a log) or one that is empty is fine.
+ * Anything else belongs to someone else.
+ */
+const LUCID_OWNED = new Set([
+  "log.ndjson",
+  "log.ndjson.lock",
+  "current.html",
+  "versions",
+  "pasted",
+  "server.json",
+  "server.log",
+  "selection.json",
+  "attendant.json",
+  "context.json",
+  "attend.out.log",
+  "create.out.log",
+  ".gitignore",
+  ".DS_Store",
+]);
+
+const occupiedByOthers = (paths: SessionPaths): boolean => {
+  if (!existsSync(paths.sessionDir)) return false;
+  if (existsSync(paths.logPath)) return false; // unmistakably ours
+  try {
+    // Ours-in-progress (a versions tree, a descriptor) reads as ours. Anything
+    // Lucid does not write is somebody's own file, and this directory is theirs.
+    return readdirSync(paths.sessionDir).some((entry) => !LUCID_OWNED.has(entry));
+  } catch {
+    return false; // unreadable: let the open fail on its own terms
+  }
+};
+
 export const ensureSessionDirs = (paths: SessionPaths): void => {
   migrateLegacySessionDir(paths);
+  if (occupiedByOthers(paths)) {
+    throw new ValidationError({
+      message:
+        `refusing to write this session's record into ${paths.sessionDir} - that directory already exists and is not a Lucid session. ` +
+        `The record is named after its artifact, so "${paths.name}.html" wants "${paths.name}/". ` +
+        `Rename the artifact, or move it into a folder of its own (e.g. lucid/${paths.name}.html).`,
+      detail: { sessionDir: paths.sessionDir, artifact: paths.artifactPath },
+    });
+  }
   mkdirSync(paths.sessionDir, { recursive: true });
   mkdirSync(paths.versionsDir, { recursive: true });
   // The ignore file goes INSIDE the session folder, not beside it. One level up
