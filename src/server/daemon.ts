@@ -1,8 +1,16 @@
 import { createHash } from "node:crypto";
-import { join, resolve as resolvePath } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, readFile, stat } from "node:fs/promises";
 import { canonicalArtifactPath, sessionPaths, type SessionPaths } from "../core/paths.ts";
-import { defaultRoots, listAll, registerSession, type RegistryEntry } from "../core/registry.ts";
+import {
+  addRoot,
+  defaultRoots,
+  listAll,
+  readRoots,
+  registerSession,
+  type RegistryEntry,
+  scanRoots,
+} from "../core/registry.ts";
 import {
   discoverLiveServer,
   loopbackFetch,
@@ -11,11 +19,12 @@ import {
   writeServerDescriptor,
 } from "./discovery.ts";
 import { escapeHtml } from "../core/escape.ts";
+import { scratchpadProject } from "../core/scratchpad.ts";
 import { projectRoot } from "../core/sessions.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
 import { detectUsageLimit } from "../launch/limits.ts";
 import { runSpawn } from "../launch/launcher.ts";
-import { buildArgv, loadRegistry, resolveRecipe } from "../launch/recipes.ts";
+import { buildArgv, loadRegistry, normalizeHarness, resolveRecipe } from "../launch/recipes.ts";
 import {
   insertSelectionArgs,
   sanitizeSelection,
@@ -86,10 +95,13 @@ export const sessionId = (artifactPath: string): string =>
 export interface DaemonOptions {
   /** Bind port. Default `HUB_PORT`; pass 0 to bind an ephemeral port. */
   readonly port?: number;
-  /** Discovery roots for `listAll`. Default `~/dev`. */
+  /** Discovery roots for `listAll`. Default `~/dev`. Folders added through
+   *  `POST /hub/roots` are scanned ON TOP of these. */
   readonly roots?: readonly string[];
   /** Injected registry file path (tests). Default `<home>/.lucid/registry.json`. */
   readonly registryPath?: string;
+  /** Injected added-roots file path (tests). Default `<home>/.lucid/roots.json`. */
+  readonly rootsPath?: string;
   /** Idle window before a hosted session suspends + evicts (ms; tests). */
   readonly sessionIdleMs?: number;
   /**
@@ -167,8 +179,19 @@ const renderShellPage = (): string => `<!doctype html>
  * their own shutdown; tests pass `port: 0` and call `stop()`.
  */
 export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle> => {
-  const roots = opts.roots ?? defaultRoots();
+  const configuredRoots = opts.roots ?? defaultRoots();
   const registryPath = opts.registryPath;
+  const rootsPath = opts.rootsPath;
+
+  /**
+   * The roots a listing pass walks: the configured set plus every folder the
+   * human has added. Read PER PASS rather than captured at startup, so a
+   * folder added through `POST /hub/roots` takes effect on the next listing
+   * instead of at the next hub restart.
+   */
+  const scanRootSet = async (): Promise<string[]> => [
+    ...new Set([...configuredRoots, ...(await readRoots(rootsPath))]),
+  ];
   const requestedPort = opts.port ?? HUB_PORT;
   const sessionIdleMs = opts.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
   const attend = opts.attend === true;
@@ -220,13 +243,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    * directories. `project` is always the grouping root; `worktree` names the
    * checkout when it differs.
    */
-  const resolveProject = async (
-    artifact: string,
-  ): Promise<{ project: string; worktree?: string }> => {
-    const cached = projectCache.get(artifact);
-    if (cached !== undefined) return cached;
-    const root = await projectRoot(sessionPaths(artifact));
-    let resolved: { project: string; worktree?: string } = { project: root };
+  const groupingFor = async (root: string): Promise<{ project: string; worktree?: string }> => {
     try {
       const gitPath = join(root, ".git");
       if ((await stat(gitPath)).isFile()) {
@@ -235,12 +252,28 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         if (m?.[1]) {
           const gitdir = resolvePath(root, m[1].trim());
           const wt = /^(.*)[/]\.git[/]worktrees[/][^/]+[/]?$/.exec(gitdir);
-          if (wt?.[1]) resolved = { project: wt[1], worktree: root };
+          if (wt?.[1]) return { project: wt[1], worktree: root };
         }
       }
     } catch {
       /* plain .git directory, or unreadable: the root is the project */
     }
+    return { project: root };
+  };
+
+  const resolveProject = async (
+    artifact: string,
+  ): Promise<{ project: string; worktree?: string }> => {
+    const cached = projectCache.get(artifact);
+    if (cached !== undefined) return cached;
+    // An artifact in an agent's scratchpad belongs to the project that agent
+    // was WORKING ON, not to the scratchpad - which is one session's workspace
+    // and would label every such row "scratchpad". The decoded cwd then goes
+    // through the same worktree resolution as any checkout, because a cwd is
+    // routinely a worktree.
+    const spProject = await scratchpadProject(dirname(artifact));
+    const root = spProject ?? (await projectRoot(sessionPaths(artifact)));
+    const resolved = await groupingFor(root);
     projectCache.set(artifact, resolved);
     return resolved;
   };
@@ -279,7 +312,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   };
 
   const listHub = async (): Promise<HubSession[]> => {
-    const entries = await listAll(roots, registryPath);
+    const entries = await listAll(await scanRootSet(), registryPath);
     rememberIds(entries);
     return Promise.all(
       entries.map(async (e) => {
@@ -423,7 +456,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (artifact === undefined) {
       // Unknown id: refresh the derived map once (a session opened after the
       // last listing), then give up.
-      rememberIds(await listAll(roots, registryPath));
+      rememberIds(await listAll(await scanRootSet(), registryPath));
       artifact = idToArtifact.get(id);
       if (artifact === undefined) return json({ error: "unknown session" }, 404);
     }
@@ -636,6 +669,18 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // hub knows about.
     const known = listing.some((s) => s.project === project || s.worktree === project);
     if (!known) return json({ error: "unknown project" }, 400);
+    // Listed is not the same as PRESENT. A project can be deleted while its
+    // reviews outlive it, and a scratchpad session's project is recovered from
+    // an encoded path whose deepest component may no longer exist - authoring
+    // there would silently mkdir -p a directory tree nobody asked for. A
+    // listing is a place to READ reviews from; writing needs the real thing.
+    const projectPresent = await stat(project).then(
+      (s) => s.isDirectory(),
+      () => false,
+    );
+    if (!projectPresent) {
+      return json({ error: "that project's folder no longer exists on disk" }, 409);
+    }
 
     const artifact = join(project, name);
     // lstat, not stat: a DANGLING symlink is absent to stat, and creating
@@ -660,7 +705,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       const resolved = registry ? resolveRecipe(registry, harness) : undefined;
       // An explicitly named harness must exist: falling back to the default
       // would silently author with a different agent than the one asked for.
-      if (!resolved || (harness !== undefined && resolved.name !== harness)) {
+      if (
+        !resolved ||
+        (harness !== undefined && normalizeHarness(resolved.name) !== normalizeHarness(harness))
+      ) {
         return json({ error: `no spawn recipe for harness "${harness ?? "(default)"}"` }, 400);
       }
 
@@ -741,52 +789,119 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   };
 
   /**
+   * Resolve the folder a `{path?}` request names: an explicit absolute path,
+   * or - with none - the macOS folder chooser. Answers with the validated
+   * directory, or with the Response to send instead (the human cancelled, no
+   * chooser exists here, the path is bad). Shared by the two routes that take
+   * a folder: `/hub/project` (where to AUTHOR) and `/hub/roots` (where to LOOK).
+   *
+   * `prompt` reaches AppleScript as source, so it stays an internal literal -
+   * never request data.
+   */
+  const chooseFolder = async (
+    body: Record<string, unknown> | null,
+    prompt: string,
+  ): Promise<{ readonly dir: string } | { readonly res: Response }> => {
+    let picked = typeof body?.path === "string" ? body.path.trim() : "";
+    if (picked === "") {
+      if (process.platform !== "darwin") {
+        return {
+          res: json({ error: "no folder chooser here - type or paste a path instead" }, 501),
+        };
+      }
+      // AppleScript returns an alias; POSIX path makes it a real path. A
+      // cancel exits non-zero, which is not an error to report - the human
+      // simply changed their mind.
+      // Activated first, and shown BY System Events: an unactivated osascript
+      // puts its chooser behind the window the human is looking at, which is
+      // indistinguishable from the button doing nothing.
+      const proc = Bun.spawn(
+        [
+          "osascript",
+          "-e",
+          'tell application "System Events"',
+          "-e",
+          "activate",
+          "-e",
+          `set picked to choose folder with prompt "${prompt}"`,
+          "-e",
+          "end tell",
+          "-e",
+          "POSIX path of picked",
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+      if (code !== 0) return { res: json({ cancelled: true }, 200, noStore) };
+      picked = out.trim();
+    }
+    if (!picked.startsWith("/")) return { res: json({ error: "an absolute path, please" }, 400) };
+    const dir = resolvePath(picked);
+    try {
+      if (!(await stat(dir)).isDirectory()) return { res: json({ error: "not a directory" }, 400) };
+    } catch {
+      return { res: json({ error: "no such directory" }, 400) };
+    }
+    return { dir };
+  };
+
+  /**
+   * `POST /hub/roots {path?}` - add a folder to the scanned set, so the
+   * sessions already inside it (`<folder>/**​/.lucid/<stem>/log.ndjson`) join
+   * the listing, and keep joining it after a restart.
+   *
+   * `~/dev` is a GUESS about where artifacts live; this is how a human corrects
+   * it - a scratchpad an agent writes to, a checkout somewhere else entirely.
+   *
+   * Deliberately NOT attend-gated, unlike `/hub/project`: pointing the hub at
+   * a folder is a READ, and the hub `lucid app` starts is review-only. Gating
+   * discovery behind attend mode is what left a cold-start shell with nothing
+   * to do but read a CLI hint.
+   *
+   * The answer reports what the folder HELD, because "added" alone leaves the
+   * human wondering whether they picked the right one.
+   */
+  const handleHubRoots = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    const chosen = await chooseFolder(body, "Choose a folder to scan for Lucid sessions");
+    if ("res" in chosen) return chosen.res;
+    await addRoot(chosen.dir, rootsPath);
+    // Counted from a scan of JUST this folder - `listAll` would union the
+    // registry and report sessions that have nothing to do with the pick.
+    const found = await scanRoots([chosen.dir]);
+    // Connected shells are told by the listing stream, not by this response:
+    // adding a root changes what EVERY window sees, not just this one's.
+    void notify();
+    // The EFFECTIVE set, not just the persisted additions: this is what the
+    // shell displays as "looking in", and answering with the additions alone
+    // made it forget the defaults (`~/dev`, the scratchpads) it still scans.
+    return json(
+      { root: chosen.dir, roots: await scanRootSet(), found: found.length },
+      200,
+      noStore,
+    );
+  };
+
+  /**
    * `POST /hub/project {path?}` - name a project the listing does not know
    * yet, so a new artifact can be authored somewhere with no sessions in it.
    *
-   * With no `path`, the hub opens the OS folder chooser (macOS only) and the
-   * human picks; with one, that path is validated instead, which is the
-   * fallback anywhere the chooser is unavailable. Either way the answer runs
-   * through the same `resolveProject` the listing uses, so a WORKTREE comes
-   * back as its main repo with the checkout named beside it - the two are
-   * related by git itself, not by anything the human has to declare.
+   * The answer runs through the same `resolveProject` the listing uses, so a
+   * WORKTREE comes back as its main repo with the checkout named beside it -
+   * the two are related by git itself, not by anything the human declares.
    *
-   * Attend-only, like create: this route runs a subprocess, and a review-only
-   * hub stays a process that spawns nothing (D-064). It is also the only
-   * consumer - picking a folder is pointless where authoring is refused.
+   * Attend-only, like create: authoring is what this folder is FOR, and a
+   * review-only hub stays a process that spawns nothing (D-064). Pointing the
+   * hub at existing sessions is `/hub/roots`, which is open to every hub.
    */
   const handleHubProject = async (req: Request): Promise<Response> => {
     if (!attend) {
       return json({ error: "this hub does not author artifacts (start it with --attend)" }, 403);
     }
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    let picked = typeof body?.path === "string" ? body.path.trim() : "";
-    if (picked === "") {
-      if (process.platform !== "darwin") {
-        return json({ error: "no folder chooser here - type or paste a path instead" }, 501);
-      }
-      // AppleScript returns an alias; POSIX path makes it a real path. A
-      // cancel exits non-zero, which is not an error to report - the human
-      // simply changed their mind.
-      const proc = Bun.spawn(
-        [
-          "osascript",
-          "-e",
-          'POSIX path of (choose folder with prompt "Choose a project folder for the new artifact")',
-        ],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-      if (code !== 0) return json({ cancelled: true }, 200, noStore);
-      picked = out.trim();
-    }
-    if (!picked.startsWith("/")) return json({ error: "an absolute path, please" }, 400);
-    const dir = resolvePath(picked);
-    try {
-      if (!(await stat(dir)).isDirectory()) return json({ error: "not a directory" }, 400);
-    } catch {
-      return json({ error: "no such directory" }, 400);
-    }
+    const chosen = await chooseFolder(body, "Choose a project folder for the new artifact");
+    if ("res" in chosen) return chosen.res;
+    const dir = chosen.dir;
     // resolveProject reads an ARTIFACT's location, so ask it about a file that
     // would live directly in this folder. Nothing is created or written.
     const proj = await resolveProject(join(dir, "artifact.html"));
@@ -865,12 +980,16 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           ...(recipe.defaultEffort !== undefined ? { defaultEffort: recipe.defaultEffort } : {}),
         }),
       );
+      // `roots` names the folders being scanned, so an empty shell can say
+      // WHERE it looked instead of just "no reviews yet" - the difference
+      // between a dead end and a correctable guess.
       return json(
         {
           lucid: "hub",
           port,
           shells: sseClients.size,
           attend,
+          roots: await scanRootSet(),
           harnesses,
           harnessInfo,
           ...(registry?.default !== undefined ? { defaultHarness: registry.default } : {}),
@@ -890,6 +1009,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     }
     if (pathname === "/hub/project" && req.method === "POST") {
       return handleHubProject(req);
+    }
+    if (pathname === "/hub/roots" && req.method === "POST") {
+      return handleHubRoots(req);
     }
     if (pathname === "/hub/events" && req.method === "GET") {
       return handleEvents();

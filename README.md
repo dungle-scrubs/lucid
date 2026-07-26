@@ -2,33 +2,27 @@
 
 Point at the line. Say what you mean. The agent gets it.
 
-Lucid is an agent-agnostic CLI. Your coding agent writes a response as an HTML
-document - a plan, a report, a schema - and Lucid serves it in a browser where
-you mark up individual elements and text ranges. Your notes go back to the agent
-as located feedback. You never touch the CLI; the agent never renders the review.
-
-```mermaid
-sequenceDiagram
-    participant A as Agent (any CLI harness)
-    participant L as lucid (single binary)
-    participant H as Human (browser)
-    A->>L: writes plan.html, runs lucid open
-    L->>H: serves the viewer - artifact + review panel
-    H->>L: annotates elements and ranges, sends messages
-    L-->>A: lucid wait returns located feedback (JSON)
-    A->>L: revises the file / replies
-    L->>H: live-reloads the artifact, appends to the record
-```
-
-## Why
+Your coding agent writes its answer as an HTML document - a plan, an audit, a
+schema - and Lucid serves it in a browser where you mark up individual elements
+and text ranges. Your notes go back as *located* feedback: not "change item 3"
+but a mark **on** item 3 with the exact quote attached, so the agent acts on it
+without guessing.
 
 A migration plan reads better as a document than as monospace prose scrolling
-out of a terminal. And "change item 3" becomes a mark *on item 3*, with the
-exact quote attached, so the agent acts on it without guessing what you meant.
+out of a terminal. Reviewing it should feel like reviewing a document.
 
-Everything - annotations, messages, versions, approvals - lands in one
-append-only log next to the artifact. Reviews suspend and resume, and any agent
-can pick up one someone else started.
+- **Nothing is thrown away.** Annotations, messages, versions, approvals and
+  replies land in one append-only log beside the artifact. Reviews suspend and
+  resume; any agent can pick up one someone else started.
+- **It lives in your repo.** The artifact and its review history sit in your
+  project, so a reboot, a cleared temp directory or a dead agent can't take
+  them with it.
+- **Agent-agnostic.** The whole integration surface is a CLI and a JSON
+  payload - no SDK, no plugin. Anything that can run a subprocess and parse
+  JSON can drive a review.
+- **It answers while you're away.** Send feedback with nobody watching and
+  Lucid can resume the agent's own conversation to apply it (see
+  [Two modes](#two-modes)).
 
 ## Install
 
@@ -51,7 +45,11 @@ Symlink rather than copy, so the skill can never describe a different version
 than the binary you built. Other harnesses have their own skill directories, or
 can read [`SKILL.md`](skills/lucid/SKILL.md) as a plain prompt.
 
-Ask for a plan, and the agent opens one. The only commands you might run:
+## Use it
+
+Ask your agent for a plan. It writes `<project>/lucid/plan.html` and runs
+`lucid open`, and the review appears. You never touch the CLI to review - but
+these are yours if you want them:
 
 ```sh
 lucid open plan.html    # serve + open the review
@@ -59,29 +57,84 @@ lucid end  plan.html    # close the session
 lucid                   # list sessions in this project
 ```
 
-### One window over every session (the shell)
+### One window over every session
 
-Instead of one browser tab per session, run the hub and get a single window
-with a tab per review - every session across `~/dev`, a `⌘K` palette, and
-`⌘1–9` tab switching:
+Rather than a browser tab per review, run the shell: one window, a tab per
+artifact, a `⌘K` palette, `⌘1-9` to switch, `⌘W` to close.
 
 ```sh
 lucid app               # start the hub (if needed) + open the shell as a Chrome app
-lucid hub               # or run the hub daemon in the foreground yourself
+lucid hub --attend      # or run the daemon yourself
 ```
 
-While the hub is running, `lucid open` surfaces sessions as tabs in that one
-window (`http://127.0.0.1:17428/`) rather than spawning per-session servers.
-Agents notice nothing: `wait`/`ask`/`end` and the JSON payload are unchanged.
+While the hub runs, `lucid open` surfaces sessions as tabs in that one window
+(`http://127.0.0.1:17428/`) instead of spawning per-session servers. Agents
+notice nothing: `wait` / `ask` / `end` and the JSON payload are unchanged.
 
-Working on the UI itself? `bun run dev` starts a hub that serves the client
-bundles from disk, rebuilds them on save, and live-reloads every connected
-shell - no binary rebuild, no restart. (Live reload, not HMR: component
-state resets on reload.)
+It finds artifacts by scanning the folders in `~/.lucid/roots.json` (`~/dev`
+plus your agents' scratchpads by default). The projects drawer has a folder
+button to add another; it reports how many reviews were already inside.
+
+## Two modes
+
+Which one you're in depends on whether that artifact's agent conversation is
+**open in a terminal right now**. The panel names the mode under the composer.
+
+**Interactive** - the conversation is open and someone is at it. Lucid records
+your feedback and stays out of the way; the waiting agent picks it up through
+`lucid wait`. The model and effort in use are shown, not offered: they belong to
+the session that's already running.
+
+**Spawn mode** - nothing is watching. Lucid resumes that artifact's own
+conversation headlessly to apply your feedback, so a review answers itself while
+you're elsewhere. Pick the model and effort for the next turn, and copy a resume
+command if you'd rather take it over in a terminal. Requires `--attend` (which
+`lucid app` sets) and a recorded session.
+
+Two other states are honest about having nothing to spawn: **no agent session**
+(hand-written or recovered artifact - feedback is saved for the next agent that
+opens it) and **recording only** (a hub started without `--attend`).
+
+Detection is live, not historical: copy the resume command into a terminal and
+the mode follows you there.
+
+## Harnesses
+
+A harness is any agent CLI. Lucid needs a recipe for one only to *start* or
+*resume* turns itself - reviews work without any registry at all.
+
+`~/.config/lucid/harnesses.json` (or `$LUCID_HARNESSES`):
+
+```json
+{
+  "default": "claude_code",
+  "harnesses": {
+    "claude_code": {
+      "spawn":  ["claude", "-p", "--session-id", "{id}", "{prompt}"],
+      "resume": ["claude", "--resume", "{id}", "-p", "{prompt}"],
+      "models": [{ "id": "opus", "label": "Opus 5" }],
+      "defaultModel": "opus",
+      "efforts": ["low", "medium", "high"]
+    }
+  }
+}
+```
+
+`spawn` authors a new artifact; `resume` drives a turn on an existing one.
+`models` and `efforts` become the pickers in the panel - without them, the
+harness simply gets none. Absent file means the launcher is off.
+
+`~/.lucid/settings.json` holds Lucid's own preferences:
+
+```json
+{ "resumeYolo": true }
+```
+
+`resumeYolo` (default true) adds the harness's skip-permissions flag to the
+resume command offered for copying - you're re-entering a conversation about
+your own artifact.
 
 ## How agents use it
-
-The whole integration surface is a CLI and a JSON payload. No SDK, no plugin.
 
 ```sh
 lucid open plan.html                       # prints an opening cursor
@@ -90,8 +143,7 @@ lucid wait plan.html --since <cursor> --reply "reordered the steps"
 lucid ask  plan.html --text "batch or nightly?" --ref step-backfill
 ```
 
-Anything that can run a subprocess and parse JSON can drive a review. The full
-protocol is [docs/CONTRACT.md](docs/CONTRACT.md); the vocabulary is
+The full protocol is [docs/CONTRACT.md](docs/CONTRACT.md); the vocabulary is
 [CONTEXT.md](CONTEXT.md).
 
 ## Contributing
@@ -102,6 +154,10 @@ bun run typecheck && bun run lint
 bun test test/*.test.ts
 bunx playwright install chromium && bunx playwright test
 ```
+
+Working on the UI? `bun run dev` starts a hub that serves the client bundles
+from disk, rebuilds on save and live-reloads every connected shell - no binary
+rebuild, no restart. (Live reload, not HMR: component state resets.)
 
 A running viewer serves the bundle its binary embedded at compile time, so after
 client changes rebuild **and** restart it - green tests against a stale bundle
@@ -121,14 +177,15 @@ src/anchors    anchor resolution      skills/          agent skills
 
 - **Skills in the binary** - `lucid skills install`, so a skill can never
   describe a different version of the CLI than the one that wrote it.
-- **Stale-binary guard** - surface a bundle mismatch instead of relying on
-  discipline.
+- **Stale-binary guard** - a shell reloads itself when the hub it reconnects to
+  reports a different bundle, but nothing notices that the *running* hub is
+  older than the binary on disk. Restarting it is still discipline.
 - **Draft persistence** - submitted messages survive an outage and a reload (the
   outbox), but queued annotations are still client memory: a reload before
   sending loses them, along with their anchors and staged images.
-- **Viewer follows its session** - a session that reopens on a different port
-  strands the tab that was watching the old one. It reconnects to nothing, so
-  undelivered work waits there instead of delivering itself.
+- **Per-session viewers follow their session** - the hub serves every session at
+  a stable address, so a restart reconnects. Without a hub, `lucid open` binds a
+  random port and a viewer on the old one strands.
 - **Packaging** - prebuilt binaries and a published package.
 
 ## Thanks

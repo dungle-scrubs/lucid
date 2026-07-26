@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
 import { SessionProvider, useActions, useSession } from "./context.tsx";
@@ -10,7 +10,7 @@ import type { SessionHandle } from "./session.ts";
 import { Sessions } from "./Sessions.tsx";
 import {
   CHROME_MIN_WIDTH,
-  DEFAULT_CHROME_WIDTH,
+  defaultChromeWidth,
   persistWidth,
   setChromeWidth,
   setSidebarOpen,
@@ -34,6 +34,7 @@ import {
 } from "./ui/sidebar.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import { Kbd } from "./ui/kbd.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 const DIVIDER_WIDTH = 5;
 
@@ -156,7 +157,7 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
         // when there is nothing measurable.
         const width =
           msg.width <= 0
-            ? DEFAULT_CHROME_WIDTH
+            ? defaultChromeWidth(window.innerWidth)
             : Math.max(CHROME_MIN_WIDTH, window.innerWidth - DIVIDER_WIDTH - msg.width);
         setChromeWidth(width);
         persistWidth(width);
@@ -285,15 +286,23 @@ const CancelPicksButton = () => {
   const count = composer + pins;
   if (count === 0) return null;
   return (
-    <button
-      type="button"
-      data-test="cancel-picks"
-      onClick={cancelAllPicks}
-      title="Cancel every collected spot - the annotation draft and all answer pins"
-      className="absolute right-3 top-3 z-30 flex cursor-pointer items-center gap-1 rounded-[5px] border border-ink-500 bg-ink-850/95 px-2.5 py-1 text-[11px] text-fg-muted shadow-[0_2px_10px_rgba(0,0,0,0.35)] hover:border-rust-300/60 hover:text-fg"
-    >
-      × Cancel picks ({count})
-    </button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            data-test="cancel-picks"
+            onClick={cancelAllPicks}
+            className="absolute right-3 top-3 z-30 flex cursor-pointer items-center gap-1 border border-ink-500 bg-ink-850/95 px-2.5 py-1 text-[11px] text-fg-muted shadow-[0_2px_10px_rgba(0,0,0,0.35)] hover:border-rust-300/60 hover:text-fg"
+          >
+            × Cancel picks ({count})
+          </button>
+        }
+      />
+      <TooltipContent>
+        Cancel every collected spot - the annotation draft and all answer pins
+      </TooltipContent>
+    </Tooltip>
   );
 };
 
@@ -373,6 +382,8 @@ export const SessionView = ({
   const sidebarOpen = useShell((s) => s.sidebarOpen);
   const sidebarTab = useShell((s) => s.sidebarTab);
   const dragging = useRef(false);
+  // Render state (not a ref): the slide duration is a style the panel reads.
+  const [resizing, setResizing] = useState(false);
 
   useSessionWiring(session, !shell, active);
 
@@ -391,6 +402,7 @@ export const SessionView = ({
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     dragging.current = true;
+    setResizing(true);
     const startX = e.clientX;
     const startW = useShell.getState().chromeWidth;
     const onMove = (ev: PointerEvent): void => {
@@ -404,6 +416,7 @@ export const SessionView = ({
     };
     const onUp = (): void => {
       dragging.current = false;
+      setResizing(false);
       persistWidth(useShell.getState().chromeWidth);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
@@ -421,7 +434,14 @@ export const SessionView = ({
         open={sidebarOpen}
         onOpenChange={setSidebarOpen}
         hotkey={active}
-        style={{ "--sidebar-width": `${chromeWidth}px` } as React.CSSProperties}
+        style={
+          {
+            "--sidebar-width": `${chromeWidth}px`,
+            // A drag sets the width every pointermove; animating it would trail
+            // the hand. Open/close keeps the 200ms slide.
+            ...(resizing ? { "--sidebar-tx": "0ms" } : {}),
+          } as React.CSSProperties
+        }
         className="h-full min-h-0"
       >
         <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
@@ -434,41 +454,50 @@ export const SessionView = ({
             opaque origin, so contentDocument is null from here. Hidden while
             collapsed: there is no panel edge to drag. */}
         {sidebarOpen ? (
-          <hr
-            aria-orientation="vertical"
-            aria-label="Resize the review panel"
-            aria-valuenow={chromeWidth}
-            aria-valuemin={CHROME_MIN_WIDTH}
-            tabIndex={0}
-            onPointerDown={onPointerDown}
-            onDoubleClick={() =>
-              session.surface.toOverlay({ source: "lucid-chrome", type: "measure-content" })
-            }
-            onKeyDown={(e) => {
-              const step = e.shiftKey ? 64 : 16;
-              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-              e.preventDefault();
-              // The panel sits on the RIGHT: moving the divider left grows it.
-              const next = Math.max(
-                CHROME_MIN_WIDTH,
-                Math.min(
-                  window.innerWidth - 320,
-                  chromeWidth + (e.key === "ArrowLeft" ? step : -step),
-                ),
-              );
-              setChromeWidth(next);
-              persistWidth(next);
-            }}
-            title="Drag to resize · double-click to fit the document"
-            // The boundary is the 1px RIGHT BORDER (the panel's edge), same
-            // border-box trick as before the flip: fixed footprint, line
-            // thickens on hover without shifting the artifact.
-            //
-            // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so
-            // without it the divider collapses to nothing - invisible and undraggable.
-            style={{ width: DIVIDER_WIDTH }}
-            className="m-0 h-full shrink-0 cursor-col-resize border-0 border-r-[1px] border-r-ink-600 bg-ink-850 hover:border-r-[2px] hover:border-r-accent-bright focus-visible:border-r-[2px] focus-visible:border-r-accent-bright"
-          />
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <hr
+                  aria-orientation="vertical"
+                  aria-label="Resize the review panel"
+                  aria-valuenow={chromeWidth}
+                  aria-valuemin={CHROME_MIN_WIDTH}
+                  tabIndex={0}
+                  onPointerDown={onPointerDown}
+                  onDoubleClick={() =>
+                    session.surface.toOverlay({
+                      source: "lucid-chrome",
+                      type: "measure-content",
+                    })
+                  }
+                  onKeyDown={(e) => {
+                    const step = e.shiftKey ? 64 : 16;
+                    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+                    e.preventDefault();
+                    // The panel sits on the RIGHT: moving the divider left grows it.
+                    const next = Math.max(
+                      CHROME_MIN_WIDTH,
+                      Math.min(
+                        window.innerWidth - 320,
+                        chromeWidth + (e.key === "ArrowLeft" ? step : -step),
+                      ),
+                    );
+                    setChromeWidth(next);
+                    persistWidth(next);
+                  }}
+                  // The boundary is the 1px RIGHT BORDER (the panel's edge), same
+                  // border-box trick as before the flip: fixed footprint, line
+                  // thickens on hover without shifting the artifact.
+                  //
+                  // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so
+                  // without it the divider collapses to nothing - invisible and undraggable.
+                  style={{ width: DIVIDER_WIDTH }}
+                  className="m-0 h-full shrink-0 cursor-col-resize border-0 border-r-[1px] border-r-ink-600 bg-ink-850 hover:border-r-[2px] hover:border-r-accent-bright focus-visible:border-r-[2px] focus-visible:border-r-accent-bright"
+                />
+              }
+            />
+            <TooltipContent>Drag to resize · double-click to fit the document</TooltipContent>
+          </Tooltip>
         ) : null}
         {/* The review panel, RIGHT (artifact-first D9): the surface is the
             primary concern in the center, the inference source at the edge.

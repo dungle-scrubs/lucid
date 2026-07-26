@@ -1,5 +1,15 @@
 import { expect, test } from "@playwright/test";
-import { openIntoHub, PLAN_V1, startHub, surfaceOf, type Cli, type Hub } from "./helpers.ts";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  makeCli,
+  openIntoHub,
+  PLAN_V1,
+  startHub,
+  surfaceOf,
+  type Cli,
+  type Hub,
+} from "./helpers.ts";
 
 /**
  * The shell (Model B): one daemon window over every session. These tests run
@@ -91,6 +101,62 @@ test("each sent item shows where it got to: recorded, then delivered (D20)", asy
   ])) as { status: string };
   expect(feedback.status).toBe("feedback");
   await expect(state).toHaveAttribute("data-state", "delivered");
+});
+
+test("an empty shell can point itself at a folder and find the sessions in it", async ({
+  page,
+}) => {
+  // The cold start: a hub scanning nowhere useful. The session exists on disk
+  // already - it was opened by a CLI with its OWN registry, so no pointer in
+  // the hub's registry and no scan root covers it. This is the "my past
+  // reviews are invisible and there is nothing on screen to do about it" case.
+  hub = await startHub();
+  cli = await makeCli(PLAN_V1);
+  await cli.run(["open", cli.artifact]);
+
+  await page.goto(`http://127.0.0.1:${hub.port}/`);
+  await expect(page.locator('[data-test="picker-project"]')).toHaveCount(0);
+  // It says where it looked, which is what makes the miss correctable.
+  await expect(page.locator("code", { hasText: hub.dir })).toBeVisible();
+
+  // Paste the folder rather than opening the native chooser - the same route a
+  // human needs for a scratchpad path Finder will not show them.
+  await page.locator('[data-test="add-folder-type"]').first().click();
+  await page.locator('[data-test="add-folder-path"]').first().fill(cli.dir);
+  await page.locator('[data-test="add-folder-path-add"]').first().click();
+
+  // The listing IS the confirmation, and it arrives over the stream - no
+  // reload, no restart. (Not asserted on the status line: success replaces
+  // this whole screen with the populated one, which unmounts it.)
+  await expect(page.locator('[data-test="picker-project"]')).toHaveCount(1);
+  await expect(page.locator('[data-test="picker-row"]').first()).toContainText("Migration plan");
+});
+
+test("the new-tab screen offers only artifacts that are NOT already open", async ({ page }) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+  // A second artifact in the same folder, so the project holds two.
+  const second = join(cli.dir, "rollout.html");
+  await writeFile(second, PLAN_V1.replace("Migration plan", "Rollout checklist"));
+  await cli.run(["open", second]);
+
+  await page.goto(opened.shellUrl);
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
+
+  // "+" is a place to OPEN something. The one artifact already sitting in the
+  // strip is not an option - picking it would just switch to that tab.
+  await page.locator('[data-test="tab-add"]').click();
+  const rows = page.locator('[data-test="picker-row"]');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText("Rollout checklist");
+
+  // Open it too, and the screen says so rather than claiming there is nothing.
+  await rows.first().click();
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+  await page.locator('[data-test="tab-add"]').click();
+  await expect(page.locator('[data-test="all-open"]')).toBeVisible();
+  await expect(page.locator('[data-test="picker-row"]')).toHaveCount(0);
 });
 
 test("the new-artifact dialog validates the name and names the flag it needs", async ({ page }) => {
@@ -200,6 +266,34 @@ test("tabs scope to a project; the drawer switches; drafts survive", async ({ pa
   );
 });
 
+test("picking a project OPENS it: every artifact in it becomes a tab", async ({ page }) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+  // A second artifact in the SAME folder, so one project holds two sessions.
+  const second = join(cli.dir, "rollout.html");
+  await writeFile(second, PLAN_V1.replace("Migration plan", "Rollout checklist"));
+  await cli.run(["open", second]);
+
+  await page.goto(opened.shellUrl);
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
+
+  await page.locator('[data-test="drawer-toggle"]').click();
+  const projectRow = page.locator('[data-test="drawer-project"]', { hasText: cli.dir });
+  // Gate on the listing having BOTH before picking, so this tests the open
+  // behaviour rather than a race with the stream.
+  await expect(projectRow).toContainText("2 artifacts");
+  await projectRow.click();
+
+  // Both, as tabs - not a second list to choose from.
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+  await expect(page.locator('[data-test="picker-row"]')).toHaveCount(0);
+  // The newest is the one in front.
+  await expect(page.locator('[data-test="shell-tab"][data-active="true"]')).toContainText(
+    "Rollout checklist",
+  );
+});
+
 test("the command palette opens sessions and runs review actions", async ({ page }) => {
   hub = await startHub();
   const first = await openIntoHub(hub, PLAN_V1);
@@ -236,4 +330,59 @@ test("the command palette opens sessions and runs review actions", async ({ page
   await expect(page.locator('[data-test="palette-input"]')).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator('[data-test="palette-overlay"]')).toHaveCount(0);
+});
+
+test("⌘W closes the artifact in front of you; the drawer adds projects from its header", async ({
+  page,
+}) => {
+  hub = await startHub();
+  const first = await openIntoHub(hub, PLAN_V1);
+  cli = first.cli;
+  // A SECOND artifact in the SAME project, so both tabs sit in one scope and
+  // the strip shows two.
+  const other = join(first.cli.dir, "rollout.html");
+  await writeFile(
+    other,
+    PLAN_V1.replace("<title>Migration plan</title>", "<title>Rollout checklist</title>"),
+    "utf8",
+  );
+  await first.cli.run(["open", other]);
+
+  await page.goto(first.shellUrl);
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
+  await page.locator('[data-test="tab-add"]').click();
+  await page.locator('[data-test="picker-row"]', { hasText: "Rollout checklist" }).click();
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+
+  // ⌘W closes the ACTIVE tab only. The browser owns the real ⌘W in a normal
+  // tab, so this asserts the shell's own handling of the gesture.
+  await page.keyboard.press("Meta+w");
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
+  // The session it closed is still listed by the hub - a closed tab is not a
+  // deleted artifact.
+  await page.locator('[data-test="tab-add"]').click();
+  await expect(page.locator('[data-test="picker-row"]')).toHaveCount(1);
+
+  // Adding a project lives at the TOP of the drawer, behind an icon; the
+  // drawer no longer repeats "New artifact", which the bar already offers.
+  await page.locator('[data-test="scope-label"]').click();
+  const drawer = page.locator('[data-test="projects-drawer"]');
+  await expect(drawer.locator('[data-test="add-folder"]')).toBeVisible();
+  await expect(drawer.locator('[data-test="drawer-new-artifact"]')).toHaveCount(0);
+});
+
+test("a dropped hub reports itself ONCE, at the composer", async ({ page }) => {
+  hub = await startHub();
+  const first = await openIntoHub(hub, PLAN_V1);
+  cli = first.cli;
+  await page.goto(first.shellUrl);
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
+  await expect(page.locator('[data-test="reconnecting"]')).toHaveCount(0);
+
+  // Kill the hub's listing stream by stopping the hub itself. Exactly one
+  // indicator may appear: two, in two corners, described one drop twice.
+  await hub.stop();
+  const indicator = page.locator('[data-test="reconnecting"]');
+  await expect(indicator).toHaveCount(1);
+  await expect(indicator).toBeVisible();
 });

@@ -12,16 +12,42 @@ import type { SessionConfig } from "./store.ts";
 const CHROME_WIDTH_KEY = "lucid:chromeWidth";
 const SIDEBAR_OPEN_KEY = "lucid:sidebarOpen";
 
-export const DEFAULT_CHROME_WIDTH = 384;
 export const CHROME_MIN_WIDTH = 320;
 
+/**
+ * The panel's share of the window when nothing has been chosen yet. A FRACTION
+ * rather than a fixed 384px: the conversation is the other half of the review,
+ * and a fixed number that sits right on a laptop is a sliver on a 32" display
+ * and crowds the paper on a small one.
+ *
+ * Clamped at both ends - never below the resize floor, and never so wide that
+ * the artifact loses its measure (a column of prose stops reading well much
+ * past ~75 characters, and the paper is what the panel is ABOUT).
+ */
+const DEFAULT_CHROME_FRACTION = 0.31;
+const DEFAULT_CHROME_MAX = 640;
+
+/** The default width at a given viewport. Exported for the tests that pin the
+ *  clamps; the running app reads the viewport itself. */
+export const defaultChromeWidth = (viewport: number): number =>
+  Math.round(
+    Math.min(DEFAULT_CHROME_MAX, Math.max(CHROME_MIN_WIDTH, viewport * DEFAULT_CHROME_FRACTION)),
+  );
+
+/** Fixed fallback for a context with no window (SSR, tests importing the
+ *  module bare) - the historical default, which is a fine laptop width. */
+export const DEFAULT_CHROME_WIDTH = 384;
+
+const viewportWidth = (): number => (typeof window === "undefined" ? 0 : (window.innerWidth ?? 0));
+
 const readStoredWidth = (): number => {
+  const fallback = viewportWidth() > 0 ? defaultChromeWidth(viewportWidth()) : DEFAULT_CHROME_WIDTH;
   try {
     const raw = localStorage.getItem(CHROME_WIDTH_KEY);
     const n = raw ? Number.parseInt(raw, 10) : NaN;
-    return Number.isFinite(n) && n >= 300 ? n : DEFAULT_CHROME_WIDTH;
+    return Number.isFinite(n) && n >= 300 ? n : fallback;
   } catch {
-    return DEFAULT_CHROME_WIDTH;
+    return fallback;
   }
 };
 

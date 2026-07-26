@@ -59,6 +59,16 @@ Never fake the review loop, and never paste build instructions at the user.
    get feedback; keep each id unique within the document - duplicate ids are
    skipped during anchor resolution.
 
+   **Write it into the PROJECT, at `<project>/lucid/<name>.html` - never your
+   scratchpad, never `/tmp`.** This is not tidiness. A session's whole history -
+   every annotation, version and reply - lives in `.lucid/` beside its artifact,
+   so the artifact's location decides where the review is stored. macOS clears
+   `/private/tmp` on every boot, and a scratchpad artifact takes weeks of
+   accumulated review with it when the machine restarts. `lucid open` refuses a
+   temporary path for exactly this reason. An artifact is content that outlives
+   the review; put it where the work lives. (Add `lucid/` to the project's
+   `.gitignore` if these should not be committed.)
+
    **Self-contained is not optional**: one inline `<style>`, system font stacks,
    no CDN, no remote assets. The artifact must render identically opened straight
    from disk with no network - it is content that outlives the review.

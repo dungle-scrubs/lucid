@@ -5,6 +5,7 @@ import { useShell } from "./shell.ts";
 import { handleize } from "../../src/core/title.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { closeButton } from "./ui/close.ts";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
  * Create from nothing (D3/D16): the shell mints a NEW artifact by asking the
@@ -37,13 +38,13 @@ const ATTEND_HINT =
   "This hub does not spawn agents. Start it with attend mode to author artifacts:";
 
 const field =
-  "w-full rounded-md border border-ink-600 bg-bg-inset px-2 py-1.5 text-[13px] text-fg outline-none placeholder:text-fg-faint focus-visible:annot-outline";
+  "w-full border border-ink-600 bg-bg-inset px-2 py-1.5 text-[13px] text-fg outline-none placeholder:text-fg-faint focus-visible:annot-outline";
 const fieldLabel = "text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint";
 /** The vendored trigger's default is the header's version PILL, which reads as
  *  a different kind of control in a column of inputs: every Select in this
  *  dialog takes the shape of the text fields beside it. */
 const selectField =
-  "w-full justify-between rounded-md border-ink-600 bg-bg-inset px-2 py-1.5 text-[13px] text-fg";
+  "w-full justify-between border-ink-600 bg-bg-inset px-2 py-1.5 text-[13px] text-fg";
 /** The id shown beside a label, and the registry default shown beside the
  *  "default" row: present, subordinate, never competing with the choice. */
 const hint = "ml-2 text-[10px] text-fg-faint";
@@ -361,30 +362,36 @@ const CreateDialogBody = () => {
                 )}
                 {/* The listing only knows projects that already hold a
                     session; this is how a brand new folder becomes one. */}
-                <button
-                  type="button"
-                  data-test="create-add-project"
-                  title="Choose a project folder"
-                  aria-label="Choose a project folder"
-                  onClick={() => void addProject()}
-                  className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-[5px] border border-ink-600 bg-ink-800 text-fg-muted hover:border-accent-bright hover:text-fg focus-visible:annot-outline"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    width="14"
-                    height="14"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v3" />
-                    <path d="M18 14v6" />
-                    <path d="M15 17h6" />
-                  </svg>
-                </button>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        data-test="create-add-project"
+                        aria-label="Choose a project folder"
+                        onClick={() => void addProject()}
+                        className="flex size-7 shrink-0 cursor-pointer items-center justify-center border border-ink-600 bg-ink-800 text-fg-muted hover:border-accent-bright hover:text-fg focus-visible:annot-outline"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          width="14"
+                          height="14"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v3" />
+                          <path d="M18 14v6" />
+                          <path d="M15 17h6" />
+                        </svg>
+                      </button>
+                    }
+                  />
+                  <TooltipContent>Choose a project folder</TooltipContent>
+                </Tooltip>
               </div>
               {typing ? (
                 <div className="flex items-center gap-1.5 pt-1">
@@ -406,7 +413,7 @@ const CreateDialogBody = () => {
                     type="button"
                     data-test="create-project-path-add"
                     onClick={() => void addProject(typedPath)}
-                    className="cursor-pointer rounded-[5px] border border-ink-600 bg-ink-700 px-2 py-1.5 text-[11px] text-fg hover:bg-ink-600"
+                    className="cursor-pointer border border-ink-600 bg-ink-700 px-2 py-1.5 text-[11px] text-fg hover:bg-ink-600"
                   >
                     Add
                   </button>
@@ -631,7 +638,7 @@ const CreateDialogBody = () => {
                 type="submit"
                 data-test="create-submit"
                 disabled={!canSubmit}
-                className="cursor-pointer rounded-md border border-ink-600 bg-ink-700 px-2.5 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
+                className="cursor-pointer border border-ink-600 bg-ink-700 px-2.5 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-fg hover:bg-ink-600 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {sending ? "Sending…" : "Author it"}
               </button>
@@ -659,7 +666,7 @@ const CreateDialogBody = () => {
                     binary - the reason is almost always right here. */}
                 <pre
                   data-test="create-failed-tail"
-                  className="mt-1 overflow-x-auto rounded border border-ink-500 bg-ink-700 p-2 font-mono text-[11px] leading-snug text-fg"
+                  className="mt-1 overflow-x-auto border border-ink-500 bg-ink-700 p-2 font-mono text-[11px] leading-snug text-fg"
                 >
                   {createFailed.tail || "(the log is empty)"}
                 </pre>

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useActions, useSession } from "../context.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip.tsx";
 
 /**
  * The one Markdown treatment the chrome speaks in: the transcript's agent turns
@@ -62,16 +63,22 @@ const MarkdownLink = ({
     const live = sectionIds === null || sectionIds.includes(sectionId);
     if (!live) return <span>{children}</span>;
     return (
-      <button
-        type="button"
-        data-test="section-link"
-        onClick={() => revealSection(sectionId)}
-        title="Scroll the artifact to this section"
-        className="mx-px inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 align-baseline text-[0.9em] font-medium text-accent hover:bg-accent/20"
-      >
-        <LocateGlyph />
-        {children}
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              data-test="section-link"
+              onClick={() => revealSection(sectionId)}
+              className="mx-px inline-flex items-center gap-1 border border-accent/40 bg-accent/10 px-1.5 align-baseline text-[0.9em] font-medium text-accent hover:bg-accent/20"
+            >
+              <LocateGlyph />
+              {children}
+            </button>
+          }
+        />
+        <TooltipContent>Scroll the artifact to this section</TooltipContent>
+      </Tooltip>
     );
   }
 
@@ -107,8 +114,8 @@ export const markdownComponents = { a: MarkdownLink, img: MarkdownImage } as con
 export const prose = [
   "min-w-0 max-w-full text-fg leading-[1.45] [&>*+*]:mt-2 break-words",
   "[&_strong]:font-semibold [&_strong]:text-fg-strong [&_em]:italic",
-  "[&_code]:rounded [&_code]:bg-ink-700 [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.92em]",
-  "[&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-ink-500 [&_pre]:bg-ink-700 [&_pre]:p-2.5 [&_pre]:font-mono [&_pre]:text-[12px] [&_pre]:leading-[1.5]",
+  "[&_code]: [&_code]:bg-ink-700 [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.92em]",
+  "[&_pre]:overflow-x-auto [&_pre]: [&_pre]:border [&_pre]:border-ink-500 [&_pre]:bg-ink-700 [&_pre]:p-2.5 [&_pre]:font-mono [&_pre]:text-[12px] [&_pre]:leading-[1.5]",
   "[&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-[1em]",
   "[&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mt-0.5 [&_li]:marker:text-fg-faint",
   "[&_:is(h1,h2,h3,h4)]:mt-3 [&_:is(h1,h2,h3,h4)]:text-[13px] [&_:is(h1,h2,h3,h4)]:font-semibold [&_:is(h1,h2,h3,h4)]:text-fg-strong",

@@ -321,11 +321,44 @@ export interface ContextUsage {
   readonly at: string;
 }
 
+/**
+ * The attending conversation as it exists RIGHT NOW, when the harness lets us
+ * see that. Present only while that session is actually running; absent means
+ * either nothing is running or the harness publishes no such signal, which the
+ * viewer must treat the same way - as "not open".
+ *
+ * Distinct from `agentsListening`, which counts agents blocked in `wait`: a
+ * human with the conversation open and mid-thought is listening to nothing,
+ * and is exactly who must not be talked over.
+ */
+export interface AttendantPresence {
+  /** A terminal someone can type into, as opposed to a headless run. */
+  readonly interactive: boolean;
+  /** The harness's own live status, e.g. `idle` / `busy`. */
+  readonly status?: string;
+  /** Where that conversation is running. */
+  readonly cwd?: string;
+}
+
 /** `/__lucid/state` response: the full folded payload plus viewer presence. */
 export interface StateResponse extends WaitPayload {
   /** Agents currently blocked in `wait` on this session. */
   readonly agentsListening: number;
   readonly lastAttendant?: AttendantRef;
+  /** The attending harness conversation, while it is open. Drives the panel's
+   *  whole mode: interactive means the human owns the conversation, so the
+   *  viewer states that and stops offering to drive it. */
+  readonly attendantPresence?: AttendantPresence;
+  /**
+   * A harness conversation exists that a turn could RESUME - the artifact
+   * carries a session id (a stamp, or one inside a recorded resume command).
+   *
+   * False for an artifact nobody has ever attended: a hand-written document, a
+   * recovered file. Without this the panel announced "spawn mode" over an
+   * artifact the engine would decline every time ("no harness session recorded"),
+   * so feedback sat there looking as though a turn were coming.
+   */
+  readonly resumable?: boolean;
   /** Last-reported context-window usage of the attending harness, if any. */
   readonly contextUsage?: ContextUsage;
   /** The artifact's sticky model/effort for unattended turns, when one is

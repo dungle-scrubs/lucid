@@ -1,11 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { writeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver } from "../core/deliver.ts";
 import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
 import { sessionPaths } from "../core/paths.ts";
+import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
 import type { WaitPayload } from "../core/payload.ts";
 import { registerSession } from "../core/registry.ts";
 import { sanitizeProgress } from "../core/progress.ts";
@@ -86,6 +87,25 @@ export interface OpenOptions {
 
 /** `lucid open <file>` - start/resume/re-segment a session and serve the viewer. */
 export const runOpen = async (file: string, options: OpenOptions = {}): Promise<void> => {
+  // An artifact in a temp tree takes its ENTIRE review with it when the OS
+  // clears that tree - and macOS clears /private/tmp on every boot, so a
+  // month of annotated plans can vanish on a restart. A session's log,
+  // versions and annotations live beside the artifact (`<dir>/.lucid/<stem>/`),
+  // so this is not just a lost file: it is the whole conversation.
+  //
+  // Refused rather than warned. An agent authors here by default (the harness
+  // hands it a scratchpad for temp files), reads no warnings, and the loss
+  // surfaces weeks later with nothing to recover from.
+  if (isVolatilePath(file)) {
+    const project = (await scratchpadProject(dirname(resolve(file)))) ?? "<your project>";
+    throw new ValidationError({
+      message:
+        `refusing to open an artifact in a temporary directory - the OS clears it (macOS wipes /private/tmp on every boot), ` +
+        `and a session's annotations and versions live beside its artifact, so they would go too. ` +
+        `Write it somewhere durable, e.g. ${join(project, "lucid", basename(file))}, and open that.`,
+      detail: { path: resolve(file), suggested: join(project, "lucid", basename(file)) },
+    });
+  }
   const paths = sessionPaths(file);
   const opener = attendantStamp();
   const result = await openSession(paths, opener ? { attendant: opener } : undefined);
@@ -602,7 +622,9 @@ export const runApp = async (): Promise<void> => {
 
   let info = await hubInfo(port);
   if (!info) {
-    spawnHub(envPort);
+    // The app front door drives delivery itself; a review-only hub would
+    // record feedback and wait for a human to go re-summon a conversation.
+    spawnHub(envPort, true);
     const deadline = Date.now() + 8000;
     while (!info && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 150));

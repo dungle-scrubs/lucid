@@ -18,7 +18,7 @@ export const Kbd = ({ className, ...props }: ComponentProps<"kbd">) => (
   <kbd
     data-slot="kbd"
     className={cn(
-      "pointer-events-none inline-flex h-[18px] w-fit min-w-[18px] select-none items-center justify-center gap-0.5 rounded border border-ink-600 bg-ink-800 px-1 font-sans text-[10px] font-medium tracking-normal text-fg-muted [&_svg:not([class*='size-'])]:size-3",
+      "pointer-events-none inline-flex h-[18px] w-fit min-w-[18px] select-none items-center justify-center gap-0.5 border border-ink-600 bg-ink-800 px-1 font-sans text-[10px] font-medium tracking-normal text-fg-muted [&_svg:not([class*='size-'])]:size-3",
       className,
     )}
     {...props}

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { realpathSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/events.ts";
@@ -8,7 +8,8 @@ import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
 import type { HarnessInfo, SelectionResponse } from "../src/protocol/wire.ts";
-import { attendDecision, pendingHumanSeqs } from "../src/server/attend.ts";
+import { resetPresenceCache } from "../src/core/presence.ts";
+import { attendDecision, createAttendant, pendingHumanSeqs } from "../src/server/attend.ts";
 import { runDaemon, sessionId, type DaemonHandle } from "../src/server/daemon.ts";
 import { createSessionHost } from "../src/server/session-host.ts";
 
@@ -133,6 +134,99 @@ describe("session host presence", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  /** A real process whose command name matches the harness, so the liveness
+   *  check sees what it sees in production. */
+  const spawnHarnessLike = async (
+    dir: string,
+  ): Promise<{ pid: number; kill: () => Promise<void> }> => {
+    const bin = join(dir, "claude-testproc");
+    await copyFile("/bin/sleep", bin);
+    await chmod(bin, 0o755);
+    // Short-lived by construction, and AWAITED on teardown: an unawaited
+    // subprocess keeps a handle on bun's loop, which held this file open for
+    // the fixture's full lifetime and starved every timing-sensitive test
+    // after it.
+    const proc = Bun.spawn([bin, "5"], { stdout: "ignore", stderr: "ignore" });
+    return {
+      pid: proc.pid,
+      kill: async () => {
+        proc.kill();
+        await proc.exited;
+      },
+    };
+  };
+
+  test("state reports the attending conversation as OPEN when it is running", async () => {
+    // Everything the panel's interactive mode hangs on: the harness comes from
+    // the LOG's stamp (this artifact has no cursor sidecar - a fresh one never
+    // does), and presence is joined to it by session id. Getting either wrong
+    // left the panel offering to drive a conversation somebody was sitting in.
+    const id = "dddddddd-0000-4000-8000-000000000001";
+    const artifact = join(dir, "stamped.html");
+    await writeFile(artifact, DOC);
+    const stampedPaths = sessionPaths(artifact);
+    await openSession(stampedPaths, {
+      attendant: { harness: "claude-code", sessionId: id, cwd: dir },
+    });
+
+    const sessionsDir = join(dir, "claude-sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    process.env.LUCID_CLAUDE_SESSIONS = sessionsDir;
+    const proc = await spawnHarnessLike(dir);
+    await writeFile(
+      join(sessionsDir, `${proc.pid}.json`),
+      JSON.stringify({ pid: proc.pid, sessionId: id, kind: "interactive", status: "idle" }),
+    );
+    resetPresenceCache();
+
+    const host = createSessionHost(stampedPaths, { getPort: () => 0, onEnded: () => {} });
+    try {
+      const res = await host.handle(
+        new Request("http://127.0.0.1/__lucid/state", { headers: { host: "127.0.0.1" } }),
+      );
+      const body = (await res.json()) as {
+        attendantPresence?: { interactive: boolean; status?: string };
+        lastAttendant?: { harness: string };
+      };
+      expect(body.attendantPresence?.interactive).toBe(true);
+      expect(body.attendantPresence?.status).toBe("idle");
+      // Named from the log stamp, with no sidecar in sight.
+      expect(body.lastAttendant?.harness).toBe("claude-code");
+    } finally {
+      host.stop();
+      await proc.kill();
+      delete process.env.LUCID_CLAUDE_SESSIONS;
+      resetPresenceCache();
+    }
+  });
+
+  test("state reports no presence once that conversation is gone", async () => {
+    const id = "dddddddd-0000-4000-8000-000000000002";
+    const artifact = join(dir, "closed.html");
+    await writeFile(artifact, DOC);
+    const stampedPaths = sessionPaths(artifact);
+    await openSession(stampedPaths, {
+      attendant: { harness: "claude-code", sessionId: id, cwd: dir },
+    });
+    const sessionsDir = join(dir, "claude-sessions-empty");
+    await mkdir(sessionsDir, { recursive: true });
+    process.env.LUCID_CLAUDE_SESSIONS = sessionsDir;
+    resetPresenceCache();
+
+    const host = createSessionHost(stampedPaths, { getPort: () => 0, onEnded: () => {} });
+    try {
+      const res = await host.handle(
+        new Request("http://127.0.0.1/__lucid/state", { headers: { host: "127.0.0.1" } }),
+      );
+      const body = (await res.json()) as { attendantPresence?: unknown };
+      expect(body.attendantPresence).toBeUndefined();
+    } finally {
+      host.stop();
+      delete process.env.LUCID_CLAUDE_SESSIONS;
+      resetPresenceCache();
+    }
+  });
+
   test("agentsListening exposes the agents blocked in wait", async () => {
     const host = createSessionHost(paths, { getPort: () => 0, onEnded: () => {} });
     try {
@@ -177,6 +271,11 @@ describe("hub attend mode", () => {
     proj = join(root, "proj");
     await mkdir(proj, { recursive: true });
     registryPath = join(dir, "registry.json");
+    // Hermetic: without this the daemon also scans the folders the human
+    // added to their OWN shell (`~/.lucid/roots.json`), on top of this tree.
+    process.env.LUCID_ROOTS = join(dir, "roots.json");
+    process.env.LUCID_CLAUDE_SESSIONS = join(dir, "no-claude-sessions");
+    resetPresenceCache();
     harnessesPath = join(dir, "harnesses.json");
     attendMarker = join(dir, "attend-marker.json");
     createMarker = join(dir, "create-marker.json");
@@ -210,6 +309,9 @@ describe("hub attend mode", () => {
   afterEach(async () => {
     await daemon?.stop();
     daemon = undefined;
+    delete process.env.LUCID_ROOTS;
+    delete process.env.LUCID_CLAUDE_SESSIONS;
+    resetPresenceCache();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -240,6 +342,138 @@ describe("hub attend mode", () => {
 
   const logEvents = async (): Promise<readonly LogEvent[]> =>
     (await readEvents(paths.logPath)).events;
+
+  test("re-drives a batch whose delivery claim went unanswered", async () => {
+    // Delivery is recorded BEFORE the turn runs, so a turn that dies leaves an
+    // ack covering feedback nothing acted on. In-process that batch is
+    // retried; across a restart only the ack survived, and the message sat
+    // marked "delivered" forever. A fresh watcher must notice and re-drive it.
+    const annotation = await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-stranded",
+      version: 1,
+      target: elementTarget,
+      note: "this must not be swallowed",
+    });
+    // The claim, with no agent output after it: exactly what a crashed turn
+    // leaves behind.
+    await appendEvent(paths.logPath, { t: "agent_ack", id: "ack-dead", covers: annotation.seq });
+
+    const attendant = createAttendant({
+      paths,
+      agentsListening: () => 0,
+      harnessesPath,
+      debounceMs: 10,
+      // The claim is already older than this by the time the first tick runs.
+      workingGraceMs: 1,
+      log: (m) => logs.push(m),
+    });
+    try {
+      await sleep(30);
+      // Two ticks: the first adopts the cursor (rolling the stale claim back)
+      // and evaluates, the second covers the debounce having just started.
+      await attendant.tick();
+      await sleep(60);
+      await attendant.tick();
+      const marker = await readMarker(attendMarker, 4000);
+      expect(marker.sessionId).toBe("sess-1");
+      expect((marker.argv as string[])[2]).toContain("this must not be swallowed");
+      expect(logs.some((l) => l.includes("delivery claim went unanswered"))).toBe(true);
+    } finally {
+      attendant.stop();
+    }
+  });
+
+  test("re-drives even after SEVERAL failed attempts on the same batch", async () => {
+    // What made this permanent in practice: every failed attempt records its
+    // own ack covering the SAME batch. Rolling back to "the previous ack" then
+    // lands on the current mark, the rollback cannot fire, and the feedback is
+    // pinned at "delivered" behind an indicator that never clears. The rollback
+    // has to target the last batch some turn actually ANSWERED.
+    const annotation = await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-retried",
+      version: 1,
+      target: elementTarget,
+      note: "three dead turns must not swallow this",
+    });
+    for (const id of ["ack-dead-1", "ack-dead-2", "ack-dead-3"]) {
+      await appendEvent(paths.logPath, { t: "agent_ack", id, covers: annotation.seq });
+    }
+
+    const attendant = createAttendant({
+      paths,
+      agentsListening: () => 0,
+      harnessesPath,
+      debounceMs: 10,
+      workingGraceMs: 1,
+      log: (m) => logs.push(m),
+    });
+    try {
+      await sleep(30);
+      await attendant.tick();
+      await sleep(60);
+      await attendant.tick();
+      const marker = await readMarker(attendMarker, 4000);
+      expect((marker.argv as string[])[2]).toContain("three dead turns must not swallow this");
+    } finally {
+      attendant.stop();
+    }
+  });
+
+  test("a turn that changes nothing still answers, in its own words", async () => {
+    // The dead end this closes: a resume that decides there is nothing to do
+    // says so on stdout and exits clean, writing no version and no reply. The
+    // panel then held "picked up your feedback - no response yet" forever on a
+    // turn that had, in fact, answered.
+    const quietStub = join(dir, "stub-quiet.ts");
+    await writeFile(
+      quietStub,
+      'console.log("Nothing to change - that note asks me to ignore it.");\n',
+    );
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "stub",
+        harnesses: {
+          stub: {
+            spawn: [process.execPath, "run", quietStub],
+            resume: [process.execPath, "run", quietStub],
+          },
+        },
+      }),
+    );
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-quiet",
+      version: 1,
+      target: elementTarget,
+      note: "this is just a test, ignore it",
+    });
+
+    const attendant = createAttendant({
+      paths,
+      agentsListening: () => 0,
+      harnessesPath,
+      debounceMs: 10,
+      log: (m) => logs.push(m),
+    });
+    try {
+      const deadline = Date.now() + 10_000;
+      let reply: LogEvent | undefined;
+      while (Date.now() < deadline && !reply) {
+        await attendant.tick();
+        await sleep(120);
+        reply = (await readEvents(paths.logPath)).events.find((e) => e.t === "agent_reply");
+      }
+      expect(reply).toBeDefined();
+      expect((reply as { text?: string }).text).toContain("asks me to ignore it");
+    } finally {
+      attendant.stop();
+    }
+    // A real harness process has to start, print and exit; the default 5s
+    // per-test budget is not enough on a cold bun.
+  }, 20_000);
 
   test("delivers an undelivered batch by resuming the artifact's own session", async () => {
     const hub = await startDaemon(true);
@@ -347,6 +581,55 @@ describe("hub attend mode", () => {
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe("unknown project");
+  });
+
+  test("POST /hub/create refuses a listed project whose folder is gone", async () => {
+    // Listed is not PRESENT. A scratchpad session's project is recovered from
+    // the encoded cwd in its path, and that directory can be gone - an
+    // ephemeral worktree deleted once its work landed. The review still lists
+    // (correctly, under the project it was about), but authoring into it would
+    // mkdir -p a tree nobody asked for.
+    const vanished = join(dir, "vanished-project");
+    const encoded = vanished.replaceAll("/", "-").replaceAll(".", "-");
+    const pad = join(
+      root,
+      "claude-501",
+      encoded,
+      "40c9c345-b638-4286-bfce-796d9e6fad98",
+      "scratchpad",
+    );
+    await mkdir(join(pad, ".lucid", "old-plan"), { recursive: true });
+    await writeFile(
+      join(pad, ".lucid", "old-plan", "log.ndjson"),
+      `${JSON.stringify({
+        seq: 1,
+        at: "2026-01-01T00:00:00.000Z",
+        t: "session_opened",
+        segment: 1,
+        version: 1,
+        artifact: "old-plan.html",
+        hash: "h",
+        path: "versions/s1/v1.html",
+      })}\n`,
+    );
+
+    const hub = await startDaemon(true);
+    // Listed, and listed under the vanished project - that is the premise.
+    const listed = (await (
+      await fetch(`http://127.0.0.1:${hub.port}/hub/sessions`, {
+        headers: { host: `127.0.0.1:${hub.port}` },
+      })
+    ).json()) as { sessions: Array<{ project: string }> };
+    expect(listed.sessions.some((s) => s.project === vanished)).toBe(true);
+
+    const res = await post(hub.port, "/hub/create", {
+      project: vanished,
+      name: "new-plan.html",
+      prompt: "map the migration",
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain("no longer exists");
+    expect(await Bun.file(createMarker).exists()).toBe(false);
   });
 
   test("POST /hub/create rejects an empty or oversized prompt", async () => {
@@ -487,6 +770,11 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
     proj = join(root, "proj");
     await mkdir(proj, { recursive: true });
     registryPath = join(dir, "registry.json");
+    // Hermetic: without this the daemon also scans the folders the human
+    // added to their OWN shell (`~/.lucid/roots.json`), on top of this tree.
+    process.env.LUCID_ROOTS = join(dir, "roots.json");
+    process.env.LUCID_CLAUDE_SESSIONS = join(dir, "no-claude-sessions");
+    resetPresenceCache();
     harnessesPath = join(dir, "harnesses.json");
     attendMarker = join(dir, "attend-marker.json");
     createMarker = join(dir, "create-marker.json");
@@ -521,6 +809,9 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
   afterEach(async () => {
     await daemon?.stop();
     daemon = undefined;
+    delete process.env.LUCID_ROOTS;
+    delete process.env.LUCID_CLAUDE_SESSIONS;
+    resetPresenceCache();
     await rm(dir, { recursive: true, force: true });
   });
 

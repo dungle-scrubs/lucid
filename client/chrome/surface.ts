@@ -132,6 +132,8 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
         agentWorking: payload.agentWorking ?? null,
         agentsListening: payload.agentsListening ?? 0,
         lastAttendant: payload.lastAttendant ?? null,
+        attendantPresence: payload.attendantPresence ?? null,
+        resumable: payload.resumable === true,
         contextUsage: payload.contextUsage ?? null,
         answerAnchors: keep(s.answerAnchors),
         answerAnchorLists: keep(s.answerAnchorLists),

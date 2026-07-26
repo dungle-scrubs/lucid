@@ -33,16 +33,29 @@ const seedSession = async (proj: string, name: string): Promise<string> => {
 const get = (port: number, path: string, headers: Record<string, string> = {}): Promise<Response> =>
   fetch(`http://127.0.0.1:${port}${path}`, { headers: { host: `127.0.0.1:${port}`, ...headers } });
 
+const post = (port: number, path: string, body: unknown): Promise<Response> =>
+  fetch(`http://127.0.0.1:${port}${path}`, {
+    method: "POST",
+    headers: { host: `127.0.0.1:${port}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "lucid-hub-"));
   registryPath = join(dir, "registry.json");
   root = join(dir, "tree");
   await mkdir(root, { recursive: true });
+  // Hermetic by DEFAULT, not per call site: without this the daemon reads the
+  // real `~/.lucid/roots.json`, and every folder the human ever added to their
+  // own shell joins these listings. `roots`/`registryPath` are injected at
+  // each call; this catches the one that forgets.
+  process.env.LUCID_ROOTS = join(dir, "roots.json");
 });
 
 afterEach(async () => {
   await daemon?.stop();
   daemon = undefined;
+  delete process.env.LUCID_ROOTS;
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -170,6 +183,167 @@ describe("hub daemon", () => {
     daemon = await runDaemon({ port: 0, roots: [root], registryPath });
     const res = await get(daemon.port, "/hub/sessions", { host: "evil.com" });
     expect(res.status).toBe(403);
+  });
+
+  test("POST /hub/roots adds a folder, reports what it held, and lists it", async () => {
+    // The folder is NOT a configured root: it is the "my sessions live
+    // somewhere the hub never looks" case the shell has to be able to fix.
+    const elsewhere = join(dir, "elsewhere");
+    await mkdir(elsewhere, { recursive: true });
+    const sessionDir = join(elsewhere, ".lucid", "old-plan");
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, "log.ndjson"),
+      `${JSON.stringify({
+        seq: 1,
+        at: "2026-01-01T00:00:00.000Z",
+        t: "session_opened",
+        segment: 1,
+        version: 1,
+        artifact: "old-plan.html",
+        hash: "h",
+        path: "versions/s1/v1.html",
+      })}\n`,
+    );
+
+    const rootsPath = join(dir, "roots.json");
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath, rootsPath });
+
+    // Before: the hub cannot see it.
+    const before = (await (await get(daemon.port, "/hub/sessions")).json()) as {
+      sessions: unknown[];
+    };
+    expect(before.sessions).toHaveLength(0);
+
+    const res = await post(daemon.port, "/hub/roots", { path: elsewhere });
+    expect(res.status).toBe(200);
+    const added = (await res.json()) as { root: string; roots: string[]; found: number };
+    expect(added.root).toBe(elsewhere);
+    expect(added.roots).toContain(elsewhere);
+    // The count is what tells the human they picked the right folder.
+    expect(added.found).toBe(1);
+
+    // After: the session is listed, without a restart.
+    const after = (await (await get(daemon.port, "/hub/sessions")).json()) as {
+      sessions: Array<{ artifact: string }>;
+    };
+    expect(after.sessions.map((s) => s.artifact)).toEqual([
+      canonicalArtifactPath(join(elsewhere, "old-plan.html")),
+    ]);
+  });
+
+  test("a scratchpad session is listed under the project it is ABOUT, not 'scratchpad'", async () => {
+    // The layout an agent actually produces: the artifact lives in that
+    // agent's session scratchpad, and the project it concerns is encoded in
+    // the path. Grouping by the directory gave every such session the project
+    // name "scratchpad", which says nothing and collides with every other one.
+    const project = join(dir, "dev", "sdlc");
+    await mkdir(project, { recursive: true });
+    const encoded = project.replaceAll("/", "-").replaceAll(".", "-");
+    const pad = join(
+      dir,
+      "claude-501",
+      encoded,
+      "40c9c345-b638-4286-bfce-796d9e6fad98",
+      "scratchpad",
+    );
+    const sessionDir = join(pad, ".lucid", "sdlc-flow");
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, "log.ndjson"),
+      `${JSON.stringify({
+        seq: 1,
+        at: "2026-01-01T00:00:00.000Z",
+        t: "session_opened",
+        segment: 1,
+        version: 1,
+        artifact: "sdlc-flow.html",
+        hash: "h",
+        path: "versions/s1/v1.html",
+      })}\n`,
+    );
+
+    daemon = await runDaemon({
+      port: 0,
+      roots: [pad],
+      registryPath,
+      rootsPath: join(dir, "roots.json"),
+    });
+
+    const body = (await (await get(daemon.port, "/hub/sessions")).json()) as {
+      sessions: Array<{ artifact: string; project: string }>;
+    };
+    expect(body.sessions).toHaveLength(1);
+    expect(body.sessions[0]?.project).toBe(project);
+    // And the artifact still points at where the file really is.
+    expect(body.sessions[0]?.artifact).toBe(canonicalArtifactPath(join(pad, "sdlc-flow.html")));
+  });
+
+  test("POST /hub/roots answers the whole scanned set, not only the addition", async () => {
+    // The shell shows this as "looking in": answering with the persisted
+    // additions alone made it forget the defaults the hub still scans.
+    const elsewhere = join(dir, "elsewhere");
+    await mkdir(elsewhere, { recursive: true });
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      rootsPath: join(dir, "roots.json"),
+    });
+
+    const res = await post(daemon.port, "/hub/roots", { path: elsewhere });
+    const body = (await res.json()) as { roots: string[] };
+    expect(body.roots).toContain(elsewhere);
+    expect(body.roots).toContain(root);
+  });
+
+  test("POST /hub/roots works on a review-only hub - discovery is not authoring", async () => {
+    // Regression: gating this behind attend mode is what left `lucid app`
+    // (which starts a review-only hub) with an empty screen and no way out.
+    const elsewhere = join(dir, "elsewhere");
+    await mkdir(elsewhere, { recursive: true });
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      rootsPath: join(dir, "roots.json"),
+      attend: false,
+    });
+
+    const res = await post(daemon.port, "/hub/roots", { path: elsewhere });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { found: number }).found).toBe(0);
+  });
+
+  test("POST /hub/roots refuses a path that is not an existing directory", async () => {
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      rootsPath: join(dir, "roots.json"),
+    });
+
+    const missing = await post(daemon.port, "/hub/roots", { path: join(dir, "nope") });
+    expect(missing.status).toBe(400);
+
+    const file = join(dir, "a-file.html");
+    await writeFile(file, "<h1>x</h1>");
+    const notDir = await post(daemon.port, "/hub/roots", { path: file });
+    expect(notDir.status).toBe(400);
+
+    const relative = await post(daemon.port, "/hub/roots", { path: "relative/path" });
+    expect(relative.status).toBe(400);
+  });
+
+  test("GET /hub/identity reports the scanned roots, added ones included", async () => {
+    const elsewhere = join(dir, "elsewhere");
+    await mkdir(elsewhere, { recursive: true });
+    const rootsPath = join(dir, "roots.json");
+    await writeFile(rootsPath, JSON.stringify([elsewhere]));
+
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath, rootsPath });
+    const who = (await (await get(daemon.port, "/hub/identity")).json()) as { roots: string[] };
+    expect(who.roots).toEqual([root, elsewhere]);
   });
 
   test("GET /hub/events opens an SSE stream and primes a snapshot", async () => {

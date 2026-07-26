@@ -111,6 +111,10 @@ export const createSession = (config: SessionConfig): SessionHandle => {
   };
 
   let source: EventSource | null = null;
+  /** Pending manual reopen after a FATAL stream error, and how many in a row -
+   *  the backoff resets the moment a stream opens. */
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  let retries = 0;
 
   const connect = (): void => {
     if (source !== null) return;
@@ -133,6 +137,21 @@ export const createSession = (config: SessionConfig): SessionHandle => {
         const arriving = d.agents > 0 && store.getState().agentsListening === 0;
         set({ agentsListening: d.agents });
         if (arriving) void surface.bootstrap();
+      } catch {
+        /* ignore */
+      }
+    });
+    // Presence: the harness conversation opened or closed in a terminal. No
+    // log event accompanies that, so it arrives as its own frame - and it
+    // changes the panel's whole mode, so it must not wait for one.
+    es.addEventListener("presence", (e) => {
+      try {
+        const d = JSON.parse((e as MessageEvent).data) as {
+          interactive: boolean;
+          status?: string;
+          cwd?: string;
+        } | null;
+        set({ attendantPresence: d });
       } catch {
         /* ignore */
       }
@@ -173,13 +192,34 @@ export const createSession = (config: SessionConfig): SessionHandle => {
       set({ live: true });
       void surface.bootstrap();
       void loadSelection();
+      retries = 0;
       // A live stream means the server is answering again, which is the only
       // thing an undelivered message was waiting on. Fires on the first open
       // too, so a message stranded by a closed tab leaves on the next load
       // without the human having to notice it.
       void actions.flushOutbox();
     };
-    es.onerror = () => set({ live: false });
+    es.onerror = () => {
+      set({ live: false });
+      // EventSource retries a DROPPED connection by itself. It does not retry a
+      // rejected one: a non-2xx response is fatal by spec, readyState goes
+      // CLOSED, and nothing ever tries again. That is exactly what a hub
+      // restart produces - the first reconnect can land before the new process
+      // has derived this session's mount and gets a 404 - so the tab sat on
+      // "reconnecting…" forever while the server was healthy and answering.
+      // Reopen it ourselves, backing off, so the pill is telling the truth.
+      if (es.readyState !== EventSource.CLOSED || retry !== null) return;
+      const delay = Math.min(1000 * 2 ** retries, 15_000);
+      retries += 1;
+      retry = setTimeout(() => {
+        retry = null;
+        // Only if nothing else has taken over the slot in the meantime.
+        if (source === es) {
+          source = null;
+          connect();
+        }
+      }, delay);
+    };
     // First paint should not wait for the stream to open: fetch the folded
     // state immediately (seq-guarded, so the onopen re-fetch is harmless).
     void surface.bootstrap();
@@ -187,6 +227,10 @@ export const createSession = (config: SessionConfig): SessionHandle => {
   };
 
   const disconnect = (): void => {
+    if (retry !== null) {
+      clearTimeout(retry);
+      retry = null;
+    }
     source?.close();
     source = null;
     // Not an outage, but the truth: nothing live is flowing to this session

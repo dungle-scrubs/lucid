@@ -177,8 +177,8 @@ test("an attending session's own model is shown, not offered", async ({ page }) 
   await expect(pickers.locator('[data-test="selection-effort"]')).toContainText(
     "inherited from claude-code",
   );
-  await expect(pickers.locator('[data-test="selection-model"]')).toHaveAttribute(
-    "title",
+  await pickers.locator('[data-test="selection-model"]').hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(
     "an interactive session runs its own model",
   );
 });

@@ -18,6 +18,28 @@ const openViewer = async (page: Page): Promise<{ nextCursor: string }> => {
   return { nextCursor: session.nextCursor };
 };
 
+test("Enter sends the message, which is what the composer's placeholder promises", async ({
+  page,
+}) => {
+  // The box says "Enter to send, Shift+Enter for a new line". Nothing tested
+  // it, so a regression there would only ever be found by a human typing.
+  await openViewer(page);
+  const input = page.locator('[data-test="message-input"]:visible');
+  await input.fill("sent with the enter key");
+  await input.press("Enter");
+
+  await expect(page.locator('[data-role="human"]')).toContainText("sent with the enter key");
+  // And the box is empty again, rather than holding the text plus a newline.
+  await expect(input).toHaveValue("");
+
+  // Shift+Enter is the other half of the promise: a newline, not a send.
+  await input.fill("first line");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("second line");
+  await expect(input).toHaveValue("first line\nsecond line");
+  await expect(page.locator('[data-role="human"]')).toHaveCount(1);
+});
+
 test("full loop: render -> annotate element -> wait -> revise -> live reload", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
   const surface = surfaceOf(page);
@@ -116,7 +138,9 @@ test("context usage renders a header ring that updates live", async ({ page }) =
   const ring = page.locator('[data-test="context-ring"]');
   await expect(ring).toBeVisible();
   await expect(ring).toHaveAttribute("data-pct", "71");
-  await expect(ring).toHaveAttribute("title", /71% used.*142k\/200k/);
+  // The detail lives in the panel's own tooltip now, not a native title.
+  await ring.hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(/71% used.*142k\/200k/);
 
   // A later report updates the same ring in place.
   await cli.run(["context", cli.artifact, "--pct", "90"]);
@@ -542,12 +566,18 @@ test("approve refuses while anything is unsent, so nothing is stranded", async (
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
   await page.locator('[data-test="annotation-note"]').fill("Backfill in one batch");
   await expect(approve).toBeDisabled();
-  await expect(page.locator('[data-test="review-bar"]')).toContainText("draft annotation first");
+  // The reason lives on the disabled button, not in the header bar.
+  await expect(page.locator('[data-test="approve"]')).toBeDisabled();
+  await page.locator('[data-test="approve-wrap"]').hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(
+    "draft annotation first",
+  );
 
   // Queued still blocks, and says how many.
   await page.locator('[data-test="add-to-queue"]').click();
   await expect(approve).toBeDisabled();
-  await expect(page.locator('[data-test="review-bar"]')).toContainText("1 queued annotation");
+  await page.locator('[data-test="approve-wrap"]').hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toContainText("1 queued annotation");
 
   // Sending clears the block...
   await page.locator('[data-test="send-queue"]').click();
@@ -956,7 +986,10 @@ test("the composer says whether an agent is listening", async ({ page }) => {
 
   // Nobody is waiting on a fresh session.
   await expect(line).toHaveAttribute("data-listening", "false");
-  await expect(line).toContainText("no agent connected");
+  // The standalone viewer has no hub, so nothing spawns. The mode is named as
+  // a term (the detail is on hover) rather than restating a sentence above the
+  // composer on every turn.
+  await expect(line).toContainText("recording only");
 
   // An agent blocks in wait: its waker connects and the line flips - live via
   // the synthetic listeners frame, no reload.
@@ -1055,7 +1088,10 @@ test("a message sent at a dead server is kept, not eaten, and delivers itself on
 
   // Approving would strand them behind a stop the agent has already acted on.
   await expect(page.locator('[data-test="approve"]')).toBeDisabled();
-  await expect(page.locator('[data-test="review-bar"]')).toContainText("2 undelivered messages");
+  await page.locator('[data-test="approve-wrap"]').hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(
+    "2 undelivered messages",
+  );
 
   // Durability is the claim, so prove it against a genuinely new JS instance
   // rather than the one that did the typing: leave the origin entirely, bring
@@ -1373,16 +1409,31 @@ test("diff view shows changes since a version and revert reaches the agent", asy
   expect(await surface.locator("[data-diff]").count()).toBeGreaterThan(0);
   expect(await surface.locator(".lucid-diff-now").count()).toBeGreaterThan(0);
 
-  // Revert the current change back to v1, with a reason; the agent receives it.
+  // An undo needs no essay: the box is empty, the button still works, and the
+  // agent receives an instruction that reads on its own.
+  await expect(page.locator('[data-test="revert"]')).toBeEnabled();
+  // And the button says what a revert IS - a request to the agent, not an undo
+  // the viewer performs.
+  await page.locator('[data-test="revert"]').hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toContainText("Forward-only");
+  // With a reason, that reason is what reaches the agent.
   await page.locator('[data-test="revert-why"]').fill("keep the nightly backfill");
   await page.locator('[data-test="revert"]').click();
 
   const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
     status: string;
+    nextCursor: string;
     reverts?: { targetVersion: number; why: string }[];
   };
   expect(fb.reverts?.[0]?.targetVersion).toBe(1);
   expect(fb.reverts?.[0]?.why).toContain("nightly backfill");
+
+  const cursor2 = fb.nextCursor;
+  await page.locator('[data-test="revert"]').click();
+  const blank = (await cli.run(["wait", cli.artifact, "--since", cursor2, "--timeout", "8"])) as {
+    reverts?: { targetVersion: number; why: string }[];
+  };
+  expect(blank.reverts?.[0]?.why).toContain("restore to v1");
 
   // Exit the change view.
   await page.locator('[data-test="diff-done"]').click();

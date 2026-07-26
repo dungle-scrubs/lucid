@@ -1,5 +1,6 @@
 import { useMessage } from "@assistant-ui/react";
 import type { DeliveryState } from "./types.ts";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
  * Per-item delivery state (D20): every piece of sent feedback says where it
@@ -36,13 +37,19 @@ export const DeliveryLabel = ({ className }: { readonly className?: string }) =>
   // must not render whatever else ever lands in it.
   if (state !== "recorded" && state !== "delivered" && state !== "answered") return null;
   return (
-    <span
-      data-test="delivery-state"
-      data-state={state}
-      title={TITLE[state]}
-      className={`text-[10px] leading-none text-fg-faint ${className ?? ""}`}
-    >
-      {state}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            data-test="delivery-state"
+            data-state={state}
+            className={`text-[10px] leading-none text-fg-faint ${className ?? ""}`}
+          >
+            {state}
+          </span>
+        }
+      />
+      <TooltipContent>{TITLE[state]}</TooltipContent>
+    </Tooltip>
   );
 };

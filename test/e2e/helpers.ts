@@ -38,7 +38,13 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
         // without this each e2e run leaves dead /tmp pointers in the REAL
         // ~/.lucid/registry.json - which the user's shell then lists as
         // ghost sessions.
+        // Fixtures live in a temp dir by design; `open` refuses those for
+        // real work (they do not survive a reboot).
+        LUCID_ALLOW_TEMP: "1",
         LUCID_REGISTRY: join(dir, "registry.json"),
+        // Same containment for the added-roots file, so nothing a CLI does
+        // here can point the user's own shell at a temp tree.
+        LUCID_ROOTS: join(dir, "roots.json"),
         // A hub the USER happens to be running would hijack `open` into
         // daemon mode (a tab in their shell) and change what these tests
         // see. Point discovery at a dead port so the dedicated-server path
@@ -77,6 +83,8 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
 export interface Hub {
   readonly port: number;
   readonly url: string;
+  /** The hub's isolated state dir, which is also its only scan root. */
+  readonly dir: string;
   readonly env: Record<string, string>;
   stop(): Promise<void>;
 }
@@ -99,9 +107,13 @@ export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
   }
   const env = {
     ...process.env,
+    LUCID_ALLOW_TEMP: "1",
     LUCID_REGISTRY: registry,
     // No scan of the real ~/dev: the isolated registry is the only source.
     LUCID_HUB_ROOTS: dir,
+    // Nor the folders the human added to their own shell - `~/.lucid/roots.json`
+    // is scanned ON TOP of LUCID_HUB_ROOTS, so it needs isolating too.
+    LUCID_ROOTS: join(dir, "roots.json"),
     LUCID_NO_OPEN: "1",
     ...(options.harnesses !== undefined ? { LUCID_HARNESSES: harnessesPath } : {}),
   } as Record<string, string>;
@@ -129,6 +141,7 @@ export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
   return {
     port,
     url: `http://127.0.0.1:${port}/`,
+    dir,
     env: { ...env, LUCID_HUB_PORT: String(port) },
     // The temp dir dies with the hub that owns it: a test that stops the hub is
     // done with its registry, and a leftover dir is a ghost session in someone

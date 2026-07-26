@@ -23,7 +23,7 @@ const SelectTrigger = ({ className, children, ...props }: SelectPrimitive.Trigge
   <SelectPrimitive.Trigger
     data-slot="select-trigger"
     className={cn(
-      "flex w-fit cursor-pointer items-center justify-between gap-1 rounded-full border border-ink-400 bg-ink-700 px-[9px] py-px text-[11px] tabular-nums text-steel-300 outline-none hover:border-accent-bright hover:text-fg focus-visible:annot-outline data-[popup-open]:border-accent-bright data-[popup-open]:text-fg [&_svg]:pointer-events-none [&_svg]:shrink-0",
+      "flex w-fit cursor-pointer items-center justify-between gap-1 border border-ink-400 bg-ink-700 px-[9px] py-px text-[11px] tabular-nums text-steel-300 outline-none hover:border-accent-bright hover:text-fg focus-visible:annot-outline data-[popup-open]:border-accent-bright data-[popup-open]:text-fg [&_svg]:pointer-events-none [&_svg]:shrink-0",
       className,
     )}
     {...props}
@@ -59,7 +59,7 @@ const SelectContent = ({ className, children, ...props }: SelectPrimitive.Popup.
       <SelectPrimitive.Popup
         data-slot="select-content"
         className={cn(
-          "max-h-[min(24rem,var(--available-height))] min-w-[var(--anchor-width)] overflow-y-auto overscroll-contain rounded-md border border-ink-500 bg-ink-800 p-1 text-fg shadow-[0_10px_30px_-10px_rgba(0,0,0,0.7)] outline-none",
+          "max-h-[min(24rem,var(--available-height))] min-w-[var(--anchor-width)] overflow-y-auto overscroll-contain border border-ink-500 bg-ink-800 p-1 text-fg shadow-[0_10px_30px_-10px_rgba(0,0,0,0.7)] outline-none",
           className,
         )}
         {...props}
@@ -74,7 +74,7 @@ const SelectItem = ({ className, children, ...props }: SelectPrimitive.Item.Prop
   <SelectPrimitive.Item
     data-slot="select-item"
     className={cn(
-      "relative flex w-full cursor-pointer select-none items-center gap-2 rounded-sm py-1 pr-2 pl-7 text-[12px] tabular-nums outline-none data-[highlighted]:bg-ink-600 data-[highlighted]:text-fg-strong",
+      "relative flex w-full cursor-pointer select-none items-center gap-2 py-1 pr-2 pl-7 text-[12px] tabular-nums outline-none data-[highlighted]:bg-ink-600 data-[highlighted]:text-fg-strong",
       className,
     )}
     {...props}
