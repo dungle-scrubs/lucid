@@ -286,44 +286,17 @@ const ListenerLine = () => {
   // there is no hub and nothing spawns - the same as false, for this line.
   const attend = useHub((s) => s.attend) === true;
   const resumable = useSession((s) => s.resumable);
-  const working = useSession((s) => s.agentWorking);
   const status = useSession((s) => s.status);
   const presence = useSession((s) => s.attendantPresence);
   const attendant = useSession((s) => s.lastAttendant);
   if (status !== "active") return null;
 
-  // A turn is RUNNING. This line used to blank itself here and defer to the
-  // working indicator in the transcript - but that indicator scrolls away with
-  // the record, so the one place the human is looking (the box they just typed
-  // into) said nothing at all about a response being on the way.
-  if (working) {
-    return (
-      <div
-        data-test="listener-line"
-        data-mode="working"
-        className="flex items-center justify-center text-center"
-      >
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              // The shimmer, not a term with a dot: everywhere else this panel
-              // reports a STATE that is simply true right now, and a sweep
-              // across the words is how the chrome already says "in progress"
-              // (tw-shimmer clips to the text, so the /40 base is what makes
-              // the sweep visible - their documented idiom).
-              <span data-test="mode-term" className="shimmer text-[11px] text-fg/40">
-                Response on the way…
-              </span>
-            }
-          />
-          <TooltipContent>
-            Your feedback was picked up and a turn is running. The artifact updates itself when it
-            lands - anything you send now joins the next turn.
-          </TooltipContent>
-        </Tooltip>
-      </div>
-    );
-  }
+  // A turn is RUNNING: this line stays on the MODE and says nothing about it.
+  // Three places reported one running turn - the pill on the artifact, the
+  // working card in the transcript (which carries the elapsed time and the
+  // stale state), and a shimmer here. This one's only unique value was being
+  // visible when the transcript is scrolled up, which is not worth a third
+  // voice for the same fact.
 
   // Someone has this conversation OPEN in a terminal. That outranks the
   // listener count, which only sees an agent blocked in `wait` and so reads
