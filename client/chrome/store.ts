@@ -218,6 +218,10 @@ export interface SessionState {
   outbox: OutboxMessage[];
   /** The outbox is being drained right now (freezes its per-card actions). */
   outboxSending: boolean;
+  /** WHICH entry is in flight, so a retry disables its own button and no
+   *  other. A single global flag left every card reading "SENDING…" - the one
+   *  control a failed send leaves you, unusable. */
+  outboxSendingId: string | null;
   newerVersion: number | null;
   warnings: WarningItem[];
   /** Neutral, transient confirmations (e.g. a fork was recorded). */
@@ -327,6 +331,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     pastedImages: [],
     outbox: storage.readOutbox(),
     outboxSending: false,
+    outboxSendingId: null,
     newerVersion: null,
     warnings: [],
     notices: [],

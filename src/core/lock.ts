@@ -47,7 +47,15 @@ const flock: FlockFn | undefined = loadFlock();
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 const RETRY_MS = 3;
-const DEFAULT_TIMEOUT_MS = 5000;
+/**
+ * How long an append waits for the artifact's lock.
+ *
+ * Generous on purpose. Appends serialize per artifact, and an agent rewriting a
+ * large artifact holds the lock for seconds at a time - at 5s a human message
+ * sent during that burst was REFUSED, which is the wrong trade: waiting is
+ * invisible, losing the message is not.
+ */
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
  * Run `fn` while holding an exclusive lock on `lockTargetPath`. The lock is on
