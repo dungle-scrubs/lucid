@@ -125,29 +125,44 @@ genuinely uniform matrix. Give text-bearing flex/grid children `min-width: 0`
 and `overflow-wrap: break-word`, or one long token wraps a column to one word
 per line and the review is wasted.
 
-## Diagrams are elements, not ASCII
+## Anything visual is markup, never ASCII
 
-A box-and-arrow diagram, a layer stack, a flow, a timeline - build it from real
-elements: padded `div`s with a hairline border, placed with flex or grid, and
-inline SVG for anything curved or genuinely drawn. **Never draw one as
-box-drawing characters inside a `<pre>`.**
+Diagrams, flows, charts, timelines, hierarchies, screens, tables of shape and
+size - **every** picture in an artifact is built from real elements: padded
+`div`s with hairline borders placed by flex or grid, and inline SVG for
+anything curved or genuinely drawn. **Never draw one as box-drawing or ASCII
+characters inside a `<pre>`.** This is the rule for the whole class, not for
+box-and-arrow diagrams alone.
 
 ASCII art fails on every count that matters here. It is a single opaque text
-node, so the reviewer can only annotate the whole picture - the node, edge, or
-label they actually want to correct is not addressable. It is frozen at the
-width you typed it, so it overflows a narrow window instead of reflowing. And
-it opts out of the document's type, color, and spacing: a monospace drawing
-sitting inside a manuscript reads as a terminal screenshot pasted onto paper.
+node, so the reviewer can only annotate the whole picture - the node, bar,
+region, or label they actually want to correct is not addressable, which
+defeats the one thing the artifact exists for. It is frozen at the width you
+typed it, so it overflows a narrow window instead of reflowing. And it opts out
+of the document's type, color, and spacing: a monospace drawing sitting inside
+a manuscript reads as a terminal screenshot pasted onto paper.
 
-Compose it from what the artifact already has: nodes are padded boxes with
-`--rule` borders and sans labels; the accent marks the one node the eye should
-land on; connectors are a border, a thin absolutely-positioned rule, or an
-`<svg>` line with `currentColor`. Give each node its own `data-lucid-id`. Reach
-for no diagram library - every one of them is an external request, and the
-artifact must open from disk.
+Compose from what the artifact already has:
+
+- **Diagrams and flows** - nodes are padded boxes with `--rule` borders and
+  sans labels; the accent marks the one node the eye should land on; connectors
+  are a border, a thin absolutely-positioned rule, or an `<svg>` line with
+  `currentColor`.
+- **Charts** - a bar is a `div` with a width or height percentage and a hairline
+  border, in a labelled row; a series of them is a flex column with the axis as
+  a rule and the values as real text beside each bar. A line or area chart is a
+  small inline `<svg>` with a `polyline`. Never a row of `█` or `#` characters,
+  and never a chart library: every one is an external request, and the artifact
+  must open from disk.
+- **Hierarchies and timelines** - nested lists or a grid with rules, not indented
+  `├──` runs.
+- **Screens** - see *Mockups are wireframes* below.
+
+Give every part a reviewer might point at its own `data-lucid-id`.
 
 Mono and `<pre>` keep the work they are good at: code, file paths, a directory
-tree, a log line, a command. Those are literal text, not pictures.
+tree from a real command's output, a log line, a command to run. Those are
+literal text being quoted, not pictures being drawn.
 
 ## Mockups are wireframes, not designs
 
@@ -207,8 +222,9 @@ whole screen.
 - No emoji, no exclamation marks, no hype
 - Cream ground, ink type, one accent used to mean something
 - If it honours dark mode, the dark variant still reads as paper - warm, lifted, distinct from the chrome, and no toggle or JS
-- Serif prose, sans labels, mono literals - and mono only for literals, never for drawing a diagram
-- Diagrams built from elements or inline SVG, each node individually addressable
+- Serif prose, sans labels, mono literals - and mono only for literals being quoted, never for drawing anything
+- Every picture - diagram, flow, chart, timeline, screen - built from elements
+  or inline SVG, each part individually addressable; no ASCII art anywhere
 - Screens drawn as wireframes - labelled regions, hatched image placeholders
   carrying their spec, greyscale plus the one accent - unless a specific visual
   design was asked for

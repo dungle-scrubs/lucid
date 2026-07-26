@@ -510,9 +510,12 @@ export const createArtifactPrompt = (artifact: string, request: string, title?: 
     // (labelled regions, hatched placeholders) until someone asks for a
     // finished design.
     "Follow the lucid-design skill if it is available. Otherwise: a warm cream",
-    "ground with near-black type, one accent, no external requests, and any",
-    "mockup of a screen drawn as a wireframe - labelled regions and hatched",
-    "placeholders carrying their spec - not finished visual design.",
+    "ground with near-black type, one accent, and no external requests. Every",
+    "picture - diagram, flow, chart, timeline, screen - is built from real",
+    "elements or inline SVG, never ASCII or box-drawing characters, so a",
+    "reviewer can annotate one part of it. A mockup of a screen is a WIREFRAME",
+    "(labelled regions, hatched placeholders carrying their spec), not finished",
+    "visual design, unless the request asks for a specific design.",
     "Then open it for review by running:",
     `  lucid open ${shellArg(artifact)}`,
     `Write only ${artifact}; do not modify other files.`,
