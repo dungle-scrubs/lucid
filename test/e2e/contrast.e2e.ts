@@ -106,3 +106,39 @@ test("every text token stays legible in BOTH themes on a dark machine", async ({
     expect(m.ratio, `dark/${id} ${m.fg} on ${m.bg}`).toBeGreaterThanOrEqual(4.5);
   }
 });
+
+// An artifact with no tokens and no dark block: hardcoded ink on hardcoded
+// paper, exactly what a hand-written or recovered document looks like.
+const PLAIN = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><title>Plain</title>
+<style>
+  body { background: #faf6ec; color: #211d15; font-family: system-ui; margin: 40px; }
+  h2 { color: #3a352b; }
+</style></head>
+<body><h2 data-lucid-id="h">Where to go deeper</h2>
+<p data-lucid-id="p">follow one publish end to end.</p></body></html>`;
+
+test("an artifact with no dark form is left in the one it has", async ({ page }) => {
+  // Forcing dark on it flips the browser's canvas to near-black while its own
+  // hardcoded ink stays dark - dark text on a dark ground, worse than the light
+  // page the author actually designed.
+  cli = await makeCli(PLAIN);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  const surface = surfaceOf(page);
+  await expect(surface.locator("h2")).toBeVisible();
+
+  await page.locator('[data-test="theme-toggle"]').click();
+  // The toggle records the human's choice...
+  await expect(page.locator('[data-test="theme-toggle"]')).toHaveAttribute("data-theme", "dark");
+  // ...but this document stays in its only form.
+  await expect(surface.locator("html")).toHaveAttribute("data-lucid-theme", "light");
+
+  const [fg, bg] = await surface
+    .locator('[data-lucid-id="h"]')
+    .evaluate((n) => [getComputedStyle(n).color, getComputedStyle(document.body).backgroundColor]);
+  const ratio = (await page.evaluate(
+    `(${RATIO})(${JSON.stringify(fg)}, ${JSON.stringify(bg)})`,
+  )) as number;
+  expect(ratio, `${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+});
