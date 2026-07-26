@@ -155,7 +155,13 @@ const CreateDialogBody = () => {
 
   const onTitle = (value: string): void => {
     setTitle(value);
-    if (!nameOwned) setName(handleize(value));
+    // The derived name carries its extension: this field is showing what the
+    // file WILL be called, and a name without .html is not that. A title with
+    // no usable characters derives nothing rather than a bare ".html".
+    if (!nameOwned) {
+      const handle = handleize(value);
+      setName(handle === "" ? "" : `${handle}.html`);
+    }
   };
 
   // Typing `some-test` means `some-test.html`: there is exactly one legal
