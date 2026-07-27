@@ -53,6 +53,10 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   // and change what the tests see - but shell.e2e.ts needs its OWN hub, so the
   // value differs per suite and only the presence of a decision is enforced.
   LUCID_HUB_PORT: "per-suite",
+  // The D-015 reconnect-backoff cap: a suite that kills streams on purpose
+  // sets it on the processes IT spawns; everything else runs production
+  // patience. Presence of a decision is what the policy enforces.
+  LUCID_SSE_MAX_BACKOFF_MS: "per-suite",
   LUCID_HUB_ROOTS: "per-suite",
   LUCID_HUB_ATTEND: "per-suite",
   // Read by ports.ts to offset every port. Left unset on purpose: the default

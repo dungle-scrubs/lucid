@@ -57,6 +57,10 @@ export interface SessionConfig {
   readonly version: number;
   /** URL prefix for this session's routes ("" or "/s/<id>"). */
   readonly base: string;
+  /** Cap on the fatal-stream reconnect backoff, ms. Threaded from the server
+   *  (LUCID_SSE_MAX_BACKOFF_MS) so a test that kills a stream is not billed
+   *  the production 15s ceiling; absent means production behaviour. */
+  readonly sseMaxBackoffMs?: number;
 }
 
 const SHOW_TARGETS_LEGACY_KEY = "lucid:showTargets";
@@ -376,6 +380,10 @@ export interface SessionState {
   /** SSE stream health. EventSource reconnects by itself, so this is a
    *  transient indicator, not an error the human has to act on. */
   live: boolean;
+  /** Consecutive FATAL-stream reopen attempts (resets when a stream opens).
+   *  Surfaced on the reconnecting pill as data-retries: the one place a
+   *  human - or a test - can see the recovery loop actually looping. */
+  streamRetries: number;
   /** Sibling sessions in this project, fetched lazily when the tab is first
    *  opened. Null means "not looked yet", which is distinct from "none found". */
   sessions: SessionSummary[] | null;
@@ -469,6 +477,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     selection: {},
     selectionInfo: null,
     live: true,
+    streamRetries: 0,
     sessions: null,
     sessionsLoading: false,
     showTargets: storage.readShowTargets(),
@@ -550,6 +559,7 @@ export const buildTimeline = (
   questions: readonly AgentQuestion[] = [],
 ): TimelineItem[] => {
   let located = 0;
+  const sentIds = new Set(annotations.map((a) => a.id));
   return [
     ...annotations.map((annotation) => ({
       kind: "annotation" as const,
@@ -567,12 +577,24 @@ export const buildTimeline = (
     // CONTINUES the located count: a queued note is the next number, not a
     // second number 1. Restarting the count put two "1" badges on the same
     // element and two cards labelled "1" in the panel.
-    ...queue.map((q, i) => ({
-      kind: "queued" as const,
-      at: q.at,
-      index: located + i + 1,
-      id: q.id,
-    })),
+    //
+    // A queued item whose id ALREADY appears in `annotations` is dropped
+    // here, because this function is where the two id-spaces are joined and
+    // therefore the only place the "one id, one entry" invariant can be
+    // enforced against every writer. A queued item sends under its own id,
+    // so between its POST landing and `sendQueue` filtering the queue the
+    // same id is in both lists - and two entries sharing an id make
+    // assistant-ui's MessageRepository throw, unmounting the whole viewer to
+    // a blank page (measured; every unsent note lost with it). The sent form
+    // wins: it is the one the log has.
+    ...queue
+      .filter((q) => !sentIds.has(q.id))
+      .map((q, i) => ({
+        kind: "queued" as const,
+        at: q.at,
+        index: located + i + 1,
+        id: q.id,
+      })),
     ...messages.map((message) => ({ kind: "message" as const, at: message.at, message })),
     // `answeredAt` is the answer's own moment; older logs (and any server that
     // predates the field) fall back to the ask time rather than vanishing.

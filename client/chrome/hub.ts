@@ -224,6 +224,14 @@ export const openTab = async (row: HubSession): Promise<SessionHandle | null> =>
     name: sessionLabel(row),
     version: identity.version,
     base,
+    // The shell page carries the server's backoff cap (D-015) exactly the way
+    // the standalone viewer page does; sessions built here must not silently
+    // lose it or a hub-hosted tab reconnects on production patience under a
+    // harness that killed its stream on purpose.
+    ...((cap) => (typeof cap === "number" ? { sseMaxBackoffMs: cap } : {}))(
+      (window as unknown as { __LUCID_SHELL__?: { sseMaxBackoffMs?: unknown } }).__LUCID_SHELL__
+        ?.sseMaxBackoffMs,
+    ),
   });
   handle.connect();
   activate(handle.key);

@@ -556,10 +556,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/message-routes.e2e.ts",
+          "testName": "feedback landing between the read and the ack is not marked delivered",
+          "mutation": "src/cli/run.ts: ack with the log's latest seq instead of the cursor just read - feedback that landed after the read is marked delivered to an agent that never saw it"
         },
         {
           "id": "wait-presence-acks-claim-nothing",
@@ -1238,10 +1238,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "a partial batch drops exactly the items that landed",
+          "mutation": "client/chrome/store.ts: drop buildTimeline's `.filter((q) => !sentIds.has(q.id))` - a landed annotation and its still-queued card share one id, assistant-ui throws, and the viewer unmounts to a blank page (measured: body length 0)"
         },
         {
           "id": "annotation-queued-mid-flight-survives-the-drain",
@@ -1254,10 +1254,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "a note queued while a send is in flight is not swept away by it",
+          "mutation": "client/chrome/actions.ts: reconcile sendQueue against a pre-send snapshot instead of live state - the note queued mid-flight is swept away with the sent ones"
         },
         {
           "id": "queue-is-lost-on-reload",
@@ -1464,10 +1464,10 @@
           "risk": "medium",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "the composer is frozen while a fork POST is in flight, and cannot double-fork",
+          "mutation": "client/chrome/actions.ts: drop the `s.forking` arm of forkPending's re-entrancy guard - a second click mints a second fork id and the log holds two forks"
         },
         {
           "id": "annotation-image-chip-remove",
@@ -1493,10 +1493,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "an image that cannot upload says so instead of vanishing",
+          "mutation": "client/chrome/actions.ts: make uploadPaste's catch return null silently (remove the warn) - the image vanishes with no explanation"
         },
         {
           "id": "send-queue-refuses-empty-open-edit",
@@ -1536,10 +1536,10 @@
           "risk": "medium",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "queue cards cannot be edited or removed mid-send, and the bar is down",
+          "mutation": "client/chrome/Panel.tsx: drop `disabled={sending}` from the queued card's edit control - a card edited mid-flight sends its old note while showing the new one"
         },
         {
           "id": "queue-blocks-session-switch",
@@ -1692,10 +1692,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/80faab5-a-verdict-is-not-retried.e2e.ts",
+          "testName": "a 4xx verdict fails once, immediately, with the server's reason",
+          "mutation": "client/chrome/transport.ts: remove the 4xx short-circuit - the verdict is re-POSTed five times over 14s"
         },
         {
           "id": "retry-state-is-per-message",
@@ -1708,10 +1708,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/80faab5-one-stuck-flush.e2e.ts",
+          "testName": "a stuck flush disables its own card's Retry, and no other's",
+          "mutation": "client/chrome/Panel.tsx: read the global `outboxSending` instead of `outboxSendingId === message.id` - every card reads Sending and the untouched card cannot be discarded"
         },
         {
           "id": "discard-works-during-a-stuck-flush",
@@ -1724,10 +1724,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/message-routes.e2e.ts",
+          "testName": "Discard clears a message mid-flush, unblocks approve, and survives a reload",
+          "mutation": "client/chrome/actions.ts: make discardOutboxMessage drop the entry from state without calling storage.forgetOutboxMessage - the card goes and the message re-sends itself after a reload"
         },
         {
           "id": "slow-send-becomes-visible-after-a-beat",
@@ -1740,10 +1740,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/80faab5-a-slow-send-is-visible.e2e.ts",
+          "testName": "a send that is taking a while says so, before it has failed",
+          "mutation": "client/chrome/Panel.tsx: raise SLOW_SEND_MS to 60_000 - a slow send shows nothing and is indistinguishable from a swallowed one"
         },
         {
           "id": "server-reason-reaches-the-human",
@@ -1756,10 +1756,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/message-routes.e2e.ts",
+          "testName": "the server's own reason for refusing is what the panel prints",
+          "mutation": "client/chrome/actions.ts: replace the reason-bearing warn with a bare \"Your message didn't send\" - the human cannot tell a busy log (retry works) from a gone hub (it never will)"
         },
         {
           "id": "outbox-drains-in-authored-order",
@@ -2382,10 +2382,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/shell-routes.e2e.ts",
+          "testName": "before the first listing arrives the screen says it is LOOKING, not empty",
+          "mutation": "client/chrome/Shell.tsx: render the empty state before the first snapshot (drop the loaded guard) - the shell claims there are no reviews while it is still asking"
         },
         {
           "id": "picker-row-open-failure-reports-on-the-row",
@@ -2691,10 +2691,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/shell-routes.e2e.ts",
+          "testName": "with no OS chooser the folder icon falls back to a path field",
+          "mutation": "client/chrome/hub.ts: drop addRoot's 501 -> needsPath arm - a build with no native chooser is a dead end instead of a path field"
         },
         {
           "id": "add-folder-from-drawer-updates-drawer",
@@ -3140,10 +3140,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/shell-routes.e2e.ts",
+          "testName": "a server without /__lucid/context falls through to the sidecar, and says live:false",
+          "mutation": "src/cli/run.ts: print live:true regardless of the response (make the `if (res.ok)` guard unconditional) - a 404'd POST is reported to the agent as a live success"
         },
         {
           "id": "context-derives-and-clamps",

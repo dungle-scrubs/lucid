@@ -411,6 +411,7 @@ const ListenerLine = () => {
  */
 const ConnectionLine = () => {
   const live = useSession((s) => s.live);
+  const streamRetries = useSession((s) => s.streamRetries);
   const hubConnected = useHub((s) => s.connected);
   // A standalone per-session viewer has NO hub - its transport base is "",
   // where the shell's is "/s/<id>". Reporting a hub that was never there would
@@ -427,6 +428,7 @@ const ConnectionLine = () => {
           <span
             data-test="reconnecting"
             data-scope={live ? "hub" : "session"}
+            data-retries={streamRetries}
             className="flex items-center justify-center gap-1.5 border-t border-ink-700 pt-2 text-[10px] text-steel-400"
           >
             <span className="inline-block size-1.5 flex-none bg-steel-400" />
