@@ -46,10 +46,10 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
 
   // Click an element in the artifact -> overlay picks it -> chrome composer opens.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
+  await expect(page.locator('[data-test="annotation-note"]')).toBeVisible();
 
   await page
-    .locator('textarea[placeholder^="What should change here?"]')
+    .locator('[data-test="annotation-note"]')
     .fill("Backfill in one batch, not nightly - nightly will take weeks.");
   await page.locator('[data-test="add-to-queue"]').click();
   await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
@@ -360,13 +360,13 @@ test("fork button spins the selection off; the request reaches wait as a fork", 
   // Pick a region, type the directive, and Fork instead of annotating in place.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
   await page
-    .locator('textarea[placeholder^="What should change here?"]')
+    .locator('[data-test="annotation-note"]')
     .fill("Turn the backfill into its own implementation plan.");
   await page.locator('[data-test="fork"]').click();
 
   // The composer clears (a fork is sent on click, not queued) and nothing lands
   // in the annotation list.
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="annotation-note"]')).toHaveCount(0);
   await expect(page.locator('[data-test="annotation"]')).toHaveCount(0);
 
   // The agent receives the fork - not an annotation - via wait.
@@ -397,12 +397,12 @@ test("Fork with an empty note still forks (default directive), and confirms", as
   // Pick a region and click Fork WITHOUT typing a directive - the region is the
   // seed, so this must still send (regression: it used to silently no-op).
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
+  await expect(page.locator('[data-test="annotation-note"]')).toBeVisible();
   await page.locator('[data-test="fork"]').click();
 
   // A neutral confirmation appears and the composer clears.
   await expect(page.getByText(/Fork(ed)?/)).toBeVisible();
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="annotation-note"]')).toHaveCount(0);
 
   // The fork reached wait with the default directive.
   const feedback = (await cli.run([
@@ -422,7 +422,7 @@ test("Esc discards the annotation being composed", async ({ page }) => {
   const surface = surfaceOf(page);
 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  const composer = page.locator('textarea[placeholder^="What should change here?"]');
+  const composer = page.locator('[data-test="annotation-note"]');
   await expect(composer).toBeVisible();
   await composer.fill("never mind this one");
   await composer.press("Escape");
@@ -439,14 +439,12 @@ test("cmd+enter queues the open note and sends the whole queue", async ({ page }
   // Queue one annotation, then start a second and flush both with cmd+enter -
   // the shortcut folds the in-progress note into the queue before sending.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page
-    .locator('textarea[placeholder^="What should change here?"]')
-    .fill("Batch the backfill.");
+  await page.locator('[data-test="annotation-note"]').fill("Batch the backfill.");
   await page.locator('[data-test="add-to-queue"]').click();
   await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
 
   await surface.locator("#note").click();
-  const composer = page.locator('textarea[placeholder^="What should change here?"]');
+  const composer = page.locator('[data-test="annotation-note"]');
   await composer.fill("Cut over on a weekend.");
   await composer.press("ControlOrMeta+Enter");
 
@@ -487,9 +485,7 @@ test("agent reply appears in the conversation log", async ({ page }) => {
 
 test("human message (non-located) reaches the agent as feedback", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
-  await page
-    .locator('textarea[placeholder^="Message the agent"]')
-    .fill("Overall: tighten the wording.");
+  await page.locator('[data-test="message-input"]').fill("Overall: tighten the wording.");
   await page.locator('[data-test="send-message"]').click();
   await expect(page.locator('[data-role="human"]')).toContainText("tighten the wording");
 
@@ -618,10 +614,8 @@ test("text-range selection produces a located annotation", async ({ page }) => {
     document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
 
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
-  await page
-    .locator('textarea[placeholder^="What should change here?"]')
-    .fill("Is zero downtime really required?");
+  await expect(page.locator('[data-test="annotation-note"]')).toBeVisible();
+  await page.locator('[data-test="annotation-note"]').fill("Is zero downtime really required?");
   await page.locator('[data-test="add-to-queue"]').click();
   await page.locator('[data-test="send-queue"]').click();
   await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
@@ -646,8 +640,8 @@ test("a queued annotation can be edited before it is sent", async ({ page }) => 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
   // Picking a target puts the caret in the note: the click already said where,
   // so the next thing you do is type.
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeFocused();
-  await page.locator('textarea[placeholder^="What should change here?"]').fill("Frist draft, typo");
+  await expect(page.locator('[data-test="annotation-note"]')).toBeFocused();
+  await page.locator('[data-test="annotation-note"]').fill("Frist draft, typo");
   await page.locator('[data-test="add-to-queue"]').click();
 
   // Cancel restores the original note, leaving the queue untouched.
@@ -727,7 +721,7 @@ test("a sent annotation stays in send order, not pinned above the replies", asyn
   const surface = surfaceOf(page);
   const annotate = async (sel: string, note: string) => {
     await surface.locator(sel).click();
-    await page.locator('textarea[placeholder^="What should change here?"]').fill(note);
+    await page.locator('[data-test="annotation-note"]').fill(note);
     await page.locator('[data-test="add-to-queue"]').click();
     await page.locator('[data-test="send-queue"]').click();
   };
@@ -754,7 +748,7 @@ test("annotations on one element cascade instead of hiding each other", async ({
   const surface = surfaceOf(page);
   for (const note of ["first", "second"]) {
     await surface.locator("#note").click();
-    await page.locator('textarea[placeholder^="What should change here?"]').fill(note);
+    await page.locator('[data-test="annotation-note"]').fill(note);
     await page.locator('[data-test="add-to-queue"]').click();
   }
   await page.locator('[data-test="send-queue"]').click();
@@ -818,7 +812,7 @@ test("a pasted image still renders in the conversation after a reload", async ({
   await openViewer(page);
 
   // A 1x1 red PNG, pasted the way the browser delivers a real screenshot.
-  await page.locator('textarea[placeholder^="Message the agent"]').click();
+  await page.locator('[data-test="message-input"]').click();
   await page.evaluate(async () => {
     const b64 =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -831,7 +825,7 @@ test("a pasted image still renders in the conversation after a reload", async ({
   });
   await expect(page.locator('[data-test="image-chip"]')).toHaveCount(1);
 
-  await page.locator('textarea[placeholder^="Message the agent"]').fill("look at this");
+  await page.locator('[data-test="message-input"]').fill("look at this");
   await page.locator('[data-test="send-message"]').click();
   await expect(page.locator('[data-test="thumb"]')).toHaveCount(1);
 
@@ -1060,7 +1054,7 @@ test("a message sent at a dead server is kept, not eaten, and delivers itself on
   page,
 }) => {
   await openViewer(page);
-  const composer = page.locator('textarea[placeholder^="Message the agent"]');
+  const composer = page.locator('[data-test="message-input"]');
   const first = "Confirm the routing: Patch re-enters at Test, not Build.";
   const second = "Also: Land is the right name for the phase, not Merge.";
 
@@ -1132,7 +1126,7 @@ test("a stale viewer never posts its message into whichever session took its por
 }) => {
   await openViewer(page);
   const stale = page.url();
-  const composer = page.locator('textarea[placeholder^="Message the agent"]');
+  const composer = page.locator('[data-test="message-input"]');
 
   // This session goes away, freeing its port back to the shared pool.
   await cli.run(["end", cli.artifact]);
@@ -1258,7 +1252,7 @@ test("the target toggle quiets the surface for reading and restores it", async (
   // Targets are on by default, so a sent annotation paints a mark.
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('textarea[placeholder^="What should change here?"]').fill("A note");
+  await page.locator('[data-test="annotation-note"]').fill("A note");
   await page.locator('[data-test="add-to-queue"]').click();
   await page.locator('[data-test="send-queue"]').click();
   await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
@@ -1270,7 +1264,7 @@ test("the target toggle quiets the surface for reading and restores it", async (
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await expect(marker).toHaveCount(0);
   await surface.locator("#note").click();
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="annotation-note"]')).toHaveCount(0);
 
   // The annotation itself is untouched - this is a view preference, not a delete.
   await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
@@ -1289,7 +1283,7 @@ test("change-view hunk navigation does not steal keys from a text field", async 
   await cli.write(PLAN_V2);
   await expect(page.locator('[data-test="version"]')).toContainText("v2");
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('textarea[placeholder^="What should change here?"]').fill("ABCDEF");
+  await page.locator('[data-test="annotation-note"]').fill("ABCDEF");
   await page.locator('[data-test="add-to-queue"]').click();
   await page.locator('[data-test="enter-diff"]').click();
   await expect(page.locator('[data-test="enter-diff"]')).toHaveCount(0);
@@ -1316,7 +1310,7 @@ test("defer-until-committed shows the newer-version indicator and never loses a 
 
   // Compose (but do not send) an annotation - a committed-but-unsent draft.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('textarea[placeholder^="What should change here?"]').fill("Draft in flight");
+  await page.locator('[data-test="annotation-note"]').fill("Draft in flight");
   await page.locator('[data-test="add-to-queue"]').click();
   await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
 
@@ -1342,7 +1336,7 @@ test("the newer-version banner names the real blocker and only offers a live dis
   // A queue is not discardable, so the banner must ask for a send and show no
   // Discard button - it could only ever clear the composer, not the queue.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('textarea[placeholder^="What should change here?"]').fill("Queued work");
+  await page.locator('[data-test="annotation-note"]').fill("Queued work");
   await page.locator('[data-test="add-to-queue"]').click();
   await cli.write(PLAN_V2);
   await expect(banner).toContainText("send your 1 queued annotation to see it");
@@ -1350,7 +1344,7 @@ test("the newer-version banner names the real blocker and only offers a live dis
 
   // A composer draft on top of the queue is discardable, so the button returns.
   await surface.locator("#note").click();
-  await page.locator('textarea[placeholder^="What should change here?"]').fill("Composer draft");
+  await page.locator('[data-test="annotation-note"]').fill("Composer draft");
   await expect(banner).toContainText("or discard your draft");
   await expect(page.locator('[data-test="discard-draft"]')).toBeVisible();
 

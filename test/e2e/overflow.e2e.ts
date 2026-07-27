@@ -61,7 +61,7 @@ for (const width of [384, 950]) {
     // A located annotation and a human message round out the record's shapes.
     await surface.locator('li[data-lucid-id="step-backfill"]').click();
     await page
-      .locator('textarea[placeholder^="What should change here?"]')
+      .locator('[data-test="annotation-note"]')
       .fill("can remove it entirely from AGENTS.md. when i want to make a skill, i will do so.");
     await page.locator('[data-test="add-to-queue"]').click();
     await page.locator('[data-test="send-queue"]').click();

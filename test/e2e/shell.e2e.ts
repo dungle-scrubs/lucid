@@ -1,3 +1,4 @@
+import { chord } from "./locators.ts";
 import { expect, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -51,9 +52,7 @@ test("the review loop works through the daemon mount", async ({ page }) => {
   await page.goto(opened.shellUrl);
   const surface = surfaceOf(page);
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page
-    .locator('textarea[placeholder^="What should change here?"]')
-    .fill("One batch, please.");
+  await page.locator('[data-test="annotation-note"]').fill("One batch, please.");
   await page.locator('[data-test="add-to-queue"]').click();
   await page.locator('[data-test="send-queue"]').click();
   await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
@@ -237,9 +236,7 @@ test("tabs scope to a project; the drawer switches; drafts survive", async ({ pa
   // Draft an annotation note AND a message here, then switch projects via
   // the drawer. Views stay mounted (display:none), so assertions use :visible.
   await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
-  await page
-    .locator('textarea[placeholder^="What should change here?"]:visible')
-    .fill("only for the checklist");
+  await page.locator('[data-test="annotation-note"]:visible').fill("only for the checklist");
   await page
     .locator('[data-test="message-input"]:visible')
     .fill("an unsent message must survive a project switch");
@@ -248,9 +245,7 @@ test("tabs scope to a project; the drawer switches; drafts survive", async ({ pa
   await expect(page.locator('[data-test="projects-drawer"]')).toBeVisible();
   await page.locator('[data-test="drawer-project"]', { hasText: cli.dir }).click();
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
-  await expect(
-    page.locator('textarea[placeholder^="What should change here?"]:visible'),
-  ).toHaveCount(0);
+  await expect(page.locator('[data-test="annotation-note"]:visible')).toHaveCount(0);
   await expect(page.locator('[data-test="message-input"]:visible')).toHaveValue("");
 
   // Back via the drawer: BOTH drafts survived - the annotation note in the
@@ -258,9 +253,9 @@ test("tabs scope to a project; the drawer switches; drafts survive", async ({ pa
   // is exactly why hidden views stay mounted.
   await page.locator('[data-test="drawer-toggle"]').click();
   await page.locator('[data-test="drawer-project"]', { hasText: second.cli.dir }).click();
-  await expect(
-    page.locator('textarea[placeholder^="What should change here?"]:visible'),
-  ).toHaveValue("only for the checklist");
+  await expect(page.locator('[data-test="annotation-note"]:visible')).toHaveValue(
+    "only for the checklist",
+  );
   await expect(page.locator('[data-test="message-input"]:visible')).toHaveValue(
     "an unsent message must survive a project switch",
   );
@@ -307,7 +302,7 @@ test("the command palette opens sessions and runs review actions", async ({ page
   await page.goto(first.shellUrl);
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
 
-  const cmdK = process.platform === "darwin" ? "Meta+k" : "Control+k";
+  const cmdK = process.platform === "darwin" ? chord("k") : "Control+k";
 
   // ⌘K -> fuzzy to the second session -> Enter opens it as a tab.
   await page.keyboard.press(cmdK);
@@ -356,7 +351,7 @@ test("⌘W closes the artifact in front of you; the drawer adds projects from it
 
   // ⌘W closes the ACTIVE tab only. The browser owns the real ⌘W in a normal
   // tab, so this asserts the shell's own handling of the gesture.
-  await page.keyboard.press("Meta+w");
+  await page.keyboard.press(chord("w"));
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
   // The session it closed is still listed by the hub - a closed tab is not a
   // deleted artifact.

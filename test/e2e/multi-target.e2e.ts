@@ -35,7 +35,7 @@ test("cmd-click collects two spots into one annotation that reaches wait as targ
   // First cmd-click starts the collection; the second adds to it instead of
   // replacing the pick the way a plain click would.
   await surface.locator('li[data-lucid-id="step-backfill"]').click({ modifiers: ["Meta"] });
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
+  await expect(page.locator('[data-test="annotation-note"]')).toBeVisible();
   await surface.locator("#note").click({ modifiers: ["Meta"] });
 
   // ONE draft, two chips - and two pending marks on the surface.
@@ -43,7 +43,7 @@ test("cmd-click collects two spots into one annotation that reaches wait as targ
   await expect(surface.locator(".marker.pending")).toHaveCount(2);
 
   await page
-    .locator('textarea[placeholder^="What should change here?"]')
+    .locator('[data-test="annotation-note"]')
     .fill("These two must agree: batch the backfill AND drop the zero-downtime claim.");
   await page.locator('[data-test="add-to-queue"]').click();
   await page.locator('[data-test="send-queue"]').click();
@@ -80,7 +80,7 @@ test("cmd-click is a toggle: repeating a pick removes its spot", async ({ page }
   await surface.locator("#note").click({ modifiers: ["Meta"] });
   // Down to one spot, the draft is the ordinary single-target composer again.
   await expect(page.locator('[data-test="target-chip"]')).toHaveCount(0);
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
+  await expect(page.locator('[data-test="annotation-note"]')).toBeVisible();
   await expect(surface.locator(".marker.pending")).toHaveCount(1);
 
   // Escape discards the whole collection as one gesture. Wait for the second
@@ -88,8 +88,8 @@ test("cmd-click is a toggle: repeating a pick removes its spot", async ({ page }
   // and an instant Escape could otherwise beat it into the chrome.
   await surface.locator("#note").click({ modifiers: ["Meta"] });
   await expect(page.locator('[data-test="target-chip"]')).toHaveCount(2);
-  await page.locator('textarea[placeholder^="What should change here?"]').press("Escape");
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveCount(0);
+  await page.locator('[data-test="annotation-note"]').press("Escape");
+  await expect(page.locator('[data-test="annotation-note"]')).toHaveCount(0);
   await expect(surface.locator(".marker.pending")).toHaveCount(0);
 });
 
@@ -104,7 +104,7 @@ test("shift-click pins the spot straight onto the open question's answer", async
   await surface.locator('li[data-lucid-id="step-backfill"]').click({ modifiers: ["Shift"] });
   await expect(page.locator('[data-test="answer-anchor"]')).toBeVisible();
   // And no annotation composer opened: the pick went to the answer.
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="annotation-note"]')).toHaveCount(0);
 
   await page.locator('[data-test="free-text"]').fill("The backfill.");
   await page.locator('[data-test="answer"]').click();
@@ -164,7 +164,7 @@ test("shift-click with no open question falls back to a plain pick", async ({ pa
 
   // No question outstanding: shift must never be a dead gesture.
   await surface.locator('li[data-lucid-id="step-backfill"]').click({ modifiers: ["Shift"] });
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
+  await expect(page.locator('[data-test="annotation-note"]')).toBeVisible();
   await expect(page.locator('[data-test="answer-anchor"]')).toHaveCount(0);
 });
 
