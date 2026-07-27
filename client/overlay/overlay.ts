@@ -81,6 +81,11 @@ const coalesceByLine = (rects: readonly DOMRect[]): Rect[] => {
 
 const post = (message: OverlayMessage): void => window.parent.postMessage(message, "*");
 
+/** The token sheet Lucid injects into the artifact. Named once because
+ *  `canRenderDark` has to recognise and skip it: it declares the very tokens
+ *  that check looks for. */
+const THEME_STYLE_ID = "__lucid_theme_style";
+
 /**
  * The overlay (RFC §1, §5). Injected into the artifact iframe, mounted once
  * into a persistent Shadow-DOM host. Provides hover targeting, click/alt-click
@@ -306,9 +311,9 @@ export class LucidOverlay extends LitElement {
     const wanted = theme === "dark" && !this.canRenderDark() ? "light" : theme;
     document.documentElement.dataset.lucidTheme = wanted;
     this.retuneColorSchemeQueries(wanted);
-    if (document.getElementById("__lucid_theme_style")) return;
+    if (document.getElementById(THEME_STYLE_ID)) return;
     const style = document.createElement("style");
-    style.id = "__lucid_theme_style";
+    style.id = THEME_STYLE_ID;
     style.textContent = `
       :root[data-lucid-theme="light"] {
         --paper: #faf6ec;
@@ -340,20 +345,62 @@ export class LucidOverlay extends LitElement {
    * `prefers-color-scheme` block (so retuning the query reaches it). An
    * artifact with neither has exactly one appearance, and honouring that is
    * more useful than a dark rectangle full of invisible text.
+   *
+   * The question is asked of the artifact AS ITS AUTHOR WROTE IT, which is why
+   * neither half reads the live computed style any more. Both halves used to
+   * answer with Lucid's own work:
+   *
+   * - `getComputedStyle(:root).--paper` sees the token sheet `applyTheme`
+   *   injects, whose `:root[data-lucid-theme="light"]` block declares `--paper`
+   *   and `--ink`. From the second theme message onward every artifact declared
+   *   the tokens, so every artifact was dark-capable and this check stopped
+   *   meaning anything.
+   * - `rule.conditionText` is REWRITTEN by `retuneColorSchemeQueries`, to
+   *   `(min-width: 0px)` or `(max-width: 0px)`. After the first toggle no rule
+   *   mentions `prefers-color-scheme`, so an artifact that qualified only on its
+   *   own dark block stopped qualifying. `schemeQueries` keeps the original
+   *   condition and is the only trustworthy source once a toggle has happened.
+   *
+   * So: skip Lucid's sheet, read declarations rather than computed values, and
+   * ask the WeakMap what a media rule originally said. Measured fresh each time
+   * rather than memoized, because a stylesheet can still arrive late.
    */
   private canRenderDark(): boolean {
-    const root = getComputedStyle(document.documentElement);
-    if (root.getPropertyValue("--paper").trim() !== "") return true;
-    if (root.getPropertyValue("--ink").trim() !== "") return true;
-    for (const sheet of Array.from(document.styleSheets)) {
-      try {
-        for (const rule of Array.from(sheet.cssRules)) {
-          if (rule instanceof CSSMediaRule && /prefers-color-scheme/i.test(rule.conditionText)) {
-            return true;
-          }
+    // Tokens set inline on the root element. No stylesheet carries these, and
+    // Lucid never writes them, so they need their own look.
+    const inline = document.documentElement.style;
+    if (inline.getPropertyValue("--paper").trim() !== "") return true;
+    if (inline.getPropertyValue("--ink").trim() !== "") return true;
+
+    const qualifies = (rules: CSSRuleList): boolean => {
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSMediaRule) {
+          const original = this.schemeQueries.get(rule) ?? rule.conditionText;
+          if (/prefers-color-scheme/i.test(original)) return true;
+          if (qualifies(rule.cssRules)) return true;
+          continue;
         }
+        // A dark block can sit inside @supports or @layer - the retune walker
+        // already descends into both, so this one must too.
+        if (rule instanceof CSSSupportsRule || rule instanceof CSSLayerBlockRule) {
+          if (qualifies(rule.cssRules)) return true;
+          continue;
+        }
+        if (rule instanceof CSSStyleRule) {
+          const { style } = rule;
+          if (style.getPropertyValue("--paper").trim() !== "") return true;
+          if (style.getPropertyValue("--ink").trim() !== "") return true;
+        }
+      }
+      return false;
+    };
+
+    for (const sheet of Array.from(document.styleSheets)) {
+      if ((sheet.ownerNode as Element | null)?.id === THEME_STYLE_ID) continue;
+      try {
+        if (qualifies(sheet.cssRules)) return true;
       } catch {
-        /* unreadable sheet: cannot judge from here */
+        /* unreadable sheet (cross-origin): cannot judge from here */
       }
     }
     return false;
