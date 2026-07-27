@@ -29,13 +29,32 @@ test.afterEach(async () => {
   cli = undefined;
 });
 
-const openHostile = async (fixture: HostileFixture): Promise<{ url: string; cursor: string }> => {
+const openHostile = async (
+  fixture: HostileFixture,
+): Promise<{ session: Cli; url: string; cursor: string }> => {
   cli = await makeCli(fixture.html);
   for (const sibling of fixture.siblings ?? []) {
     await writeFile(join(cli.dir, sibling.name), sibling.content);
   }
   const opened = (await cli.run(["open", cli.artifact])) as { url: string; nextCursor: string };
-  return { url: opened.url, cursor: opened.nextCursor };
+  return { session: cli, url: opened.url, cursor: opened.nextCursor };
+};
+
+/** Pick an element, write the note, queue it, send the queue - the human
+ *  half of the loop, spelled once for the loop body and the badge test. */
+const pickQueueSend = async (
+  page: Page,
+  surface: ReturnType<typeof surfaceOf>,
+  selector: string,
+  note: string,
+): Promise<void> => {
+  await surface.locator(selector).click();
+  await expect(on(page).annotationNote()).toBeVisible();
+  await on(page).annotationNote().fill(note);
+  await on(page).addToQueue().click();
+  await expect(on(page).queuedAnnotation()).toHaveCount(1);
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
 };
 
 test("every corpus fixture is accounted for: surviving the loop, or a recorded defect", () => {
@@ -47,7 +66,6 @@ test("every corpus fixture is accounted for: surviving the loop, or a recorded d
   for (const defectId of HOSTILE_DEFECTS.keys()) {
     expect(ids.has(defectId), `defect ledger names unknown fixture ${defectId}`).toBe(true);
   }
-  expect(HOSTILE_FIXTURES.length).toBe(12);
 
   // ...and the direction a deleted test would escape through: every fixture
   // NOT in the defect ledger must have its loop test declared in this very
@@ -60,6 +78,24 @@ test("every corpus fixture is accounted for: surviving the loop, or a recorded d
       titles.includes(`the loop survives ${fixture.title}`),
       `surviving fixture ${fixture.id} has no loop test`,
     ).toBe(true);
+  }
+
+  // ...and the THIRD copy of the corpus: suite Q in the catalogue. Its id
+  // set must equal the fixture id set, and a row is uncovered exactly when
+  // its fixture is in the defect ledger - so a fixed fixture whose row was
+  // never flipped to covered is red here, before coverage-check ever runs.
+  const catalogue = JSON.parse(
+    readFileSync(fileURLToPath(new URL("./catalogue.json", import.meta.url)), "utf8"),
+  ) as { suites: { name: string; scenarios: { id: string; status: string }[] }[] };
+  const suiteQ = catalogue.suites.find((s) => s.name.startsWith("Q."));
+  expect(suiteQ, "suite Q left the catalogue").toBeDefined();
+  const rowIds = new Set((suiteQ?.scenarios ?? []).map((r) => r.id));
+  expect([...rowIds].sort()).toEqual([...ids].sort());
+  for (const row of suiteQ?.scenarios ?? []) {
+    expect(
+      row.status === "uncovered",
+      `catalogue row ${row.id} is ${row.status} but the defect ledger says ${HOSTILE_DEFECTS.has(row.id) ? "defect" : "survivor"}`,
+    ).toBe(HOSTILE_DEFECTS.has(row.id));
   }
 });
 
@@ -82,23 +118,20 @@ const survives =
     if (HOSTILE_DEFECTS.has(id)) {
       throw new Error(`${id} is in the defect ledger - its test cannot exist yet`);
     }
-    const { url, cursor } = await openHostile(fixture);
+    const { session, url, cursor } = await openHostile(fixture);
     await page.goto(url);
 
     const surface = surfaceOf(page);
     // The document's own hostile behaviour settles first, so the pick is a
-    // statement about the document a human would see, not a race with it.
+    // statement about the document a human would see, not a race with it -
+    // and where the hostile ingredient could silently fail to arrive, the
+    // fixture proves its presence before the loop starts.
     await (fixture.settle
       ? fixture.settle(surface)
       : expect(surface.locator(fixture.pick)).toBeVisible());
+    await fixture.proof?.(surface);
 
-    await surface.locator(fixture.pick).click();
-    await expect(on(page).annotationNote()).toBeVisible();
-    await on(page).annotationNote().fill(fixture.note);
-    await on(page).addToQueue().click();
-    await expect(on(page).queuedAnnotation()).toHaveCount(1);
-    await on(page).sendQueue().click();
-    await expect(on(page).annotation()).toHaveCount(1);
+    await pickQueueSend(page, surface, fixture.pick, fixture.note);
 
     // The agent's side: the right text, a target that resolved, and a
     // snippet pinning the PICK. The snippet is capture-time outerHTML, so it
@@ -106,9 +139,9 @@ const survives =
     // test below is the one place suite Q pins resolution to a named
     // element, and finding #47 is what the difference costs on a document
     // that rewrites itself.
-    const feedback = (await cli?.run([
+    const feedback = (await session.run([
       "wait",
-      cli.artifact,
+      session.artifact,
       "--since",
       cursor,
       "--timeout",
@@ -122,9 +155,9 @@ const survives =
     const annotation = feedback.annotations[0];
     expect(annotation?.note).toBe(fixture.note);
     expect(annotation?.resolved, "the anchor did not resolve against the artifact").toBeTruthy();
-    if (fixture.picked) {
-      expect(annotation?.target.snippet ?? "").toContain(fixture.picked);
-    }
+    // Unconditional: every fixture declares the text that pins its pick, so
+    // an empty `picked` cannot quietly switch this assertion off.
+    expect(annotation?.target.snippet ?? "").toContain(fixture.picked);
   };
 
 test(
@@ -164,13 +197,10 @@ test("picking the third of four identically-stamped rows marks the THIRD", async
   await page.goto(url);
 
   const surface = surfaceOf(page);
-  const third = surface.locator("#list li:nth-child(3)");
-  await third.click();
-  await expect(on(page).annotationNote()).toBeVisible();
-  await on(page).annotationNote().fill(fixture.note);
-  await on(page).addToQueue().click();
-  await on(page).sendQueue().click();
-  await expect(on(page).annotation()).toHaveCount(1);
+  // The FIXTURE's own pick selector, so the corpus cannot drift away from
+  // this test's title while both stay green.
+  const third = surface.locator(fixture.pick);
+  await pickQueueSend(page, surface, fixture.pick, fixture.note);
 
   // The committed mark's badge sits inside the THIRD row's box - not the
   // first's, which is where every ambiguous resolution used to land.

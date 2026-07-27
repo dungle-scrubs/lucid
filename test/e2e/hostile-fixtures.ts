@@ -45,6 +45,10 @@ export interface HostileFixture {
   /** Wait for the document's own hostile behaviour to finish, so the pick is
    *  a statement about the settled document rather than a race with it. */
   readonly settle?: (surface: FrameLocator) => Promise<void>;
+  /** Prove the fixture's hostile ingredient is actually PRESENT before the
+   *  loop runs - a linked sheet that 404'd would leave the document benign
+   *  and the loop green while the fixture stopped attacking its seam. */
+  readonly proof?: (surface: FrameLocator) => Promise<void>;
 }
 
 /**
@@ -94,7 +98,7 @@ ${body}
 </body>
 </html>`;
 
-/** 18,000 flat sibling list items (3,956,061 bytes total). Built once at
+/** 18,000 flat sibling list items (~3.96MB as authored). Built once at
  *  module load; the constant is the fixture, same as PLAN_V1. The hostile
  *  dimension is the SIBLING FAN-OUT, not the byte count - see D-065. */
 const HUGE_BODY = (() => {
@@ -313,6 +317,15 @@ h1 { color: var(--accent); }`,
     pick: "#claim",
     note: "Inline the tokens so the doc survives being emailed.",
     picked: "accent color for this document",
+    // The seam must be PRESENT to be survived: unstyled, this document is
+    // benign and the loop would pass while measuring nothing. Proved by the
+    // body max-width, which only the linked sheet sets - NOT by the accent
+    // color, which Lucid's theme layer deliberately remaps (asserting the
+    // authored hex measured the absence of the very remapping D-032 is
+    // about; observed rgb(123,98,40) where the sheet says #2b6cb0).
+    proof: async (surface) => {
+      await expect(surface.locator("body")).toHaveCSS("max-width", "720px");
+    },
   },
   {
     id: "hostile-fragment-only",
