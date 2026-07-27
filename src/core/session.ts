@@ -61,30 +61,61 @@ export const migrateLegacySessionDir = (paths: SessionPaths): void => {
  * A directory Lucid already owns (it holds a log) or one that is empty is fine.
  * Anything else belongs to someone else.
  */
-const LUCID_OWNED = new Set([
+/**
+ * Files only Lucid writes. Finding one is positive evidence that this directory
+ * is a record of ours, half-built or otherwise.
+ *
+ * `server.out.log` and not `server.log`: `paths.ts` writes the former, and the
+ * latter was a name nothing has produced since. An allowlist that has drifted
+ * from its writer is worse than a short one - it refuses our own directory and
+ * accepts somebody else's.
+ */
+const LUCID_WRITES = new Set([
   "log.ndjson",
   "log.ndjson.lock",
   "current.html",
   "versions",
   "pasted",
   "server.json",
-  "server.log",
+  "server.out.log",
   "selection.json",
   "attendant.json",
   "context.json",
   "attend.out.log",
   "create.out.log",
-  ".gitignore",
-  ".DS_Store",
 ]);
 
+/*
+ * Deliberately absent from that list: `.gitignore` and `.DS_Store`. Both used
+ * to count as ours, and neither is evidence of anything. Lucid writes a
+ * `.gitignore`, and so does anybody keeping a folder out of git; the Finder
+ * writes `.DS_Store` into any folder somebody opens. Treating them as proof
+ * meant a placeholder folder holding one of them was read as ours and written
+ * over. They now count as somebody's, which errs toward refusing - the
+ * recoverable direction, since the answer names the directory and renaming it
+ * takes a second.
+ */
+
+/**
+ * Whether `<dir>/<stem>/` is somebody ELSE's.
+ *
+ * Ownership needs positive evidence, not the absence of a stranger. Deciding it
+ * by "nothing here is unrecognised" made a folder holding only a `.gitignore` -
+ * a placeholder somebody keeps out of git, which is a common thing to have -
+ * read as ours, and Lucid then wrote its log, its versions tree and a `*`
+ * .gitignore over the top of it. That is the exact harm this check exists to
+ * prevent, admitted through the list meant to prevent it.
+ */
 const occupiedByOthers = (paths: SessionPaths): boolean => {
   if (!existsSync(paths.sessionDir)) return false;
   if (existsSync(paths.logPath)) return false; // unmistakably ours
   try {
-    // Ours-in-progress (a versions tree, a descriptor) reads as ours. Anything
-    // Lucid does not write is somebody's own file, and this directory is theirs.
-    return readdirSync(paths.sessionDir).some((entry) => !LUCID_OWNED.has(entry));
+    const entries = readdirSync(paths.sessionDir);
+    if (entries.length === 0) return false; // an empty directory is nobody's
+    // Ours-in-progress - a versions tree, a descriptor, a server log - reads as
+    // ours. Ambient files are not counted either way.
+    if (entries.some((entry) => LUCID_WRITES.has(entry))) return false;
+    return true;
   } catch {
     return false; // unreadable: let the open fail on its own terms
   }

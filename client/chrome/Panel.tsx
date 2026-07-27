@@ -221,6 +221,7 @@ export const Notices = () => {
       {notices.map((n) => (
         <div
           key={n.id}
+          data-test="notice"
           className="border border-ink-600 bg-ink-700 px-2.5 py-1.5 text-[12px] text-cream-300"
         >
           {n.message}
