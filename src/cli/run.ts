@@ -306,8 +306,13 @@ export const runProgress = async (
   // append when no daemon answers, which never passes through the ack handler.
   const cleaned = sanitizeProgress(progress);
   if (!cleaned) {
-    print({ ok: false, error: "progress needs a --label, --total, or --done" });
-    return;
+    // Thrown, not printed. This used to `print({ok:false})` and return, which
+    // exits 0 - so `if lucid progress …; then` read a refusal as success and
+    // every agent checking the exit code before parsing saw nothing wrong.
+    throw new ValidationError({
+      message: "progress needs a --label, --total, or --done",
+      detail: { file },
+    });
   }
   const attendant = attendantStamp();
   await deliver(paths, {
@@ -334,8 +339,10 @@ export const runContext = async (
   const paths = sessionPaths(file);
   const clean = sanitizeContext(usage);
   if (!clean) {
-    print({ ok: false, error: "context needs a --pct, or --used with --total" });
-    return;
+    throw new ValidationError({
+      message: "context needs a --pct, or --used with --total",
+      detail: { file },
+    });
   }
   const live = await discoverLiveServer(paths);
   if (live) {

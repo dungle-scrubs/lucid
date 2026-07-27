@@ -73,7 +73,20 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     broke: "A reload threw away every open tab and dropped you on the pick screen.",
     testFile: "test/e2e/regression/3bca9c0-reload-keeps-your-tabs.e2e.ts",
     testName: "a reload keeps the tab that was open, instead of the pick screen",
-    mutation: { kind: "revert", sha: "3bca9c0" },
+    // Was a revert until the M2 ownership fix touched the same commit's
+    // session.ts and the revert stopped applying. The verifier caught that on
+    // the run after, which is the whole reason it prints conflicts rather than
+    // skipping them.
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/shell.ts",
+      // The READ, not the key name. Renaming the key moved the writer and
+      // the reader together, so a reload still restored and the verifier
+      // reported a mutation that changed nothing - which is what it was.
+      find: "export const readStoredTabs = (): PersistedTabs => {",
+      replace:
+        "export const readStoredTabs = (): PersistedTabs => {\n  return { keys: [], active: null, project: null }; // mutation",
+    },
   },
   {
     sha: "3bca9c0",
@@ -81,7 +94,12 @@ export const REGRESSIONS: readonly RegressionRow[] = [
       "A session wrote its record into a folder of the user's that happened to share its name.",
     testFile: "test/e2e/regression/3bca9c0-no-colonising-your-folder.e2e.ts",
     testName: "open refuses a record folder that already holds someone else's work",
-    mutation: { kind: "revert", sha: "3bca9c0" },
+    mutation: {
+      kind: "edit",
+      file: "src/core/session.ts",
+      find: "  if (existsSync(paths.logPath)) return false; // unmistakably ours",
+      replace: "  return false; // mutation: every directory reads as ours",
+    },
   },
   {
     sha: "9df5eae",
@@ -136,6 +154,45 @@ export const REGRESSIONS: readonly RegressionRow[] = [
       file: "client/chrome/actions.ts",
       find: 'if (get().status === "ended") {',
       replace: "if (false) {",
+    },
+  },
+  {
+    sha: "m2.1",
+    broke: "Effect's own refusals logged a formatted block to stdout, so JSON.parse(stdout) threw.",
+    testFile: "test/e2e/regression/m2.1-stdout-is-one-json-document.e2e.ts",
+    testName: "a refused command puts one JSON envelope on stdout",
+    mutation: {
+      kind: "edit",
+      file: "src/cli/main.ts",
+      // The catchAll, not the logger. Removing the stderr logger alone leaves
+      // the test green: the top-level catch handles the error before anything
+      // logs it, so the logger replacement is belt-and-braces rather than the
+      // fix. Measured, not assumed - the first mutation named here was the
+      // logger, and it passed.
+      // Anchored on the catch-all's own line. `process.stdout.write`
+      // alone matches twice - runEffect writes the same envelope for
+      // failures INSIDE a command - and an ambiguous mutation would not
+      // mean what the row says it means.
+      find: "    const envelope = asEnvelope(error);",
+      replace: "    const envelope = undefined as ReturnType<typeof asEnvelope>;",
+    },
+  },
+  {
+    sha: "m2.2",
+    broke:
+      "progress and context printed {ok:false} and exited 0, so a shell `if` read a refusal as success.",
+    testFile: "test/e2e/regression/m2.2-refusals-exit-non-zero.e2e.ts",
+    testName: "progress and context refuse with a non-zero exit, not a quiet ok:false",
+    mutation: {
+      kind: "edit",
+      file: "src/cli/run.ts",
+      // Removes the fix, not a type. An earlier version appended an excess
+      // property to the ValidationError constructor, which is a COMPILE-time
+      // error and nothing else - the verifier does not run tsc, so at runtime
+      // the throw was unchanged, the test passed, and the row reported itself
+      // proven while proving nothing.
+      find: `    throw new ValidationError({\n      message: "progress needs a --label, --total, or --done",\n      detail: { file },\n    });`,
+      replace: `    print({ ok: false, error: "progress needs a --label, --total, or --done" });\n    return;`,
     },
   },
   {

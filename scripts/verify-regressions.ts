@@ -15,6 +15,11 @@
  *
  * Mutations are applied in a scratch git worktree, never in the working tree,
  * so an interrupted run cannot leave a sabotaged checkout behind.
+ *
+ * That worktree is checked out at HEAD, so this verifies what is COMMITTED and
+ * not what is in front of you. Uncommitted work is invisible to it - which is
+ * the right default for a claim about the repository, and surprising exactly
+ * once, when a fix you just made appears not to have taken.
  */
 
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";

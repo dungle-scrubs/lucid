@@ -1,8 +1,15 @@
 #!/usr/bin/env bun
-import { Args, Command, Options } from "@effect/cli";
+import { Args, Command, HelpDoc, Options, ValidationError } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
-import { Effect, Option } from "effect";
-import { toErrorJson, type LucidError } from "../errors.ts";
+import { Effect, Logger, Option } from "effect";
+// Aliased, because `@effect/cli` exports a `ValidationError` too and this file
+// imports both. They are unrelated types with the same name; `isValidationError`
+// is TypeId-based so the runtime can never confuse them, but a reader can.
+import {
+  toErrorJson,
+  ValidationError as LucidValidationError,
+  type LucidError,
+} from "../errors.ts";
 import {
   runApp,
   runAsk,
@@ -206,9 +213,18 @@ const planIngestCommand = Command.make(
 );
 const planCommand = Command.make("plan", {}, () =>
   runEffect(async () => {
-    process.stdout.write(
+    // `lucid plan` on its own names no subcommand, which is a refusal, not an
+    // answer - it used to print two lines of usage to STDOUT and exit 0, which
+    // is both of the defects this milestone fixed, in the one command that did
+    // not go through either path. The usage goes to stderr where the words
+    // belong, and the refusal answers on stdout in the envelope.
+    process.stderr.write(
       "lucid plan render <doc.md> [--out <file>] [--title <t>] [--stage <s>]\nlucid plan ingest --plan <name> [--payload <file>]  (or pipe `lucid wait` JSON to stdin)\n",
     );
+    throw new LucidValidationError({
+      message: "plan needs a subcommand - use one of 'render', 'ingest'",
+      detail: {},
+    });
   }),
 ).pipe(Command.withSubcommands([planRenderCommand, planIngestCommand]));
 
@@ -234,4 +250,74 @@ const cli = Command.run(lucid, {
   version: "0.2.0", // x-release-please-version
 });
 
-cli(process.argv).pipe(Effect.provide(BunContext.layer), BunRuntime.runMain);
+/**
+ * Nothing Effect logs goes to stdout.
+ *
+ * The CLI's OWN refusals - an unknown subcommand, an argument outside its set,
+ * a missing option - fail before any handler runs, so they were logged as a
+ * formatted block:
+ *
+ *     [16:59:59] ERROR (#17):
+ *       Error: {"_tag":"CommandMismatch","error":{...}}
+ *
+ * That breaks the one promise the CLI makes to an agent: stdout is one JSON
+ * document. `JSON.parse(stdout)` then throws a parser error pointing at the
+ * caller's own code, for a refusal the CLI could have named.
+ *
+ * `disablePrettyLogger` is the part that matters, and it took a review to find
+ * out why. `runMain` installs `prettyLoggerDefault` into the ROOT fiber refs
+ * before the effect runs, and that logger writes to stdout via `console.log`.
+ * A `Logger.replace(Logger.defaultLogger, …)` inside the effect therefore
+ * removes nothing - the default is no longer there to replace - and merely
+ * ADDS a second logger, so every log line went to both channels and the one
+ * that mattered still reached stdout. The stderr logger below is now the only
+ * logger, rather than a second opinion.
+ */
+const logToStderr = Logger.replace(
+  Logger.defaultLogger,
+  Logger.make(({ message }) => {
+    const parts = Array.isArray(message) ? message : [message];
+    process.stderr.write(`${parts.map((m) => String(m)).join(" ")}\n`);
+  }),
+);
+
+/**
+ * The CLI's own refusals, in the envelope every other refusal already uses.
+ *
+ * `runEffect` covers failures INSIDE a command body; these happen before one is
+ * chosen, so they never reached it. A help or version request is not a refusal
+ * and is left alone - it has already printed what it was asked for.
+ */
+const asEnvelope = (error: unknown): { readonly error: LucidError } | undefined => {
+  if (!ValidationError.isValidationError(error)) return undefined;
+  // No help/version guard here, deliberately. Both are answers rather than
+  // refusals, and both are handled inside `cliApp.run` before this catch ever
+  // sees them - an earlier version excluded `NoBuiltInMatch`, which is
+  // swallowed by the built-in `orElse` and never arrives either. A guard that
+  // protects nothing reachable reads as though it does.
+  return {
+    error: {
+      code: "USAGE",
+      // The same words stderr already carries, so the two never disagree.
+      message: HelpDoc.toAnsiText(error.error).trim(),
+      detail: {},
+    } as unknown as LucidError,
+  };
+};
+
+cli(process.argv).pipe(
+  Effect.provide(BunContext.layer),
+  Effect.provide(logToStderr),
+  Effect.catchAll((error) => {
+    const envelope = asEnvelope(error);
+    if (!envelope) return Effect.fail(error);
+    return Effect.sync(() => {
+      process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
+      process.exitCode = 1;
+    });
+  }),
+  (effect) =>
+    // The pretty logger is what wrote to stdout; error reporting would re-log
+    // the failure this catch has already answered.
+    BunRuntime.runMain(effect, { disablePrettyLogger: true, disableErrorReporting: true }),
+);
