@@ -1,5 +1,6 @@
+import { hook, on } from "./locators.ts";
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
-import { makeCli, PLAN_V1, PLAN_V2, type Cli } from "./helpers.ts";
+import { PLAN_V1, PLAN_V2, makeCli, type Cli, waitTimeoutSeconds } from "./helpers.ts";
 
 let cli: Cli;
 
@@ -24,7 +25,7 @@ test("Enter sends the message, which is what the composer's placeholder promises
   // The box says "Enter to send, Shift+Enter for a new line". Nothing tested
   // it, so a regression there would only ever be found by a human typing.
   await openViewer(page);
-  const input = page.locator('[data-test="message-input"]:visible');
+  const input = page.locator(`${hook("message-input")}:visible`);
   await input.fill("sent with the enter key");
   await input.press("Enter");
 
@@ -46,17 +47,17 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
 
   // Click an element in the artifact -> overlay picks it -> chrome composer opens.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await expect(page.locator('[data-test="annotation-note"]')).toBeVisible();
+  await expect(on(page).annotationNote()).toBeVisible();
 
   await page
-    .locator('[data-test="annotation-note"]')
+    .locator(hook("annotation-note"))
     .fill("Backfill in one batch, not nightly - nightly will take weeks.");
-  await page.locator('[data-test="add-to-queue"]').click();
-  await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
-  await page.locator('[data-test="send-queue"]').click();
+  await on(page).addToQueue().click();
+  await expect(on(page).sendQueue()).toBeVisible();
+  await on(page).sendQueue().click();
 
   // The annotation echoes back via SSE and renders in the chrome list.
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await expect(on(page).annotation()).toHaveCount(1);
 
   // The agent receives located feedback via wait.
   const feedback = (await cli.run([
@@ -65,7 +66,7 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as {
     status: string;
     annotations: { note: string; resolved: boolean; target: { snippet: string } }[];
@@ -80,7 +81,7 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
   // The agent revises the artifact; the watcher commits v2 and the viewer live-reloads.
   await cli.write(PLAN_V2);
   await expect(surface.locator("h1")).toContainText("revised");
-  await expect(page.locator('[data-test="version"]')).toContainText("v2");
+  await expect(on(page).version()).toContainText("v2");
 
   // A version-only delta returns `waiting`, not feedback (D-062).
   const afterRevise = (await cli.run([
@@ -89,7 +90,7 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
     "--since",
     feedback.nextCursor,
     "--timeout",
-    "4",
+    waitTimeoutSeconds(4),
   ])) as {
     status: string;
     version: number;
@@ -103,7 +104,7 @@ test("lucid progress renders a distinct fan-out indicator that output clears", a
 
   // The agent farms the revision out to parallel subagents and self-reports.
   await cli.run(["progress", cli.artifact, "--label", "auditing 7 screens", "--total", "7"]);
-  const fanout = page.locator('[data-test="agent-working"][data-fanout="true"]');
+  const fanout = page.locator(`${hook("agent-working")}[data-fanout="true"]`);
   await expect(fanout).toBeVisible();
   await expect(fanout).toContainText("7 agents in progress");
   await expect(fanout).toContainText("0/7 reported");
@@ -124,18 +125,18 @@ test("lucid progress renders a distinct fan-out indicator that output clears", a
 
   // Real output (a new version) closes the window entirely.
   await cli.write(PLAN_V2);
-  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+  await expect(on(page).agentWorking()).toHaveCount(0);
 });
 
 test("context usage renders a header ring that updates live", async ({ page }) => {
   await openViewer(page);
 
   // No report yet -> no ring.
-  await expect(page.locator('[data-test="context-ring"]')).toHaveCount(0);
+  await expect(on(page).contextRing()).toHaveCount(0);
 
   // The harness (its statusline) reports usage; the ring appears via SSE.
   await cli.run(["context", cli.artifact, "--used", "142000", "--total", "200000"]);
-  const ring = page.locator('[data-test="context-ring"]');
+  const ring = on(page).contextRing();
   await expect(ring).toBeVisible();
   await expect(ring).toHaveAttribute("data-pct", "71");
   // The detail lives in the panel's own tooltip now, not a native title.
@@ -166,32 +167,32 @@ test("structured question: choose an option and pin an artifact region as the an
   ]);
 
   // The drawer rises over the surface with the choices as rows.
-  await expect(page.locator('[data-test="question-drawer"]')).toBeVisible();
-  const choices = page.locator('[data-test="choice"]');
+  await expect(on(page).questionDrawer()).toBeVisible();
+  const choices = on(page).choice();
   await expect(choices).toHaveCount(2);
   await choices.first().click();
   await expect(choices.first()).toHaveAttribute("aria-checked", "true");
 
   // Pin a region of the artifact as the answer's referent - the surface stays
   // live under the drawer, which is the point of a drawer rather than a modal.
-  await page.locator('[data-test="pin-region"]').click();
+  await on(page).pinRegion().click();
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await expect(page.locator('[data-test="answer-anchor"]')).toBeVisible();
+  await expect(on(page).answerAnchor()).toBeVisible();
 
   // Send the answer; it reaches wait with the chosen option and the pinned region.
-  await page.locator('[data-test="answer"]').click();
+  await on(page).answer().click();
   // Answered -> the drawer lowers (nothing outstanding) and the exchange enters
   // the record. An options-only answer has no free text, so the card has to read
   // the chosen labels or it would print an empty answer over a real decision.
-  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
-  await expect(page.locator('[data-test="qa-answer"]')).toContainText("Postgres");
+  await expect(on(page).questionDrawer()).toHaveCount(0);
+  await expect(on(page).qaAnswer()).toContainText("Postgres");
   const payload = (await cli.run([
     "wait",
     cli.artifact,
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as {
     questions?: {
       answered: boolean;
@@ -225,8 +226,8 @@ test("multi-select question: options are numbered and more than one can be chose
     "Spam|marked-spam label",
   ]);
 
-  await expect(page.locator('[data-test="question-drawer"]')).toBeVisible();
-  const options = page.locator('[data-test="choice"]');
+  await expect(on(page).questionDrawer()).toBeVisible();
+  const options = on(page).choice();
   await expect(options).toHaveCount(3);
   // Options carry a numeral (1..N) so a prose note can reference a choice by
   // number; the third choice is "3".
@@ -241,7 +242,7 @@ test("multi-select question: options are numbered and more than one can be chose
   // Enter from a focused option submits the options-only answer (rather than
   // re-toggling the option) - no note or Answer-button click needed.
   await options.nth(2).press("Enter");
-  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
+  await expect(on(page).questionDrawer()).toHaveCount(0);
 
   const payload = (await cli.run([
     "wait",
@@ -249,7 +250,7 @@ test("multi-select question: options are numbered and more than one can be chose
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { questions?: { answered: boolean; answerOptions?: string[] }[] };
   const q = payload.questions?.[0];
   expect(q?.answered).toBe(true);
@@ -260,14 +261,21 @@ test("a question can be skipped: it leaves the panel and the agent is told", asy
   const { nextCursor } = await openViewer(page);
 
   await cli.run(["ask", cli.artifact, "--text", "Do you have the API keys?"]);
-  await expect(page.locator('[data-test="question-drawer"]')).toBeVisible();
+  await expect(on(page).questionDrawer()).toBeVisible();
 
   // Decline without answering.
-  await page.locator('[data-test="skip"]').click();
-  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
+  await on(page).skip().click();
+  await expect(on(page).questionDrawer()).toHaveCount(0);
 
   // The agent learns it was declined, not answered with content.
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     questions?: { answered: boolean; skipped?: boolean; answer?: string }[];
   };
   expect(fb.questions?.[0]?.answered).toBe(true);
@@ -294,7 +302,7 @@ test("a question renders as Markdown and can be handed back for a clearer re-ask
       "```",
     ].join("\n"),
   ]);
-  const q = page.locator('[data-test="question-text"]');
+  const q = on(page).questionText();
   await expect(q).toBeVisible();
   // Markdown, not literal source: the fence became a code block and its
   // backticks are gone from the text.
@@ -302,16 +310,24 @@ test("a question renders as Markdown and can be handed back for a clearer re-ask
   await expect(q).not.toContainText("```");
 
   // Short question, no disclosure: the fold only exists for walls.
-  await expect(page.locator('[data-test="question-fold"]')).toHaveCount(0);
+  // Absent by design, so there is no hook in the product to generate from.
+  await expect(page.locator(hook("question-fold"))).toHaveCount(0);
 
   // "I don't understand this" - the note says what was confusing. A bare
   // --text ask renders as a free-text field in the drawer.
-  await page.locator('[data-test="free-text"]').fill("which schema do you mean?");
-  await page.locator('[data-test="reask"]').click();
-  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
+  await on(page).freeText().fill("which schema do you mean?");
+  await on(page).reask().click();
+  await expect(on(page).questionDrawer()).toHaveCount(0);
 
   // The agent is told to ask again rather than that it was answered or declined.
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     questions?: { answered: boolean; unclear?: boolean; skipped?: boolean; answer?: string }[];
   };
   expect(fb.questions?.[0]?.answered).toBe(true);
@@ -335,12 +351,13 @@ test("a wall-of-text question renders whole; the drawer caps and scrolls instead
   // No disclosure step: the reader always needs the whole question, so the
   // full text renders and the DRAWER is what bounds height (60% cap,
   // internal scroll).
-  const text = page.locator('[data-test="question-text"]');
+  const text = on(page).questionText();
   await expect(text).toBeVisible();
-  await expect(page.locator('[data-test="question-fold"]')).toHaveCount(0);
+  // Absent by design, so there is no hook in the product to generate from.
+  await expect(page.locator(hook("question-fold"))).toHaveCount(0);
   await expect(text).toContainText("Paragraph 12");
 
-  const drawer = page.locator('[data-test="question-drawer"]');
+  const drawer = on(page).questionDrawer();
   const surfaceBox = await page.locator('iframe[title="artifact surface"]').boundingBox();
   const drawerBox = await drawer.boundingBox();
   expect(drawerBox?.height ?? Infinity).toBeLessThanOrEqual((surfaceBox?.height ?? 0) * 0.62);
@@ -348,7 +365,7 @@ test("a wall-of-text question renders whole; the drawer caps and scrolls instead
   expect(scrollable).toBe(true);
 
   // However tall the question, the drawer never eats the composer that answers it.
-  await expect(page.locator('[data-test="message-input"]')).toBeVisible();
+  await expect(on(page).messageInput()).toBeVisible();
 });
 
 test("fork button spins the selection off; the request reaches wait as a fork", async ({
@@ -360,14 +377,14 @@ test("fork button spins the selection off; the request reaches wait as a fork", 
   // Pick a region, type the directive, and Fork instead of annotating in place.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
   await page
-    .locator('[data-test="annotation-note"]')
+    .locator(hook("annotation-note"))
     .fill("Turn the backfill into its own implementation plan.");
-  await page.locator('[data-test="fork"]').click();
+  await on(page).fork().click();
 
   // The composer clears (a fork is sent on click, not queued) and nothing lands
   // in the annotation list.
-  await expect(page.locator('[data-test="annotation-note"]')).toHaveCount(0);
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(0);
+  await expect(on(page).annotationNote()).toHaveCount(0);
+  await expect(on(page).annotation()).toHaveCount(0);
 
   // The agent receives the fork - not an annotation - via wait.
   const feedback = (await cli.run([
@@ -376,7 +393,7 @@ test("fork button spins the selection off; the request reaches wait as a fork", 
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as {
     status: string;
     annotations: unknown[];
@@ -397,12 +414,12 @@ test("Fork with an empty note still forks (default directive), and confirms", as
   // Pick a region and click Fork WITHOUT typing a directive - the region is the
   // seed, so this must still send (regression: it used to silently no-op).
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await expect(page.locator('[data-test="annotation-note"]')).toBeVisible();
-  await page.locator('[data-test="fork"]').click();
+  await expect(on(page).annotationNote()).toBeVisible();
+  await on(page).fork().click();
 
   // A neutral confirmation appears and the composer clears.
   await expect(page.getByText(/Fork(ed)?/)).toBeVisible();
-  await expect(page.locator('[data-test="annotation-note"]')).toHaveCount(0);
+  await expect(on(page).annotationNote()).toHaveCount(0);
 
   // The fork reached wait with the default directive.
   const feedback = (await cli.run([
@@ -411,7 +428,7 @@ test("Fork with an empty note still forks (default directive), and confirms", as
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { status: string; forks?: { note: string }[] };
   expect(feedback.forks).toHaveLength(1);
   expect(feedback.forks?.[0]?.note.length).toBeGreaterThan(0);
@@ -422,14 +439,14 @@ test("Esc discards the annotation being composed", async ({ page }) => {
   const surface = surfaceOf(page);
 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  const composer = page.locator('[data-test="annotation-note"]');
+  const composer = on(page).annotationNote();
   await expect(composer).toBeVisible();
   await composer.fill("never mind this one");
   await composer.press("Escape");
 
   // The composer is dismissed and nothing was queued.
   await expect(composer).toHaveCount(0);
-  await expect(page.locator('[data-test="send-queue"]')).toHaveCount(0);
+  await expect(on(page).sendQueue()).toHaveCount(0);
 });
 
 test("cmd+enter queues the open note and sends the whole queue", async ({ page }) => {
@@ -439,18 +456,18 @@ test("cmd+enter queues the open note and sends the whole queue", async ({ page }
   // Queue one annotation, then start a second and flush both with cmd+enter -
   // the shortcut folds the in-progress note into the queue before sending.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("Batch the backfill.");
-  await page.locator('[data-test="add-to-queue"]').click();
-  await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
+  await on(page).annotationNote().fill("Batch the backfill.");
+  await on(page).addToQueue().click();
+  await expect(on(page).sendQueue()).toBeVisible();
 
   await surface.locator("#note").click();
-  const composer = page.locator('[data-test="annotation-note"]');
+  const composer = on(page).annotationNote();
   await composer.fill("Cut over on a weekend.");
   await composer.press("ControlOrMeta+Enter");
 
   // Both annotations echo back via SSE and the queue clears.
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(2);
-  await expect(page.locator('[data-test="send-queue"]')).toHaveCount(0);
+  await expect(on(page).annotation()).toHaveCount(2);
+  await expect(on(page).sendQueue()).toHaveCount(0);
 
   const feedback = (await cli.run([
     "wait",
@@ -458,7 +475,7 @@ test("cmd+enter queues the open note and sends the whole queue", async ({ page }
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as {
     status: string;
     annotations: { note: string }[];
@@ -478,18 +495,25 @@ test("agent reply appears in the conversation log", async ({ page }) => {
     "--reply",
     "I reordered and batched the backfill.",
     "--timeout",
-    "1",
+    waitTimeoutSeconds(1),
   ]);
   await expect(page.locator('[data-role="agent"]')).toContainText("reordered and batched");
 });
 
 test("human message (non-located) reaches the agent as feedback", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
-  await page.locator('[data-test="message-input"]').fill("Overall: tighten the wording.");
-  await page.locator('[data-test="send-message"]').click();
+  await on(page).messageInput().fill("Overall: tighten the wording.");
+  await on(page).sendMessage().click();
   await expect(page.locator('[data-role="human"]')).toContainText("tighten the wording");
 
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     status: string;
     messages: { role: string; text: string }[];
   };
@@ -499,8 +523,8 @@ test("human message (non-located) reaches the agent as feedback", async ({ page 
 
 test("approve/resolve closes the loop and reopen clears it", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
-  await page.locator('[data-test="approve"]').click();
-  await expect(page.locator('[data-test="resolved-bar"]')).toBeVisible();
+  await on(page).approve().click();
+  await expect(on(page).resolvedBar()).toBeVisible();
 
   const resolved = (await cli.run([
     "wait",
@@ -508,7 +532,7 @@ test("approve/resolve closes the loop and reopen clears it", async ({ page }) =>
     "--since",
     nextCursor,
     "--timeout",
-    "6",
+    waitTimeoutSeconds(6),
   ])) as {
     reviewResolved: boolean;
     nextCursor: string;
@@ -516,37 +540,37 @@ test("approve/resolve closes the loop and reopen clears it", async ({ page }) =>
   expect(resolved.reviewResolved).toBe(true);
 
   // Reopen clears the resolved state (D-059).
-  await page.locator('[data-test="reopen"]').click();
-  await expect(page.locator('[data-test="resolved-bar"]')).toHaveCount(0);
+  await on(page).reopen().click();
+  await expect(on(page).resolvedBar()).toHaveCount(0);
 });
 
 test("reopen with nobody listening says feedback is record-only", async ({ page }) => {
   // No agent ever connects in this test, so the listening count is
   // deterministically zero - the exact state approval leaves behind.
   await openViewer(page);
-  await page.locator('[data-test="approve"]').click();
-  await expect(page.locator('[data-test="resolved-bar"]')).toBeVisible();
+  await on(page).approve().click();
+  await expect(on(page).resolvedBar()).toBeVisible();
 
-  await page.locator('[data-test="reopen"]').click();
-  await expect(page.locator('[data-test="resolved-bar"]')).toHaveCount(0);
+  await on(page).reopen().click();
+  await expect(on(page).resolvedBar()).toHaveCount(0);
   await expect(page.getByText("no agent is listening right now")).toBeVisible();
 });
 
 test("reopen on an ended session explains the way back instead of failing", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
-  await page.locator('[data-test="approve"]').click();
-  await expect(page.locator('[data-test="resolved-bar"]')).toBeVisible();
-  await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "6"]);
+  await on(page).approve().click();
+  await expect(on(page).resolvedBar()).toBeVisible();
+  await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", waitTimeoutSeconds(6)]);
   // The wait's delivery ack opens the working indicator...
-  await expect(page.locator('[data-test="agent-working"]')).toBeVisible();
+  await expect(on(page).agentWorking()).toBeVisible();
   await cli.run(["end", cli.artifact]);
   // ...and session_ended closes it - the observable proof the browser has
   // processed the ended state before we click.
-  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+  await expect(on(page).agentWorking()).toHaveCount(0);
 
   // Reopen must not fire a doomed POST at a dead server and claim "try
   // again" would help.
-  const reopen = page.locator('[data-test="reopen"]');
+  const reopen = on(page).reopen();
   await expect(reopen).toBeVisible();
   await reopen.click();
   await expect(page.getByText("needs the agent to run")).toBeVisible();
@@ -555,36 +579,43 @@ test("reopen on an ended session explains the way back instead of failing", asyn
 test("approve refuses while anything is unsent, so nothing is stranded", async ({ page }) => {
   const { nextCursor } = await openViewer(page);
   const surface = surfaceOf(page);
-  const approve = page.locator('[data-test="approve"]');
+  const approve = on(page).approve();
   await expect(approve).toBeEnabled();
 
   // A half-composed annotation already blocks: approving would abandon it.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("Backfill in one batch");
+  await on(page).annotationNote().fill("Backfill in one batch");
   await expect(approve).toBeDisabled();
   // The reason lives on the disabled button, not in the header bar.
-  await expect(page.locator('[data-test="approve"]')).toBeDisabled();
-  await page.locator('[data-test="approve-wrap"]').hover();
+  await expect(on(page).approve()).toBeDisabled();
+  await on(page).approveWrap().hover();
   await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(
     "draft annotation first",
   );
 
   // Queued still blocks, and says how many.
-  await page.locator('[data-test="add-to-queue"]').click();
+  await on(page).addToQueue().click();
   await expect(approve).toBeDisabled();
-  await page.locator('[data-test="approve-wrap"]').hover();
+  await on(page).approveWrap().hover();
   await expect(page.locator('[data-slot="tooltip-content"]')).toContainText("1 queued annotation");
 
   // Sending clears the block...
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
   await expect(approve).toBeEnabled();
   await approve.click();
-  await expect(page.locator('[data-test="resolved-bar"]')).toBeVisible();
+  await expect(on(page).resolvedBar()).toBeVisible();
 
   // ...and the agent sees the annotation together with the approval, rather
   // than a stop with the feedback stranded behind it.
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     reviewResolved: boolean;
     annotations: { note: string }[];
   };
@@ -614,13 +645,20 @@ test("text-range selection produces a located annotation", async ({ page }) => {
     document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
 
-  await expect(page.locator('[data-test="annotation-note"]')).toBeVisible();
-  await page.locator('[data-test="annotation-note"]').fill("Is zero downtime really required?");
-  await page.locator('[data-test="add-to-queue"]').click();
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await expect(on(page).annotationNote()).toBeVisible();
+  await on(page).annotationNote().fill("Is zero downtime really required?");
+  await on(page).addToQueue().click();
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
 
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     annotations: { resolved: boolean; target: { kind: string; quote?: { exact: string } } }[];
   };
   expect(fb.annotations).toHaveLength(1);
@@ -640,33 +678,40 @@ test("a queued annotation can be edited before it is sent", async ({ page }) => 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
   // Picking a target puts the caret in the note: the click already said where,
   // so the next thing you do is type.
-  await expect(page.locator('[data-test="annotation-note"]')).toBeFocused();
-  await page.locator('[data-test="annotation-note"]').fill("Frist draft, typo");
-  await page.locator('[data-test="add-to-queue"]').click();
+  await expect(on(page).annotationNote()).toBeFocused();
+  await on(page).annotationNote().fill("Frist draft, typo");
+  await on(page).addToQueue().click();
 
   // Cancel restores the original note, leaving the queue untouched.
-  await page.locator('[data-test="edit-queued"]').click();
+  await on(page).editQueued().click();
   // Edit puts the caret in the box: opening an editor you then have to click is
   // not an editor.
-  await expect(page.locator('[data-test="edit-note"]')).toBeFocused();
-  await page.locator('[data-test="edit-note"]').fill("Discarded rewrite");
-  await page.locator('[data-test="cancel-edit"]').click();
-  await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
+  await expect(on(page).editNote()).toBeFocused();
+  await on(page).editNote().fill("Discarded rewrite");
+  await on(page).cancelEdit().click();
+  await expect(on(page).sendQueue()).toBeVisible();
   await expect(page.locator("[data-annotation-id]")).toContainText("Frist draft, typo");
 
   // An empty note is refused - Save stays disabled.
-  await page.locator('[data-test="edit-queued"]').click();
-  await page.locator('[data-test="edit-note"]').fill("   ");
-  await expect(page.locator('[data-test="save-edit"]')).toBeDisabled();
+  await on(page).editQueued().click();
+  await on(page).editNote().fill("   ");
+  await expect(on(page).saveEdit()).toBeDisabled();
 
   // Save rewrites the note in place, and that is what reaches the agent.
-  await page.locator('[data-test="edit-note"]').fill("Backfill in one batch, not nightly.");
-  await page.locator('[data-test="save-edit"]').click();
-  await expect(page.locator('[data-test="edit-note"]')).toHaveCount(0);
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await on(page).editNote().fill("Backfill in one batch, not nightly.");
+  await on(page).saveEdit().click();
+  await expect(on(page).editNote()).toHaveCount(0);
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
 
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     annotations: { note: string }[];
   };
   expect(fb.annotations).toHaveLength(1);
@@ -682,33 +727,44 @@ test("the record is chronological: queued cards hold their authored place", asyn
   // separate section pinned under the transcript, so every new message
   // appeared above the older queued item.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("Queued first");
-  await page.locator('[data-test="add-to-queue"]').click();
+  await on(page).annotationNote().fill("Queued first");
+  await on(page).addToQueue().click();
   // Queueing hands focus to the message composer - the flow the panel is
   // built around: point, note, Enter, keep talking.
-  await expect(page.locator('[data-test="message-input"]')).toBeFocused();
-  await page.locator('[data-test="message-input"]').fill("typed second");
-  await page.locator('[data-test="send-message"]').click();
+  await expect(on(page).messageInput()).toBeFocused();
+  await on(page).messageInput().fill("typed second");
+  await on(page).sendMessage().click();
   await expect(page.locator('[data-role="human"]')).toContainText("typed second");
 
+  // Built out here and passed IN: the callback runs in the browser, where
+  // `hook` does not exist. Interpolating it inside the callback typechecks
+  // perfectly and fails at runtime with `hook is not defined`.
+  const cards = `[data-role], ${hook("annotation")}, ${hook("queued-annotation")}`;
   const order = () =>
-    page.evaluate(() =>
-      Array.from(
-        document.querySelectorAll(
-          '[data-role], [data-test="annotation"], [data-test="queued-annotation"]',
+    page.evaluate(
+      (selector) =>
+        Array.from(document.querySelectorAll(selector)).map(
+          (el) => (el as HTMLElement).dataset.role ?? (el as HTMLElement).dataset.test,
         ),
-      ).map((el) => (el as HTMLElement).dataset.role ?? (el as HTMLElement).dataset.test),
+      cards,
     );
   expect(await order()).toEqual(["queued-annotation", "human"]);
 
   // Sending must not reorder: the event carries authoredAt, so the located
   // card takes the queued card's place instead of leapfrogging to send time.
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
   expect(await order()).toEqual(["annotation", "human"]);
 
   // And the agent sees the authorship time alongside the log time.
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     annotations: { note: string; authoredAt?: string; at: string }[];
   };
   const sent = fb.annotations[0];
@@ -721,17 +777,24 @@ test("a sent annotation stays in send order, not pinned above the replies", asyn
   const surface = surfaceOf(page);
   const annotate = async (sel: string, note: string) => {
     await surface.locator(sel).click();
-    await page.locator('[data-test="annotation-note"]').fill(note);
-    await page.locator('[data-test="add-to-queue"]').click();
-    await page.locator('[data-test="send-queue"]').click();
+    await on(page).annotationNote().fill(note);
+    await on(page).addToQueue().click();
+    await on(page).sendQueue().click();
   };
 
   await annotate('li[data-lucid-id="step-backfill"]', "first note");
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
-  await cli.run(["wait", cli.artifact, "--reply", "agent replied here", "--timeout", "1"]);
+  await expect(on(page).annotation()).toHaveCount(1);
+  await cli.run([
+    "wait",
+    cli.artifact,
+    "--reply",
+    "agent replied here",
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ]);
   await expect(page.locator('[data-role="agent"]')).toHaveCount(1);
   await annotate("#note", "second note");
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(2);
+  await expect(on(page).annotation()).toHaveCount(2);
 
   // The record is chronological: the later annotation sits BELOW the reply that
   // preceded it, rather than jumping into a pile above the conversation.
@@ -748,11 +811,11 @@ test("annotations on one element cascade instead of hiding each other", async ({
   const surface = surfaceOf(page);
   for (const note of ["first", "second"]) {
     await surface.locator("#note").click();
-    await page.locator('[data-test="annotation-note"]').fill(note);
-    await page.locator('[data-test="add-to-queue"]').click();
+    await on(page).annotationNote().fill(note);
+    await on(page).addToQueue().click();
   }
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(2);
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(2);
 
   // Same anchor -> same rect. Without a cascade both badges land on the same
   // pixel and only the last is reachable.
@@ -769,7 +832,7 @@ test("an image pasted onto an annotation reaches the agent, located", async ({ p
   const surface = surfaceOf(page);
 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("Looks like this instead");
+  await on(page).annotationNote().fill("Looks like this instead");
   await page.evaluate(async () => {
     const b64 =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -780,14 +843,14 @@ test("an image pasted onto an annotation reaches the agent, located", async ({ p
       .querySelector('[data-test="annotation-note"]')
       ?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
   });
-  await expect(page.locator('[data-test="annotation-chip"]')).toHaveCount(1);
+  await expect(on(page).annotationChip()).toHaveCount(1);
 
   // The image travels with the queued item, through to the sent card.
-  await page.locator('[data-test="add-to-queue"]').click();
-  await expect(page.locator('[data-test="annotation-chip"]')).toHaveCount(1);
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
-  await expect(page.locator('[data-test="annotation-thumb"]')).toHaveCount(1);
+  await on(page).addToQueue().click();
+  await expect(on(page).annotationChip()).toHaveCount(1);
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
+  await expect(on(page).annotationThumb()).toHaveCount(1);
 
   // It decoded, rather than merely resolving.
   const width = await page.evaluate(
@@ -799,7 +862,14 @@ test("an image pasted onto an annotation reaches the agent, located", async ({ p
 
   // The agent gets the anchor and the bytes together: an absolute path to read
   // and the note saying what is wrong.
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     annotations: { note: string; images?: { name: string; file: string; path: string }[] }[];
   };
   expect(fb.annotations).toHaveLength(1);
@@ -812,7 +882,7 @@ test("a pasted image still renders in the conversation after a reload", async ({
   await openViewer(page);
 
   // A 1x1 red PNG, pasted the way the browser delivers a real screenshot.
-  await page.locator('[data-test="message-input"]').click();
+  await on(page).messageInput().click();
   await page.evaluate(async () => {
     const b64 =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -823,17 +893,17 @@ test("a pasted image still renders in the conversation after a reload", async ({
     const ta = document.querySelector('[data-test="message-input"]') as HTMLTextAreaElement;
     ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
   });
-  await expect(page.locator('[data-test="image-chip"]')).toHaveCount(1);
+  await expect(on(page).imageChip()).toHaveCount(1);
 
-  await page.locator('[data-test="message-input"]').fill("look at this");
-  await page.locator('[data-test="send-message"]').click();
-  await expect(page.locator('[data-test="thumb"]')).toHaveCount(1);
+  await on(page).messageInput().fill("look at this");
+  await on(page).sendMessage().click();
+  await expect(on(page).thumb()).toHaveCount(1);
 
   // Reload: messages now come from the wait payload rather than the live SSE
   // frame. The payload rewrites images for the agent, and used to drop the
   // filename the viewer needs - so the thumb 404'd only after a reload.
   await page.reload();
-  await expect(page.locator('[data-test="thumb"]')).toHaveCount(1);
+  await expect(on(page).thumb()).toHaveCount(1);
   const decoded = await page.evaluate(() => {
     const img = document.querySelector('[data-test="thumb"] img') as HTMLImageElement | null;
     return img ? { src: img.getAttribute("src") ?? "", width: img.naturalWidth } : null;
@@ -849,7 +919,7 @@ test("a large text paste folds to a placeholder; the agent still gets every line
 
   // Forty lines of terminal output, pasted the way the browser delivers it.
   const wall = Array.from({ length: 40 }, (_, i) => `log line ${i}`).join("\n");
-  const ta = page.locator('[data-test="message-input"]');
+  const ta = on(page).messageInput();
   await ta.click();
   await page.evaluate((text) => {
     const dt = new DataTransfer();
@@ -862,18 +932,25 @@ test("a large text paste folds to a placeholder; the agent still gets every line
   // after it as if the paste were one token.
   await expect(ta).toHaveValue("[Pasted text #1 +40 lines]");
   await ta.pressSequentially(" - why did this fail?");
-  await page.locator('[data-test="send-message"]').click();
+  await on(page).sendMessage().click();
 
   // The human's turn renders folded: the head shows, the rest waits behind
   // the toggle, and expanding brings in the last line.
   const bubble = page.locator('[data-role="human"]');
-  await expect(page.locator('[data-test="fold-toggle"]')).toContainText("show 34 more lines");
+  await expect(on(page).foldToggle()).toContainText("show 34 more lines");
   await expect(bubble).not.toContainText("log line 39");
-  await page.locator('[data-test="fold-toggle"]').click();
+  await on(page).foldToggle().click();
   await expect(bubble).toContainText("log line 39 - why did this fail?");
 
   // The agent reads what was actually pasted, not the placeholder.
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     messages: { text: string }[];
     nextCursor: string;
   };
@@ -885,14 +962,14 @@ test("a large text paste folds to a placeholder; the agent still gets every line
   // A later message that literally quotes the placeholder must NOT expand -
   // the staged paste was spent by the send that used it.
   await ta.fill("what did [Pasted text #1 +40 lines] contain?");
-  await page.locator('[data-test="send-message"]').click();
+  await on(page).sendMessage().click();
   const fb2 = (await cli.run([
     "wait",
     cli.artifact,
     "--since",
     fb.nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { messages: { text: string }[] };
   expect(fb2.messages).toHaveLength(1);
   expect(fb2.messages[0]?.text).toBe("what did [Pasted text #1 +40 lines] contain?");
@@ -907,14 +984,21 @@ test("scrolled-up readers are not yanked; the floating button brings them back",
   // always "at bottom", which would pass every assertion here vacuously.
   const filler = "detail ".repeat(40);
   for (let i = 0; i < 12; i++) {
-    await cli.run(["wait", cli.artifact, "--reply", `filler ${i}: ${filler}`, "--timeout", "1"]);
+    await cli.run([
+      "wait",
+      cli.artifact,
+      "--reply",
+      `filler ${i}: ${filler}`,
+      "--timeout",
+      waitTimeoutSeconds(1),
+    ]);
   }
   await expect(page.locator('[data-role="agent"]')).toHaveCount(12);
-  const vp = page.locator('[data-test="thread-viewport"]');
+  const vp = on(page).threadViewport();
   expect(await vp.evaluate((el) => el.scrollHeight > el.clientHeight + 100)).toBe(true);
 
   // Pinned to the bottom, the button is disabled and hidden.
-  await expect(page.locator('[data-test="scroll-bottom"]')).toBeDisabled();
+  await expect(on(page).scrollBottom()).toBeDisabled();
 
   // Scroll up the way a reader does - with the wheel; a new agent reply must
   // NOT yank the reader down.
@@ -927,14 +1011,14 @@ test("scrolled-up readers are not yanked; the floating button brings them back",
     "--reply",
     "one more while you were reading",
     "--timeout",
-    "1",
+    waitTimeoutSeconds(1),
   ]);
   await expect(page.locator('[data-role="agent"]')).toHaveCount(13);
   await page.waitForTimeout(400); // any yank would have happened by now
   expect(await vp.evaluate((el) => el.scrollTop)).toBeLessThan(50);
 
   // The affordance is live while scrolled up, and returns the reader.
-  const btn = page.locator('[data-test="scroll-bottom"]');
+  const btn = on(page).scrollBottom();
   await expect(btn).toBeEnabled();
   await btn.click();
   await expect
@@ -950,33 +1034,40 @@ test("the working indicator opens when the agent takes delivery and closes on it
   const surface = surfaceOf(page);
 
   // No agent has taken anything yet.
-  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+  await expect(on(page).agentWorking()).toHaveCount(0);
 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("Backfill in one batch");
-  await page.locator('[data-test="add-to-queue"]').click();
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await on(page).annotationNote().fill("Backfill in one batch");
+  await on(page).addToQueue().click();
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
 
   // The agent takes delivery: wait returns feedback and acks it. The viewer
   // flips to "agent is working".
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     status: string;
     nextCursor: string;
   };
   expect(fb.status).toBe("feedback");
-  await expect(page.locator('[data-test="agent-working"]')).toBeVisible();
-  await expect(page.locator('[data-test="agent-working"]')).toContainText("Agent responding");
+  await expect(on(page).agentWorking()).toBeVisible();
+  await expect(on(page).agentWorking()).toContainText("Agent responding");
 
   // The agent's reply closes the window.
-  await cli.run(["wait", cli.artifact, "--reply", "Batched.", "--timeout", "1"]);
-  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+  await cli.run(["wait", cli.artifact, "--reply", "Batched.", "--timeout", waitTimeoutSeconds(1)]);
+  await expect(on(page).agentWorking()).toHaveCount(0);
   await expect(page.locator('[data-role="agent"]')).toContainText("Batched.");
 });
 
 test("the composer says whether an agent is listening", async ({ page }) => {
   await openViewer(page);
-  const line = page.locator('[data-test="listener-line"]');
+  const line = on(page).listenerLine();
 
   // Nobody is waiting on a fresh session.
   await expect(line).toHaveAttribute("data-listening", "false");
@@ -987,7 +1078,14 @@ test("the composer says whether an agent is listening", async ({ page }) => {
 
   // An agent blocks in wait: its waker connects and the line flips - live via
   // the synthetic listeners frame, no reload.
-  const waiting = cli.run(["wait", cli.artifact, "--since", "evt_00001", "--timeout", "6"]);
+  const waiting = cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    "evt_00001",
+    "--timeout",
+    waitTimeoutSeconds(6),
+  ]);
   await expect(line).toHaveAttribute("data-listening", "true");
   await expect(line).toContainText("agent listening");
 
@@ -1010,8 +1108,8 @@ test("declared revise intent puts an update-on-the-way spinner on the surface", 
       body: JSON.stringify({ id: "i-ack" }),
     }),
   );
-  await expect(page.locator('[data-test="agent-working"]')).toContainText("Agent responding");
-  await expect(page.locator('[data-test="surface-updating"]')).toHaveCount(0);
+  await expect(on(page).agentWorking()).toContainText("Agent responding");
+  await expect(on(page).surfaceUpdating()).toHaveCount(0);
 
   await page.evaluate(() =>
     fetch("/__lucid/ack", {
@@ -1020,69 +1118,69 @@ test("declared revise intent puts an update-on-the-way spinner on the surface", 
       body: JSON.stringify({ id: "i-intent", intent: "revise" }),
     }),
   );
-  await expect(page.locator('[data-test="surface-updating"]')).toBeVisible();
-  await expect(page.locator('[data-test="agent-working"]')).toContainText("Updating the artifact");
+  await expect(on(page).surfaceUpdating()).toBeVisible();
+  await expect(on(page).agentWorking()).toContainText("Updating the artifact");
 
   // Real output closes the window and the spinner with it.
-  await cli.run(["wait", cli.artifact, "--reply", "done", "--timeout", "1"]);
-  await expect(page.locator('[data-test="surface-updating"]')).toHaveCount(0);
-  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+  await cli.run(["wait", cli.artifact, "--reply", "done", "--timeout", waitTimeoutSeconds(1)]);
+  await expect(on(page).surfaceUpdating()).toHaveCount(0);
+  await expect(on(page).agentWorking()).toHaveCount(0);
 });
 
 test("a dropped live connection shows a self-clearing indicator, not a warning pile", async ({
   page,
 }) => {
   await openViewer(page);
-  await expect(page.locator('[data-test="reconnecting"]')).toHaveCount(0);
+  await expect(on(page).reconnecting()).toHaveCount(0);
 
   // Stop the server out from under the viewer.
   await cli.run(["end", cli.artifact]);
-  await expect(page.locator('[data-test="reconnecting"]')).toBeVisible();
+  await expect(on(page).reconnecting()).toBeVisible();
 
   // EventSource retries by itself, so this must never tell the human to reload,
   // and must never pile up one warning per failed attempt.
   await page.waitForTimeout(1500);
-  await expect(page.locator('[data-test="reconnecting"]')).toHaveCount(1);
+  await expect(on(page).reconnecting()).toHaveCount(1);
   await expect(page.locator("body")).not.toContainText("reload to resume");
 
   // ...and it clears itself once the stream is back.
   await cli.run(["open", cli.artifact]);
-  await expect(page.locator('[data-test="reconnecting"]')).toHaveCount(0, { timeout: 15_000 });
+  await expect(on(page).reconnecting()).toHaveCount(0, { timeout: 15_000 });
 });
 
 test("a message sent at a dead server is kept, not eaten, and delivers itself on reconnect", async ({
   page,
 }) => {
   await openViewer(page);
-  const composer = page.locator('[data-test="message-input"]');
+  const composer = on(page).messageInput();
   const first = "Confirm the routing: Patch re-enters at Test, not Build.";
   const second = "Also: Land is the right name for the phase, not Merge.";
 
   // The server goes out from under the viewer - the failure this whole path
   // exists for. The composer keeps working; only the POST cannot land.
   await cli.run(["end", cli.artifact]);
-  await expect(page.locator('[data-test="reconnecting"]')).toBeVisible();
+  await expect(on(page).reconnecting()).toBeVisible();
 
   await composer.fill(first);
-  await page.locator('[data-test="send-message"]').click();
+  await on(page).sendMessage().click();
 
   // assistant-ui empties the composer on Enter, so this card is the only place
   // the typing still exists. It must exist.
-  await expect(page.locator('[data-test="unsent-message"]')).toContainText(first);
+  await expect(on(page).unsentMessage()).toContainText(first);
   await expect(composer).toHaveValue("");
   // ...and be recoverable by hand, not just by retry.
-  await expect(page.locator('[data-test="copy-unsent"]')).toBeVisible();
+  await expect(on(page).copyUnsent()).toBeVisible();
 
   // A second message during the same outage gets its own card. Nothing may hide
   // behind the first: an invisible entry still blocks approval, with no way to
   // retry or discard it.
   await composer.fill(second);
-  await page.locator('[data-test="send-message"]').click();
-  await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(2);
+  await on(page).sendMessage().click();
+  await expect(on(page).unsentMessage()).toHaveCount(2);
 
   // Approving would strand them behind a stop the agent has already acted on.
-  await expect(page.locator('[data-test="approve"]')).toBeDisabled();
-  await page.locator('[data-test="approve-wrap"]').hover();
+  await expect(on(page).approve()).toBeDisabled();
+  await on(page).approveWrap().hover();
   await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(
     "2 undelivered messages",
   );
@@ -1099,12 +1197,12 @@ test("a message sent at a dead server is kept, not eaten, and delivers itself on
 
   // The restored outbox drains on its own - no gesture from the human - and both
   // messages take their normal place in the record, in the order they were typed.
-  await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(0, { timeout: 20_000 });
+  await expect(on(page).unsentMessage()).toHaveCount(0, { timeout: 20_000 });
   const humanTurns = page.locator('[data-role="human"]');
   await expect(humanTurns).toHaveCount(2);
   await expect(humanTurns.first()).toContainText("Patch re-enters at Test");
   await expect(humanTurns.last()).toContainText("Land is the right name");
-  await expect(page.locator('[data-test="approve"]')).toBeEnabled();
+  await expect(on(page).approve()).toBeEnabled();
 
   // And the agent actually receives them - the cards were never a consolation prize.
   const fb = (await cli.run([
@@ -1113,7 +1211,7 @@ test("a message sent at a dead server is kept, not eaten, and delivers itself on
     "--since",
     reopened.nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { status: string; messages: { role: string; text: string }[] };
   expect(fb.status).toBe("feedback");
   const delivered = fb.messages.filter((m) => m.role === "human").map((m) => m.text);
@@ -1126,15 +1224,15 @@ test("a stale viewer never posts its message into whichever session took its por
 }) => {
   await openViewer(page);
   const stale = page.url();
-  const composer = page.locator('[data-test="message-input"]');
+  const composer = on(page).messageInput();
 
   // This session goes away, freeing its port back to the shared pool.
   await cli.run(["end", cli.artifact]);
-  await expect(page.locator('[data-test="reconnecting"]')).toBeVisible();
+  await expect(on(page).reconnecting()).toBeVisible();
 
   await composer.fill("Renumber the phases in the overview.");
-  await page.locator('[data-test="send-message"]').click();
-  await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(1);
+  await on(page).sendMessage().click();
+  await expect(on(page).unsentMessage()).toHaveCount(1);
 
   // A DIFFERENT artifact opens and takes that address. The stale tab's stream
   // reconnects to it quite happily - but the message belongs to the old session,
@@ -1147,7 +1245,7 @@ test("a stale viewer never posts its message into whichever session took its por
     };
     test.skip(new URL(otherSession.url).port !== new URL(stale).port, "port was not reused");
 
-    await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(1);
+    await expect(on(page).unsentMessage()).toHaveCount(1);
     await expect(page.locator("body")).toContainText("A different session is running");
 
     // The other session's agent must see nothing at all.
@@ -1157,7 +1255,7 @@ test("a stale viewer never posts its message into whichever session took its por
       "--since",
       otherSession.nextCursor,
       "--timeout",
-      "2",
+      waitTimeoutSeconds(2),
     ])) as { messages?: { role: string }[] };
     expect(fb.messages?.some((m) => m.role === "human") ?? false).toBe(false);
   } finally {
@@ -1211,25 +1309,25 @@ test("the panel tabs switch between review and sessions, and the panel collapses
   const gap = page.locator('[data-slot="sidebar-gap"]');
 
   // The review tab is the default face of the panel; the composer is present.
-  await expect(page.locator('[data-test="message-input"]')).toBeVisible();
+  await expect(on(page).messageInput()).toBeVisible();
   const openWidth = Number.parseFloat(await gap.evaluate((el) => getComputedStyle(el).width));
   expect(openWidth).toBeGreaterThan(300);
 
   // Switch to Sessions: the current session lists itself as "you are here", and
   // the composer survives underneath (keepMounted), it is only hidden.
-  await page.locator('[data-test="tab-sessions"]').click();
-  await expect(page.locator('[data-test="sessions-list"]')).toBeVisible();
-  await expect(page.locator('[data-test="session-row"]')).toHaveCount(1);
-  await expect(page.locator('[data-test="sessions-list"]')).toContainText("you are here");
-  await expect(page.locator('[data-test="message-input"]')).toBeHidden();
+  await on(page).tabSessions().click();
+  await expect(on(page).sessionsList()).toBeVisible();
+  await expect(on(page).sessionRow()).toHaveCount(1);
+  await expect(on(page).sessionsList()).toContainText("you are here");
+  await expect(on(page).messageInput()).toBeHidden();
 
   // Back to review; the composer is shown again, never remounted.
-  await page.locator('[data-test="tab-chat"]').click();
-  await expect(page.locator('[data-test="message-input"]')).toBeVisible();
+  await on(page).tabChat().click();
+  await expect(on(page).messageInput()).toBeVisible();
 
   // Closing the panel collapses the gap to zero - the artifact reflows into the
   // space rather than being covered by an overlay.
-  await page.locator('[data-test="panel-toggle"]').click();
+  await on(page).panelToggle().click();
   await expect
     .poll(async () => Number.parseFloat(await gap.evaluate((el) => getComputedStyle(el).width)))
     .toBe(0);
@@ -1237,7 +1335,7 @@ test("the panel tabs switch between review and sessions, and the panel collapses
   await expect(page.locator('[aria-label="Resize the review panel"]')).toHaveCount(0);
 
   // Reopen restores the panel to its width.
-  await page.locator('[data-test="panel-toggle"]').click();
+  await on(page).panelToggle().click();
   await expect
     .poll(async () => Number.parseFloat(await gap.evaluate((el) => getComputedStyle(el).width)))
     .toBe(openWidth);
@@ -1247,15 +1345,15 @@ test("the target toggle quiets the surface for reading and restores it", async (
   await openViewer(page);
   const surface = surfaceOf(page);
   const marker = surface.locator(".marker");
-  const toggle = page.locator('[data-test="toggle-targets"]');
+  const toggle = on(page).toggleTargets();
 
   // Targets are on by default, so a sent annotation paints a mark.
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("A note");
-  await page.locator('[data-test="add-to-queue"]').click();
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await on(page).annotationNote().fill("A note");
+  await on(page).addToQueue().click();
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
   await expect(marker).toHaveCount(1);
 
   // Read mode: marks gone, and clicking the artifact no longer picks a target -
@@ -1264,10 +1362,10 @@ test("the target toggle quiets the surface for reading and restores it", async (
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await expect(marker).toHaveCount(0);
   await surface.locator("#note").click();
-  await expect(page.locator('[data-test="annotation-note"]')).toHaveCount(0);
+  await expect(on(page).annotationNote()).toHaveCount(0);
 
   // The annotation itself is untouched - this is a view preference, not a delete.
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await expect(on(page).annotation()).toHaveCount(1);
 
   // Toggling back repaints from anchors the overlay kept the whole time.
   await toggle.click();
@@ -1281,16 +1379,16 @@ test("change-view hunk navigation does not steal keys from a text field", async 
 
   // Commit v2 so change view is reachable, then queue an annotation and edit it.
   await cli.write(PLAN_V2);
-  await expect(page.locator('[data-test="version"]')).toContainText("v2");
+  await expect(on(page).version()).toContainText("v2");
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("ABCDEF");
-  await page.locator('[data-test="add-to-queue"]').click();
-  await page.locator('[data-test="enter-diff"]').click();
-  await expect(page.locator('[data-test="enter-diff"]')).toHaveCount(0);
-  await page.locator('[data-test="edit-queued"]').click();
+  await on(page).annotationNote().fill("ABCDEF");
+  await on(page).addToQueue().click();
+  await on(page).enterDiff().click();
+  await expect(on(page).enterDiff()).toHaveCount(0);
+  await on(page).editQueued().click();
 
   // Arrows move the caret rather than jumping hunks...
-  const box = page.locator('[data-test="edit-note"]');
+  const box = on(page).editNote();
   await box.click();
   await box.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(4, 4));
   await page.keyboard.press("ArrowLeft");
@@ -1299,7 +1397,7 @@ test("change-view hunk navigation does not steal keys from a text field", async 
   // ...and Escape cancels the edit without also exiting change view.
   await page.keyboard.press("Escape");
   await expect(box).toHaveCount(0);
-  await expect(page.locator('[data-test="enter-diff"]')).toHaveCount(0);
+  await expect(on(page).enterDiff()).toHaveCount(0);
 });
 
 test("defer-until-committed shows the newer-version indicator and never loses a draft", async ({
@@ -1310,19 +1408,19 @@ test("defer-until-committed shows the newer-version indicator and never loses a 
 
   // Compose (but do not send) an annotation - a committed-but-unsent draft.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("Draft in flight");
-  await page.locator('[data-test="add-to-queue"]').click();
-  await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
+  await on(page).annotationNote().fill("Draft in flight");
+  await on(page).addToQueue().click();
+  await expect(on(page).sendQueue()).toBeVisible();
 
   // A new version arrives while the draft is queued -> swap deferred, indicator shown.
   await cli.write(PLAN_V2);
-  await expect(page.locator('[data-test="newer-version"]')).toBeVisible();
+  await expect(on(page).newerVersion()).toBeVisible();
   // Surface still shows the old version (swap deferred).
   await expect(surface.locator("h1")).not.toContainText("revised");
 
   // Sending the draft releases the deferred swap.
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="newer-version"]')).toHaveCount(0);
+  await on(page).sendQueue().click();
+  await expect(on(page).newerVersion()).toHaveCount(0);
   await expect(surface.locator("h1")).toContainText("revised");
 });
 
@@ -1331,26 +1429,26 @@ test("the newer-version banner names the real blocker and only offers a live dis
 }) => {
   await openViewer(page);
   const surface = surfaceOf(page);
-  const banner = page.locator('[data-test="newer-version"]');
+  const banner = on(page).newerVersion();
 
   // A queue is not discardable, so the banner must ask for a send and show no
   // Discard button - it could only ever clear the composer, not the queue.
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("Queued work");
-  await page.locator('[data-test="add-to-queue"]').click();
+  await on(page).annotationNote().fill("Queued work");
+  await on(page).addToQueue().click();
   await cli.write(PLAN_V2);
   await expect(banner).toContainText("send your 1 queued annotation to see it");
-  await expect(page.locator('[data-test="discard-draft"]')).toHaveCount(0);
+  await expect(on(page).discardDraft()).toHaveCount(0);
 
   // A composer draft on top of the queue is discardable, so the button returns.
   await surface.locator("#note").click();
-  await page.locator('[data-test="annotation-note"]').fill("Composer draft");
+  await on(page).annotationNote().fill("Composer draft");
   await expect(banner).toContainText("or discard your draft");
-  await expect(page.locator('[data-test="discard-draft"]')).toBeVisible();
+  await expect(on(page).discardDraft()).toBeVisible();
 
   // Discarding it clears only the composer - the queue survives, swap still deferred.
-  await page.locator('[data-test="discard-draft"]').click();
-  await expect(page.locator('[data-test="send-queue"]')).toBeVisible();
+  await on(page).discardDraft().click();
+  await expect(on(page).sendQueue()).toBeVisible();
   await expect(page.locator("[data-annotation-id]")).toContainText("Queued work");
   await expect(banner).toContainText("send your 1 queued annotation to see it");
   await expect(surface.locator("h1")).not.toContainText("revised");
@@ -1363,19 +1461,26 @@ test("agent question surfaces in the viewer and the answer reaches the agent", a
   await cli.run(["ask", cli.artifact, "--text", "Should backfill run before the cutover?"]);
 
   // It surfaces in the drawer over the artifact.
-  await expect(page.locator('[data-test="question"]')).toContainText("Should backfill run before");
+  await expect(on(page).question()).toContainText("Should backfill run before");
 
   // Human answers it.
-  await page.locator('[data-test="free-text"]').fill("Yes - backfill must finish first.");
-  await page.locator('[data-test="answer"]').click();
+  await on(page).freeText().fill("Yes - backfill must finish first.");
+  await on(page).answer().click();
   // Answered -> the drawer goes away and the question enters the RECORD, as one
   // question+answer item at the answer moment (D14).
-  await expect(page.locator('[data-test="question-drawer"]')).toHaveCount(0);
-  await expect(page.locator('[data-test="qa"]')).toContainText("Should backfill run before");
-  await expect(page.locator('[data-test="qa-answer"]')).toContainText("backfill must finish first");
+  await expect(on(page).questionDrawer()).toHaveCount(0);
+  await expect(on(page).qa()).toContainText("Should backfill run before");
+  await expect(on(page).qaAnswer()).toContainText("backfill must finish first");
 
   // The answer reaches the agent as feedback.
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     status: string;
     questions?: { answered: boolean; answer?: string }[];
   };
@@ -1391,12 +1496,12 @@ test("diff view shows changes since a version and revert reaches the agent", asy
   // Agent revises v1 -> v2; the viewer live-reloads.
   await cli.write(PLAN_V2);
   await expect(surface.locator("h1")).toContainText("revised");
-  await expect(page.locator('[data-test="version"]')).toContainText("v2");
+  await expect(on(page).version()).toContainText("v2");
 
   // Enter the change view.
-  await page.locator('[data-test="enter-diff"]').click();
-  await expect(page.locator('[data-test="diff-bar"]')).toBeVisible();
-  await expect(page.locator('[data-test="diff-count"]')).toContainText("/");
+  await on(page).enterDiff().click();
+  await expect(on(page).diffBar()).toBeVisible();
+  await expect(on(page).diffCount()).toContainText("/");
 
   // The surface shows in-place diff markup (sage adds/changes, ghost removes).
   // A changed block stacks its old version over the new one, in place.
@@ -1405,16 +1510,23 @@ test("diff view shows changes since a version and revert reaches the agent", asy
 
   // An undo needs no essay: the box is empty, the button still works, and the
   // agent receives an instruction that reads on its own.
-  await expect(page.locator('[data-test="revert"]')).toBeEnabled();
+  await expect(on(page).revert()).toBeEnabled();
   // And the button says what a revert IS - a request to the agent, not an undo
   // the viewer performs.
-  await page.locator('[data-test="revert"]').hover();
+  await on(page).revert().hover();
   await expect(page.locator('[data-slot="tooltip-content"]')).toContainText("Forward-only");
   // With a reason, that reason is what reaches the agent.
-  await page.locator('[data-test="revert-why"]').fill("keep the nightly backfill");
-  await page.locator('[data-test="revert"]').click();
+  await on(page).revertWhy().fill("keep the nightly backfill");
+  await on(page).revert().click();
 
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     status: string;
     nextCursor: string;
     reverts?: { targetVersion: number; why: string }[];
@@ -1423,15 +1535,22 @@ test("diff view shows changes since a version and revert reaches the agent", asy
   expect(fb.reverts?.[0]?.why).toContain("nightly backfill");
 
   const cursor2 = fb.nextCursor;
-  await page.locator('[data-test="revert"]').click();
-  const blank = (await cli.run(["wait", cli.artifact, "--since", cursor2, "--timeout", "8"])) as {
+  await on(page).revert().click();
+  const blank = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    cursor2,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     reverts?: { targetVersion: number; why: string }[];
   };
   expect(blank.reverts?.[0]?.why).toContain("restore to v1");
 
   // Exit the change view.
-  await page.locator('[data-test="diff-done"]').click();
-  await expect(page.locator('[data-test="diff-bar"]')).toHaveCount(0);
+  await on(page).diffDone().click();
+  await expect(on(page).diffBar()).toHaveCount(0);
 });
 
 /**
@@ -1482,12 +1601,12 @@ test("the paper toggle re-themes the artifact itself, and the choice survives a 
   const root = surface.locator("html");
 
   // Light is the default: paper is the ground every artifact is designed on.
-  await expect(page.locator('[data-test="theme-toggle"]')).toHaveAttribute("data-theme", "light");
+  await expect(on(page).themeToggle()).toHaveAttribute("data-theme", "light");
   await expect(root).toHaveAttribute("data-lucid-theme", "light");
 
   // The toggle reaches INSIDE the artifact document - the tokens it remaps are
   // what an artifact's own colors resolve through.
-  await page.locator('[data-test="theme-toggle"]').click();
+  await on(page).themeToggle().click();
   await expect(root).toHaveAttribute("data-lucid-theme", "dark");
   const dark = await surface
     .locator("html")
@@ -1496,11 +1615,11 @@ test("the paper toggle re-themes the artifact itself, and the choice survives a 
 
   // A theme belongs to the eyes reading, so it outlives the page.
   await page.reload();
-  await expect(page.locator('[data-test="theme-toggle"]')).toHaveAttribute("data-theme", "dark");
+  await expect(on(page).themeToggle()).toHaveAttribute("data-theme", "dark");
   await expect(surfaceOf(page).locator("html")).toHaveAttribute("data-lucid-theme", "dark");
 
   // And back, without leaving the artifact on the wrong palette.
-  await page.locator('[data-test="theme-toggle"]').click();
+  await on(page).themeToggle().click();
   await expect(surfaceOf(page).locator("html")).toHaveAttribute("data-lucid-theme", "light");
   const light = await surfaceOf(page)
     .locator("html")

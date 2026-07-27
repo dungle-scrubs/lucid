@@ -1,9 +1,18 @@
+import { hook, on } from "./locators.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { MAIN, openIntoHub, PLAN_V1, startHub, type Cli, type Hub } from "./helpers.ts";
+import {
+  MAIN,
+  PLAN_V1,
+  openIntoHub,
+  startHub,
+  type Cli,
+  type Hub,
+  waitTimeoutSeconds,
+} from "./helpers.ts";
 
 /**
  * The human picks the harness's MODEL and EFFORT: in the create dialog for a
@@ -73,33 +82,33 @@ test("the create dialog offers the registry's models and the pick reaches the ar
   cli = opened.cli;
 
   await page.goto(opened.shellUrl);
-  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
-  await page.locator('[data-test="tab-add"]').click();
-  await page.locator('[data-test="new-artifact"]').click();
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await on(page).tabAdd().click();
+  await on(page).newArtifact().click();
 
   // Both pickers exist because the registry declares both lists, and each
   // opens on "default" - the row that sends nothing and lets the CLI decide.
-  await expect(page.locator('[data-test="create-model"]')).toContainText("default (opus-4.8)");
-  await expect(page.locator('[data-test="create-effort"]')).toContainText("default (medium)");
+  await expect(on(page).createModel()).toContainText("default (opus-4.8)");
+  await expect(on(page).createEffort()).toContainText("default (medium)");
 
   // The ladder follows the MODEL: with none picked, the default model's own
   // efforts apply, so the harness-wide extras are not on offer.
-  await page.locator('[data-test="create-effort"]').click();
+  await on(page).createEffort().click();
   await expect(page.getByRole("option", { name: "high", exact: true })).toBeVisible();
   await expect(page.getByRole("option", { name: "xhigh", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
 
   // A model with no efforts of its own falls back to the harness ladder, and
   // the extra rungs appear.
-  await page.locator('[data-test="create-model"]').click();
+  await on(page).createModel().click();
   await page.getByRole("option", { name: /Sonnet 5/ }).click();
-  await page.locator('[data-test="create-effort"]').click();
+  await on(page).createEffort().click();
   await page.getByRole("option", { name: "xhigh", exact: true }).click();
 
-  await page.locator('[data-test="create-name"]').fill("authored");
-  await page.locator('[data-test="create-prompt"]').fill("a rollout plan for billing");
-  await page.locator('[data-test="create-submit"]').click();
-  await expect(page.locator('[data-test="create-authoring"]')).toBeVisible();
+  await on(page).createName().fill("authored");
+  await on(page).createPrompt().fill("a rollout plan for billing");
+  await on(page).createSubmit().click();
+  await expect(on(page).createAuthoring()).toBeVisible();
 
   // The harness's own flags, in the recipe's argv: the adapter put them right
   // after the executable, where a positional prompt cannot swallow them.
@@ -122,17 +131,15 @@ test("the chat pickers write the artifact's sticky selection", async ({ page }) 
   cli = opened.cli;
 
   await page.goto(opened.shellUrl);
-  const pickers = page.locator('[data-test="selection-pickers"]:visible');
+  const pickers = page.locator(`${hook("selection-pickers")}:visible`);
   await expect(pickers).toHaveAttribute("data-readonly", "false");
-  await expect(pickers.locator('[data-test="selection-model"]')).toContainText(
-    "default (opus-4.8)",
-  );
+  await expect(on(pickers).selectionModel()).toContainText("default (opus-4.8)");
 
-  await pickers.locator('[data-test="selection-model"]').click();
+  await on(pickers).selectionModel().click();
   await page.getByRole("option", { name: /Opus 4\.8/ }).click();
-  await expect(pickers.locator('[data-test="selection-model"]')).toContainText("Opus 4.8");
+  await expect(on(pickers).selectionModel()).toContainText("Opus 4.8");
 
-  await pickers.locator('[data-test="selection-effort"]').click();
+  await on(pickers).selectionEffort().click();
   await page.getByRole("option", { name: "high", exact: true }).click();
 
   const file = selectionFile(cli);
@@ -163,21 +170,25 @@ test("an attending session's own model is shown, not offered", async ({ page }) 
     "evt_00001",
   ];
   await new Promise<void>((resolve) => {
-    const done = spawn("bun", [...waitArgs, "--timeout", "1"], { env, stdio: "ignore" });
+    const done = spawn("bun", [...waitArgs, "--timeout", waitTimeoutSeconds(1)], {
+      env,
+      stdio: "ignore",
+    });
     done.once("exit", () => resolve());
   });
-  listener = spawn("bun", [...waitArgs, "--timeout", "30"], { env, stdio: "ignore" });
+  listener = spawn("bun", [...waitArgs, "--timeout", waitTimeoutSeconds(30)], {
+    env,
+    stdio: "ignore",
+  });
 
   await page.goto(opened.shellUrl);
-  const pickers = page.locator('[data-test="selection-pickers"]:visible');
+  const pickers = page.locator(`${hook("selection-pickers")}:visible`);
   // Lucid cannot move a live conversation onto another model, so the pickers
   // report the attendant's own instead of offering a choice that would lie.
   await expect(pickers).toHaveAttribute("data-readonly", "true", { timeout: 20_000 });
-  await expect(pickers.locator('[data-test="selection-model"]')).toContainText("Opus 4.8");
-  await expect(pickers.locator('[data-test="selection-effort"]')).toContainText(
-    "inherited from claude-code",
-  );
-  await pickers.locator('[data-test="selection-model"]').hover();
+  await expect(on(pickers).selectionModel()).toContainText("Opus 4.8");
+  await expect(on(pickers).selectionEffort()).toContainText("inherited from claude-code");
+  await on(pickers).selectionModel().hover();
   await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(
     "an interactive session runs its own model",
   );
@@ -195,7 +206,7 @@ test("an attendant arriving mid-session is read afresh, not from the open tab's 
   // attendant at all. Presence frames carry only a count, so without a re-read
   // the row would flip to a readout of nothing the moment an agent arrived.
   await page.goto(opened.shellUrl);
-  const pickers = page.locator('[data-test="selection-pickers"]:visible');
+  const pickers = page.locator(`${hook("selection-pickers")}:visible`);
   await expect(pickers).toHaveAttribute("data-readonly", "false", { timeout: 20_000 });
 
   const env = { ...hub.env, LUCID_HARNESS: "claude-code", LUCID_MODEL: "sonnet-5" };
@@ -210,11 +221,17 @@ test("an attendant arriving mid-session is read afresh, not from the open tab's 
     "evt_00001",
   ];
   await new Promise<void>((resolve) => {
-    const done = spawn("bun", [...waitArgs, "--timeout", "1"], { env, stdio: "ignore" });
+    const done = spawn("bun", [...waitArgs, "--timeout", waitTimeoutSeconds(1)], {
+      env,
+      stdio: "ignore",
+    });
     done.once("exit", () => resolve());
   });
-  listener = spawn("bun", [...waitArgs, "--timeout", "30"], { env, stdio: "ignore" });
+  listener = spawn("bun", [...waitArgs, "--timeout", waitTimeoutSeconds(30)], {
+    env,
+    stdio: "ignore",
+  });
 
   await expect(pickers).toHaveAttribute("data-readonly", "true", { timeout: 20_000 });
-  await expect(pickers.locator('[data-test="selection-model"]')).toContainText("Sonnet 5");
+  await expect(on(pickers).selectionModel()).toContainText("Sonnet 5");
 });

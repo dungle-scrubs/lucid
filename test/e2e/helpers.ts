@@ -16,7 +16,7 @@ export { interpretCliResult, type CliOutcome } from "./cli-result.ts";
 // `harnessEnv`, so publishing it here would hand every future test the one
 // function that can read the developer's real home. `hub.ts` imports it
 // directly, which is the only caller that should.
-export { MAIN, makeCli, type Cli } from "./cli.ts";
+export { MAIN, makeCli, waitTimeoutSeconds, type Cli } from "./cli.ts";
 export * from "./hub.ts";
 export * from "./visual.ts";
 export * from "./fixtures.ts";

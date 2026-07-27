@@ -1,3 +1,4 @@
+import { on } from "./locators.ts";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
@@ -95,7 +96,7 @@ test("every text token stays legible in BOTH themes on a dark machine", async ({
 
   const light = (await measure()) as Record<string, { fg: string; bg: string; ratio: number }>;
   console.log("LIGHT (OS is dark):", JSON.stringify(light, null, 1));
-  await page.locator('[data-test="theme-toggle"]').click();
+  await on(page).themeToggle().click();
   await expect(surface.locator("html")).toHaveAttribute("data-lucid-theme", "dark");
   const dark = (await measure()) as Record<string, { fg: string; bg: string; ratio: number }>;
   console.log("DARK:", JSON.stringify(dark, null, 1));
@@ -130,9 +131,9 @@ test("an artifact with no dark form is left in the one it has", async ({ page })
   const surface = surfaceOf(page);
   await expect(surface.locator("h2")).toBeVisible();
 
-  await page.locator('[data-test="theme-toggle"]').click();
+  await on(page).themeToggle().click();
   // The toggle records the human's choice...
-  await expect(page.locator('[data-test="theme-toggle"]')).toHaveAttribute("data-theme", "dark");
+  await expect(on(page).themeToggle()).toHaveAttribute("data-theme", "dark");
   // ...but this document stays in its only form.
   //
   // Settled first, then read once. A correct implementation produces NO change
@@ -175,7 +176,7 @@ test("an artifact whose dark form is its own media block follows every toggle", 
   const root = surface.locator("html");
   await expect(surface.locator("h2")).toBeVisible();
 
-  const toggle = page.locator('[data-test="theme-toggle"]');
+  const toggle = on(page).themeToggle();
   await toggle.click();
   await expect(root).toHaveAttribute("data-lucid-theme", "dark");
   await toggle.click();
@@ -228,7 +229,7 @@ test("an artifact whose tokens live in a linked sheet still follows the toggle",
   // assertion below would be measuring a document with no styling at all.
   await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(250, 246, 236)");
 
-  await page.locator('[data-test="theme-toggle"]').click();
+  await on(page).themeToggle().click();
   await expect(surface.locator("html")).toHaveAttribute("data-lucid-theme", "dark");
   await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(33, 29, 21)");
 });

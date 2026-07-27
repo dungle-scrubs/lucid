@@ -1,3 +1,4 @@
+import { on } from "../locators.ts";
 import { expect, test } from "@playwright/test";
 import { makeCli, surfaceOf, type Cli } from "../helpers.ts";
 
@@ -49,10 +50,10 @@ test("an annotation on the third identical cell marks the third, not the first",
   // therefore an identical fingerprint to the other two.
   const third = surface.locator("tr:nth-child(3) td.status");
   await third.click();
-  await page.locator('[data-test="annotation-note"]').fill("This one is overdue");
-  await page.locator('[data-test="add-to-queue"]').click();
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await on(page).annotationNote().fill("This one is overdue");
+  await on(page).addToQueue().click();
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
 
   const cell = await third.boundingBox();
   const mark = await surface.locator("[data-annotation-id]").first().boundingBox();

@@ -1,3 +1,4 @@
+import { hook, on } from "../locators.ts";
 import { expect, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -41,14 +42,14 @@ test("a reload keeps the tabs that were open, and the one in front", async ({ pa
   await cli.run(["open", second]);
 
   await page.goto(opened.shellUrl);
-  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
-  await page.locator('[data-test="tab-add"]').click();
-  await page.locator('[data-test="picker-row"]').first().click();
-  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await on(page).tabAdd().click();
+  await on(page).pickerRow().first().click();
+  await expect(on(page).shellTab()).toHaveCount(2);
 
   // Put a specific one in front, so "restored" has to mean the right one.
-  await page.locator('[data-test="shell-tab"]', { hasText: "Rollout checklist" }).first().click();
-  await expect(page.locator('[data-test="shell-tab"][data-active="true"]')).toContainText(
+  await page.locator(hook("shell-tab"), { hasText: "Rollout checklist" }).first().click();
+  await expect(page.locator(`${hook("shell-tab")}[data-active="true"]`)).toContainText(
     "Rollout checklist",
   );
 
@@ -58,9 +59,9 @@ test("a reload keeps the tabs that were open, and the one in front", async ({ pa
   // reopened, or ⌘R after the shell has taken the session id out of the URL.
   await page.goto(`http://127.0.0.1:${hub?.port}/`);
 
-  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+  await expect(on(page).shellTab()).toHaveCount(2);
   await expect(
-    page.locator('[data-test="shell-tab"][data-active="true"]'),
+    page.locator(`${hook("shell-tab")}[data-active="true"]`),
     "the roster came back but the wrong tab was in front",
   ).toContainText("Rollout checklist");
 });

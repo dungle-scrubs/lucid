@@ -42,6 +42,10 @@ jobs:
             exit 1
           fi
 
+      # Beside the guard above and BEFORE the build, for the same reason: a
+      # one-second grep should not cost a full bundle to reach.
+      - run: bun run scripts/check-locators.ts
+
       # First: src/server imports the generated client bundle, so nothing below
       # can typecheck, lint or run until it exists. It is not in git - Bun's
       # bundler does not emit byte-identical output for identical input, so a
@@ -64,3 +68,4 @@ jobs:
       # and Playwright runs on the maintainer's Mac, not here (D-044). A gate
       # that pretended otherwise would need a report this job cannot produce.
       - run: bun run scripts/coverage-check.ts --no-report
+

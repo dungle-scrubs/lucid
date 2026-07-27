@@ -1,3 +1,4 @@
+import { on } from "../locators.ts";
 import { expect, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -58,10 +59,10 @@ test("the pick list comes to rest on a whole row, never half of one", async ({ p
   }
 
   await page.goto(`http://127.0.0.1:${hub.port}/`);
-  await page.locator('[data-test="add-folder-type"]').first().click();
-  await page.locator('[data-test="add-folder-path"]').first().fill(cli.dir);
-  await page.locator('[data-test="add-folder-path-add"]').first().click();
-  await expect(page.locator('[data-test="picker-row"]')).toHaveCount(ROWS);
+  await on(page).addFolderType().first().click();
+  await on(page).addFolderPath().first().fill(cli.dir);
+  await on(page).addFolderPathAdd().first().click();
+  await expect(on(page).pickerRow()).toHaveCount(ROWS);
 
   const settled = await page.evaluate(async () => {
     const first = document.querySelector('[data-test="picker-row"]');

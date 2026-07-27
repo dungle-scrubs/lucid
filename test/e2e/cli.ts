@@ -28,6 +28,41 @@ const execFileAsync = promisify(execFile);
  * deliberately NOT on the `helpers.ts` barrel: it takes a raw `env`, and every
  * other caller should be going through `makeCli`, which contains one.
  */
+/**
+ * A `wait` deadline, in seconds, scaled for the machine it runs on (D-020).
+ *
+ * A literal in a test body cannot be scaled. The number that is comfortable on
+ * an idle laptop is the first thing to flake on a loaded one, and the failure
+ * arrives as "the agent never answered" rather than "this deadline was too
+ * short" - so the test gets rewritten instead of the timeout.
+ *
+ * The base is what the scenario needs when nothing is contending. Everything
+ * else is the harness's business: more workers means more processes competing
+ * for the same cores, and `LUCID_E2E_TIMEOUT_SCALE` is the escape hatch for a
+ * machine nobody anticipated.
+ */
+export const waitTimeoutSeconds = (base: number): string => {
+  // `LUCID_E2E_TIMEOUT_SCALE` and nothing else.
+  //
+  // An earlier version also multiplied by 1.5 when `TEST_PARALLEL_INDEX > 0`,
+  // on the belief that it was a worker COUNT. It is the 0-based index of the
+  // worker SLOT, so that gave slot 0 a tight deadline and every other slot a
+  // loosened one - a per-slot lottery where a test flakes on slot 0 and not on
+  // slot 2 - and with `workers: 1` in the config the branch was unreachable
+  // anyway. Dead code that read as protection.
+  //
+  // The knob moves THIS deadline only. `playwright.config.ts`'s `timeout` and
+  // `expect.timeout` are separate numbers; on a machine slow enough to need
+  // the scale, they need raising too, and doing that silently from here would
+  // hide which budget a run actually died on.
+  const raw = process.env.LUCID_E2E_TIMEOUT_SCALE;
+  // `parseFloat("3x")` is 3, which silently half-applies a typo. Require the
+  // whole string to be a number.
+  const scale = raw !== undefined && /^\d+(\.\d+)?$/.test(raw) ? Number.parseFloat(raw) : 1;
+  const factor = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  return String(Math.max(1, Math.ceil(base * factor)));
+};
+
 export const invoke = async (
   args: readonly string[],
   options: Parameters<typeof execFileAsync>[2] & { timeout?: number },
