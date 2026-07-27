@@ -66,6 +66,38 @@ const isOutboxImage = (v: unknown): v is { id: string; name: string; file: strin
   return typeof o?.id === "string" && typeof o.name === "string" && typeof o.file === "string";
 };
 
+/** A queued annotation as it sits in storage: the composer's object URL is a
+ *  page-lifetime handle, so it is dropped on write and rebuilt from the
+ *  uploaded asset's `file` on read - the same way sent images render. */
+type PersistedQueuedImage = { id: string; name: string; file: string };
+interface PersistedQueuedAnnotation {
+  readonly id: string;
+  readonly targets: readonly Anchor[];
+  readonly note: string;
+  readonly at: string;
+  readonly images: readonly PersistedQueuedImage[];
+}
+
+/** Anchors are opaque here: the shape belongs to `src/anchors`, and a stale one
+ *  degrades to an orphaned mark rather than a bad POST, so "a non-null object"
+ *  is the honest check - anything deeper would be a second schema to drift. */
+const isAnchorLike = (v: unknown): v is Anchor => typeof v === "object" && v !== null;
+
+const isQueuedAnnotation = (v: unknown): v is PersistedQueuedAnnotation => {
+  const o = v as Record<string, unknown> | null;
+  return (
+    typeof o?.id === "string" &&
+    typeof o.note === "string" &&
+    o.note.trim().length > 0 &&
+    typeof o.at === "string" &&
+    Array.isArray(o.targets) &&
+    o.targets.length > 0 &&
+    o.targets.every(isAnchorLike) &&
+    Array.isArray(o.images) &&
+    o.images.every(isOutboxImage)
+  );
+};
+
 /** Storage is untrusted input (a stale schema, another tool's key, a truncated
  *  write), and the outbox drives POSTs - so every field is checked rather than
  *  cast. A malformed entry is dropped, never sent. */
@@ -90,6 +122,13 @@ export interface SessionStorage {
   readonly readOutbox: () => OutboxMessage[];
   readonly persistOutboxMessage: (message: OutboxMessage, onFail: () => void) => void;
   readonly forgetOutboxMessage: (id: string) => void;
+  /** Queued annotations from a previous page life, thumbnails re-addressed
+   *  through `assetUrl`. The queue persists for the same reason the outbox
+   *  does (D-054): a reload - or a closed tab - must not destroy a note a
+   *  human wrote and did not send. */
+  readonly readQueue: (assetUrl: (file: string) => string) => QueuedAnnotation[];
+  readonly persistQueuedItem: (item: QueuedAnnotation, onFail: () => void) => void;
+  readonly forgetQueuedItem: (id: string) => void;
   readonly readShowTargets: () => boolean;
   readonly persistShowTargets: (on: boolean) => void;
 }
@@ -107,6 +146,8 @@ export const createSessionStorage = (sessionKey: string): SessionStorage => {
    */
   const outboxPrefix = `lucid:outbox:${sessionKey}:`;
   const outboxKey = (id: string): string => `${outboxPrefix}${id}`;
+  const queuePrefix = `lucid:queue:${sessionKey}:`;
+  const queueKey = (id: string): string => `${queuePrefix}${id}`;
   const showTargetsKey = `lucid:showTargets:${sessionKey}`;
 
   /** Undelivered messages from a previous page life (this tab's or another's).
@@ -156,6 +197,71 @@ export const createSessionStorage = (sessionKey: string): SessionStorage => {
     }
   };
 
+  /** Queued annotations from a previous page life, in authoring order. The
+   *  invariant `target === targets[0]` is rebuilt rather than trusted: storage
+   *  is one writer among many, and the pair travelling separately is exactly
+   *  the drift the invariant exists to prevent. */
+  const readQueue = (assetUrl: (file: string) => string): QueuedAnnotation[] => {
+    try {
+      const found: QueuedAnnotation[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key === null || !key.startsWith(queuePrefix)) continue;
+        try {
+          const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "");
+          // Skipped, not deleted, like the outbox: unreadable to us, but still
+          // the only copy of something a human wrote.
+          if (!isQueuedAnnotation(parsed)) continue;
+          const target = parsed.targets[0];
+          if (!target) continue;
+          found.push({
+            id: parsed.id,
+            target,
+            targets: parsed.targets,
+            note: parsed.note,
+            at: parsed.at,
+            images: parsed.images.map((img) => ({ ...img, url: assetUrl(img.file) })),
+          });
+        } catch {
+          /* not ours to interpret */
+        }
+      }
+      return found.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    } catch {
+      return [];
+    }
+  };
+
+  /** Write one queued annotation to storage (add or edit - same key either
+   *  way). Guards real data like the outbox persister, so a failure is
+   *  reported: the card still lives in memory, but it will not survive a
+   *  reload and the human is the only one who can act on that. */
+  const persistQueuedItem = (item: QueuedAnnotation, onFail: () => void): void => {
+    const persisted: PersistedQueuedAnnotation = {
+      id: item.id,
+      targets: item.targets,
+      note: item.note,
+      at: item.at,
+      images: item.images.map(({ id, name, file }) => ({ id, name, file })),
+    };
+    try {
+      localStorage.setItem(queueKey(item.id), JSON.stringify(persisted));
+    } catch {
+      onFail();
+    }
+  };
+
+  /** Drop one queued annotation from storage: it sent, or the human removed
+   *  it. Silent on failure, like the outbox delete - a no-op delete stakes
+   *  nothing. */
+  const forgetQueuedItem = (id: string): void => {
+    try {
+      localStorage.removeItem(queueKey(id));
+    } catch {
+      /* storage unavailable; the entry was never written either */
+    }
+  };
+
   /** Annotation marks are the point of the surface, so they are on unless the
    *  human has explicitly turned them off before. Falls back to the pre-shell
    *  global key so an existing preference survives the per-session move. */
@@ -181,6 +287,9 @@ export const createSessionStorage = (sessionKey: string): SessionStorage => {
     readOutbox,
     persistOutboxMessage,
     forgetOutboxMessage,
+    readQueue,
+    persistQueuedItem,
+    forgetQueuedItem,
     readShowTargets,
     persistShowTargets,
   };
@@ -312,7 +421,13 @@ export interface SessionState {
 
 export type SessionStore = StoreApi<SessionState>;
 
-export const createSessionStore = (config: SessionConfig, storage: SessionStorage): SessionStore =>
+export const createSessionStore = (
+  config: SessionConfig,
+  storage: SessionStorage,
+  /** Rebuilds a restored thumbnail's URL from its uploaded asset (the object
+   *  URL a queued image was staged with died with the page that made it). */
+  assetUrl: (file: string) => string,
+): SessionStore =>
   createStore<SessionState>(() => ({
     annotations: [],
     messages: [],
@@ -322,7 +437,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     pendingTarget: null,
     pendingTargets: [],
     composerNote: "",
-    queue: [],
+    queue: storage.readQueue(assetUrl),
     editingId: null,
     editDraft: "",
     sending: false,

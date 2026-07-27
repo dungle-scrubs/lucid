@@ -124,10 +124,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/3bca9c0-no-colonising-your-folder.e2e.ts",
+          "testName": "open refuses a record folder that already holds someone else's work",
+          "mutation": "src/core/session.ts: replace the logPath ownership check with `return false; // every directory reads as ours` - open colonises the pre-existing folder again (registry 3bca9c0, D-055)"
         },
         {
           "id": "open-fresh-contract-shape",
@@ -524,10 +524,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-wait-zero-drains.e2e.ts",
+          "testName": "wait --timeout 0 drains and returns instead of blocking forever",
+          "mutation": "src/core/wait.ts: restore `const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;` - the drain never returns and the run dies on the exec deadline (registry m4.1-wait-zero)"
         },
         {
           "id": "wait-unparseable-cursor-silently-bootstraps",
@@ -540,10 +540,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-wait-since-garbage-refused.e2e.ts",
+          "testName": "a garbage --since is a VALIDATION_ERROR, not a silent full replay",
+          "mutation": "src/core/wait.ts: neutralise the refusal guard to `if (false) {` - the garbage cursor bootstraps the full state with exit 0 (registry m4.1-wait-since)"
         },
         {
           "id": "wait-ack-covers-only-what-was-read",
@@ -555,7 +555,7 @@
           "expected": "A shows delivered, B still shows recorded — the ack's `covers` is the cursor just read, not the ack's own position.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "",
+          "needsCapability": "route-intercept",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
@@ -1267,10 +1267,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-queue-survives-reload.e2e.ts",
+          "testName": "queued annotations survive a reload, and the survivors still send",
+          "mutation": "client/chrome/store.ts: restore `queue: [],` in the initial state - storage still fills but nothing reads it back, every card gone after reload (registry m4.1-queue-reload)"
         },
         {
           "id": "send-queue-commits-the-open-edit",
@@ -1315,10 +1315,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-blank-note-refusal-visible.e2e.ts",
+          "testName": "add to queue refuses a blank note visibly, and typing re-arms it",
+          "mutation": "client/chrome/Panel.tsx: force `disabled={false}` on the add-to-queue button - both disabled assertions go red (registry m4.1-blank-note)"
         },
         {
           "id": "quick-reply-destroys-typed-note",
@@ -1330,10 +1330,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-quick-reply-merges.e2e.ts",
+          "testName": "a quick-reply over a typed note queues both, the typing first",
+          "mutation": "client/chrome/actions.ts: restore the overwrite `set({ composerNote: note });` in queueQuickReply - the typed sentence vanishes from the queued card (registry m4.1-quick-reply)"
         },
         {
           "id": "toggling-off-last-spot-discards-note-and-images",

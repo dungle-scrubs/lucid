@@ -1,4 +1,4 @@
-import { NotFoundError } from "../errors.ts";
+import { NotFoundError, ValidationError } from "../errors.ts";
 import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
 import { parseCursor } from "./cursor.ts";
 import {
@@ -134,6 +134,19 @@ export const runWait = async (
   options: WaitOptions = {},
 ): Promise<WaitPayload> => {
   const cursor = parseCursor(options.since);
+  // A supplied cursor that does not parse is refused, not treated as absent.
+  // `undefined` here is the bootstrap read (D-056) - full folded state, no ack.
+  // Falling into it from a typo meant the agent silently re-applied the whole
+  // session as a delta and the viewer never flipped to "delivered".
+  if (options.since !== undefined && cursor === undefined) {
+    throw new ValidationError({
+      message:
+        `--since ${JSON.stringify(options.since)} is not a cursor. Pass the nextCursor ` +
+        `from the last payload (evt_00042, or a bare integer), or omit --since to ` +
+        `bootstrap with the full current state.`,
+      detail: { since: options.since },
+    });
+  }
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const heartbeatMs = options.pollMs ?? HEARTBEAT_MS;
 
@@ -181,7 +194,11 @@ export const runWait = async (
     );
   }
 
-  const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;
+  // `--timeout 0` is a drain: one read of the log, feedback if there is any,
+  // `waiting` if not, return either way. It used to map to POSITIVE_INFINITY -
+  // the one meaning nobody writing `0` intends - and parked the agent's turn
+  // forever. Negative gets the same drain; there is no meaning below zero.
+  const deadline = Date.now() + Math.max(0, timeoutMs);
   let wakes = 0;
   let liveKnown = true;
   let waker: Waker | undefined;

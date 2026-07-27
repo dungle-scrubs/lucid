@@ -86,7 +86,7 @@ export const Warnings = () => {
     <section>
       <h3 className={heading}>Warnings</h3>
       {warnings.map((w) => (
-        <div key={w.id} className="text-[12px] text-rust-300">
+        <div key={w.id} data-test="warning" className="text-[12px] text-rust-300">
           {w.code}: {w.message}
         </div>
       ))}
@@ -348,6 +348,7 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
             </button>
             <button
               type="button"
+              data-test="remove-queued"
               disabled={sending}
               onClick={() => removeQueued(q.id)}
               className={btn}
@@ -746,6 +747,9 @@ export const PendingComposer = () => {
               type="button"
               data-test="add-to-queue"
               onClick={addToQueue}
+              // The action itself refuses a blank note; a still-enabled button
+              // makes that refusal invisible - click, nothing, no reason.
+              disabled={composerNote.trim().length === 0}
               className={`${btnPrimary} flex items-center gap-1.5`}
             >
               Add to queue

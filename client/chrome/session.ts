@@ -43,8 +43,8 @@ export interface SessionHandle {
 
 export const createSession = (config: SessionConfig): SessionHandle => {
   const storage = createSessionStorage(config.session);
-  const store = createSessionStore(config, storage);
   const transport = createTransport(config.base);
+  const store = createSessionStore(config, storage, transport.assetUrl);
   const notify = createNotify(store);
   const surface = createSurface(store, transport);
   const pastes = createPastes();

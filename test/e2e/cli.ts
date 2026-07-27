@@ -104,6 +104,10 @@ export interface Cli {
   readonly dir: string;
   readonly artifact: string;
   run(args: string[], timeoutMs?: number): Promise<Record<string, unknown>>;
+  /** `run`, but from a caller-chosen working directory - for scenarios about
+   *  path resolution itself (a relative artifact from a subdirectory, a bare
+   *  name from a stranger's cwd). Same isolated env as `run`; only cwd moves. */
+  runFrom(cwd: string, args: string[], timeoutMs?: number): Promise<Record<string, unknown>>;
   write(html: string): Promise<void>;
   cleanup(): Promise<void>;
 }
@@ -114,9 +118,13 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
   const artifact = join(dir, "plan.html");
   await writeFile(artifact, initialHtml);
 
-  const run = async (args: string[], timeoutMs = 30_000): Promise<Record<string, unknown>> =>
+  const runFrom = async (
+    cwd: string,
+    args: string[],
+    timeoutMs = 30_000,
+  ): Promise<Record<string, unknown>> =>
     invoke(args, {
-      cwd: dir,
+      cwd,
       timeout: timeoutMs,
       env: {
         // The whole child environment, not a patch over `process.env` -
@@ -131,10 +139,14 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
       },
     });
 
+  const run = (args: string[], timeoutMs = 30_000): Promise<Record<string, unknown>> =>
+    runFrom(dir, args, timeoutMs);
+
   return {
     dir,
     artifact,
     run,
+    runFrom,
     write: (html: string) => writeFile(artifact, html),
     cleanup: async () => {
       try {

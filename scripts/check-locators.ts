@@ -115,8 +115,10 @@ const RULES: readonly Rule[] = [
     // across two lines, which is now the dominant local shape - and a rule that
     // only saw one line missed exactly the form a future test would copy.
     whole: /["']--timeout(?:=\d)?["']\s*(?:,\s*(?:["']\d|String\())?/g,
-    // The one legal continuation.
-    allow: /waitTimeoutSeconds\(/,
+    // Two legal continuations. `waitTimeoutSeconds` is the scaled deadline. A
+    // literal `"0"` is not a deadline at all - it is the drain-and-return
+    // contract itself (the m4.1 wait fix), and scaling has no meaning at zero.
+    allow: /waitTimeoutSeconds\(|^["']--timeout["']\s*,\s*["']0["']/,
   },
 ];
 

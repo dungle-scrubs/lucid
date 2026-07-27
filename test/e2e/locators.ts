@@ -142,6 +142,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   queuedAnnotation: (): Locator => root.locator(hook("queued-annotation")),
   quickReply: (): Locator => root.locator(hook("quick-reply")),
   reask: (): Locator => root.locator(hook("reask")),
+  removeQueued: (): Locator => root.locator(hook("remove-queued")),
   reason: (): Locator => root.locator(hook("reason")),
   reconnecting: (): Locator => root.locator(hook("reconnecting")),
   reopen: (): Locator => root.locator(hook("reopen")),
@@ -184,6 +185,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   unsentMessage: (): Locator => root.locator(hook("unsent-message")),
   unsentMessages: (): Locator => root.locator(hook("unsent-messages")),
   version: (): Locator => root.locator(hook("version")),
+  warning: (): Locator => root.locator(hook("warning")),
   versionView: (): Locator => root.locator(hook("version-view")),
   versionViewExit: (): Locator => root.locator(hook("version-view-exit")),
 });

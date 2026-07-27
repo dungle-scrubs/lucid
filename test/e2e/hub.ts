@@ -34,6 +34,10 @@ export interface HubOptions {
    *  pointed at by LUCID_HARNESSES - the user's own
    *  `~/.config/lucid/harnesses.json` is never read by these tests. */
   readonly harnesses?: unknown;
+  /** Extra environment for the hub process, applied over `harnessEnv`. For
+   *  scenarios about the env contract itself (LUCID_HUB_ATTEND's strictness);
+   *  everything else should be an option, not an env var. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
@@ -47,6 +51,7 @@ export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
     ...harnessEnv(dir),
     // No scan of the real ~/dev: the isolated registry is the only source.
     LUCID_HUB_ROOTS: dir,
+    ...options.env,
   };
   const child: ChildProcess = spawn(
     "bun",

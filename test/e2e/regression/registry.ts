@@ -244,6 +244,82 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     },
   },
   {
+    sha: "m4.1-wait-zero",
+    broke:
+      "wait --timeout 0 mapped to POSITIVE_INFINITY and parked the agent's turn forever - the opposite of what 0 reads as.",
+    testFile: "test/e2e/regression/m4.1-wait-zero-drains.e2e.ts",
+    testName: "wait --timeout 0 drains and returns instead of blocking forever",
+    mutation: {
+      kind: "edit",
+      file: "src/core/wait.ts",
+      find: "  const deadline = Date.now() + Math.max(0, timeoutMs);",
+      replace:
+        "  const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;",
+    },
+  },
+  {
+    sha: "m4.1-wait-since",
+    broke:
+      "A --since that parsed to nothing silently became the bootstrap read: the whole session replayed as a delta, with no ack, and the viewer never flipped to delivered.",
+    testFile: "test/e2e/regression/m4.1-wait-since-garbage-refused.e2e.ts",
+    testName: "a garbage --since is a VALIDATION_ERROR, not a silent full replay",
+    mutation: {
+      kind: "edit",
+      file: "src/core/wait.ts",
+      // Neutralises the guard, not the parse: the refusal is the fix, and with
+      // it gone the garbage cursor falls through to the bootstrap branch the
+      // way it always did.
+      find: "  if (options.since !== undefined && cursor === undefined) {",
+      replace: "  if (false) {",
+    },
+  },
+  {
+    sha: "m4.1-blank-note",
+    broke:
+      "Add to queue with a whitespace-only note refused silently: the button stayed enabled, the click did nothing, and nothing said why.",
+    testFile: "test/e2e/regression/m4.1-blank-note-refusal-visible.e2e.ts",
+    testName: "add to queue refuses a blank note visibly, and typing re-arms it",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/Panel.tsx",
+      find: "              disabled={composerNote.trim().length === 0}",
+      replace: "              disabled={false}",
+    },
+  },
+  {
+    sha: "m4.1-quick-reply",
+    broke:
+      "A quick-reply chip clicked over a half-typed note replaced it wholesale - the queued card held only the canned ask, with no confirmation and no way back.",
+    testFile: "test/e2e/regression/m4.1-quick-reply-merges.e2e.ts",
+    testName: "a quick-reply over a typed note queues both, the typing first",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/actions.ts",
+      // The `\\n` is deliberate: the SOURCE spells `\n` as two characters
+      // inside its template literal, so the match must too. A single-escaped
+      // version held real newlines, matched nothing, and was caught by the
+      // exactly-once guard - the same silent-no-op class as mistake #6.
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the SOURCE being matched, not an interpolation that forgot its backticks
+      find: "    set({ composerNote: typed ? `${typed}\\n\\n${note}` : note });",
+      replace: "    set({ composerNote: note });",
+    },
+  },
+  {
+    sha: "m4.1-queue-reload",
+    broke:
+      "A reload destroyed every queued annotation while an undelivered message survived it - the queue lived only in component state.",
+    testFile: "test/e2e/regression/m4.1-queue-survives-reload.e2e.ts",
+    testName: "queued annotations survive a reload, and the survivors still send",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/store.ts",
+      // Severs the restore, not the writes: storage still fills, the page just
+      // never reads it back - which is exactly the pre-fix shape.
+      find: "    queue: storage.readQueue(assetUrl),",
+      replace: "    queue: [],",
+    },
+  },
+  {
     sha: "7c46d38",
     broke: "Answered questions stayed pinned in the 'Questions for you' panel.",
     testFile: null,

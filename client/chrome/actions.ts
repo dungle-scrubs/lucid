@@ -18,6 +18,7 @@ import type {
   MessageImage,
   OutboxMessage,
   PastedImage,
+  QueuedAnnotation,
   SessionSummary,
 } from "./types.ts";
 
@@ -63,6 +64,16 @@ export const createActions = (ctx: ActionsCtx) => {
       ),
     );
 
+  /** The queue's durability layer, mirroring the outbox's (D-054): written on
+   *  queue and on edit, forgotten on send and on remove, restored on load. */
+  const persistQueued = (item: QueuedAnnotation): void =>
+    storage.persistQueuedItem(item, () =>
+      pushWarning(
+        "DRAFT_AT_RISK",
+        "Couldn't save your queued annotation to this browser - it won't survive a reload.",
+      ),
+    );
+
   /** Upload a pasted blob and stage it for the annotation composer. */
   const uploadPaste = async (file: File): Promise<PastedImage | null> => {
     try {
@@ -79,20 +90,22 @@ export const createActions = (ctx: ActionsCtx) => {
   const addToQueue = (): void => {
     const s = get();
     if (!s.pendingTarget || s.composerNote.trim().length === 0) return;
+    const item: QueuedAnnotation = {
+      id: uuid(),
+      target: s.pendingTarget,
+      // The whole cmd-collected set rides as ONE queued item: one note
+      // covering every spot (a singleton for the ordinary pick).
+      targets: s.pendingTargets,
+      note: s.composerNote.trim(),
+      at: new Date().toISOString(),
+      images: s.pastedImages,
+    };
+    // Storage first, state second, like the outbox: the gap between them is
+    // the only window a crash could eat the note, and this ordering points it
+    // the harmless way.
+    persistQueued(item);
     set({
-      queue: [
-        ...s.queue,
-        {
-          id: uuid(),
-          target: s.pendingTarget,
-          // The whole cmd-collected set rides as ONE queued item: one note
-          // covering every spot (a singleton for the ordinary pick).
-          targets: s.pendingTargets,
-          note: s.composerNote.trim(),
-          at: new Date().toISOString(),
-          images: s.pastedImages,
-        },
-      ],
+      queue: [...s.queue, item],
       pendingTarget: null,
       pendingTargets: [],
       composerNote: "",
@@ -111,8 +124,12 @@ export const createActions = (ctx: ActionsCtx) => {
   };
 
   const queueQuickReply = (note: string): void => {
-    if (!get().pendingTarget) return;
-    set({ composerNote: note });
+    const s = get();
+    if (!s.pendingTarget) return;
+    // A chip clicked over a half-typed note must not eat the typing: the draft
+    // and the canned ask ride as ONE queued note, the draft first (D-053).
+    const typed = s.composerNote.trim();
+    set({ composerNote: typed ? `${typed}\n\n${note}` : note });
     addToQueue();
   };
 
@@ -226,6 +243,7 @@ export const createActions = (ctx: ActionsCtx) => {
 
   const removeQueued = (id: string): void => {
     if (get().editingId === id) cancelEdit();
+    storage.forgetQueuedItem(id);
     set((s) => ({ queue: s.queue.filter((q) => q.id !== id) }));
     applyDeferredSwapIfReady();
     pushHighlights();
@@ -253,6 +271,8 @@ export const createActions = (ctx: ActionsCtx) => {
     const note = s.editDraft.trim();
     if (note.length === 0) return false;
     const id = s.editingId;
+    const edited = s.queue.find((q) => q.id === id);
+    if (edited) persistQueued({ ...edited, note });
     set({
       queue: s.queue.map((q) => (q.id === id ? { ...q, note } : q)),
       editingId: null,
@@ -285,6 +305,7 @@ export const createActions = (ctx: ActionsCtx) => {
           images: q.images.map(({ id, name, file }) => ({ id, name, file })),
         });
         sent.add(q.id); // ids are idempotent, so a retry of a sent one is safe
+        storage.forgetQueuedItem(q.id); // it reached the log; storage owes nothing
         consumePastes(q.note); // this note's placeholders are spent
       }
     } catch {
