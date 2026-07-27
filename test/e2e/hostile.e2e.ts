@@ -2,6 +2,9 @@ import { on } from "./locators.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { testTitlesIn } from "../../scripts/coverage-check.ts";
 import { HOSTILE_DEFECTS, HOSTILE_FIXTURES, type HostileFixture } from "./hostile-fixtures.ts";
 import { makeCli, surfaceOf, waitTimeoutSeconds, type Cli } from "./helpers.ts";
 
@@ -45,6 +48,19 @@ test("every corpus fixture is accounted for: surviving the loop, or a recorded d
     expect(ids.has(defectId), `defect ledger names unknown fixture ${defectId}`).toBe(true);
   }
   expect(HOSTILE_FIXTURES.length).toBe(12);
+
+  // ...and the direction a deleted test would escape through: every fixture
+  // NOT in the defect ledger must have its loop test declared in this very
+  // file. Read out of the source with the coverage checker's own parser, so
+  // a renamed or dropped test is red before a browser ever starts.
+  const titles = testTitlesIn(readFileSync(fileURLToPath(import.meta.url), "utf8"));
+  for (const fixture of HOSTILE_FIXTURES) {
+    if (HOSTILE_DEFECTS.has(fixture.id)) continue;
+    expect(
+      titles.includes(`the loop survives ${fixture.title}`),
+      `surviving fixture ${fixture.id} has no loop test`,
+    ).toBe(true);
+  }
 });
 
 /**
@@ -84,8 +100,12 @@ const survives =
     await on(page).sendQueue().click();
     await expect(on(page).annotation()).toHaveCount(1);
 
-    // The agent's side: the right text, riding a target that actually
-    // resolved against this document.
+    // The agent's side: the right text, a target that resolved, and a
+    // snippet pinning the PICK. The snippet is capture-time outerHTML, so it
+    // proves what was picked, never what resolution chose - the badge-box
+    // test below is the one place suite Q pins resolution to a named
+    // element, and finding #47 is what the difference costs on a document
+    // that rewrites itself.
     const feedback = (await cli?.run([
       "wait",
       cli.artifact,
@@ -114,10 +134,6 @@ test(
 test(
   "the loop survives an artifact whose content lives inside an open shadow root",
   survives("hostile-shadow-dom"),
-);
-test(
-  "the loop survives an artifact that rewrites its own DOM after load",
-  survives("hostile-self-rewriting"),
 );
 test(
   "the loop survives an artifact whose CSS lives in a linked file",

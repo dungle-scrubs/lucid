@@ -14,7 +14,7 @@ import { expect } from "@playwright/test";
  *
  * Each fixture names the SEAM it attacks, because the corpus was designed
  * from the product's own mechanics, not from a list of scary words:
- * `inject.ts` anchors the overlay bootstrap on the raw text `</body>`; the
+ * `src/server/inject.ts` anchors the overlay bootstrap on the raw text `</body>`; the
  * surface iframe is sandboxed `allow-scripts` only, so every stylesheet is
  * cross-origin to the document reading it (D-032); anchors fingerprint
  * elements with no shadow traversal; the static-asset route serves siblings
@@ -75,8 +75,12 @@ export const HOSTILE_DEFECTS: ReadonlyMap<string, string> = new Map([
     "finding #45: a foreign <base> re-roots the path-absolute bootstrap src to the hostile origin",
   ],
   [
+    "hostile-self-rewriting",
+    "finding #47: the rewritten DOM exists only in the browser - resolution falls through positionally onto the SAVED skeleton, so resolved:true delivers context the human never saw",
+  ],
+  [
     "hostile-huge-dom",
-    "finding #46: on 5MB/18k nodes the committed card never renders (measured absent at 30s), with no warning",
+    "finding #46 (diagnosis corrected by D-065): 18k flat siblings hang resolveElementAnchor super-quadratically - the committed card never renders AND lucid wait hangs; the trigger is sibling fan-out, not bytes",
   ],
 ]);
 
@@ -90,8 +94,9 @@ ${body}
 </body>
 </html>`;
 
-/** ~5MB of real nodes: 18k list items of ~280 chars. Built once at module
- *  load; the constant is the fixture, same as PLAN_V1. */
+/** 18,000 flat sibling list items (3,956,061 bytes total). Built once at
+ *  module load; the constant is the fixture, same as PLAN_V1. The hostile
+ *  dimension is the SIBLING FAN-OUT, not the byte count - see D-065. */
 const HUGE_BODY = (() => {
   const filler =
     "The reconciliation pass compares the ledger row against the event stream and flags any divergence for the nightly audit, which is the only consumer allowed to write corrections back. ";
@@ -145,9 +150,11 @@ export const HOSTILE_FIXTURES: readonly HostileFixture[] = [
   {
     id: "hostile-competing-overlay",
     title: "an artifact with its own full-width overlay at maximum z-index",
-    // The seam: the lucid marks and the pick surface share a stacking context
-    // with whatever the artifact renders; a cookie-banner-alike at z-index
-    // 2147483647 sits over the top third of the page.
+    // The banner out-bids the overlay host's z-index 2147483646 by one, and
+    // the loop is proved on content BESIDE it. What this fixture does NOT
+    // measure - deliberately, recorded as finding #48 - is the mark-under-
+    // banner stacking contest; that needs its own fixture with a scroll and
+    // an overlay settle.
     html: page(
       "",
       `<div style="position:fixed;top:0;left:0;right:0;height:30vh;background:rgba(20,20,28,0.9);color:#fff;z-index:2147483647;display:flex;align-items:center;justify-content:center">
@@ -186,14 +193,16 @@ export const HOSTILE_FIXTURES: readonly HostileFixture[] = [
     ),
     pick: "#card",
     note: "Does the padding come from the theme or the component?",
-    picked: "",
+    // The snippet pins the PICK to the retargeted host - measured: the anchor
+    // captures <widget-card>, which is the stable thing the document offers.
+    picked: "<widget-card",
   },
   {
     id: "hostile-huge-dom",
-    title: "an artifact with five megabytes of nodes",
-    // The seam: fingerprinting, highlight painting and live-reload diffing
-    // all walk the DOM; 18k elements is a real generated report, not a
-    // pathological one.
+    title: "an artifact with eighteen thousand sibling nodes",
+    // The seam: resolveElementAnchor fingerprints every element, and
+    // indexAmongSiblings makes that super-quadratic over flat lists (D-065).
+    // 18k rows is a real generated report, not a pathological one.
     html: page(
       "",
       `<article>
@@ -321,9 +330,12 @@ h1 { color: var(--accent); }`,
   {
     id: "hostile-throwing-script",
     title: "an artifact whose own scripts throw, at load and on every click",
-    // The seam: the overlay shares the document's error channel; an uncaught
-    // load-time throw and a throw inside a bubbling click handler must not
-    // take the pick pipeline down with them.
+    // The seam: the overlay shares the document's error channel. The click
+    // handler is registered at WINDOW CAPTURE - the one phase that runs
+    // BEFORE the overlay's document-capture pick listener - so the throw
+    // genuinely interleaves with every pick (a bubble-phase handler would
+    // never run: the overlay stops propagation on a successful pick). An
+    // exception in one listener must not stop the others.
     html: page(
       "",
       `<article>
@@ -331,7 +343,7 @@ h1 { color: var(--accent); }`,
     <p id="claim">The chart library fails to initialise in this export.</p>
   </article>
   <script>
-    window.addEventListener("click", () => { throw new Error("artifact click handler exploded"); });
+    window.addEventListener("click", () => { throw new Error("artifact click handler exploded"); }, true);
     throw new Error("artifact load exploded");
   </script>`,
     ),

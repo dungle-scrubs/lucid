@@ -3908,14 +3908,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "Pick, queue, send, wait all work on content outside the banner; the delivered annotation resolves.",
+          "expected": "Pick, queue, send, wait all work on content BESIDE the max-z-index banner; the delivered annotation resolves. The mark-under-banner stacking contest is deliberately not claimed here - it is unmeasured and recorded as plan finding #48.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/e2e/hostile.e2e.ts",
           "testName": "the loop survives an artifact with its own full-width overlay at maximum z-index",
-          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - the unresolved annotation re-renders as an orphan card, so the loop test goes red at the committed-card count (measured; the resolved-truthy and snippet assertions sit later and are shielded by it). The CLI-side snippet assertion has its own isolating mutation: src/anchors/dom.ts captureElementAnchor snippet -> empty string leaves the card count green and reds only the snippet check (measured on the fragment fixture)."
         },
         {
           "id": "hostile-shadow-dom",
@@ -3932,7 +3932,7 @@
           "status": "covered",
           "testFile": "test/e2e/hostile.e2e.ts",
           "testName": "the loop survives an artifact whose content lives inside an open shadow root",
-          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - the unresolved annotation re-renders as an orphan card, so the loop test goes red at the committed-card count (measured; the resolved-truthy and snippet assertions sit later and are shielded by it). The CLI-side snippet assertion has its own isolating mutation: src/anchors/dom.ts captureElementAnchor snippet -> empty string leaves the card count green and reds only the snippet check (measured on the fragment fixture)."
         },
         {
           "id": "hostile-huge-dom",
@@ -3993,14 +3993,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "Picking the hydrated content after the rewrite settles completes the loop; the delivered annotation resolves against the rewritten document.",
+          "expected": "The delivered annotation resolves against the document AS PICKED. Today the rewritten DOM exists only in the browser: resolution runs against the saved file, the fingerprint matches nothing, and the positional fall-through lands on the skeleton - measured: a pick on the hydrated paragraph resolves to <p>Rendering...</p>, with resolved:true and no low-confidence signal (plan finding #47).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/e2e/hostile.e2e.ts",
-          "testName": "the loop survives an artifact that rewrites its own DOM after load",
-          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
         },
         {
           "id": "hostile-linked-stylesheet",
@@ -4017,7 +4017,7 @@
           "status": "covered",
           "testFile": "test/e2e/hostile.e2e.ts",
           "testName": "the loop survives an artifact whose CSS lives in a linked file",
-          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - the unresolved annotation re-renders as an orphan card, so the loop test goes red at the committed-card count (measured; the resolved-truthy and snippet assertions sit later and are shielded by it). The CLI-side snippet assertion has its own isolating mutation: src/anchors/dom.ts captureElementAnchor snippet -> empty string leaves the card count green and reds only the snippet check (measured on the fragment fixture)."
         },
         {
           "id": "hostile-fragment-only",
@@ -4034,7 +4034,7 @@
           "status": "covered",
           "testFile": "test/e2e/hostile.e2e.ts",
           "testName": "the loop survives an artifact that is a bare fragment - no html, head, or body tags",
-          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - the unresolved annotation re-renders as an orphan card, so the loop test goes red at the committed-card count (measured; the resolved-truthy and snippet assertions sit later and are shielded by it). The CLI-side snippet assertion has its own isolating mutation: src/anchors/dom.ts captureElementAnchor snippet -> empty string leaves the card count green and reds only the snippet check (measured on the fragment fixture)."
         },
         {
           "id": "hostile-throwing-script",
@@ -4051,7 +4051,7 @@
           "status": "covered",
           "testFile": "test/e2e/hostile.e2e.ts",
           "testName": "the loop survives an artifact whose own scripts throw, at load and on every click",
-          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - the unresolved annotation re-renders as an orphan card, so the loop test goes red at the committed-card count (measured; the resolved-truthy and snippet assertions sit later and are shielded by it). The CLI-side snippet assertion has its own isolating mutation: src/anchors/dom.ts captureElementAnchor snippet -> empty string leaves the card count green and reds only the snippet check (measured on the fragment fixture)."
         },
         {
           "id": "hostile-duplicate-ids",
@@ -4068,7 +4068,7 @@
           "status": "covered",
           "testFile": "test/e2e/hostile.e2e.ts",
           "testName": "picking the third of four identically-stamped rows marks the THIRD",
-          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - the badge never renders and the third-row box assertion goes red (measured). Single-layer breaks do NOT red this test: reverting 9df5eae was applied and observed GREEN, because computeFingerprint folds the sibling index, so the fingerprint layer disambiguates before the fall-through is ever reached - the ladder is defense in depth (D-064)."
+          "mutation": "src/core/payload.ts: sever anchor resolution (const resolved = null) - the orphan re-render empties the committed-card count ahead of the badge query, so the test reds there (measured). Single-layer ladder breaks do NOT red it: reverting 9df5eae was applied and observed GREEN, because computeFingerprint folds the sibling index and disambiguates a layer above the fall-through (D-064)."
         }
       ]
     }
