@@ -156,6 +156,19 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     },
   },
   {
+    sha: "m2.2",
+    broke:
+      "progress and context printed {ok:false} and exited 0, so a shell `if` read a refusal as success.",
+    testFile: "test/e2e/regression/m2.2-refusals-exit-non-zero.e2e.ts",
+    testName: "progress and context refuse with a non-zero exit, not a quiet ok:false",
+    mutation: {
+      kind: "edit",
+      file: "src/cli/run.ts",
+      find: '      message: "progress needs a --label, --total, or --done",',
+      replace: '      message: "progress needs a --label, --total, or --done", exitZero: true,',
+    },
+  },
+  {
     sha: "42842f3",
     broke: "The badge straddling a card's top edge landed on the previous card's footer.",
     testFile: null,
