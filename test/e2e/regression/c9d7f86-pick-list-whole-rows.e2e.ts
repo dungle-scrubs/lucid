@@ -84,6 +84,11 @@ test("the pick list comes to rest on a whole row, never half of one", async ({ p
     // Two frames: one for the scroll, one for the snap that follows it.
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
+    // KNOWN GAP: the reference comes from the live `scroll-padding-top`, which
+    // is half the fix, so `scroll-pt-0` leaves this green - only the snapping
+    // half is protected. Measuring against the sticky heading instead was
+    // tried and reported 44px with the fix in place, so it was withdrawn rather
+    // than shipped wrong. Recorded as a finding rather than left implied.
     const padding = Number.parseFloat(getComputedStyle(list).scrollPaddingTop);
     const snapLine = list.getBoundingClientRect().top + (Number.isNaN(padding) ? 0 : padding);
     const offsets = rows.map((row) => Math.abs(top(row) - snapLine));

@@ -36,8 +36,10 @@ test("Fork with no directive still reaches the agent, and says it did", async ({
   // No directive typed. The region alone is the instruction.
   await page.locator('[data-test="fork"]').click();
 
-  // The person is told, which is the half of the defect that was silent.
-  await expect(page.getByText(/Fork(ed)?/)).toBeVisible();
+  // The person is told, on the notices channel - NOT `getByText(/Fork/)`, which
+  // is satisfied by the button that was just clicked ("Forking…") and so
+  // asserted nothing at all. Suppressing the notice used to leave this green.
+  await expect(page.locator('[data-test="notice"]')).toContainText(/fork/i);
 
   const feedback = (await cli.run([
     "wait",

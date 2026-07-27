@@ -59,14 +59,20 @@ test("an annotation on the third identical cell marks the third, not the first",
   expect(cell, "the clicked cell has no box").not.toBeNull();
   expect(mark, "no mark was drawn on the artifact").not.toBeNull();
 
-  // Same row, not the first one. Compared by centre so a border or an inset
-  // does not decide the outcome.
-  const cellCentre = (cell?.y ?? 0) + (cell?.height ?? 0) / 2;
-  const markCentre = (mark?.y ?? 0) + (mark?.height ?? 0) / 2;
+  // Both axes. The wrong ROW is what the ambiguous fingerprint produced, but
+  // an identical cell has an identical sibling one column over, and a mark on
+  // the right row and the wrong column is the same defect wearing a different
+  // hat - a y-only comparison called that a pass.
+  const centre = (box: { x: number; y: number; width: number; height: number } | null) => ({
+    x: (box?.x ?? 0) + (box?.width ?? 0) / 2,
+    y: (box?.y ?? 0) + (box?.height ?? 0) / 2,
+  });
+  const want = centre(cell);
+  const got = centre(mark);
   expect(
-    Math.abs(cellCentre - markCentre),
-    `the mark landed ${Math.round(Math.abs(cellCentre - markCentre))}px from the cell that was ` +
-      `clicked (cell centre ${Math.round(cellCentre)}, mark centre ${Math.round(markCentre)}) - ` +
-      "an ambiguous fingerprint resolved to the wrong row",
-  ).toBeLessThanOrEqual(3);
+    { dx: Math.round(Math.abs(want.x - got.x)), dy: Math.round(Math.abs(want.y - got.y)) },
+    `the mark landed ${Math.round(Math.abs(want.x - got.x))}px across and ` +
+      `${Math.round(Math.abs(want.y - got.y))}px down from the cell that was clicked - ` +
+      "an ambiguous fingerprint resolved to the wrong element",
+  ).toEqual({ dx: 0, dy: 0 });
 });

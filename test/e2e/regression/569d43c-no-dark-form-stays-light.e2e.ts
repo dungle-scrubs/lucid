@@ -17,6 +17,22 @@ import { makeCli, overlaySettled, surfaceOf, type Cli } from "../helpers.ts";
  * unconditionally, which is what the original defect amounted to.
  */
 
+/** The control: this one DOES declare a dark form, so it must follow the
+ *  toggle. Without it, a theme message that never arrives at all is
+ *  indistinguishable from one correctly declined - and deleting the broadcast
+ *  entirely left the negative assertion below green. */
+const HAS_DARK = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>Both forms</title>
+<style>
+  :root { --paper: #ffffff; --ink: #111111; }
+  @media (prefers-color-scheme: dark) { :root { --paper: #111111; --ink: #f5f5f5; } }
+  body { background: var(--paper); color: var(--ink); }
+</style>
+</head>
+<body><h1>Both forms</h1></body>
+</html>`;
+
 /** No dark form anywhere: no media query, no tokens, no colour-scheme. */
 const LIGHT_ONLY = `<!doctype html>
 <html lang="en">
@@ -30,6 +46,19 @@ let cli: Cli;
 
 test.afterEach(async () => {
   await cli?.cleanup();
+});
+
+test("an artifact that declares a dark form does follow the toggle", async ({ page }) => {
+  // The control for the test below. If this one stops going dark, the theme
+  // message is not arriving at all and the negative assertion proves nothing.
+  cli = await makeCli(HAS_DARK);
+  const session = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(session.url);
+  await expect(surfaceOf(page).locator("h1")).toContainText("Both forms");
+
+  await page.locator('[data-test="theme-toggle"]').click();
+  await overlaySettled(page);
+  expect(await surfaceOf(page).locator("html").getAttribute("data-lucid-theme")).toBe("dark");
 });
 
 test("an artifact with no dark form is not relabelled dark", async ({ page }) => {
