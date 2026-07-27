@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
+  BUNDLE_SOURCES,
   bundleFreshness,
   ensureFreshBundle,
   killSurvivors,
@@ -31,6 +32,7 @@ describe("the build gate", () => {
       await writeFile(join(src, "app.tsx"), "new");
       await setMtime(bundle, 1_000_000);
       await setMtime(join(src, "app.tsx"), 2_000_000);
+      await setMtime(src, 1_000_000);
 
       const freshness = await bundleFreshness(bundle, [src]);
       expect(freshness.fresh).toBe(false);
@@ -49,6 +51,7 @@ describe("the build gate", () => {
       await writeFile(join(src, "app.tsx"), "src");
       await writeFile(bundle, "built");
       await setMtime(join(src, "app.tsx"), 1_000_000);
+      await setMtime(src, 1_000_000);
       await setMtime(bundle, 2_000_000);
 
       expect((await bundleFreshness(bundle, [src])).fresh).toBe(true);
@@ -78,10 +81,74 @@ describe("the build gate", () => {
       await writeFile(join(deep, "button.tsx"), "new");
       await setMtime(bundle, 1_000_000);
       await setMtime(join(deep, "button.tsx"), 2_000_000);
+      for (const d of [deep, join(dir, "client", "chrome"), join(dir, "client")]) {
+        await setMtime(d, 1_000_000);
+      }
 
       const freshness = await bundleFreshness(bundle, [join(dir, "client")]);
       expect(freshness.fresh).toBe(false);
       expect(freshness.newestSourcePath).toBe(join(deep, "button.tsx"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("DELETING a source stales the bundle, which only a directory mtime shows", async () => {
+    // A delete leaves no file behind to carry a new mtime - it bumps the
+    // parent directory and nothing else. Watching files alone would call the
+    // bundle current after a component was removed from the build.
+    const dir = await scratch();
+    try {
+      const src = join(dir, "client");
+      await mkdir(src);
+      const doomed = join(src, "gone.tsx");
+      const bundle = join(dir, "bundle.ts");
+      await writeFile(doomed, "about to go");
+      await writeFile(bundle, "built");
+      await setMtime(doomed, 1_000_000);
+      await setMtime(src, 1_000_000);
+      await setMtime(bundle, 2_000_000);
+      expect((await bundleFreshness(bundle, [src])).fresh).toBe(true);
+
+      await rm(doomed);
+      await setMtime(src, 3_000_000); // what the filesystem does on a delete
+
+      const after = await bundleFreshness(bundle, [src]);
+      expect(after.fresh).toBe(false);
+      expect(after.newestSourcePath).toBe(src);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a single FILE listed as a source counts, not just directories", async () => {
+    // The build script is an input and does not live under client/. Passing it
+    // used to make readdir throw ENOTDIR, which the walk swallowed - so the one
+    // source the gate claimed to cover beyond client/ was silently ignored.
+    const dir = await scratch();
+    try {
+      const bundle = join(dir, "bundle.ts");
+      const script = join(dir, "build-client.ts");
+      await writeFile(bundle, "built");
+      await writeFile(script, "the build itself changed");
+      await setMtime(bundle, 1_000_000);
+      await setMtime(script, 2_000_000);
+
+      const freshness = await bundleFreshness(bundle, [script]);
+      expect(freshness.fresh).toBe(false);
+      expect(freshness.newestSourcePath).toBe(script);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a source path that does not exist is ignored, not fatal", async () => {
+    const dir = await scratch();
+    try {
+      const bundle = join(dir, "bundle.ts");
+      await writeFile(bundle, "built");
+      const freshness = await bundleFreshness(bundle, [join(dir, "no-such-place")]);
+      expect(freshness.fresh).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -97,11 +164,12 @@ describe("the build gate", () => {
       await writeFile(join(src, "app.tsx"), "new");
       await setMtime(bundle, 1_000_000);
       await setMtime(join(src, "app.tsx"), 2_000_000);
+      await setMtime(src, 1_000_000);
 
       let built = 0;
       await ensureFreshBundle({
         bundlePath: bundle,
-        sourceDirs: [src],
+        sources: [src],
         build: async () => {
           built += 1;
           await writeFile(bundle, "rebuilt");
@@ -127,10 +195,11 @@ describe("the build gate", () => {
       await writeFile(join(src, "app.tsx"), "new");
       await setMtime(bundle, 1_000_000);
       await setMtime(join(src, "app.tsx"), 2_000_000);
+      await setMtime(src, 1_000_000);
 
       const promise = ensureFreshBundle({
         bundlePath: bundle,
-        sourceDirs: [src],
+        sources: [src],
         build: async () => {
           /* exits 0, changes nothing - the failure this gate is for */
         },
@@ -152,10 +221,11 @@ describe("the build gate", () => {
       await writeFile(bundle, "built");
       await writeFile(join(src, "app.tsx"), "from the future");
       await setMtime(join(src, "app.tsx"), Date.now() + 365 * 24 * 60 * 60 * 1000);
+      await setMtime(src, 1_000_000);
 
       const promise = ensureFreshBundle({
         bundlePath: bundle,
-        sourceDirs: [src],
+        sources: [src],
         build: async () => {
           await setMtime(bundle, Date.now());
         },
@@ -175,12 +245,13 @@ describe("the build gate", () => {
       await writeFile(join(src, "app.tsx"), "src");
       await writeFile(bundle, "built");
       await setMtime(join(src, "app.tsx"), 1_000_000);
+      await setMtime(src, 1_000_000);
       await setMtime(bundle, 2_000_000);
 
       let built = 0;
       await ensureFreshBundle({
         bundlePath: bundle,
-        sourceDirs: [src],
+        sources: [src],
         build: async () => {
           built += 1;
         },
@@ -188,6 +259,45 @@ describe("the build gate", () => {
       expect(built).toBe(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the declared bundle sources", () => {
+  test("cover every src/ module that client/ actually imports", async () => {
+    // BUNDLE_SOURCES is deliberately coarse - whole directories - so that adding
+    // an import does not silently open a hole. This is what makes the coarseness
+    // safe: `client/` is NOT a closed graph (client/shared/capture.ts pulls in
+    // src/anchors/dom.ts, which is compiled into the overlay bundle the
+    // selection suites drive), and a reach into a root nobody listed would let
+    // the gate report fresh while the browser ran last week's code.
+    const repo = join(import.meta.dirname, "..");
+    const clientDir = join(repo, "client");
+    const files = (await readdir(clientDir, { withFileTypes: true, recursive: true })).filter(
+      (e) => e.isFile() && /\.tsx?$/.test(e.name),
+    );
+
+    const roots = BUNDLE_SOURCES.map((s) => join(repo, ...s.split("/")));
+    const uncovered: string[] = [];
+    for (const file of files) {
+      const path = join(file.parentPath, file.name);
+      const text = await readFile(path, "utf8");
+      for (const match of text.matchAll(/from\s+"([^"]+)"/g)) {
+        const spec = match[1];
+        if (!spec?.startsWith(".")) continue;
+        const resolved = resolve(file.parentPath, spec);
+        if (resolved.startsWith(clientDir)) continue;
+        if (roots.some((root) => resolved === root || resolved.startsWith(`${root}/`))) continue;
+        uncovered.push(`${path.slice(repo.length + 1)} -> ${spec}`);
+      }
+    }
+    expect(uncovered).toEqual([]);
+  });
+
+  test("names roots that exist - a typo would silently cover nothing", async () => {
+    const repo = join(import.meta.dirname, "..");
+    for (const source of BUNDLE_SOURCES) {
+      expect(existsSync(join(repo, ...source.split("/")))).toBe(true);
     }
   });
 });

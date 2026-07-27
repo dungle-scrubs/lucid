@@ -2,11 +2,15 @@ import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { ensureFreshBundle, sweepStaleRoots } from "./gate.ts";
+import { BUNDLE_SOURCES, bundleFreshness, ensureFreshBundle, sweepStaleRoots } from "./gate.ts";
 
 const execFileAsync = promisify(execFile);
 
 const REPO = join(import.meta.dirname, "..", "..");
+
+/** The embedded client bundle - gitignored, so it is whatever the last build
+ *  left behind, which is the whole reason this file exists. */
+const BUNDLE_PATH = join(REPO, "src", "server", "client-bundle.generated.ts");
 
 /** Run roots the durable-path fixture (M5.5) leaves outside the temp dir. A day
  *  is longer than any run, so nothing in progress can be swept. */
@@ -26,10 +30,8 @@ const globalSetup = async (): Promise<void> => {
   const log = (message: string): void => console.log(`[e2e setup] ${message}`);
 
   const freshness = await ensureFreshBundle({
-    bundlePath: join(REPO, "src", "server", "client-bundle.generated.ts"),
-    // The build script counts as a source: a change to how the bundle is made
-    // stales the bundle just as surely as a change to what goes into it.
-    sourceDirs: [join(REPO, "client"), join(REPO, "scripts", "build-client.ts")],
+    bundlePath: BUNDLE_PATH,
+    sources: BUNDLE_SOURCES.map((s) => join(REPO, ...s.split("/"))),
     build: async () => {
       await execFileAsync("bun", ["run", "build:client"], { cwd: REPO });
     },
@@ -39,13 +41,24 @@ const globalSetup = async (): Promise<void> => {
     log(`bundle mtime ${new Date(freshness.bundleMtimeMs).toISOString()}`);
   }
 
-  // Built once here rather than per test. Nothing under test/ runs it yet - the
-  // harness spawns `bun run src/cli/main.ts` - so today this only proves the
-  // binary compiles from this commit. The compiled-binary scenario is Phase 5's,
-  // and it needs the artifact to already exist rather than paying for a build
-  // inside a test's timeout.
-  await execFileAsync("bun", ["run", "build:binary"], { cwd: REPO });
-  log("dist/lucid built");
+  // Built once per run rather than per test, and skipped when it is already
+  // newer than the bundle it embeds - CI runs `bun run build` in its own step
+  // seconds earlier, so an unconditional build here compiles the binary twice
+  // in every job and twice again on each platform of the nightly.
+  //
+  // Deliberately a weaker check than the bundle's: nothing under test/ runs
+  // dist/lucid yet, since the harness spawns `bun run src/cli/main.ts`. Today
+  // this proves the binary COMPILES from this commit and nothing more. Phase 5
+  // introduces the first real consumer and has to tighten this to the binary's
+  // own inputs.
+  const binary = join(REPO, "dist", "lucid");
+  const binaryFresh = (await bundleFreshness(binary, [BUNDLE_PATH])).fresh;
+  if (binaryFresh) {
+    log("dist/lucid is current");
+  } else {
+    await execFileAsync("bun", ["run", "build:binary"], { cwd: REPO });
+    log("dist/lucid built");
+  }
 
   const swept = await sweepStaleRoots({
     root: RUN_ROOT,

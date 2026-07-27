@@ -18,23 +18,79 @@ const execFileAsync = promisify(execFile);
  * or an old run-root in front of it and assert on the answer.
  */
 
-/** The newest mtime under `dirs`, and which file it belongs to. */
+/**
+ * Everything the client bundle is built FROM, repo-relative.
+ *
+ * `client/` is not a closed graph, which is the trap here. `client/shared/
+ * capture.ts` imports `src/anchors/dom.ts`, and that anchor-resolution code is
+ * compiled into the overlay bundle - the code `selection.e2e.ts` and the
+ * multi-target suite spend most of their time driving. A gate watching only
+ * `client/` would let you fix `resolveRangeAnchor`, run the suite against the
+ * old resolver, and get a green result about code that is not in the commit:
+ * exactly the failure this gate exists to prevent, on the best-covered path.
+ *
+ * Coarse on purpose - whole directories rather than the six files actually
+ * imported - because a list of files goes stale the first time someone adds an
+ * import. `test/e2e-gate.test.ts` asserts that every `../../src/…` import under
+ * `client/` resolves inside one of these roots, so the coarseness cannot drift
+ * into a hole in silence.
+ *
+ * The cost is a rebuild when `src/core` changes without affecting the bundle.
+ * A rebuild is seconds; a gate that reports fresh when it is not has no value
+ * at all.
+ */
+export const BUNDLE_SOURCES = [
+  "client",
+  // Reached from client/ by value imports - see the drift test.
+  "src/anchors",
+  "src/core",
+  "src/protocol",
+  // Embedded as FAVICON_SVG by the build script.
+  "assets/lucid-mark.svg",
+  // The build itself: a change to HOW the bundle is made stales it as surely as
+  // a change to what goes in it.
+  "scripts/build-client.ts",
+] as const;
+
+/**
+ * The newest mtime among `sources`, and which file it belongs to.
+ *
+ * Each entry may be a directory (walked recursively) or a single file - the
+ * build script is as much an input as the code it compiles, and it does not
+ * live under `client/`. Treating a file as an unreadable directory and skipping
+ * it would leave the gate quietly blind to exactly that case.
+ */
 export const newestSource = async (
-  dirs: readonly string[],
+  sources: readonly string[],
 ): Promise<{ readonly path: string; readonly mtimeMs: number } | undefined> => {
   let newest: { path: string; mtimeMs: number } | undefined;
-  for (const dir of dirs) {
+  const consider = (path: string, mtimeMs: number): void => {
+    if (!newest || mtimeMs > newest.mtimeMs) newest = { path, mtimeMs };
+  };
+
+  for (const source of sources) {
     let entries: Dirent[];
     try {
-      entries = await readdir(dir, { withFileTypes: true, recursive: true });
+      entries = await readdir(source, { withFileTypes: true, recursive: true });
     } catch {
-      continue; // a source dir that does not exist cannot make anything stale
+      // Either a single file, or nothing at all. A file counts; a path that
+      // does not exist cannot stale anything.
+      try {
+        consider(source, (await stat(source)).mtimeMs);
+      } catch {
+        /* not there */
+      }
+      continue;
     }
+    // The root itself, then everything under it. Directories count as much as
+    // files: creating or deleting a file bumps its parent's mtime and nothing
+    // else, so a delete would otherwise leave the bundle stale while the gate
+    // called it current - and the root is where a top-level add or delete
+    // registers, which nothing below would see.
+    consider(source, (await stat(source)).mtimeMs);
     for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      const path = join(entry.parentPath ?? dir, entry.name);
-      const { mtimeMs } = await stat(path);
-      if (!newest || mtimeMs > newest.mtimeMs) newest = { path, mtimeMs };
+      const path = join(entry.parentPath, entry.name);
+      consider(path, (await stat(path)).mtimeMs);
     }
   }
   return newest;
@@ -51,9 +107,9 @@ export interface Freshness {
 /** Is the built bundle at least as new as every file it is built from? */
 export const bundleFreshness = async (
   bundlePath: string,
-  sourceDirs: readonly string[],
+  sources: readonly string[],
 ): Promise<Freshness> => {
-  const newest = await newestSource(sourceDirs);
+  const newest = await newestSource(sources);
   let bundleMtimeMs: number | undefined;
   try {
     bundleMtimeMs = (await stat(bundlePath)).mtimeMs;
@@ -71,7 +127,8 @@ export const bundleFreshness = async (
 
 export interface BuildGate {
   readonly bundlePath: string;
-  readonly sourceDirs: readonly string[];
+  /** Directories to walk, or single files. Both are real inputs. */
+  readonly sources: readonly string[];
   /** Injected so a test can supply one that does nothing and watch the gate
    *  refuse, which is the only way to observe the refusal without a real
    *  stale checkout. */
@@ -94,7 +151,7 @@ export interface BuildGate {
  */
 export const ensureFreshBundle = async (gate: BuildGate): Promise<Freshness> => {
   const log = gate.log ?? (() => {});
-  const before = await bundleFreshness(gate.bundlePath, gate.sourceDirs);
+  const before = await bundleFreshness(gate.bundlePath, gate.sources);
   if (before.fresh) {
     log(`bundle is current (${gate.bundlePath})`);
     return before;
@@ -106,7 +163,7 @@ export const ensureFreshBundle = async (gate: BuildGate): Promise<Freshness> => 
   );
   await gate.build();
 
-  const after = await bundleFreshness(gate.bundlePath, gate.sourceDirs);
+  const after = await bundleFreshness(gate.bundlePath, gate.sources);
   if (!after.fresh) {
     // A source dated in the future can never be caught up with, however well
     // the build works, so it gets its own diagnosis - the generic message would
@@ -221,9 +278,18 @@ export const killSurvivors = async (
 ): Promise<readonly Survivor[]> => {
   let psOutput = "";
   try {
-    const { stdout } = await execFileAsync("ps", ["-Ao", "pid=,command="]);
+    // -ww: never truncate. procps sizes piped output to a buffer default but
+    // lets an exported COLUMNS override it afterwards, and the marker this
+    // matcher needs sits at the END of the line - precisely what truncation
+    // eats. One flag removes the whole class of silent miss.
+    const { stdout } = await execFileAsync("ps", ["-wwAo", "pid=,command="]);
     psOutput = stdout;
-  } catch {
+  } catch (error) {
+    // Never silently: a sweep that cannot list processes reports exactly what a
+    // clean run reports, so every run afterwards would look healthy while
+    // reaping nothing. That is the failure this whole function is written to
+    // avoid, one level up.
+    log(`could not list processes, so nothing was reaped: ${(error as Error).message}`);
     return [];
   }
   const survivors = survivingProcesses(psOutput, repoMain);
