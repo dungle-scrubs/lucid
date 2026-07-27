@@ -1,6 +1,7 @@
 import type { SessionPaths } from "../core/paths.ts";
 import { ServerError } from "../errors.ts";
 import { removeServerDescriptor, writeServerDescriptor } from "./discovery.ts";
+import { portBase, sessionPortPool } from "./ports.ts";
 import { createSessionHost } from "./session-host.ts";
 
 export interface ServerOptions {
@@ -13,14 +14,14 @@ export interface ServerOptions {
 const DEFAULT_IDLE_MS = 30 * 60 * 1000;
 
 /**
- * Preferred per-session ports, tried in order before falling back to `0`
- * (ephemeral). A stable port keeps a reopened session on the URL the browser
- * already has; the trailing `0` guarantees a session still starts when every
- * preferred port is taken.
+ * Preferred per-session ports for THIS process, offset by `LUCID_PORT_BASE`.
+ *
+ * The numbers and the reasoning behind them live in `ports.ts`; this is the
+ * binding of them to the current environment. Machine-global by default, which
+ * is right for one human on one machine and wrong for four test workers - see
+ * that module.
  */
-export const PORT_POOL: readonly number[] = [
-  17412, 17413, 17414, 17415, 17416, 17417, 17418, 17419, 0,
-];
+export const PORT_POOL: readonly number[] = sessionPortPool(portBase(process.env));
 
 /**
  * Run the dedicated per-session loopback server (the long-lived daemon body).
@@ -93,6 +94,19 @@ export const runServer = async (
   }
   const boundServer = server;
   port = boundServer.port ?? 0;
+
+  // One line naming what was bound and why it was available.
+  //
+  // The offset is derived silently from the environment, so a collision between
+  // two parallel workers surfaces as a session that never answers - a hung
+  // server, to anyone reading the log - rather than as two processes wanting
+  // one number. This is the only place that knows both, and the per-session
+  // server is where a collision would actually happen: the stamp cannot say it,
+  // because it runs outside every worker and always sees base 0.
+  console.log(
+    `lucid session server on 127.0.0.1:${port} ` +
+      `(base ${portBase(process.env)}, pool [${requestedPorts.join(", ")}])`,
+  );
 
   await writeServerDescriptor(paths, {
     port,

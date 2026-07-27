@@ -25,8 +25,10 @@
  * child, on the same Bun and platform - a sound proxy, not the run itself.
  */
 import { lockBackend } from "../src/core/lock.ts";
+import { hubPort, portBase, sessionPortPool } from "../src/server/ports.ts";
 
 const backend = lockBackend();
+const base = portBase(process.env);
 
 console.log(
   JSON.stringify({
@@ -36,6 +38,15 @@ console.log(
     node: process.version,
     lockBackend: backend,
     ci: process.env.CI === "true",
+    // The ports THIS process would bind, which is worker 0's set: the stamp is
+    // its own CI step and runs outside every worker, so TEST_PARALLEL_INDEX is
+    // not set here and the base is always 0. Recorded anyway because it pins
+    // the unshifted layout, and named honestly so nobody reads it as evidence
+    // about what a parallel run did. Each server logs the base it actually
+    // bound with, which is where that answer lives.
+    portBaseHere: base,
+    unshiftedSessionPorts: sessionPortPool(base),
+    unshiftedHubPort: hubPort(base),
   }),
 );
 

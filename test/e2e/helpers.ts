@@ -3,9 +3,52 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { expect, type FrameLocator, type Page } from "@playwright/test";
+import { expect, type FrameLocator, type Page, type Route } from "@playwright/test";
+import { type CliOutcome, interpretCliResult } from "./cli-result.ts";
+export { killSessionServer } from "./kill-server.ts";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Run the CLI and interpret what came back.
+ *
+ * `execFile` rejects with `Command failed` and hangs the exit code, stdout and
+ * stderr off the error object where nobody looks, so the rejection is caught
+ * here and turned into the full outcome before `interpretCliResult` judges it.
+ * A genuine spawn failure - no such binary - is re-thrown untouched, because
+ * that is not the CLI answering at all.
+ */
+const invoke = async (
+  args: readonly string[],
+  options: Parameters<typeof execFileAsync>[2] & { timeout?: number },
+): Promise<Record<string, unknown>> => {
+  let outcome: CliOutcome;
+  try {
+    const { stdout, stderr } = await execFileAsync("bun", ["run", MAIN, ...args], options);
+    outcome = { argv: args, code: 0, signal: null, stdout: String(stdout), stderr: String(stderr) };
+  } catch (error) {
+    const failed = error as NodeJS.ErrnoException & {
+      stdout?: string;
+      stderr?: string;
+      signal?: NodeJS.Signals;
+      killed?: boolean;
+    };
+    // `code` is a number for an exit, a string like ENOENT for a spawn failure.
+    const code = typeof failed.code === "number" ? failed.code : null;
+    const signal = failed.signal ?? null;
+    if (code === null && signal === null) throw error;
+    outcome = {
+      argv: args,
+      code,
+      signal,
+      stdout: failed.stdout ?? "",
+      stderr: failed.stderr ?? "",
+      killed: failed.killed === true,
+      ...(options?.timeout === undefined ? {} : { timeoutMs: options.timeout }),
+    };
+  }
+  return interpretCliResult(outcome);
+};
 
 const REPO = join(import.meta.dirname, "..", "..");
 /** The CLI entrypoint, exported so a suite can spawn a long-running invocation
@@ -26,8 +69,8 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
   const artifact = join(dir, "plan.html");
   await writeFile(artifact, initialHtml);
 
-  const run = async (args: string[], timeoutMs = 30_000): Promise<Record<string, unknown>> => {
-    const { stdout } = await execFileAsync("bun", ["run", MAIN, ...args], {
+  const run = async (args: string[], timeoutMs = 30_000): Promise<Record<string, unknown>> =>
+    invoke(args, {
       cwd: dir,
       timeout: timeoutMs,
       env: {
@@ -53,8 +96,6 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
         LUCID_HUB_PORT: "1",
       },
     });
-    return JSON.parse(stdout) as Record<string, unknown>;
-  };
 
   return {
     dir,
@@ -170,14 +211,12 @@ export const openIntoHub = async (
 ): Promise<{ cli: Cli; shellUrl: string }> => {
   const c = await makeCli(html);
   // Rebind the CLI's env to the hub (makeCli's own env has no LUCID_HUB_PORT).
-  const run = async (args: string[], timeoutMs = 30_000) => {
-    const { stdout } = await execFileAsync("bun", ["run", MAIN, ...args], {
+  const run = async (args: string[], timeoutMs = 30_000) =>
+    invoke(args, {
       cwd: c.dir,
       timeout: timeoutMs,
       env: { ...hub.env, LUCID_IDLE_MS: "0" },
     });
-    return JSON.parse(stdout) as Record<string, unknown>;
-  };
   const opened = (await run(["open", c.artifact])) as { url: string };
   expect(opened.url).toContain(`127.0.0.1:${hub.port}/?s=`);
   return { cli: { ...c, run } as Cli, shellUrl: opened.url };
@@ -274,3 +313,51 @@ export const PLAN_V2 = `<!doctype html>
   </article>
 </body>
 </html>`;
+
+/**
+ * Interfering with a request the page is about to make.
+ *
+ * Three shapes, because they fail differently and the difference is the point:
+ * a slow response is still a response, an aborted one never arrives, and a
+ * stubbed error arrives quickly and says something specific. A suite asserting
+ * "the composer keeps the message when the server is gone" needs the second;
+ * one asserting "a 500 surfaces the server's reason" needs the third.
+ *
+ * Each takes the URL pattern rather than wrapping a fixed route, so the caller
+ * names the endpoint it is talking about at the call site.
+ */
+export const delayRoute = async (
+  page: Page,
+  pattern: string | RegExp,
+  ms: number,
+): Promise<void> => {
+  await page.route(pattern, async (route: Route) => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    // The whole job of this helper is to still be holding a request when
+    // something else happens, so the page navigating or closing mid-delay is
+    // the LIKELY path, not the exotic one - and `continue()` rejects inside a
+    // route handler when it does. Swallowed: the test has already moved on, and
+    // an unhandled rejection here would fail whatever ran next instead.
+    await route.continue().catch(() => {});
+  });
+};
+
+/** Make the request fail as though the connection dropped. */
+export const abortRoute = async (page: Page, pattern: string | RegExp): Promise<void> => {
+  await page.route(pattern, (route: Route) => route.abort("connectionfailed"));
+};
+
+/** Answer the request without it reaching the server. */
+export const stubRoute = async (
+  page: Page,
+  pattern: string | RegExp,
+  response: { status?: number; body?: string; contentType?: string },
+): Promise<void> => {
+  await page.route(pattern, (route: Route) =>
+    route.fulfill({
+      status: response.status ?? 200,
+      contentType: response.contentType ?? "application/json",
+      body: response.body ?? "{}",
+    }),
+  );
+};
