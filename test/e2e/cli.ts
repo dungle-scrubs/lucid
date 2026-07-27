@@ -42,10 +42,25 @@ const execFileAsync = promisify(execFile);
  * machine nobody anticipated.
  */
 export const waitTimeoutSeconds = (base: number): string => {
-  const workers = Number.parseInt(process.env.TEST_PARALLEL_INDEX ?? "0", 10) + 1;
-  const scale = Number.parseFloat(process.env.LUCID_E2E_TIMEOUT_SCALE ?? "1");
+  // `LUCID_E2E_TIMEOUT_SCALE` and nothing else.
+  //
+  // An earlier version also multiplied by 1.5 when `TEST_PARALLEL_INDEX > 0`,
+  // on the belief that it was a worker COUNT. It is the 0-based index of the
+  // worker SLOT, so that gave slot 0 a tight deadline and every other slot a
+  // loosened one - a per-slot lottery where a test flakes on slot 0 and not on
+  // slot 2 - and with `workers: 1` in the config the branch was unreachable
+  // anyway. Dead code that read as protection.
+  //
+  // The knob moves THIS deadline only. `playwright.config.ts`'s `timeout` and
+  // `expect.timeout` are separate numbers; on a machine slow enough to need
+  // the scale, they need raising too, and doing that silently from here would
+  // hide which budget a run actually died on.
+  const raw = process.env.LUCID_E2E_TIMEOUT_SCALE;
+  // `parseFloat("3x")` is 3, which silently half-applies a typo. Require the
+  // whole string to be a number.
+  const scale = raw !== undefined && /^\d+(\.\d+)?$/.test(raw) ? Number.parseFloat(raw) : 1;
   const factor = Number.isFinite(scale) && scale > 0 ? scale : 1;
-  return String(Math.max(1, Math.ceil(base * factor * (workers > 1 ? 1.5 : 1))));
+  return String(Math.max(1, Math.ceil(base * factor)));
 };
 
 export const invoke = async (

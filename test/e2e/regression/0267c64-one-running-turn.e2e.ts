@@ -60,28 +60,23 @@ test("a running turn is announced in one place, not three", async ({ page }) => 
   // And the composer line is naming a mode, not repeating the card.
   await expect(page.locator(`${hook("listener-line")}[data-mode="working"]`)).toHaveCount(0);
 
-  // Every surface that announces a running turn, not the two the fix happened
-  // to touch: the commit names three voices and the pill over the artifact is
-  // the first of them. Selectors are built out here and passed IN, because
-  // `page.evaluate` runs in the browser where locators.ts does not exist, and
-  // spelling them in both places is how two copies drift.
+  // The two surfaces this commit was about, and no more.
+  //
+  // A wider count was tried - adding the artifact pill and the tab badge - and
+  // withdrawn, because it asserts something the product deliberately does NOT
+  // do: `loop.e2e.ts`'s revise-intent test requires the pill and the card to
+  // appear TOGETHER ("Updating the artifact"). A regression test that forbids
+  // that would go red for correct behaviour the moment this fixture declared an
+  // intent, and neither added surface was ever verified by reverting anything.
+  // Selectors are built out here and passed IN: `page.evaluate` runs in the
+  // browser, where locators.ts does not exist.
   const voices = await page.evaluate(
     (sel) => {
       const count = (selector: string): number => document.querySelectorAll(selector).length;
-      const surfaces = {
-        transcriptCard: count(sel.card),
-        composerShimmer: count(sel.shimmer),
-        artifactPill: count(sel.pill),
-        tabBadge: count(sel.badge),
-      };
-      return { surfaces, total: Object.values(surfaces).reduce((sum, n) => sum + n, 0) };
+      const surfaces = { transcriptCard: count(sel.card), composerShimmer: count(sel.shimmer) };
+      return { surfaces, total: surfaces.transcriptCard + surfaces.composerShimmer };
     },
-    {
-      card: hook("agent-working"),
-      shimmer: `${hook("listener-line")}[data-mode="working"]`,
-      pill: hook("surface-updating"),
-      badge: `${hook("tab-attention")}[data-kind="working"]`,
-    },
+    { card: hook("agent-working"), shimmer: `${hook("listener-line")}[data-mode="working"]` },
   );
   expect(
     voices.total,

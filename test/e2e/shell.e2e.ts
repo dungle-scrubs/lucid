@@ -97,7 +97,7 @@ test("each sent item shows where it got to: recorded, then delivered (D20)", asy
     "--since",
     before.nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { status: string };
   expect(feedback.status).toBe("feedback");
   await expect(state).toHaveAttribute("data-state", "delivered");

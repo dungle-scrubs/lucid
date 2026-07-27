@@ -66,7 +66,7 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as {
     status: string;
     annotations: { note: string; resolved: boolean; target: { snippet: string } }[];
@@ -90,7 +90,7 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
     "--since",
     feedback.nextCursor,
     "--timeout",
-    "4",
+    waitTimeoutSeconds(4),
   ])) as {
     status: string;
     version: number;
@@ -192,7 +192,7 @@ test("structured question: choose an option and pin an artifact region as the an
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as {
     questions?: {
       answered: boolean;
@@ -250,7 +250,7 @@ test("multi-select question: options are numbered and more than one can be chose
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { questions?: { answered: boolean; answerOptions?: string[] }[] };
   const q = payload.questions?.[0];
   expect(q?.answered).toBe(true);
@@ -393,7 +393,7 @@ test("fork button spins the selection off; the request reaches wait as a fork", 
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as {
     status: string;
     annotations: unknown[];
@@ -428,7 +428,7 @@ test("Fork with an empty note still forks (default directive), and confirms", as
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { status: string; forks?: { note: string }[] };
   expect(feedback.forks).toHaveLength(1);
   expect(feedback.forks?.[0]?.note.length).toBeGreaterThan(0);
@@ -475,7 +475,7 @@ test("cmd+enter queues the open note and sends the whole queue", async ({ page }
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as {
     status: string;
     annotations: { note: string }[];
@@ -495,7 +495,7 @@ test("agent reply appears in the conversation log", async ({ page }) => {
     "--reply",
     "I reordered and batched the backfill.",
     "--timeout",
-    "1",
+    waitTimeoutSeconds(1),
   ]);
   await expect(page.locator('[data-role="agent"]')).toContainText("reordered and batched");
 });
@@ -532,7 +532,7 @@ test("approve/resolve closes the loop and reopen clears it", async ({ page }) =>
     "--since",
     nextCursor,
     "--timeout",
-    "6",
+    waitTimeoutSeconds(6),
   ])) as {
     reviewResolved: boolean;
     nextCursor: string;
@@ -969,7 +969,7 @@ test("a large text paste folds to a placeholder; the agent still gets every line
     "--since",
     fb.nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { messages: { text: string }[] };
   expect(fb2.messages).toHaveLength(1);
   expect(fb2.messages[0]?.text).toBe("what did [Pasted text #1 +40 lines] contain?");
@@ -1011,7 +1011,7 @@ test("scrolled-up readers are not yanked; the floating button brings them back",
     "--reply",
     "one more while you were reading",
     "--timeout",
-    "1",
+    waitTimeoutSeconds(1),
   ]);
   await expect(page.locator('[data-role="agent"]')).toHaveCount(13);
   await page.waitForTimeout(400); // any yank would have happened by now
@@ -1211,7 +1211,7 @@ test("a message sent at a dead server is kept, not eaten, and delivers itself on
     "--since",
     reopened.nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { status: string; messages: { role: string; text: string }[] };
   expect(fb.status).toBe("feedback");
   const delivered = fb.messages.filter((m) => m.role === "human").map((m) => m.text);
@@ -1255,7 +1255,7 @@ test("a stale viewer never posts its message into whichever session took its por
       "--since",
       otherSession.nextCursor,
       "--timeout",
-      "2",
+      waitTimeoutSeconds(2),
     ])) as { messages?: { role: string }[] };
     expect(fb.messages?.some((m) => m.role === "human") ?? false).toBe(false);
   } finally {

@@ -1,3 +1,4 @@
+import { waitTimeoutSeconds } from "../cli.ts";
 import { on } from "../locators.ts";
 import type { Page } from "@playwright/test";
 import type { Cli } from "../cli.ts";
@@ -46,7 +47,7 @@ test("Fork with no directive still reaches the agent, and says it did", async ({
     "--since",
     nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { status: string; forks?: { note: string }[] };
 
   expect(feedback.forks, "no fork reached the agent").toHaveLength(1);

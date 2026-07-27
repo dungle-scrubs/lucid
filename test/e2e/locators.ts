@@ -14,7 +14,7 @@ import type { FrameLocator, Locator, Page } from "@playwright/test";
  * `Meta+w` hardcodes macOS. The same test on Linux drives a chord the product
  * never receives, and passes by asserting nothing happened. `mod()` asks.
  *
- * Generated from the hooks in use (146 of them) rather than written by
+ * Generated from the hooks in use (147 of them) rather than written by
  * hand, so the list cannot fall behind the suites. `scripts/check-locators.ts`
  * rejects a raw `[data-test=` outside this file.
  */
@@ -118,6 +118,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   newArtifact: (): Locator => root.locator(hook("new-artifact")),
   newerVersion: (): Locator => root.locator(hook("newer-version")),
   notice: (): Locator => root.locator(hook("notice")),
+  orphan: (): Locator => root.locator(hook("orphan")),
   palette: (): Locator => root.locator(hook("palette")),
   paletteInput: (): Locator => root.locator(hook("palette-input")),
   paletteOverlay: (): Locator => root.locator(hook("palette-overlay")),

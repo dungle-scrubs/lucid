@@ -1,6 +1,6 @@
 import { hook, on } from "./locators.ts";
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
-import { makeCli, PLAN_V1, type Cli } from "./helpers.ts";
+import { PLAN_V1, makeCli, type Cli, waitTimeoutSeconds } from "./helpers.ts";
 
 /**
  * The thread viewport is a vertical record: wide content scrolls inside its
@@ -56,7 +56,7 @@ for (const width of [384, 950]) {
       "--since",
       session.nextCursor,
       "--timeout",
-      "1",
+      waitTimeoutSeconds(1),
     ]);
 
     // A located annotation and a human message round out the record's shapes.

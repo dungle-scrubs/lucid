@@ -35,9 +35,11 @@ test("cmd-click collects two spots into one annotation that reaches wait as targ
 
   // First cmd-click starts the collection; the second adds to it instead of
   // replacing the pick the way a plain click would.
-  await surface.locator('li[data-lucid-id="step-backfill"]').click({ modifiers: ["Meta"] });
+  await surface
+    .locator('li[data-lucid-id="step-backfill"]')
+    .click({ modifiers: ["ControlOrMeta"] });
   await expect(on(page).annotationNote()).toBeVisible();
-  await surface.locator("#note").click({ modifiers: ["Meta"] });
+  await surface.locator("#note").click({ modifiers: ["ControlOrMeta"] });
 
   // ONE draft, two chips - and two pending marks on the surface.
   await expect(on(page).targetChip()).toHaveCount(2);
@@ -80,12 +82,14 @@ test("cmd-click is a toggle: repeating a pick removes its spot", async ({ page }
   await openViewer(page);
   const surface = surfaceOf(page);
 
-  await surface.locator('li[data-lucid-id="step-backfill"]').click({ modifiers: ["Meta"] });
-  await surface.locator("#note").click({ modifiers: ["Meta"] });
+  await surface
+    .locator('li[data-lucid-id="step-backfill"]')
+    .click({ modifiers: ["ControlOrMeta"] });
+  await surface.locator("#note").click({ modifiers: ["ControlOrMeta"] });
   await expect(on(page).targetChip()).toHaveCount(2);
 
   // Cmd-click the same element again: its spot leaves the collection.
-  await surface.locator("#note").click({ modifiers: ["Meta"] });
+  await surface.locator("#note").click({ modifiers: ["ControlOrMeta"] });
   // Down to one spot, the draft is the ordinary single-target composer again.
   await expect(on(page).targetChip()).toHaveCount(0);
   await expect(on(page).annotationNote()).toBeVisible();
@@ -94,7 +98,7 @@ test("cmd-click is a toggle: repeating a pick removes its spot", async ({ page }
   // Escape discards the whole collection as one gesture. Wait for the second
   // spot to land first: the pick crosses the frame boundary as a postMessage,
   // and an instant Escape could otherwise beat it into the chrome.
-  await surface.locator("#note").click({ modifiers: ["Meta"] });
+  await surface.locator("#note").click({ modifiers: ["ControlOrMeta"] });
   await expect(on(page).targetChip()).toHaveCount(2);
   await on(page).annotationNote().press("Escape");
   await expect(on(page).annotationNote()).toHaveCount(0);
@@ -143,8 +147,8 @@ test("shift+cmd-click collects several answer pins that reach wait as anchors[2]
 
   await surface
     .locator('li[data-lucid-id="step-backfill"]')
-    .click({ modifiers: ["Shift", "Meta"] });
-  await surface.locator("#note").click({ modifiers: ["Shift", "Meta"] });
+    .click({ modifiers: ["Shift", "ControlOrMeta"] });
+  await surface.locator("#note").click({ modifiers: ["Shift", "ControlOrMeta"] });
   await expect(on(page).answerAnchor()).toHaveCount(2);
 
   // A chip's × drops that pin alone; re-pin it for the send.
@@ -153,7 +157,7 @@ test("shift+cmd-click collects several answer pins that reach wait as anchors[2]
     .nth(1)
     .click();
   await expect(on(page).answerAnchor()).toHaveCount(1);
-  await surface.locator("#note").click({ modifiers: ["Shift", "Meta"] });
+  await surface.locator("#note").click({ modifiers: ["Shift", "ControlOrMeta"] });
   await expect(on(page).answerAnchor()).toHaveCount(2);
 
   await on(page).freeText().fill("Both of these.");

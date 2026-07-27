@@ -141,7 +141,7 @@ test("a grouped question rises as a drawer, gates on its reason, and answers as 
     "--since",
     before.nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as {
     questions?: {
       answered: boolean;
@@ -198,7 +198,7 @@ test("Enter on Skip declines; it never submits the drawer's draft as a decision"
     "--since",
     before.nextCursor,
     "--timeout",
-    "8",
+    waitTimeoutSeconds(8),
   ])) as { questions?: { skipped?: boolean; answer?: string; answerItems?: unknown[] }[] };
   const q = payload.questions?.[0];
   expect(q?.skipped).toBe(true);
