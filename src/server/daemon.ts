@@ -43,6 +43,7 @@ import {
 } from "./client-bundle.generated.ts";
 import { devBundleStamp, readDevAsset } from "./dev-assets.ts";
 import { injectOverlay } from "./inject.ts";
+import { hubPort, portBase } from "./ports.ts";
 import { validateHeaders } from "./security.ts";
 import { createSessionHost, type SessionHost } from "./session-host.ts";
 
@@ -69,7 +70,7 @@ import { createSessionHost, type SessionHost } from "./session-host.ts";
  * Binds 127.0.0.1 only, behind the same Host/Origin gate the per-session
  * server uses.
  */
-export const HUB_PORT = 17428;
+export const HUB_PORT = hubPort(portBase(process.env));
 
 /** How often the SSE change-detector re-scans while subscribers are connected. */
 const POLL_MS = 2000;

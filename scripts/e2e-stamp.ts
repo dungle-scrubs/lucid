@@ -25,8 +25,10 @@
  * child, on the same Bun and platform - a sound proxy, not the run itself.
  */
 import { lockBackend } from "../src/core/lock.ts";
+import { hubPort, portBase, sessionPortPool } from "../src/server/ports.ts";
 
 const backend = lockBackend();
+const base = portBase(process.env);
 
 console.log(
   JSON.stringify({
@@ -36,6 +38,14 @@ console.log(
     node: process.version,
     lockBackend: backend,
     ci: process.env.CI === "true",
+    // Which ports this run will actually bind. The offset is computed silently
+    // from the environment, so without it in the record a port collision looks
+    // like a hung server rather than two workers wanting the same number - and
+    // that is the failure this offset exists to prevent, so it has to be
+    // visible when it happens anyway.
+    portBase: base,
+    sessionPorts: sessionPortPool(base),
+    hubPort: hubPort(base),
   }),
 );
 

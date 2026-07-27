@@ -1,6 +1,7 @@
 import type { SessionPaths } from "../core/paths.ts";
 import { ServerError } from "../errors.ts";
 import { removeServerDescriptor, writeServerDescriptor } from "./discovery.ts";
+import { portBase, sessionPortPool } from "./ports.ts";
 import { createSessionHost } from "./session-host.ts";
 
 export interface ServerOptions {
@@ -13,14 +14,14 @@ export interface ServerOptions {
 const DEFAULT_IDLE_MS = 30 * 60 * 1000;
 
 /**
- * Preferred per-session ports, tried in order before falling back to `0`
- * (ephemeral). A stable port keeps a reopened session on the URL the browser
- * already has; the trailing `0` guarantees a session still starts when every
- * preferred port is taken.
+ * Preferred per-session ports for THIS process, offset by `LUCID_PORT_BASE`.
+ *
+ * The numbers and the reasoning behind them live in `ports.ts`; this is the
+ * binding of them to the current environment. Machine-global by default, which
+ * is right for one human on one machine and wrong for four test workers - see
+ * that module.
  */
-export const PORT_POOL: readonly number[] = [
-  17412, 17413, 17414, 17415, 17416, 17417, 17418, 17419, 0,
-];
+export const PORT_POOL: readonly number[] = sessionPortPool(portBase(process.env));
 
 /**
  * Run the dedicated per-session loopback server (the long-lived daemon body).
