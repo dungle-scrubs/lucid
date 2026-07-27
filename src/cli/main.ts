@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { Args, Command, Options } from "@effect/cli";
+import { Args, Command, HelpDoc, Options, ValidationError } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
-import { Effect, Option } from "effect";
+import { Effect, Logger, Option } from "effect";
 import { toErrorJson, type LucidError } from "../errors.ts";
 import {
   runApp,
@@ -234,4 +234,61 @@ const cli = Command.run(lucid, {
   version: "0.2.0", // x-release-please-version
 });
 
-cli(process.argv).pipe(Effect.provide(BunContext.layer), BunRuntime.runMain);
+/**
+ * Everything Effect logs goes to stderr.
+ *
+ * The default logger writes to stdout, and the CLI's OWN refusals - an unknown
+ * subcommand, an argument outside its set, a missing option - fail before any
+ * handler runs, so they were logged there as a formatted block:
+ *
+ *     [16:59:59] ERROR (#17):
+ *       Error: {"_tag":"CommandMismatch","error":{...}}
+ *
+ * That breaks the one promise the CLI makes to an agent: stdout is one JSON
+ * document. `JSON.parse(stdout)` then throws a parser error pointing at the
+ * caller's own code, for a refusal the CLI could have named. stdout belongs to
+ * the answer; everything else is stderr's.
+ */
+const logToStderr = Logger.replace(
+  Logger.defaultLogger,
+  Logger.make(({ message }) => {
+    const parts = Array.isArray(message) ? message : [message];
+    process.stderr.write(`${parts.map((m) => String(m)).join(" ")}\n`);
+  }),
+);
+
+/**
+ * The CLI's own refusals, in the envelope every other refusal already uses.
+ *
+ * `runEffect` covers failures INSIDE a command body; these happen before one is
+ * chosen, so they never reached it. A help or version request is not a refusal
+ * and is left alone - it has already printed what it was asked for.
+ */
+const asEnvelope = (error: unknown): { readonly error: LucidError } | undefined => {
+  if (!ValidationError.isValidationError(error)) return undefined;
+  // Help and version are answers, not refusals: they have already printed what
+  // was asked for, and wrapping them in an error envelope would be a lie.
+  if (error._tag === "NoBuiltInMatch") return undefined;
+  return {
+    error: {
+      code: "USAGE",
+      // The same words stderr already carries, so the two never disagree.
+      message: HelpDoc.toAnsiText(error.error).trim(),
+      detail: {},
+    } as unknown as LucidError,
+  };
+};
+
+cli(process.argv).pipe(
+  Effect.provide(BunContext.layer),
+  Effect.provide(logToStderr),
+  Effect.catchAll((error) => {
+    const envelope = asEnvelope(error);
+    if (!envelope) return Effect.fail(error);
+    return Effect.sync(() => {
+      process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
+      process.exitCode = 1;
+    });
+  }),
+  BunRuntime.runMain,
+);

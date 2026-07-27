@@ -139,6 +139,23 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     },
   },
   {
+    sha: "m2.1",
+    broke: "Effect's own refusals logged a formatted block to stdout, so JSON.parse(stdout) threw.",
+    testFile: "test/e2e/regression/m2.1-stdout-is-one-json-document.e2e.ts",
+    testName: "a refused command puts one JSON envelope on stdout, or nothing at all",
+    mutation: {
+      kind: "edit",
+      file: "src/cli/main.ts",
+      // The catchAll, not the logger. Removing the stderr logger alone leaves
+      // the test green: the top-level catch handles the error before anything
+      // logs it, so the logger replacement is belt-and-braces rather than the
+      // fix. Measured, not assumed - the first mutation named here was the
+      // logger, and it passed.
+      find: "    if (!envelope) return Effect.fail(error);",
+      replace: "    if (envelope) return Effect.fail(error);",
+    },
+  },
+  {
     sha: "42842f3",
     broke: "The badge straddling a card's top edge landed on the previous card's footer.",
     testFile: null,
