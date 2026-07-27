@@ -55,6 +55,16 @@ jobs:
 
       - run: bun test test/*.test.ts
 
+      # The half of the ledger check that needs no browser: statuses that belong
+      # to no bucket, a covered row naming no test, a declined row with no
+      # reason, and a covered row owing a mutation that was never grandfathered.
+      # It runs here as well as after the e2e suite because the e2e job is the
+      # wrong single home for it - if that job is red for any unrelated reason,
+      # the ledger goes unchecked, and a red suite is exactly when rows are
+      # being edited. The cross-check against a real run stays in `e2e`, which
+      # is the only place a real run exists.
+      - run: bun run scripts/coverage-check.ts --no-report
+
   # Playwright had never run outside a laptop. Every claim the e2e suite makes
   # rested on one developer's machine, one browser build, and a client bundle
   # that is gitignored - so a green local run could always have been a run
@@ -123,6 +133,19 @@ jobs:
       # set has to become a tag some test declares, which M6.2 decides once cost
       # is measured.
       - run: bunx playwright test
+
+      # `test/e2e/catalogue.json` is the scope ledger: which of the 256 catalogued
+      # scenarios are covered, and by which test. Nothing else in the repo reads
+      # those rows, so a renamed test, a deleted one, or a row that claimed
+      # coverage it never had all looked exactly like progress. This checks every
+      # `covered` row against the run that just finished, and recomputes the
+      # totals from the rows - the hand-written summary it replaces had drifted
+      # to 257/35 while the rows said 256/39.
+      #
+      # After the suite, deliberately: the report is the evidence, so there is
+      # nothing to check until it exists.
+      - name: The catalogue agrees with the run
+        run: bun run scripts/coverage-check.ts
 
       # A CI failure is not reproducible by re-reading the log - nobody has the
       # machine. Uploaded on failure AND on success: the JSON result file is what

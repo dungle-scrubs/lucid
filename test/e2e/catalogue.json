@@ -1,0 +1,3883 @@
+{
+  "suites": [
+    {
+      "name": "A. Agent contract: stdout, exit codes, error envelopes",
+      "purpose": "Everything an agent shells out to must return one parseable JSON document on stdout and a truthful exit code. This is the contract that breaks silently and breaks every integration at once.",
+      "scenarios": [
+        {
+          "id": "stdout-is-always-one-json-document",
+          "title": "Effect CLI failures never put non-JSON on stdout",
+          "steps": [
+            "Run `lucid bogus`, `echo '{}' | lucid plan ingest` (no --plan), and `lucid intent plan.html maybe`",
+            "Capture stdout and stderr separately for each",
+            "JSON.parse each stdout"
+          ],
+          "expected": "Each exits 1 and stdout is empty or a single `{error:{code,message,detail}}` envelope. Today all three emit an Effect log block (`[23:39:36] ERROR (#17): Error: {\"_tag\":\"CommandMismatch\"...}`) on stdout, so every agent doing JSON.parse(stdout) throws instead of reading a typed error.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "raw-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "exit-code-contract-is-uniform",
+          "title": "A refusal always exits non-zero, including progress and context",
+          "steps": [
+            "Run `lucid progress plan.html` (no flags) and `lucid progress plan.html --done -3`; echo $?",
+            "Run `lucid context plan.html --used 142000` (no --total); echo $?",
+            "Compare with `lucid ask plan.html` (no text)"
+          ],
+          "expected": "All refusals exit 1 with an error envelope. Today progress and context print `{ok:false,error:...}` with exit 0, so `if lucid progress ...` in a shell treats a no-op as success.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "raw-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "error-codes-are-a-closed-set",
+          "title": "An unexpected runtime error is not emitted as an undocumented Lucid code",
+          "steps": [
+            "Start `lucid hub --port 17492`, then start a second hub on the same port",
+            "Read the envelope's `error.code`"
+          ],
+          "expected": "One of the documented codes (VALIDATION_ERROR/NOT_FOUND/ARTIFACT_ERROR/SERVER_ERROR/LOG_ERROR). Today it is `EADDRINUSE` — a raw Bun error masquerading as a typed Lucid error, so an agent switching on the documented set falls through.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "raw-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "help-lists-every-command",
+          "title": "`--help` documents every user-facing flag and hides `__serve`",
+          "steps": ["Run `lucid --help` and each `lucid <cmd> --help`"],
+          "expected": "Exit 0 with --since/--reply/--harness/--resume/--timeout, --group, --restart, --attend, --poll all documented. `__serve` is internal but currently leaks into the invalid-subcommand hint.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "raw-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "version-flag-matches-package",
+          "title": "`lucid --version` matches the released version",
+          "steps": ["Run `lucid --version` and compare against package.json"],
+          "expected": "Identical. The value is a hand-maintained literal in main.ts with an `x-release-please-version` comment, so binary/release drift is possible.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "raw-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "plan-bare-usage-is-not-json",
+          "title": "`lucid plan` prints usage, and that is documented as non-JSON",
+          "steps": ["Run `lucid plan` with no subcommand"],
+          "expected": "Two usage lines on stdout, exit 0 — deliberately not JSON, which a scripted caller must not parse.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "raw-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "launch-stdout-is-not-json",
+          "title": "`lucid launch` writes plain progress lines",
+          "steps": ["Run `lucid launch plan.html` and read stdout"],
+          "expected": "Human-readable lines (`launcher watching plan for forks (Ctrl-C to stop)`). Documented as the one non-JSON long-running command besides `hub`.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "raw-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "B. Session identity and the on-disk record",
+      "purpose": "Where Lucid writes its record, how it names a session from a path, and what it must never touch. The layout just moved from `.lucid/<stem>/` to `<dir>/<stem>/`, so this is the freshest breakage surface.",
+      "scenarios": [
+        {
+          "id": "open-session-dir-collides-with-existing-folder",
+          "title": "Opening plan.html next to an existing plan/ folder must not colonise it",
+          "steps": [
+            "Create `<dir>/plan/notes.md` (the human's own folder) and `<dir>/plan.html`",
+            "Run `lucid open <dir>/plan.html`",
+            "List `<dir>/plan/`, cat its .gitignore, run `git status`"
+          ],
+          "expected": "Lucid refuses or picks a distinct name; it never writes its record into a pre-existing non-Lucid directory and never drops a `.gitignore` containing `*` over the human's files. Reproduced today: log.ndjson, current.html, versions/, server.json and a `*` .gitignore land in the user's folder and notes.md disappears from git.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-fresh-contract-shape",
+          "title": "A fresh open prints exactly the fields an agent parses",
+          "steps": [
+            "Run `lucid open plan.html` on a durable path with no prior session",
+            "JSON.parse stdout"
+          ],
+          "expected": "Exit 0 and `{session:<abs path>, version:1, status:\"active\", nextCursor:\"evt_00001\", url:\"http://127.0.0.1:<port>/__lucid/viewer\"}`; `warnings` present only when there is one.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "cwd-relative-paths-canonical",
+          "title": "A relative path resolves against cwd; a stranger cwd is not a silent attach",
+          "steps": [
+            "From <dir>, `lucid open ./plan.html`",
+            "From <dir>/sub, `lucid wait ../plan.html --timeout 1`",
+            "From an unrelated directory, `lucid wait plan.html`"
+          ],
+          "expected": "The first two address one canonical session; the third is NOT_FOUND rather than attaching to an ambient session. `session` is the absolute path in every payload.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "status-lists-both-layouts",
+          "title": "Bare `lucid` finds sessions in both the new and legacy layouts",
+          "steps": [
+            "Create `<dir>/a/log.ndjson` and `<dir>/.lucid/b/log.ndjson`",
+            "Run `lucid` in <dir>"
+          ],
+          "expected": "Both listed once, each resolving to the right artifact path — no duplicates, no `.lucid` leaking into the reported path.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-refuses-volatile-tmp",
+          "title": "`lucid open` refuses an artifact under /tmp and names a durable path",
+          "steps": [
+            "Write plan.html under /private/tmp/... with LUCID_ALLOW_TEMP unset",
+            "Run `lucid open <that path>` and inspect the directory afterwards"
+          ],
+          "expected": "Exit 1, VALIDATION_ERROR saying the OS clears the directory, detail carrying {path, suggested}; no session folder, no log.ndjson, no server process.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "durable-path-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-volatile-suggestion-recovers-project",
+          "title": "The refusal suggests the agent's real project, decoded from the scratchpad path",
+          "steps": [
+            "Write the artifact to `<tmp>/claude-<uid>/-Users-kevin-dev-lucid/<uuid>/scratchpad/a.html`",
+            "Run `lucid open` on it, then repeat with an encoded cwd that no longer exists"
+          ],
+          "expected": "detail.suggested is `/Users/kevin/dev/lucid/lucid/a.html`, not a literal `<your project>`; the missing-cwd case degrades to `<your project>/lucid/<name>` without crashing.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "durable-path-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-volatile-tmpdir-env",
+          "title": "$TMPDIR counts as volatile, not just /tmp",
+          "steps": [
+            "Set TMPDIR to a durable-looking directory, write the artifact inside it",
+            "Run `lucid open`"
+          ],
+          "expected": "Refused with the same VALIDATION_ERROR — volatileRoots() includes resolve($TMPDIR).",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "durable-path-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-allow-temp-optout",
+          "title": "Only the exact string LUCID_ALLOW_TEMP=1 opts out",
+          "steps": ["Run `lucid open <tmp artifact>` with LUCID_ALLOW_TEMP=1, then =0, then unset"],
+          "expected": "Opens under `=1`; refused under `=0` and unset.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "durable-path-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-migrates-legacy-lucid-layout",
+          "title": "A legacy `.lucid/<stem>/` record moves forward once, losing nothing",
+          "steps": [
+            "Create `<dir>/.lucid/old/log.ndjson` plus `<dir>/.lucid/.gitignore`",
+            "Run `lucid open <dir>/old.html` and inspect the tree and nextCursor"
+          ],
+          "expected": "Record at `<dir>/old/` with the same log (cursor continues, annotations preserved), `.lucid/` gone, nothing duplicated. Reproduced today: the move works but `.lucid/` survives holding a stray `.gitignore` because rmdir fails on a non-empty dir.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-both-layouts-present-never-merges",
+          "title": "With both layouts present, neither log is silently chosen or merged",
+          "steps": [
+            "Create `<dir>/plan/log.ndjson` and `<dir>/.lucid/plan/log.ndjson` with different content",
+            "Run `lucid open <dir>/plan.html`, then diff both logs"
+          ],
+          "expected": "The new-layout log is used, the legacy folder is byte-for-byte untouched, nothing merged or overwritten.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-two-stems-collide",
+          "title": "plan.html and plan.md in one folder must not share a session record",
+          "steps": [
+            "`lucid open <dir>/plan.html`, annotate, then `lucid open <dir>/plan.md`",
+            "Run `lucid wait` on each"
+          ],
+          "expected": "Two independent sessions, or an explicit refusal. Both currently resolve to `<dir>/plan/`, so the second open appends to the first one's log and the two reviews interleave.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-artifact-without-extension",
+          "title": "An artifact with no extension does not crash the layout",
+          "steps": [
+            "Write valid HTML to `<dir>/plan` (no extension)",
+            "Run `lucid open <dir>/plan`"
+          ],
+          "expected": "A clean typed error or a distinct session folder. sessionName returns the basename unchanged, so sessionDir === the artifact path — a raw ENOTDIR/EEXIST trace or a clobbered artifact is a failure.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "symlinked-artifact-identity",
+          "title": "A symlink and its target do not become two competing sessions",
+          "steps": [
+            "Open `real/plan.html`, then `link/plan.html` which symlinks to it",
+            "Annotate through one and wait on the other"
+          ],
+          "expected": "One session (paths canonicalized through realpath) or a clear refusal. Today `resolve()` does not follow symlinks, so two logs accumulate for one document and feedback splits silently.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "path-with-spaces-and-unicode",
+          "title": "Spaces and non-ASCII in an artifact path work end to end",
+          "steps": [
+            "Open `<dir>/my plan (v2) – рабочий.html`",
+            "Annotate, run wait, inspect the session folder name and the printed url"
+          ],
+          "expected": "open/wait/ask/end all work, the folder is named from the stem, the url loads, and nothing is shell-quoted incorrectly when spawning the server.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-missing-file",
+          "title": "Opening a path that does not exist gives a typed error",
+          "steps": ["Run `lucid open /durable/does-not-exist.html`"],
+          "expected": "Exit 1, ARTIFACT_ERROR \"cannot read artifact: …\" with detail.path — not an unhandled ENOENT stack.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-invalid-structure-fresh",
+          "title": "A truncated artifact is refused on a fresh open, not half-recorded",
+          "steps": ["Write HTML cut off mid-tag and run `lucid open`", "Check for log.ndjson"],
+          "expected": "Exit 1, ARTIFACT_ERROR naming the structural reason; no session_opened event committed.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-invalid-structure-on-resume",
+          "title": "A truncated artifact on resume warns instead of committing a broken version",
+          "steps": [
+            "Open a valid artifact, kill the server so it suspends",
+            "Overwrite the artifact with a truncated document and run `lucid open`"
+          ],
+          "expected": "Exit 0 with a STRUCTURE_INVALID warning, version unchanged, current.html still holding the last good bytes.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "kill-server",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-theme-warning-advisory",
+          "title": "A non-adaptive artifact warns but still opens",
+          "steps": [
+            "Open an artifact with hard-coded colors and no --paper/--ink tokens",
+            "Open a second one declaring the tokens plus a dark block"
+          ],
+          "expected": "First prints warnings[] containing THEME_NOT_ADAPTIVE and still exits 0 with a live url; second prints no `warnings` key at all.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "status-empty-directory",
+          "title": "Bare `lucid` with no sessions is empty, not an error",
+          "steps": ["Run `lucid` in a fresh empty directory"],
+          "expected": "Exit 0 with `{sessions:[], usage:{…}}` — the usage block is the discoverability affordance and must always be present.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "status-skips-foreign-log-ndjson",
+          "title": "An unrelated log.ndjson does not become a phantom session",
+          "steps": [
+            "Drop `vendor/thing/log.ndjson` with arbitrary JSON, and another with non-JSON text",
+            "Run bare `lucid`"
+          ],
+          "expected": "Neither appears in sessions[]; no LOG_ERROR thrown and no session reported for a file it cannot fold.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "status-large-tree-performance",
+          "title": "Bare `lucid` in a large checkout returns promptly",
+          "steps": ["Run `lucid` at the root of a repo with node_modules and a deep .git; time it"],
+          "expected": "Returns in a couple of seconds. The `**/log.ndjson` glob has no prune list (unlike scanRoots), so a monorepo is the regression to watch.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "scale-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "status-live-first-ordering",
+          "title": "The listing puts live sessions first, then sorts by name",
+          "steps": ["Open three sessions, end one, kill another's server", "Run bare `lucid`"],
+          "expected": "live:true rows first, then suspended/ended by name; dead rows carry `resume: lucid open <path>`, live rows carry `viewer`.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "kill-server",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "status-hub-hosted-viewer-url",
+          "title": "A hub-hosted session lists its shell tab url, not a per-session viewer path",
+          "steps": ["Open a session into a hub, run bare `lucid`"],
+          "expected": "viewer is `http://127.0.0.1:<hub>/?s=<id>` — `/s/<id>/__lucid/viewer` would render a second chrome inside the window.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "status-attendant-surfaced",
+          "title": "lastAttendant reaches the listing after a --harness wait",
+          "steps": ["Run a wait with --harness/--resume and model env, then bare `lucid`"],
+          "expected": "lastAttendant carries harness, at, resume, model and effort — the fields the shell and a returning human read.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "docs-statusline-still-finds-the-record",
+          "title": "The documented statusline snippet still finds context.json after the layout move",
+          "steps": [
+            "Follow docs/CONTRACT.md's statusline snippet verbatim against a live session",
+            "Check whether it reports context usage"
+          ],
+          "expected": "It works. Today CONTRACT.md documents `.lucid/<name>/cursor.<harness>.json`, `selection.json`, `context.json` and greps `-path '*/.lucid/*'` for server.json — none of which match the new layout, so a copied statusline silently stops reporting.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "C. The wait loop: cursors, deltas, acks, lifecycle",
+      "purpose": "The five-step agent contract. Everything here decides whether an agent hangs, re-applies feedback it already handled, or claims a delivery it never made.",
+      "scenarios": [
+        {
+          "id": "full-agent-loop-happy-path",
+          "title": "The five-step contract loop works exactly as documented",
+          "steps": [
+            "`lucid open plan.html`, keep nextCursor; annotate and send from the viewer",
+            "`lucid wait --since <cursor> --timeout 8`, apply, rewrite plan.html atomically",
+            "`lucid wait --since <new cursor> --reply \"reordered the steps\"`, approve in the viewer, drain, `lucid end`"
+          ],
+          "expected": "Each payload carries a strictly increasing nextCursor, the annotation resolves against the new version, `reviewResolved:true` appears only after Approve, and the final wait returns `waiting` with reviewResolved true.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "full loop: render -> annotate element -> wait -> revise -> live reload",
+          "mutation": null
+        },
+        {
+          "id": "wait-timeout-zero-blocks-forever",
+          "title": "`wait --timeout 0` must not park an agent's turn forever",
+          "steps": [
+            "Open a session, take nextCursor",
+            "Run `lucid wait plan.html --since <cursor> --timeout 0` and wait 60s"
+          ],
+          "expected": "An immediate drain-and-return (`waiting`), or an explicit refusal of 0. Today timeoutMs 0 maps to POSITIVE_INFINITY, so the process never returns and the agent's turn hangs — the opposite of what `0` reads as.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-unparseable-cursor-silently-bootstraps",
+          "title": "A garbage --since must not silently replay the whole session as a delta",
+          "steps": [
+            "Open, annotate three times, drain with a real cursor",
+            "Run `lucid wait --since not-a-cursor --timeout 3`"
+          ],
+          "expected": "A VALIDATION_ERROR, or documented bootstrap behaviour the agent can detect. Today the cursor parses to undefined and wait returns the FULL folded state with no ack, so the agent re-applies every annotation and the viewer never flips to \"delivered\".",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-ack-covers-only-what-was-read",
+          "title": "Feedback landing between the read and the ack is not marked delivered",
+          "steps": [
+            "Hold a `wait --since <c>`; send message A so wait returns",
+            "Immediately send message B before the next wait; inspect both delivery chips"
+          ],
+          "expected": "A shows delivered, B still shows recorded — the ack's `covers` is the cursor just read, not the ack's own position.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-presence-acks-claim-nothing",
+          "title": "`intent` and `progress` must not mark pending feedback as delivered",
+          "steps": [
+            "Send a message from the viewer (chip: recorded)",
+            "Run `lucid intent plan.html revise` and `lucid progress plan.html --total 3`",
+            "Re-check the chip"
+          ],
+          "expected": "Still \"recorded\" — a presence-only re-ack carries no `covers`, so it claims no batch.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-no-cursor-bootstrap-does-not-ack",
+          "title": "A cursorless catch-up read reports feedback but claims no delivery",
+          "steps": [
+            "Send a human message from the viewer",
+            "Run `lucid wait plan.html --timeout 1` with no --since",
+            "Read the item's delivery chip"
+          ],
+          "expected": "status feedback with the full folded state, but the item still shows \"recorded\" — a bootstrap read is not a hand-off.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "each sent item shows where it got to: recorded, then delivered (D20)",
+          "mutation": null
+        },
+        {
+          "id": "open-after-end-starts-new-segment",
+          "title": "Re-opening an ended session starts segment 2 with a globally monotonic cursor",
+          "steps": [
+            "Open, `lucid end`, then `lucid open` again",
+            "Read version, segment (bare `lucid`) and nextCursor"
+          ],
+          "expected": "segment 2, version back to 1, nextCursor strictly greater than the cursor held before `end` — a persisted cursor stays valid across the reopen.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-suspended-when-server-dead",
+          "title": "A dead server makes wait return suspended instead of hanging",
+          "steps": [
+            "Open a session, kill its server process",
+            "Run `lucid wait --since <cursor> --timeout 30`"
+          ],
+          "expected": "Returns \"suspended\" well before the timeout, so the agent stops the loop rather than busy-waiting.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "kill-server",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-two-waiters-both-get-the-batch",
+          "title": "Two concurrent waits on one session both receive the feedback",
+          "steps": [
+            "Start two `lucid wait --since <same cursor> --timeout 20` processes",
+            "Send one annotation from the viewer"
+          ],
+          "expected": "Both return status feedback carrying the same annotation id (at-least-once, dedupe by id); neither hangs and the log stays parseable.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "concurrent-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-killed-and-rerun-redelivers",
+          "title": "A killed wait re-delivers rather than dropping feedback",
+          "steps": [
+            "Start `wait --since <c>`, send an annotation, SIGKILL the wait before it prints",
+            "Re-run the identical wait command"
+          ],
+          "expected": "The annotation is delivered again with the same id — nothing is consumed by the killed process.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "concurrent-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-survives-server-restart-midflight",
+          "title": "A wait in flight recovers when the server is restarted under it",
+          "steps": [
+            "Start a long `wait --since <c>`",
+            "Run `lucid open --restart` elsewhere, then annotate from the reloaded viewer"
+          ],
+          "expected": "The blocked wait reconnects its SSE stream and returns the annotation (heartbeat fallback at worst) instead of reporting suspended or hanging past the deadline.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "concurrent-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-reply-with-dead-server-survives",
+          "title": "A reply written while the server is down is not lost",
+          "steps": [
+            "Kill the session's server",
+            "Run `lucid wait plan.html --reply \"applied offline\" --timeout 1`",
+            "`lucid open` again and read the thread"
+          ],
+          "expected": "The reply was appended directly to the log under the lock and shows in the thread after the reopen, in order.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "kill-server",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "a message sent at a dead server is kept, not eaten, and delivers itself on reconnect",
+          "mutation": null
+        },
+        {
+          "id": "wait-timeout-is-seconds",
+          "title": "`--timeout` is seconds, and the wall is honoured",
+          "steps": [
+            "Run `lucid wait --since <fresh cursor> --timeout 3` on an idle session and time it"
+          ],
+          "expected": "Returns in roughly 3s (not 3ms, not 3 minutes) with status \"waiting\". Also covers the negative case and the default 5-minute window.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-future-cursor",
+          "title": "A cursor past the end of the log does not lose later feedback",
+          "steps": [
+            "Run `lucid wait --since evt_99999 --timeout 5` while annotating from the viewer"
+          ],
+          "expected": "Returns \"waiting\" at the deadline without crashing, and a subsequent wait using the payload's own nextCursor delivers the annotation rather than dropping it.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-bare-integer-cursor",
+          "title": "A bare integer cursor is an alias for evt_NNNNN",
+          "steps": ["Run `lucid wait --since 3 --timeout 3` after events 1..3 exist"],
+          "expected": "Same result as `--since evt_00003` — the delta excludes seq<=3.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-ended-session",
+          "title": "wait on an ended session returns ended immediately",
+          "steps": [
+            "`lucid end plan.html`, then `lucid wait plan.html --since <cursor> --timeout 30`"
+          ],
+          "expected": "Immediate `status:\"ended\"`, annotations [] and messages [], exit 0.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-unknown-session",
+          "title": "wait on a path with no session is NOT_FOUND, not a hang",
+          "steps": ["Run `lucid wait /durable/never-opened.html`"],
+          "expected": "Exit 1 with `{error:{code:\"NOT_FOUND\"}}` naming the path.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-reply-reaches-the-thread",
+          "title": "--reply posts an agent turn that renders as Markdown",
+          "steps": [
+            "Run `lucid wait plan.html --reply \"reordered the **steps**\" --timeout 1`",
+            "Read the thread in the viewer"
+          ],
+          "expected": "An agent turn with the emphasis rendered; it does not itself count as feedback that wakes another waiting agent.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "agent reply appears in the conversation log",
+          "mutation": null
+        },
+        {
+          "id": "wait-reply-empty-is-noop",
+          "title": "`--reply \"\"` writes no event",
+          "steps": [
+            "Run `lucid wait plan.html --reply \"\" --timeout 1`, then count agent_reply events"
+          ],
+          "expected": "No agent_reply appended and no empty bubble in the thread.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-huge-payload",
+          "title": "A large backlog comes back as one valid JSON document",
+          "steps": [
+            "Queue and send 100 annotations with long notes plus a pasted image",
+            "Run a cursorless `lucid wait --timeout 5` and JSON.parse stdout"
+          ],
+          "expected": "Parses cleanly; every annotation present with resolved/target/note; image paths absolute and readable; no truncation and no interleaved log output.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "scale-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-harness-resume-sidecar",
+          "title": "--harness/--resume records an attendant a human can copy",
+          "steps": [
+            "Run wait with `--harness claude-code --resume \"claude --resume <uuid> --dangerously-skip-permissions\"`",
+            "Run bare `lucid` and open the viewer"
+          ],
+          "expected": "The listing carries `lastAttendant:{harness,at,resume}` with the exact command, the viewer surfaces it, and Lucid never executes it.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-resume-without-harness",
+          "title": "--resume alone records an attendant under a generic name",
+          "steps": [
+            "Run `lucid wait ... --resume \"codex resume <id> --yolo\"` with no --harness, then read bare `lucid`"
+          ],
+          "expected": "lastAttendant.harness is \"agent\" and the resume command is preserved.",
+          "risk": "low",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-stamps-build-session-history",
+          "title": "Provenance env produces sessionHistory; its absence produces none",
+          "steps": [
+            "Drive a loop with LUCID_HARNESS/LUCID_SESSION_ID exported and read a wait payload",
+            "Repeat with neither set"
+          ],
+          "expected": "First carries sessionHistory with firstAt/lastAt/counts per harness session; second omits the key entirely, so old integrations are unaffected.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "wait-stamp-sanitized",
+          "title": "A hostile LUCID_HARNESS cannot corrupt the log or the viewer",
+          "steps": [
+            "Export LUCID_HARNESS as a 5000-char string with newlines and control characters",
+            "Run `lucid wait --reply hi --timeout 1`, read the log, open the viewer"
+          ],
+          "expected": "Stamp truncated to 64 chars with control characters stripped, log.ndjson stays one-event-per-line and parseable, and the viewer renders the name as text (no layout break, no injection).",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-idempotent-on-active",
+          "title": "Re-opening a live session reuses the same server and starts no segment",
+          "steps": [
+            "`lucid open plan.html`, note url and nextCursor",
+            "Run `lucid open plan.html` again without touching the file; compare via bare `lucid`"
+          ],
+          "expected": "Same url, same version, segment still 1, no second server process, and the browser tab already showing it is not duplicated.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-reconciles-edit-made-while-suspended",
+          "title": "An edit made while nobody was serving becomes v2 on the next open",
+          "steps": [
+            "Open, kill the server, edit plan.html",
+            "Run `lucid open` again and load the printed url"
+          ],
+          "expected": "version:2 in the payload, the viewer renders the new content, and the previous version is still browsable in the diff view.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "kill-server",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "end-idempotent",
+          "title": "end twice is safe and terminal",
+          "steps": ["Run `lucid end plan.html` twice"],
+          "expected": "Both exit 0 printing `{session, status:\"ended\"}`; only one session_ended event in the log.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "end-stops-server-and-frees-port",
+          "title": "end stops the server, clears the descriptor, and the listing agrees",
+          "steps": ["Open, then `lucid end`", "Run bare `lucid` and curl the old port"],
+          "expected": "live:false with a `resume: lucid open <path>` hint, server.json gone, and the port no longer answers /__lucid/identity.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "end-with-dead-server-cleans-descriptor",
+          "title": "end after the server already died still removes the stale descriptor",
+          "steps": ["Kill the server process, run `lucid end`, check for server.json"],
+          "expected": "Exit 0, status ended, server.json removed so the next listing shows no ghost live session.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "kill-server",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "end-while-viewer-open",
+          "title": "`lucid end` flips an open viewer/tab to the ended state",
+          "steps": [
+            "With the viewer loaded (and separately, with a hub tab open), run `lucid end`",
+            "Watch the browser and then click \"+\""
+          ],
+          "expected": "The view reports the session ended and offers the way back (composer disabled and explained); the strip keeps the tab until closed; the picker stops offering it. No blank pane and no connection-error pile.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "reopen on an ended session explains the way back instead of failing",
+          "mutation": null
+        },
+        {
+          "id": "idle-suspend-and-resume",
+          "title": "An idle session suspends, says so once, and re-hosts on demand",
+          "steps": [
+            "Open with LUCID_IDLE_MS small and leave it alone",
+            "Run `lucid wait --since <c> --timeout 20`; read the viewer",
+            "Send a message from the tab, then `lucid open` again"
+          ],
+          "expected": "wait returns \"suspended\", the viewer explains how to resume, the message still reaches the log (the mount re-hosts on demand — never a permanent 404), and the reopen brings the annotations back intact.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "reopen with nobody listening says feedback is record-only",
+          "mutation": null
+        },
+        {
+          "id": "end-unknown-session",
+          "title": "end on a path with no session is NOT_FOUND",
+          "steps": ["Run `lucid end /durable/never-opened.html`"],
+          "expected": "Exit 1 with NOT_FOUND naming the path.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "D. Asking questions",
+      "purpose": "`lucid ask` validation and the grouped-question round trip — the path where a malformed call must never half-record a question the human will be asked to answer.",
+      "scenarios": [
+        {
+          "id": "ask-group-answer-round-trip",
+          "title": "A grouped answer comes back as answerItems plus a derived summary",
+          "steps": [
+            "Ask a 3-question group, answer in the drawer (one deferred, one with a reason)",
+            "Run `lucid wait --since <c> --timeout 8`"
+          ],
+          "expected": "questions[0].answerItems has one entry per question with selected/text/reason/defer, and `answer` is a combined summary consistent with the stored group.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/question-drawer.e2e.ts",
+          "testName": "a grouped question rises as a drawer, gates on its reason, and answers as one unit",
+          "mutation": null
+        },
+        {
+          "id": "ask-needs-text-or-group",
+          "title": "ask with neither --text nor --group is a typed validation error",
+          "steps": ["Run `lucid ask plan.html` and `lucid ask plan.html --text \"   \"`"],
+          "expected": "Both exit 1 with VALIDATION_ERROR \"lucid ask needs --text <question> or --group <file|->\"; no question event written.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-text-and-group-are-exclusive",
+          "title": "--group plus --text/--option/--multi is refused, not silently preferred",
+          "steps": ["Run `lucid ask plan.html --text hi --group q.json`"],
+          "expected": "Exit 1, VALIDATION_ERROR \"lucid ask takes --group or --text/--option/--multi, not both\" — flags the caller believed they sent are never dropped.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-multi-without-options",
+          "title": "--multi with no --option must not claim a multi-select",
+          "steps": [
+            "Run `lucid ask plan.html --text \"pick\" --multi` and look at the question in the viewer"
+          ],
+          "expected": "A validation error or a plain free-text question. Today `multi` is silently dropped, so the agent believes it asked a multi-select and the human sees a text box.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-option-parsing-edges",
+          "title": "--option label|description handles the degenerate forms",
+          "steps": [
+            "Ask with `--option \"A|does a thing\" --option \"B|\" --option \"|orphan\" --option \"  C  \"`",
+            "Compare the rendered options with the printed JSON"
+          ],
+          "expected": "A has a description, B has none, the label-less entry is dropped, C is trimmed; printed `options` matches what the viewer renders.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "structured question: choose an option and pin an artifact region as the answer",
+          "mutation": null
+        },
+        {
+          "id": "ask-group-from-stdin",
+          "title": "--group - reads the group from stdin",
+          "steps": [
+            "Pipe a valid 3-question group into `lucid ask plan.html --group -`, read the drawer"
+          ],
+          "expected": "Exit 0 printing `{asked, text, questions:[{id,question,shape}]}` and the drawer renders all three as one unit.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/question-drawer.e2e.ts",
+          "testName": "a grouped question rises as a drawer, gates on its reason, and answers as one unit",
+          "mutation": null
+        },
+        {
+          "id": "ask-group-oversized",
+          "title": "A group larger than 512KB is refused before it is parsed",
+          "steps": ["Generate a 2MB JSON group file and pass it to --group"],
+          "expected": "Exit 1 with \"question group is too large (max 524288 characters)\"; no seconds spent parsing and no memory blowup.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-group-too-many-questions",
+          "title": "Six questions are rejected with an issues list",
+          "steps": ["Ask a group of 6 questions"],
+          "expected": "Exit 1, VALIDATION_ERROR whose detail.issues names the at-most-5 rule; nothing half-recorded and the drawer never opens.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-group-choice-without-choices",
+          "title": "A choice question with no choices is rejected",
+          "steps": ["Ask a group whose question sets multiSelect but supplies choices: []"],
+          "expected": "Exit 1 with an issue naming that question; no question event appended.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-group-empty-stdin",
+          "title": "An empty stdin group is refused with a specific message",
+          "steps": ["Run `lucid ask plan.html --group - < /dev/null`"],
+          "expected": "Exit 1, VALIDATION_ERROR \"no question group on stdin\" — not a JSON parse error.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-group-invalid-json",
+          "title": "Malformed group JSON reports the parse problem, not a stack trace",
+          "steps": ["Write `{not json` to q.json and run `lucid ask plan.html --group q.json`"],
+          "expected": "Exit 1, VALIDATION_ERROR \"question group is not valid JSON: …\" with detail.source.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-no-session",
+          "title": "ask before open is NOT_FOUND",
+          "steps": ["Run `lucid ask /durable/never-opened.html --text hi`"],
+          "expected": "Exit 1 NOT_FOUND — an agent that skipped `open` is told, rather than writing a question nobody will see.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-with-dead-server-recorded",
+          "title": "A question asked while the server is down survives to the next open",
+          "steps": [
+            "Kill the server, run `lucid ask plan.html --text \"still there?\"`",
+            "Run `lucid open` and read the questions panel"
+          ],
+          "expected": "Exit 0, and the question appears in the panel after the reopen (direct log append path).",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "kill-server",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-group-missing-file",
+          "title": "An unreadable --group file is refused by name",
+          "steps": ["Run `lucid ask plan.html --group /nope.json`"],
+          "expected": "Exit 1, VALIDATION_ERROR \"cannot read question group: /nope.json\".",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "ask-unknown-ref",
+          "title": "--ref naming a nonexistent element still asks",
+          "steps": ["Run `lucid ask plan.html --text \"which one?\" --ref no-such-id`"],
+          "expected": "Exit 0, the question renders without a live anchor chip, and the viewer does not throw or scroll to nothing.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "E. Annotating: pick, compose, queue, send",
+      "purpose": "The human's authoring path in the panel. Every failure here destroys work the human typed by hand, which is the least recoverable thing the product can lose.",
+      "scenarios": [
+        {
+          "id": "queue-send-failure-keeps-every-item",
+          "title": "A dead server does not eat the queue, and the retry does not duplicate",
+          "steps": [
+            "Queue three annotations, run `lucid end`, click Send",
+            "Run `lucid open` again and click Send once reconnected; read the log with `lucid wait`"
+          ],
+          "expected": "The first attempt warns \"Some annotations didn't send - they're kept in the queue, try again.\" and all three cards remain; after the retry the agent sees exactly three annotations, one per note.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "queue-partial-send-drops-only-what-landed",
+          "title": "A partial batch drops exactly the items that landed",
+          "steps": [
+            "Queue three annotations",
+            "Route POST **/__lucid/annotation to succeed once then 500",
+            "Click Send"
+          ],
+          "expected": "One [data-test=annotation] appears in the record, exactly two queued cards remain, and the warning names the failure once.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "annotation-queued-mid-flight-survives-the-drain",
+          "title": "A note queued while a send is in flight is not swept away by it",
+          "steps": [
+            "Route POST **/__lucid/annotation to delay 2s; queue A and click Send",
+            "During the flight, pick another element and queue B"
+          ],
+          "expected": "When the send settles, A is a sent card and B is still a queued card with its note intact.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "queue-is-lost-on-reload",
+          "title": "A reload silently destroys queued annotations while messages survive",
+          "steps": ["Queue two annotations, reload the page, inspect the panel"],
+          "expected": "Today both queued cards are gone with no warning and no recovery card, while an undelivered MESSAGE survives the same reload — the asymmetry is the finding. Either the queue persists too, or the loss is warned about.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "send-queue-commits-the-open-edit",
+          "title": "Sending with an editor open sends the EDITED note",
+          "steps": [
+            "Queue an annotation noted 'first draft'",
+            "Click [data-test=edit-queued], replace with 'batched, not nightly'",
+            "Without saving, click [data-test=send-queue]; read via `lucid wait`"
+          ],
+          "expected": "The delivered note is 'batched, not nightly'.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "queue-numbering-continues-after-sent",
+          "title": "A queued card takes the NEXT number, never a second '1'",
+          "steps": [
+            "Annotate an element and send it (card 1)",
+            "Annotate a different element and leave it queued"
+          ],
+          "expected": "The queued card's badge reads 2 and the artifact shows badges 1 and 2 — no two cards or markers labelled 1.",
+          "risk": "high",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "add-to-queue-refuses-blank-note",
+          "title": "Add to queue with a whitespace-only note is silently inert",
+          "steps": [
+            "Click an element, fill the note with '   ', click [data-test=add-to-queue], wait 500ms"
+          ],
+          "expected": "Either it queues or it explains itself. Today no queued card appears, the Send bar stays absent, and the still-enabled button gives no reason — the refusal is invisible.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "quick-reply-destroys-typed-note",
+          "title": "A quick-reply chip clicked over a half-typed note replaces it without asking",
+          "steps": [
+            "Click an element, type a long note, click the 'What is this?' quick-reply chip"
+          ],
+          "expected": "The typed sentence is not discarded silently. Today the queued card contains only 'What is this?' with no confirmation and no way back.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "toggling-off-last-spot-discards-note-and-images",
+          "title": "Toggling the last spot off discards the whole draft, not just the marker",
+          "steps": [
+            "Cmd-click one element, paste an image, type a note",
+            "Cmd-click the same element again to toggle the spot off",
+            "Click a different element to start a new pick"
+          ],
+          "expected": "The composer unmounts on the toggle-off and the new pick opens with an EMPTY note and no image chips — the old note and images never resurrect.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/multi-target.e2e.ts",
+          "testName": "cmd-click is a toggle: repeating a pick removes its spot",
+          "mutation": null
+        },
+        {
+          "id": "annotation-note-large-paste-expands-on-send",
+          "title": "A wall of text pasted into the ANNOTATION note folds, and the agent still gets every line",
+          "steps": [
+            "Click an element, paste 40 lines into [data-test=annotation-note]",
+            "Queue, send, and read the annotation with `lucid wait`"
+          ],
+          "expected": "The note box holds '[Pasted text #1 +40 lines]' and the queued card shows the placeholder, but the delivered note contains all 40 lines. (The existing paste test covers the MESSAGE composer only.)",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "fork-failure-keeps-draft-and-retries-once",
+          "title": "A failed fork keeps the draft and a manual retry produces exactly one fork",
+          "steps": [
+            "Click an element, type a fork directive, `lucid end`, click Fork",
+            "`lucid open` again, return to the viewer, click Fork again; read the log"
+          ],
+          "expected": "The first click warns \"The fork didn't send - the draft is kept, try again.\" and leaves the note and pick intact; after the retry exactly ONE fork event exists (the stable fork id deduped it).",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "enter-on-blank-note-is-inert",
+          "title": "Enter on an empty note neither queues nor discards",
+          "steps": ["Click an element, press Enter in an empty [data-test=annotation-note]"],
+          "expected": "The composer stays open with the same pick, no queued card, no warning row.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "quick-reply-queues-canned-note",
+          "title": "A quick-reply chip queues that note in one tap",
+          "steps": [
+            "Click an element, click the [data-test=quick-reply] chip labelled 'Explain further'"
+          ],
+          "expected": "The composer closes, one queued card appears whose text is exactly 'Explain further', and the surface shows one queued marker.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "multi-spot-chip-remove-keeps-draft",
+          "title": "Removing one collected spot leaves the note and the other spots intact",
+          "steps": [
+            "Cmd-click two elements, type a note, click the × on the first [data-test=target-chip]"
+          ],
+          "expected": "One spot remains (chips collapse to a single snippet), the note is unchanged, and the surface shows one pending marker.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/multi-target.e2e.ts",
+          "testName": "cmd-click collects two spots into one annotation that reaches wait as targets[2]",
+          "mutation": null
+        },
+        {
+          "id": "pick-cap-at-eight-spots",
+          "title": "The ninth collected spot is refused with a notice",
+          "steps": ["Cmd-click eight distinct elements, then a ninth"],
+          "expected": "[data-test=target-chip] stays at 8 and a notice reads 'Up to 8 spots per note - that pick was not added.'",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "fork-disabled-with-multiple-spots",
+          "title": "Fork is disabled with more than one spot, and says why",
+          "steps": ["Cmd-click two elements, hover [data-test=fork]"],
+          "expected": "Fork is disabled and the tooltip reads 'Fork takes a single spot - remove the extra chips first'.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "composer-frozen-while-forking",
+          "title": "The note is uneditable while a fork POST is in flight",
+          "steps": [
+            "Route POST **/__lucid/fork to delay 3s; click an element, type, click Fork",
+            "Try to type into the note"
+          ],
+          "expected": "[data-test=annotation-note] is disabled, the button reads 'Forking…', and a second click cannot mint a second fork.",
+          "risk": "medium",
+          "kind": "concurrency",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "annotation-image-chip-remove",
+          "title": "A staged annotation image can be removed before queueing",
+          "steps": [
+            "Click an element, paste an image, click × on [data-test=annotation-chip]",
+            "Queue and send"
+          ],
+          "expected": "The chip disappears and the annotation reaching `lucid wait` carries no images.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "annotation-image-upload-failure-warns",
+          "title": "An image that cannot upload says so instead of vanishing",
+          "steps": ["Route POST **/__lucid/asset to abort; click an element and paste an image"],
+          "expected": "No chip appears and a warning reads \"That image didn't upload - try again.\"",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "send-queue-refuses-empty-open-edit",
+          "title": "Sending while an editor is blank refuses and names the rule",
+          "steps": [
+            "Queue an annotation, open its editor, clear the text, click [data-test=send-queue]"
+          ],
+          "expected": "Nothing sends, the queue is unchanged, and a warning reads \"Finish editing the queued annotation first - a note can't be empty.\"",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "remove-queued-while-editing-closes-editor",
+          "title": "Removing the card being edited closes the editor",
+          "steps": [
+            "Queue two annotations, open the editor on the first, click Remove on the first"
+          ],
+          "expected": "The card and [data-test=edit-note] both disappear; the second card is untouched and still sendable.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "queue-controls-frozen-while-sending",
+          "title": "Queue cards cannot be edited or removed mid-send",
+          "steps": ["Route POST **/__lucid/annotation to delay 3s, queue two, click Send"],
+          "expected": "edit-queued, Remove and send-queue are all disabled for the duration; after the send they are gone with the cards.",
+          "risk": "medium",
+          "kind": "concurrency",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "queue-blocks-session-switch",
+          "title": "Switching sessions with unsent work is refused, not silently discarded",
+          "steps": [
+            "Queue an annotation, press ⌘2 for the Sessions tab, click another session row"
+          ],
+          "expected": "The page does not navigate and a warning reads 'Send or discard your unsent feedback before switching sessions.'",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "queue-survives-panel-tab-switch",
+          "title": "Glancing at the Sessions tab keeps the queue, the draft and the scroll",
+          "steps": ["Queue an annotation, start typing a second note, press ⌘2 then ⌘1"],
+          "expected": "Queued card, half-typed note, its pick and the scroll position are all as they were (keepMounted).",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "pick-opens-note-composer-focused",
+          "title": "Clicking an element opens the note composer with the caret in it",
+          "steps": [
+            "Open a viewer on PLAN_V1, click li[data-lucid-id=step-backfill] in the artifact frame",
+            "Read document.activeElement"
+          ],
+          "expected": "[data-test=annotation-note] is visible and focused; the heading reads 'New annotation' with the '⌘-click adds more spots' hint.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "a queued annotation can be edited before it is sent",
+          "mutation": null
+        },
+        {
+          "id": "idle-panel-has-no-composer-furniture",
+          "title": "With nothing picked the panel shows the empty state and no composer",
+          "steps": ["Open a fresh viewer and assert on the thread body before any interaction"],
+          "expected": "Zero [data-test=annotation-note], no 'New annotation' heading, and the thread reads 'No feedback sent yet. Click an element or select text in the artifact to annotate it.'",
+          "risk": "low",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "quick-replies-only-with-a-pick",
+          "title": "Quick replies exist only while a spot is picked",
+          "steps": ["Assert on a fresh viewer, then click an element and assert again"],
+          "expected": "[data-test=quick-reply] count 0 before the pick, 2 after.",
+          "risk": "low",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "queue-survives-panel-collapse",
+          "title": "Collapsing and reopening the panel keeps unsent work",
+          "steps": ["Queue an annotation, press ⌘B to collapse, ⌘B to reopen"],
+          "expected": "The queued card and the Send bar are still there with the same note.",
+          "risk": "low",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "send-bar-pluralizes-and-hides",
+          "title": "The send bar counts correctly and disappears when the queue empties",
+          "steps": ["Assert with an empty queue, queue one, then a second, then send"],
+          "expected": "Absent at 0, 'Send 1 annotation' at 1, 'Send 2 annotations' at 2, absent again after the send.",
+          "risk": "low",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "F. Messages, outbox, and delivery resilience",
+      "purpose": "The human's typed message must be unlosable: through outages, port recycling, stuck retries and page death.",
+      "scenarios": [
+        {
+          "id": "outbox-survives-a-restart-and-self-drains",
+          "title": "Messages typed at a dead server survive a page life and deliver themselves",
+          "steps": [
+            "Take the server down and submit two messages",
+            "Navigate to about:blank, restart the server, return to the viewer URL",
+            "Repeat the same sequence against a hub-hosted tab"
+          ],
+          "expected": "Both cards clear within seconds without a gesture, both bubbles appear in typing order, `lucid wait` sees both texts, and the delivery state advances without a reload. Must hold in both the dedicated viewer and the hub shell.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "fixed-port-hub-restart",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "a message sent at a dead server is kept, not eaten, and delivers itself on reconnect",
+          "mutation": null
+        },
+        {
+          "id": "stale-viewer-never-crosses-into-another-session",
+          "title": "A recycled port never receives another session's message",
+          "steps": [
+            "End the session, submit a message",
+            "Open a DIFFERENT artifact that binds the freed port",
+            "Watch the stale tab and read the new session's log"
+          ],
+          "expected": "The card stays, the panel says 'A different session is running at this address now', and the other session's agent sees no human message.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "a stale viewer never posts its message into whichever session took its port",
+          "mutation": null
+        },
+        {
+          "id": "409-mid-flight-is-not-retried",
+          "title": "A 409 verdict fails fast instead of spending four retries",
+          "steps": [
+            "Create an undelivered message",
+            "Route POST **/__lucid/message to 409 {error:'message addressed to a different session'} and count requests",
+            "Click Retry"
+          ],
+          "expected": "Exactly one request goes out, the card flips to 'not delivered' within ~1s, and the warning names the different-session reason rather than a generic failure.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "retry-state-is-per-message",
+          "title": "One stuck retry does not disable the other undelivered cards",
+          "steps": [
+            "Take the server down and submit two messages so both show 'not delivered'",
+            "Route POST **/__lucid/message to hang, click Retry on the first"
+          ],
+          "expected": "Only the first card's button reads 'Sending…' and is disabled; the second card's Retry and Discard stay clickable, and Discard on it works immediately.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "discard-works-during-a-stuck-flush",
+          "title": "Discard always clears a message, even mid-flush, and unblocks approve",
+          "steps": [
+            "Create two undelivered messages, start a hanging retry",
+            "Click Discard on both cards, then reload"
+          ],
+          "expected": "Both cards go, [data-test=approve] becomes enabled, and neither message returns after the reload (their localStorage keys were removed).",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "slow-send-becomes-visible-after-a-beat",
+          "title": "A send slower than a beat shows a 'Sending' card, so it never looks swallowed",
+          "steps": [
+            "Route POST **/__lucid/message to delay 3s",
+            "Type a message, press Enter, watch the panel"
+          ],
+          "expected": "After ~1.2s a [data-test=unsent-message] appears under 'Sending' reading 'sending…' (not 'not delivered'); when the POST lands the card disappears and exactly ONE human bubble exists.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "server-reason-reaches-the-human",
+          "title": "The server's own reason for refusing a message is what the panel prints",
+          "steps": [
+            "Route POST **/__lucid/message to 503 with body {error:'the log is busy'}",
+            "Send a message"
+          ],
+          "expected": "The warning reads \"Your message didn't send (HTTP 503 - the log is busy) - it's kept below, and you can retry it.\" — the server's reason, not a bare generic failure.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "outbox-drains-in-authored-order",
+          "title": "Three messages queued during one outage arrive in typing order",
+          "steps": [
+            "Take the server down, submit A, B, C",
+            "Restore the server, let the outbox drain, read the log"
+          ],
+          "expected": "The record and the agent's payload both show A, B, C in that order — never reordered by retry timing.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "a message sent at a dead server is kept, not eaten, and delivers itself on reconnect",
+          "mutation": null
+        },
+        {
+          "id": "fast-send-never-flashes-a-card",
+          "title": "An ordinary fast send never flashes an unsent card",
+          "steps": [
+            "Send a message against a healthy server",
+            "Poll [data-test=unsent-message] continuously for 2s"
+          ],
+          "expected": "The card never appears at any point — the common path must not stutter.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "copy-unsent-puts-the-exact-text-on-the-clipboard",
+          "title": "Copy makes an undelivered message genuinely unlosable",
+          "steps": [
+            "Grant clipboard permissions, create an undelivered multi-line message",
+            "Click [data-test=copy-unsent] and read the clipboard"
+          ],
+          "expected": "The clipboard holds the message verbatim (expanded, not a paste placeholder); the button reads 'Copied' and reverts after ~2s.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "clipboard",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "copy-failure-tells-you-what-to-do",
+          "title": "A denied clipboard write says to select the text instead",
+          "steps": [
+            "Stub navigator.clipboard.writeText to reject, click Copy on an undelivered card"
+          ],
+          "expected": "A warning reads \"Couldn't copy - select the text above instead.\" and the button does not claim 'Copied'.",
+          "risk": "low",
+          "kind": "recovery",
+          "needsCapability": "clipboard",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "G. The shell window: tabs, boot, and scale",
+      "purpose": "The hub shell as the human actually lives in it — booting into a session, juggling tabs, and not losing state when tabs come and go.",
+      "scenarios": [
+        {
+          "id": "boot-s-opens-tab",
+          "title": "?s=<id> opens the named session as a tab on load",
+          "steps": [
+            "Start a hub, `lucid open plan.html` against it",
+            "Navigate to the returned http://127.0.0.1:PORT/?s=<id>"
+          ],
+          "expected": "Exactly one [data-test=shell-tab] appears labeled by the document <title>, and the artifact surface renders its h1.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "lucid open surfaces the session as a tab in the shell",
+          "mutation": null
+        },
+        {
+          "id": "boot-s-pending-retry-until-listed",
+          "title": "?s= for a session the listing does not name yet is retried, not dropped",
+          "steps": [
+            "Start a hub with no sessions, navigate to /?s=<id of an unopened artifact>",
+            "After the page settles on the pick screen, run `lucid open <that artifact>`"
+          ],
+          "expected": "The tab opens by itself once the listing names the id; the shell never stays stranded on the pick screen with the id still in the URL.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "boot-s-consumed-once",
+          "title": "A closed boot tab does not resurrect on the next listing snapshot",
+          "steps": [
+            "Load via /?s=<id>, wait for the tab, close it with its ×",
+            "Force a new listing snapshot (rewrite the artifact's <title>, or open a second artifact)"
+          ],
+          "expected": "The closed tab stays closed — the ?s= boot never re-fires on later snapshots.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-close-x-keeps-session-running",
+          "title": "Closing a tab with × leaves the session alive and re-openable",
+          "steps": [
+            "Open a tab, click [data-test=tab-close]",
+            "Run `lucid wait <artifact> --timeout 2`, then click \"+\""
+          ],
+          "expected": "The wait still answers (session not ended) and the artifact reappears as a picker row.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-close-promotes-a-live-neighbor",
+          "title": "Closing the active tab promotes a neighbor whose stream is actually live",
+          "steps": [
+            "Open 3 tabs in one project and visit each so streams exist",
+            "Activate the middle tab, close it with ⌘W",
+            "Append an agent reply to the promoted neighbor's session from the CLI"
+          ],
+          "expected": "The promoted tab is showing and the new reply appears without any extra click or reload — not a frozen, disconnected view.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-close-last-returns-to-picker",
+          "title": "Closing the only tab lands on the pick screen offering it again",
+          "steps": ["Open exactly one tab, close it with ⌘W"],
+          "expected": "The pick screen renders and lists the just-closed artifact as an openable row — not 'Every session is already open', not a blank pane.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tabs-many-strip-scrolls",
+          "title": "Twelve open tabs scroll inside the strip without breaking the page",
+          "steps": [
+            "Create 12 artifacts in one project, open the project from the drawer",
+            "Compare document.scrollWidth to clientWidth; scroll the strip to its end"
+          ],
+          "expected": "The tab bar scrolls horizontally, the page body does not, and the last tab plus \"+\" stay reachable and clickable.",
+          "risk": "high",
+          "kind": "visual",
+          "needsCapability": "scale-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tabs-stream-cap-reconnects-on-activate",
+          "title": "A tab evicted by the 10-stream cap comes back live when activated",
+          "steps": [
+            "Open 12 sessions as tabs, activate the first-opened one",
+            "Append an annotation or agent reply to that session from the CLI"
+          ],
+          "expected": "The reactivated tab refolds its state and shows the new event live — never a frozen snapshot.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "scale-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-attention-question-in-background",
+          "title": "A question arriving for a background tab raises its attention dot",
+          "steps": ["Open two tabs, keep A active, ask a question on B's session from the CLI"],
+          "expected": "Tab B shows [data-test=tab-attention][data-kind=question] without being activated; answering it in B clears the dot.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "duplicate-open-same-artifact",
+          "title": "Opening the same artifact twice yields one tab, raised not remounted",
+          "steps": [
+            "`lucid open plan.html`, wait for the tab, switch to a different tab",
+            "Run `lucid open plan.html` again"
+          ],
+          "expected": "Still exactly one tab for that artifact and it is active; no duplicate tab, no iframe reload, no second browser window, and the CLI still prints the same ?s= url.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "burst-open-five",
+          "title": "Five back-to-back opens produce five distinct tabs and one active",
+          "steps": [
+            "With the shell loaded, run `lucid open` for five artifacts as fast as possible"
+          ],
+          "expected": "Five tabs, no duplicates, exactly one data-active tab, and the scope badge matching the artifact actually displayed.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "concurrent-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "scope-active-tab-always-visible",
+          "title": "The active tab is never filtered out of the strip during a burst of opens",
+          "steps": [
+            "With the shell loaded, `lucid open` three artifacts in three different projects back to back",
+            "Sample the strip repeatedly while the listing catches up"
+          ],
+          "expected": "At every moment the strip contains a data-active tab whose label matches the shown artifact; the strip is never empty under a surface.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "concurrent-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "shell-under-the-panel-hidden-tabs-stay-mounted",
+          "title": "Hidden tabs stay mounted so drafts and scroll survive switching",
+          "steps": ["Type an annotation note and a message draft in tab A, switch to B and back"],
+          "expected": "Both drafts intact and the thread scroll position preserved.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "tabs scope to a project; the drawer switches; drafts survive",
+          "mutation": null
+        },
+        {
+          "id": "background-tab-keeps-folding-events",
+          "title": "A background tab stays current while hidden",
+          "steps": [
+            "Open two tabs; while B is hidden, have the agent post a reply and take delivery on B's session",
+            "Switch to B"
+          ],
+          "expected": "B already shows the reply and the correct delivery state — no re-fetch flash, no missing events.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "activate-focuses-composer",
+          "title": "Landing on a tab lands the keyboard in that tab's composer",
+          "steps": [
+            "Open two tabs, click the background tab (repeat with ⌘1)",
+            "Type immediately without clicking anything"
+          ],
+          "expected": "The typed text lands in the newly active tab's VISIBLE message input, not a hidden tab's.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "plus-keeps-existing-tabs",
+          "title": "\"+\" deselects but does not close anything",
+          "steps": [
+            "Open two tabs, type a draft in the active one, click \"+\", then click the tab you were on"
+          ],
+          "expected": "Both tabs stay in the strip while the pick screen shows; returning restores the tab with its draft intact.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "theme-applies-to-every-open-tab",
+          "title": "Switching the artifact theme reaches every open tab",
+          "steps": [
+            "Open two tabs, toggle the paper/dark theme in A",
+            "Switch to B and screenshot immediately; then reload"
+          ],
+          "expected": "B's artifact is already in the new palette with no flash of the old one, and the choice survives the reload.",
+          "risk": "high",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "the paper toggle re-themes the artifact itself, and the choice survives a reload",
+          "mutation": null
+        },
+        {
+          "id": "cmd-w-with-unsent-queue",
+          "title": "⌘W on a tab holding an unsent queue does not silently destroy work",
+          "steps": [
+            "Queue an annotation without sending, press ⌘W, reopen the session from the picker"
+          ],
+          "expected": "Either the queued item is still there after reopening, or the close was gated/warned — a human-authored note must not vanish without a trace.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "boot-s-unknown-id",
+          "title": "?s= with a garbage id lands on the pick screen, not a blank window",
+          "steps": ["Start a hub with one session, navigate to /?s=deadbeefdeadbeef"],
+          "expected": "The pick screen renders with its session list, \"+\" still works, and no uncaught page error is logged.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "boot-s-identity-failure",
+          "title": "?s= whose session data is gone degrades to the pick screen",
+          "steps": [
+            "`lucid open` into the hub, wait for the listing, delete the session directory",
+            "Navigate to /?s=<id>"
+          ],
+          "expected": "No tab created and no blank surface; the pick screen (or the row's \"couldn't open\" state) shows and the shell stays usable.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "boot-s-sets-scope-badge",
+          "title": "Booting via ?s= scopes the strip to that session's project",
+          "steps": [
+            "Open two sessions in two different project folders, load /?s=<id of the second>"
+          ],
+          "expected": "[data-test=scope-label] names the second session's project and only that project's tab is in the strip.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "reload-keeps-only-boot-tab",
+          "title": "A reload restores only the ?s= tab",
+          "steps": ["Boot via ?s=, open two more tabs from the picker, reload"],
+          "expected": "One tab (the ?s= one) returns with its recorded review state intact; the other two are gone from the strip but still listed by the picker.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-label-falls-back-to-filename",
+          "title": "An artifact with no <title> is labeled by its filename",
+          "steps": [
+            "Write an artifact whose <head> has no <title>, `lucid open` it, load the shell"
+          ],
+          "expected": "The tab reads the filename (e.g. \"plan.html\") — never an empty label or \"undefined\".",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-label-updates-live",
+          "title": "Rewriting the artifact's <title> relabels its open tab without a reload",
+          "steps": [
+            "Open a tab for plan.html titled \"Migration plan\"",
+            "Rewrite the file with <title>Rollout checklist</title>"
+          ],
+          "expected": "The tab's label changes on the next listing snapshot with no page reload.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tabs-same-title-remain-distinguishable",
+          "title": "Two open tabs with identical titles are still tellable apart",
+          "steps": [
+            "Create plan.html and rollout.html in ONE project both titled \"Migration plan\", open both",
+            "Hover each tab, then click each"
+          ],
+          "expected": "Each tab's tooltip shows its own artifact path and each shows its own document — never two identical labels with no differentiator.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tabs-cross-project-name-collision",
+          "title": "Same-named artifacts from different projects carry a project qualifier",
+          "steps": [
+            "Open plan.html from project A and plan.html from project B (same title), widen the scope"
+          ],
+          "expected": "Both tabs read \"<title> · <project>\" — the browser-style disambiguation.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-long-title-truncates",
+          "title": "A 200-character title truncates instead of pushing the strip apart",
+          "steps": [
+            "Open an artifact whose <title> is 200 characters; inspect the tab width and the \"+\" position"
+          ],
+          "expected": "The tab clamps at its max width with an ellipsis, the close × stays clickable, and \"+\" is still on screen.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-close-background-leaves-active-alone",
+          "title": "Closing a background tab does not disturb the active one",
+          "steps": [
+            "Open two tabs, type an unsent draft in the active one, close the OTHER via its ×"
+          ],
+          "expected": "The active tab stays active, its draft unchanged, and its surface does not remount or scroll to top.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-close-affordance-on-hover",
+          "title": "An inactive tab's close button appears on hover and closes that tab only",
+          "steps": ["Open two tabs, hover the inactive one and click its ×"],
+          "expected": "The hovered tab closes; the active tab is untouched and stays active.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-close-all-then-cmdw-noop",
+          "title": "⌘W with nothing open is a harmless no-op",
+          "steps": ["Open 2 tabs, press ⌘W twice to empty the strip, press ⌘W again"],
+          "expected": "The pick screen stays, no error, the browser tab itself unaffected.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-attention-working",
+          "title": "An agent working in a background tab shows the working dot",
+          "steps": [
+            "Open two tabs, have the agent take delivery / declare a revision on the background session"
+          ],
+          "expected": "That tab shows data-kind=\"working\"; the dot clears when the agent replies.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "panel-width-shared-across-tabs",
+          "title": "A panel resize in one tab applies to all tabs and persists",
+          "steps": ["Open two tabs, drag the divider in A, switch to B, then reload"],
+          "expected": "Both tabs render the new panel width and the width survives the reload.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-attention-approved",
+          "title": "An approved review marks its tab with a check",
+          "steps": ["Open two tabs, approve the review in one, switch away"],
+          "expected": "That tab shows data-kind=\"approved\" (✓); reopening the review removes it.",
+          "risk": "low",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tab-attention-priority-question-wins",
+          "title": "A pending question outranks the working indicator on a tab",
+          "steps": [
+            "Drive a session into both states (unanswered question AND agent mid-turn), observe its tab"
+          ],
+          "expected": "Exactly one dot renders, kind=\"question\" — the strip advertises the human's turn.",
+          "risk": "low",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "sidebar-collapse-shared",
+          "title": "Collapsing the review panel holds across tab switches",
+          "steps": ["Collapse the panel in A, switch to B and back"],
+          "expected": "The panel stays collapsed in both and the artifact reflows to full width in both.",
+          "risk": "low",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "plus-blurs-itself",
+          "title": "Clicking \"+\" leaves no stuck focus ring",
+          "steps": [
+            "Click [data-test=tab-add], read document.activeElement; repeat for the drawer badge and New artifact"
+          ],
+          "expected": "Focus is not left burning on the control — each blurs on activation.",
+          "risk": "low",
+          "kind": "a11y",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "H. Projects, the picker, and add-folder",
+      "purpose": "How a human finds the review they want: project scoping, the drawer, the pick screen, and pointing the shell at a folder.",
+      "scenarios": [
+        {
+          "id": "picker-looking-state-before-first-snapshot",
+          "title": "Before the first listing arrives the screen says it is LOOKING, not empty",
+          "steps": ["Delay GET /hub/events by ~2s in the browser context, load the shell root"],
+          "expected": "\"Looking for sessions…\" shows during the delay; \"No reviews here yet\" never appears before the first snapshot.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "picker-row-open-failure-reports-on-the-row",
+          "title": "A picker row that cannot open says so on itself and keeps the screen",
+          "steps": ["List a session, delete its log file, click its picker row"],
+          "expected": "The row's subtitle becomes \"couldn't open - is the session's log readable?\", no tab is created, and the pick screen remains.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "picker-row-truly-hittable",
+          "title": "Picker rows are hittable by a real pointer, not just Playwright's auto-scroll",
+          "steps": [
+            "Open the pick screen with rows present, elementFromPoint at each row's center"
+          ],
+          "expected": "The hit element is the row (or inside it) — no clipped popover or overlay intercepting.",
+          "risk": "high",
+          "kind": "visual",
+          "needsCapability": "hit-test",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "tabs scope to a project; the drawer switches; drafts survive",
+          "mutation": null
+        },
+        {
+          "id": "picker-all-open-scoped-copy",
+          "title": "\"Everything is open\" in a scope offers widening, not a dead end",
+          "steps": ["Open every artifact in project A, click \"+\" while scoped to A"],
+          "expected": "Copy names the project (\"Every artifact in A is already open\") and offers \"all projects\" plus New artifact — never \"No reviews here yet\".",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "the new-tab screen offers only artifacts that are NOT already open",
+          "mutation": null
+        },
+        {
+          "id": "drawer-open-does-not-block-tabbar",
+          "title": "With the drawer open, the tab strip is still clickable",
+          "steps": [
+            "Open 2 tabs, open the drawer, click a tab then \"+\" then the badge without closing it"
+          ],
+          "expected": "Each control receives its click — the fixed overlay is anchored below --lucid-shell-top and never covers the 37px bar.",
+          "risk": "high",
+          "kind": "visual",
+          "needsCapability": "hit-test",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "drawer-open-large-project",
+          "title": "Opening a 12-artifact project produces 12 ordered tabs and stays responsive",
+          "steps": ["Create 12 artifacts in one project, pick the project from the drawer"],
+          "expected": "12 tabs in lastSeen order with no duplicates, exactly one active (the newest), drawer closed, and the window still accepts input during and after the sequential opens.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "scale-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "scope-hides-other-projects",
+          "title": "The strip is project-scoped; the other project's tab hides rather than closes",
+          "steps": [
+            "Open sessions in two projects, then open the second from the picker after widening scope"
+          ],
+          "expected": "One visible tab and a badge naming the second project; widening the scope brings the first tab back (it was never closed).",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "tabs scope to a project; the drawer switches; drafts survive",
+          "mutation": null
+        },
+        {
+          "id": "drawer-opens-whole-project",
+          "title": "Picking a project opens every artifact in it as a tab, newest active",
+          "steps": ["Two artifacts in one project; open the drawer and click the project row"],
+          "expected": "Two tabs appear (oldest first), the newest is data-active, and no second pick list is shown.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "picking a project OPENS it: every artifact in it becomes a tab",
+          "mutation": null
+        },
+        {
+          "id": "picker-hides-open-artifacts",
+          "title": "The new-tab screen offers only artifacts that are not already tabs",
+          "steps": ["Open one of two artifacts in a project, click \"+\""],
+          "expected": "Only the unopened artifact is listed; after opening it too the screen shows [data-test=all-open] and zero rows.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "the new-tab screen offers only artifacts that are NOT already open",
+          "mutation": null
+        },
+        {
+          "id": "picker-empty-names-its-roots",
+          "title": "An empty shell names where it looked and offers a correction",
+          "steps": ["Start a hub whose only root holds nothing, load the shell"],
+          "expected": "\"No reviews here yet\", the scanned root paths rendered as <code>, plus Add-a-project and New-artifact actions.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "an empty shell can point itself at a folder and find the sessions in it",
+          "mutation": null
+        },
+        {
+          "id": "add-folder-paste-path",
+          "title": "An empty shell can be pointed at a folder and finds the sessions in it",
+          "steps": ["Empty hub, click \"paste a path\", type a folder containing sessions, Add"],
+          "expected": "The listing updates over the stream (no reload) and the picker shows the found sessions.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "an empty shell can point itself at a folder and find the sessions in it",
+          "mutation": null
+        },
+        {
+          "id": "scope-unknown-project-widens",
+          "title": "Activating a tab the listing cannot place widens the scope instead of lying",
+          "steps": [
+            "Open a tab, make its listing row disappear (delete/rename the artifact), re-activate the tab"
+          ],
+          "expected": "The badge falls back to \"Projects\" (no scope) rather than showing another project's name over this artifact.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "drawer-open-close-routes",
+          "title": "The drawer opens and closes by badge, ×, and click-away",
+          "steps": [
+            "Click [data-test=drawer-toggle], then [data-test=drawer-close]",
+            "Reopen and click the backdrop; reopen and click the badge again"
+          ],
+          "expected": "Each route closes it, aria-expanded tracks state, and the drawer is never a trap with no visible exit.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "drawer-worktree-grouping",
+          "title": "A session inside a git worktree groups under its main repo",
+          "steps": [
+            "Create a repo, add a worktree, open an artifact inside the worktree, open the drawer"
+          ],
+          "expected": "One project row for the MAIN repo carrying \"+1 worktree\"; no separate top-level row for the worktree path.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "drawer-project-with-nothing-left",
+          "title": "Picking a project whose sessions just vanished shows the scoped pick screen",
+          "steps": [
+            "Open the drawer while a project row exists, delete that project's session data",
+            "Click the stale row before the next snapshot arrives"
+          ],
+          "expected": "The scoped pick screen renders with its explanatory copy and a way out (all projects) — never a blank window under a project badge.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "drawer-on-empty-hub",
+          "title": "The drawer on a hub with no sessions is still usable",
+          "steps": ["Start a hub with no sessions, open the drawer"],
+          "expected": "Drawer opens showing the Projects header and the add-folder icon, zero project rows, and closes normally.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "picker-sticky-group-headings",
+          "title": "Project headings stay put while a long list scrolls and are not clickable",
+          "steps": [
+            "List ~40 sessions across 4 projects, scroll the pick list to mid-group, click a heading"
+          ],
+          "expected": "The owning project's heading is still visible at the top of the list viewport; clicking a heading opens nothing.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "scale-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "picker-huge-list-internal-scroll",
+          "title": "A 60-session listing scrolls inside the list, not the page",
+          "steps": [
+            "List 60 sessions, open the pick screen, compare document scrollHeight to clientHeight, scroll the list"
+          ],
+          "expected": "The list is capped (~60vh) with its own scrollbar, the page body does not scroll, and the last row is clickable.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "scale-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "picker-scratchpad-subtitle",
+          "title": "An artifact living outside its project shows just its filename",
+          "steps": [
+            "Add an agent-scratchpad folder as a root so its artifact is listed under the project it was about",
+            "Open the pick screen"
+          ],
+          "expected": "The row subtitle is the bare filename, not a nonsense sliced path like \"…/artifact.html\" chopped mid-path.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "add-folder-bad-path",
+          "title": "A nonexistent path is refused with a visible reason",
+          "steps": ["Paste /no/such/folder and click Add"],
+          "expected": "[data-test=add-folder-error] shows the hub's refusal; the listing is unchanged and the field keeps the typed value.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "add-folder-zero-reviews",
+          "title": "A folder holding no reviews explains itself instead of going silent",
+          "steps": ["Paste an empty temp directory and Add"],
+          "expected": "[data-test=add-folder-result] says it is watching the folder but found no reviews, and explains scratchpads — not a bare \"added\".",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "add-folder-duplicate",
+          "title": "Adding the same folder twice does not duplicate the project",
+          "steps": ["Add a folder with sessions, add the exact same path again"],
+          "expected": "One drawer project row and one picker group; no duplicated rows and no duplicate tabs.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "add-folder-no-native-chooser",
+          "title": "With no OS chooser the icon falls back to a path field",
+          "steps": ["With POST /hub/roots answering 501, click the drawer's folder+ icon"],
+          "expected": "A path input appears instead of a dead-end failure; typing a path and Enter adds it.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "add-folder-from-drawer-updates-drawer",
+          "title": "Adding a folder from the drawer header updates the drawer list live",
+          "steps": [
+            "Open the drawer on a hub with one project, add a second folder with sessions from the header control"
+          ],
+          "expected": "A new project row appears in the open drawer without closing and reopening it.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "stale-registry-pointer-not-listed",
+          "title": "A registry pointer whose session is gone is not a phantom picker row",
+          "steps": [
+            "Register a session, delete its directory, wait a listing pass, open the pick screen"
+          ],
+          "expected": "No row for the dead session, or a row that reports the failure on click — never a blank tab.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "session-data-deleted-while-open",
+          "title": "Deleting a session's data under an open tab degrades gracefully",
+          "steps": ["Open a tab, delete its session directory, send a message, then click \"+\""],
+          "expected": "The tab reports the failure rather than blanking, and the listing self-heals so the picker shows no phantom row.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "scope-clear-widens-picker",
+          "title": "\"all projects\" on the pick screen widens the scope",
+          "steps": ["Boot scoped to project A, click \"+\", click [data-test=scope-clear]"],
+          "expected": "Rows from every project appear and the badge reverts to \"Projects\".",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "tabs scope to a project; the drawer switches; drafts survive",
+          "mutation": null
+        },
+        {
+          "id": "drawer-counts-and-plurals",
+          "title": "Drawer project rows report accurate artifact counts",
+          "steps": ["Put 1 artifact in project A and 3 in project B, open the drawer"],
+          "expected": "\"1 artifact\" and \"3 artifacts\" — singular/plural correct and counts matching what picking the project opens.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "picking a project OPENS it: every artifact in it becomes a tab",
+          "mutation": null
+        },
+        {
+          "id": "drawer-header-has-add-folder-only",
+          "title": "The drawer header offers add-folder and not a duplicate New artifact",
+          "steps": ["Open the drawer and inspect its header"],
+          "expected": "[data-test=add-folder] present; [data-test=drawer-new-artifact] absent.",
+          "risk": "low",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "⌘W closes the artifact in front of you; the drawer adds projects from its header",
+          "mutation": null
+        },
+        {
+          "id": "drawer-long-project-name-layout",
+          "title": "A long project name truncates without pushing its count to a second line",
+          "steps": ["Add a folder with a 60-character basename holding a session, open the drawer"],
+          "expected": "Name truncates with ellipsis on one line, count stays baseline-aligned on that line, path line truncates too.",
+          "risk": "low",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "I. Keyboard map and command palette",
+      "purpose": "The power path. Nearly untested today: only ⌘K and ⌘W have any coverage, and the failure mode is a shortcut firing on the wrong tab or eating a keystroke meant for a text field.",
+      "scenarios": [
+        {
+          "id": "palette-over-a-composer-draft",
+          "title": "⌘K from inside the composer opens the palette and preserves the draft",
+          "steps": ["Type text in the message composer, press ⌘K and type a query, press Escape"],
+          "expected": "Typed characters go into the palette input (not the composer); after Escape the composer still holds the original draft.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "palette-open-tab-item-activates",
+          "title": "Selecting an already-open session activates its tab instead of duplicating it",
+          "steps": ["Open two tabs, ⌘K, pick the background one from \"Open tabs\""],
+          "expected": "Tab count unchanged, that tab becomes active, and its composer receives focus.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "cmd-digits-index-visible-tabs",
+          "title": "⌘1-9 index the VISIBLE, project-scoped strip",
+          "steps": ["Open two tabs in project A and two in B, scope to B, press ⌘1 and ⌘2"],
+          "expected": "They select B's first and second visible tabs — never a hidden tab from project A.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "palette-opens-and-opens-a-session",
+          "title": "⌘K fuzzy-opens another session and runs an action on the active one",
+          "steps": ["⌘K, type a session name, Enter", "⌘K, type \"toggle\", Enter", "⌘K, Escape"],
+          "expected": "The session opens as a tab and rescopes the strip; the action runs; Escape closes without running anything.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "the command palette opens sessions and runs review actions",
+          "mutation": null
+        },
+        {
+          "id": "palette-cmdk-toggles",
+          "title": "⌘K a second time closes the palette",
+          "steps": ["Press ⌘K, then ⌘K again"],
+          "expected": "The overlay is gone — the handler toggles rather than re-opening.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "palette-with-no-active-session",
+          "title": "The palette on the pick screen omits the review group and does not crash",
+          "steps": ["From an empty or deselected shell press ⌘K"],
+          "expected": "No \"This review\" group and no \"Close this tab\" item; session groups still list and open.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "palette-close-this-tab",
+          "title": "\"Close this tab\" from the palette closes the tab and the palette",
+          "steps": ["With two tabs open press ⌘K, type \"close\", Enter"],
+          "expected": "Tab count drops by one, palette closes, and a neighbor is promoted and live.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "palette-filters-by-project",
+          "title": "Typing a project name narrows the palette to that project's sessions",
+          "steps": ["List sessions across 3 projects, ⌘K, type the project's basename"],
+          "expected": "Only that project's sessions remain (the project name rides each item's value).",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "palette-annotation-jump",
+          "title": "The palette lists located annotations and jumps to one",
+          "steps": ["Create a located annotation, ⌘K, type part of the note, Enter"],
+          "expected": "The palette closes and the artifact scrolls the annotated element into view.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "palette-cmdw-does-not-close-underneath",
+          "title": "⌘W while the palette is open must not close the tab behind it",
+          "steps": ["Open two tabs, press ⌘K, press ⌘W while the palette shows"],
+          "expected": "The tab under the palette is not closed out from under the human — the shell's window handler should not act while a modal owns focus.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "palette-while-hub-is-down",
+          "title": "The palette still works after the hub drops",
+          "steps": ["Open the shell, stop the hub, press ⌘K and select a not-open session"],
+          "expected": "The palette opens over the last-known listing; the failed open does not blank the window and the shell keeps its current tab.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "cmd-bracket-cycles-with-wrap",
+          "title": "⌘⇧] and ⌘⇧[ step through tabs and wrap around",
+          "steps": [
+            "Open 3 tabs in one project, activate the first",
+            "Press ⌘⇧] three times, then ⌘⇧[ once"
+          ],
+          "expected": "Selection walks 1→2→3→1 then back to 3 — wraparound both directions, within the visible strip only.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "cmd-bracket-uses-keycode",
+          "title": "Bracket stepping keys off e.code, so a non-US layout still cycles",
+          "steps": ["Dispatch keydown with metaKey+shiftKey, code=\"BracketRight\", key=\"*\""],
+          "expected": "The next tab activates — the binding does not depend on the produced character.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "cmd-w-on-pick-screen",
+          "title": "⌘W with no active tab is a no-op",
+          "steps": ["Click \"+\" so no tab is active, press ⌘W"],
+          "expected": "Nothing closes, the pick screen stays, and the event is not preventDefault'd into a dead gesture.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "shortcuts-work-while-typing",
+          "title": "⌘2 while typing in the composer switches tabs and inserts no character",
+          "steps": ["Open two tabs, focus the composer and type \"abc\", press ⌘2"],
+          "expected": "The second tab activates and the first tab's draft is still exactly \"abc\".",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "palette-empty-result",
+          "title": "A query matching nothing says so",
+          "steps": ["⌘K, type \"zzzzqqq\""],
+          "expected": "\"Nothing matches.\" is shown and Enter does nothing.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "cmd-digit-out-of-range",
+          "title": "⌘5 with two tabs changes nothing",
+          "steps": ["Open two tabs, press ⌘5"],
+          "expected": "The active tab is unchanged and no error is thrown.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "cmd-bracket-single-tab-noop",
+          "title": "Bracket stepping with one tab does nothing",
+          "steps": ["Open one tab, press ⌘⇧] and ⌘⇧["],
+          "expected": "No change, no error, no flicker of the pick screen.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "alt-modifier-ignored",
+          "title": "⌥⌘K does not open the palette",
+          "steps": ["Press Alt+Meta+k"],
+          "expected": "No palette overlay — alt-modified chords are left to the OS and browser.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "J. Presence: intent, progress, context, attendant",
+      "purpose": "The advisory surfaces that tell a human what the agent is doing. They must never claim a delivery, never outlive a turn, and never bloat the log.",
+      "scenarios": [
+        {
+          "id": "progress-cleared-by-real-output",
+          "title": "A fan-out indicator clears when the agent produces real output",
+          "steps": [
+            "Post progress, then write a new artifact version by atomic rename, watch the surface"
+          ],
+          "expected": "The fan-out indicator is replaced by the live-reloaded version — progress is advisory presence, never a window that outlives the turn.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "lucid progress renders a distinct fan-out indicator that output clears",
+          "mutation": null
+        },
+        {
+          "id": "wait-model-effort-env-displayed",
+          "title": "LUCID_MODEL/LUCID_EFFORT reach the viewer as displayed settings, not pickers",
+          "steps": [
+            "Export LUCID_HARNESS/LUCID_SESSION_ID/LUCID_MODEL/LUCID_EFFORT and run a blocking wait",
+            "Look at the model/effort area of the header, then let the wait end"
+          ],
+          "expected": "The attending session's model and effort show subdued instead of offering a choice; when the wait ends with no attendant the pickers return.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/selection.e2e.ts",
+          "testName": "an attending session's own model is shown, not offered",
+          "mutation": null
+        },
+        {
+          "id": "context-live-vs-sidecar",
+          "title": "context reports live:true against a running server and live:false when none answers",
+          "steps": [
+            "With the server up, `lucid context plan.html --pct 42` and read the ring",
+            "Kill the server, `lucid context plan.html --pct 90`, then `lucid open` and read the ring"
+          ],
+          "expected": "First `{ok:true,live:true}` with the ring updating without a reload; second `{ok:true,live:false}` writing context.json; after the reopen the ring shows 90%.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "kill-server",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "context usage renders a header ring that updates live",
+          "mutation": null
+        },
+        {
+          "id": "intent-reply-vs-revise-copy",
+          "title": "revise and reply produce different working-window copy",
+          "steps": [
+            "Run `lucid intent plan.html revise` and read the surface",
+            "Run `lucid intent plan.html reply` and read it again"
+          ],
+          "expected": "\"an update is on the way\" vs \"a reply is coming\"; both windows close only on real output (a new version or an agent_reply), never on the intent itself.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "declared revise intent puts an update-on-the-way spinner on the surface",
+          "mutation": null
+        },
+        {
+          "id": "progress-sanitization",
+          "title": "Negative, fractional and non-finite counts never reach the indicator",
+          "steps": [
+            "Run `--total 7 --done 2`, then `--done 3.7`, then `--total -1`, watching after each"
+          ],
+          "expected": "Counts floor (3.7 → 3), negatives are dropped (the previous total stands), and the indicator never shows a negative or NaN.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "context-stale-daemon-404",
+          "title": "An older server without /__lucid/context falls through to the sidecar",
+          "steps": ["Stub the route to 404 and run `lucid context plan.html --pct 55`"],
+          "expected": "live:false and the sidecar written — never a `live:true` success for a POST that 404'd.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "route-intercept",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "context-derives-and-clamps",
+          "title": "used/total derives the percentage and out-of-range pct is clamped",
+          "steps": [
+            "Run `--used 142000 --total 200000`, then `--pct 150`, then `--pct -5`, then `--used` alone"
+          ],
+          "expected": "71% with token counts in the tooltip; 150 clamps to 100 and -5 to 0; `--used` with no total is refused.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "context usage renders a header ring that updates live",
+          "mutation": null
+        },
+        {
+          "id": "context-never-bloats-the-log",
+          "title": "Repeated context reports add no log events",
+          "steps": [
+            "Run `lucid context plan.html --pct N` 50 times, count lines in log.ndjson before and after"
+          ],
+          "expected": "Line count unchanged — usage lives only in the last-value sidecar.",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "progress-done-exceeds-total",
+          "title": "done greater than total renders clamped, not broken",
+          "steps": ["Run `lucid progress plan.html --total 3 --done 9`"],
+          "expected": "The viewer clamps at 3/3 (or shows 9 reported without a broken bar); no overflowing bar and no layout break.",
+          "risk": "low",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "K. Hub and process resilience",
+      "purpose": "Restarts, crashes, stale descriptors and multiple windows. This is where a wrong move corrupts the log with two appenders or kills every open tab.",
+      "scenarios": [
+        {
+          "id": "open-restart-never-kills-the-hub",
+          "title": "`open --restart` on a hub-hosted session leaves the hub and other tabs alive",
+          "steps": [
+            "Start `lucid hub`, open two artifacts into it (two tabs in one window)",
+            "Run `lucid open <first> --restart`, check /hub/identity and both tabs"
+          ],
+          "expected": "The hub process survives, both tabs keep working, and the second session is unaffected — stopServer refuses a descriptor carrying a `base`.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-restart-replaces-daemon",
+          "title": "`open --restart` replaces the running server without ending the session",
+          "steps": [
+            "Open a session, annotate from the browser, rebuild the client bundle",
+            "Run `lucid open plan.html --restart`, reload the url, run `lucid wait --since <old cursor>`"
+          ],
+          "expected": "A new server pid serves the freshly built bundle, no session_ended event was written, and the earlier annotation is still delivered by wait.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "bundle-stamp",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-hub-dies-mid-open",
+          "title": "A hub that dies between accept and handshake fails loudly, never split-brains",
+          "steps": [
+            "Start the hub, begin `lucid open`, kill the hub right after it accepts /hub/open",
+            "Inspect the exit code and whether a dedicated server was spawned"
+          ],
+          "expected": "Exit 1 with SERVER_ERROR \"the hub accepted the session but its mount never answered\"; no dedicated per-session server behind the hub's mount (two appenders would corrupt the log).",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "kill-server",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-stale-descriptor-recovered",
+          "title": "A stale server.json does not wedge open or attach to a stranger's port",
+          "steps": [
+            "Open a session, kill the server without cleanup so server.json survives",
+            "Bind an unrelated HTTP server on the recorded port, run `lucid open` again"
+          ],
+          "expected": "The handshake rejects the impostor (session path mismatch), the stale descriptor is removed, a fresh server is spawned, and the printed url points at the new port.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "kill-server",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "a stale viewer never posts its message into whichever session took its port",
+          "mutation": null
+        },
+        {
+          "id": "open-concurrent-same-artifact",
+          "title": "Two simultaneous opens of one artifact yield one session and one server",
+          "steps": [
+            "Run two `lucid open plan.html` processes concurrently",
+            "Compare payloads and count session_opened events"
+          ],
+          "expected": "Both exit 0 with the same url and version, exactly one session_opened, and only one listening port.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "concurrent-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hub-attend-env-opt-in-is-strict",
+          "title": "Only LUCID_HUB_ATTEND=1 enables agent spawning",
+          "steps": [
+            "Start the hub with LUCID_HUB_ATTEND=true, then =yes, then =1",
+            "Read the startup line and GET /hub/identity each time"
+          ],
+          "expected": "attend:false for \"true\" and \"yes\" (no banner, /hub/create answers 403); attend:true only for \"1\". A review-only install must never silently start spawning agents.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hub-restart-same-port-recovers",
+          "title": "A restarted hub on the same port re-adopts open windows without a reload",
+          "steps": [
+            "Start the hub, open two sessions, load the shell (drafts typed)",
+            "Kill and restart the hub on the same port with the same registry",
+            "Wait through the backoff, then append an agent reply from the CLI"
+          ],
+          "expected": "The reconnecting indicator clears on its own, both tabs come back with drafts intact, the new event appears in the open tab — no duplicate tabs, no stuck \"reconnecting…\", no manual reload.",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "fixed-port-hub-restart",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hub-drop-reports-once-then-exits-cleanly",
+          "title": "A dropped or SIGTERM'd hub reports itself exactly once",
+          "steps": [
+            "Start the hub with two sessions and a shell window loaded, send SIGTERM",
+            "Watch the window and the hub's exit code"
+          ],
+          "expected": "Exactly one [data-test=reconnecting] indicator, at the composer — not a growing pile of warnings — and the process exits 0 after daemon.stop().",
+          "risk": "high",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/shell.e2e.ts",
+          "testName": "a dropped hub reports itself ONCE, at the composer",
+          "mutation": null
+        },
+        {
+          "id": "two-windows-open-tab-broadcast",
+          "title": "`lucid open` surfaces the tab in every open shell and pops no browser",
+          "steps": [
+            "Load the shell in two browser contexts against one hub",
+            "Run `lucid open <new artifact>` with LUCID_NO_OPEN unset"
+          ],
+          "expected": "Both windows gain the tab, the CLI reports shells>0, and no second browser window is spawned (shells > 0 suppresses the launch).",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "multi-window",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "two-windows-close-is-local",
+          "title": "Closing a tab in one window does not close it in the other",
+          "steps": ["Two windows with the same tab open, close it in window 1"],
+          "expected": "Window 2 still shows the tab and its live stream keeps working.",
+          "risk": "medium",
+          "kind": "concurrency",
+          "needsCapability": "multi-window",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-many-sessions-port-pool",
+          "title": "Opening more sessions than the fixed port pool still works",
+          "steps": ["Without a hub, open 12 different artifacts, then run bare `lucid`"],
+          "expected": "All 12 report live:true with distinct viewer urls (17412–17419 then ephemeral ports); none fail with a bind error.",
+          "risk": "medium",
+          "kind": "concurrency",
+          "needsCapability": "scale-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hub-many-sessions",
+          "title": "A hub hosting twenty sessions binds one port and lists them all",
+          "steps": ["Open 20 artifacts into one hub, check listening ports and the shell listing"],
+          "expected": "Exactly one listening port; all 20 appear in the listing and any one opens as a tab within a couple of seconds.",
+          "risk": "medium",
+          "kind": "concurrency",
+          "needsCapability": "scale-fixture",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "open-registry-write-failure-is-advisory",
+          "title": "An unwritable registry never fails an open",
+          "steps": [
+            "Point LUCID_REGISTRY at a path in a read-only directory, run `lucid open plan.html`"
+          ],
+          "expected": "Exit 0, url printed, session usable; only the shell's discovery convenience is degraded.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hub-invalid-env-port",
+          "title": "A malformed LUCID_HUB_PORT falls back to the default",
+          "steps": ["Start `lucid hub` with LUCID_HUB_PORT=abc, then =0x1f, then =99999"],
+          "expected": "Each falls back to 17428 (parseHubPort rejects them) rather than binding a nonsense port or throwing.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hub-restart-new-bundle-reloads",
+          "title": "A hub serving a newer UI bundle makes live windows reload themselves",
+          "steps": [
+            "Load the shell in dev mode, touch/rebuild the chrome bundle so the stamp moves"
+          ],
+          "expected": "The window reloads itself once and comes back on the new bundle (tabs restored per the ?s= rules).",
+          "risk": "low",
+          "kind": "recovery",
+          "needsCapability": "bundle-stamp",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "two-windows-independent-scope",
+          "title": "Two windows keep independent project scopes",
+          "steps": ["Window 1 scoped to project A, window 2 to project B, open a tab in each"],
+          "expected": "Neither window's badge or strip changes because of the other.",
+          "risk": "low",
+          "kind": "concurrency",
+          "needsCapability": "multi-window",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "L. Log integrity and concurrent writers",
+      "purpose": "log.ndjson is the single source of truth. A lost, duplicated or unparseable event is unrecoverable data loss.",
+      "scenarios": [
+        {
+          "id": "concurrent-writers-serialize",
+          "title": "Simultaneous CLI and viewer writes all land, in order",
+          "steps": [
+            "Fire `lucid ask`, `lucid wait --reply`, `lucid progress` and a viewer annotation send at the same moment",
+            "Read log.ndjson and the panel"
+          ],
+          "expected": "Every event present exactly once, seq strictly monotonic with no duplicates, every line parses, and the panel order matches the log order.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "concurrent-cli",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "log-torn-tail-recovery",
+          "title": "A torn final log line does not break any command",
+          "steps": [
+            "Append a partial (non-newline-terminated) JSON fragment to log.ndjson",
+            "Run bare `lucid`, `lucid wait --timeout 1`, and `lucid open`"
+          ],
+          "expected": "All succeed; the torn tail is ignored then truncated on the next append, and no committed event is lost.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "log-corruption",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "log-corrupt-committed-line",
+          "title": "A corrupt committed log line is reported precisely and destroys nothing",
+          "steps": [
+            "Replace a middle line of log.ndjson with garbage plus a newline, run `lucid wait`"
+          ],
+          "expected": "Exit 1 with LOG_ERROR naming the line number and a truncated excerpt; the file is left intact for the human to repair.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "log-corruption",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "M. Launcher and forks",
+      "purpose": "`lucid launch` spawns agent processes from human gestures. A dedupe or yield bug here means duplicate agents burning tokens on the same work.",
+      "scenarios": [
+        {
+          "id": "launch-spawns-per-fork",
+          "title": "A fork request spawns a child that authors and opens a new artifact",
+          "steps": [
+            "Start `lucid launch plan.html` with a stub harness recipe that writes the child HTML and runs `lucid open`",
+            "Fork a region from the viewer, watch the shell listing"
+          ],
+          "expected": "The stub is invoked with substituted {id}/{seed}/{artifact}/{cwd}/{prompt}, the child artifact appears as a new session/tab, and the parent's fork is not folded into the parent artifact.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "stub-harness-launcher",
+          "status": "covered",
+          "testFile": "test/e2e/loop.e2e.ts",
+          "testName": "fork button spins the selection off; the request reaches wait as a fork",
+          "mutation": null
+        },
+        {
+          "id": "launch-dedupes-handled-forks",
+          "title": "Restarting the launcher does not re-spawn already-handled forks",
+          "steps": [
+            "Launch, handle one fork, Ctrl-C the launcher",
+            "Restart `lucid launch plan.html` and wait a poll cycle"
+          ],
+          "expected": "No second child is spawned for the same fork id; only genuinely new forks are acted on.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "stub-harness-launcher",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "launch-yields-to-a-human-attendant",
+          "title": "The launcher does not drive a child a human is attending",
+          "steps": [
+            "Launch a child, run a blocking `lucid wait --harness claude-code` on that child",
+            "Send feedback in the child's viewer"
+          ],
+          "expected": "The launcher logs that it is yielding to the attending harness and does not spawn a resume turn; the interactive attendant gets the batch.",
+          "risk": "high",
+          "kind": "concurrency",
+          "needsCapability": "stub-harness-launcher",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "launch-no-registry",
+          "title": "`lucid launch` without a harness registry explains exactly what to create",
+          "steps": [
+            "Unset LUCID_HARNESSES, point XDG_CONFIG_HOME at an empty dir, run `lucid launch plan.html`"
+          ],
+          "expected": "Exit 1, VALIDATION_ERROR naming the resolved registry path with a complete example registry in detail.example — actionable without reading the docs.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "launch-invalid-registry",
+          "title": "A malformed harness registry fails at load, naming the file",
+          "steps": [
+            "Write a registry declaring `models` for a harness Lucid knows no flags for, run `lucid launch plan.html`"
+          ],
+          "expected": "Exit 1 with a ValidationError carrying the registry path and the offending harness name — never a picker offering models the CLI will reject at spawn.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/selection.e2e.ts",
+          "testName": "the create dialog offers the registry's models and the pick reaches the argv",
+          "mutation": null
+        },
+        {
+          "id": "launch-sigint-stops-cleanly",
+          "title": "Ctrl-C stops the launcher without orphaning children",
+          "steps": [
+            "Start `lucid launch`, trigger a fork, send SIGINT mid-create, check for stray processes"
+          ],
+          "expected": "The launcher exits, the in-flight child is completed or terminated (not orphaned holding the log lock), and the parent session stays usable.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "stub-harness-launcher",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "launch-no-session",
+          "title": "launch before open is NOT_FOUND",
+          "steps": ["Run `lucid launch /durable/never-opened.html`"],
+          "expected": "Exit 1 NOT_FOUND, checked before the registry is even read.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "N. Plan documents: render and ingest",
+      "purpose": "The plan-db bridge. Entirely uncovered end to end, and the ingest path quotes human-authored text into shell commands.",
+      "scenarios": [
+        {
+          "id": "plan-render-open-roundtrip",
+          "title": "A rendered plan opens, anchors on its D-NNN ids, and ingests back",
+          "steps": [
+            "`lucid plan render impl.md --title X --stage build`, then `lucid open` the result",
+            "Annotate an element carrying data-lucid-id=\"D-004\" and send it",
+            "`lucid wait --since <c> --timeout 8 | lucid plan ingest --plan myplan`"
+          ],
+          "expected": "Title/stage appear in the document, the annotation resolves against the D-004 anchor, and ingest emits a `decision-feedback` item with a plan-db add-finding command referencing D-004.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "plan-render-default-out",
+          "title": "plan render derives <doc>.lucid.html and honours --out",
+          "steps": [
+            "Run `lucid plan render notes.md`",
+            "Run `lucid plan render notes.md --out /durable/custom.html`"
+          ],
+          "expected": "First writes notes.lucid.html printing `{artifact, next:\"lucid open …\"}`; second writes exactly the --out path. Both paths absolute in the output.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "plan-ingest-quotes-escaped",
+          "title": "Notes with quotes and backslashes produce safely quoted commands",
+          "steps": ["Annotate with `he said \"do it\\now\"` and ingest the payload"],
+          "expected": "The emitted plan-db command escapes quotes and backslashes into a single well-formed argument; nothing in a human note can inject a second command.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "plan-render-missing-doc",
+          "title": "plan render on a missing doc is a typed ARTIFACT_ERROR",
+          "steps": ["Run `lucid plan render /nope.md`"],
+          "expected": "Exit 1 with ARTIFACT_ERROR \"cannot read plan doc: …\" and detail.path.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "plan-ingest-invalid-json",
+          "title": "plan ingest refuses unparseable input",
+          "steps": ["Run `echo 'not json' | lucid plan ingest --plan p`"],
+          "expected": "Exit 1 with ARTIFACT_ERROR \"could not parse wait payload JSON from input\".",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "plan-ingest-empty-payload",
+          "title": "An empty wait payload ingests to an empty command list",
+          "steps": [
+            "Pipe a `waiting` payload with no annotations/messages into `lucid plan ingest --plan p`"
+          ],
+          "expected": "Exit 0 with `{plan:\"p\", items:[], commands:[]}` — no invented commands.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "O. Entry points and the shipped binary",
+      "purpose": "How a human and a machine first reach Lucid: `lucid app`, the compiled binary, and running without a network. The compiled binary is never exercised today, so a selfInvocation regression ships green.",
+      "scenarios": [
+        {
+          "id": "app-does-not-stack-windows",
+          "title": "`lucid app` run repeatedly never stacks browser windows",
+          "steps": [
+            "Run `lucid app` with no hub running and let the window connect",
+            "Run `lucid app` three more times; repeat right after a hub restart"
+          ],
+          "expected": "The first prints `{hub,app,status:\"running\"}`; the rest print `app:\"already-open\"` with shells>0 and open nothing. The reconnect beat is given whether or not the hub answered the first probe.",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "fixed-port-hub-restart",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "app-starts-hub-in-attend-mode",
+          "title": "`lucid app` brings up a hub that actually drives delivery",
+          "steps": ["With no hub running, run `lucid app`, then GET /hub/identity on 17428"],
+          "expected": "attend:true — the app front door is a human sitting down to review, so feedback is not left waiting. Asserted deliberately so it cannot regress to a review-only hub.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "compiled-binary-selfinvocation",
+          "title": "The compiled binary spawns its own __serve correctly",
+          "steps": [
+            "`bun run build`, then run `dist/lucid open plan.html` (not the dev entrypoint)",
+            "Load the printed url and run `dist/lucid wait --timeout 3`"
+          ],
+          "expected": "The detached server starts and answers within the 8s window. selfInvocation drops the script argument only for the compiled binary, so a regression makes `open` time out with SERVER_ERROR in the shipped artifact while dev mode stays green.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "compiled-binary",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "app-hub-fails-to-start",
+          "title": "`lucid app` fails loudly when the hub cannot come up",
+          "steps": ["Occupy port 17428 with a non-Lucid server, run `lucid app`"],
+          "expected": "After the 8s deadline, exit 1 with SERVER_ERROR \"hub daemon failed to start\" and detail.port — never a silent success or an endless spin.",
+          "risk": "medium",
+          "kind": "recovery",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "loopback-only-no-network",
+          "title": "Every command works with outbound networking disabled",
+          "steps": [
+            "Disable external network access, run open, wait, ask, context, hub, app end to end"
+          ],
+          "expected": "All succeed — everything is 127.0.0.1, so a Lucid review works on a plane and never phones home.",
+          "risk": "medium",
+          "kind": "functional",
+          "needsCapability": "no-network",
+          "status": "declined",
+          "declineReason": "Outbound networking cannot be disabled per-process on macOS without root pf rules, so the scenario as written could only ever be a permanent skip. Replaced by a narrower property that IS asserted: every Bun.serve in src/ binds 127.0.0.1 (src/server/daemon.ts, src/server/server.ts), and test/daemon.test.ts rejects a non-loopback Host. Note the limit: nothing yet gates a FUTURE Bun.serve, and nothing checks the shipped bundle for a non-loopback origin - D-016 describes that gate, and it does not exist.",
+          "mutation": null
+        },
+        {
+          "id": "app-no-chrome-fallback",
+          "title": "With no Chrome-family browser, app falls back to the default browser",
+          "steps": ["Run `lucid app` with a stubbed /Applications where no Chrome flavor exists"],
+          "expected": "Prints `app:false` and still opens the url in the default browser; the printed hub url is always usable manually.",
+          "risk": "low",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        }
+      ]
+    },
+    {
+      "name": "P. Layout, hit-testing, and a11y",
+      "purpose": "Pixel-level integrity that Playwright's auto-scroll and auto-wait normally hide: overlays eating clicks, page-level horizontal scroll, keyboard-only operation and contrast.",
+      "scenarios": [
+        {
+          "id": "tab-tooltip-does-not-eat-clicks",
+          "title": "An open tab tooltip never blocks a click on a neighboring tab or its ×",
+          "steps": [
+            "Open 3 tabs, hover tab 1 until its tooltip shows",
+            "Immediately click tab 3, then tab 3's ×, verifying with elementFromPoint at the click coordinates"
+          ],
+          "expected": "Tab 3 activates and then closes — the portalled tooltip popup never intercepts the pointer.",
+          "risk": "high",
+          "kind": "visual",
+          "needsCapability": "hit-test",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "drawer-parallax-no-horizontal-scroll",
+          "title": "The drawer's parallax shift never creates a page-level horizontal scrollbar",
+          "steps": [
+            "Open the drawer at 900px and at a wide viewport",
+            "Measure document.documentElement.scrollWidth vs clientWidth, open and closed"
+          ],
+          "expected": "No horizontal overflow on the body in either state.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tabbar-a11y-labels",
+          "title": "Strip controls carry usable accessible names",
+          "steps": ["Inspect the close button, attention dot, drawer badge and \"+\""],
+          "expected": "Close is \"Close <artifact name>\", the dot is role=img with a stateful label, the badge exposes aria-expanded, and \"+\" names the ⌘K equivalent.",
+          "risk": "medium",
+          "kind": "a11y",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tabbar-keyboard-reachable",
+          "title": "The strip is operable from the keyboard alone",
+          "steps": [
+            "From a fresh load, Tab through the shell",
+            "Activate the badge, a tab, and \"+\" with Enter/Space"
+          ],
+          "expected": "Each control is reachable with a visible focus ring and activates on Enter/Space; focus is never trapped in the drawer.",
+          "risk": "medium",
+          "kind": "a11y",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "tabbar-contrast-both-themes",
+          "title": "Active and inactive tab labels stay legible in both machine themes",
+          "steps": [
+            "Load the shell with tabs under prefers-color-scheme light and dark",
+            "Measure text/background contrast on active and inactive tabs and the scope badge"
+          ],
+          "expected": "All strip text meets the project's contrast floor in both themes.",
+          "risk": "medium",
+          "kind": "a11y",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/contrast.e2e.ts",
+          "testName": "every text token stays legible in BOTH themes on a dark machine",
+          "mutation": null
+        }
+      ]
+    }
+  ],
+  "newCapabilities": [
+    "raw-cli: a runner that returns {stdout, stderr, code} without JSON.parse. makeCli.run today parses stdout and execFileAsync throws on non-zero exit, so no existing test can even observe a polluted stdout or a wrong exit code — the single highest-value harness gap.",
+    "durable-path-fixture: a fixture rooted outside $TMPDIR, and a runner that omits LUCID_ALLOW_TEMP. Every e2e today sets LUCID_ALLOW_TEMP=1 in a temp dir, so the entire volatile-path refusal path is structurally untestable.",
+    "kill-server: read server.json for the pid and SIGKILL/SIGTERM the dedicated session server (and the hub) mid-test. Today only `lucid end` is used, which is a clean shutdown and exercises none of the suspended/stale-descriptor paths.",
+    "fixed-port-hub-restart: start a hub on a stable port, stop it, and start a second one on the same port with the same registry inside one test. startHub uses --port 0 and its stop() deletes the state dir, so reattach and self-recovery cannot be exercised.",
+    "multi-window: two browser contexts against one hub, with helpers to assert broadcast, independent close and independent scope. No test opens a second context today.",
+    "route-intercept: page.route helpers for delay / abort / status+body stubbing of /__lucid/message, /annotation, /asset, /fork and /hub/events. No e2e uses page.route at all, so every slow-send, partial-failure, 409 and server-reason path is unreachable.",
+    "hit-test: a reusable elementFromPoint assertion (\"this control is what a real pointer would hit\"). Exists as one ad-hoc block in shell.e2e.ts; needs generalizing to cover tooltips, the drawer overlay and picker rows.",
+    "scale-fixture: generate N artifacts/sessions (12, 20, 60) in one or several projects cheaply. Required for strip scrolling, the 10-stream cap, the port pool, the 60-row picker and the large-tree status timing.",
+    "concurrent-cli: fire several CLI invocations simultaneously (or hold a long-running one) and compare their payloads and the log. Needed for two waits, two opens, mid-flight restart, and the ask/reply/progress/viewer write race.",
+    "compiled-binary: `bun run build` then drive dist/lucid in e2e. Every test runs `bun run src/cli/main.ts`, so selfInvocation regressions in the shipped binary ship green.",
+    "clipboard: grant clipboard-read/write permissions on the context and read navigator.clipboard, plus a stub that rejects writeText.",
+    "stub-harness-launcher: run `lucid launch` as a long-lived child with a stub harness recipe (test/launch-stub.ts exists but is not driven end to end), capture its substituted argv, and send it SIGINT.",
+    "log-corruption: mutate log.ndjson mid-test — append a torn tail, replace a committed line — and assert the recovery path.",
+    "bundle-stamp: touch or rebuild the chrome bundle mid-test so the dev stamp moves, for --restart-serves-new-bundle and the self-reload.",
+    "no-network: run a full loop with outbound networking disabled, to prove the loopback-only claim."
+  ]
+}
