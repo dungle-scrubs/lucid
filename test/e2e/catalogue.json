@@ -1593,10 +1593,11 @@
           "risk": "low",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "declineReason": "Cosmetic empty state, declined KNOWINGLY including its instruction copy (the click-to-annotate line): a regression in either is visible the instant the panel opens, nothing is lost, and the composer lifecycle is exercised by every queue test."
         },
         {
           "id": "quick-replies-only-with-a-pick",
@@ -1606,10 +1607,11 @@
           "risk": "low",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "declineReason": "Chip PRESENCE cosmetics; chip BEHAVIOUR (the merge over a typed draft) is covered by m4.1-quick-reply-merges."
         },
         {
           "id": "queue-survives-panel-collapse",
@@ -1632,10 +1634,11 @@
           "risk": "low",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "declineReason": "Pluralization and hide cosmetics; the bar functions in every queue test, and a wrong count is visible with nothing at stake."
         }
       ]
     },
@@ -2315,10 +2318,11 @@
           "risk": "low",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "declineReason": "A decorative check on a tab; approval itself is load-bearing and covered by 41af772 and the loop reviewResolved assertions."
         },
         {
           "id": "tab-attention-priority-question-wins",
@@ -2358,10 +2362,11 @@
           "risk": "low",
           "kind": "a11y",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "declineReason": "A stuck focus ring - visible, harmless, self-correcting on the next interaction."
         }
       ]
     },
@@ -2781,10 +2786,11 @@
           "risk": "low",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "declineReason": "Truncation layout under a long name: visual polish priced below its shell-window runtime; the drawer itself is exercised by shell.e2e.ts."
         }
       ]
     },
@@ -3177,10 +3183,11 @@
           "risk": "low",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "declineReason": "A clamped render of an agent-side input error; the progress contract (refusals, presence) is covered by m2.2 and the presence tests."
         }
       ]
     },
