@@ -1,13 +1,13 @@
 import { on } from "../locators.ts";
-import { expect, test } from "@playwright/test";
-import { delayRoute, makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
+import { expect, test } from "../harness.ts";
+import { delayRoute, surfaceOf } from "../helpers.ts";
 
 /**
  * Regression: `80faab5`, invariant three of three - a flush stuck on ONE
  * message disables that card's controls and no other's.
  *
- * The commit's review found this shipped untested (finding #31): the per-card
- * check is `outboxSendingId === message.id`, and flattening it back to the
+ * The commit's review found this shipped untested: the per-card check is
+ * `outboxSendingId === message.id`, and flattening it back to the
  * global `outboxSending` flag leaves every card reading "Sending…" during any
  * flight - the one control a failed send leaves you, unusable on all of them
  * at once.
@@ -17,14 +17,7 @@ import { delayRoute, makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts
  * card's Retry is disabled while the first is in flight.
  */
 
-let cli: Cli;
-
-test.afterEach(async () => {
-  await cli?.cleanup();
-});
-
-test("a stuck flush disables its own card's Retry, and no other's", async ({ page }) => {
-  cli = await makeCli(PLAN_V1);
+test("a stuck flush disables its own card's Retry, and no other's", async ({ page, cli }) => {
   const session = (await cli.run(["open", cli.artifact])) as { url: string };
   await page.goto(session.url);
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");

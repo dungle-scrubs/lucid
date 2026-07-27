@@ -1,6 +1,7 @@
 import { on } from "../locators.ts";
-import { expect, test, type Page } from "@playwright/test";
-import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
+import type { Page } from "@playwright/test";
+import { expect, test } from "../harness.ts";
+import { surfaceOf, type Cli } from "../helpers.ts";
 
 /**
  * M4.1 - a quick-reply chip over a half-typed note merges, never destroys.
@@ -16,22 +17,17 @@ import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
  * the queued card.
  */
 
-let cli: Cli;
-
-test.afterEach(async () => {
-  await cli?.cleanup();
-});
-
-const openAndPick = async (page: Page): Promise<void> => {
-  cli = await makeCli(PLAN_V1);
+// The `cli` fixture (harness.ts) supplies the artifact and cleans up in
+// `use()` teardown, whatever the test does (D-022).
+const openAndPick = async (page: Page, cli: Cli): Promise<void> => {
   const session = (await cli.run(["open", cli.artifact])) as { url: string };
   await page.goto(session.url);
   await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
   await expect(on(page).annotationNote()).toBeVisible();
 };
 
-test("a quick-reply over a typed note queues both, the typing first", async ({ page }) => {
-  await openAndPick(page);
+test("a quick-reply over a typed note queues both, the typing first", async ({ page, cli }) => {
+  await openAndPick(page, cli);
 
   const typed = "The backfill cadence is wrong - the events table is written hourly.";
   await on(page).annotationNote().fill(typed);

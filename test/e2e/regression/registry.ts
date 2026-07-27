@@ -42,7 +42,9 @@ export interface NoMutation {
 export type Mutation = RevertMutation | EditMutation | NoMutation;
 
 export interface RegressionRow {
-  /** The shipped fix this row is about. */
+  /** The fix this row is about: a commit sha, or a milestone slug (`m2.1`,
+   *  `m4.1-queue-paste`) for a fix that shipped inside a larger commit. Only
+   *  a real sha can carry a `revert` mutation; slug rows are always edits. */
   readonly sha: string;
   /** What broke, in the words of the bug report. */
   readonly broke: string;
@@ -236,7 +238,7 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     // line and none tested, so the `why` was true of the refusal and false of
     // the commit. The other two - the 4xx short-circuit in transport.ts and
     // outboxSendingId vs outboxSending in Panel.tsx - are the two 80faab5
-    // rows below (finding #31, closed by D-059).
+    // rows below (closed by D-059).
     mutation: {
       kind: "edit",
       file: "client/chrome/Panel.tsx",
@@ -283,7 +285,7 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     mutation: {
       kind: "edit",
       file: "client/chrome/Panel.tsx",
-      find: "              disabled={composerNote.trim().length === 0}",
+      find: "              disabled={!hasComposerDraft({ pendingTarget, composerNote })}",
       replace: "              disabled={false}",
     },
   },
@@ -299,7 +301,7 @@ export const REGRESSIONS: readonly RegressionRow[] = [
       // The `\\n` is deliberate: the SOURCE spells `\n` as two characters
       // inside its template literal, so the match must too. A single-escaped
       // version held real newlines, matched nothing, and was caught by the
-      // exactly-once guard - the same silent-no-op class as mistake #6.
+      // exactly-once guard: a mutation that matches nothing proves nothing.
       // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the SOURCE being matched, not an interpolation that forgot its backticks
       find: "    set({ composerNote: typed ? `${typed}\\n\\n${note}` : note });",
       replace: "    set({ composerNote: note });",
@@ -316,7 +318,7 @@ export const REGRESSIONS: readonly RegressionRow[] = [
       file: "client/chrome/store.ts",
       // Severs the restore, not the writes: storage still fills, the page just
       // never reads it back - which is exactly the pre-fix shape.
-      find: "    queue: storage.readQueue(assetUrl),",
+      find: "    queue: storage.readQueue(),",
       replace: "    queue: [],",
     },
   },
@@ -368,8 +370,9 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     mutation: {
       kind: "edit",
       file: "client/chrome/store.ts",
-      find: '  return (o?.kind === "element" || o?.kind === "range") && typeof o.snippet === "string";',
-      replace: '  return typeof v === "object" && v !== null;',
+      find: 'const isAnchorLike = (v: unknown): v is Anchor => !("error" in parseAnchor(v));',
+      replace:
+        'const isAnchorLike = (v: unknown): v is Anchor => typeof v === "object" && v !== null;',
     },
   },
   {

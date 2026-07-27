@@ -5,7 +5,7 @@ import { TargetSnippet } from "./AnnotationPart.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
 import { effortLadder, withCurrent } from "./selection.ts";
-import { imagesFromPaste } from "./store.ts";
+import { hasComposerDraft, imagesFromPaste } from "./store.ts";
 import type { OutboxMessage, PastedImage } from "./types.ts";
 import { Kbd, KbdGroup } from "./ui/kbd.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
@@ -749,7 +749,7 @@ export const PendingComposer = () => {
               onClick={addToQueue}
               // The action itself refuses a blank note; a still-enabled button
               // makes that refusal invisible - click, nothing, no reason.
-              disabled={composerNote.trim().length === 0}
+              disabled={!hasComposerDraft({ pendingTarget, composerNote })}
               className={`${btnPrimary} flex items-center gap-1.5`}
             >
               Add to queue

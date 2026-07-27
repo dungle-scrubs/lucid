@@ -16,18 +16,21 @@ focus.
 ## Shape
 
 ```
-viewer  - the whole Lucid window in the browser
- |- chrome    composer | conversation log | queued annotations | controls
- |- surface   the ADDRESSABLE rendering of the agent's output
-     |- artifact   agent-authored, free-form HTML (content, not Lucid UI)
-     |- overlay    injected Lit + Shadow-DOM layer that makes the
-                   artifact addressable (hover targets, annotation
-                   cards, text-range highlights)
+shell   - one browser window over every OPEN artifact
+ |- tab bar   tabs, grouped by project
+ |- viewer    the whole Lucid window for the ACTIVE tab
+     |- chrome    composer | conversation log | queued annotations | controls
+     |- surface   the ADDRESSABLE rendering of the agent's output
+         |- artifact   agent-authored, free-form HTML (content, not Lucid UI)
+         |- overlay    injected Lit + Shadow-DOM layer that makes the
+                       artifact addressable (hover targets, annotation
+                       cards, text-range highlights)
 ```
 
 `chrome` lives *around* the artifact; `overlay` lives *on* it. Together with
 the artifact, the overlay forms the `surface`; the `surface` plus the
-`chrome` form the `viewer`.
+`chrome` form the `viewer`. One `viewer` per open artifact; the `shell` holds
+them all in one window and shows one at a time.
 
 ## Glossary
 
@@ -144,10 +147,13 @@ or **ended** (terminal; only an explicit `end` reaches it - D-021). `open` on an
 ENDED path starts a fresh lifecycle **segment** in the same log rather than
 erroring (D-045). Multiple concurrent single-artifact sessions each run their own
 independent per-session loopback server and origin ("multi-session" - D-036); that
-is distinct from the deferred multi-artifact-per-session. Discovery is per-session via `.lucid/<name>/server.json`; bare `lucid` enumerates
-only sessions reachable without a global index, and cross-filesystem enumeration of
-scattered sessions from any cwd is a deferred limitation - there is no global session
-registry (D-065, supersedes D-052).
+is distinct from the deferred multi-artifact-per-session. Per-session discovery is
+via `.lucid/<name>/server.json`. **Model B superseded D-065's "no global session
+registry":** a global pointer registry now exists at `<home>/.lucid/registry.json`,
+holding only pointers and `lastSeen` - never session data - and the **hub** unions it
+with a scan of its **roots** to produce the **listing**. Cross-filesystem enumeration
+of scattered artifacts is no longer a deferred limitation; that is what the hub is
+for.
 
 ### Event log (state file)
 The co-located, append-only NDJSON file that is the session's **source of
@@ -258,3 +264,109 @@ The terminal coding agent driving Lucid (Claude Code, Codex, OpenCode, or a
 custom one). Lucid is **harness-agnostic**: the only integration surface is
 the CLI protocol and the co-located event log, so any harness can drive or
 resume a session.
+
+## Glossary - the shell
+
+The vocabulary of the window a human keeps open, as opposed to the
+review-protocol vocabulary above. Everything here is about *reaching* an
+artifact; nothing here is about reviewing one.
+
+### Hub
+The always-on loopback daemon (Model B): one process per machine that
+discovers every artifact under its **roots**, hosts each one in-process under
+an opaque id (`/s/<id>`), and serves the **shell** at `/`. Data never moves -
+a hosted artifact reads and writes its own co-located `.lucid/<name>/` exactly
+as a dedicated per-session server does. When an artifact already has a live
+dedicated server, the hub proxies to it rather than hosting it, preserving the
+one-appender rule (D-049).
+_Avoid_: daemon, server (both are ambiguous - "server" is also the
+per-session loopback server).
+
+### Root
+A folder the hub scans for artifacts. Defaults to the user's project checkouts
+plus the agent scratchpads where most artifacts actually land; a human adds
+more by hand, and added roots persist across hub restarts. A root is *where to
+look*, never *what to show*.
+
+### Listing
+The hub's snapshot of every artifact it knows about, broadcast to every open
+shell. Derived from the global pointer registry unioned with a scan of the
+**roots**. The listing is the cross-project index: it is what makes an artifact
+reachable from a window opened anywhere.
+_Avoid_: session list, index.
+
+### Project
+The grouping key for artifacts - **derived, never declared**. A human never
+registers a project; the hub resolves one for every artifact: an artifact in an
+agent scratchpad belongs to the project that agent was *working on* (not to the
+scratchpad), otherwise to its enclosing repository root. A git **worktree**
+resolves to its main repository, and the worktree is kept as a *qualifier* on
+the artifact rather than becoming a project of its own.
+
+A project **labels and groups**; it never filters. There is no notion of "the
+project you are currently in" - the shell is never scoped to one.
+_Avoid_: **project scope**, active project, workspace. (An earlier shell
+scoped the tab bar to one project at a time and gated switching behind a
+projects drawer. Both are removed - see `.plans/03-cross-project-tab-bar/`.)
+
+### Tab
+One **open artifact** in the shell, holding that artifact's **viewer** and its
+live connection to the hub. Every tab is an artifact; most artifacts are not
+tabs. Closing a tab drops the connection and nothing else - the review record
+is untouched, and reopening refolds it from the log.
+
+"Tab" is the artifact-first term (D18). The shell's code still says `session`
+in its identifiers (`sessionKeys`, `HubSession`, `openTab`) - legacy naming,
+the same accommodation the payload's `session` field already carries. Prose
+says tab and artifact.
+_Avoid_: session (as a name for a tab), pane, window.
+
+### Tab group
+The run of tabs in the shell belonging to one **project**, labelled once at the
+head of the run. A tab's group is a fact about its artifact, not a human
+choice: a tab cannot be dragged into another group, and a group never contains
+two projects. Groups are ordered by when the project was first opened and do
+not reorder afterwards.
+
+### Attention state
+What a tab reports about its artifact *without being looked at*: a question is
+waiting on the human, the agent is working, a turn finished and has not been
+seen, or the review is settled. It is derived from the artifact's review record
+but carried on the **listing**, so a tab reports truthfully whether or not its
+own connection is currently live.
+_Avoid_: status, badge, activity (status already names the session lifecycle -
+active/suspended/ended - and means something else).
+
+### Unseen
+The property of a tab whose artifact changed since the human last **activated**
+that tab. Cleared by activating the tab, never by the change itself settling: a
+turn that finishes while the human is looking elsewhere stays marked until they
+actually arrive.
+_Avoid_: unread, dirty, stale.
+
+## Relationships
+
+- One **hub** serves many **shells** (one per browser window) and publishes one
+  **listing** to all of them.
+- A **hub** scans many **roots**; a **root** contains zero or more **artifacts**.
+- A **shell** holds zero or more **tabs**; each **tab** holds exactly one
+  **artifact** and renders exactly one **viewer**.
+- Every **artifact** resolves to exactly one **project**; a **project** appears
+  at most once in a shell, as one **tab group**.
+- Every **tab** has exactly one **attention state**; **unseen** is a separate
+  property that can hold alongside any of them.
+
+## Flagged ambiguities
+
+- **"Session" names four things** - the harness conversation, an artifact's
+  review record, the payload's `session` field, and the shell's `HubSession`
+  listing row. Resolved: one glossary, disambiguated in prose. Say **harness
+  session** for the conversation, **review record** for the artifact's log and
+  annotations, **tab** for an open artifact in the shell. Bare "session" in
+  code identifiers and the wire payload is legacy naming, kept for
+  compatibility.
+- **"Project" was used both as a grouping and as a filter.** Resolved: grouping
+  only. A project labels and groups tabs; it never restricts what the shell
+  shows.
+- **"Server" names two things** - the per-session loopback server and the hub.
+  Resolved: say **hub** for the daemon, **per-session server** for the other.

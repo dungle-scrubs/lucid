@@ -1,13 +1,7 @@
 import { on } from "./locators.ts";
-import { expect, test, type Page } from "@playwright/test";
-import {
-  PLAN_V1,
-  makeCli,
-  overlaySettled,
-  surfaceOf,
-  waitTimeoutSeconds,
-  type Cli,
-} from "./helpers.ts";
+import type { Page } from "@playwright/test";
+import { expect, test } from "./harness.ts";
+import { overlaySettled, surfaceOf, waitTimeoutSeconds, type Cli } from "./helpers.ts";
 
 /**
  * The annotation QUEUE: the staging area between a pick and the agent.
@@ -19,18 +13,33 @@ import {
  * nothing was eaten, and the retry did not duplicate.
  */
 
-let cli: Cli;
+// The `cli` fixture (harness.ts) replaces the module-level `let cli` +
+// afterEach pattern: `use()` teardown runs whether a test passes, fails or
+// throws, per test rather than per file (D-022).
 
-test.afterEach(async () => {
-  await cli?.cleanup();
-});
-
-const openViewer = async (page: Page): Promise<{ url: string; nextCursor: string }> => {
-  cli = await makeCli(PLAN_V1);
+const openViewer = async (page: Page, cli: Cli): Promise<{ url: string; nextCursor: string }> => {
   const session = (await cli.run(["open", cli.artifact])) as { url: string; nextCursor: string };
   await page.goto(session.url);
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
   return session;
+};
+
+/** Take delivery since `cursor` and hand back the feedback payload - the
+ *  five-argument wait incantation, spelled once instead of four times. */
+const feedbackSince = async <T extends { status: string }>(
+  cli: Cli,
+  cursor: string,
+): Promise<T> => {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    cursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as T;
+  expect(fb.status).toBe("feedback");
+  return fb;
 };
 
 /** Pick an element in the artifact, write a note, and queue it. */
@@ -51,7 +60,7 @@ const queueNote = async (page: Page, selector: string, note: string): Promise<vo
  * signal on the SAME page: a reload would throw away the in-memory queue and
  * draft, which is exactly what these tests exist to protect.
  */
-const reopenOnSameOrigin = async (page: Page): Promise<void> => {
+const reopenOnSameOrigin = async (page: Page, cli: Cli): Promise<void> => {
   const reopened = (await cli.run(["open", cli.artifact])) as { url: string };
   expect(
     new URL(reopened.url).origin,
@@ -62,11 +71,12 @@ const reopenOnSameOrigin = async (page: Page): Promise<void> => {
 
 test("a dead server keeps every queued annotation, and the retry sends each one once", async ({
   page,
+  cli,
 }) => {
   // Two failed-POST rounds of backoff plus a reconnect: the product answering
   // slowly is the scenario, not a tuning problem.
   test.slow();
-  const session = await openViewer(page);
+  const session = await openViewer(page, cli);
 
   // THREE, on three different elements. One cannot prove "every item is kept":
   // a catch path that keeps only the item it died on would pass with a single
@@ -98,7 +108,7 @@ test("a dead server keeps every queued annotation, and the retry sends each one 
   await expect(on(page).queuedAnnotation()).toHaveCount(3);
   await expect(on(page).annotation()).toHaveCount(0);
 
-  await reopenOnSameOrigin(page);
+  await reopenOnSameOrigin(page, cli);
 
   await on(page).sendQueue().click();
   await expect(on(page).queuedAnnotation()).toHaveCount(0, { timeout: 20_000 });
@@ -107,20 +117,18 @@ test("a dead server keeps every queued annotation, and the retry sends each one 
   // The cursor was taken BEFORE anything was written, so this is the whole
   // record of the review: three annotations, one per note, and no second copy
   // of the ones the first attempt tried to send.
-  const fb = (await cli.run([
-    "wait",
-    cli.artifact,
-    "--since",
+  const fb = await feedbackSince<{ status: string; annotations: { note: string }[] }>(
+    cli,
     session.nextCursor,
-    "--timeout",
-    waitTimeoutSeconds(8),
-  ])) as { status: string; annotations: { note: string }[] };
-  expect(fb.status).toBe("feedback");
+  );
   expect(fb.annotations.map((a) => a.note).sort()).toEqual([...notes].sort());
 });
 
-test("a queued card takes the NEXT number, on its card and on its mark alike", async ({ page }) => {
-  await openViewer(page);
+test("a queued card takes the NEXT number, on its card and on its mark alike", async ({
+  page,
+  cli,
+}) => {
+  await openViewer(page, cli);
 
   // One annotation SENT: card 1, mark 1.
   await queueNote(page, 'li[data-lucid-id="step-backfill"]', "Nightly is fine for the backfill.");
@@ -145,8 +153,9 @@ test("a queued card takes the NEXT number, on its card and on its mark alike", a
 
 test("sending with an editor open sends the EDITED note, not the one it replaced", async ({
   page,
+  cli,
 }) => {
-  const session = await openViewer(page);
+  const session = await openViewer(page, cli);
 
   await queueNote(page, 'li[data-lucid-id="step-backfill"]', "first draft");
   await on(page).editQueued().click();
@@ -161,22 +170,18 @@ test("sending with an editor open sends the EDITED note, not the one it replaced
   await expect(on(page).annotation()).toContainText("batched, not nightly");
   await expect(on(page).annotation()).not.toContainText("first draft");
 
-  const fb = (await cli.run([
-    "wait",
-    cli.artifact,
-    "--since",
+  const fb = await feedbackSince<{ status: string; annotations: { note: string }[] }>(
+    cli,
     session.nextCursor,
-    "--timeout",
-    waitTimeoutSeconds(8),
-  ])) as { status: string; annotations: { note: string }[] };
-  expect(fb.status).toBe("feedback");
+  );
   expect(fb.annotations.map((a) => a.note)).toEqual(["batched, not nightly"]);
 });
 
 test("a wall of text pasted into an annotation folds, and the agent still gets every line", async ({
   page,
+  cli,
 }) => {
-  const session = await openViewer(page);
+  const session = await openViewer(page, cli);
 
   await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
   await expect(on(page).annotationNote()).toBeVisible();
@@ -208,15 +213,10 @@ test("a wall of text pasted into an annotation folds, and the agent still gets e
 
   // The agent reads what was actually pasted - every line of it - not the
   // placeholder that stood in for it on screen.
-  const fb = (await cli.run([
-    "wait",
-    cli.artifact,
-    "--since",
+  const fb = await feedbackSince<{ status: string; annotations: { note: string }[] }>(
+    cli,
     session.nextCursor,
-    "--timeout",
-    waitTimeoutSeconds(8),
-  ])) as { status: string; annotations: { note: string }[] };
-  expect(fb.status).toBe("feedback");
+  );
   const note = fb.annotations[0]?.note ?? "";
   expect(note).not.toContain("Pasted text #1");
   expect(note).toContain("log line 0");
@@ -226,11 +226,12 @@ test("a wall of text pasted into an annotation folds, and the agent still gets e
 
 test("a failed fork keeps the draft, and a manual retry produces exactly one fork", async ({
   page,
+  cli,
 }) => {
   // Two full POST-retry ladders (a dead server, then a lost response) before
   // the fork that lands.
   test.slow();
-  const session = await openViewer(page);
+  const session = await openViewer(page, cli);
 
   const directive = "Spin the backfill step out into its own migration plan.";
   await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
@@ -253,7 +254,7 @@ test("a failed fork keeps the draft, and a manual retry produces exactly one for
   await expect(on(page).annotationNote()).toHaveValue(directive);
   await expect(surfaceOf(page).locator(".marker.pending")).toHaveCount(1);
 
-  await reopenOnSameOrigin(page);
+  await reopenOnSameOrigin(page, cli);
 
   // --- the ambiguous failure: the server TOOK it, the answer never came ----
   //
@@ -285,15 +286,10 @@ test("a failed fork keeps the draft, and a manual retry produces exactly one for
   // the one that landed.
   await expect(on(page).annotationNote()).toHaveCount(0);
 
-  const fb = (await cli.run([
-    "wait",
-    cli.artifact,
-    "--since",
+  const fb = await feedbackSince<{ status: string; forks?: { note: string }[] }>(
+    cli,
     session.nextCursor,
-    "--timeout",
-    waitTimeoutSeconds(8),
-  ])) as { status: string; forks?: { note: string }[] };
-  expect(fb.status).toBe("feedback");
+  );
   expect(
     fb.forks?.map((f) => f.note),
     "the retry reused the fork id, so the log holds one fork - not a twin",

@@ -1,14 +1,14 @@
 import { on } from "../locators.ts";
-import { expect, test } from "@playwright/test";
-import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
+import { expect, test } from "../harness.ts";
+import { surfaceOf } from "../helpers.ts";
 
 /**
  * Regression: `80faab5`, invariant two of three - a 4xx is the server's
  * VERDICT, and a verdict is not retried.
  *
- * The commit's review found this short-circuit shipped untested (finding #31):
- * delete it and a 409 - "this address belongs to another session" - is
- * re-POSTed five times over 14 seconds, spending the human's patience to be
+ * The commit's review found this short-circuit shipped untested: delete it
+ * and a 409 - "this address belongs to another session" - is re-POSTed five
+ * times over 14 seconds, spending the human's patience to be
  * told the same thing again, while the failure card arrives 14s after the
  * click instead of now.
  *
@@ -19,14 +19,7 @@ import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
  * remove the verdict throw in `transport.ts` and the counter reads 5.
  */
 
-let cli: Cli;
-
-test.afterEach(async () => {
-  await cli?.cleanup();
-});
-
-test("a 4xx verdict fails once, immediately, with the server's reason", async ({ page }) => {
-  cli = await makeCli(PLAN_V1);
+test("a 4xx verdict fails once, immediately, with the server's reason", async ({ page, cli }) => {
   const session = (await cli.run(["open", cli.artifact])) as { url: string };
   await page.goto(session.url);
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");

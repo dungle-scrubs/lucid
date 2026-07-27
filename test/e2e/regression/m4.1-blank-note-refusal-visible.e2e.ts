@@ -1,6 +1,7 @@
 import { on } from "../locators.ts";
-import { expect, test, type Page } from "@playwright/test";
-import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
+import type { Page } from "@playwright/test";
+import { expect, test } from "../harness.ts";
+import { surfaceOf, type Cli } from "../helpers.ts";
 
 /**
  * M4.1 - the blank-note refusal is visible, not silent.
@@ -16,22 +17,17 @@ import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
  * assertions below go red.
  */
 
-let cli: Cli;
-
-test.afterEach(async () => {
-  await cli?.cleanup();
-});
-
-const openAndPick = async (page: Page): Promise<void> => {
-  cli = await makeCli(PLAN_V1);
+// The `cli` fixture (harness.ts) supplies the artifact and cleans up in
+// `use()` teardown, whatever the test does (D-022).
+const openAndPick = async (page: Page, cli: Cli): Promise<void> => {
   const session = (await cli.run(["open", cli.artifact])) as { url: string };
   await page.goto(session.url);
   await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
   await expect(on(page).annotationNote()).toBeVisible();
 };
 
-test("add to queue refuses a blank note visibly, and typing re-arms it", async ({ page }) => {
-  await openAndPick(page);
+test("add to queue refuses a blank note visibly, and typing re-arms it", async ({ page, cli }) => {
+  await openAndPick(page, cli);
 
   // An untouched composer has nothing to queue, and says so.
   await expect(on(page).addToQueue()).toBeDisabled();
@@ -43,7 +39,6 @@ test("add to queue refuses a blank note visibly, and typing re-arms it", async (
 
   // The KEYBOARD earns the same refusal, spoken: Enter is `addToQueue` too,
   // and a disabled button says nothing to a hand that never leaves the keys.
-  // (Adversarial review, finding 3: the first fix covered the mouse only.)
   await on(page).annotationNote().press("Enter");
   await expect(on(page).warning()).toContainText("note is the point");
 

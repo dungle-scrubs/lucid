@@ -5,7 +5,12 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loopbackFetch } from "../../src/server/discovery.ts";
 import { CliFailure } from "./cli-result.ts";
+// `invoke` is scoped off the barrel because it takes a raw env; this file is
+// the case that scoping names (an env `makeCli` will not hand out), the same
+// way hub.ts is.
+import { invoke } from "./cli.ts";
 import { harnessEnv } from "./harness-env.ts";
 import {
   MAIN,
@@ -63,12 +68,11 @@ const freePort = async (): Promise<number> =>
     });
   });
 
-/** GET a hub route over loopback, or `undefined` when nothing answers. The Host
- *  header a plain fetch writes is already `127.0.0.1:<port>`, which is what the
- *  server's DNS-rebind gate wants. */
+/** GET a hub route over the product's own loopback request shape, or
+ *  `undefined` when nothing answers. */
 const hubGet = async (port: number, path: string): Promise<Record<string, unknown> | undefined> => {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}${path}`);
+    const res = await loopbackFetch(port, path);
     if (!res.ok) return undefined;
     return (await res.json()) as Record<string, unknown>;
   } catch {
@@ -129,37 +133,12 @@ const startHubWithEnv = async (extra: Record<string, string>): Promise<LocalHub>
   return local;
 };
 
-/** Spawn the CLI directly, the way `m2.2-refusals-exit-non-zero` does: these
- *  invocations need an env `makeCli` does not hand out (a hub port of this
- *  test's choosing), and `invoke` is deliberately off the harness barrel. */
-const raw = async (
-  cwd: string,
-  env: Record<string, string>,
-  args: readonly string[],
-): Promise<{ code: number; stdout: string; stderr: string }> => {
-  const proc = spawn("bun", ["run", MAIN, ...args], {
-    cwd,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  proc.stdout?.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString();
-  });
-  proc.stderr?.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
-  const code = await new Promise<number>((resolve) => proc.once("close", (c) => resolve(c ?? 0)));
-  return { code, stdout, stderr };
-};
-
 test.afterEach(async () => {
   await cli?.cleanup();
   cli = undefined;
   await hub?.stop();
   hub = undefined;
-  for (const local of localHubs.splice(0)) await local.stop();
+  await Promise.all(localHubs.splice(0).map((local) => local.stop()));
 
   // The hub `lucid app` started is DETACHED - nothing in this process is its
   // parent, so nothing reaps it when the test ends. It has to be signalled by
@@ -285,26 +264,19 @@ test("open --restart on a hub-hosted session leaves the hub and the other tab al
   expect(stillHosted.pid, "the hub was replaced, not left alone").toBe(hubPid.pid);
 
   // Both sessions still answer THROUGH the hub - a live round trip each, not
-  // just a descriptor that has not been cleaned up yet.
-  const secondState = (await cli.run([
-    "wait",
-    second,
-    "--timeout",
-    waitTimeoutSeconds(2),
-  ])) as Record<string, unknown>;
-  expect(secondState.session).toBe(second);
-  const firstState = (await cli.run([
-    "wait",
-    cli.artifact,
-    "--timeout",
-    waitTimeoutSeconds(2),
-  ])) as Record<string, unknown>;
-  expect(firstState.session).toBe(cli.artifact);
+  // just a descriptor that has not been cleaned up yet. Independent sessions,
+  // asked concurrently.
+  const [secondState, firstState] = (await Promise.all([
+    cli.run(["wait", second, "--timeout", waitTimeoutSeconds(2)]),
+    cli.run(["wait", cli.artifact, "--timeout", waitTimeoutSeconds(2)]),
+  ])) as Record<string, unknown>[];
+  expect(secondState?.session).toBe(second);
+  expect(firstState?.session).toBe(cli.artifact);
 });
 
 test("only LUCID_HUB_ATTEND=1 turns on agent spawning", async () => {
   const create = async (port: number): Promise<number> => {
-    const res = await fetch(`http://127.0.0.1:${port}/hub/create`, {
+    const res = await loopbackFetch(port, "/hub/create", {
       method: "POST",
       headers: { "content-type": "application/json" },
       // Deliberately invalid: on an attend hub the name check refuses it with
@@ -316,8 +288,18 @@ test("only LUCID_HUB_ATTEND=1 turns on agent spawning", async () => {
     return res.status;
   };
 
-  for (const value of ["true", "yes"]) {
-    const local = await startHubWithEnv({ LUCID_HUB_ATTEND: value });
+  // Three independent hubs - own dirs, own ephemeral ports - so they start
+  // concurrently and only the assertions are ordered.
+  const [asTrue, asYes, opted] = await Promise.all([
+    startHubWithEnv({ LUCID_HUB_ATTEND: "true" }),
+    startHubWithEnv({ LUCID_HUB_ATTEND: "yes" }),
+    startHubWithEnv({ LUCID_HUB_ATTEND: "1" }),
+  ]);
+
+  for (const [value, local] of [
+    ["true", asTrue],
+    ["yes", asYes],
+  ] as const) {
     const identity = await hubGet(local.port, "/hub/identity");
     expect(identity?.attend, `LUCID_HUB_ATTEND=${value} enabled spawning`).toBe(false);
     // The startup line is the other half of the promise: a review-only hub
@@ -326,7 +308,6 @@ test("only LUCID_HUB_ATTEND=1 turns on agent spawning", async () => {
     expect(await create(local.port), `LUCID_HUB_ATTEND=${value} let /hub/create through`).toBe(403);
   }
 
-  const opted = await startHubWithEnv({ LUCID_HUB_ATTEND: "1" });
   const identity = await hubGet(opted.port, "/hub/identity");
   expect(identity?.attend, "the explicit opt-in did not take").toBe(true);
   expect(opted.banner).toContain("attend mode: headless turns enabled");
@@ -480,9 +461,13 @@ test("lucid app brings up a hub that actually drives delivery", async () => {
   const env = { ...harnessEnv(dir), LUCID_HUB_PORT: String(port), LUCID_HUB_ROOTS: dir };
   appHub = { dir, port };
 
-  const started = await raw(dir, env, ["app"]);
-  expect(started.code, `lucid app exited ${started.code}: ${started.stderr}`).toBe(0);
-  expect((JSON.parse(started.stdout) as { status: string }).status).toBe("running");
+  // `invoke` throws a CliFailure carrying code/stdout/stderr on any exit but
+  // a clean JSON document, which is exactly the assertion the raw spawn made
+  // by hand.
+  const started = (await invoke(["app"], { cwd: dir, env, timeout: 30_000 })) as {
+    status: string;
+  };
+  expect(started.status).toBe("running");
 
   // The pid first, and before any assertion that can fail: the hub is detached,
   // so a failure between here and `afterEach` with no pid recorded leaks a
@@ -491,8 +476,7 @@ test("lucid app brings up a hub that actually drives delivery", async () => {
   // the process behind a mount.
   const artifact = join(dir, "plan.html");
   await writeFile(artifact, PLAN_V1, "utf8");
-  const opened = await raw(dir, env, ["open", artifact]);
-  expect(opened.code, `open into the app's hub exited ${opened.code}: ${opened.stderr}`).toBe(0);
+  await invoke(["open", artifact], { cwd: dir, env, timeout: 30_000 });
   const descriptor = JSON.parse(await readFile(join(dir, "plan", "server.json"), "utf8")) as {
     pid: number;
     base?: string;

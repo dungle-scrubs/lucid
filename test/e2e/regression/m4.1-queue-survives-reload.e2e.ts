@@ -1,6 +1,7 @@
 import { on } from "../locators.ts";
-import { expect, test, type Page } from "@playwright/test";
-import { makeCli, PLAN_V1, surfaceOf, waitTimeoutSeconds, type Cli } from "../helpers.ts";
+import type { Page } from "@playwright/test";
+import { expect, test } from "../harness.ts";
+import { surfaceOf, waitTimeoutSeconds } from "../helpers.ts";
 
 /**
  * M4.1 - queued annotations survive a reload, the way messages already do.
@@ -21,12 +22,6 @@ import { makeCli, PLAN_V1, surfaceOf, waitTimeoutSeconds, type Cli } from "../he
  * gone after the first reload.
  */
 
-let cli: Cli;
-
-test.afterEach(async () => {
-  await cli?.cleanup();
-});
-
 const queueOn = async (page: Page, artifactSelector: string, note: string): Promise<void> => {
   await surfaceOf(page).locator(artifactSelector).click();
   await expect(on(page).annotationNote()).toBeVisible();
@@ -34,8 +29,7 @@ const queueOn = async (page: Page, artifactSelector: string, note: string): Prom
   await on(page).addToQueue().click();
 };
 
-test("queued annotations survive a reload, and the survivors still send", async ({ page }) => {
-  cli = await makeCli(PLAN_V1);
+test("queued annotations survive a reload, and the survivors still send", async ({ page, cli }) => {
   const opened = (await cli.run(["open", cli.artifact])) as {
     url: string;
     nextCursor: string;
@@ -49,7 +43,7 @@ test("queued annotations survive a reload, and the survivors still send", async 
   // large PASTE, because a placeholder note is a pointer into the page-local
   // paste store: persisting the pointer instead of the words came back from
   // a reload as "[Pasted text #1 +12 lines]" and sent itself to the agent
-  // verbatim (adversarial review, finding 1).
+  // verbatim.
   const first = "Backfill nightly, not in one batch.";
   const wall = Array.from({ length: 12 }, (_, i) => `log line ${i}`).join("\n");
   await queueOn(page, 'li[data-lucid-id="step-backfill"]', first);
@@ -82,13 +76,19 @@ test("queued annotations survive a reload, and the survivors still send", async 
   // CORRUPT entry beside the good one - another tool's key, a stale schema -
   // is skipped, not rendered: an earlier validator admitted any object, one
   // forged target threw in the React tree on every load, and BOTH cards
-  // vanished until localStorage was cleared by hand (adversarial review,
-  // finding 2).
+  // vanished until localStorage was cleared by hand.
   await on(cards.first()).removeQueued().click();
   await expect(on(page).queuedAnnotation()).toHaveCount(1);
-  await page.evaluate((session) => {
+  // The forged key is DERIVED from a key the product itself wrote, never
+  // restated: a hardcoded `lucid:queue:` prefix would go quietly stale if the
+  // scheme moved, and this test would then assert against a key nothing
+  // reads - passing for the wrong reason. No real key = loud failure.
+  await page.evaluate(() => {
+    const real = Object.keys(localStorage).find((k) => k.includes(":queue:"));
+    if (!real) throw new Error("no queued item in storage to derive the key scheme from");
+    const forgedKey = `${real.slice(0, real.lastIndexOf(":") + 1)}forged`;
     localStorage.setItem(
-      `lucid:queue:${session}:forged`,
+      forgedKey,
       JSON.stringify({
         id: "forged",
         targets: [{ kind: "elephant", nope: true }],
@@ -97,7 +97,7 @@ test("queued annotations survive a reload, and the survivors still send", async 
         images: [],
       }),
     );
-  }, opened.session);
+  });
   await page.goto("about:blank");
   await page.goto(opened.url);
   await expect(

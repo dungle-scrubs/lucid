@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { realpathSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
+import { parseCursor } from "../../src/core/cursor.ts";
 import { CliFailure } from "./cli-result.ts";
 import { makeCli, surfaceOf, waitTimeoutSeconds, type Cli } from "./helpers.ts";
 
@@ -49,11 +50,15 @@ li { margin: 6px 0; }
 </body>
 </html>`;
 
-/** The numeric part of `evt_00042`. Cursors are compared as numbers, never as
- *  strings: `evt_00009` < `evt_00010` lexically only by luck of the padding. */
+/** The numeric part of `evt_00042`, read by the product's own cursor parser.
+ *  Cursors are compared as numbers, never as strings: `evt_00009` <
+ *  `evt_00010` lexically only by luck of the padding - which the shape
+ *  assertion pins, since `parseCursor` deliberately does not. */
 const seqOf = (cursor: unknown): number => {
   expect(cursor).toMatch(/^evt_\d{5}$/);
-  return Number.parseInt(String(cursor).slice("evt_".length), 10);
+  const seq = parseCursor(String(cursor));
+  expect(seq).toBeDefined();
+  return seq as number;
 };
 
 let cli: Cli | undefined;
@@ -66,9 +71,10 @@ let stranger: Cli | undefined;
  * `end` only STOPS a live server when the path it is handed handshakes as the
  * same session, and macOS symlinks the temp root - so `/tmp/x/plan.html` and
  * `/private/tmp/x/plan.html` are one file to the log and two identities to the
- * handshake (finding #41). A session opened through a relative path is
- * therefore ended by the absolute path the product itself reported, or its
- * `__serve` process outlives the suite.
+ * handshake - the session-identity realpath gap, recorded in the plan
+ * ledger. A session opened through a relative path is therefore ended by the
+ * absolute path the product itself reported, or its `__serve` process
+ * outlives the suite.
  */
 let pendingEnds: string[] = [];
 
@@ -272,8 +278,8 @@ test("bare lucid lists sessions in BOTH layouts, each once, at the right artifac
   // an agent would address the session by. Compared by realpath, not by
   // string: the live row reports the spelling its descriptor was opened
   // under while the legacy row is reconstructed from the scan root's cwd,
-  // which the OS hands back realpathed - the identity split finding #41
-  // records. The same FILE is the claim; one spelling of it is not.
+  // which the OS hands back realpathed - the same identity split the cleanup
+  // comment above documents. The same FILE is the claim; one spelling is not.
   expect(paths.map((p) => realpathSync(p)).sort()).toEqual(
     [cli.artifact, rollout].map((p) => realpathSync(p)).sort(),
   );

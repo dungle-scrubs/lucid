@@ -27,8 +27,8 @@ let cli: Cli | undefined;
 let cli2: Cli | undefined;
 
 test.afterEach(async () => {
-  await cli?.cleanup();
-  await cli2?.cleanup();
+  // Independent processes, reaped concurrently.
+  await Promise.all([cli?.cleanup(), cli2?.cleanup()]);
   cli = cli2 = undefined;
   await hub?.stop();
   hub = undefined;
@@ -64,7 +64,9 @@ const composerValues = (page: Page): Promise<string[]> =>
  * both. Returns with the SECOND tab ("Rollout checklist") active, because
  * opening a tab activates it.
  */
-const twoTabsOneProject = async (page: Page): Promise<{ shellUrl: string; other: string }> => {
+const twoTabsOneProject = async (
+  page: Page,
+): Promise<{ shellUrl: string; other: string; cli: Cli }> => {
   hub = await startHub();
   const opened = await openIntoHub(hub, PLAN_V1);
   cli = opened.cli;
@@ -84,14 +86,13 @@ const twoTabsOneProject = async (page: Page): Promise<{ shellUrl: string; other:
   await expect(on(page).paletteOverlay()).toHaveCount(0);
   await expect(on(page).shellTab()).toHaveCount(2);
   await expect(activeTab(page)).toContainText("Rollout checklist");
-  return { shellUrl: opened.shellUrl, other };
+  return { shellUrl: opened.shellUrl, other, cli: opened.cli };
 };
 
 test("a question for a background tab raises ITS dot and leaves the front tab alone", async ({
   page,
 }) => {
-  const { other } = await twoTabsOneProject(page);
-  if (!cli) throw new Error("no cli");
+  const { other, cli } = await twoTabsOneProject(page);
 
   // A is in front, B is the background tab the question is about.
   await tabNamed(page, "Migration plan").click();
@@ -142,8 +143,7 @@ test("a question for a background tab raises ITS dot and leaves the front tab al
 test("opening the same artifact twice raises the tab it already has, without remounting it", async ({
   page,
 }) => {
-  const { shellUrl } = await twoTabsOneProject(page);
-  if (!cli) throw new Error("no cli");
+  const { shellUrl, cli } = await twoTabsOneProject(page);
 
   // Mark the FIRST artifact's frame while it is the visible one. The marker
   // lives on that iframe's own window, so it cannot survive a reload or a
@@ -184,8 +184,7 @@ test("opening the same artifact twice raises the tab it already has, without rem
 test("a hidden tab keeps folding events: the reply is already there when you arrive", async ({
   page,
 }) => {
-  const { other } = await twoTabsOneProject(page);
-  if (!cli) throw new Error("no cli");
+  const { other, cli } = await twoTabsOneProject(page);
 
   // The cursor an agent holds before any of this exists.
   const before = (await cli.run(["wait", other, "--timeout", waitTimeoutSeconds(1)])) as {

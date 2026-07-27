@@ -60,8 +60,13 @@ export const listSessions = async (root: string): Promise<SessionSummary[]> => {
       const descriptor = await readServerDescriptor(sessionPaths(reconstructed));
       const artifactPath = descriptor?.session ?? reconstructed;
       const canonical = sessionPaths(artifactPath);
-      const identity = await discoverLiveServer(canonical);
-      const attendant = await readLastAttendant(canonical);
+      // Independent reads, and the first can burn a full handshake timeout on
+      // a stale descriptor - inside a per-session loop the shell polls, so
+      // sequencing the attendant read behind it was pure addition.
+      const [identity, attendant] = await Promise.all([
+        discoverLiveServer(canonical),
+        readLastAttendant(canonical),
+      ]);
 
       sessions.push({
         session: artifactPath,
