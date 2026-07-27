@@ -19,28 +19,35 @@ import { join } from "node:path";
  * back onto the developer's home directory.
  */
 
-/** Why a variable does not need containing. Written out because "not in the
- *  list" is indistinguishable from "nobody thought about it". */
+/** Why a variable does not need pointing at a path inside the test's dir.
+ *  Written out because "not in the list" is indistinguishable from "nobody
+ *  thought about it". */
 export type NotIsolatedReason =
-  /** The product sets it FOR a child it spawns; it is an output, not config. */
-  | "written-for-children"
-  /** Only meaningful in dev mode, which the harness never runs. */
-  | "dev-only"
+  /** Not a path: a behaviour flag the harness pins for processes it SPAWNS.
+   *  Leaving it unset reads no state off the developer's disk, so the unit
+   *  suite - which spawns almost nothing - has no reason to pin it. */
+  | "harness-switch"
+  /** The product WRITES it for a child it spawns AND reads it back off its own
+   *  environment, so an inherited value is somebody else's identity. Removed
+   *  from the child env rather than pointed anywhere. */
+  | "clear"
   /** The harness sets it per-suite rather than globally, because suites
    *  legitimately disagree about the value. */
   | "per-suite";
 
 export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">> = {
-  // Contained: each points at a path inside the test's own directory.
+  // Contained: each points at a path inside the test's own directory. Unset,
+  // every one of them resolves into the real home of whoever ran the suite.
   LUCID_SETTINGS: "isolate",
   LUCID_CLAUDE_SESSIONS: "isolate",
   LUCID_CLAUDE_PROJECTS: "isolate",
   LUCID_REGISTRY: "isolate",
   LUCID_ROOTS: "isolate",
   LUCID_HARNESSES: "isolate",
-  LUCID_ALLOW_TEMP: "isolate",
-  LUCID_NO_OPEN: "isolate",
-  LUCID_IDLE_MS: "isolate",
+
+  LUCID_ALLOW_TEMP: "harness-switch",
+  LUCID_NO_OPEN: "harness-switch",
+  LUCID_IDLE_MS: "harness-switch",
 
   // A hub the human happens to be running would hijack `open` into daemon mode
   // and change what the tests see - but shell.e2e.ts needs its OWN hub, so the
@@ -52,47 +59,95 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   // is derived from the Playwright slot, which is the isolation.
   LUCID_PORT_BASE: "per-suite",
 
-  // Handed to a spawned agent by the product itself. Nothing reads these from
-  // the developer's environment.
-  LUCID_HARNESS: "written-for-children",
-  LUCID_MODEL: "written-for-children",
-  LUCID_EFFORT: "written-for-children",
-  LUCID_SESSION_ID: "written-for-children",
+  // Written for children by `src/launch/launcher.ts` - and read straight back
+  // off the environment by `attendantStamp` (src/cli/run.ts:63-69), which is
+  // what makes an inherited one dangerous rather than merely untidy. The Lucid
+  // skill exports LUCID_HARNESS and LUCID_SESSION_ID into the agent's shell, so
+  // a suite launched from an agent session that has used Lucid stamps every
+  // artifact it opens with the DEVELOPER's harness and their real session UUID.
+  // That stamp then feeds presenceFor, the "conversation is open" panel and the
+  // resume command - the outcome of the run changes with who started it.
+  LUCID_HARNESS: "clear",
+  LUCID_MODEL: "clear",
+  LUCID_EFFORT: "clear",
+  LUCID_SESSION_ID: "clear",
 
-  LUCID_DEV_ASSETS: "dev-only",
+  // `devAssetsDir()` (src/server/dev-assets.ts:17) reads this on EVERY asset
+  // request in every server, with no dev-mode gate of any kind. Left inherited,
+  // a developer who still has it exported from `bun run dev` serves the suite
+  // dist/chrome.js off their disk instead of the bundle compiled into this
+  // commit - which silently voids the freshness gate 867520e exists to provide.
+  LUCID_DEV_ASSETS: "clear",
 };
 
-/** Variables the harness env must contain for every spawned process. */
+/**
+ * Variables that must point inside the test's own directory.
+ *
+ * Also what the unit suite's preload pins, which is the reason this is a
+ * separate list from "everything harnessEnv sets": these are the names whose
+ * absence means "read the developer's real home", and they are dangerous in
+ * any process, spawned or not. A behaviour switch is not.
+ */
 export const MUST_ISOLATE: readonly string[] = Object.entries(ENV_POLICY)
   .filter(([, policy]) => policy === "isolate")
   .map(([name]) => name)
   .sort();
 
+/** Every variable `harnessEnv` is responsible for setting on a spawned process. */
+export const HARNESS_ENV_NAMES: readonly string[] = Object.entries(ENV_POLICY)
+  .filter(([, policy]) => policy === "isolate" || policy === "harness-switch")
+  .map(([name]) => name)
+  .sort();
+
+/** Variables that must not survive from the parent environment into a spawned
+ *  process at all. */
+export const MUST_CLEAR: readonly string[] = Object.entries(ENV_POLICY)
+  .filter(([, policy]) => policy === "clear")
+  .map(([name]) => name)
+  .sort();
+
 /**
- * The contained environment for a CLI invocation rooted at `dir`.
+ * The COMPLETE environment for a harness-spawned Lucid process rooted at `dir`.
+ *
+ * Takes the parent environment rather than being spread over it, because
+ * removal is half the job: a variable the product reads back off its own
+ * environment cannot be contained by adding a key, only by not passing one.
+ * (Setting it empty would work today - every reader happens to treat "" as
+ * absent - but that is a property of five call sites, not of the harness, and
+ * the next reader is not bound by it.)
  *
  * One definition rather than an object literal per call site, so the drift test
  * has something to check and so a new containment reaches every suite at once.
  */
-export const harnessEnv = (dir: string): Record<string, string> => ({
-  LUCID_NO_OPEN: "1",
-  LUCID_IDLE_MS: "0",
-  // `open` registers every session in the hub registry; without this each run
-  // leaves dead /tmp pointers in the REAL ~/.lucid/registry.json, which the
-  // human's shell then lists as ghost sessions.
-  LUCID_ALLOW_TEMP: "1",
-  LUCID_REGISTRY: join(dir, "registry.json"),
-  LUCID_ROOTS: join(dir, "roots.json"),
-  // The three that used to reach the developer's real home. Pointed at paths
-  // inside the test's directory that deliberately do not exist: the product
-  // must cope with absent settings and an empty history, and if a test ever
-  // depends on their contents it will say so by failing rather than by quietly
-  // reading whatever the human happened to have.
-  LUCID_SETTINGS: join(dir, "settings.json"),
-  LUCID_CLAUDE_SESSIONS: join(dir, "claude-sessions"),
-  LUCID_CLAUDE_PROJECTS: join(dir, "claude-projects"),
-  LUCID_HARNESSES: join(dir, "harnesses.json"),
-});
+export const harnessEnv = (
+  dir: string,
+  parent: NodeJS.ProcessEnv = process.env,
+): Record<string, string> => {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(parent)) {
+    if (value !== undefined && !MUST_CLEAR.includes(name)) env[name] = value;
+  }
+  return {
+    ...env,
+    LUCID_NO_OPEN: "1",
+    LUCID_IDLE_MS: "0",
+    // `open` registers every session in the hub registry; without this each run
+    // leaves dead /tmp pointers in the REAL ~/.lucid/registry.json, which the
+    // human's shell then lists as ghost sessions.
+    LUCID_ALLOW_TEMP: "1",
+    LUCID_REGISTRY: join(dir, "registry.json"),
+    LUCID_ROOTS: join(dir, "roots.json"),
+    // The three that used to reach the developer's real home. Pointed at paths
+    // inside the test's directory that deliberately do not exist: the product
+    // must cope with absent settings and an empty history, and if a test ever
+    // depends on their contents it will say so by failing rather than by quietly
+    // reading whatever the human happened to have.
+    LUCID_SETTINGS: join(dir, "settings.json"),
+    LUCID_CLAUDE_SESSIONS: join(dir, "claude-sessions"),
+    LUCID_CLAUDE_PROJECTS: join(dir, "claude-projects"),
+    LUCID_HARNESSES: join(dir, "harnesses.json"),
+  };
+};
 
 /**
  * A port nothing listens on, so discovery cannot find a hub.

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  harnessPidsIn,
   harnessSessionCwd,
   harnessSessionId,
   harnessSupportsPresence,
@@ -10,6 +11,8 @@ import {
   type HarnessPresence,
   livePresence,
   presenceFor,
+  realPs,
+  resetProcessLister,
   setProcessLister,
   resetPresenceCache,
 } from "../src/core/presence.ts";
@@ -32,7 +35,86 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Unconditional, and not only in the fixture's own teardown: a test that
+  // installs a stub lister and then throws never reaches its undo, and one
+  // leaked stub disables presence detection for every file that runs after it.
+  resetProcessLister();
   await rm(dir, { recursive: true, force: true });
+});
+
+/**
+ * The real `ps` call, against processes this test spawns itself.
+ *
+ * Everything that can be wrong here is invisible to a stubbed lister, because
+ * every failure mode - wrong flags, a mis-joined pid list, a missing binary -
+ * collapses to empty output, which `harnessPidsIn` reads as "nothing is live"
+ * and every caller reads as "no conversation is open". That is the exact
+ * production defect this module exists to prevent, so it cannot be the thing
+ * the suite stops looking at.
+ *
+ * Two processes, deliberately: with one pid, `pids.join(",")` and
+ * `pids.join(" ")` produce the same string and a broken join goes unnoticed.
+ */
+describe("realPs asks the OS and gets an answer back", () => {
+  test("reports a line per live pid, with the command name the OS has for it", async () => {
+    const a = Bun.spawn(["sleep", "5"], { stdout: "ignore", stderr: "ignore" });
+    const b = Bun.spawn(["sleep", "5"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      const out = await realPs([a.pid, b.pid]);
+      const lines = out.split("\n").filter((l) => l.trim() !== "");
+      expect(lines).toHaveLength(2);
+      // Both pids present, each followed by a command name - the shape
+      // `harnessPidsIn` parses. `comm` is the executed file's name: `sleep`.
+      expect(lines.map((l) => Number.parseInt(l.trim(), 10)).sort()).toEqual([a.pid, b.pid].sort());
+      for (const line of lines) expect(line).toMatch(/^\s*\d+\s+\S*sleep\s*$/);
+    } finally {
+      a.kill();
+      b.kill();
+      await Promise.all([a.exited, b.exited]);
+    }
+  });
+
+  test("a pid nothing owns produces no line, rather than an error", async () => {
+    // `ps -p` exits non-zero when it matches nothing. The caller must read that
+    // as "not running", which is only true if the output is empty and the
+    // non-zero exit is not thrown at anyone.
+    expect((await realPs([DEAD_PID])).trim()).toBe("");
+  });
+
+  test("a plain `sleep` is not mistaken for a conversation", async () => {
+    // The whole point of reading `comm`: a live pid is not enough.
+    const proc = Bun.spawn(["sleep", "5"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      expect(harnessPidsIn(await realPs([proc.pid])).size).toBe(0);
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  });
+});
+
+/** The pure half, tested directly - the docstring in presence.ts claims it is,
+ *  and until now nothing imported it. */
+describe("harnessPidsIn", () => {
+  test("keeps the pids whose command name names the harness, in any case", () => {
+    const out = ["  501 claude", " 502 sleep", "503 Claude Code Helper", "504 bun"].join("\n");
+    expect([...harnessPidsIn(out)].sort()).toEqual([501, 503]);
+  });
+
+  test("a command name with spaces survives whole", () => {
+    expect([...harnessPidsIn("777 not-claude at all")]).toEqual([777]);
+  });
+
+  test("empty output, blank lines and headers yield nothing", () => {
+    expect(harnessPidsIn("").size).toBe(0);
+    expect(harnessPidsIn("\n\n   \n").size).toBe(0);
+    expect(harnessPidsIn("  PID COMM\n").size).toBe(0);
+  });
+
+  test("a pid that is a prefix of another is not confused with it", () => {
+    // 50 and 501 both appear; only the one whose own line names claude counts.
+    expect([...harnessPidsIn("50 sleep\n501 claude")]).toEqual([501]);
+  });
 });
 
 const writeSession = async (pid: number, body: Record<string, unknown>): Promise<void> => {

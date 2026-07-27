@@ -10,9 +10,11 @@ import { openSession } from "../src/core/session.ts";
 import type { HarnessInfo, SelectionResponse } from "../src/protocol/wire.ts";
 import {
   resetPresenceCache,
+  resetProcessLister,
   resetSessionCwdCache,
   setProcessLister,
 } from "../src/core/presence.ts";
+import { applyUnitEnv } from "./unit-env.ts";
 import { attendDecision, createAttendant, pendingHumanSeqs } from "../src/server/attend.ts";
 import { runDaemon, sessionId, type DaemonHandle } from "../src/server/daemon.ts";
 import { createSessionHost } from "../src/server/session-host.ts";
@@ -141,6 +143,12 @@ describe("session host presence", () => {
     await openSession(paths);
   });
   afterEach(async () => {
+    // Unconditional, and not only in the fixture's own teardown: the stub is
+    // installed before the `try` that undoes it, so anything throwing in
+    // between leaves it in place - and `bun test` shares one process across
+    // files, so a leaked stub reports every pid as `other` and turns presence
+    // detection off for the rest of the run, silently.
+    resetProcessLister();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -223,8 +231,9 @@ describe("session host presence", () => {
     } finally {
       host.stop();
       await proc.kill();
-      delete process.env.LUCID_CLAUDE_SESSIONS;
-      process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
+      // Same defect as the `afterEach` blocks below, in a `finally`: assigning
+      // a path here left it pointed at a directory this test's teardown removes.
+      applyUnitEnv();
       resetPresenceCache();
       resetSessionCwdCache();
     }
@@ -254,8 +263,9 @@ describe("session host presence", () => {
       expect(body.attendantPresence).toBeUndefined();
     } finally {
       host.stop();
-      delete process.env.LUCID_CLAUDE_SESSIONS;
-      process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
+      // Same defect as the `afterEach` blocks below, in a `finally`: assigning
+      // a path here left it pointed at a directory this test's teardown removes.
+      applyUnitEnv();
       resetPresenceCache();
       resetSessionCwdCache();
     }
@@ -310,9 +320,7 @@ describe("hub attend mode", () => {
     process.env.LUCID_ROOTS = join(dir, "roots.json");
     process.env.LUCID_CLAUDE_SESSIONS = join(dir, "no-claude-sessions");
     process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
-    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
     resetPresenceCache();
-    resetSessionCwdCache();
     resetSessionCwdCache();
     harnessesPath = join(dir, "harnesses.json");
     attendMarker = join(dir, "attend-marker.json");
@@ -347,12 +355,12 @@ describe("hub attend mode", () => {
   afterEach(async () => {
     await daemon?.stop();
     daemon = undefined;
-    delete process.env.LUCID_ROOTS;
-    delete process.env.LUCID_CLAUDE_SESSIONS;
-    // Deleted, not re-set. This assigned a path instead of clearing it, so
-    // LUCID_CLAUDE_PROJECTS outlived the block that owned it, pointing at a
-    // directory the next line removes.
-    delete process.env.LUCID_CLAUDE_PROJECTS;
+    // Restored, not deleted. This block used to ASSIGN a path here, so the
+    // variable outlived the describe that owned it while pointing at a
+    // directory the next line removes. Deleting was the fix while nothing owned
+    // the baseline; `test/preload.ts` owns it now, and a delete would strip the
+    // containment itself and point whatever runs next at the developer's home.
+    applyUnitEnv();
     resetPresenceCache();
     resetSessionCwdCache();
     await rm(dir, { recursive: true, force: true });
@@ -854,12 +862,12 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
   afterEach(async () => {
     await daemon?.stop();
     daemon = undefined;
-    delete process.env.LUCID_ROOTS;
-    delete process.env.LUCID_CLAUDE_SESSIONS;
-    // Deleted, not re-set. This assigned a path instead of clearing it, so
-    // LUCID_CLAUDE_PROJECTS outlived the block that owned it, pointing at a
-    // directory the next line removes.
-    delete process.env.LUCID_CLAUDE_PROJECTS;
+    // Restored, not deleted. This block used to ASSIGN a path here, so the
+    // variable outlived the describe that owned it while pointing at a
+    // directory the next line removes. Deleting was the fix while nothing owned
+    // the baseline; `test/preload.ts` owns it now, and a delete would strip the
+    // containment itself and point whatever runs next at the developer's home.
+    applyUnitEnv();
     resetPresenceCache();
     resetSessionCwdCache();
     await rm(dir, { recursive: true, force: true });
