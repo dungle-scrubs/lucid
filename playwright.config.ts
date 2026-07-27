@@ -9,6 +9,12 @@ const onCI = !!process.env.CI;
 export default defineConfig({
   testDir: "./test/e2e",
   testMatch: /.*\.e2e\.ts$/,
+
+  // The bundle the suite drives is gitignored, so without this a pass can be a
+  // pass against whatever the last build left on disk. Teardown reaps anything
+  // a fixture failed to stop, and says what it reaped.
+  globalSetup: "./test/e2e/global-setup.ts",
+  globalTeardown: "./test/e2e/global-teardown.ts",
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
