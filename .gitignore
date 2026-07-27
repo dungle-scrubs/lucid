@@ -45,3 +45,4 @@ workspace-overview.html
 # Artifacts recovered out of a harness's own edit history after /private/tmp was
 # cleared on reboot. Review material that happens to live here, same as above.
 /lucid-recovered/
+.claude/worktrees/

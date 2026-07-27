@@ -320,6 +320,32 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     },
   },
   {
+    sha: "80faab5",
+    broke:
+      "A 4xx verdict was retried like a hiccup: a 409 re-POSTed five times over 14s, and the failure card arrived 14s late.",
+    testFile: "test/e2e/regression/80faab5-a-verdict-is-not-retried.e2e.ts",
+    testName: "a 4xx verdict fails once, immediately, with the server's reason",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/transport.ts",
+      find: "        if (res.status >= 400 && res.status < 500) throw lastErr;",
+      replace: "        // mutation: a verdict is retried like a hiccup",
+    },
+  },
+  {
+    sha: "80faab5",
+    broke:
+      "One stuck flush read as a global sending flag would disable every card's Retry and Discard - the one control a failed send leaves you.",
+    testFile: "test/e2e/regression/80faab5-one-stuck-flush.e2e.ts",
+    testName: "a stuck flush disables its own card's Retry, and no other's",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/Panel.tsx",
+      find: "  const sending = useSession((s) => s.outboxSendingId) === message.id;",
+      replace: "  const sending = useSession((s) => s.outboxSending);",
+    },
+  },
+  {
     sha: "7c46d38",
     broke: "Answered questions stayed pinned in the 'Questions for you' panel.",
     testFile: null,
