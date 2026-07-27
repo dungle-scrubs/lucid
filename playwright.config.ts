@@ -51,12 +51,19 @@ export default defineConfig({
     // scrollback. Kept for the failed attempt of a retry-pass too, which is the
     // only evidence a flake ever leaves behind.
     headless: true,
+    // Nested under `contextOptions`, which is where Playwright actually reads
+    // it. A top-level `reducedMotion` in `use` is NOT a test option: the runner
+    // enumerates context options by name and this is not among them, so the
+    // key was absorbed as an unknown fixture option and silently ignored -
+    // `defineConfig`'s generic accepts it, so typecheck stayed green while the
+    // whole suite ran with motion fully live.
+    //
     // The suite measures geometry - overlap, clipping, contrast, resting
-    // position - and geometry is a moving target while anything is animating.
-    // This is the accessibility preference a real person sets, honoured by
+    // position - and geometry is a moving target while anything animates. This
+    // is the accessibility preference a real person sets, honoured by
     // `styles.css`; the stable page is a consequence of the product being
     // correct rather than a concession to the harness (D-003).
-    reducedMotion: "reduce",
+    contextOptions: { reducedMotion: "reduce" },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

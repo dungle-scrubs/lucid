@@ -238,9 +238,11 @@
  * a favour. `playwright.config.ts` sets `reducedMotion: "reduce"`, so the whole
  * suite runs under the same rules a person with that preference gets.
  *
- * `0.01ms` rather than `0`: a zero-duration animation never fires
- * `animationend`, and code waiting on that event would hang where the animation
- * used to complete.
+ * `0.01ms` rather than `0`, and the reason is narrower than it first looked: a
+ * zero-duration CSS ANIMATION does fire `animationend` in Chromium. What does
+ * not fire is `transitionend` on a zero-duration TRANSITION - measured both -
+ * so code waiting on a transition to finish would hang where it used to
+ * complete.
  */
 @media (prefers-reduced-motion: reduce) {
   *,

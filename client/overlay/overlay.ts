@@ -130,6 +130,20 @@ export class LucidOverlay extends LitElement {
       z-index: 2147483646;
       font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     }
+    /* The overlay lives in a shadow root inside the artifact's own document, so
+       the chrome's stylesheet never reaches it - it kept animating while the
+       rest of the product had stopped. The accessibility preference is the
+       artifact reader's too, and a mark that is still easing when a measurement
+       is taken is a position nothing was ever at. */
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
     .hover {
       position: fixed;
       border: 1.5px dashed rgba(94, 129, 172, 0.9);

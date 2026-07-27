@@ -1,5 +1,5 @@
-import { on } from "../locators.ts";
 import { expect, test } from "../harness.ts";
+import { on } from "../locators.ts";
 import {
   contrastRatio,
   fullyVisibleIn,
@@ -7,52 +7,91 @@ import {
   overlaps,
   scrollsSideways,
   settled,
-  surfaceOf,
 } from "../visual.ts";
 
 /**
- * M3.4 - the five visual invariants, exercised against the real chrome.
+ * M3.4 - the five visual instruments, read in both directions.
  *
- * They exist because thirty suites are about to ask the same five questions,
- * and thirty hand-rolled answers would drift into thirty slightly different
- * definitions of "overlaps". This file is what stops them shipping as five
- * plausible functions nobody has run: each is used here against the product,
- * in both directions where the product offers one.
+ * Thirty suites are about to trust these, so the question this file answers is
+ * not "does the chrome look right" but "does the instrument report correctly".
+ * The first version asserted one direction each and passed with four of the
+ * five replaced by constants - it tested the product and called that testing
+ * the instrument.
  *
- * Not a scenario test - it asserts nothing about Lucid's behaviour. It asserts
- * that the instruments read correctly, which is the thing every scenario test
- * after it will be trusting.
+ * Every case below is a fixture built to have a KNOWN answer, so a helper
+ * returning a constant fails at least one of them. The chrome is used only
+ * where the truth is equally knowable there.
  */
 
-test("the instruments read the real chrome correctly", async ({ page, cli }) => {
+/** A page with two boxes whose geometry is decided here, not by the product. */
+const geometry = `<!doctype html>
+<html><body style="margin:0;background:rgb(255,255,255)">
+  <div id="a" style="position:absolute;left:0;top:0;width:100px;height:100px"></div>
+  <div id="b" style="position:absolute;left:50px;top:50px;width:100px;height:100px"></div>
+  <div id="far" style="position:absolute;left:400px;top:400px;width:10px;height:10px"></div>
+  <div id="empty" style="position:absolute;left:0;top:0;width:0;height:0"></div>
+
+  <div id="box" style="position:absolute;left:0;top:200px;width:100px;height:60px;overflow:auto">
+    <div id="wide" style="width:500px;height:20px"></div>
+    <div id="inside" style="width:20px;height:20px"></div>
+  </div>
+  <div id="clipped" style="position:absolute;left:200px;top:200px;width:100px;height:60px;overflow:hidden">
+    <div style="width:500px;height:20px"></div>
+  </div>
+
+  <div id="dark" style="position:absolute;left:0;top:300px;background:rgb(0,0,0)">
+    <span id="invisible" style="color:rgb(0,0,0)">cannot be read</span>
+    <span id="legible" style="color:rgb(255,255,255)">can be read</span>
+  </div>
+
+  <button id="clickable" style="position:absolute;left:0;top:400px;width:80px;height:30px">ok</button>
+  <button id="covered" style="position:absolute;left:100px;top:400px;width:80px;height:30px">no</button>
+  <div style="position:absolute;left:100px;top:400px;width:80px;height:30px;background:rgba(0,0,0,0.01)"></div>
+</body></html>`;
+
+test("the instruments report correctly, in both directions", async ({ page, cli }) => {
+  await cli.write(geometry);
   const session = (await cli.run(["open", cli.artifact])) as { url: string };
   await page.goto(session.url);
-  const surface = surfaceOf(page);
-  await expect(surface.locator("h1")).toContainText("Database migration plan");
+  const surface = page.frameLocator('iframe[title="artifact surface"]');
+  await expect(surface.locator("#a")).toBeAttached();
   await settled(page);
 
-  // OVERLAP: an element always overlaps itself, and the composer does not
-  // overlap the artifact surface beside it. Both directions, because a
-  // predicate that always returns false passes the second half alone.
-  const composer = on(page).messageInput();
-  expect(await overlaps(composer, composer), "an element must overlap itself").toBe(true);
-  expect(
-    await overlaps(composer, page.locator('iframe[title="artifact surface"]')),
-    "the composer and the artifact surface are side by side, not on top of each other",
-  ).toBe(false);
+  const el = (id: string) => surface.locator(`#${id}`);
 
-  // SIDEWAYS SCROLL: the thread is a vertical record, so this is 0 or less.
-  expect(await scrollsSideways(on(page).threadViewport())).toBeLessThanOrEqual(0);
+  // OVERLAP - true, false, and the zero-area case that has no exceptions.
+  expect(await overlaps(el("a"), el("b")), "boxes that intersect").toBe(true);
+  expect(await overlaps(el("a"), el("far")), "boxes that do not").toBe(false);
+  expect(await overlaps(el("empty"), el("empty")), "an element overlaps itself").toBe(true);
 
-  // CONTAINMENT: the composer is inside the panel that holds it.
-  expect(await fullyVisibleIn(composer, on(page).threadViewport().locator(".."))).toBe(true);
+  // SIDEWAYS SCROLL - a real scroller reports its range; a clipped box reports
+  // nothing, because it cannot be scrolled however far its content runs.
+  expect(await scrollsSideways(el("box")), "an overflow:auto box with wide content").toBe(400);
+  expect(await scrollsSideways(el("clipped")), "overflow:hidden is not scrollable").toBe(0);
 
-  // CONTRAST: the composer's own text against whatever is actually behind it.
-  // 4.5 is the WCAG AA threshold for body text; the chrome's own tokens are
-  // the thing under test here, not an artifact's.
-  const ratio = await contrastRatio(composer);
-  expect(ratio, `composer text contrast is ${ratio.toFixed(2)}:1`).toBeGreaterThan(4.5);
+  // CONTAINMENT - both axes. `wide` runs 400px past its container's right edge,
+  // which a Y-only check called fully visible.
+  expect(await fullyVisibleIn(el("inside"), el("box")), "a child that fits").toBe(true);
+  expect(await fullyVisibleIn(el("wide"), el("box")), "a child that runs off sideways").toBe(false);
 
-  // HIT TEST: the send button is what a click at its centre would reach.
+  // CONTRAST - the two extremes, against a known ground.
+  expect(await contrastRatio(el("invisible")), "black on black").toBeLessThan(1.5);
+  expect(await contrastRatio(el("legible")), "white on black").toBeGreaterThan(15);
+
+  // HIT TEST - reachable, and covered by something the eye cannot see.
+  expect(await isHittable(el("clickable")), "a button with nothing over it").toBe(true);
+  expect(await isHittable(el("covered")), "a button under a near-invisible film").toBe(false);
+});
+
+test("the instruments agree with the real chrome", async ({ page, cli }) => {
+  // The fixtures above prove the instruments; this proves they still read a
+  // real page, where the answers are not arranged.
+  const session = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(session.url);
+  await settled(page);
+
+  expect(await scrollsSideways(on(page).threadViewport())).toBe(0);
   expect(await isHittable(on(page).sendMessage())).toBe(true);
+  const ratio = await contrastRatio(on(page).messageInput());
+  expect(ratio, `composer text contrast is ${ratio.toFixed(2)}:1`).toBeGreaterThan(4.5);
 });
