@@ -65,14 +65,27 @@ export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
    */
   const abandon = async (): Promise<void> => {
     child.kill("SIGKILL");
-    await rm(dir, { recursive: true, force: true });
+    // `catch`, not `finally`: `finally` re-throws, so an rm that failed on a
+    // busy or unreadable tree would reject a promise nobody is holding, and
+    // Playwright would report an unattributed run failure instead of the
+    // startup error the caller is waiting for.
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
   };
+
+  let onEarlyExit: (code: number | null) => void = () => {};
 
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => {
-      void abandon().finally(() => reject(new Error("hub did not start within 15s")));
+      void abandon().then(() => reject(new Error("hub did not start within 15s")));
     }, 15_000);
     let buf = "";
+    onEarlyExit = (code) => {
+      clearTimeout(timer);
+      // Already dead, so only the directory is left to take with it.
+      void rm(dir, { recursive: true, force: true })
+        .catch(() => {})
+        .then(() => reject(new Error(`hub exited early (${code}): ${buf}`)));
+    };
     child.stdout?.on("data", (chunk: Buffer) => {
       buf += chunk.toString();
       const m = /listening on http:\/\/127\.0\.0\.1:(\d+)/.exec(buf);
@@ -81,14 +94,18 @@ export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
         resolve(Number.parseInt(m[1], 10));
       }
     });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      // Already dead, so only the directory is left to take with it.
-      void rm(dir, { recursive: true, force: true }).finally(() =>
-        reject(new Error(`hub exited early (${code}): ${buf}`)),
-      );
-    });
+    child.once("exit", onEarlyExit);
   });
+
+  // Removed the moment the hub is up, and this is not tidiness: left attached
+  // it survives into the test and into `stop()`, where it fires FIRST on
+  // SIGTERM and starts an unawaited `rm` of the same tree. That concurrent rm
+  // made `stop()`'s own awaited rm return early - measured at 6ms against 29ms,
+  // with 836 of 841 entries still on disk after the process exited. It also
+  // meant a hub that CRASHED mid-test had its registry deleted underneath the
+  // test still using it. The two rare paths this commit fixed cost the one
+  // every hub in the suite takes.
+  child.off("exit", onEarlyExit);
   return {
     port,
     url: `http://127.0.0.1:${port}/`,

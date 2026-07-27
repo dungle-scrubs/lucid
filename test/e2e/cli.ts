@@ -23,8 +23,11 @@ const execFileAsync = promisify(execFile);
  * here and turned into the full outcome before `interpretCliResult` judges it.
  * A genuine spawn failure - no such binary - is re-thrown untouched, because
  * that is not the CLI answering at all.
+ *
+ * Exported only for `hub.ts`, which rebinds a CLI to a running hub's env. It is
+ * deliberately NOT on the `helpers.ts` barrel: it takes a raw `env`, and every
+ * other caller should be going through `makeCli`, which contains one.
  */
-/** Exported for `hub.ts`, which rebinds a CLI to a running hub's env. */
 export const invoke = async (
   args: readonly string[],
   options: Parameters<typeof execFileAsync>[2] & { timeout?: number },
