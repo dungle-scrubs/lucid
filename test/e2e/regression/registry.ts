@@ -164,8 +164,13 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     mutation: {
       kind: "edit",
       file: "src/cli/run.ts",
-      find: '      message: "progress needs a --label, --total, or --done",',
-      replace: '      message: "progress needs a --label, --total, or --done", exitZero: true,',
+      // Removes the fix, not a type. An earlier version appended an excess
+      // property to the ValidationError constructor, which is a COMPILE-time
+      // error and nothing else - the verifier does not run tsc, so at runtime
+      // the throw was unchanged, the test passed, and the row reported itself
+      // proven while proving nothing.
+      find: `    throw new ValidationError({\n      message: "progress needs a --label, --total, or --done",\n      detail: { file },\n    });`,
+      replace: `    print({ ok: false, error: "progress needs a --label, --total, or --done" });\n    return;`,
     },
   },
   {

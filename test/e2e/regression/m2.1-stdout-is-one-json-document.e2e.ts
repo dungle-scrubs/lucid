@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { makeCli, type Cli } from "../helpers.ts";
+import { harnessEnv } from "../harness-env.ts";
+import { MAIN, makeCli, type Cli } from "../helpers.ts";
 
 /**
  * M2.1 - stdout carries one JSON document, or nothing.
@@ -29,13 +30,19 @@ test.afterEach(async () => {
 
 /** stdout, stderr and the code, with nothing interpreted - the raw contract. */
 const raw = async (
-  _cwd: string,
+  cwd: string,
   args: readonly string[],
 ): Promise<{ code: number; stdout: string; stderr: string }> => {
   // Playwright's runner is Node, not Bun - `Bun.spawn` is not defined here.
-  const proc = spawn("bun", ["run", "src/cli/main.ts", ...args], {
-    cwd: process.cwd(),
-    env: { ...process.env, LUCID_NO_OPEN: "1" },
+  // `harnessEnv`, not a hand-rolled `{...process.env}`. Spelling the env out
+  // here inherited every name M0.4 exists to contain: a run from an agent
+  // session that had used Lucid stamped the artifact with the DEVELOPER's
+  // harness and their real session UUID, and left hub discovery unpinned.
+  // `test/env-isolation.test.ts` audits `harnessEnv` and the unit suite, so it
+  // cannot see an e2e file that declines to use it.
+  const proc = spawn("bun", [MAIN, ...args], {
+    cwd,
+    env: harnessEnv(cwd),
   });
   let stdout = "";
   let stderr = "";
@@ -56,6 +63,10 @@ test("a refused command puts one JSON envelope on stdout, or nothing at all", as
     { what: "an unknown subcommand", args: ["bogus"] },
     { what: "an argument outside its allowed set", args: ["intent", cli.artifact, "maybe"] },
     { what: "a missing required option", args: ["wait"] },
+    // The one command that had its own dialect: `lucid plan` with no
+    // subcommand printed usage to stdout and exited 0, which is both defects
+    // this milestone fixed, in the command neither path went through.
+    { what: "a parent command with no subcommand", args: ["plan"] },
   ];
 
   const broken: string[] = [];
@@ -63,7 +74,16 @@ test("a refused command puts one JSON envelope on stdout, or nothing at all", as
     const result = await raw(cli.dir, args);
     const out = result.stdout.trim();
 
-    if (out === "") continue; // silence is a legal answer; stderr carries the words
+    if (out === "") {
+      // Silence is a legal answer, but only if the refusal is legible
+      // somewhere. Left as a bare `continue`, a CLI that printed NOTHING for
+      // every case passed this test - which is exactly what "suppress the
+      // logger" would produce if the envelope were never added.
+      if (result.stderr.trim() === "") {
+        broken.push(`${what}: refused in total silence - nothing on stdout, nothing on stderr`);
+      }
+      continue;
+    }
     try {
       const parsed = JSON.parse(out) as { error?: { code?: string; message?: string } };
       // One document, and the shape an agent is told to expect.
@@ -99,4 +119,18 @@ test("a refusal still says why, in words, and exits non-zero", async () => {
   const envelope = JSON.parse(result.stdout) as { error: { code: string; message: string } };
   expect(envelope.error.code).toBe("USAGE");
   expect(result.stderr).toContain(envelope.error.message.split(" - ")[0] ?? "");
+});
+
+test("help, version and completions are answers, and are left alone", async () => {
+  // The contract is "stdout is one JSON document" for anything that is asked to
+  // DO something. An explicit request for help, a version or a completion
+  // script is asked for text, and gets text - enumerated here rather than left
+  // as an unstated exception to an unqualified promise.
+  cli = await makeCli("<!doctype html><html><body><h1>Plan</h1></body></html>");
+
+  for (const args of [["--help"], ["--version"], ["plan", "render", "--help"]]) {
+    const result = await raw(cli.dir, args);
+    expect(result.code, `${args.join(" ")} exited ${result.code}`).toBe(0);
+    expect(result.stdout.trim().length, `${args.join(" ")} printed nothing`).toBeGreaterThan(0);
+  }
 });
