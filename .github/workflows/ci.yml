@@ -124,6 +124,19 @@ jobs:
       # is measured.
       - run: bunx playwright test
 
+      # `test/e2e/catalogue.json` is the scope ledger: which of the 256 catalogued
+      # scenarios are covered, and by which test. Nothing else in the repo reads
+      # those rows, so a renamed test, a deleted one, or a row that claimed
+      # coverage it never had all looked exactly like progress. This checks every
+      # `covered` row against the run that just finished, and recomputes the
+      # totals from the rows - the hand-written summary it replaces had drifted
+      # to 257/35 while the rows said 256/39.
+      #
+      # After the suite, deliberately: the report is the evidence, so there is
+      # nothing to check until it exists.
+      - name: The catalogue agrees with the run
+        run: bun run scripts/coverage-check.ts
+
       # A CI failure is not reproducible by re-reading the log - nobody has the
       # machine. Uploaded on failure AND on success: the JSON result file is what
       # the coverage ledger cross-checks its `covered` rows against, so a green
