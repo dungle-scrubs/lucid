@@ -72,7 +72,7 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     sha: "3bca9c0",
     broke: "A reload threw away every open tab and dropped you on the pick screen.",
     testFile: "test/e2e/regression/3bca9c0-reload-keeps-your-tabs.e2e.ts",
-    testName: "a reload keeps the tab that was open, instead of the pick screen",
+    testName: "a reload keeps the tabs that were open, and the one in front",
     // Was a revert until the M2 ownership fix touched the same commit's
     // session.ts and the revert stopped applying. The verifier caught that on
     // the run after, which is the whole reason it prints conflicts rather than
@@ -224,16 +224,23 @@ export const REGRESSIONS: readonly RegressionRow[] = [
   },
   {
     sha: "80faab5",
-    broke: "A human message was refused outright because an agent held the append lock.",
-    testFile: null,
-    testName: null,
+    broke: "A slow send showed nothing, so it looked exactly like a swallowed one.",
+    testFile: "test/e2e/regression/80faab5-a-slow-send-is-visible.e2e.ts",
+    testName: "a send that is taking a while says so, before it has failed",
+    // This row was first closed as "no reachable mutation" on the reading that
+    // the commit was about the LOCK REFUSAL - and that part is genuinely
+    // unreachable: the lock was held for 9s and the composer sent with
+    // DEFAULT_TIMEOUT_MS at 30_000, 5000 and 100, and all three delivered with
+    // no warning, because f107e28's outbox retries until the lock frees. The
+    // review pointed out the commit shipped three more invariants, each one
+    // line and none tested, so the `why` was true of the refusal and false of
+    // the commit. Two remain untested: the 4xx short-circuit in transport.ts,
+    // and outboxSendingId vs outboxSending in Panel.tsx.
     mutation: {
-      kind: "none",
-      why:
-        "The refusal is unreachable at any timeout. Held the artifact's append lock for 9s and " +
-        "sent from the composer with DEFAULT_TIMEOUT_MS at 30_000, 5000 (the pre-fix value) and " +
-        "100: all three delivered with no warning, because f107e28's outbox retries until the " +
-        "lock frees. The invariant now belongs to f107e28's row.",
+      kind: "edit",
+      file: "client/chrome/Panel.tsx",
+      find: "const SLOW_SEND_MS = 1200;",
+      replace: "const SLOW_SEND_MS = 60_000;",
     },
   },
   {

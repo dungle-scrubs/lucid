@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { openIntoHub, startHub, type Cli, type Hub } from "../helpers.ts";
 
 /**
@@ -23,7 +25,7 @@ test.afterEach(async () => {
   hub = undefined;
 });
 
-test("a reload keeps the tab that was open, instead of the pick screen", async ({ page }) => {
+test("a reload keeps the tabs that were open, and the one in front", async ({ page }) => {
   hub = await startHub();
   const opened = await openIntoHub(
     hub,
@@ -31,9 +33,24 @@ test("a reload keeps the tab that was open, instead of the pick screen", async (
   );
   cli = opened.cli;
 
+  // TWO tabs. With one, "the active tab survived" is unavoidable - there is
+  // nothing else it could be - so tab activation and project scope, two of the
+  // three things the commit says it restores, went untested.
+  const second = join(cli.dir, "handover.html");
+  await writeFile(second, "<!doctype html><title>Handover notes</title><h1>Handover</h1>");
+  await cli.run(["open", second]);
+
   await page.goto(opened.shellUrl);
   await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
-  await expect(page.locator('[data-test="shell-tab"]')).toContainText("Rollout checklist");
+  await page.locator('[data-test="tab-add"]').click();
+  await page.locator('[data-test="picker-row"]').first().click();
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+
+  // Put a specific one in front, so "restored" has to mean the right one.
+  await page.locator('[data-test="shell-tab"]', { hasText: "Rollout checklist" }).first().click();
+  await expect(page.locator('[data-test="shell-tab"][data-active="true"]')).toContainText(
+    "Rollout checklist",
+  );
 
   // A bare load of the shell, which is what the roster has to survive on its
   // own: reloading the `?s=` URL proves nothing, because that query re-opens
@@ -41,7 +58,9 @@ test("a reload keeps the tab that was open, instead of the pick screen", async (
   // reopened, or ⌘R after the shell has taken the session id out of the URL.
   await page.goto(`http://127.0.0.1:${hub?.port}/`);
 
-  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(1);
-  await expect(page.locator('[data-test="shell-tab"]')).toContainText("Rollout checklist");
-  await expect(page.locator('[data-test="shell-tab"][data-active="true"]')).toHaveCount(1);
+  await expect(page.locator('[data-test="shell-tab"]')).toHaveCount(2);
+  await expect(
+    page.locator('[data-test="shell-tab"][data-active="true"]'),
+    "the roster came back but the wrong tab was in front",
+  ).toContainText("Rollout checklist");
 });
