@@ -110,8 +110,18 @@ const run = async (
 
 /** The one test this row names, run in `cwd`. */
 const runTest = async (cwd: string, check: Check): Promise<{ passed: boolean; output: string }> => {
+  // Resolved from the lockfile'd install, not through `bunx`: `bunx <tool>`
+  // falls back to the npm registry when the name is not already resolvable, so
+  // a run could silently be judged by a different Playwright than the one this
+  // repo pins. CI greps scripts/ for exactly this and was right to.
   const result = await run(
-    ["bunx", "playwright", "test", "--project=regression", "-g", check.testName],
+    [
+      join(cwd, "node_modules", ".bin", "playwright"),
+      "test",
+      "--project=regression",
+      "-g",
+      check.testName,
+    ],
     cwd,
   );
   return { passed: result.code === 0, output: `${result.stdout}\n${result.stderr}`.trim() };
