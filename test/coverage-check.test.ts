@@ -3,9 +3,11 @@ import { join } from "node:path";
 import {
   type CatalogueRow,
   checkLedger,
+  GRANDFATHERED_WITHOUT_MUTATION,
   mutationDebt,
   summarise,
   testTitlesIn,
+  unmutatedNewcomers,
 } from "../scripts/coverage-check.ts";
 
 const REPO = join(import.meta.dirname, "..");
@@ -119,6 +121,99 @@ describe("checkLedger", () => {
   });
 });
 
+describe("checkLedger folds the outcomes it is given", () => {
+  test("a test skipped in one project and passing in another does not cover it", () => {
+    // `spec.tests[]` is one entry per PROJECT. Reading tests[0] made the first
+    // project the whole truth, so a scenario skipped everywhere else read as
+    // covered. One `chromium` project today; D-026 splits the suite in two.
+    const twoProjects = {
+      suites: [
+        {
+          file: "loop.e2e.ts",
+          specs: [
+            {
+              title: "agent reply appears in the conversation log",
+              tests: [{ status: "expected" }, { status: "skipped" }],
+            },
+          ],
+        },
+      ],
+    };
+    const problems = checkLedger(
+      [
+        {
+          id: "wait-reply-reaches-the-thread",
+          status: "covered",
+          testFile: "test/e2e/loop.e2e.ts",
+          testName: "agent reply appears in the conversation log",
+        },
+      ],
+      twoProjects,
+    );
+    expect(problems.map((p) => p.problem)).toEqual(["claims a test that was skipped in this run"]);
+  });
+
+  test("a passing namesake does not vouch for a skipped test in the same file", () => {
+    // Playwright allows duplicate titles in one file, and the key holds the
+    // leaf title only - the describe path is not in it. Last-write-wins let
+    // whichever came second decide.
+    const duplicated = {
+      suites: [
+        {
+          file: "loop.e2e.ts",
+          specs: [
+            { title: "same title", tests: [{ status: "skipped" }] },
+            { title: "same title", tests: [{ status: "expected" }] },
+          ],
+        },
+      ],
+    };
+    const problems = checkLedger(
+      [
+        {
+          id: "ambiguous",
+          status: "covered",
+          testFile: "test/e2e/loop.e2e.ts",
+          testName: "same title",
+        },
+      ],
+      duplicated,
+    );
+    expect(problems).toHaveLength(1);
+  });
+});
+
+describe("testTitlesIn returns specs, and only specs", () => {
+  test("a describe block or a step is not a test that can back a row", () => {
+    // The old `test\.\w+` catch-all matched both, so a `describe` title could
+    // satisfy a covered row that no test backs.
+    const source = [
+      'test.describe("a block, not a test", () => {',
+      '  test.step("a step, not a test", async () => {});',
+      '  test("a real test", async () => {});',
+      '  test.skip("a skipped test still declares a spec", async () => {});',
+      '  test.fail("a failing-by-declaration test declares one too", async () => {});',
+      "});",
+    ].join("\n");
+    expect(testTitlesIn(source)).toEqual([
+      "a real test",
+      "a skipped test still declares a spec",
+      "a failing-by-declaration test declares one too",
+    ]);
+  });
+
+  test("an interpolated title is not returned, because it cannot be resolved", () => {
+    // Returning the raw template would let a row claim a test whose real title
+    // never matches it. Not returning it means such a row fails instead, which
+    // is the safe direction.
+    // Assembled so the interpolation is data here, not a template this file
+    // would itself evaluate.
+    const interpolation = ["$", "{width}"].join("");
+    const source = `  test(\`viewport never scrolls (panel at ${interpolation}px)\`, async () => {});`;
+    expect(testTitlesIn(source)).toEqual([]);
+  });
+});
+
 describe("the mutation debt", () => {
   test("counts covered rows that name no mutation, and does not invent one", () => {
     // D-007 says every test ships a named mutation. The 39 tests this catalogue
@@ -132,6 +227,34 @@ describe("the mutation debt", () => {
       { id: "not-yet", status: "uncovered" },
     ];
     expect(mutationDebt(rows)).toEqual(["old"]);
+  });
+
+  test("demoting a grandfathered row does not free a slot for a new one", () => {
+    // A ceiling on the COUNT is not a ratchet. Demote one inherited row to
+    // uncovered, add a brand-new covered row with no mutation, and the total is
+    // unchanged - so a count check passes while exactly the thing it exists to
+    // prevent has happened. Membership is the check instead.
+    const grandfathered = [...GRANDFATHERED_WITHOUT_MUTATION][0] ?? "";
+    expect(grandfathered).not.toBe("");
+
+    const rows: CatalogueRow[] = [
+      { id: grandfathered, status: "uncovered" },
+      { id: "brand-new", status: "covered", testFile: "a.ts", testName: "a", mutation: null },
+    ];
+    // The count is one either way; only membership tells them apart.
+    expect(mutationDebt(rows)).toEqual(["brand-new"]);
+    expect(unmutatedNewcomers(rows)).toEqual(["brand-new"]);
+  });
+
+  test("every grandfathered id is a row that really does owe a mutation", async () => {
+    // A permission for a row that no longer needs one is a rule outliving its
+    // reason - and it would silently cover a future row that reused the id.
+    const catalogue = (await Bun.file(join(REPO, "test/e2e/catalogue.json")).json()) as {
+      suites: Array<{ scenarios: CatalogueRow[] }>;
+    };
+    const owed = new Set(mutationDebt(catalogue.suites.flatMap((suite) => suite.scenarios)));
+    const stale = [...GRANDFATHERED_WITHOUT_MUTATION].filter((id) => !owed.has(id));
+    expect(stale).toEqual([]);
   });
 });
 

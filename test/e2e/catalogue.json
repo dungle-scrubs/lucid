@@ -57,7 +57,9 @@
         {
           "id": "help-lists-every-command",
           "title": "`--help` documents every user-facing flag and hides `__serve`",
-          "steps": ["Run `lucid --help` and each `lucid <cmd> --help`"],
+          "steps": [
+            "Run `lucid --help` and each `lucid <cmd> --help`"
+          ],
           "expected": "Exit 0 with --since/--reply/--harness/--resume/--timeout, --group, --restart, --attend, --poll all documented. `__serve` is internal but currently leaks into the invalid-subcommand hint.",
           "risk": "low",
           "kind": "functional",
@@ -70,7 +72,9 @@
         {
           "id": "version-flag-matches-package",
           "title": "`lucid --version` matches the released version",
-          "steps": ["Run `lucid --version` and compare against package.json"],
+          "steps": [
+            "Run `lucid --version` and compare against package.json"
+          ],
           "expected": "Identical. The value is a hand-maintained literal in main.ts with an `x-release-please-version` comment, so binary/release drift is possible.",
           "risk": "low",
           "kind": "functional",
@@ -83,7 +87,9 @@
         {
           "id": "plan-bare-usage-is-not-json",
           "title": "`lucid plan` prints usage, and that is documented as non-JSON",
-          "steps": ["Run `lucid plan` with no subcommand"],
+          "steps": [
+            "Run `lucid plan` with no subcommand"
+          ],
           "expected": "Two usage lines on stdout, exit 0 — deliberately not JSON, which a scripted caller must not parse.",
           "risk": "low",
           "kind": "functional",
@@ -96,7 +102,9 @@
         {
           "id": "launch-stdout-is-not-json",
           "title": "`lucid launch` writes plain progress lines",
-          "steps": ["Run `lucid launch plan.html` and read stdout"],
+          "steps": [
+            "Run `lucid launch plan.html` and read stdout"
+          ],
           "expected": "Human-readable lines (`launcher watching plan for forks (Ctrl-C to stop)`). Documented as the one non-JSON long-running command besides `hub`.",
           "risk": "low",
           "kind": "functional",
@@ -229,7 +237,9 @@
         {
           "id": "open-allow-temp-optout",
           "title": "Only the exact string LUCID_ALLOW_TEMP=1 opts out",
-          "steps": ["Run `lucid open <tmp artifact>` with LUCID_ALLOW_TEMP=1, then =0, then unset"],
+          "steps": [
+            "Run `lucid open <tmp artifact>` with LUCID_ALLOW_TEMP=1, then =0, then unset"
+          ],
           "expected": "Opens under `=1`; refused under `=0` and unset.",
           "risk": "medium",
           "kind": "functional",
@@ -338,7 +348,9 @@
         {
           "id": "open-missing-file",
           "title": "Opening a path that does not exist gives a typed error",
-          "steps": ["Run `lucid open /durable/does-not-exist.html`"],
+          "steps": [
+            "Run `lucid open /durable/does-not-exist.html`"
+          ],
           "expected": "Exit 1, ARTIFACT_ERROR \"cannot read artifact: …\" with detail.path — not an unhandled ENOENT stack.",
           "risk": "medium",
           "kind": "functional",
@@ -351,7 +363,10 @@
         {
           "id": "open-invalid-structure-fresh",
           "title": "A truncated artifact is refused on a fresh open, not half-recorded",
-          "steps": ["Write HTML cut off mid-tag and run `lucid open`", "Check for log.ndjson"],
+          "steps": [
+            "Write HTML cut off mid-tag and run `lucid open`",
+            "Check for log.ndjson"
+          ],
           "expected": "Exit 1, ARTIFACT_ERROR naming the structural reason; no session_opened event committed.",
           "risk": "medium",
           "kind": "functional",
@@ -396,7 +411,9 @@
         {
           "id": "status-empty-directory",
           "title": "Bare `lucid` with no sessions is empty, not an error",
-          "steps": ["Run `lucid` in a fresh empty directory"],
+          "steps": [
+            "Run `lucid` in a fresh empty directory"
+          ],
           "expected": "Exit 0 with `{sessions:[], usage:{…}}` — the usage block is the discoverability affordance and must always be present.",
           "risk": "low",
           "kind": "functional",
@@ -425,7 +442,9 @@
         {
           "id": "status-large-tree-performance",
           "title": "Bare `lucid` in a large checkout returns promptly",
-          "steps": ["Run `lucid` at the root of a repo with node_modules and a deep .git; time it"],
+          "steps": [
+            "Run `lucid` at the root of a repo with node_modules and a deep .git; time it"
+          ],
           "expected": "Returns in a couple of seconds. The `**/log.ndjson` glob has no prune list (unlike scanRoots), so a monorepo is the regression to watch.",
           "risk": "medium",
           "kind": "functional",
@@ -438,7 +457,10 @@
         {
           "id": "status-live-first-ordering",
           "title": "The listing puts live sessions first, then sorts by name",
-          "steps": ["Open three sessions, end one, kill another's server", "Run bare `lucid`"],
+          "steps": [
+            "Open three sessions, end one, kill another's server",
+            "Run bare `lucid`"
+          ],
           "expected": "live:true rows first, then suspended/ended by name; dead rows carry `resume: lucid open <path>`, live rows carry `viewer`.",
           "risk": "low",
           "kind": "functional",
@@ -451,7 +473,9 @@
         {
           "id": "status-hub-hosted-viewer-url",
           "title": "A hub-hosted session lists its shell tab url, not a per-session viewer path",
-          "steps": ["Open a session into a hub, run bare `lucid`"],
+          "steps": [
+            "Open a session into a hub, run bare `lucid`"
+          ],
           "expected": "viewer is `http://127.0.0.1:<hub>/?s=<id>` — `/s/<id>/__lucid/viewer` would render a second chrome inside the window.",
           "risk": "medium",
           "kind": "functional",
@@ -464,7 +488,9 @@
         {
           "id": "status-attendant-surfaced",
           "title": "lastAttendant reaches the listing after a --harness wait",
-          "steps": ["Run a wait with --harness/--resume and model env, then bare `lucid`"],
+          "steps": [
+            "Run a wait with --harness/--resume and model env, then bare `lucid`"
+          ],
           "expected": "lastAttendant carries harness, at, resume, model and effort — the fields the shell and a returning human read.",
           "risk": "medium",
           "kind": "state",
@@ -725,7 +751,9 @@
         {
           "id": "wait-bare-integer-cursor",
           "title": "A bare integer cursor is an alias for evt_NNNNN",
-          "steps": ["Run `lucid wait --since 3 --timeout 3` after events 1..3 exist"],
+          "steps": [
+            "Run `lucid wait --since 3 --timeout 3` after events 1..3 exist"
+          ],
           "expected": "Same result as `--since evt_00003` — the delta excludes seq<=3.",
           "risk": "low",
           "kind": "functional",
@@ -753,7 +781,9 @@
         {
           "id": "wait-unknown-session",
           "title": "wait on a path with no session is NOT_FOUND, not a hang",
-          "steps": ["Run `lucid wait /durable/never-opened.html`"],
+          "steps": [
+            "Run `lucid wait /durable/never-opened.html`"
+          ],
           "expected": "Exit 1 with `{error:{code:\"NOT_FOUND\"}}` naming the path.",
           "risk": "medium",
           "kind": "functional",
@@ -908,7 +938,9 @@
         {
           "id": "end-idempotent",
           "title": "end twice is safe and terminal",
-          "steps": ["Run `lucid end plan.html` twice"],
+          "steps": [
+            "Run `lucid end plan.html` twice"
+          ],
           "expected": "Both exit 0 printing `{session, status:\"ended\"}`; only one session_ended event in the log.",
           "risk": "medium",
           "kind": "functional",
@@ -921,7 +953,10 @@
         {
           "id": "end-stops-server-and-frees-port",
           "title": "end stops the server, clears the descriptor, and the listing agrees",
-          "steps": ["Open, then `lucid end`", "Run bare `lucid` and curl the old port"],
+          "steps": [
+            "Open, then `lucid end`",
+            "Run bare `lucid` and curl the old port"
+          ],
           "expected": "live:false with a `resume: lucid open <path>` hint, server.json gone, and the port no longer answers /__lucid/identity.",
           "risk": "medium",
           "kind": "state",
@@ -934,7 +969,9 @@
         {
           "id": "end-with-dead-server-cleans-descriptor",
           "title": "end after the server already died still removes the stale descriptor",
-          "steps": ["Kill the server process, run `lucid end`, check for server.json"],
+          "steps": [
+            "Kill the server process, run `lucid end`, check for server.json"
+          ],
           "expected": "Exit 0, status ended, server.json removed so the next listing shows no ghost live session.",
           "risk": "medium",
           "kind": "recovery",
@@ -980,7 +1017,9 @@
         {
           "id": "end-unknown-session",
           "title": "end on a path with no session is NOT_FOUND",
-          "steps": ["Run `lucid end /durable/never-opened.html`"],
+          "steps": [
+            "Run `lucid end /durable/never-opened.html`"
+          ],
           "expected": "Exit 1 with NOT_FOUND naming the path.",
           "risk": "low",
           "kind": "functional",
@@ -1015,7 +1054,9 @@
         {
           "id": "ask-needs-text-or-group",
           "title": "ask with neither --text nor --group is a typed validation error",
-          "steps": ["Run `lucid ask plan.html` and `lucid ask plan.html --text \"   \"`"],
+          "steps": [
+            "Run `lucid ask plan.html` and `lucid ask plan.html --text \"   \"`"
+          ],
           "expected": "Both exit 1 with VALIDATION_ERROR \"lucid ask needs --text <question> or --group <file|->\"; no question event written.",
           "risk": "medium",
           "kind": "functional",
@@ -1028,7 +1069,9 @@
         {
           "id": "ask-text-and-group-are-exclusive",
           "title": "--group plus --text/--option/--multi is refused, not silently preferred",
-          "steps": ["Run `lucid ask plan.html --text hi --group q.json`"],
+          "steps": [
+            "Run `lucid ask plan.html --text hi --group q.json`"
+          ],
           "expected": "Exit 1, VALIDATION_ERROR \"lucid ask takes --group or --text/--option/--multi, not both\" — flags the caller believed they sent are never dropped.",
           "risk": "medium",
           "kind": "functional",
@@ -1087,7 +1130,9 @@
         {
           "id": "ask-group-oversized",
           "title": "A group larger than 512KB is refused before it is parsed",
-          "steps": ["Generate a 2MB JSON group file and pass it to --group"],
+          "steps": [
+            "Generate a 2MB JSON group file and pass it to --group"
+          ],
           "expected": "Exit 1 with \"question group is too large (max 524288 characters)\"; no seconds spent parsing and no memory blowup.",
           "risk": "medium",
           "kind": "functional",
@@ -1100,7 +1145,9 @@
         {
           "id": "ask-group-too-many-questions",
           "title": "Six questions are rejected with an issues list",
-          "steps": ["Ask a group of 6 questions"],
+          "steps": [
+            "Ask a group of 6 questions"
+          ],
           "expected": "Exit 1, VALIDATION_ERROR whose detail.issues names the at-most-5 rule; nothing half-recorded and the drawer never opens.",
           "risk": "medium",
           "kind": "functional",
@@ -1113,7 +1160,9 @@
         {
           "id": "ask-group-choice-without-choices",
           "title": "A choice question with no choices is rejected",
-          "steps": ["Ask a group whose question sets multiSelect but supplies choices: []"],
+          "steps": [
+            "Ask a group whose question sets multiSelect but supplies choices: []"
+          ],
           "expected": "Exit 1 with an issue naming that question; no question event appended.",
           "risk": "medium",
           "kind": "functional",
@@ -1126,7 +1175,9 @@
         {
           "id": "ask-group-empty-stdin",
           "title": "An empty stdin group is refused with a specific message",
-          "steps": ["Run `lucid ask plan.html --group - < /dev/null`"],
+          "steps": [
+            "Run `lucid ask plan.html --group - < /dev/null`"
+          ],
           "expected": "Exit 1, VALIDATION_ERROR \"no question group on stdin\" — not a JSON parse error.",
           "risk": "medium",
           "kind": "functional",
@@ -1139,7 +1190,9 @@
         {
           "id": "ask-group-invalid-json",
           "title": "Malformed group JSON reports the parse problem, not a stack trace",
-          "steps": ["Write `{not json` to q.json and run `lucid ask plan.html --group q.json`"],
+          "steps": [
+            "Write `{not json` to q.json and run `lucid ask plan.html --group q.json`"
+          ],
           "expected": "Exit 1, VALIDATION_ERROR \"question group is not valid JSON: …\" with detail.source.",
           "risk": "medium",
           "kind": "functional",
@@ -1152,7 +1205,9 @@
         {
           "id": "ask-no-session",
           "title": "ask before open is NOT_FOUND",
-          "steps": ["Run `lucid ask /durable/never-opened.html --text hi`"],
+          "steps": [
+            "Run `lucid ask /durable/never-opened.html --text hi`"
+          ],
           "expected": "Exit 1 NOT_FOUND — an agent that skipped `open` is told, rather than writing a question nobody will see.",
           "risk": "medium",
           "kind": "functional",
@@ -1181,7 +1236,9 @@
         {
           "id": "ask-group-missing-file",
           "title": "An unreadable --group file is refused by name",
-          "steps": ["Run `lucid ask plan.html --group /nope.json`"],
+          "steps": [
+            "Run `lucid ask plan.html --group /nope.json`"
+          ],
           "expected": "Exit 1, VALIDATION_ERROR \"cannot read question group: /nope.json\".",
           "risk": "low",
           "kind": "functional",
@@ -1194,7 +1251,9 @@
         {
           "id": "ask-unknown-ref",
           "title": "--ref naming a nonexistent element still asks",
-          "steps": ["Run `lucid ask plan.html --text \"which one?\" --ref no-such-id`"],
+          "steps": [
+            "Run `lucid ask plan.html --text \"which one?\" --ref no-such-id`"
+          ],
           "expected": "Exit 0, the question renders without a live anchor chip, and the viewer does not throw or scroll to nothing.",
           "risk": "low",
           "kind": "functional",
@@ -1262,7 +1321,9 @@
         {
           "id": "queue-is-lost-on-reload",
           "title": "A reload silently destroys queued annotations while messages survive",
-          "steps": ["Queue two annotations, reload the page, inspect the panel"],
+          "steps": [
+            "Queue two annotations, reload the page, inspect the panel"
+          ],
           "expected": "Today both queued cards are gone with no warning and no recovery card, while an undelivered MESSAGE survives the same reload — the asymmetry is the finding. Either the queue persists too, or the loss is warned about.",
           "risk": "high",
           "kind": "state",
@@ -1387,7 +1448,9 @@
         {
           "id": "enter-on-blank-note-is-inert",
           "title": "Enter on an empty note neither queues nor discards",
-          "steps": ["Click an element, press Enter in an empty [data-test=annotation-note]"],
+          "steps": [
+            "Click an element, press Enter in an empty [data-test=annotation-note]"
+          ],
           "expected": "The composer stays open with the same pick, no queued card, no warning row.",
           "risk": "medium",
           "kind": "functional",
@@ -1430,7 +1493,9 @@
         {
           "id": "pick-cap-at-eight-spots",
           "title": "The ninth collected spot is refused with a notice",
-          "steps": ["Cmd-click eight distinct elements, then a ninth"],
+          "steps": [
+            "Cmd-click eight distinct elements, then a ninth"
+          ],
           "expected": "[data-test=target-chip] stays at 8 and a notice reads 'Up to 8 spots per note - that pick was not added.'",
           "risk": "medium",
           "kind": "functional",
@@ -1443,7 +1508,9 @@
         {
           "id": "fork-disabled-with-multiple-spots",
           "title": "Fork is disabled with more than one spot, and says why",
-          "steps": ["Cmd-click two elements, hover [data-test=fork]"],
+          "steps": [
+            "Cmd-click two elements, hover [data-test=fork]"
+          ],
           "expected": "Fork is disabled and the tooltip reads 'Fork takes a single spot - remove the extra chips first'.",
           "risk": "medium",
           "kind": "functional",
@@ -1488,7 +1555,9 @@
         {
           "id": "annotation-image-upload-failure-warns",
           "title": "An image that cannot upload says so instead of vanishing",
-          "steps": ["Route POST **/__lucid/asset to abort; click an element and paste an image"],
+          "steps": [
+            "Route POST **/__lucid/asset to abort; click an element and paste an image"
+          ],
           "expected": "No chip appears and a warning reads \"That image didn't upload - try again.\"",
           "risk": "medium",
           "kind": "recovery",
@@ -1531,7 +1600,9 @@
         {
           "id": "queue-controls-frozen-while-sending",
           "title": "Queue cards cannot be edited or removed mid-send",
-          "steps": ["Route POST **/__lucid/annotation to delay 3s, queue two, click Send"],
+          "steps": [
+            "Route POST **/__lucid/annotation to delay 3s, queue two, click Send"
+          ],
           "expected": "edit-queued, Remove and send-queue are all disabled for the duration; after the send they are gone with the cards.",
           "risk": "medium",
           "kind": "concurrency",
@@ -1559,7 +1630,9 @@
         {
           "id": "queue-survives-panel-tab-switch",
           "title": "Glancing at the Sessions tab keeps the queue, the draft and the scroll",
-          "steps": ["Queue an annotation, start typing a second note, press ⌘2 then ⌘1"],
+          "steps": [
+            "Queue an annotation, start typing a second note, press ⌘2 then ⌘1"
+          ],
           "expected": "Queued card, half-typed note, its pick and the scroll position are all as they were (keepMounted).",
           "risk": "medium",
           "kind": "state",
@@ -1588,7 +1661,9 @@
         {
           "id": "idle-panel-has-no-composer-furniture",
           "title": "With nothing picked the panel shows the empty state and no composer",
-          "steps": ["Open a fresh viewer and assert on the thread body before any interaction"],
+          "steps": [
+            "Open a fresh viewer and assert on the thread body before any interaction"
+          ],
           "expected": "Zero [data-test=annotation-note], no 'New annotation' heading, and the thread reads 'No feedback sent yet. Click an element or select text in the artifact to annotate it.'",
           "risk": "low",
           "kind": "visual",
@@ -1601,7 +1676,9 @@
         {
           "id": "quick-replies-only-with-a-pick",
           "title": "Quick replies exist only while a spot is picked",
-          "steps": ["Assert on a fresh viewer, then click an element and assert again"],
+          "steps": [
+            "Assert on a fresh viewer, then click an element and assert again"
+          ],
           "expected": "[data-test=quick-reply] count 0 before the pick, 2 after.",
           "risk": "low",
           "kind": "visual",
@@ -1614,7 +1691,9 @@
         {
           "id": "queue-survives-panel-collapse",
           "title": "Collapsing and reopening the panel keeps unsent work",
-          "steps": ["Queue an annotation, press ⌘B to collapse, ⌘B to reopen"],
+          "steps": [
+            "Queue an annotation, press ⌘B to collapse, ⌘B to reopen"
+          ],
           "expected": "The queued card and the Send bar are still there with the same note.",
           "risk": "low",
           "kind": "state",
@@ -1627,7 +1706,9 @@
         {
           "id": "send-bar-pluralizes-and-hides",
           "title": "The send bar counts correctly and disappears when the queue empties",
-          "steps": ["Assert with an empty queue, queue one, then a second, then send"],
+          "steps": [
+            "Assert with an empty queue, queue one, then a second, then send"
+          ],
           "expected": "Absent at 0, 'Send 1 annotation' at 1, 'Send 2 annotations' at 2, absent again after the send.",
           "risk": "low",
           "kind": "visual",
@@ -1911,7 +1992,9 @@
         {
           "id": "tab-close-last-returns-to-picker",
           "title": "Closing the only tab lands on the pick screen offering it again",
-          "steps": ["Open exactly one tab, close it with ⌘W"],
+          "steps": [
+            "Open exactly one tab, close it with ⌘W"
+          ],
           "expected": "The pick screen renders and lists the just-closed artifact as an openable row — not 'Every session is already open', not a blank pane.",
           "risk": "high",
           "kind": "functional",
@@ -1956,7 +2039,9 @@
         {
           "id": "tab-attention-question-in-background",
           "title": "A question arriving for a background tab raises its attention dot",
-          "steps": ["Open two tabs, keep A active, ask a question on B's session from the CLI"],
+          "steps": [
+            "Open two tabs, keep A active, ask a question on B's session from the CLI"
+          ],
           "expected": "Tab B shows [data-test=tab-attention][data-kind=question] without being activated; answering it in B clears the dot.",
           "risk": "high",
           "kind": "state",
@@ -2016,7 +2101,9 @@
         {
           "id": "shell-under-the-panel-hidden-tabs-stay-mounted",
           "title": "Hidden tabs stay mounted so drafts and scroll survive switching",
-          "steps": ["Type an annotation note and a message draft in tab A, switch to B and back"],
+          "steps": [
+            "Type an annotation note and a message draft in tab A, switch to B and back"
+          ],
           "expected": "Both drafts intact and the thread scroll position preserved.",
           "risk": "high",
           "kind": "state",
@@ -2107,7 +2194,9 @@
         {
           "id": "boot-s-unknown-id",
           "title": "?s= with a garbage id lands on the pick screen, not a blank window",
-          "steps": ["Start a hub with one session, navigate to /?s=deadbeefdeadbeef"],
+          "steps": [
+            "Start a hub with one session, navigate to /?s=deadbeefdeadbeef"
+          ],
           "expected": "The pick screen renders with its session list, \"+\" still works, and no uncaught page error is logged.",
           "risk": "medium",
           "kind": "recovery",
@@ -2151,7 +2240,9 @@
         {
           "id": "reload-keeps-only-boot-tab",
           "title": "A reload restores only the ?s= tab",
-          "steps": ["Boot via ?s=, open two more tabs from the picker, reload"],
+          "steps": [
+            "Boot via ?s=, open two more tabs from the picker, reload"
+          ],
           "expected": "One tab (the ?s= one) returns with its recorded review state intact; the other two are gone from the strip but still listed by the picker.",
           "risk": "medium",
           "kind": "state",
@@ -2256,7 +2347,9 @@
         {
           "id": "tab-close-affordance-on-hover",
           "title": "An inactive tab's close button appears on hover and closes that tab only",
-          "steps": ["Open two tabs, hover the inactive one and click its ×"],
+          "steps": [
+            "Open two tabs, hover the inactive one and click its ×"
+          ],
           "expected": "The hovered tab closes; the active tab is untouched and stays active.",
           "risk": "medium",
           "kind": "functional",
@@ -2269,7 +2362,9 @@
         {
           "id": "tab-close-all-then-cmdw-noop",
           "title": "⌘W with nothing open is a harmless no-op",
-          "steps": ["Open 2 tabs, press ⌘W twice to empty the strip, press ⌘W again"],
+          "steps": [
+            "Open 2 tabs, press ⌘W twice to empty the strip, press ⌘W again"
+          ],
           "expected": "The pick screen stays, no error, the browser tab itself unaffected.",
           "risk": "medium",
           "kind": "functional",
@@ -2297,7 +2392,9 @@
         {
           "id": "panel-width-shared-across-tabs",
           "title": "A panel resize in one tab applies to all tabs and persists",
-          "steps": ["Open two tabs, drag the divider in A, switch to B, then reload"],
+          "steps": [
+            "Open two tabs, drag the divider in A, switch to B, then reload"
+          ],
           "expected": "Both tabs render the new panel width and the width survives the reload.",
           "risk": "medium",
           "kind": "state",
@@ -2310,7 +2407,9 @@
         {
           "id": "tab-attention-approved",
           "title": "An approved review marks its tab with a check",
-          "steps": ["Open two tabs, approve the review in one, switch away"],
+          "steps": [
+            "Open two tabs, approve the review in one, switch away"
+          ],
           "expected": "That tab shows data-kind=\"approved\" (✓); reopening the review removes it.",
           "risk": "low",
           "kind": "state",
@@ -2338,7 +2437,9 @@
         {
           "id": "sidebar-collapse-shared",
           "title": "Collapsing the review panel holds across tab switches",
-          "steps": ["Collapse the panel in A, switch to B and back"],
+          "steps": [
+            "Collapse the panel in A, switch to B and back"
+          ],
           "expected": "The panel stays collapsed in both and the artifact reflows to full width in both.",
           "risk": "low",
           "kind": "state",
@@ -2372,7 +2473,9 @@
         {
           "id": "picker-looking-state-before-first-snapshot",
           "title": "Before the first listing arrives the screen says it is LOOKING, not empty",
-          "steps": ["Delay GET /hub/events by ~2s in the browser context, load the shell root"],
+          "steps": [
+            "Delay GET /hub/events by ~2s in the browser context, load the shell root"
+          ],
           "expected": "\"Looking for sessions…\" shows during the delay; \"No reviews here yet\" never appears before the first snapshot.",
           "risk": "high",
           "kind": "state",
@@ -2385,7 +2488,9 @@
         {
           "id": "picker-row-open-failure-reports-on-the-row",
           "title": "A picker row that cannot open says so on itself and keeps the screen",
-          "steps": ["List a session, delete its log file, click its picker row"],
+          "steps": [
+            "List a session, delete its log file, click its picker row"
+          ],
           "expected": "The row's subtitle becomes \"couldn't open - is the session's log readable?\", no tab is created, and the pick screen remains.",
           "risk": "high",
           "kind": "recovery",
@@ -2413,7 +2518,9 @@
         {
           "id": "picker-all-open-scoped-copy",
           "title": "\"Everything is open\" in a scope offers widening, not a dead end",
-          "steps": ["Open every artifact in project A, click \"+\" while scoped to A"],
+          "steps": [
+            "Open every artifact in project A, click \"+\" while scoped to A"
+          ],
           "expected": "Copy names the project (\"Every artifact in A is already open\") and offers \"all projects\" plus New artifact — never \"No reviews here yet\".",
           "risk": "high",
           "kind": "functional",
@@ -2441,7 +2548,9 @@
         {
           "id": "drawer-open-large-project",
           "title": "Opening a 12-artifact project produces 12 ordered tabs and stays responsive",
-          "steps": ["Create 12 artifacts in one project, pick the project from the drawer"],
+          "steps": [
+            "Create 12 artifacts in one project, pick the project from the drawer"
+          ],
           "expected": "12 tabs in lastSeen order with no duplicates, exactly one active (the newest), drawer closed, and the window still accepts input during and after the sequential opens.",
           "risk": "high",
           "kind": "functional",
@@ -2469,7 +2578,9 @@
         {
           "id": "drawer-opens-whole-project",
           "title": "Picking a project opens every artifact in it as a tab, newest active",
-          "steps": ["Two artifacts in one project; open the drawer and click the project row"],
+          "steps": [
+            "Two artifacts in one project; open the drawer and click the project row"
+          ],
           "expected": "Two tabs appear (oldest first), the newest is data-active, and no second pick list is shown.",
           "risk": "high",
           "kind": "functional",
@@ -2482,7 +2593,9 @@
         {
           "id": "picker-hides-open-artifacts",
           "title": "The new-tab screen offers only artifacts that are not already tabs",
-          "steps": ["Open one of two artifacts in a project, click \"+\""],
+          "steps": [
+            "Open one of two artifacts in a project, click \"+\""
+          ],
           "expected": "Only the unopened artifact is listed; after opening it too the screen shows [data-test=all-open] and zero rows.",
           "risk": "high",
           "kind": "functional",
@@ -2495,7 +2608,9 @@
         {
           "id": "picker-empty-names-its-roots",
           "title": "An empty shell names where it looked and offers a correction",
-          "steps": ["Start a hub whose only root holds nothing, load the shell"],
+          "steps": [
+            "Start a hub whose only root holds nothing, load the shell"
+          ],
           "expected": "\"No reviews here yet\", the scanned root paths rendered as <code>, plus Add-a-project and New-artifact actions.",
           "risk": "high",
           "kind": "functional",
@@ -2508,7 +2623,9 @@
         {
           "id": "add-folder-paste-path",
           "title": "An empty shell can be pointed at a folder and finds the sessions in it",
-          "steps": ["Empty hub, click \"paste a path\", type a folder containing sessions, Add"],
+          "steps": [
+            "Empty hub, click \"paste a path\", type a folder containing sessions, Add"
+          ],
           "expected": "The listing updates over the stream (no reload) and the picker shows the found sessions.",
           "risk": "high",
           "kind": "functional",
@@ -2583,7 +2700,9 @@
         {
           "id": "drawer-on-empty-hub",
           "title": "The drawer on a hub with no sessions is still usable",
-          "steps": ["Start a hub with no sessions, open the drawer"],
+          "steps": [
+            "Start a hub with no sessions, open the drawer"
+          ],
           "expected": "Drawer opens showing the Projects header and the add-folder icon, zero project rows, and closes normally.",
           "risk": "medium",
           "kind": "functional",
@@ -2642,7 +2761,9 @@
         {
           "id": "add-folder-bad-path",
           "title": "A nonexistent path is refused with a visible reason",
-          "steps": ["Paste /no/such/folder and click Add"],
+          "steps": [
+            "Paste /no/such/folder and click Add"
+          ],
           "expected": "[data-test=add-folder-error] shows the hub's refusal; the listing is unchanged and the field keeps the typed value.",
           "risk": "medium",
           "kind": "recovery",
@@ -2655,7 +2776,9 @@
         {
           "id": "add-folder-zero-reviews",
           "title": "A folder holding no reviews explains itself instead of going silent",
-          "steps": ["Paste an empty temp directory and Add"],
+          "steps": [
+            "Paste an empty temp directory and Add"
+          ],
           "expected": "[data-test=add-folder-result] says it is watching the folder but found no reviews, and explains scratchpads — not a bare \"added\".",
           "risk": "medium",
           "kind": "functional",
@@ -2668,7 +2791,9 @@
         {
           "id": "add-folder-duplicate",
           "title": "Adding the same folder twice does not duplicate the project",
-          "steps": ["Add a folder with sessions, add the exact same path again"],
+          "steps": [
+            "Add a folder with sessions, add the exact same path again"
+          ],
           "expected": "One drawer project row and one picker group; no duplicated rows and no duplicate tabs.",
           "risk": "medium",
           "kind": "functional",
@@ -2681,7 +2806,9 @@
         {
           "id": "add-folder-no-native-chooser",
           "title": "With no OS chooser the icon falls back to a path field",
-          "steps": ["With POST /hub/roots answering 501, click the drawer's folder+ icon"],
+          "steps": [
+            "With POST /hub/roots answering 501, click the drawer's folder+ icon"
+          ],
           "expected": "A path input appears instead of a dead-end failure; typing a path and Enter adds it.",
           "risk": "medium",
           "kind": "recovery",
@@ -2724,7 +2851,9 @@
         {
           "id": "session-data-deleted-while-open",
           "title": "Deleting a session's data under an open tab degrades gracefully",
-          "steps": ["Open a tab, delete its session directory, send a message, then click \"+\""],
+          "steps": [
+            "Open a tab, delete its session directory, send a message, then click \"+\""
+          ],
           "expected": "The tab reports the failure rather than blanking, and the listing self-heals so the picker shows no phantom row.",
           "risk": "medium",
           "kind": "recovery",
@@ -2737,7 +2866,9 @@
         {
           "id": "scope-clear-widens-picker",
           "title": "\"all projects\" on the pick screen widens the scope",
-          "steps": ["Boot scoped to project A, click \"+\", click [data-test=scope-clear]"],
+          "steps": [
+            "Boot scoped to project A, click \"+\", click [data-test=scope-clear]"
+          ],
           "expected": "Rows from every project appear and the badge reverts to \"Projects\".",
           "risk": "medium",
           "kind": "functional",
@@ -2750,7 +2881,9 @@
         {
           "id": "drawer-counts-and-plurals",
           "title": "Drawer project rows report accurate artifact counts",
-          "steps": ["Put 1 artifact in project A and 3 in project B, open the drawer"],
+          "steps": [
+            "Put 1 artifact in project A and 3 in project B, open the drawer"
+          ],
           "expected": "\"1 artifact\" and \"3 artifacts\" — singular/plural correct and counts matching what picking the project opens.",
           "risk": "low",
           "kind": "functional",
@@ -2763,7 +2896,9 @@
         {
           "id": "drawer-header-has-add-folder-only",
           "title": "The drawer header offers add-folder and not a duplicate New artifact",
-          "steps": ["Open the drawer and inspect its header"],
+          "steps": [
+            "Open the drawer and inspect its header"
+          ],
           "expected": "[data-test=add-folder] present; [data-test=drawer-new-artifact] absent.",
           "risk": "low",
           "kind": "visual",
@@ -2776,7 +2911,9 @@
         {
           "id": "drawer-long-project-name-layout",
           "title": "A long project name truncates without pushing its count to a second line",
-          "steps": ["Add a folder with a 60-character basename holding a session, open the drawer"],
+          "steps": [
+            "Add a folder with a 60-character basename holding a session, open the drawer"
+          ],
           "expected": "Name truncates with ellipsis on one line, count stays baseline-aligned on that line, path line truncates too.",
           "risk": "low",
           "kind": "visual",
@@ -2795,7 +2932,9 @@
         {
           "id": "palette-over-a-composer-draft",
           "title": "⌘K from inside the composer opens the palette and preserves the draft",
-          "steps": ["Type text in the message composer, press ⌘K and type a query, press Escape"],
+          "steps": [
+            "Type text in the message composer, press ⌘K and type a query, press Escape"
+          ],
           "expected": "Typed characters go into the palette input (not the composer); after Escape the composer still holds the original draft.",
           "risk": "high",
           "kind": "functional",
@@ -2808,7 +2947,9 @@
         {
           "id": "palette-open-tab-item-activates",
           "title": "Selecting an already-open session activates its tab instead of duplicating it",
-          "steps": ["Open two tabs, ⌘K, pick the background one from \"Open tabs\""],
+          "steps": [
+            "Open two tabs, ⌘K, pick the background one from \"Open tabs\""
+          ],
           "expected": "Tab count unchanged, that tab becomes active, and its composer receives focus.",
           "risk": "high",
           "kind": "functional",
@@ -2821,7 +2962,9 @@
         {
           "id": "cmd-digits-index-visible-tabs",
           "title": "⌘1-9 index the VISIBLE, project-scoped strip",
-          "steps": ["Open two tabs in project A and two in B, scope to B, press ⌘1 and ⌘2"],
+          "steps": [
+            "Open two tabs in project A and two in B, scope to B, press ⌘1 and ⌘2"
+          ],
           "expected": "They select B's first and second visible tabs — never a hidden tab from project A.",
           "risk": "high",
           "kind": "functional",
@@ -2834,7 +2977,11 @@
         {
           "id": "palette-opens-and-opens-a-session",
           "title": "⌘K fuzzy-opens another session and runs an action on the active one",
-          "steps": ["⌘K, type a session name, Enter", "⌘K, type \"toggle\", Enter", "⌘K, Escape"],
+          "steps": [
+            "⌘K, type a session name, Enter",
+            "⌘K, type \"toggle\", Enter",
+            "⌘K, Escape"
+          ],
           "expected": "The session opens as a tab and rescopes the strip; the action runs; Escape closes without running anything.",
           "risk": "high",
           "kind": "functional",
@@ -2847,7 +2994,9 @@
         {
           "id": "palette-cmdk-toggles",
           "title": "⌘K a second time closes the palette",
-          "steps": ["Press ⌘K, then ⌘K again"],
+          "steps": [
+            "Press ⌘K, then ⌘K again"
+          ],
           "expected": "The overlay is gone — the handler toggles rather than re-opening.",
           "risk": "medium",
           "kind": "functional",
@@ -2860,7 +3009,9 @@
         {
           "id": "palette-with-no-active-session",
           "title": "The palette on the pick screen omits the review group and does not crash",
-          "steps": ["From an empty or deselected shell press ⌘K"],
+          "steps": [
+            "From an empty or deselected shell press ⌘K"
+          ],
           "expected": "No \"This review\" group and no \"Close this tab\" item; session groups still list and open.",
           "risk": "medium",
           "kind": "functional",
@@ -2873,7 +3024,9 @@
         {
           "id": "palette-close-this-tab",
           "title": "\"Close this tab\" from the palette closes the tab and the palette",
-          "steps": ["With two tabs open press ⌘K, type \"close\", Enter"],
+          "steps": [
+            "With two tabs open press ⌘K, type \"close\", Enter"
+          ],
           "expected": "Tab count drops by one, palette closes, and a neighbor is promoted and live.",
           "risk": "medium",
           "kind": "functional",
@@ -2886,7 +3039,9 @@
         {
           "id": "palette-filters-by-project",
           "title": "Typing a project name narrows the palette to that project's sessions",
-          "steps": ["List sessions across 3 projects, ⌘K, type the project's basename"],
+          "steps": [
+            "List sessions across 3 projects, ⌘K, type the project's basename"
+          ],
           "expected": "Only that project's sessions remain (the project name rides each item's value).",
           "risk": "medium",
           "kind": "functional",
@@ -2899,7 +3054,9 @@
         {
           "id": "palette-annotation-jump",
           "title": "The palette lists located annotations and jumps to one",
-          "steps": ["Create a located annotation, ⌘K, type part of the note, Enter"],
+          "steps": [
+            "Create a located annotation, ⌘K, type part of the note, Enter"
+          ],
           "expected": "The palette closes and the artifact scrolls the annotated element into view.",
           "risk": "medium",
           "kind": "functional",
@@ -2912,7 +3069,9 @@
         {
           "id": "palette-cmdw-does-not-close-underneath",
           "title": "⌘W while the palette is open must not close the tab behind it",
-          "steps": ["Open two tabs, press ⌘K, press ⌘W while the palette shows"],
+          "steps": [
+            "Open two tabs, press ⌘K, press ⌘W while the palette shows"
+          ],
           "expected": "The tab under the palette is not closed out from under the human — the shell's window handler should not act while a modal owns focus.",
           "risk": "medium",
           "kind": "functional",
@@ -2925,7 +3084,9 @@
         {
           "id": "palette-while-hub-is-down",
           "title": "The palette still works after the hub drops",
-          "steps": ["Open the shell, stop the hub, press ⌘K and select a not-open session"],
+          "steps": [
+            "Open the shell, stop the hub, press ⌘K and select a not-open session"
+          ],
           "expected": "The palette opens over the last-known listing; the failed open does not blank the window and the shell keeps its current tab.",
           "risk": "medium",
           "kind": "recovery",
@@ -2954,7 +3115,9 @@
         {
           "id": "cmd-bracket-uses-keycode",
           "title": "Bracket stepping keys off e.code, so a non-US layout still cycles",
-          "steps": ["Dispatch keydown with metaKey+shiftKey, code=\"BracketRight\", key=\"*\""],
+          "steps": [
+            "Dispatch keydown with metaKey+shiftKey, code=\"BracketRight\", key=\"*\""
+          ],
           "expected": "The next tab activates — the binding does not depend on the produced character.",
           "risk": "medium",
           "kind": "functional",
@@ -2967,7 +3130,9 @@
         {
           "id": "cmd-w-on-pick-screen",
           "title": "⌘W with no active tab is a no-op",
-          "steps": ["Click \"+\" so no tab is active, press ⌘W"],
+          "steps": [
+            "Click \"+\" so no tab is active, press ⌘W"
+          ],
           "expected": "Nothing closes, the pick screen stays, and the event is not preventDefault'd into a dead gesture.",
           "risk": "medium",
           "kind": "functional",
@@ -2980,7 +3145,9 @@
         {
           "id": "shortcuts-work-while-typing",
           "title": "⌘2 while typing in the composer switches tabs and inserts no character",
-          "steps": ["Open two tabs, focus the composer and type \"abc\", press ⌘2"],
+          "steps": [
+            "Open two tabs, focus the composer and type \"abc\", press ⌘2"
+          ],
           "expected": "The second tab activates and the first tab's draft is still exactly \"abc\".",
           "risk": "medium",
           "kind": "functional",
@@ -2993,7 +3160,9 @@
         {
           "id": "palette-empty-result",
           "title": "A query matching nothing says so",
-          "steps": ["⌘K, type \"zzzzqqq\""],
+          "steps": [
+            "⌘K, type \"zzzzqqq\""
+          ],
           "expected": "\"Nothing matches.\" is shown and Enter does nothing.",
           "risk": "low",
           "kind": "functional",
@@ -3006,7 +3175,9 @@
         {
           "id": "cmd-digit-out-of-range",
           "title": "⌘5 with two tabs changes nothing",
-          "steps": ["Open two tabs, press ⌘5"],
+          "steps": [
+            "Open two tabs, press ⌘5"
+          ],
           "expected": "The active tab is unchanged and no error is thrown.",
           "risk": "low",
           "kind": "functional",
@@ -3019,7 +3190,9 @@
         {
           "id": "cmd-bracket-single-tab-noop",
           "title": "Bracket stepping with one tab does nothing",
-          "steps": ["Open one tab, press ⌘⇧] and ⌘⇧["],
+          "steps": [
+            "Open one tab, press ⌘⇧] and ⌘⇧["
+          ],
           "expected": "No change, no error, no flicker of the pick screen.",
           "risk": "low",
           "kind": "functional",
@@ -3032,7 +3205,9 @@
         {
           "id": "alt-modifier-ignored",
           "title": "⌥⌘K does not open the palette",
-          "steps": ["Press Alt+Meta+k"],
+          "steps": [
+            "Press Alt+Meta+k"
+          ],
           "expected": "No palette overlay — alt-modified chords are left to the OS and browser.",
           "risk": "low",
           "kind": "functional",
@@ -3129,7 +3304,9 @@
         {
           "id": "context-stale-daemon-404",
           "title": "An older server without /__lucid/context falls through to the sidecar",
-          "steps": ["Stub the route to 404 and run `lucid context plan.html --pct 55`"],
+          "steps": [
+            "Stub the route to 404 and run `lucid context plan.html --pct 55`"
+          ],
           "expected": "live:false and the sidecar written — never a `live:true` success for a POST that 404'd.",
           "risk": "medium",
           "kind": "recovery",
@@ -3172,7 +3349,9 @@
         {
           "id": "progress-done-exceeds-total",
           "title": "done greater than total renders clamped, not broken",
-          "steps": ["Run `lucid progress plan.html --total 3 --done 9`"],
+          "steps": [
+            "Run `lucid progress plan.html --total 3 --done 9`"
+          ],
           "expected": "The viewer clamps at 3/3 (or shows 9 reported without a broken bar); no overflowing bar and no layout break.",
           "risk": "low",
           "kind": "visual",
@@ -3336,7 +3515,9 @@
         {
           "id": "two-windows-close-is-local",
           "title": "Closing a tab in one window does not close it in the other",
-          "steps": ["Two windows with the same tab open, close it in window 1"],
+          "steps": [
+            "Two windows with the same tab open, close it in window 1"
+          ],
           "expected": "Window 2 still shows the tab and its live stream keeps working.",
           "risk": "medium",
           "kind": "concurrency",
@@ -3349,7 +3530,9 @@
         {
           "id": "open-many-sessions-port-pool",
           "title": "Opening more sessions than the fixed port pool still works",
-          "steps": ["Without a hub, open 12 different artifacts, then run bare `lucid`"],
+          "steps": [
+            "Without a hub, open 12 different artifacts, then run bare `lucid`"
+          ],
           "expected": "All 12 report live:true with distinct viewer urls (17412–17419 then ephemeral ports); none fail with a bind error.",
           "risk": "medium",
           "kind": "concurrency",
@@ -3362,7 +3545,9 @@
         {
           "id": "hub-many-sessions",
           "title": "A hub hosting twenty sessions binds one port and lists them all",
-          "steps": ["Open 20 artifacts into one hub, check listening ports and the shell listing"],
+          "steps": [
+            "Open 20 artifacts into one hub, check listening ports and the shell listing"
+          ],
           "expected": "Exactly one listening port; all 20 appear in the listing and any one opens as a tab within a couple of seconds.",
           "risk": "medium",
           "kind": "concurrency",
@@ -3390,7 +3575,9 @@
         {
           "id": "hub-invalid-env-port",
           "title": "A malformed LUCID_HUB_PORT falls back to the default",
-          "steps": ["Start `lucid hub` with LUCID_HUB_PORT=abc, then =0x1f, then =99999"],
+          "steps": [
+            "Start `lucid hub` with LUCID_HUB_PORT=abc, then =0x1f, then =99999"
+          ],
           "expected": "Each falls back to 17428 (parseHubPort rejects them) rather than binding a nonsense port or throwing.",
           "risk": "low",
           "kind": "functional",
@@ -3418,7 +3605,9 @@
         {
           "id": "two-windows-independent-scope",
           "title": "Two windows keep independent project scopes",
-          "steps": ["Window 1 scoped to project A, window 2 to project B, open a tab in each"],
+          "steps": [
+            "Window 1 scoped to project A, window 2 to project B, open a tab in each"
+          ],
           "expected": "Neither window's badge or strip changes because of the other.",
           "risk": "low",
           "kind": "concurrency",
@@ -3583,7 +3772,9 @@
         {
           "id": "launch-no-session",
           "title": "launch before open is NOT_FOUND",
-          "steps": ["Run `lucid launch /durable/never-opened.html`"],
+          "steps": [
+            "Run `lucid launch /durable/never-opened.html`"
+          ],
           "expected": "Exit 1 NOT_FOUND, checked before the registry is even read.",
           "risk": "low",
           "kind": "functional",
@@ -3635,7 +3826,9 @@
         {
           "id": "plan-ingest-quotes-escaped",
           "title": "Notes with quotes and backslashes produce safely quoted commands",
-          "steps": ["Annotate with `he said \"do it\\now\"` and ingest the payload"],
+          "steps": [
+            "Annotate with `he said \"do it\\now\"` and ingest the payload"
+          ],
           "expected": "The emitted plan-db command escapes quotes and backslashes into a single well-formed argument; nothing in a human note can inject a second command.",
           "risk": "medium",
           "kind": "functional",
@@ -3648,7 +3841,9 @@
         {
           "id": "plan-render-missing-doc",
           "title": "plan render on a missing doc is a typed ARTIFACT_ERROR",
-          "steps": ["Run `lucid plan render /nope.md`"],
+          "steps": [
+            "Run `lucid plan render /nope.md`"
+          ],
           "expected": "Exit 1 with ARTIFACT_ERROR \"cannot read plan doc: …\" and detail.path.",
           "risk": "low",
           "kind": "functional",
@@ -3661,7 +3856,9 @@
         {
           "id": "plan-ingest-invalid-json",
           "title": "plan ingest refuses unparseable input",
-          "steps": ["Run `echo 'not json' | lucid plan ingest --plan p`"],
+          "steps": [
+            "Run `echo 'not json' | lucid plan ingest --plan p`"
+          ],
           "expected": "Exit 1 with ARTIFACT_ERROR \"could not parse wait payload JSON from input\".",
           "risk": "low",
           "kind": "functional",
@@ -3711,7 +3908,9 @@
         {
           "id": "app-starts-hub-in-attend-mode",
           "title": "`lucid app` brings up a hub that actually drives delivery",
-          "steps": ["With no hub running, run `lucid app`, then GET /hub/identity on 17428"],
+          "steps": [
+            "With no hub running, run `lucid app`, then GET /hub/identity on 17428"
+          ],
           "expected": "attend:true — the app front door is a human sitting down to review, so feedback is not left waiting. Asserted deliberately so it cannot regress to a review-only hub.",
           "risk": "high",
           "kind": "functional",
@@ -3740,7 +3939,9 @@
         {
           "id": "app-hub-fails-to-start",
           "title": "`lucid app` fails loudly when the hub cannot come up",
-          "steps": ["Occupy port 17428 with a non-Lucid server, run `lucid app`"],
+          "steps": [
+            "Occupy port 17428 with a non-Lucid server, run `lucid app`"
+          ],
           "expected": "After the 8s deadline, exit 1 with SERVER_ERROR \"hub daemon failed to start\" and detail.port — never a silent success or an endless spin.",
           "risk": "medium",
           "kind": "recovery",
@@ -3761,13 +3962,15 @@
           "kind": "functional",
           "needsCapability": "no-network",
           "status": "declined",
-          "declineReason": "Outbound networking cannot be disabled per-process on macOS without root pf rules, so the scenario as written could only ever be a permanent skip. Replaced by a static gate: every Bun.serve binds 127.0.0.1, and the shipped bundle contains no non-loopback origin.",
+          "declineReason": "Outbound networking cannot be disabled per-process on macOS without root pf rules, so the scenario as written could only ever be a permanent skip. Replaced by a narrower property that IS asserted: every Bun.serve in src/ binds 127.0.0.1 (src/server/daemon.ts, src/server/server.ts), and test/daemon.test.ts rejects a non-loopback Host. Note the limit: nothing yet gates a FUTURE Bun.serve, and nothing checks the shipped bundle for a non-loopback origin - D-016 describes that gate, and it does not exist.",
           "mutation": null
         },
         {
           "id": "app-no-chrome-fallback",
           "title": "With no Chrome-family browser, app falls back to the default browser",
-          "steps": ["Run `lucid app` with a stubbed /Applications where no Chrome flavor exists"],
+          "steps": [
+            "Run `lucid app` with a stubbed /Applications where no Chrome flavor exists"
+          ],
           "expected": "Prints `app:false` and still opens the url in the default browser; the printed hub url is always usable manually.",
           "risk": "low",
           "kind": "functional",
@@ -3818,7 +4021,9 @@
         {
           "id": "tabbar-a11y-labels",
           "title": "Strip controls carry usable accessible names",
-          "steps": ["Inspect the close button, attention dot, drawer badge and \"+\""],
+          "steps": [
+            "Inspect the close button, attention dot, drawer badge and \"+\""
+          ],
           "expected": "Close is \"Close <artifact name>\", the dot is role=img with a stateful label, the badge exposes aria-expanded, and \"+\" names the ⌘K equivalent.",
           "risk": "medium",
           "kind": "a11y",

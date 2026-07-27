@@ -55,6 +55,16 @@ jobs:
 
       - run: bun test test/*.test.ts
 
+      # The half of the ledger check that needs no browser: statuses that belong
+      # to no bucket, a covered row naming no test, a declined row with no
+      # reason, and a covered row owing a mutation that was never grandfathered.
+      # It runs here as well as after the e2e suite because the e2e job is the
+      # wrong single home for it - if that job is red for any unrelated reason,
+      # the ledger goes unchecked, and a red suite is exactly when rows are
+      # being edited. The cross-check against a real run stays in `e2e`, which
+      # is the only place a real run exists.
+      - run: bun run scripts/coverage-check.ts --no-report
+
   # Playwright had never run outside a laptop. Every claim the e2e suite makes
   # rested on one developer's machine, one browser build, and a client bundle
   # that is gitignored - so a green local run could always have been a run
