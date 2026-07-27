@@ -65,9 +65,16 @@ export const createActions = (ctx: ActionsCtx) => {
     );
 
   /** The queue's durability layer, mirroring the outbox's (D-054): written on
-   *  queue and on edit, forgotten on send and on remove, restored on load. */
+   *  queue and on edit, forgotten on send and on remove, restored on load.
+   *
+   *  Persisted EXPANDED, the way the outbox is (`runtime.tsx` expands before
+   *  `enqueueMessage`): the `[Pasted text #N]` placeholder is a pointer into
+   *  the in-memory paste store, which dies with the page - a persisted
+   *  placeholder came back from a reload as forty lines of nothing and sent
+   *  itself to the agent verbatim. Memory keeps the placeholder for display;
+   *  storage keeps the words. */
   const persistQueued = (item: QueuedAnnotation): void =>
-    storage.persistQueuedItem(item, () =>
+    storage.persistQueuedItem({ ...item, note: expandPastes(item.note) }, () =>
       pushWarning(
         "DRAFT_AT_RISK",
         "Couldn't save your queued annotation to this browser - it won't survive a reload.",
@@ -89,7 +96,14 @@ export const createActions = (ctx: ActionsCtx) => {
 
   const addToQueue = (): void => {
     const s = get();
-    if (!s.pendingTarget || s.composerNote.trim().length === 0) return;
+    if (!s.pendingTarget) return;
+    if (s.composerNote.trim().length === 0) {
+      // The keyboard route to the same refusal the disabled button makes
+      // visible: Enter in a blank composer is an explicit "queue this", and
+      // silence here was the original defect wearing a different input device.
+      warn("A note is the point of an annotation - type what should change before queueing.");
+      return;
+    }
     const item: QueuedAnnotation = {
       id: uuid(),
       target: s.pendingTarget,
@@ -327,7 +341,10 @@ export const createActions = (ctx: ActionsCtx) => {
    *  the current note; this is the one gesture that flushes the queue without
    *  reaching for the button, even while a text field has focus. */
   const sendAll = async (): Promise<void> => {
-    addToQueue(); // no-op unless a note is being composed
+    // Fold an in-progress note in only when one EXISTS: this gesture means
+    // "send the queue", and the blank-note refusal - which a plain Enter
+    // earns - would be noise on a batch send that queues nothing.
+    if (get().pendingTarget && get().composerNote.trim().length > 0) addToQueue();
     if (get().sending || get().queue.length === 0) return;
     await sendQueue();
   };

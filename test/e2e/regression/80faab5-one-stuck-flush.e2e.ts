@@ -46,6 +46,13 @@ test("a stuck flush disables its own card's Retry, and no other's", async ({ pag
   await on(page).sendMessage().click();
   await expect(on(page).unsentMessage()).toHaveCount(2);
 
+  // A FAILED flush released its card: the id cleared in the same path that
+  // marked it failed, so Retry is usable again. Without this, a mutation
+  // that leaves outboxSendingId set after a failure - Retry frozen forever
+  // on the one card that needs it - would pass everything below, because
+  // the held-route window only ever ends in success.
+  await expect(on(on(page).unsentMessage().first()).retryUnsent()).toBeEnabled();
+
   // Now the wire comes back, slowly: every POST is held 4s and then reaches
   // the REAL server. The hold is the window this test exists to look inside.
   await page.unroute("**/__lucid/message");

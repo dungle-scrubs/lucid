@@ -234,8 +234,9 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     // no warning, because f107e28's outbox retries until the lock frees. The
     // review pointed out the commit shipped three more invariants, each one
     // line and none tested, so the `why` was true of the refusal and false of
-    // the commit. Two remain untested: the 4xx short-circuit in transport.ts,
-    // and outboxSendingId vs outboxSending in Panel.tsx.
+    // the commit. The other two - the 4xx short-circuit in transport.ts and
+    // outboxSendingId vs outboxSending in Panel.tsx - are the two 80faab5
+    // rows below (finding #31, closed by D-059).
     mutation: {
       kind: "edit",
       file: "client/chrome/Panel.tsx",
@@ -343,6 +344,45 @@ export const REGRESSIONS: readonly RegressionRow[] = [
       file: "client/chrome/Panel.tsx",
       find: "  const sending = useSession((s) => s.outboxSendingId) === message.id;",
       replace: "  const sending = useSession((s) => s.outboxSending);",
+    },
+  },
+  {
+    sha: "m4.1-queue-paste",
+    broke:
+      "The persisted queue stored the [Pasted text #N] placeholder - a pointer into the page-local paste store - so a reload restored the pointer and sent it to the agent verbatim, forty lines of nothing.",
+    testFile: "test/e2e/regression/m4.1-queue-survives-reload.e2e.ts",
+    testName: "queued annotations survive a reload, and the survivors still send",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/actions.ts",
+      find: "    storage.persistQueuedItem({ ...item, note: expandPastes(item.note) }, () =>",
+      replace: "    storage.persistQueuedItem(item, () =>",
+    },
+  },
+  {
+    sha: "m4.1-queue-validator",
+    broke:
+      "The queue validator admitted any non-null object as an anchor; one forged target in storage threw in the React tree on every load, took the valid cards down with it, and never healed - skip-not-delete meant the crash was permanent.",
+    testFile: "test/e2e/regression/m4.1-queue-survives-reload.e2e.ts",
+    testName: "queued annotations survive a reload, and the survivors still send",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/store.ts",
+      find: '  return (o?.kind === "element" || o?.kind === "range") && typeof o.snippet === "string";',
+      replace: '  return typeof v === "object" && v !== null;',
+    },
+  },
+  {
+    sha: "m4.1-blank-note-enter",
+    broke:
+      "The blank-note refusal was visible to the mouse only: Enter in the composer called addToQueue directly, which still returned in silence.",
+    testFile: "test/e2e/regression/m4.1-blank-note-refusal-visible.e2e.ts",
+    testName: "add to queue refuses a blank note visibly, and typing re-arms it",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/actions.ts",
+      find: '      warn("A note is the point of an annotation - type what should change before queueing.");\n      return;',
+      replace: "      return;",
     },
   },
   {

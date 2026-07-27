@@ -78,10 +78,21 @@ interface PersistedQueuedAnnotation {
   readonly images: readonly PersistedQueuedImage[];
 }
 
-/** Anchors are opaque here: the shape belongs to `src/anchors`, and a stale one
- *  degrades to an orphaned mark rather than a bad POST, so "a non-null object"
- *  is the honest check - anything deeper would be a second schema to drift. */
-const isAnchorLike = (v: unknown): v is Anchor => typeof v === "object" && v !== null;
+/**
+ * The two fields everything downstream requires of an anchor, whatever its
+ * kind: the renderer reads `target.snippet` unguarded (`AnnotationPart`), and
+ * the server's `parseAnchor` refuses anything without `kind` and `snippet` -
+ * with a 400, which the 4xx short-circuit makes terminal. An earlier version
+ * accepted any non-null object on the theory that a stale anchor degrades to
+ * an orphaned mark; measured otherwise: one forged `{kind:"elephant"}` in
+ * storage threw in the React tree on EVERY load, taking the valid cards down
+ * with it, and skip-not-delete meant it never healed. Deeper validation than
+ * this would be a second schema to drift; shallower is a crash.
+ */
+const isAnchorLike = (v: unknown): v is Anchor => {
+  const o = v as Record<string, unknown> | null;
+  return (o?.kind === "element" || o?.kind === "range") && typeof o.snippet === "string";
+};
 
 const isQueuedAnnotation = (v: unknown): v is PersistedQueuedAnnotation => {
   const o = v as Record<string, unknown> | null;

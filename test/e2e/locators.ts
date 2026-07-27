@@ -185,9 +185,9 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   unsentMessage: (): Locator => root.locator(hook("unsent-message")),
   unsentMessages: (): Locator => root.locator(hook("unsent-messages")),
   version: (): Locator => root.locator(hook("version")),
-  warning: (): Locator => root.locator(hook("warning")),
   versionView: (): Locator => root.locator(hook("version-view")),
   versionViewExit: (): Locator => root.locator(hook("version-view-exit")),
+  warning: (): Locator => root.locator(hook("warning")),
 });
 
 /**

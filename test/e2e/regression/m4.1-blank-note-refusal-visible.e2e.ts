@@ -41,6 +41,12 @@ test("add to queue refuses a blank note visibly, and typing re-arms it", async (
   await on(page).annotationNote().fill("   ");
   await expect(on(page).addToQueue()).toBeDisabled();
 
+  // The KEYBOARD earns the same refusal, spoken: Enter is `addToQueue` too,
+  // and a disabled button says nothing to a hand that never leaves the keys.
+  // (Adversarial review, finding 3: the first fix covered the mouse only.)
+  await on(page).annotationNote().press("Enter");
+  await expect(on(page).warning()).toContainText("note is the point");
+
   // The control: a real note arms the button, and the armed path still works
   // end to end - a refusal made visible is worthless if it also broke consent.
   await on(page).annotationNote().fill("Backfill nightly, not in one batch.");

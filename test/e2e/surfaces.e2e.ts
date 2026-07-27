@@ -166,8 +166,22 @@ test.afterEach(async () => {
   // pid, and the kill has to be verified: a hub still holding 127.0.0.1:<port>
   // outlives the whole run and hijacks the next one.
   if (appHub) {
-    const { port, pid, dir } = appHub;
+    const { port, dir } = appHub;
+    let { pid } = appHub;
     appHub = undefined;
+    // A failure BEFORE the test recorded the pid must not convert into a
+    // leak: the descriptor the hub writes may already be on disk, so read it
+    // here - before the rm below destroys the only copy - and reap by it.
+    if (pid === undefined) {
+      try {
+        const descriptor = JSON.parse(await readFile(join(dir, "plan", "server.json"), "utf8")) as {
+          pid?: number;
+        };
+        pid = descriptor.pid;
+      } catch {
+        /* the hub never hosted a session; the port probe below still verifies */
+      }
+    }
     if (pid !== undefined) {
       try {
         process.kill(pid, "SIGTERM");

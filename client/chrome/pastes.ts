@@ -10,10 +10,12 @@ import type { ClipboardEvent } from "react";
  * it back: the agent reads everything, the human reads their own message.
  *
  * Tab-local by design. The staged map lives in the session instance, not the
- * log - a reload before sending forgets the content along with the draft that
- * referenced it, and a placeholder edited into something else simply sends
- * as the text it became, exactly as typed. Per session, because two sessions'
- * composers must not expand each other's placeholders.
+ * log, so a placeholder is only meaningful to the page life that minted it -
+ * which is why everything DURABLE stores the expansion, never the pointer:
+ * the outbox expands before `enqueueMessage`, and the queue's persister
+ * expands before writing (D-054). A placeholder edited into something else
+ * simply sends as the text it became, exactly as typed. Per session, because
+ * two sessions' composers must not expand each other's placeholders.
  */
 
 /** Past either bound a paste stops being readable inline and folds. */

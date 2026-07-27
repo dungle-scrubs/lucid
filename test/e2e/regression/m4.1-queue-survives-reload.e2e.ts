@@ -36,34 +36,75 @@ const queueOn = async (page: Page, artifactSelector: string, note: string): Prom
 
 test("queued annotations survive a reload, and the survivors still send", async ({ page }) => {
   cli = await makeCli(PLAN_V1);
-  const opened = (await cli.run(["open", cli.artifact])) as { url: string; nextCursor: string };
+  const opened = (await cli.run(["open", cli.artifact])) as {
+    url: string;
+    nextCursor: string;
+    session: string;
+  };
   await page.goto(opened.url);
 
   // TWO, on different elements, for the same reason the outbox test uses two:
   // one item cannot tell "persisted the queue" from "persisted the last
-  // write", and each item must come back on its own key.
+  // write", and each item must come back on its own key. The SECOND is a
+  // large PASTE, because a placeholder note is a pointer into the page-local
+  // paste store: persisting the pointer instead of the words came back from
+  // a reload as "[Pasted text #1 +12 lines]" and sent itself to the agent
+  // verbatim (adversarial review, finding 1).
   const first = "Backfill nightly, not in one batch.";
-  const second = "This zero-downtime assumption needs a source.";
+  const wall = Array.from({ length: 12 }, (_, i) => `log line ${i}`).join("\n");
   await queueOn(page, 'li[data-lucid-id="step-backfill"]', first);
-  await queueOn(page, "#note", second);
+  await surfaceOf(page).locator("#note").click();
+  await expect(on(page).annotationNote()).toBeVisible();
+  await page.evaluate((text) => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", text);
+    const el = document.querySelector('[data-test="annotation-note"]');
+    el?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
+  }, wall);
+  await expect(on(page).annotationNote()).toHaveValue("[Pasted text #1 +12 lines]");
+  await on(page).addToQueue().click();
   await expect(on(page).queuedAnnotation()).toHaveCount(2);
 
-  // A genuinely new page instance: nothing in memory survives this.
+  // A genuinely new page instance: nothing in memory survives this - least of
+  // all the paste store the placeholder pointed into.
   await page.goto("about:blank");
   await page.goto(opened.url);
   const cards = on(page).queuedAnnotation();
   await expect(cards, "the queue did not survive the reload").toHaveCount(2);
   await expect(cards.first()).toContainText(first);
-  await expect(cards.last()).toContainText(second);
+  // The restored card holds the WORDS. The placeholder died with the page
+  // that minted it, and showing it here would be showing a dangling pointer.
+  await expect(cards.last()).toContainText("log line 0");
+  await expect(cards.last()).not.toContainText("Pasted text");
 
   // A restored card is still a card: Remove works, and is itself durable -
-  // the removed item must not resurrect as a ghost on the next load.
+  // the removed item must not resurrect as a ghost on the next load. And a
+  // CORRUPT entry beside the good one - another tool's key, a stale schema -
+  // is skipped, not rendered: an earlier validator admitted any object, one
+  // forged target threw in the React tree on every load, and BOTH cards
+  // vanished until localStorage was cleared by hand (adversarial review,
+  // finding 2).
   await on(cards.first()).removeQueued().click();
   await expect(on(page).queuedAnnotation()).toHaveCount(1);
+  await page.evaluate((session) => {
+    localStorage.setItem(
+      `lucid:queue:${session}:forged`,
+      JSON.stringify({
+        id: "forged",
+        targets: [{ kind: "elephant", nope: true }],
+        note: "not a real anchor",
+        at: new Date().toISOString(),
+        images: [],
+      }),
+    );
+  }, opened.session);
   await page.goto("about:blank");
   await page.goto(opened.url);
-  await expect(on(page).queuedAnnotation(), "a removed item came back").toHaveCount(1);
-  await expect(on(page).queuedAnnotation()).toContainText(second);
+  await expect(
+    on(page).queuedAnnotation(),
+    "a removed item came back, a forged one rendered, or the forged one took the page down",
+  ).toHaveCount(1);
+  await expect(on(page).queuedAnnotation()).toContainText("log line 0");
 
   // And a restored item still DRIVES the POST it was written for: the note
   // reaches the agent and its anchor still resolves. Storage that renders a
@@ -79,7 +120,12 @@ test("queued annotations survive a reload, and the survivors still send", async 
   ])) as { status: string; annotations: { note: string; resolved: unknown }[] };
   expect(feedback.status).toBe("feedback");
   expect(feedback.annotations).toHaveLength(1);
-  expect(feedback.annotations[0]?.note).toBe(second);
+  // Every line of the paste, not the placeholder that stood in for it: the
+  // agent reads what was actually pasted, across a page life it never saw.
+  const note = feedback.annotations[0]?.note ?? "";
+  expect(note).not.toContain("Pasted text");
+  expect(note.split("\n")).toHaveLength(12);
+  expect(note).toContain("log line 11");
   // Resolution is the proof the restored TARGET came through intact, not only
   // the note: a mangled anchor still POSTs fine and still renders a card.
   expect(feedback.annotations[0]?.resolved).toBeTruthy();
