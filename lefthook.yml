@@ -8,9 +8,17 @@ pre-commit:
       # Same gate CI enforces (bun run lint == biome check), but only on the
       # files being committed. Safe fixes are applied and re-staged; real lint
       # errors still block the commit.
+      #
+      # The key is `stage_fixed`, not `stage_fixes`. Lefthook ignores a key it
+      # does not recognise without saying so, and the failure is invisible from
+      # here: the fix reaches the WORKING TREE, so `bun run lint` is green
+      # locally while the commit still holds the unformatted file, and CI is the
+      # first thing to see it. That is what happened to test/e2e/catalogue.json
+      # in #59. Verified by committing a deliberately unformatted JSON file
+      # under each spelling and reading `git show HEAD:<file>` back.
       glob: "*.{ts,tsx,js,jsx,json,jsonc,css}"
       run: bunx biome check --write --no-errors-on-unmatched {staged_files}
-      stage_fixes: true
+      stage_fixed: true
 
 pre-push:
   parallel: true
