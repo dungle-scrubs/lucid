@@ -1,6 +1,13 @@
 import { on } from "./locators.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { PLAN_V1, makeCli, surfaceOf, waitTimeoutSeconds, type Cli } from "./helpers.ts";
+import {
+  PLAN_V1,
+  makeCli,
+  overlaySettled,
+  surfaceOf,
+  waitTimeoutSeconds,
+  type Cli,
+} from "./helpers.ts";
 
 /**
  * The annotation QUEUE: the staging area between a pick and the agent.
@@ -85,7 +92,7 @@ test("a dead server keeps every queued annotation, and the retry sends each one 
   // so a card count read after it is a count of what the send decided to keep -
   // not the value that happened to be there while the POST was still retrying.
   await expect(
-    page.locator("body"),
+    on(page).warning(),
     "a failed send must say the annotations are still queued",
   ).toContainText("kept in the queue", { timeout: 30_000 });
   await expect(on(page).queuedAnnotation()).toHaveCount(3);
@@ -110,6 +117,30 @@ test("a dead server keeps every queued annotation, and the retry sends each one 
   ])) as { status: string; annotations: { note: string }[] };
   expect(fb.status).toBe("feedback");
   expect(fb.annotations.map((a) => a.note).sort()).toEqual([...notes].sort());
+});
+
+test("a queued card takes the NEXT number, on its card and on its mark alike", async ({ page }) => {
+  await openViewer(page);
+
+  // One annotation SENT: card 1, mark 1.
+  await queueNote(page, 'li[data-lucid-id="step-backfill"]', "Nightly is fine for the backfill.");
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
+
+  // A second QUEUED on a different element: it takes the NEXT number in both
+  // places. The panel and the surface must agree - a queued mark wearing "1"
+  // beside a sent mark wearing "1" is two claims to the same badge, and the
+  // card saying "2" over a mark saying "1" is worse: the human cannot tell
+  // which mark their unsent note is about.
+  await queueNote(page, "#note", "Which downtime window does this assume?");
+  const queued = on(page).queuedAnnotation();
+  await expect(queued).toHaveCount(1);
+  await expect(queued).toHaveAttribute("aria-label", "Queued annotation 2");
+
+  // The overlay repaints on the queue push; settled() is what makes reading
+  // both badges a statement about the final frame.
+  await overlaySettled(page);
+  await expect(surfaceOf(page).locator(".badge")).toHaveText(["1", "2"]);
 });
 
 test("sending with an editor open sends the EDITED note, not the one it replaced", async ({
@@ -210,7 +241,7 @@ test("a failed fork keeps the draft, and a manual retry produces exactly one for
   await cli.run(["end", cli.artifact]);
   await expect(on(page).reconnecting()).toBeVisible();
   await on(page).fork().click();
-  await expect(page.locator("body"), "a failed fork must say the draft is kept").toContainText(
+  await expect(on(page).warning(), "a failed fork must say the draft is kept").toContainText(
     "the draft is kept",
     { timeout: 30_000 },
   );

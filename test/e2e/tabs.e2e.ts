@@ -8,6 +8,7 @@ import {
   openIntoHub,
   PLAN_V1,
   startHub,
+  surfaceOf,
   waitTimeoutSeconds,
   type Cli,
   type Hub,
@@ -212,6 +213,37 @@ test("closing the active tab promotes a neighbour that is still live", async ({ 
   await expect(page.locator('[data-role="agent"]:visible')).toContainText(
     "promoted neighbour check",
   );
+});
+
+test("⌘W over an unsent queue: reopening the artifact restores the queued note", async ({
+  page,
+}) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  clis.push(opened.cli);
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+
+  // A note written and queued, never sent - the only copy of the human's words.
+  await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
+  await expect(on(page).annotationNote()).toBeVisible();
+  await on(page).annotationNote().fill("do not lose this note");
+  await on(page).addToQueue().click();
+  await expect(on(page).queuedAnnotation()).toHaveCount(1);
+
+  await page.keyboard.press(chord("w"));
+  await expect(on(page).shellTab()).toHaveCount(0);
+
+  // Reopening from the picker restores the queue from the session's own
+  // storage (D-054): the close destroyed a view, not the words. This is the
+  // scenario's survivable arm - the alternative (a gated close) was declined
+  // when the queue became durable, because a guard dialog protects nothing
+  // that persistence has not already protected better.
+  await on(page).pickerRow().click();
+  await expect(on(page).shellTab()).toHaveCount(1);
+  const restored = on(page).queuedAnnotation();
+  await expect(restored, "the queued note did not survive the close").toHaveCount(1);
+  await expect(restored).toContainText("do not lose this note");
 });
 
 test("closing the only tab lands on the pick screen offering it again", async ({ page }) => {

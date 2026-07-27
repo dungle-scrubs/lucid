@@ -48,8 +48,12 @@ export const listSessions = async (root: string): Promise<SessionSummary[]> => {
     );
 
     try {
-      const probe = sessionPaths(resolve(artifactDir, `${stem}.html`));
-      const state = foldLog((await readEvents(probe.logPath)).events);
+      // The log the GLOB found, not the new-layout path recomputed from the
+      // artifact dir: for a legacy `.lucid/<stem>/` row those differ, the
+      // recomputed file does not exist, `readEvents` answers `{events: []}`
+      // on ENOENT, and the fold's `none` dropped every legacy session from
+      // the listing while its log sat right where the glob had seen it.
+      const state = foldLog((await readEvents(resolve(scanRoot, rel))).events);
       if (state.status === "none") continue;
 
       const reconstructed = resolve(artifactDir, state.artifact || `${stem}.html`);

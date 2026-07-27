@@ -346,6 +346,35 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     },
   },
   {
+    sha: "m4.1-legacy-listing",
+    broke:
+      "Bare `lucid` never listed a legacy .lucid/<stem>/ session: the glob found its log, the fold read the NEW-layout path, ENOENT folded to none, and the row was dropped.",
+    testFile: "test/e2e/session-wait.e2e.ts",
+    testName: "bare lucid lists sessions in BOTH layouts, each once, at the right artifact",
+    mutation: {
+      kind: "edit",
+      file: "src/core/sessions.ts",
+      // The old read: the new-layout path recomputed from the artifact dir,
+      // which for a legacy row names a file that does not exist.
+      find: "      const state = foldLog((await readEvents(resolve(scanRoot, rel))).events);",
+      replace:
+        '      const state = foldLog((await readEvents(resolve(artifactDir, stem, "log.ndjson"))).events);',
+    },
+  },
+  {
+    sha: "m4.1-queued-badge",
+    broke:
+      "The overlay restarted queued badge numbering at 1, so a queued mark wore the same number as a sent one while its own card correctly read 2.",
+    testFile: "test/e2e/queue.e2e.ts",
+    testName: "a queued card takes the NEXT number, on its card and on its mark alike",
+    mutation: {
+      kind: "edit",
+      file: "client/overlay/overlay.ts",
+      find: '      pushAll(q.id, "queued", n + i + 1, q.targets ?? [q.target]);',
+      replace: '      pushAll(q.id, "queued", i + 1, q.targets ?? [q.target]);',
+    },
+  },
+  {
     sha: "7c46d38",
     broke: "Answered questions stayed pinned in the 'Questions for you' panel.",
     testFile: null,

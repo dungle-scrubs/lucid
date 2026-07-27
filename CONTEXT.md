@@ -32,9 +32,10 @@ the artifact, the overlay forms the `surface`; the `surface` plus the
 ## Glossary
 
 ### Artifact
-The agent-authored, free-form HTML document under review. It is **content,
-not Lucid UI**, and renders identically with or without Lucid. The agent has
-full creative freedom over it (any HTML/CSS, sandboxed JS).
+The free-form HTML document under review, authored by the agent. It is
+**content, not Lucid UI**, and renders identically with or without Lucid. The
+agent has full creative freedom over it (any HTML/CSS, sandboxed JS). Who may
+write its bytes is a separate question - see `artifact writer`.
 
 **The artifact is the primary, durable object** (artifact-first, D18). What
 Lucid's CLI and payload historically call a "session" is the artifact's
@@ -57,7 +58,9 @@ Lucid's core concept.
 The interaction layer Lucid injects into/over the artifact (built with Lit +
 Shadow DOM) that makes the surface addressable: hover targets, annotation
 cards, text-range highlights. It is **CSS-isolated** from the artifact (Shadow
-DOM) and never alters the saved artifact file. The artifact iframe is served
+DOM) and **never writes the artifact file** - it may paint an `edit preview`
+into the rendered DOM, but the bytes on disk are the `artifact writer`'s alone.
+The artifact iframe is served
 with `sandbox="allow-scripts"` (no `allow-same-origin`), which gives it an
 opaque origin: the overlay loads and runs, and `postMessage` crosses the
 boundary, but artifact-authored scripts cannot reach the Lucid control routes
@@ -98,6 +101,17 @@ also degrades it: the overlay re-resolves and orphans committed anchors on
 intra-version DOM mutation too, not only on a version swap, so feedback is
 never silently detached (D-041).
 
+### Editability / editable element
+The property that an element's text can be **rewritten in place by the human**,
+by clicking into it on the surface. A narrower property than addressability:
+every element is addressable, only some are editable. An **editable element** is
+one whose text the human may rewrite; a text range is never editable, only
+addressable, because an edit replaces an element's whole text and a range has no
+element boundary to replace. Whether an element carrying inline children
+(`<code>`, `<a>`, `<strong>`) qualifies is undecided - an edit expressed as plain
+text cannot preserve that markup. Editability is **not yet implemented**; the
+term exists so the design has one word for it.
+
 ### Annotation
 One piece of **located** human feedback, bound to a specific element or text
 range via an anchor, optionally carrying a note. Each annotation records the
@@ -112,9 +126,34 @@ missing or hash-mismatched, the annotation is orphaned rather than re-anchored
 against the current version (D-035). An orphan leaves the tray only when a human
 dismisses it or the agent acknowledges or re-anchors it via a revision (D-047).
 
+### Suggested edit
+A located human intent that an `editable element`'s text become exactly the
+**replacement text**, carried back as feedback and applied by the agent
+re-authoring the artifact forward. A sibling of `revert` and `fork`, not of
+`annotation`: all three are located human decisions the agent acts on, whereas an
+annotation is a note the agent reads. Whether it travels as its own event or as a
+field on an annotation is an encoding question, not a vocabulary one. A suggested
+edit is a **request, not a guarantee** - nothing enforces that the agent applies
+the text verbatim.
+
+### Replacement text
+The exact, complete new text of the element a `suggested edit` targets -
+including the parts the human did not change, because an edit captures an
+element's whole text rather than a diff of it. Distinct from the suggested edit
+itself: the edit is the located intent, the replacement text is its end state.
+
+### Edit preview
+The `replacement text` painted into the surface DOM while its `suggested edit` is
+still unapplied - so the human sees their own edit immediately, before any
+version contains it. A property of the surface, never of the artifact file. It
+ends when a version arrives carrying the edit (it becomes indistinguishable from
+the artifact), or when the agent's revision overrides it.
+
 ### Feedback
 The umbrella for what flows back to the agent: **annotations** (located) plus
-human **messages** (non-located, in the conversation log). The human may also
+human **messages** (non-located, in the conversation log) plus the located human
+decisions the agent acts on - **reverts**, **fork requests**, and **suggested
+edits**. The human may also
 post an **approve/resolve** signal (`review_resolved`), a positive
 done-or-approved event distinct from suspend and from explicit `end`, which tells
 the agent it can stop iterating (D-046). Approving winds the chrome down to an
@@ -133,6 +172,18 @@ was authored against** first, then carries forward to the current version.
 - **Text range**: a text quote (exact text + prefix/suffix context) with a
   character-position fallback; position offsets are relative to the artifact
   document body `textContent` (the W3C default - D-047).
+
+### Anchor rebase
+Re-capturing a committed annotation's anchor against a newer version so it
+survives a change that would otherwise **orphan** it. Named because an edit
+guarantees that change: the element fingerprint folds in the element's own
+normalized text, and range positions are offsets into the body `textContent`, so
+rewriting one element re-fingerprints it and shifts every later range offset.
+Orphaning is the correct answer when an agent revision moves the ground under an
+anchor (D-029); it is noise when the human's own edit orphans the annotation they
+attached to the thing they just fixed. **No rebase exists today, and the
+append-only log has no event that could express one** - the alternative is to
+accept the orphans.
 
 ### Session
 One artifact under review, identified by its **canonical file path**,
@@ -174,12 +225,30 @@ no cursor, which returns the full folded state of the current segment.
 ### Version
 A captured revision of the artifact, recorded in the event log as a `version`
 event. History is retained from day one; the human-facing diff/revert view is a
-later addition. The agent MUST write `<file>` atomically (temp file in the **same
-directory** as the target) and the watcher MUST **structurally** validate the
-settled file - closing root + balanced structure, not mere parseability - before
-committing it (D-043, D-061). A version is committed crash-safely by writing the
-**segment-scoped** snapshot `versions/sN/vM.html` then appending the event (D-024,
-D-050).
+later addition. The `artifact writer` MUST write `<file>` atomically (temp file in
+the **same directory** as the target) and the watcher MUST **structurally**
+validate the settled file - closing root + balanced structure, not mere
+parseability - before committing it (D-043, D-061). A version is committed
+crash-safely by writing the **segment-scoped** snapshot `versions/sN/vM.html` then
+appending the event (D-024, D-050).
+
+### Artifact writer
+The one process permitted to write the artifact file's bytes. **Today it is the
+agent, always** - an invariant the code relies on and nothing enforces: the
+artifact file has no lock, unlike the event log, whose single-appender discipline
+is enforced by an exclusive `flock` (D-030, D-049). A second writer therefore
+introduces a lost update in either direction, with no mechanism to detect it. The
+term exists because that assumption has to be visible before anything proposes to
+break it.
+
+### Version origin
+Who a version's content came from: **agent-authored** (every version that exists
+today) or **human-authored** (a version whose bytes a human's edit produced).
+`version` events carry an optional `attendant` stamp naming the harness session
+behind a revision, which by construction cannot describe a human. The distinction
+matters for exactly one reason: an agent that cannot tell a human's version from
+its own will re-author the document from its own model of it and silently discard
+the human's change. **Not yet represented in the log.**
 
 ### Snapshot
 The frozen HTML file for a version (`versions/vN.html`), referenced from the
@@ -258,3 +327,39 @@ The terminal coding agent driving Lucid (Claude Code, Codex, OpenCode, or a
 custom one). Lucid is **harness-agnostic**: the only integration surface is
 the CLI protocol and the co-located event log, so any harness can drive or
 resume a session.
+
+## Which edit term applies when
+
+The three edit terms name three different moments, and only the last one
+changes the artifact:
+
+```
+human types into an editable element
+ |
+ |-- edit preview          painted on the surface; artifact file untouched
+ |
+ v  human sends
+ |-- suggested edit        located intent in the log, carrying replacement text
+ |
+ v  agent re-authors the artifact
+ `-- version              the change is now in the artifact; preview ends
+```
+
+The gap between the second and third steps is the whole design problem: the
+human sees their text while no version contains it.
+
+## Flagged ambiguities
+
+- **"edit"** was used for both the agent changing the artifact and the human
+  changing it - resolved: the agent produces a **revision** (yielding a
+  `version`); **edit** is the human's, and only the human's. Existing prose that
+  says a region was "edited away" means an agent revision removed it.
+- **"editable region"** was considered for the unit the human can rewrite -
+  rejected: only whole elements qualify, and "region" reads as a text range,
+  which never does. Use **editable element**.
+- **"replacement"** alone is ambiguous between the intent and the text - use
+  **suggested edit** for the intent, **replacement text** for the string.
+- **"the artifact is agent-authored"** conflated two claims - resolved: the agent
+  is the **author** (it decides the content), and today also the sole
+  **`artifact writer`** (it writes the bytes). A human editing the document
+  would break the second without touching the first.

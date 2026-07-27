@@ -1,16 +1,9 @@
 import { on } from "./locators.ts";
 import { expect, test } from "@playwright/test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { realpathSync } from "node:fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import { CliFailure } from "./cli-result.ts";
-// `invoke` is deliberately off the `helpers.ts` barrel because it takes a raw
-// `env` - so the one caller that needs it must supply `harnessEnv` itself,
-// which is exactly what `runFrom` below does. Every scenario here that needs a
-// cwd OTHER than the session's own directory goes through it; nothing else in
-// this file spawns a CLI by hand.
-import { invoke } from "./cli.ts";
-import { DEAD_HUB_PORT, harnessEnv } from "./harness-env.ts";
 import { makeCli, surfaceOf, waitTimeoutSeconds, type Cli } from "./helpers.ts";
 
 /**
@@ -56,27 +49,6 @@ li { margin: 6px 0; }
 </body>
 </html>`;
 
-/** Mirrors `makeCli`'s own per-invocation budget, so a hung CLI is reported as
- *  a killed child rather than as the whole test timing out. */
-const CLI_TIMEOUT_MS = 30_000;
-
-/**
- * Run the CLI from an arbitrary cwd, with the isolation `makeCli` would have
- * applied. `dir` is the directory the harness env is rooted at (registry,
- * settings, the fake harness home); `cwd` is where the process actually runs,
- * which is the whole point of this helper.
- */
-const runFrom = async (
-  cwd: string,
-  dir: string,
-  args: string[],
-): Promise<Record<string, unknown>> =>
-  invoke(args, {
-    cwd,
-    timeout: CLI_TIMEOUT_MS,
-    env: { ...harnessEnv(dir), LUCID_HUB_PORT: DEAD_HUB_PORT },
-  });
-
 /** The numeric part of `evt_00042`. Cursors are compared as numbers, never as
  *  strings: `evt_00009` < `evt_00010` lexically only by luck of the padding. */
 const seqOf = (cursor: unknown): number => {
@@ -85,17 +57,18 @@ const seqOf = (cursor: unknown): number => {
 };
 
 let cli: Cli | undefined;
-/** Directories this file made outside `cli.dir`; removed whatever happens. */
-let strays: string[] = [];
+/** A second, unrelated CLI (the stranger-cwd scenario); cleaned up like the
+ *  first. */
+let stranger: Cli | undefined;
 /**
  * Sessions whose canonical path is not the string `makeCli` holds.
  *
  * `end` only STOPS a live server when the path it is handed handshakes as the
  * same session, and macOS symlinks the temp root - so `/tmp/x/plan.html` and
  * `/private/tmp/x/plan.html` are one file to the log and two identities to the
- * handshake. A session opened through a relative path is therefore ended by
- * the absolute path the product itself reported, or its `__serve` process
- * outlives the suite.
+ * handshake (finding #41). A session opened through a relative path is
+ * therefore ended by the absolute path the product itself reported, or its
+ * `__serve` process outlives the suite.
  */
 let pendingEnds: string[] = [];
 
@@ -103,7 +76,7 @@ test.afterEach(async () => {
   for (const artifact of pendingEnds) {
     if (!cli) break;
     try {
-      await runFrom(cli.dir, cli.dir, ["end", artifact]);
+      await cli.run(["end", artifact]);
     } catch {
       /* already ended */
     }
@@ -111,8 +84,8 @@ test.afterEach(async () => {
   pendingEnds = [];
   await cli?.cleanup();
   cli = undefined;
-  for (const dir of strays) await rm(dir, { recursive: true, force: true });
-  strays = [];
+  await stranger?.cleanup();
+  stranger = undefined;
 });
 
 test("a fresh open prints exactly the fields an agent parses, and no warnings", async () => {
@@ -151,12 +124,12 @@ test("a relative path resolves against cwd; a stranger cwd is NOT_FOUND, not an 
   await mkdir(sub);
 
   // Opened from the artifact's own directory, by a `./` path.
-  const opened = await runFrom(cli.dir, cli.dir, ["open", "./plan.html"]);
+  const opened = await cli.runFrom(cli.dir, ["open", "./plan.html"]);
   pendingEnds.push(String(opened.session));
   // Waited from a CHILD directory, by a `../` path. If these two resolved to
   // different files the wait would raise NOT_FOUND rather than answer, so this
   // cannot pass by asserting nothing.
-  const waited = await runFrom(sub, cli.dir, [
+  const waited = await cli.runFrom(sub, [
     "wait",
     "../plan.html",
     "--timeout",
@@ -174,22 +147,18 @@ test("a relative path resolves against cwd; a stranger cwd is NOT_FOUND, not an 
   expect(waited.version).toBe(opened.version);
   expect(waited.nextCursor).toBe(opened.nextCursor);
 
-  // A stranger directory holding a file of the SAME NAME. The bare relative
+  // A stranger directory holding a file of the SAME NAME - `makeCli` writes
+  // its own plan.html, which is exactly the shape needed. The bare relative
   // path must address THAT file - which has no session - rather than drifting
   // onto the ambient one an agent happens to have open elsewhere.
-  const stranger = await mkdtemp(join(tmpdir(), "lucid-e2e-stranger-"));
-  strays.push(stranger);
-  await writeFile(join(stranger, "plan.html"), PLAN_THEMED);
+  stranger = await makeCli(PLAN_THEMED);
 
-  const refusal = await runFrom(stranger, stranger, [
-    "wait",
-    "plan.html",
-    "--timeout",
-    waitTimeoutSeconds(1),
-  ]).then(
-    (payload) => payload,
-    (error: unknown) => error,
-  );
+  const refusal = await stranger
+    .run(["wait", "plan.html", "--timeout", waitTimeoutSeconds(1)])
+    .then(
+      (payload) => payload,
+      (error: unknown) => error,
+    );
 
   expect(refusal, "a stranger cwd attached to an ambient session").toBeInstanceOf(CliFailure);
   const failure = refusal as CliFailure;
@@ -199,7 +168,7 @@ test("a relative path resolves against cwd; a stranger cwd is NOT_FOUND, not an 
   };
   expect(envelope.error.code).toBe("NOT_FOUND");
   // Named the stranger's own file, so the refusal is about the right path.
-  expect(envelope.error.detail.path).toContain(basename(stranger));
+  expect(envelope.error.detail.path).toContain(basename(stranger.dir));
   expect(envelope.error.detail.path).not.toBe(opened.session);
 });
 
@@ -276,4 +245,39 @@ test("re-opening an ended session starts segment 2 with a strictly greater curso
   expect(listed).toHaveLength(1);
   expect(listed[0]?.segment).toBe(2);
   expect(listed[0]?.version).toBe(1);
+});
+
+test("bare lucid lists sessions in BOTH layouts, each once, at the right artifact", async () => {
+  cli = await makeCli(PLAN_THEMED);
+  // A second artifact in the same folder, so the listing has one session per
+  // layout to find - and a miss is attributable to the layout, not the folder.
+  const rollout = join(cli.dir, "rollout.html");
+  await writeFile(rollout, PLAN_THEMED);
+  await cli.run(["open", cli.artifact]);
+  await cli.run(["open", rollout]);
+  await cli.run(["end", rollout]);
+
+  // Fabricate the legacy layout the way history did: the session folder lives
+  // under `.lucid/` beside the artifact (src/core/paths.ts legacySessionDir)
+  // until its next open moves it forward. Ended first, so no live server holds
+  // a descriptor pointing at the old location.
+  await mkdir(join(cli.dir, ".lucid"), { recursive: true });
+  await rename(join(cli.dir, "rollout"), join(cli.dir, ".lucid", "rollout"));
+
+  const status = (await cli.run([])) as { sessions: { session: string; status: string }[] };
+  const paths = status.sessions.map((s) => s.session);
+
+  // Both, once each, and each resolving to its own artifact - the legacy row
+  // must not duplicate the modern one, vanish, or leak `.lucid` into the path
+  // an agent would address the session by. Compared by realpath, not by
+  // string: the live row reports the spelling its descriptor was opened
+  // under while the legacy row is reconstructed from the scan root's cwd,
+  // which the OS hands back realpathed - the identity split finding #41
+  // records. The same FILE is the claim; one spelling of it is not.
+  expect(paths.map((p) => realpathSync(p)).sort()).toEqual(
+    [cli.artifact, rollout].map((p) => realpathSync(p)).sort(),
+  );
+  for (const p of paths) expect(p).not.toContain(".lucid");
+  const legacyRow = status.sessions.find((s) => realpathSync(s.session) === realpathSync(rollout));
+  expect(legacyRow?.status).toBe("ended");
 });
