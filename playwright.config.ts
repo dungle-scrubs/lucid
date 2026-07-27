@@ -1,10 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Playwright's own idiom - any truthy CI, not the literal string "true". An
-// exact compare would silently hand `CI=1`, `act`, and an agent sandbox a run
-// with no retries, no trace and no flake gate, and still exit 0: the whole
-// apparatus this file exists to guarantee, absent, reporting success.
-const onCI = !!process.env.CI;
+// This suite runs on the maintainer's Mac and nowhere else (D-044). There is no
+// CI leg, so nothing here is conditional on one: retries, the flake gate and
+// trace used to be gated on `process.env.CI`, which after the CI job was removed
+// would have meant they never applied again - D-019's whole mechanism deleted by
+// a condition that stopped being reachable rather than by a decision.
 
 export default defineConfig({
   testDir: "./test/e2e",
@@ -30,30 +30,59 @@ export default defineConfig({
   // `failOnFlakyTests` takes back the pass.
   //
   // This is deliberately not a threshold. A suite of 256 scenarios gating every
-  // PR cannot afford a tolerated flake rate: at 1% a run that size is red more
-  // often than not, and the first response to a tolerated flake is to stop
+  // change cannot afford a tolerated flake rate: at 1% a run that size is red
+  // more often than not, and the first response to a tolerated flake is to stop
   // reading the failures.
-  retries: onCI ? 1 : 0,
-  failOnFlakyTests: onCI,
+  retries: 1,
+  failOnFlakyTests: true,
 
   reporter: [
     ["list"],
-    // Unconditional, including locally. `coverage-check.ts` (M0.5) cross-checks
-    // every scenario the catalogue claims as covered against this file, so a
-    // developer has to be able to check ledger drift without pretending to be
-    // CI. `test-results/` is already gitignored, so it costs nothing.
+    // `coverage-check.ts` (M0.5) cross-checks every scenario the catalogue
+    // claims as covered against this file, and since the run only happens here
+    // this is the only place that check can be made at all. `test-results/` is
+    // gitignored, so it costs nothing.
     ["json", { outputFile: "test-results/results.json" }],
-    ...(onCI ? [["html", { open: "never" }] as const] : []),
+    ["html", { open: "never" }],
   ],
 
   use: {
-    headless: true,
-    // A CI failure is not reproducible by re-reading the log: nobody has the
-    // machine. Kept for the failed attempt of a retry-pass too, which is the
+    // A failure an hour old is not reproducible by re-reading the terminal
+    // scrollback. Kept for the failed attempt of a retry-pass too, which is the
     // only evidence a flake ever leaves behind.
-    trace: onCI ? "retain-on-failure" : "off",
+    headless: true,
+    trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
 
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  /**
+   * Two projects, because they answer different questions and are run at
+   * different moments (D-006).
+   *
+   * `regression` holds one test per shipped fix, each written from the bug
+   * report and verified by reverting the fix. It is the project you run before
+   * pushing: small, fast, and every failure in it is a bug a user already hit
+   * once. Its budget is 90 seconds - not a wish, a constraint on what may be
+   * added to it.
+   *
+   * `chromium` is everything else: the scenario suite, which grows to cover the
+   * catalogue and takes minutes rather than seconds.
+   *
+   * The split is by directory so it cannot drift. A file under
+   * `test/e2e/regression/` is in the regression project by living there, and
+   * `testIgnore` keeps it from also running as part of the main suite, which
+   * would double every regression test's cost and its entry in the report.
+   */
+  projects: [
+    {
+      name: "regression",
+      testMatch: /regression\/.*\.e2e\.ts$/,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "chromium",
+      testIgnore: /regression\//,
+      use: { ...devices["Desktop Chrome"] },
+    },
+  ],
 });

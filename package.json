@@ -38,7 +38,9 @@
     "lucid": "bun run src/cli/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test test/*.test.ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "bun run scripts/e2e-stamp.ts && playwright test && bun run scripts/coverage-check.ts",
+    "test:regression": "playwright test --project=regression",
+    "test:e2e:soak": "bun run scripts/e2e-stamp.ts && playwright test --repeat-each=5",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "prepare": "bun run build:client && lefthook install"
