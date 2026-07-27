@@ -1,0 +1,6 @@
+# `bun test` only. Nothing here affects `bun run`.
+[test]
+# Pins hub discovery at a dead port for every unit test file, so no test can
+# find the hub the developer is running. See test/preload.ts for why this is a
+# preload and not a beforeEach.
+preload = ["./test/preload.ts"]

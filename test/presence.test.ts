@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
   type HarnessPresence,
   livePresence,
   presenceFor,
+  setProcessLister,
   resetPresenceCache,
 } from "../src/core/presence.ts";
 
@@ -79,19 +80,34 @@ describe("livePresence", () => {
 });
 
 describe("livePresence finds a running conversation", () => {
-  /** A real process whose command name matches the harness, so the `ps` guard
-   *  sees what it sees in production. `sleep` copied under a claude-ish name
-   *  is the cheapest honest way to get one. */
+  /**
+   * A real running process, reported to the liveness check under a
+   * harness-like name.
+   *
+   * The pid is genuine - a plain `sleep`, actually running, actually reaped -
+   * so "this pid is alive" stays a real observation. Only the NAME `ps` would
+   * report is substituted.
+   *
+   * This used to copy `/bin/sleep` to `claude-testproc` and execute the copy,
+   * because `comm` comes from the executed file's name and that is the only way
+   * to make a real process answer to "claude". A copied platform binary fails
+   * macOS code signature validation: the process is SIGKILLed, and enough
+   * repetitions crash `syspolicyd`, which then throttles and stops NEW
+   * APPLICATIONS LAUNCHING machine-wide. That cost this project two hard
+   * restarts before the suite was identified as the cause. Nothing in `test/`
+   * may copy a signed platform binary.
+   */
   const spawnHarnessLike = async (): Promise<{ pid: number; kill: () => Promise<void> }> => {
-    const bin = join(dir, "claude-testproc");
-    await copyFile("/bin/sleep", bin);
-    await chmod(bin, 0o755);
     // Short, and AWAITED on teardown: an unawaited subprocess keeps a handle
     // on bun's loop and holds the whole file open for its lifetime.
-    const proc = Bun.spawn([bin, "5"], { stdout: "ignore", stderr: "ignore" });
+    const proc = Bun.spawn(["sleep", "5"], { stdout: "ignore", stderr: "ignore" });
+    const restore = setProcessLister(async (pids) =>
+      pids.map((pid) => `${pid} ${pid === proc.pid ? "claude-testproc" : "other"}`).join("\n"),
+    );
     return {
       pid: proc.pid,
       kill: async () => {
+        restore();
         proc.kill();
         await proc.exited;
       },
