@@ -221,3 +221,38 @@
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
+
+/**
+ * Motion is decoration; measurement is not.
+ *
+ * Every visual assertion this suite makes - does a badge overlap the card above
+ * it, does the thread scroll sideways, is this text legible against what is
+ * behind it - is a question about geometry, and geometry is a moving target for
+ * as long as something is animating. A test that measures mid-transition reads
+ * a position nothing was ever at, and the failure it reports is a number nobody
+ * can reproduce by looking.
+ *
+ * This is not a test-only accommodation. It is the accessibility setting, which
+ * a real person sets for real reasons, and honouring it is the product being
+ * correct; the suite gets a stable page as a consequence of that rather than as
+ * a favour. `playwright.config.ts` sets `reducedMotion: "reduce"`, so the whole
+ * suite runs under the same rules a person with that preference gets.
+ *
+ * `0.01ms` rather than `0`: a zero-duration animation never fires
+ * `animationend`, and code waiting on that event would hang where the animation
+ * used to complete.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: an accessibility override has to beat the utility class it overrides, at equal specificity */
+    animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same */
+    animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same */
+    transition-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same */
+    scroll-behavior: auto !important;
+  }
+}

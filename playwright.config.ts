@@ -51,6 +51,12 @@ export default defineConfig({
     // scrollback. Kept for the failed attempt of a retry-pass too, which is the
     // only evidence a flake ever leaves behind.
     headless: true,
+    // The suite measures geometry - overlap, clipping, contrast, resting
+    // position - and geometry is a moving target while anything is animating.
+    // This is the accessibility preference a real person sets, honoured by
+    // `styles.css`; the stable page is a consequence of the product being
+    // correct rather than a concession to the harness (D-003).
+    reducedMotion: "reduce",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
