@@ -68,10 +68,52 @@ export const sessionPortPool = (base: number): readonly number[] =>
  */
 export const hubPort = (base: number): number => 17428 + base;
 
-/** How far to shift every port. Zero means "behave exactly as before". */
+/**
+ * The largest offset that still leaves every port bindable.
+ *
+ * The hub is the highest number here, so it sets the ceiling: 17428 + base must
+ * stay inside the 16-bit port space.
+ */
+const MAX_BASE = 65535 - 17428;
+
+/**
+ * A whole non-negative integer, or undefined - and nothing in between.
+ *
+ * `Number.parseInt` is far too forgiving to read configuration with: it takes
+ * the leading digits and discards the rest, so `1e3` is 1 and `20abc` is 20.
+ * Someone who meant a thousand would get one, every port would be off by 999,
+ * and the only symptom would be a session on a port they did not expect. A
+ * value that is not simply a number is a mistake worth naming.
+ */
+const strictInt = (raw: string | undefined): number | undefined =>
+  raw !== undefined && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : undefined;
+
+/**
+ * How far to shift every port. Zero means "behave exactly as before".
+ *
+ * Refuses rather than returns nonsense. An out-of-range base produces ports
+ * outside the 16-bit space, and the failure that follows is `Bun.serve`
+ * rejecting a number with no hint of where it came from - a bind error three
+ * layers from the environment variable that caused it. Better to say so here.
+ */
 export const portBase = (env: PortEnv): number => {
-  const explicit = Number.parseInt(env.LUCID_PORT_BASE ?? "", 10);
-  if (Number.isFinite(explicit)) return explicit;
-  const worker = Number.parseInt(env.TEST_WORKER_INDEX ?? "", 10);
-  return Number.isFinite(worker) ? worker * WORKER_STRIDE : 0;
+  const raw = env.LUCID_PORT_BASE?.trim();
+  if (raw !== undefined && raw !== "") {
+    const explicit = strictInt(raw);
+    if (explicit === undefined) {
+      throw new RangeError(
+        `LUCID_PORT_BASE must be a whole number, got ${JSON.stringify(raw)}. ` +
+          'Partial parses are refused on purpose: "1e3" would silently mean 1.',
+      );
+    }
+    if (explicit > MAX_BASE) {
+      throw new RangeError(
+        `LUCID_PORT_BASE ${explicit} would put the hub on ${17428 + explicit}, ` +
+          `past the highest port there is. The most it can be is ${MAX_BASE}.`,
+      );
+    }
+    return explicit;
+  }
+  const worker = strictInt(env.TEST_WORKER_INDEX);
+  return worker === undefined ? 0 : worker * WORKER_STRIDE;
 };

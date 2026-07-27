@@ -29,11 +29,35 @@ describe("portBase", () => {
     expect(portBase({ LUCID_PORT_BASE: "500", TEST_WORKER_INDEX: "2" })).toBe(500);
   });
 
-  test("nonsense is treated as no offset, not as NaN", () => {
-    // A NaN base would silently produce NaN ports and a bind failure nobody
-    // could trace back to an environment variable.
+  test("an unset or empty base is simply no offset", () => {
     expect(portBase({ LUCID_PORT_BASE: "" })).toBe(0);
-    expect(portBase({ LUCID_PORT_BASE: "abc" })).toBe(0);
+    expect(portBase({ LUCID_PORT_BASE: "   " })).toBe(0);
+    expect(portBase({})).toBe(0);
+  });
+
+  test("a base that is not a whole number is REFUSED, not silently truncated", () => {
+    // parseInt takes the leading digits and drops the rest, so "1e3" is 1 and
+    // "20abc" is 20. Someone who meant a thousand would get one, every port
+    // would be off by 999, and the only symptom would be a session on a port
+    // they did not expect. Refusing names the mistake where it was made.
+    expect(() => portBase({ LUCID_PORT_BASE: "1e3" })).toThrow(/whole number/);
+    expect(() => portBase({ LUCID_PORT_BASE: "20abc" })).toThrow(/whole number/);
+    expect(() => portBase({ LUCID_PORT_BASE: "0x10" })).toThrow(/whole number/);
+    expect(() => portBase({ LUCID_PORT_BASE: "-20" })).toThrow(/whole number/);
+    expect(() => portBase({ LUCID_PORT_BASE: "abc" })).toThrow(/whole number/);
+  });
+
+  test("a base that would push a port past 65535 is REFUSED", () => {
+    // Otherwise the failure is Bun.serve rejecting a number, three layers away
+    // from the environment variable that produced it.
+    expect(() => portBase({ LUCID_PORT_BASE: "999999" })).toThrow(/past the highest port/);
+    // The boundary itself still works: the hub lands exactly on 65535.
+    expect(hubPort(portBase({ LUCID_PORT_BASE: String(65535 - 17428) }))).toBe(65535);
+  });
+
+  test("a nonsense worker index is ignored rather than fatal", () => {
+    // Unlike the explicit base, this one is not the human's doing - it is
+    // whatever the runner set - so the safe reading is "no isolation asked for".
     expect(portBase({ TEST_WORKER_INDEX: "abc" })).toBe(0);
   });
 });

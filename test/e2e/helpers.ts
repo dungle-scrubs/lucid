@@ -4,9 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { expect, type FrameLocator, type Page, type Route } from "@playwright/test";
-import { sessionPaths } from "../../src/core/paths.ts";
-import { readServerDescriptor } from "../../src/server/discovery.ts";
 import { type CliOutcome, interpretCliResult } from "./cli-result.ts";
+export { killSessionServer } from "./kill-server.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -311,30 +310,6 @@ export const PLAN_V2 = `<!doctype html>
   </article>
 </body>
 </html>`;
-
-/**
- * SIGKILL the dedicated server behind a session, the way a crash would.
- *
- * Reads the pid from the session's own `server.json` rather than pattern-
- * matching `ps`: that descriptor is how the product itself finds a running
- * session, so a test that kills through it is killing the thing the product
- * would have talked to, and cannot accidentally reach a different session.
- *
- * SIGKILL rather than SIGTERM by default, because the point is to leave no
- * chance to clean up - the scenarios behind this capability are about what the
- * shell and the CLI do when a server vanishes without saying goodbye.
- */
-export const killSessionServer = async (
-  artifactPath: string,
-  signal: NodeJS.Signals = "SIGKILL",
-): Promise<number> => {
-  const descriptor = await readServerDescriptor(sessionPaths(artifactPath));
-  if (!descriptor) {
-    throw new Error(`no server.json for ${artifactPath} - nothing to kill`);
-  }
-  process.kill(descriptor.pid, signal);
-  return descriptor.pid;
-};
 
 /**
  * Interfering with a request the page is about to make.
