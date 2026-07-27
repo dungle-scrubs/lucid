@@ -34,6 +34,13 @@ const openViewer = async (page: Page): Promise<void> => {
 test("a message typed at a dead server is kept, and delivers itself later", async ({ page }) => {
   await openViewer(page);
   const typed = "Confirm the routing: Patch re-enters at Test, not Build.";
+  // TWO, because one cannot prove an outbox. The commit names three failure
+  // modes and two of them need a second message: everything held has to
+  // surface after a failed drain, and each message needs its own key rather
+  // than one key holding the array. With one message, replacing the outbox
+  // instead of appending to it passed - a message-destroying bug of exactly
+  // the class this fix exists to prevent.
+  const second = "Also: Land is the right name for the phase, not Merge.";
 
   // The server goes out from under the viewer.
   await cli.run(["end", cli.artifact]);
@@ -47,14 +54,23 @@ test("a message typed at a dead server is kept, and delivers itself later", asyn
   await expect(page.locator('[data-test="unsent-message"]')).toContainText(typed);
   await expect(page.locator('[data-test="message-input"]')).toHaveValue("");
 
+  // A second message during the same outage gets its own card. Nothing may hide
+  // behind the first: an invisible entry is one nobody can retry or discard.
+  await page.locator('[data-test="message-input"]').fill(second);
+  await page.locator('[data-test="send-message"]').click();
+  await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(2);
+
   // A new JS instance, and a server that has come back: neither remembers
   // anything the first page held.
   await page.goto("about:blank");
   const reopened = (await cli.run(["open", cli.artifact])) as { url: string };
   await page.goto(reopened.url);
 
-  await expect(
-    page.locator('[data-role="human"]').last(),
-    "the message was lost when the server went away",
-  ).toContainText(typed, { timeout: 20_000 });
+  // Both arrive, and in the order they were written.
+  const delivered = page.locator('[data-role="human"]');
+  await expect(delivered, "a message was lost when the server went away").toHaveCount(2, {
+    timeout: 20_000,
+  });
+  await expect(delivered.first()).toContainText(typed);
+  await expect(delivered.last()).toContainText(second);
 });
