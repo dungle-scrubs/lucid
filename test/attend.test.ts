@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { realpathSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/events.ts";
@@ -8,7 +8,13 @@ import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
 import type { HarnessInfo, SelectionResponse } from "../src/protocol/wire.ts";
-import { resetPresenceCache, resetSessionCwdCache } from "../src/core/presence.ts";
+import {
+  resetPresenceCache,
+  resetProcessLister,
+  resetSessionCwdCache,
+  setProcessLister,
+} from "../src/core/presence.ts";
+import { applyUnitEnv } from "./unit-env.ts";
 import { attendDecision, createAttendant, pendingHumanSeqs } from "../src/server/attend.ts";
 import { runDaemon, sessionId, type DaemonHandle } from "../src/server/daemon.ts";
 import { createSessionHost } from "../src/server/session-host.ts";
@@ -137,25 +143,47 @@ describe("session host presence", () => {
     await openSession(paths);
   });
   afterEach(async () => {
+    // Unconditional, and not only in the fixture's own teardown: the stub is
+    // installed before the `try` that undoes it, so anything throwing in
+    // between leaves it in place - and `bun test` shares one process across
+    // files, so a leaked stub reports every pid as `other` and turns presence
+    // detection off for the rest of the run, silently.
+    resetProcessLister();
     await rm(dir, { recursive: true, force: true });
   });
 
-  /** A real process whose command name matches the harness, so the liveness
-   *  check sees what it sees in production. */
+  /**
+   * A real running process, reported to the liveness check under a
+   * harness-like name.
+   *
+   * The pid is genuine - a plain `sleep`, actually running, actually reaped -
+   * so "this pid is alive" stays a real observation. Only the NAME `ps` would
+   * report is substituted.
+   *
+   * This used to copy `/bin/sleep` to `claude-testproc` and execute the copy,
+   * because `comm` comes from the executed file's name and that is the only way
+   * to make a real process answer to "claude". A copied platform binary fails
+   * macOS code signature validation: the process is SIGKILLed, and enough
+   * repetitions crash `syspolicyd`, which then throttles and stops NEW
+   * APPLICATIONS LAUNCHING machine-wide. That cost this project two hard
+   * restarts before the suite was identified as the cause. Nothing in `test/`
+   * may copy a signed platform binary.
+   */
   const spawnHarnessLike = async (
-    dir: string,
+    _dir: string,
   ): Promise<{ pid: number; kill: () => Promise<void> }> => {
-    const bin = join(dir, "claude-testproc");
-    await copyFile("/bin/sleep", bin);
-    await chmod(bin, 0o755);
     // Short-lived by construction, and AWAITED on teardown: an unawaited
     // subprocess keeps a handle on bun's loop, which held this file open for
     // the fixture's full lifetime and starved every timing-sensitive test
     // after it.
-    const proc = Bun.spawn([bin, "5"], { stdout: "ignore", stderr: "ignore" });
+    const proc = Bun.spawn(["sleep", "5"], { stdout: "ignore", stderr: "ignore" });
+    const restore = setProcessLister(async (pids) =>
+      pids.map((pid) => `${pid} ${pid === proc.pid ? "claude-testproc" : "other"}`).join("\n"),
+    );
     return {
       pid: proc.pid,
       kill: async () => {
+        restore();
         proc.kill();
         await proc.exited;
       },
@@ -203,8 +231,9 @@ describe("session host presence", () => {
     } finally {
       host.stop();
       await proc.kill();
-      delete process.env.LUCID_CLAUDE_SESSIONS;
-      process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
+      // Same defect as the `afterEach` blocks below, in a `finally`: assigning
+      // a path here left it pointed at a directory this test's teardown removes.
+      applyUnitEnv();
       resetPresenceCache();
       resetSessionCwdCache();
     }
@@ -234,8 +263,9 @@ describe("session host presence", () => {
       expect(body.attendantPresence).toBeUndefined();
     } finally {
       host.stop();
-      delete process.env.LUCID_CLAUDE_SESSIONS;
-      process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
+      // Same defect as the `afterEach` blocks below, in a `finally`: assigning
+      // a path here left it pointed at a directory this test's teardown removes.
+      applyUnitEnv();
       resetPresenceCache();
       resetSessionCwdCache();
     }
@@ -290,9 +320,7 @@ describe("hub attend mode", () => {
     process.env.LUCID_ROOTS = join(dir, "roots.json");
     process.env.LUCID_CLAUDE_SESSIONS = join(dir, "no-claude-sessions");
     process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
-    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
     resetPresenceCache();
-    resetSessionCwdCache();
     resetSessionCwdCache();
     harnessesPath = join(dir, "harnesses.json");
     attendMarker = join(dir, "attend-marker.json");
@@ -327,9 +355,12 @@ describe("hub attend mode", () => {
   afterEach(async () => {
     await daemon?.stop();
     daemon = undefined;
-    delete process.env.LUCID_ROOTS;
-    delete process.env.LUCID_CLAUDE_SESSIONS;
-    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
+    // Restored, not deleted. This block used to ASSIGN a path here, so the
+    // variable outlived the describe that owned it while pointing at a
+    // directory the next line removes. Deleting was the fix while nothing owned
+    // the baseline; `test/preload.ts` owns it now, and a delete would strip the
+    // containment itself and point whatever runs next at the developer's home.
+    applyUnitEnv();
     resetPresenceCache();
     resetSessionCwdCache();
     await rm(dir, { recursive: true, force: true });
@@ -831,9 +862,12 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
   afterEach(async () => {
     await daemon?.stop();
     daemon = undefined;
-    delete process.env.LUCID_ROOTS;
-    delete process.env.LUCID_CLAUDE_SESSIONS;
-    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
+    // Restored, not deleted. This block used to ASSIGN a path here, so the
+    // variable outlived the describe that owned it while pointing at a
+    // directory the next line removes. Deleting was the fix while nothing owned
+    // the baseline; `test/preload.ts` owns it now, and a delete would strip the
+    // containment itself and point whatever runs next at the developer's home.
+    applyUnitEnv();
     resetPresenceCache();
     resetSessionCwdCache();
     await rm(dir, { recursive: true, force: true });

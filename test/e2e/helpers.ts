@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { expect, type FrameLocator, type Page, type Route } from "@playwright/test";
 import { type CliOutcome, interpretCliResult } from "./cli-result.ts";
+import { harnessEnv } from "./harness-env.ts";
 export { killSessionServer } from "./kill-server.ts";
 
 const execFileAsync = promisify(execFile);
@@ -74,20 +75,9 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
       cwd: dir,
       timeout: timeoutMs,
       env: {
-        ...process.env,
-        LUCID_NO_OPEN: "1",
-        LUCID_IDLE_MS: "0",
-        // Isolated: `open` registers every session in the hub registry, and
-        // without this each e2e run leaves dead /tmp pointers in the REAL
-        // ~/.lucid/registry.json - which the user's shell then lists as
-        // ghost sessions.
-        // Fixtures live in a temp dir by design; `open` refuses those for
-        // real work (they do not survive a reboot).
-        LUCID_ALLOW_TEMP: "1",
-        LUCID_REGISTRY: join(dir, "registry.json"),
-        // Same containment for the added-roots file, so nothing a CLI does
-        // here can point the user's own shell at a temp tree.
-        LUCID_ROOTS: join(dir, "roots.json"),
+        // The whole child environment, not a patch over `process.env` -
+        // `harnessEnv` has to be able to REMOVE a name, not only add one.
+        ...harnessEnv(dir),
         // A hub the USER happens to be running would hijack `open` into
         // daemon mode (a tab in their shell) and change what these tests
         // see. Point discovery at a dead port so the dedicated-server path
@@ -106,7 +96,7 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
       try {
         await execFileAsync("bun", ["run", MAIN, "end", artifact], {
           cwd: dir,
-          env: { ...process.env, LUCID_NO_OPEN: "1" },
+          env: harnessEnv(dir),
         });
       } catch {
         /* already ended */
@@ -141,23 +131,16 @@ export interface HubOptions {
 
 export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
   const dir = await mkdtemp(join(tmpdir(), "lucid-hub-e2e-"));
-  const registry = join(dir, "registry.json");
-  const harnessesPath = join(dir, "harnesses.json");
   if (options.harnesses !== undefined) {
-    await writeFile(harnessesPath, JSON.stringify(options.harnesses, null, 2));
+    // The path `harnessEnv` already points LUCID_HARNESSES at; writing the file
+    // is what turns it from "isolated and absent" into "isolated and stocked".
+    await writeFile(join(dir, "harnesses.json"), JSON.stringify(options.harnesses, null, 2));
   }
   const env = {
-    ...process.env,
-    LUCID_ALLOW_TEMP: "1",
-    LUCID_REGISTRY: registry,
+    ...harnessEnv(dir),
     // No scan of the real ~/dev: the isolated registry is the only source.
     LUCID_HUB_ROOTS: dir,
-    // Nor the folders the human added to their own shell - `~/.lucid/roots.json`
-    // is scanned ON TOP of LUCID_HUB_ROOTS, so it needs isolating too.
-    LUCID_ROOTS: join(dir, "roots.json"),
-    LUCID_NO_OPEN: "1",
-    ...(options.harnesses !== undefined ? { LUCID_HARNESSES: harnessesPath } : {}),
-  } as Record<string, string>;
+  };
   const child: ChildProcess = spawn(
     "bun",
     ["run", MAIN, "hub", "--port", "0", ...(options.attend ? ["--attend"] : [])],

@@ -66,26 +66,78 @@ interface SessionFile {
  * something else - without this, that file would read as a live conversation
  * forever.
  */
-const liveHarnessPids = async (pids: readonly number[]): Promise<Set<number>> => {
+export const harnessPidsIn = (psOutput: string): Set<number> => {
   const live = new Set<number>();
-  if (pids.length === 0) return live;
+  for (const line of psOutput.split("\n")) {
+    const m = /^\s*(\d+)\s+(.*\S)\s*$/.exec(line);
+    if (!m?.[1] || !m[2]) continue;
+    if (/claude/i.test(m[2])) live.add(Number.parseInt(m[1], 10));
+  }
+  return live;
+};
+
+/**
+ * Ask the OS for the command name behind each pid.
+ *
+ * Injectable, and the reason is not tidiness. Proving that this check rejects a
+ * recycled pid needs a live process whose `comm` contains "claude", and `comm`
+ * on macOS comes from the name of the executed FILE - so a test can only
+ * produce one by executing a file called `claude-something`. The fixture did
+ * that by copying `/bin/sleep`, and a copied platform binary fails macOS code
+ * signature validation: the process is SIGKILLed, and enough repetitions crash
+ * `syspolicyd` outright and take new app launches down with it. Twice, on this
+ * project, before anyone connected the two.
+ *
+ * So the pid stays real - a plain `sleep`, genuinely running, genuinely
+ * reaped - and only the NAME the OS would report is substituted. What the check
+ * does with that name is `harnessPidsIn`, which is pure and tested directly.
+ *
+ * Substituting it is not a licence to leave the real thing untested: everything
+ * that can be wrong with `ps` - the flags, the pid list, the exit handling -
+ * lives in `realPs` and is invisible to a stubbed test, because every failure
+ * mode degrades to an empty set and reads as "nothing is live". So `realPs` is
+ * exported and exercised directly against processes this suite spawns itself.
+ */
+export type ProcessLister = (pids: readonly number[]) => Promise<string>;
+
+export const realPs: ProcessLister = async (pids) => {
+  const proc = Bun.spawn(["ps", "-p", pids.join(","), "-o", "pid=,comm="], {
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  return out;
+};
+
+let listProcesses: ProcessLister = realPs;
+
+/** Substitute the process listing. Returns the undo, so a test cannot leave it
+ *  installed for whatever runs next. */
+export const setProcessLister = (lister: ProcessLister): (() => void) => {
+  const previous = listProcesses;
+  listProcesses = lister;
+  return () => {
+    listProcesses = previous;
+  };
+};
+
+/** Put the real `ps` back unconditionally. A test that installs a stub and then
+ *  throws never reaches its own undo, and `bun test` shares one process across
+ *  files - so a leaked stub turns presence detection off for everything that
+ *  runs afterwards, silently and with nothing naming the cause. */
+export const resetProcessLister = (): void => {
+  listProcesses = realPs;
+};
+
+const liveHarnessPids = async (pids: readonly number[]): Promise<Set<number>> => {
+  if (pids.length === 0) return new Set();
   try {
-    const proc = Bun.spawn(["ps", "-p", pids.join(","), "-o", "pid=,comm="], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    for (const line of out.split("\n")) {
-      const m = /^\s*(\d+)\s+(.*\S)\s*$/.exec(line);
-      if (!m?.[1] || !m[2]) continue;
-      if (/claude/i.test(m[2])) live.add(Number.parseInt(m[1], 10));
-    }
+    return harnessPidsIn(await listProcesses(pids));
   } catch {
     // No `ps` (or it refused): report nothing rather than guessing a session
     // is live. Every caller's fallback is the pre-detection behaviour.
     return new Set();
   }
-  return live;
 };
 
 /**
