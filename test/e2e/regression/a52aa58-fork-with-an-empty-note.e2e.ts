@@ -1,5 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
-import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
+import type { Page } from "@playwright/test";
+import type { Cli } from "../cli.ts";
+import { surfaceOf } from "../visual.ts";
+import { expect, test } from "../harness.ts";
 
 /**
  * Regression: `a52aa58` - a fork with an empty note still sends.
@@ -13,22 +15,18 @@ import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
  * `client/chrome/store.ts` so an empty note sends an empty note.
  */
 
-let cli: Cli;
-
-test.afterEach(async () => {
-  await cli?.cleanup();
-});
-
-const openViewer = async (page: Page): Promise<string> => {
-  cli = await makeCli(PLAN_V1);
+/** No module-level `let cli` and no afterEach: the `cli` fixture is created and
+ *  cleaned up by `use()`, which runs whether this test passes, fails or throws
+ *  (D-022). */
+const openViewer = async (page: Page, cli: Cli): Promise<string> => {
   const session = (await cli.run(["open", cli.artifact])) as { url: string; nextCursor: string };
   await page.goto(session.url);
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
   return session.nextCursor;
 };
 
-test("Fork with no directive still reaches the agent, and says it did", async ({ page }) => {
-  const nextCursor = await openViewer(page);
+test("Fork with no directive still reaches the agent, and says it did", async ({ page, cli }) => {
+  const nextCursor = await openViewer(page, cli);
   const surface = surfaceOf(page);
 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
