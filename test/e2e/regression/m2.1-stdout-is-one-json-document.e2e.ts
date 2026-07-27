@@ -56,7 +56,7 @@ const raw = async (
   return { code, stdout, stderr };
 };
 
-test("a refused command puts one JSON envelope on stdout, or nothing at all", async () => {
+test("a refused command puts one JSON envelope on stdout", async () => {
   cli = await makeCli("<!doctype html><html><body><h1>Plan</h1></body></html>");
 
   const cases: ReadonlyArray<{ what: string; args: readonly string[] }> = [
@@ -75,13 +75,12 @@ test("a refused command puts one JSON envelope on stdout, or nothing at all", as
     const out = result.stdout.trim();
 
     if (out === "") {
-      // Silence is a legal answer, but only if the refusal is legible
-      // somewhere. Left as a bare `continue`, a CLI that printed NOTHING for
-      // every case passed this test - which is exactly what "suppress the
-      // logger" would produce if the envelope were never added.
-      if (result.stderr.trim() === "") {
-        broken.push(`${what}: refused in total silence - nothing on stdout, nothing on stderr`);
-      }
+      // The catalogue's scenario allows "empty OR one envelope". This CLI
+      // implements the envelope, always, and asserting what it implements is
+      // what makes the row provable: while empty counted as a pass, removing
+      // the envelope left stdout silent and the test green - a mutation that
+      // deletes the fix has to be able to fail.
+      broken.push(`${what}: refused with nothing on stdout - a caller has no typed reason to read`);
       continue;
     }
     try {
