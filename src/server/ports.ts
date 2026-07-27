@@ -17,8 +17,17 @@
 export interface PortEnv {
   /** An explicit offset, which wins over everything else. */
   readonly LUCID_PORT_BASE?: string | undefined;
-  /** Set by Playwright per worker, so the harness gets isolation for free. */
-  readonly TEST_WORKER_INDEX?: string | undefined;
+  /**
+   * Playwright's per-worker slot, 0..workers-1, and REUSED when a worker is
+   * restarted after a failure. Deliberately not `TEST_WORKER_INDEX`, which is
+   * unique-forever and climbs on every restart: this milestone's suites SIGKILL
+   * servers on purpose, so workers do get replaced, and a base derived from the
+   * unique index would wander further from the defaults with every crash - into
+   * whatever else is on the machine, differently on every run. That is the
+   * failure this offset exists to eliminate, reintroduced by picking the wrong
+   * variable.
+   */
+  readonly TEST_PARALLEL_INDEX?: string | undefined;
   /** Present so `process.env` is assignable: an interface of only optional
    *  properties is a "weak type", which TypeScript refuses to match against
    *  `ProcessEnv`. The two above are the ones actually read. */
@@ -114,6 +123,11 @@ export const portBase = (env: PortEnv): number => {
     }
     return explicit;
   }
-  const worker = strictInt(env.TEST_WORKER_INDEX);
-  return worker === undefined ? 0 : worker * WORKER_STRIDE;
+  const slot = strictInt(env.TEST_PARALLEL_INDEX);
+  if (slot === undefined) return 0;
+  const derived = slot * WORKER_STRIDE;
+  // Clamped rather than thrown: the runner set this, not a human, so the useful
+  // response to an implausible slot is to stop shifting rather than to take the
+  // whole run down. It cannot happen with a sane `workers` setting.
+  return derived > MAX_BASE ? 0 : derived;
 };

@@ -20,7 +20,7 @@ const execFileAsync = promisify(execFile);
  */
 const invoke = async (
   args: readonly string[],
-  options: Parameters<typeof execFileAsync>[2],
+  options: Parameters<typeof execFileAsync>[2] & { timeout?: number },
 ): Promise<Record<string, unknown>> => {
   let outcome: CliOutcome;
   try {
@@ -31,6 +31,7 @@ const invoke = async (
       stdout?: string;
       stderr?: string;
       signal?: NodeJS.Signals;
+      killed?: boolean;
     };
     // `code` is a number for an exit, a string like ENOENT for a spawn failure.
     const code = typeof failed.code === "number" ? failed.code : null;
@@ -42,6 +43,8 @@ const invoke = async (
       signal,
       stdout: failed.stdout ?? "",
       stderr: failed.stderr ?? "",
+      killed: failed.killed === true,
+      ...(options?.timeout === undefined ? {} : { timeoutMs: options.timeout }),
     };
   }
   return interpretCliResult(outcome);
@@ -330,7 +333,12 @@ export const delayRoute = async (
 ): Promise<void> => {
   await page.route(pattern, async (route: Route) => {
     await new Promise((resolve) => setTimeout(resolve, ms));
-    await route.continue();
+    // The whole job of this helper is to still be holding a request when
+    // something else happens, so the page navigating or closing mid-delay is
+    // the LIKELY path, not the exotic one - and `continue()` rejects inside a
+    // route handler when it does. Swallowed: the test has already moved on, and
+    // an unhandled rejection here would fail whatever ran next instead.
+    await route.continue().catch(() => {});
   });
 };
 

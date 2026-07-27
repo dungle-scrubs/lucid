@@ -57,6 +57,54 @@ describe("interpretCliResult", () => {
     expect(failure.message).toContain("level=INFO");
   });
 
+  test("a TIMEOUT says so, instead of blaming the SIGTERM used to enforce it", () => {
+    // execFile enforces its deadline with SIGTERM, so a hang and a deliberate
+    // signal arrive looking identical. Both really happen in this suite -
+    // kill-server SIGKILLs servers on purpose - so reporting "killed by
+    // SIGTERM" for a hang would assert the wrong cause in the file where the
+    // right one matters most.
+    let thrown: unknown;
+    try {
+      interpretCliResult({
+        ...ok,
+        code: null,
+        signal: "SIGTERM",
+        killed: true,
+        timeoutMs: 30_000,
+        stdout: "",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    const failure = thrown as CliFailure;
+    expect(failure.message).toContain("timed out after 30000ms");
+    expect(failure.message).not.toContain("killed by SIGTERM");
+  });
+
+  test("JSON that is not an object is refused, not handed back as one", () => {
+    // `null`, `3` and `[]` all parse. None is the document the contract
+    // promises, and passing one on turns into a confusing undefined three lines
+    // into whichever test received it.
+    for (const stdout of ["null", "3", "[]", '"a string"']) {
+      expect(() => interpretCliResult({ ...ok, stdout })).toThrow(/not a JSON object/);
+    }
+  });
+
+  test("a huge stream is clipped so one failure cannot bury the CI log", () => {
+    let thrown: unknown;
+    try {
+      interpretCliResult({ ...ok, code: 1, stderr: "x".repeat(50_000) });
+    } catch (error) {
+      thrown = error;
+    }
+    const failure = thrown as CliFailure;
+    expect(failure.message.length).toBeLessThan(5_000);
+    // Clipped in the message, whole on the field - an assertion can still see
+    // all of it, a log reader is not made to.
+    expect(failure.stderr).toHaveLength(50_000);
+    expect(failure.message).toContain("+48000 chars");
+  });
+
   test("a killed process names the signal rather than reporting exit null", () => {
     // kill-server SIGKILLs a session mid-turn on purpose, so this is a normal
     // outcome in that suite and needs to read as one.

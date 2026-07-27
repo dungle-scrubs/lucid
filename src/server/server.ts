@@ -95,6 +95,19 @@ export const runServer = async (
   const boundServer = server;
   port = boundServer.port ?? 0;
 
+  // One line naming what was bound and why it was available.
+  //
+  // The offset is derived silently from the environment, so a collision between
+  // two parallel workers surfaces as a session that never answers - a hung
+  // server, to anyone reading the log - rather than as two processes wanting
+  // one number. This is the only place that knows both, and the per-session
+  // server is where a collision would actually happen: the stamp cannot say it,
+  // because it runs outside every worker and always sees base 0.
+  console.log(
+    `lucid session server on 127.0.0.1:${port} ` +
+      `(base ${portBase(process.env)}, pool [${requestedPorts.join(", ")}])`,
+  );
+
   await writeServerDescriptor(paths, {
     port,
     pid: process.pid,

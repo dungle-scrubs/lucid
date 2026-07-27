@@ -13,20 +13,21 @@ describe("portBase", () => {
     expect(portBase({ LUCID_PORT_BASE: "500" })).toBe(500);
   });
 
-  test("falls back to the Playwright worker index, with worker 0 unshifted", () => {
-    // Playwright sets TEST_WORKER_INDEX per worker, so the harness gets
-    // isolation without every helper having to compute and thread a base.
+  test("falls back to the Playwright parallel slot, with slot 0 unshifted", () => {
+    // TEST_PARALLEL_INDEX, not TEST_WORKER_INDEX: the parallel slot is bounded by
+    // `workers` and reused when a crashed worker is replaced, while the worker
+    // index is unique forever and climbs on every restart.
     // Worker 0 must land on zero: a single-worker run is the common case and
     // has to behave exactly as it did before this existed.
-    expect(portBase({ TEST_WORKER_INDEX: "0" })).toBe(0);
-    expect(portBase({ TEST_WORKER_INDEX: "1" })).toBeGreaterThan(0);
-    expect(portBase({ TEST_WORKER_INDEX: "3" })).toBe(3 * portBase({ TEST_WORKER_INDEX: "1" }));
+    expect(portBase({ TEST_PARALLEL_INDEX: "0" })).toBe(0);
+    expect(portBase({ TEST_PARALLEL_INDEX: "1" })).toBeGreaterThan(0);
+    expect(portBase({ TEST_PARALLEL_INDEX: "3" })).toBe(3 * portBase({ TEST_PARALLEL_INDEX: "1" }));
   });
 
   test("an explicit base beats the worker index", () => {
     // A test that pins a port deliberately must not have it moved underneath by
     // whichever worker happened to pick the test up.
-    expect(portBase({ LUCID_PORT_BASE: "500", TEST_WORKER_INDEX: "2" })).toBe(500);
+    expect(portBase({ LUCID_PORT_BASE: "500", TEST_PARALLEL_INDEX: "2" })).toBe(500);
   });
 
   test("an unset or empty base is simply no offset", () => {
@@ -58,7 +59,7 @@ describe("portBase", () => {
   test("a nonsense worker index is ignored rather than fatal", () => {
     // Unlike the explicit base, this one is not the human's doing - it is
     // whatever the runner set - so the safe reading is "no isolation asked for".
-    expect(portBase({ TEST_WORKER_INDEX: "abc" })).toBe(0);
+    expect(portBase({ TEST_PARALLEL_INDEX: "abc" })).toBe(0);
   });
 });
 
@@ -98,7 +99,7 @@ describe("the property the whole parallel story rests on", () => {
     // any of those rather than needing to be updated alongside it.
     const claimed = new Map<number, number>();
     for (let worker = 0; worker < 8; worker++) {
-      const base = portBase({ TEST_WORKER_INDEX: String(worker) });
+      const base = portBase({ TEST_PARALLEL_INDEX: String(worker) });
       // The ephemeral 0 is shared by every worker by design - it is a request,
       // not a port, and the OS hands out a different one each time.
       const ports = [...sessionPortPool(base).filter((p) => p !== 0), hubPort(base)];
@@ -111,5 +112,23 @@ describe("the property the whole parallel story rests on", () => {
         claimed.set(port, worker);
       }
     }
+  });
+});
+
+describe("the variable it reads", () => {
+  test("ignores TEST_WORKER_INDEX, which climbs forever as workers are replaced", () => {
+    // The two look interchangeable and are not. A suite that SIGKILLs servers -
+    // which is exactly what M5.2 does - gets its workers replaced, and each
+    // replacement takes a NEW worker index while keeping its parallel slot. A
+    // base derived from the worker index would walk away from the defaults run
+    // by run, into whatever else is listening on the machine.
+    expect(portBase({ TEST_WORKER_INDEX: "37" })).toBe(0);
+    expect(portBase({ TEST_PARALLEL_INDEX: "1" })).toBeGreaterThan(0);
+  });
+
+  test("an implausible slot stops shifting rather than producing an unbindable port", () => {
+    // The runner sets this, not a human, so taking the run down is the wrong
+    // answer; refusing to shift is the safe one.
+    expect(portBase({ TEST_PARALLEL_INDEX: "999999" })).toBe(0);
   });
 });

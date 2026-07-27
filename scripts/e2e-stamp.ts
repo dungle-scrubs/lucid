@@ -38,14 +38,15 @@ console.log(
     node: process.version,
     lockBackend: backend,
     ci: process.env.CI === "true",
-    // Which ports this run will actually bind. The offset is computed silently
-    // from the environment, so without it in the record a port collision looks
-    // like a hung server rather than two workers wanting the same number - and
-    // that is the failure this offset exists to prevent, so it has to be
-    // visible when it happens anyway.
-    portBase: base,
-    sessionPorts: sessionPortPool(base),
-    hubPort: hubPort(base),
+    // The ports THIS process would bind, which is worker 0's set: the stamp is
+    // its own CI step and runs outside every worker, so TEST_PARALLEL_INDEX is
+    // not set here and the base is always 0. Recorded anyway because it pins
+    // the unshifted layout, and named honestly so nobody reads it as evidence
+    // about what a parallel run did. Each server logs the base it actually
+    // bound with, which is where that answer lives.
+    portBaseHere: base,
+    unshiftedSessionPorts: sessionPortPool(base),
+    unshiftedHubPort: hubPort(base),
   }),
 );
 
