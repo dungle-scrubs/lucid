@@ -42,7 +42,9 @@ export interface NoMutation {
 export type Mutation = RevertMutation | EditMutation | NoMutation;
 
 export interface RegressionRow {
-  /** The shipped fix this row is about. */
+  /** The fix this row is about: a commit sha, or a milestone slug (`m2.1`,
+   *  `m4.1-queue-paste`) for a fix that shipped inside a larger commit. Only
+   *  a real sha can carry a `revert` mutation; slug rows are always edits. */
   readonly sha: string;
   /** What broke, in the words of the bug report. */
   readonly broke: string;
@@ -234,13 +236,185 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     // no warning, because f107e28's outbox retries until the lock frees. The
     // review pointed out the commit shipped three more invariants, each one
     // line and none tested, so the `why` was true of the refusal and false of
-    // the commit. Two remain untested: the 4xx short-circuit in transport.ts,
-    // and outboxSendingId vs outboxSending in Panel.tsx.
+    // the commit. The other two - the 4xx short-circuit in transport.ts and
+    // outboxSendingId vs outboxSending in Panel.tsx - are the two 80faab5
+    // rows below (closed by D-059).
     mutation: {
       kind: "edit",
       file: "client/chrome/Panel.tsx",
       find: "const SLOW_SEND_MS = 1200;",
       replace: "const SLOW_SEND_MS = 60_000;",
+    },
+  },
+  {
+    sha: "m4.1-wait-zero",
+    broke:
+      "wait --timeout 0 mapped to POSITIVE_INFINITY and parked the agent's turn forever - the opposite of what 0 reads as.",
+    testFile: "test/e2e/regression/m4.1-wait-zero-drains.e2e.ts",
+    testName: "wait --timeout 0 drains and returns instead of blocking forever",
+    mutation: {
+      kind: "edit",
+      file: "src/core/wait.ts",
+      find: "  const deadline = Date.now() + Math.max(0, timeoutMs);",
+      replace:
+        "  const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;",
+    },
+  },
+  {
+    sha: "m4.1-wait-since",
+    broke:
+      "A --since that parsed to nothing silently became the bootstrap read: the whole session replayed as a delta, with no ack, and the viewer never flipped to delivered.",
+    testFile: "test/e2e/regression/m4.1-wait-since-garbage-refused.e2e.ts",
+    testName: "a garbage --since is a VALIDATION_ERROR, not a silent full replay",
+    mutation: {
+      kind: "edit",
+      file: "src/core/wait.ts",
+      // Neutralises the guard, not the parse: the refusal is the fix, and with
+      // it gone the garbage cursor falls through to the bootstrap branch the
+      // way it always did.
+      find: "  if (options.since !== undefined && cursor === undefined) {",
+      replace: "  if (false) {",
+    },
+  },
+  {
+    sha: "m4.1-blank-note",
+    broke:
+      "Add to queue with a whitespace-only note refused silently: the button stayed enabled, the click did nothing, and nothing said why.",
+    testFile: "test/e2e/regression/m4.1-blank-note-refusal-visible.e2e.ts",
+    testName: "add to queue refuses a blank note visibly, and typing re-arms it",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/Panel.tsx",
+      find: "              disabled={!hasComposerDraft({ pendingTarget, composerNote })}",
+      replace: "              disabled={false}",
+    },
+  },
+  {
+    sha: "m4.1-quick-reply",
+    broke:
+      "A quick-reply chip clicked over a half-typed note replaced it wholesale - the queued card held only the canned ask, with no confirmation and no way back.",
+    testFile: "test/e2e/regression/m4.1-quick-reply-merges.e2e.ts",
+    testName: "a quick-reply over a typed note queues both, the typing first",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/actions.ts",
+      // The `\\n` is deliberate: the SOURCE spells `\n` as two characters
+      // inside its template literal, so the match must too. A single-escaped
+      // version held real newlines, matched nothing, and was caught by the
+      // exactly-once guard: a mutation that matches nothing proves nothing.
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the SOURCE being matched, not an interpolation that forgot its backticks
+      find: "    set({ composerNote: typed ? `${typed}\\n\\n${note}` : note });",
+      replace: "    set({ composerNote: note });",
+    },
+  },
+  {
+    sha: "m4.1-queue-reload",
+    broke:
+      "A reload destroyed every queued annotation while an undelivered message survived it - the queue lived only in component state.",
+    testFile: "test/e2e/regression/m4.1-queue-survives-reload.e2e.ts",
+    testName: "queued annotations survive a reload, and the survivors still send",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/store.ts",
+      // Severs the restore, not the writes: storage still fills, the page just
+      // never reads it back - which is exactly the pre-fix shape.
+      find: "    queue: storage.readQueue(),",
+      replace: "    queue: [],",
+    },
+  },
+  {
+    sha: "80faab5",
+    broke:
+      "A 4xx verdict was retried like a hiccup: a 409 re-POSTed five times over 14s, and the failure card arrived 14s late.",
+    testFile: "test/e2e/regression/80faab5-a-verdict-is-not-retried.e2e.ts",
+    testName: "a 4xx verdict fails once, immediately, with the server's reason",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/transport.ts",
+      find: "        if (res.status >= 400 && res.status < 500) throw lastErr;",
+      replace: "        // mutation: a verdict is retried like a hiccup",
+    },
+  },
+  {
+    sha: "80faab5",
+    broke:
+      "One stuck flush read as a global sending flag would disable every card's Retry and Discard - the one control a failed send leaves you.",
+    testFile: "test/e2e/regression/80faab5-one-stuck-flush.e2e.ts",
+    testName: "a stuck flush disables its own card's Retry, and no other's",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/Panel.tsx",
+      find: "  const sending = useSession((s) => s.outboxSendingId) === message.id;",
+      replace: "  const sending = useSession((s) => s.outboxSending);",
+    },
+  },
+  {
+    sha: "m4.1-queue-paste",
+    broke:
+      "The persisted queue stored the [Pasted text #N] placeholder - a pointer into the page-local paste store - so a reload restored the pointer and sent it to the agent verbatim, forty lines of nothing.",
+    testFile: "test/e2e/regression/m4.1-queue-survives-reload.e2e.ts",
+    testName: "queued annotations survive a reload, and the survivors still send",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/actions.ts",
+      find: "    storage.persistQueuedItem({ ...item, note: expandPastes(item.note) }, () =>",
+      replace: "    storage.persistQueuedItem(item, () =>",
+    },
+  },
+  {
+    sha: "m4.1-queue-validator",
+    broke:
+      "The queue validator admitted any non-null object as an anchor; one forged target in storage threw in the React tree on every load, took the valid cards down with it, and never healed - skip-not-delete meant the crash was permanent.",
+    testFile: "test/e2e/regression/m4.1-queue-survives-reload.e2e.ts",
+    testName: "queued annotations survive a reload, and the survivors still send",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/store.ts",
+      find: 'const isAnchorLike = (v: unknown): v is Anchor => !("error" in parseAnchor(v));',
+      replace:
+        'const isAnchorLike = (v: unknown): v is Anchor => typeof v === "object" && v !== null;',
+    },
+  },
+  {
+    sha: "m4.1-blank-note-enter",
+    broke:
+      "The blank-note refusal was visible to the mouse only: Enter in the composer called addToQueue directly, which still returned in silence.",
+    testFile: "test/e2e/regression/m4.1-blank-note-refusal-visible.e2e.ts",
+    testName: "add to queue refuses a blank note visibly, and typing re-arms it",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/actions.ts",
+      find: '      warn("A note is the point of an annotation - type what should change before queueing.");\n      return;',
+      replace: "      return;",
+    },
+  },
+  {
+    sha: "m4.1-legacy-listing",
+    broke:
+      "Bare `lucid` never listed a legacy .lucid/<stem>/ session: the glob found its log, the fold read the NEW-layout path, ENOENT folded to none, and the row was dropped.",
+    testFile: "test/e2e/session-wait.e2e.ts",
+    testName: "bare lucid lists sessions in BOTH layouts, each once, at the right artifact",
+    mutation: {
+      kind: "edit",
+      file: "src/core/sessions.ts",
+      // The old read: the new-layout path recomputed from the artifact dir,
+      // which for a legacy row names a file that does not exist.
+      find: "      const state = foldLog((await readEvents(resolve(scanRoot, rel))).events);",
+      replace:
+        '      const state = foldLog((await readEvents(resolve(artifactDir, stem, "log.ndjson"))).events);',
+    },
+  },
+  {
+    sha: "m4.1-queued-badge",
+    broke:
+      "The overlay restarted queued badge numbering at 1, so a queued mark wore the same number as a sent one while its own card correctly read 2.",
+    testFile: "test/e2e/queue.e2e.ts",
+    testName: "a queued card takes the NEXT number, on its card and on its mark alike",
+    mutation: {
+      kind: "edit",
+      file: "client/overlay/overlay.ts",
+      find: '      pushAll(q.id, "queued", n + i + 1, q.targets ?? [q.target]);',
+      replace: '      pushAll(q.id, "queued", i + 1, q.targets ?? [q.target]);',
     },
   },
   {

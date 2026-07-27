@@ -121,11 +121,14 @@ const testsInReport = (report: PlaywrightReport): Map<string, string> => {
  */
 export const testTitlesIn = (source: string): string[] => {
   const titles: string[] = [];
+  // Three quote shapes, not two: biome rewrites a title CONTAINING a double
+  // quote into single quotes, so `test('"+" deselects…')` is the formatter's
+  // own canonical output - a parser blind to it refused a legal title.
   for (const match of source.matchAll(
-    /^[ \t]*test(?:\.(?:only|skip|fail|fixme))?\(\s*(?:`([^`${]*)`|"((?:[^"\\]|\\.)*)")/gm,
+    /^[ \t]*test(?:\.(?:only|skip|fail|fixme))?\(\s*(?:`([^`${]*)`|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/gm,
   )) {
-    const raw = match[1] ?? match[2];
-    if (raw !== undefined) titles.push(raw.replace(/\\"/g, '"'));
+    const raw = match[1] ?? match[2] ?? match[3];
+    if (raw !== undefined) titles.push(raw.replace(/\\"/g, '"').replace(/\\'/g, "'"));
   }
   return titles;
 };

@@ -814,7 +814,11 @@ export class LucidOverlay extends LitElement {
       pushAll(a.id, "committed", n, a.targets ?? [a.target]);
     }
     this.queuedAnchors.forEach((q, i) => {
-      pushAll(q.id, "queued", i + 1, q.targets ?? [q.target]);
+      // CONTINUES the committed count, exactly as the panel's timeline does
+      // (store.ts buildTimeline): a queued note is the next number, not a
+      // second number 1. Restarting from `i + 1` put a queued mark wearing
+      // "1" on the artifact while its own card correctly read "2".
+      pushAll(q.id, "queued", n + i + 1, q.targets ?? [q.target]);
     });
     this.pendingAnchors.forEach((t, i) => {
       const rects = this.rectsFor(t);

@@ -9,7 +9,7 @@ import {
   legacyAnswerFields,
 } from "./question-draft.ts";
 import type { Notify, SessionStorage, SessionStore } from "./store.ts";
-import { uuid } from "./store.ts";
+import { hasComposerDraft, toWireImages, uuid } from "./store.ts";
 import type { Surface } from "./surface.ts";
 import type { Transport, UploadedAsset } from "./transport.ts";
 import type {
@@ -18,6 +18,7 @@ import type {
   MessageImage,
   OutboxMessage,
   PastedImage,
+  QueuedAnnotation,
   SessionSummary,
 } from "./types.ts";
 
@@ -63,6 +64,23 @@ export const createActions = (ctx: ActionsCtx) => {
       ),
     );
 
+  /** The queue's durability layer, mirroring the outbox's (D-054): written on
+   *  queue and on edit, forgotten on send and on remove, restored on load.
+   *
+   *  Persisted EXPANDED, the way the outbox is (`runtime.tsx` expands before
+   *  `enqueueMessage`): the `[Pasted text #N]` placeholder is a pointer into
+   *  the in-memory paste store, which dies with the page - a persisted
+   *  placeholder came back from a reload as forty lines of nothing and sent
+   *  itself to the agent verbatim. Memory keeps the placeholder for display;
+   *  storage keeps the words. */
+  const persistQueued = (item: QueuedAnnotation): void =>
+    storage.persistQueuedItem({ ...item, note: expandPastes(item.note) }, () =>
+      pushWarning(
+        "DRAFT_AT_RISK",
+        "Couldn't save your queued annotation to this browser - it won't survive a reload.",
+      ),
+    );
+
   /** Upload a pasted blob and stage it for the annotation composer. */
   const uploadPaste = async (file: File): Promise<PastedImage | null> => {
     try {
@@ -78,21 +96,30 @@ export const createActions = (ctx: ActionsCtx) => {
 
   const addToQueue = (): void => {
     const s = get();
-    if (!s.pendingTarget || s.composerNote.trim().length === 0) return;
+    if (!s.pendingTarget) return;
+    if (s.composerNote.trim().length === 0) {
+      // The keyboard route to the same refusal the disabled button makes
+      // visible: Enter in a blank composer is an explicit "queue this", and
+      // silence here was the original defect wearing a different input device.
+      warn("A note is the point of an annotation - type what should change before queueing.");
+      return;
+    }
+    const item: QueuedAnnotation = {
+      id: uuid(),
+      target: s.pendingTarget,
+      // The whole cmd-collected set rides as ONE queued item: one note
+      // covering every spot (a singleton for the ordinary pick).
+      targets: s.pendingTargets,
+      note: s.composerNote.trim(),
+      at: new Date().toISOString(),
+      images: s.pastedImages,
+    };
+    // Storage first, state second, like the outbox: the gap between them is
+    // the only window a crash could eat the note, and this ordering points it
+    // the harmless way.
+    persistQueued(item);
     set({
-      queue: [
-        ...s.queue,
-        {
-          id: uuid(),
-          target: s.pendingTarget,
-          // The whole cmd-collected set rides as ONE queued item: one note
-          // covering every spot (a singleton for the ordinary pick).
-          targets: s.pendingTargets,
-          note: s.composerNote.trim(),
-          at: new Date().toISOString(),
-          images: s.pastedImages,
-        },
-      ],
+      queue: [...s.queue, item],
       pendingTarget: null,
       pendingTargets: [],
       composerNote: "",
@@ -111,8 +138,12 @@ export const createActions = (ctx: ActionsCtx) => {
   };
 
   const queueQuickReply = (note: string): void => {
-    if (!get().pendingTarget) return;
-    set({ composerNote: note });
+    const s = get();
+    if (!s.pendingTarget) return;
+    // A chip clicked over a half-typed note must not eat the typing: the draft
+    // and the canned ask ride as ONE queued note, the draft first (D-053).
+    const typed = s.composerNote.trim();
+    set({ composerNote: typed ? `${typed}\n\n${note}` : note });
     addToQueue();
   };
 
@@ -145,7 +176,7 @@ export const createActions = (ctx: ActionsCtx) => {
         target,
         note,
         authoredAt: new Date().toISOString(),
-        images: images.map(({ id: imgId, name, file }) => ({ id: imgId, name, file })),
+        images: toWireImages(images),
       });
     } catch {
       warn("The fork didn't send - the draft is kept, try again.");
@@ -226,6 +257,12 @@ export const createActions = (ctx: ActionsCtx) => {
 
   const removeQueued = (id: string): void => {
     if (get().editingId === id) cancelEdit();
+    // Removing the card drops the last reference to its staged thumbnails.
+    // Revoking is safe for restored items too: their `url` is the asset
+    // route, and revoking a non-blob URL is a documented no-op.
+    const item = get().queue.find((q) => q.id === id);
+    if (item) for (const img of item.images) URL.revokeObjectURL(img.url);
+    storage.forgetQueuedItem(id);
     set((s) => ({ queue: s.queue.filter((q) => q.id !== id) }));
     applyDeferredSwapIfReady();
     pushHighlights();
@@ -253,11 +290,20 @@ export const createActions = (ctx: ActionsCtx) => {
     const note = s.editDraft.trim();
     if (note.length === 0) return false;
     const id = s.editingId;
-    set({
-      queue: s.queue.map((q) => (q.id === id ? { ...q, note } : q)),
-      editingId: null,
-      editDraft: "",
-    });
+    // An unchanged note commits without writing: `beginEdit` folds the open
+    // editor in first, so merely switching between two cards passed through
+    // here - and paid a storage write plus a fresh queue array (one no-op
+    // render per subscriber) for typing nothing.
+    if (s.queue.find((q) => q.id === id)?.note === note) {
+      set({ editingId: null, editDraft: "" });
+      return true;
+    }
+    // One construction serves both the persist and the state, so a future
+    // field-fixup cannot land in one and miss the other.
+    const next = s.queue.map((q) => (q.id === id ? { ...q, note } : q));
+    const edited = next.find((q) => q.id === id);
+    if (edited) persistQueued(edited);
+    set({ queue: next, editingId: null, editDraft: "" });
     return true;
   };
 
@@ -282,9 +328,10 @@ export const createActions = (ctx: ActionsCtx) => {
           // what sends is the paste it stands for.
           note: expandPastes(q.note),
           authoredAt: q.at,
-          images: q.images.map(({ id, name, file }) => ({ id, name, file })),
+          images: toWireImages(q.images),
         });
         sent.add(q.id); // ids are idempotent, so a retry of a sent one is safe
+        storage.forgetQueuedItem(q.id); // it reached the log; storage owes nothing
         consumePastes(q.note); // this note's placeholders are spent
       }
     } catch {
@@ -306,7 +353,10 @@ export const createActions = (ctx: ActionsCtx) => {
    *  the current note; this is the one gesture that flushes the queue without
    *  reaching for the button, even while a text field has focus. */
   const sendAll = async (): Promise<void> => {
-    addToQueue(); // no-op unless a note is being composed
+    // Fold an in-progress note in only when one EXISTS: this gesture means
+    // "send the queue", and the blank-note refusal - which a plain Enter
+    // earns - would be noise on a batch send that queues nothing.
+    if (hasComposerDraft(get())) addToQueue();
     if (get().sending || get().queue.length === 0) return;
     await sendQueue();
   };
@@ -725,9 +775,7 @@ export const createActions = (ctx: ActionsCtx) => {
         // Several pins send as `anchors`; the server derives `anchor` as the
         // first, same as an annotation's `targets`.
         ...(anchorList.length > 1 ? { anchors: anchorList } : {}),
-        ...(images.length > 0
-          ? { images: images.map(({ id, name, file }) => ({ id, name, file })) }
-          : {}),
+        ...(images.length > 0 ? { images: toWireImages(images) } : {}),
       });
       // Clear this question's staged answer only after it is recorded.
       for (const img of images) URL.revokeObjectURL(img.url);

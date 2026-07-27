@@ -124,10 +124,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/3bca9c0-no-colonising-your-folder.e2e.ts",
+          "testName": "open refuses a record folder that already holds someone else's work",
+          "mutation": "src/core/session.ts: replace the logPath ownership check with `return false; // every directory reads as ours` - open colonises the pre-existing folder again (registry 3bca9c0, D-055)"
         },
         {
           "id": "open-fresh-contract-shape",
@@ -140,10 +140,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/session-wait.e2e.ts",
+          "testName": "a fresh open prints exactly the fields an agent parses, and no warnings",
+          "mutation": "src/cli/run.ts: `runOpen` emits `warnings` unconditionally instead of only when there is one, so a clean artifact's payload grows a sixth key and the exact-key-set assertion goes red."
         },
         {
           "id": "cwd-relative-paths-canonical",
@@ -157,10 +157,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/session-wait.e2e.ts",
+          "testName": "a relative path resolves against cwd; a stranger cwd is NOT_FOUND, not an attach",
+          "mutation": "src/core/paths.ts: `canonicalArtifactPath` leaves a relative artifact path un-anchored instead of resolving it against cwd, so `open ./plan.html` reports the session id as `./plan.html` and the absolute-path claim collapses."
         },
         {
           "id": "status-lists-both-layouts",
@@ -173,10 +173,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/session-wait.e2e.ts",
+          "testName": "bare lucid lists sessions in BOTH layouts, each once, at the right artifact",
+          "mutation": "src/core/sessions.ts: read the fold from the recomputed new-layout path instead of the globbed one - the legacy row folds to none on ENOENT and vanishes from the listing (registry m4.1-legacy-listing)"
         },
         {
           "id": "open-refuses-volatile-tmp",
@@ -524,10 +524,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-wait-zero-drains.e2e.ts",
+          "testName": "wait --timeout 0 drains and returns instead of blocking forever",
+          "mutation": "src/core/wait.ts: restore `const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;` - the drain never returns and the run dies on the exec deadline (registry m4.1-wait-zero)"
         },
         {
           "id": "wait-unparseable-cursor-silently-bootstraps",
@@ -540,10 +540,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-wait-since-garbage-refused.e2e.ts",
+          "testName": "a garbage --since is a VALIDATION_ERROR, not a silent full replay",
+          "mutation": "src/core/wait.ts: neutralise the refusal guard to `if (false) {` - the garbage cursor bootstraps the full state with exit 0 (registry m4.1-wait-since)"
         },
         {
           "id": "wait-ack-covers-only-what-was-read",
@@ -555,7 +555,7 @@
           "expected": "A shows delivered, B still shows recorded — the ack's `covers` is the cursor just read, not the ack's own position.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "",
+          "needsCapability": "route-intercept",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
@@ -573,10 +573,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/session-wait.e2e.ts",
+          "testName": "intent and progress refine the working window without claiming delivery",
+          "mutation": "src/core/payload.ts: `deliveryOf` treats an open working window as proof of delivery, so a presence-only `agent_ack` (which carries no `covers`) marks the still-pending message delivered."
         },
         {
           "id": "wait-no-cursor-bootstrap-does-not-ack",
@@ -606,10 +606,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/session-wait.e2e.ts",
+          "testName": "re-opening an ended session starts segment 2 with a strictly greater cursor",
+          "mutation": "src/core/session.ts: Re-opening an ended session reuses the segment it just closed instead of starting the next one, so the second lifecycle overwrites the first's snapshot tree and the listing never reports segment 2."
         },
         {
           "id": "wait-suspended-when-server-dead",
@@ -1221,10 +1221,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue.e2e.ts",
+          "testName": "a dead server keeps every queued annotation, and the retry sends each one once",
+          "mutation": "client/chrome/actions.ts: In `sendQueue`'s catch path, mark every still-queued item as sent so the reconcile below drops the whole queue anyway - the warning still shows, but the three cards it promises to keep are gone."
         },
         {
           "id": "queue-partial-send-drops-only-what-landed",
@@ -1267,10 +1267,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-queue-survives-reload.e2e.ts",
+          "testName": "queued annotations survive a reload, and the survivors still send",
+          "mutation": "client/chrome/store.ts: restore `queue: [],` in the initial state - storage still fills but nothing reads it back, every card gone after reload (registry m4.1-queue-reload)"
         },
         {
           "id": "send-queue-commits-the-open-edit",
@@ -1284,10 +1284,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue.e2e.ts",
+          "testName": "sending with an editor open sends the EDITED note, not the one it replaced",
+          "mutation": "client/chrome/actions.ts: Sever the `commitEdit()` call at the top of `sendQueue` so an open editor is never folded back into the queue before the send - the queued item ships the note it held before the human's correction."
         },
         {
           "id": "queue-numbering-continues-after-sent",
@@ -1300,10 +1300,10 @@
           "risk": "high",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue.e2e.ts",
+          "testName": "a queued card takes the NEXT number, on its card and on its mark alike",
+          "mutation": "client/overlay/overlay.ts: restart the queued badge count (`i + 1` instead of `n + i + 1` in the queuedAnchors loop) - the surface shows two marks labelled 1 while the card reads 2 (registry m4.1-queued-badge)"
         },
         {
           "id": "add-to-queue-refuses-blank-note",
@@ -1315,10 +1315,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-blank-note-refusal-visible.e2e.ts",
+          "testName": "add to queue refuses a blank note visibly, and typing re-arms it",
+          "mutation": "client/chrome/Panel.tsx: force `disabled={false}` on the add-to-queue button - both disabled assertions go red (registry m4.1-blank-note)"
         },
         {
           "id": "quick-reply-destroys-typed-note",
@@ -1330,10 +1330,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m4.1-quick-reply-merges.e2e.ts",
+          "testName": "a quick-reply over a typed note queues both, the typing first",
+          "mutation": "client/chrome/actions.ts: restore the overwrite `set({ composerNote: note });` in queueQuickReply - the typed sentence vanishes from the queued card (registry m4.1-quick-reply)"
         },
         {
           "id": "toggling-off-last-spot-discards-note-and-images",
@@ -1363,10 +1363,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue.e2e.ts",
+          "testName": "a wall of text pasted into an annotation folds, and the agent still gets every line",
+          "mutation": "client/chrome/actions.ts: Send a queued annotation's note raw instead of `expandPastes(q.note)`, so the agent receives the on-screen placeholder rather than the forty lines it stands for."
         },
         {
           "id": "fork-failure-keeps-draft-and-retries-once",
@@ -1379,10 +1379,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue.e2e.ts",
+          "testName": "a failed fork keeps the draft, and a manual retry produces exactly one fork",
+          "mutation": "client/chrome/actions.ts: Mint a fresh fork id on every click instead of reusing the one kept across an ambiguous failure, so a manual retry asks for a second artifact rather than the same one."
         },
         {
           "id": "enter-on-blank-note-is-inert",
@@ -1854,10 +1854,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs.e2e.ts",
+          "testName": "?s= for a session the listing does not name yet is retried, not dropped",
+          "mutation": "client/chrome/Shell.tsx: Consume the boot `?s=` id on the FIRST listing snapshot instead of only on a successful open, so an id the listing does not name yet is forgotten rather than retried - the shell then stays stranded on the pick screen forever."
         },
         {
           "id": "boot-s-consumed-once",
@@ -1870,10 +1870,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs.e2e.ts",
+          "testName": "a closed boot tab does not resurrect on the next listing snapshot",
+          "mutation": "client/chrome/Shell.tsx: Never mark the boot `?s=` id consumed, so every later listing snapshot re-fires it and a tab the human closed reopens itself behind them."
         },
         {
           "id": "tab-close-x-keeps-session-running",
@@ -1886,10 +1886,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs.e2e.ts",
+          "testName": "closing a tab with × leaves the session alive and re-openable",
+          "mutation": "client/chrome/hub.ts: Make closing a tab tear the SESSION down too - the close path POSTs /__lucid/end alongside dropping the stream - which is exactly the \"the tab bar is not a kill switch\" promise the × tooltip makes."
         },
         {
           "id": "tab-close-promotes-a-live-neighbor",
@@ -1903,10 +1903,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs.e2e.ts",
+          "testName": "closing the active tab promotes a neighbour that is still live",
+          "mutation": "client/chrome/hub.ts: Closing the active tab promotes nobody - it drops the window to the pick screen instead of the neighbour that took the closed tab's place. (Honest limit: with 3 tabs and MAX_CONNECTED=10 no neighbour is ever LRU-disconnected, so the reply assertion proves the promoted view is mounted, on screen and folding live events, but cannot exhibit the dead-stream half of the promotion; that needs 11 open tabs.)"
         },
         {
           "id": "tab-close-last-returns-to-picker",
@@ -1916,10 +1916,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs.e2e.ts",
+          "testName": "closing the only tab lands on the pick screen offering it again",
+          "mutation": "client/chrome/hub.ts: Leave the closed key in the shell's open-set, so the pick screen filters the artifact out as \"already open\" and offers the human nothing to come back to."
         },
         {
           "id": "tabs-many-strip-scrolls",
@@ -1961,10 +1961,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs-focus.e2e.ts",
+          "testName": "a question for a background tab raises ITS dot and leaves the front tab alone",
+          "mutation": "client/chrome/Shell.tsx: Render the tab's attention dot only for the ACTIVE tab, so a question arriving for a background session raises nothing."
         },
         {
           "id": "duplicate-open-same-artifact",
@@ -1977,10 +1977,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs-focus.e2e.ts",
+          "testName": "opening the same artifact twice raises the tab it already has, without remounting it",
+          "mutation": "client/chrome/hub.ts: Stop `openTab` raising the tab a session already has, so a repeat `lucid open` registers the artifact but leaves whatever tab was in front where it was."
         },
         {
           "id": "burst-open-five",
@@ -2037,10 +2037,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs-focus.e2e.ts",
+          "testName": "a hidden tab keeps folding events: the reply is already there when you arrive",
+          "mutation": "client/chrome/hub.ts: Cut the connected-stream cap to one, so activating a tab disconnects every background session's SSE stream and a hidden tab stops folding events."
         },
         {
           "id": "activate-focuses-composer",
@@ -2053,10 +2053,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs-focus.e2e.ts",
+          "testName": "landing on a tab lands the keyboard in THAT tab's composer",
+          "mutation": "client/chrome/hub.ts: Drop the focus call from activateTab's focus-routing rAF, so landing on a tab finds the composer but never gives it the keyboard."
         },
         {
           "id": "plus-keeps-existing-tabs",
@@ -2068,10 +2068,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs-focus.e2e.ts",
+          "testName": "\"+\" deselects the tab you are on; it closes nothing and loses no draft",
+          "mutation": "client/chrome/Shell.tsx: Make \"+\" close the tab it deselects by dropping the active key from the roster, so the pick screen arrives one tab lighter."
         },
         {
           "id": "theme-applies-to-every-open-tab",
@@ -2099,10 +2099,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs.e2e.ts",
+          "testName": "⌘W over an unsent queue: reopening the artifact restores the queued note",
+          "mutation": "client/chrome/store.ts: restore `queue: [],` in the initial state - the reopened tab restores nothing and the note is gone (the same seam the m4.1-queue-reload registry row proves from the reload door)"
         },
         {
           "id": "boot-s-unknown-id",
@@ -2390,10 +2390,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/surfaces.e2e.ts",
+          "testName": "a picker row that cannot open says so on itself and keeps the pick screen",
+          "mutation": "client/chrome/hub.ts: Drop the `r.ok` guard in `openTab`'s identity fetch so a 404 JSON error body is taken for an identity, the tab is created anyway and the row never reports the failure."
         },
         {
           "id": "picker-row-truly-hittable",
@@ -2800,10 +2800,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs-focus.e2e.ts",
+          "testName": "⌘K over a composer draft types into the palette, and Escape gives the draft back",
+          "mutation": "client/chrome/Palette.tsx: Remove the palette input's autofocus on open, so ⌘K raises the palette while the keyboard stays in the composer."
         },
         {
           "id": "palette-open-tab-item-activates",
@@ -2813,10 +2813,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs-focus.e2e.ts",
+          "testName": "the palette activates an already-open tab instead of opening a second one",
+          "mutation": "client/chrome/Palette.tsx: Route \"Open tabs\" palette items through the full open path instead of activate, so picking an already-open session takes the open branch rather than the raise-and-focus one."
         },
         {
           "id": "cmd-digits-index-visible-tabs",
@@ -2826,10 +2826,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/tabs-focus.e2e.ts",
+          "testName": "⌘1-9 index the VISIBLE strip, never a tab hidden by the project scope",
+          "mutation": "client/chrome/Shell.tsx: Index ⌘1-9 into every open tab instead of the project-scoped visible keys, so a digit can land on a tab the strip is not showing."
         },
         {
           "id": "palette-opens-and-opens-a-session",
@@ -3199,10 +3199,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/surfaces.e2e.ts",
+          "testName": "open --restart on a hub-hosted session leaves the hub and the other tab alive",
+          "mutation": "src/cli/self.ts: Invert `stopServer`'s hub-descriptor refusal so a descriptor carrying a `base` is signalled instead of left alone, and `open --restart` SIGTERMs the shared hub."
         },
         {
           "id": "open-restart-replaces-daemon",
@@ -3279,10 +3279,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/surfaces.e2e.ts",
+          "testName": "only LUCID_HUB_ATTEND=1 turns on agent spawning",
+          "mutation": "src/cli/run.ts: Loosen `runHub`'s env opt-in from an exact \"1\" to any non-empty value, so LUCID_HUB_ATTEND=true silently turns a review-only install into one that spawns agents."
         },
         {
           "id": "hub-restart-same-port-recovers",
@@ -3545,10 +3545,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/surfaces.e2e.ts",
+          "testName": "launch without a harness registry names the file to create and shows a complete one",
+          "mutation": "src/cli/run.ts: Rename the `example` key in `runLaunchCli`'s VALIDATION_ERROR detail, so the refusal still names the path but no longer hands back a registry a person can copy."
         },
         {
           "id": "launch-invalid-registry",
@@ -3611,10 +3611,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/surfaces.e2e.ts",
+          "testName": "a rendered plan opens, anchors on its D-NNN ids, and ingests back",
+          "mutation": "src/plan/ingest.ts: Narrow `refOf` to question anchors only, so a D-NNN anchor loses its ledger ref and a decision annotation ingests as an unlinked located-note."
         },
         {
           "id": "plan-render-default-out",
@@ -3716,10 +3716,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/surfaces.e2e.ts",
+          "testName": "lucid app brings up a hub that actually drives delivery",
+          "mutation": "src/cli/run.ts: Have `runApp` spawn a review-only hub, so the app front door records feedback and leaves it waiting for someone to re-summon a conversation."
         },
         {
           "id": "compiled-binary-selfinvocation",

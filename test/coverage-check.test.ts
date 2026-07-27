@@ -202,6 +202,14 @@ describe("testTitlesIn returns specs, and only specs", () => {
     ]);
   });
 
+  test("a single-quoted title is a spec too - it is how biome writes one containing a quote", () => {
+    // The formatter rewrites a title holding a double quote into single
+    // quotes, so this shape is canonical output, not a style choice a test
+    // author could avoid. A parser blind to it refused a legal title.
+    const source = "test('\"+\" deselects the tab you are on', async () => {});";
+    expect(testTitlesIn(source)).toEqual(['"+" deselects the tab you are on']);
+  });
+
   test("an interpolated title is not returned, because it cannot be resolved", () => {
     // Returning the raw template would let a row claim a test whose real title
     // never matches it. Not returning it means such a row fails instead, which

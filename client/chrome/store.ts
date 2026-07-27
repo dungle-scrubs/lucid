@@ -1,5 +1,5 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { Anchor } from "../../src/anchors/anchor.ts";
+import { parseAnchor, type Anchor } from "../../src/anchors/anchor.ts";
 import type {
   AgentWorking,
   AttendantPresence,
@@ -61,9 +61,61 @@ export interface SessionConfig {
 
 const SHOW_TARGETS_LEGACY_KEY = "lucid:showTargets";
 
-const isOutboxImage = (v: unknown): v is { id: string; name: string; file: string } => {
+/** The three fields an uploaded image travels as - what POSTs carry and what
+ *  storage keeps. The composer's object URL is a page-lifetime handle and
+ *  never leaves the page that minted it. */
+export interface WireImage {
+  readonly id: string;
+  readonly name: string;
+  readonly file: string;
+}
+
+/** Project staged images down to the wire shape. Three call sites (queue
+ *  send, fork, persistence) each used to spell the destructuring by hand. */
+export const toWireImages = (images: readonly WireImage[]): WireImage[] =>
+  images.map(({ id, name, file }) => ({ id, name, file }));
+
+const isOutboxImage = (v: unknown): v is WireImage => {
   const o = v as Record<string, unknown> | null;
   return typeof o?.id === "string" && typeof o.name === "string" && typeof o.file === "string";
+};
+
+/** A queued annotation as it sits in storage: the composer's object URL is a
+ *  page-lifetime handle, so it is dropped on write and rebuilt from the
+ *  uploaded asset's `file` on read - the same way sent images render. */
+interface PersistedQueuedAnnotation {
+  readonly id: string;
+  readonly targets: readonly Anchor[];
+  readonly note: string;
+  readonly at: string;
+  readonly images: readonly WireImage[];
+}
+
+/**
+ * A stored anchor is validated by the server's OWN validator, so the two ends
+ * cannot drift: anything `parseAnchor` would 400 - which the 4xx
+ * short-circuit makes terminal - is refused at restore instead of rendered.
+ * An earlier version accepted any non-null object on the theory that a stale
+ * anchor degrades to an orphaned mark; measured otherwise: one forged
+ * `{kind:"elephant"}` in storage threw in `AnnotationPart`'s unguarded
+ * `snippet.replace` on EVERY load, taking the valid cards down with it, and
+ * skip-not-delete meant it never healed.
+ */
+const isAnchorLike = (v: unknown): v is Anchor => !("error" in parseAnchor(v));
+
+const isQueuedAnnotation = (v: unknown): v is PersistedQueuedAnnotation => {
+  const o = v as Record<string, unknown> | null;
+  return (
+    typeof o?.id === "string" &&
+    typeof o.note === "string" &&
+    o.note.trim().length > 0 &&
+    typeof o.at === "string" &&
+    Array.isArray(o.targets) &&
+    o.targets.length > 0 &&
+    o.targets.every(isAnchorLike) &&
+    Array.isArray(o.images) &&
+    o.images.every(isOutboxImage)
+  );
 };
 
 /** Storage is untrusted input (a stale schema, another tool's key, a truncated
@@ -90,11 +142,22 @@ export interface SessionStorage {
   readonly readOutbox: () => OutboxMessage[];
   readonly persistOutboxMessage: (message: OutboxMessage, onFail: () => void) => void;
   readonly forgetOutboxMessage: (id: string) => void;
+  /** Queued annotations from a previous page life. The queue persists for the
+   *  same reason the outbox does (D-054): a reload - or a closed tab - must
+   *  not destroy a note a human wrote and did not send. */
+  readonly readQueue: () => QueuedAnnotation[];
+  readonly persistQueuedItem: (item: QueuedAnnotation, onFail: () => void) => void;
+  readonly forgetQueuedItem: (id: string) => void;
   readonly readShowTargets: () => boolean;
   readonly persistShowTargets: (on: boolean) => void;
 }
 
-export const createSessionStorage = (sessionKey: string): SessionStorage => {
+export const createSessionStorage = (
+  sessionKey: string,
+  /** Re-addresses a restored thumbnail through the asset route - the object
+   *  URL a queued image was staged with died with the page that made it. */
+  assetUrl: (file: string) => string,
+): SessionStorage => {
   /**
    * One storage key per undelivered message, namespaced by session.
    *
@@ -106,55 +169,105 @@ export const createSessionStorage = (sessionKey: string): SessionStorage => {
    * so no tab can overwrite another's undelivered work.
    */
   const outboxPrefix = `lucid:outbox:${sessionKey}:`;
-  const outboxKey = (id: string): string => `${outboxPrefix}${id}`;
+  const queuePrefix = `lucid:queue:${sessionKey}:`;
   const showTargetsKey = `lucid:showTargets:${sessionKey}`;
 
-  /** Undelivered messages from a previous page life (this tab's or another's).
-   *  They outlive the tab on purpose: the whole point is that hitting Enter can
-   *  never destroy typing. Restored in authoring order, which is the order they
-   *  must reach the agent in. */
-  const readOutbox = (): OutboxMessage[] => {
-    try {
-      const found: OutboxMessage[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key === null || !key.startsWith(outboxPrefix)) continue;
-        try {
-          const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "");
-          // A malformed entry is skipped, not deleted: it is unreadable to us
-          // but it is still the only copy of something a human typed.
-          if (isOutboxMessage(parsed)) found.push(parsed);
-        } catch {
-          /* not ours to interpret */
+  /**
+   * One persistence bucket: per-item keys under one prefix.
+   *
+   * The policy lives HERE, once, because it was written twice and the two
+   * copies could drift on exactly the parts that matter:
+   *
+   * - A malformed entry is SKIPPED, never deleted - unreadable to us, but
+   *   still the only copy of something a human wrote.
+   * - Reads return authoring order (`at` ascending), the order work must
+   *   reach the agent in.
+   * - Writes guard real data, so a failure (quota, private mode) reports to
+   *   the caller: the entry still lives in memory, but it will not survive a
+   *   reload and the human is the only one who can act on that.
+   * - Deletes are silent - nothing is at stake in a delete that no-ops.
+   */
+  const bucket = <T extends { readonly at: string }>(
+    prefix: string,
+    guard: (v: unknown) => v is T,
+  ) => ({
+    readAll: (): T[] => {
+      try {
+        const found: T[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key === null || !key.startsWith(prefix)) continue;
+          try {
+            const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "");
+            if (guard(parsed)) found.push(parsed);
+          } catch {
+            /* not ours to interpret */
+          }
         }
+        return found.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      } catch {
+        return [];
       }
-      return found.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-    } catch {
-      return [];
-    }
+    },
+    write: (id: string, value: T, onFail: () => void): void => {
+      try {
+        localStorage.setItem(prefix + id, JSON.stringify(value));
+      } catch {
+        onFail();
+      }
+    },
+    forget: (id: string): void => {
+      try {
+        localStorage.removeItem(prefix + id);
+      } catch {
+        /* storage unavailable; the entry was never written either */
+      }
+    },
+  });
+
+  const outbox = bucket(outboxPrefix, isOutboxMessage);
+  const queue = bucket(queuePrefix, isQueuedAnnotation);
+
+  /** Undelivered messages outlive the tab on purpose: the whole point is that
+   *  hitting Enter can never destroy typing. */
+  const readOutbox = (): OutboxMessage[] => outbox.readAll();
+  const persistOutboxMessage = (message: OutboxMessage, onFail: () => void): void =>
+    outbox.write(message.id, message, onFail);
+  const forgetOutboxMessage = (id: string): void => outbox.forget(id);
+
+  /** The invariant `target === targets[0]` is rebuilt rather than trusted:
+   *  storage is one writer among many, and the pair travelling separately is
+   *  exactly the drift the invariant exists to prevent. */
+  const readQueue = (): QueuedAnnotation[] =>
+    queue.readAll().flatMap((p) => {
+      const target = p.targets[0];
+      if (!target) return [];
+      return [
+        {
+          id: p.id,
+          target,
+          targets: p.targets,
+          note: p.note,
+          at: p.at,
+          images: p.images.map((img) => ({ ...img, url: assetUrl(img.file) })),
+        },
+      ];
+    });
+
+  /** Add or edit - same key either way. The composer's object URL is dropped
+   *  on write and rebuilt from the uploaded asset on read. */
+  const persistQueuedItem = (item: QueuedAnnotation, onFail: () => void): void => {
+    const persisted: PersistedQueuedAnnotation = {
+      id: item.id,
+      targets: item.targets,
+      note: item.note,
+      at: item.at,
+      images: toWireImages(item.images),
+    };
+    queue.write(item.id, persisted, onFail);
   };
 
-  /** Write one undelivered message to storage. Unlike the other persisters this
-   *  one guards real data, so a failure (quota, private mode) is reported to
-   *  the caller: the entry still lives in memory, but it will not survive a
-   *  reload and the human is the only one who can act on that. */
-  const persistOutboxMessage = (message: OutboxMessage, onFail: () => void): void => {
-    try {
-      localStorage.setItem(outboxKey(message.id), JSON.stringify(message));
-    } catch {
-      onFail();
-    }
-  };
-
-  /** Drop one message from storage: it reached the log, or the human discarded
-   *  it. Silent on failure - there is nothing at stake in a delete that no-ops. */
-  const forgetOutboxMessage = (id: string): void => {
-    try {
-      localStorage.removeItem(outboxKey(id));
-    } catch {
-      /* storage unavailable; the entry was never written either */
-    }
-  };
+  const forgetQueuedItem = (id: string): void => queue.forget(id);
 
   /** Annotation marks are the point of the surface, so they are on unless the
    *  human has explicitly turned them off before. Falls back to the pre-shell
@@ -181,6 +294,9 @@ export const createSessionStorage = (sessionKey: string): SessionStorage => {
     readOutbox,
     persistOutboxMessage,
     forgetOutboxMessage,
+    readQueue,
+    persistQueuedItem,
+    forgetQueuedItem,
     readShowTargets,
     persistShowTargets,
   };
@@ -312,6 +428,14 @@ export interface SessionState {
 
 export type SessionStore = StoreApi<SessionState>;
 
+/** The one spelling of "the composer holds queueable work": a pick, and a
+ *  note that is more than whitespace. This pair was being re-derived inline
+ *  at every gate that cares (the queue guard, the send-all fold, the button's
+ *  disabled state) - and a rule spelled seven ways is a rule that drifts. */
+export const hasComposerDraft = (
+  s: Pick<SessionState, "pendingTarget" | "composerNote">,
+): boolean => s.pendingTarget !== null && s.composerNote.trim().length > 0;
+
 export const createSessionStore = (config: SessionConfig, storage: SessionStorage): SessionStore =>
   createStore<SessionState>(() => ({
     annotations: [],
@@ -322,7 +446,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     pendingTarget: null,
     pendingTargets: [],
     composerNote: "",
-    queue: [],
+    queue: storage.readQueue(),
     editingId: null,
     editDraft: "",
     sending: false,
