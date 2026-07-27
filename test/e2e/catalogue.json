@@ -3861,6 +3861,216 @@
           "mutation": null
         }
       ]
+    },
+    {
+      "name": "Q. Hostile artifacts: the corpus",
+      "purpose": "Twelve documents hostile the way real generated artifacts are - each attacking a named product seam (injection anchoring, the opaque-origin stylesheet wall, shadow retargeting, event capture, document scale). Every fixture either survives the one loop that matters or is a recorded product defect in the plan ledger; the guard test in hostile.e2e.ts makes the accounting total (D-017, D-032).",
+      "scenarios": [
+        {
+          "id": "hostile-csp-meta",
+          "title": "A document-authored CSP must not silently kill the review tooling",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-csp-meta)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "Either the overlay boots anyway (the served document is Lucid's own response) or the silenced state is surfaced. Today default-src 'none' blocks the bootstrap module and picking dies with no indication (plan finding #42).",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hostile-prevent-default",
+          "title": "Capture-phase event swallowing must not silence picking without a trace",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-prevent-default)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "Picking works, or the human is told the document is fighting the tooling. Today window-capture stopPropagation registered before the bootstrap starves the overlay listeners silently (plan finding #43).",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hostile-competing-overlay",
+          "title": "An artifact overlay at maximum z-index does not break the loop",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-competing-overlay)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "Pick, queue, send, wait all work on content outside the banner; the delivered annotation resolves.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact with its own full-width overlay at maximum z-index",
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+        },
+        {
+          "id": "hostile-shadow-dom",
+          "title": "Content inside an open shadow root is still annotatable",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-shadow-dom)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "Clicking the component anchors the retargeted host and the loop completes; the delivered annotation resolves.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact whose content lives inside an open shadow root",
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+        },
+        {
+          "id": "hostile-huge-dom",
+          "title": "A five-megabyte document completes the annotation round trip in human time",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-huge-dom)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "The committed card renders within a human budget, or progress is visible. Today it is absent at 30s with the queue consumed and no warning - a silent half-delivered state (plan finding #46).",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hostile-malformed",
+          "title": "Parser-repaired markup with a literal closing-body in a textarea still boots the overlay",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-malformed)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "The bootstrap lands after the REAL body close and the loop works on the repaired tree. Today inject.ts anchors on the first raw closing-body - inside the textarea - and renders the bootstrap as content (plan finding #44).",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hostile-base-tag",
+          "title": "A foreign base href must not re-root the overlay bootstrap",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-base-tag)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "The injected script src is immune to the document base. Today the path-absolute /__lucid/client.js resolves against the hostile origin and the overlay never boots (plan finding #45).",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "uncovered",
+          "testFile": null,
+          "testName": null,
+          "mutation": null
+        },
+        {
+          "id": "hostile-self-rewriting",
+          "title": "A document that rewrites its own DOM after load is still annotatable",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-self-rewriting)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "Picking the hydrated content after the rewrite settles completes the loop; the delivered annotation resolves against the rewritten document.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact that rewrites its own DOM after load",
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+        },
+        {
+          "id": "hostile-linked-stylesheet",
+          "title": "CSS in a linked file survives the opaque-origin styleSheets wall",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-linked-stylesheet)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "cssRules throws for every linked sheet on the opaque origin (D-032); nothing reading document.styleSheets may crash or relabel, and the loop completes.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact whose CSS lives in a linked file",
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+        },
+        {
+          "id": "hostile-fragment-only",
+          "title": "A bare fragment with no html, head or body tags is a first-class artifact",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-fragment-only)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "inject.ts's append branch boots the overlay and the loop completes on the wrapped fragment.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact that is a bare fragment - no html, head, or body tags",
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+        },
+        {
+          "id": "hostile-throwing-script",
+          "title": "A document whose own scripts throw does not take the pick pipeline down",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-throwing-script)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "An uncaught load-time throw and a throwing click handler leave picking intact; the loop completes.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact whose own scripts throw, at load and on every click",
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - every corpus loop test goes red at the resolved-truthy assertion"
+        },
+        {
+          "id": "hostile-duplicate-ids",
+          "title": "One data-lucid-id stamped on four identical siblings still disambiguates",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-duplicate-ids)",
+            "Pick the fixture-declared element, write the note, queue, send",
+            "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
+          ],
+          "expected": "Picking the third identical row delivers an annotation whose mark sits on the THIRD row - the 9df5eae disambiguation holding against an author actively destroying identity.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "picking the third of four identically-stamped rows marks the THIRD",
+          "mutation": "src/core/payload.ts: sever anchor resolution in buildWaitPayload (const resolved = null) - the badge never renders and the third-row box assertion goes red (measured). Single-layer breaks do NOT red this test: reverting 9df5eae was applied and observed GREEN, because computeFingerprint folds the sibling index, so the fingerprint layer disambiguates before the fall-through is ever reached - the ladder is defense in depth (D-064)."
+        }
+      ]
     }
   ],
   "newCapabilities": [
