@@ -1,3 +1,4 @@
+import { on } from "../locators.ts";
 import type { Page } from "@playwright/test";
 import type { Cli } from "../cli.ts";
 import { surfaceOf } from "../visual.ts";
@@ -30,14 +31,14 @@ test("Fork with no directive still reaches the agent, and says it did", async ({
   const surface = surfaceOf(page);
 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await expect(page.locator('textarea[placeholder^="What should change here?"]')).toBeVisible();
+  await expect(on(page).annotationNote()).toBeVisible();
   // No directive typed. The region alone is the instruction.
-  await page.locator('[data-test="fork"]').click();
+  await on(page).fork().click();
 
   // The person is told, on the notices channel - NOT `getByText(/Fork/)`, which
   // is satisfied by the button that was just clicked ("Forking…") and so
   // asserted nothing at all. Suppressing the notice used to leave this green.
-  await expect(page.locator('[data-test="notice"]')).toContainText(/fork/i);
+  await expect(on(page).notice()).toContainText(/fork/i);
 
   const feedback = (await cli.run([
     "wait",

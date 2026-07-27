@@ -1,3 +1,4 @@
+import { on } from "../locators.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
 
@@ -44,21 +45,21 @@ test("a message typed at a dead server is kept, and delivers itself later", asyn
 
   // The server goes out from under the viewer.
   await cli.run(["end", cli.artifact]);
-  await expect(page.locator('[data-test="reconnecting"]')).toBeVisible();
+  await expect(on(page).reconnecting()).toBeVisible();
 
-  await page.locator('[data-test="message-input"]').fill(typed);
-  await page.locator('[data-test="send-message"]').click();
+  await on(page).messageInput().fill(typed);
+  await on(page).sendMessage().click();
 
   // The composer has emptied, so this card is the only place the typing still
   // exists. It must exist, and it must be recoverable by hand.
-  await expect(page.locator('[data-test="unsent-message"]')).toContainText(typed);
-  await expect(page.locator('[data-test="message-input"]')).toHaveValue("");
+  await expect(on(page).unsentMessage()).toContainText(typed);
+  await expect(on(page).messageInput()).toHaveValue("");
 
   // A second message during the same outage gets its own card. Nothing may hide
   // behind the first: an invisible entry is one nobody can retry or discard.
-  await page.locator('[data-test="message-input"]').fill(second);
-  await page.locator('[data-test="send-message"]').click();
-  await expect(page.locator('[data-test="unsent-message"]')).toHaveCount(2);
+  await on(page).messageInput().fill(second);
+  await on(page).sendMessage().click();
+  await expect(on(page).unsentMessage()).toHaveCount(2);
 
   // A new JS instance, and a server that has come back: neither remembers
   // anything the first page held.

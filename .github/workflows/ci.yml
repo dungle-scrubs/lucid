@@ -64,3 +64,10 @@ jobs:
       # and Playwright runs on the maintainer's Mac, not here (D-044). A gate
       # that pretended otherwise would need a report this job cannot produce.
       - run: bun run scripts/coverage-check.ts --no-report
+
+      # The selector rules (M3.3). Greps rather than a lint plugin, because the
+      # thing being prevented is a STRING in a test that no type system sees,
+      # and because a rule the next person can read in ten seconds is a rule
+      # they can argue with. Every one of them was true of the tree when it
+      # landed - a gate introduced red is a gate somebody turns off.
+      - run: bun run scripts/check-locators.ts

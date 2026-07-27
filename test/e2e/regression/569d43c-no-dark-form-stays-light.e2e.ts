@@ -1,3 +1,4 @@
+import { on } from "../locators.ts";
 import { expect, test } from "@playwright/test";
 import { makeCli, overlaySettled, surfaceOf, type Cli } from "../helpers.ts";
 
@@ -56,7 +57,7 @@ test("an artifact that declares a dark form does follow the toggle", async ({ pa
   await page.goto(session.url);
   await expect(surfaceOf(page).locator("h1")).toContainText("Both forms");
 
-  await page.locator('[data-test="theme-toggle"]').click();
+  await on(page).themeToggle().click();
   await overlaySettled(page);
   expect(await surfaceOf(page).locator("html").getAttribute("data-lucid-theme")).toBe("dark");
 });
@@ -69,10 +70,10 @@ test("an artifact with no dark form is not relabelled dark", async ({ page }) =>
   await expect(surface.locator("h1")).toContainText("Light only");
 
   // Ask for dark, which is the gesture that used to ruin the page.
-  await page.locator('[data-test="theme-toggle"]').click();
+  await on(page).themeToggle().click();
 
   // The toggle records the human's choice, whatever the artifact can honour.
-  await expect(page.locator('[data-test="theme-toggle"]')).toHaveAttribute("data-theme", "dark");
+  await expect(on(page).themeToggle()).toHaveAttribute("data-theme", "dark");
 
   // Settled first, then read ONCE. A correct implementation produces no change
   // here, so there is no transition for a polling assertion to wait on: it

@@ -1,3 +1,4 @@
+import { on } from "../locators.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { delayRoute, makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
 
@@ -37,12 +38,12 @@ test("a send that is taking a while says so, before it has failed", async ({ pag
   // whether their message went anywhere.
   await delayRoute(page, "**/__lucid/message", 4_000);
 
-  await page.locator('[data-test="message-input"]').fill("Is this getting through?");
-  await page.locator('[data-test="send-message"]').click();
+  await on(page).messageInput().fill("Is this getting through?");
+  await on(page).sendMessage().click();
 
   // Still in flight - not failed, not delivered - and visible.
   await expect(
-    page.locator('[data-test="unsent-message"]'),
+    on(page).unsentMessage(),
     "a slow send showed nothing, so it was indistinguishable from a swallowed one",
   ).toContainText("Is this getting through?", { timeout: 10_000 });
 });

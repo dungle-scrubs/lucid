@@ -1,3 +1,4 @@
+import { hook, on } from "./locators.ts";
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
 import { makeCli, PLAN_V1, type Cli } from "./helpers.ts";
 
@@ -61,11 +62,11 @@ for (const width of [384, 950]) {
     // A located annotation and a human message round out the record's shapes.
     await surface.locator('li[data-lucid-id="step-backfill"]').click();
     await page
-      .locator('[data-test="annotation-note"]')
+      .locator(hook("annotation-note"))
       .fill("can remove it entirely from AGENTS.md. when i want to make a skill, i will do so.");
-    await page.locator('[data-test="add-to-queue"]').click();
-    await page.locator('[data-test="send-queue"]').click();
-    await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+    await on(page).addToQueue().click();
+    await on(page).sendQueue().click();
+    await expect(on(page).annotation()).toHaveCount(1);
 
     const box = await page.evaluate(() => {
       const vp = document.querySelector('[data-test="thread-viewport"]');

@@ -28,6 +28,26 @@ const execFileAsync = promisify(execFile);
  * deliberately NOT on the `helpers.ts` barrel: it takes a raw `env`, and every
  * other caller should be going through `makeCli`, which contains one.
  */
+/**
+ * A `wait` deadline, in seconds, scaled for the machine it runs on (D-020).
+ *
+ * A literal in a test body cannot be scaled. The number that is comfortable on
+ * an idle laptop is the first thing to flake on a loaded one, and the failure
+ * arrives as "the agent never answered" rather than "this deadline was too
+ * short" - so the test gets rewritten instead of the timeout.
+ *
+ * The base is what the scenario needs when nothing is contending. Everything
+ * else is the harness's business: more workers means more processes competing
+ * for the same cores, and `LUCID_E2E_TIMEOUT_SCALE` is the escape hatch for a
+ * machine nobody anticipated.
+ */
+export const waitTimeoutSeconds = (base: number): string => {
+  const workers = Number.parseInt(process.env.TEST_PARALLEL_INDEX ?? "0", 10) + 1;
+  const scale = Number.parseFloat(process.env.LUCID_E2E_TIMEOUT_SCALE ?? "1");
+  const factor = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  return String(Math.max(1, Math.ceil(base * factor * (workers > 1 ? 1.5 : 1))));
+};
+
 export const invoke = async (
   args: readonly string[],
   options: Parameters<typeof execFileAsync>[2] & { timeout?: number },

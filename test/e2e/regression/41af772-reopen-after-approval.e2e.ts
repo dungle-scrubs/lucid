@@ -1,3 +1,4 @@
+import { on } from "../locators.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
 
@@ -37,15 +38,15 @@ const openViewer = async (page: Page): Promise<string> => {
 test("reopening a review after the session ended explains the way back", async ({ page }) => {
   await openViewer(page);
 
-  await page.locator('[data-test="approve"]').click();
-  await expect(page.locator('[data-test="reopen"]')).toBeVisible();
+  await on(page).approve().click();
+  await expect(on(page).reopen()).toBeVisible();
 
   // The agent takes approval as a release and ends the session - the sequence
   // that turned Reopen into a dead end.
   await cli.run(["end", cli.artifact]);
-  await expect(page.locator('[data-test="reconnecting"]')).toBeVisible();
+  await expect(on(page).reconnecting()).toBeVisible();
 
-  await page.locator('[data-test="reopen"]').click();
+  await on(page).reopen().click();
 
   // Not "try again": the way back is for the agent to run `lucid open`, and
   // saying so is the difference between a dead end and an instruction.

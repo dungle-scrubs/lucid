@@ -1,5 +1,6 @@
+import { hook, on } from "../locators.ts";
 import { expect, test, type Page } from "@playwright/test";
-import { makeCli, PLAN_V1, surfaceOf, type Cli } from "../helpers.ts";
+import { PLAN_V1, makeCli, surfaceOf, type Cli, waitTimeoutSeconds } from "../helpers.ts";
 
 /**
  * Regression: `0267c64` - one running turn, reported once.
@@ -34,37 +35,62 @@ test("a running turn is announced in one place, not three", async ({ page }) => 
   const surface = surfaceOf(page);
 
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator('[data-test="annotation-note"]').fill("Backfill in one batch");
-  await page.locator('[data-test="add-to-queue"]').click();
-  await page.locator('[data-test="send-queue"]').click();
-  await expect(page.locator('[data-test="annotation"]')).toHaveCount(1);
+  await on(page).annotationNote().fill("Backfill in one batch");
+  await on(page).addToQueue().click();
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
 
   // The agent takes delivery: the turn is now running, which is the moment the
   // three voices used to speak at once.
-  const fb = (await cli.run(["wait", cli.artifact, "--since", nextCursor, "--timeout", "8"])) as {
+  const fb = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(8),
+  ])) as {
     status: string;
   };
   expect(fb.status).toBe("feedback");
-  await expect(page.locator('[data-test="agent-working"]')).toBeVisible();
+  await expect(on(page).agentWorking()).toBeVisible();
 
   // The card is the keeper.
-  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(1);
+  await expect(on(page).agentWorking()).toHaveCount(1);
   // And the composer line is naming a mode, not repeating the card.
-  await expect(page.locator('[data-test="listener-line"][data-mode="working"]')).toHaveCount(0);
+  await expect(page.locator(`${hook("listener-line")}[data-mode="working"]`)).toHaveCount(0);
 
-  const voices = await page.evaluate(() => {
-    const working = document.querySelectorAll('[data-test="agent-working"]').length;
-    const shimmer = document.querySelectorAll(
-      '[data-test="listener-line"][data-mode="working"]',
-    ).length;
-    return { working, shimmer, total: working + shimmer };
-  });
+  // Every surface that announces a running turn, not the two the fix happened
+  // to touch: the commit names three voices and the pill over the artifact is
+  // the first of them. Selectors are built out here and passed IN, because
+  // `page.evaluate` runs in the browser where locators.ts does not exist, and
+  // spelling them in both places is how two copies drift.
+  const voices = await page.evaluate(
+    (sel) => {
+      const count = (selector: string): number => document.querySelectorAll(selector).length;
+      const surfaces = {
+        transcriptCard: count(sel.card),
+        composerShimmer: count(sel.shimmer),
+        artifactPill: count(sel.pill),
+        tabBadge: count(sel.badge),
+      };
+      return { surfaces, total: Object.values(surfaces).reduce((sum, n) => sum + n, 0) };
+    },
+    {
+      card: hook("agent-working"),
+      shimmer: `${hook("listener-line")}[data-mode="working"]`,
+      pill: hook("surface-updating"),
+      badge: `${hook("tab-attention")}[data-kind="working"]`,
+    },
+  );
   expect(
     voices.total,
-    `a running turn is reported by ${voices.total} surfaces ` +
-      `(transcript card ${voices.working}, composer shimmer ${voices.shimmer})`,
+    `a running turn is reported by ${voices.total} surfaces: ${JSON.stringify(voices.surfaces)}`,
   ).toBe(1);
+  // And the one that speaks is the card, which carries elapsed time and the
+  // stale state - the reason the commit kept that one and not another.
+  expect(voices.surfaces.transcriptCard).toBe(1);
 
-  await cli.run(["wait", cli.artifact, "--reply", "Batched.", "--timeout", "1"]);
-  await expect(page.locator('[data-test="agent-working"]')).toHaveCount(0);
+  await cli.run(["wait", cli.artifact, "--reply", "Batched.", "--timeout", waitTimeoutSeconds(1)]);
+  await expect(on(page).agentWorking()).toHaveCount(0);
 });

@@ -1,3 +1,4 @@
+import { on } from "./locators.ts";
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { makeCli, surfaceOf, type Cli } from "./helpers.ts";
@@ -105,7 +106,7 @@ test("the real artifact, measured", async ({ page }) => {
   };
 
   const light = await sample("LIGHT (OS dark)");
-  await page.locator('[data-test="theme-toggle"]').click();
+  await on(page).themeToggle().click();
   await expect(surface.locator("html")).toHaveAttribute("data-lucid-theme", "dark");
   const dark = await sample("DARK");
   console.log("\nSUMMARY", JSON.stringify({ light, dark }));
