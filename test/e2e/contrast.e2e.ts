@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { makeCli, overlaySettled, surfaceOf, type Cli } from "./helpers.ts";
 
@@ -179,15 +181,54 @@ test("an artifact whose dark form is its own media block follows every toggle", 
   await toggle.click();
   await expect(root).toHaveAttribute("data-lucid-theme", "light");
 
-  // The third toggle is the one that matters. Applying a theme REWRITES the
-  // artifact's `prefers-color-scheme` conditions to `(min-width: 0px)` /
-  // `(max-width: 0px)`, so by now no rule in the document mentions
-  // prefers-color-scheme at all. Asking the live condition whether this artifact
-  // has a dark form would say no, and an artifact that went dark twice would
-  // refuse to a third time. Only the original conditions, kept aside before the
-  // first rewrite, still answer truthfully.
+  // Every one of these depends on the same thing, including the first. Applying
+  // a theme REWRITES the artifact's `prefers-color-scheme` conditions to
+  // `(min-width: 0px)` / `(max-width: 0px)`, and the chrome sends a theme
+  // message as soon as the overlay is ready - so by the time a human can click
+  // anything, no rule in the document mentions prefers-color-scheme at all.
+  // Asking the live condition whether this artifact has a dark form would say
+  // no, from the very first toggle. Only the original conditions, kept aside
+  // before the first rewrite, still answer truthfully. The round trip is here
+  // to prove the answer survives being toggled back and forth, not because the
+  // third click is special.
   await toggle.click();
   await expect(root).toHaveAttribute("data-lucid-theme", "dark");
   // Its own block is genuinely in force, not merely the attribute.
+  await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(33, 29, 21)");
+});
+
+// Tokens in a LINKED sheet - the ordinary shape for anything bigger than a
+// one-page document, and the case that cannot be answered by reading rules.
+const LINKED = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><title>Linked</title>
+<link rel="stylesheet" href="tokens.css" /></head>
+<body><h2 data-lucid-id="h">Where to go deeper</h2></body></html>`;
+
+const LINKED_CSS = `:root { --paper: #faf6ec; --ink: #211d15; }
+@media (prefers-color-scheme: dark) { :root { --paper: #211d15; --ink: #ece3cf; } }
+body { background: var(--paper); color: var(--ink); font-family: system-ui; margin: 40px }`;
+
+test("an artifact whose tokens live in a linked sheet still follows the toggle", async ({
+  page,
+}) => {
+  // The surface iframe is sandboxed WITHOUT allow-same-origin, so the artifact
+  // runs on an opaque origin - which is cross-origin with the very server that
+  // served it. Reading `cssRules` off any <link>ed sheet throws SecurityError,
+  // so a capability check that walks rules concludes "no tokens here" for every
+  // artifact that keeps its CSS in a file, and pins it light forever. The tokens
+  // resolve perfectly well; they are just not readable rule by rule. Asking the
+  // computed cascade is the only thing that sees them.
+  cli = await makeCli(LINKED);
+  await writeFile(join(cli.dir, "tokens.css"), LINKED_CSS);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  const surface = surfaceOf(page);
+  await expect(surface.locator("h2")).toBeVisible();
+  // The sheet really did load and its tokens really do resolve - otherwise the
+  // assertion below would be measuring a document with no styling at all.
+  await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(250, 246, 236)");
+
+  await page.locator('[data-test="theme-toggle"]').click();
+  await expect(surface.locator("html")).toHaveAttribute("data-lucid-theme", "dark");
   await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(33, 29, 21)");
 });

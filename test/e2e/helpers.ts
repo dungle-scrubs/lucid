@@ -201,37 +201,41 @@ export const surfaceOf = (page: Page): FrameLocator =>
  * stay green on a claim CI disproves.
  *
  * So this posts a message of its own and waits for the answer. The overlay
- * services `measure-content` from the same `onMessage` switch that applies a
- * theme, and postMessage delivery to one window is ordered, so a reply to a
- * message posted AFTER the action proves the action's message was handled
- * first. `width` is discarded - the round trip is the whole point.
+ * services `ping` from the same synchronous `onMessage` switch that applies a
+ * theme, and postMessage delivery to one window is ordered, so a `pong` proves
+ * the action's message was handled first.
+ *
+ * `ping`/`pong` exists for exactly this and does nothing else. Borrowing a real
+ * message would import its effect: `measure-content` looks inert and is not -
+ * the chrome answers it by resizing the review panel AND writing the new width
+ * to localStorage, so a probe named "settled" would quietly resize the surface
+ * and change state that outlives the test. The nonce keeps a reply attributable
+ * to the probe that asked for it, so a reply still in flight from an earlier
+ * call cannot resolve this one early.
  */
 export const overlaySettled = async (page: Page): Promise<void> => {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        const frame = Array.from(
-          document.querySelectorAll<HTMLIFrameElement>('iframe[title="artifact surface"]'),
-        ).find((el) => el.offsetParent !== null || el.getClientRects().length > 0);
-        if (!frame?.contentWindow) {
-          reject(new Error("no visible artifact surface to settle"));
-          return;
-        }
-        const timer = setTimeout(() => {
-          window.removeEventListener("message", onReply);
-          reject(new Error("overlay did not answer measure-content"));
-        }, 10_000);
-        function onReply(e: MessageEvent): void {
-          const d = e.data as { source?: string; type?: string } | null;
-          if (d?.source !== "lucid-overlay" || d.type !== "content-width") return;
-          clearTimeout(timer);
-          window.removeEventListener("message", onReply);
-          resolve();
-        }
-        window.addEventListener("message", onReply);
-        frame.contentWindow.postMessage({ source: "lucid-chrome", type: "measure-content" }, "*");
-      }),
-  );
+  await page.evaluate(async () => {
+    const nonce = `settle-${Math.random().toString(36).slice(2)}`;
+    const frame = Array.from(
+      document.querySelectorAll<HTMLIFrameElement>('iframe[title="artifact surface"]'),
+    ).find((el) => el.offsetParent !== null || el.getClientRects().length > 0);
+    if (!frame?.contentWindow) throw new Error("no visible artifact surface to settle");
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener("message", onReply);
+        reject(new Error(`overlay did not answer ping ${nonce}`));
+      }, 10_000);
+      function onReply(e: MessageEvent): void {
+        const d = e.data as { source?: string; type?: string; nonce?: string } | null;
+        if (d?.source !== "lucid-overlay" || d.type !== "pong" || d.nonce !== nonce) return;
+        clearTimeout(timer);
+        window.removeEventListener("message", onReply);
+        resolve();
+      }
+      window.addEventListener("message", onReply);
+      frame.contentWindow?.postMessage({ source: "lucid-chrome", type: "ping", nonce }, "*");
+    });
+  });
 };
 
 export const PLAN_V1 = `<!doctype html>
