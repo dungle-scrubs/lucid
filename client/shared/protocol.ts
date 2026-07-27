@@ -48,6 +48,9 @@ export type OverlayMessage =
    *  chrome cannot measure it: the surface runs on an opaque origin (D-020), so
    *  `iframe.contentDocument` is null from the parent. */
   | { readonly source: "lucid-overlay"; readonly type: "content-width"; readonly width: number }
+  /** Answer to `ping`, echoing its nonce so a reply can be attributed to the
+   *  probe that asked for it rather than to one still in flight. */
+  | { readonly source: "lucid-overlay"; readonly type: "pong"; readonly nonce: string }
   /** Every `data-lucid-id` present in the current artifact. The chrome can't see
    *  the artifact DOM (opaque origin), so the overlay reports it: a section
    *  permalink in chat is a live chip while its id is in this set, and degrades
@@ -89,6 +92,18 @@ export type ChromeMessage =
   | { readonly source: "lucid-chrome"; readonly type: "clear-pending" }
   /** Ask the overlay to measure the artifact's content width. */
   | { readonly source: "lucid-chrome"; readonly type: "measure-content" }
+  /**
+   * A round trip that does nothing, answered by `pong` with the same `nonce`.
+   *
+   * For proving that everything sent BEFORE it has been handled. The overlay
+   * services messages synchronously and in order, so a `pong` is evidence that
+   * the earlier message was processed - which is the only way to observe a
+   * chrome action whose correct outcome is that the artifact does NOT change.
+   * Deliberately inert: any real message borrowed for this purpose would carry
+   * its own effect, and a probe that resizes the panel to answer a question is
+   * not a probe.
+   */
+  | { readonly source: "lucid-chrome"; readonly type: "ping"; readonly nonce: string }
   /**
    * Which palette the artifact renders in. The DECISION is the human's and
    * belongs to the tool, not the document: an artifact must render identically

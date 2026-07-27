@@ -10,8 +10,8 @@ test.afterEach(async () => {
 const surfaceOf = (page: Page): FrameLocator =>
   page.frameLocator('iframe[title="artifact surface"]');
 
-const openViewer = async (page: Page): Promise<{ nextCursor: string }> => {
-  cli = await makeCli(PLAN_V1);
+const openViewer = async (page: Page, html: string = PLAN_V1): Promise<{ nextCursor: string }> => {
+  cli = await makeCli(html);
   const session = (await cli.run(["open", cli.artifact])) as { url: string; nextCursor: string };
   await page.goto(session.url);
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
@@ -1440,10 +1440,50 @@ test("diff view shows changes since a version and revert reaches the agent", asy
   await expect(page.locator('[data-test="diff-bar"]')).toHaveCount(0);
 });
 
+/**
+ * PLAN_V1's content with its colours routed through the standard tokens, plus
+ * the dark remap an author writes.
+ *
+ * The toggle test needs this because PLAN_V1 itself has NO dark form - no
+ * tokens, no `prefers-color-scheme`, just `color:#1a202c` hardcoded on body. An
+ * artifact like that is deliberately left in the one appearance it has, so
+ * asserting that the toggle re-themes it was asserting the defect 569d43c set
+ * out to fix. It only passed because `canRenderDark()` used to find the tokens
+ * Lucid itself injected and call every artifact dark-capable.
+ *
+ * The subject here is the toggle's REACH into the artifact and the persistence
+ * of the choice, which needs a document that can legitimately be re-themed. The
+ * artifact that cannot is covered in contrast.e2e.ts, which asserts the opposite
+ * and is the reason the two disagreed.
+ */
+const THEMED_PLAN = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>Migration plan</title>
+<style>
+  :root { --paper: #faf6ec; --ink: #211d15; }
+  @media (prefers-color-scheme: dark) { :root { --paper: #211d15; --ink: #ece3cf; } }
+  body { background: var(--paper); color: var(--ink); font-family: system-ui;
+         max-width: 760px; margin: 40px auto }
+  li { margin: 6px 0 }
+</style>
+</head>
+<body>
+  <article>
+    <h1>Database migration plan</h1>
+    <ol id="steps">
+      <li data-lucid-id="step-backfill">Backfill from the events table nightly</li>
+      <li>Cut over reads to the new store</li>
+      <li>Decommission the legacy table</li>
+    </ol>
+    <p id="note">This plan assumes zero downtime is required for the cutover.</p>
+  </article>
+</body>
+</html>`;
+
 test("the paper toggle re-themes the artifact itself, and the choice survives a reload", async ({
   page,
 }) => {
-  await openViewer(page);
+  await openViewer(page, THEMED_PLAN);
   const surface = surfaceOf(page);
   const root = surface.locator("html");
 

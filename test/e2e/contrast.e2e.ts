@@ -1,5 +1,7 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { makeCli, surfaceOf, type Cli } from "./helpers.ts";
+import { makeCli, overlaySettled, surfaceOf, type Cli } from "./helpers.ts";
 
 let cli: Cli | undefined;
 test.afterEach(async () => {
@@ -118,32 +120,7 @@ const PLAIN = `<!doctype html>
 <body><h2 data-lucid-id="h">Where to go deeper</h2>
 <p data-lucid-id="p">follow one publish end to end.</p></body></html>`;
 
-// Quarantined by the first CI run this repo ever had, which found two defects
-// stacked on top of each other. M1.1 owns both (its `569d43c` row).
-//
-// The product one: `applyTheme` injects `:root[data-lucid-theme="light"] {
-// --paper: …; --ink: … }` into the artifact on the FIRST theme message, which the
-// chrome sends as soon as the overlay is ready. `canRenderDark()` then asks
-// whether the document declares `--paper` or `--ink` - and from then on it does,
-// because Lucid put them there. So every artifact reads as dark-capable from the
-// second message onward and the 569d43c fix stops applying. Measured on the PLAIN
-// document below, which declares no custom properties at all: `--paper` computes
-// to #faf6ec before the toggle and #211d15 after, with data-lucid-theme="dark".
-// On both platforms - this is not a Linux quirk.
-//
-// The test one: the assertion below polls, so it resolves against the attribute's
-// pre-message value whenever the machine wins the race. That is why this passed on
-// a laptop for as long as a laptop was the only place it ran. A correct version
-// needs a positive settle signal, and for THIS document a correct implementation
-// produces no observable change - so the signal has to come from a second, token-
-// using artifact in the same shell, whose flip proves the broadcast was handled.
-// That is a harness capability (M3.1/M3.4), which is why the rewrite waits rather
-// than being bolted on here.
-//
-// fixme, not fail(): the racy assertion makes the outcome depend on ordering, so
-// test.fail() would flip between expected-failure and unexpectedly-passed and make
-// the gate flap - the one thing this milestone exists to prevent.
-test.fixme("an artifact with no dark form is left in the one it has", async ({ page }) => {
+test("an artifact with no dark form is left in the one it has", async ({ page }) => {
   // Forcing dark on it flips the browser's canvas to near-black while its own
   // hardcoded ink stays dark - dark text on a dark ground, worse than the light
   // page the author actually designed.
@@ -157,7 +134,14 @@ test.fixme("an artifact with no dark form is left in the one it has", async ({ p
   // The toggle records the human's choice...
   await expect(page.locator('[data-test="theme-toggle"]')).toHaveAttribute("data-theme", "dark");
   // ...but this document stays in its only form.
-  await expect(surface.locator("html")).toHaveAttribute("data-lucid-theme", "light");
+  //
+  // Settled first, then read once. A correct implementation produces NO change
+  // here, so there is no transition for a polling assertion to wait on - it would
+  // resolve against the attribute that was already there and pass before the
+  // overlay had read the message at all. That is exactly how this test was green
+  // on a laptop while the behaviour was broken on every platform.
+  await overlaySettled(page);
+  expect(await surface.locator("html").getAttribute("data-lucid-theme")).toBe("light");
 
   const [fg, bg] = await surface
     .locator('[data-lucid-id="h"]')
@@ -166,4 +150,85 @@ test.fixme("an artifact with no dark form is left in the one it has", async ({ p
     `(${RATIO})(${JSON.stringify(fg)}, ${JSON.stringify(bg)})`,
   )) as number;
   expect(ratio, `${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+});
+
+// A dark form carried entirely by the artifact's OWN media block, with no tokens
+// anywhere. Lucid reaches this one by rewriting the query, never by injecting
+// values - so it is the case that proves the rewrite stays reversible.
+const OWN_DARK = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><title>Own dark</title>
+<style>
+  body { background: #faf6ec; color: #211d15; font-family: system-ui; margin: 40px; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #211d15; color: #ece3cf; }
+  }
+</style></head>
+<body><h2 data-lucid-id="h">Where to go deeper</h2></body></html>`;
+
+test("an artifact whose dark form is its own media block follows every toggle", async ({
+  page,
+}) => {
+  cli = await makeCli(OWN_DARK);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  const surface = surfaceOf(page);
+  const root = surface.locator("html");
+  await expect(surface.locator("h2")).toBeVisible();
+
+  const toggle = page.locator('[data-test="theme-toggle"]');
+  await toggle.click();
+  await expect(root).toHaveAttribute("data-lucid-theme", "dark");
+  await toggle.click();
+  await expect(root).toHaveAttribute("data-lucid-theme", "light");
+
+  // Every one of these depends on the same thing, including the first. Applying
+  // a theme REWRITES the artifact's `prefers-color-scheme` conditions to
+  // `(min-width: 0px)` / `(max-width: 0px)`, and the chrome sends a theme
+  // message as soon as the overlay is ready - so by the time a human can click
+  // anything, no rule in the document mentions prefers-color-scheme at all.
+  // Asking the live condition whether this artifact has a dark form would say
+  // no, from the very first toggle. Only the original conditions, kept aside
+  // before the first rewrite, still answer truthfully. The round trip is here
+  // to prove the answer survives being toggled back and forth, not because the
+  // third click is special.
+  await toggle.click();
+  await expect(root).toHaveAttribute("data-lucid-theme", "dark");
+  // Its own block is genuinely in force, not merely the attribute.
+  await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(33, 29, 21)");
+});
+
+// Tokens in a LINKED sheet - the ordinary shape for anything bigger than a
+// one-page document, and the case that cannot be answered by reading rules.
+const LINKED = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><title>Linked</title>
+<link rel="stylesheet" href="tokens.css" /></head>
+<body><h2 data-lucid-id="h">Where to go deeper</h2></body></html>`;
+
+const LINKED_CSS = `:root { --paper: #faf6ec; --ink: #211d15; }
+@media (prefers-color-scheme: dark) { :root { --paper: #211d15; --ink: #ece3cf; } }
+body { background: var(--paper); color: var(--ink); font-family: system-ui; margin: 40px }`;
+
+test("an artifact whose tokens live in a linked sheet still follows the toggle", async ({
+  page,
+}) => {
+  // The surface iframe is sandboxed WITHOUT allow-same-origin, so the artifact
+  // runs on an opaque origin - which is cross-origin with the very server that
+  // served it. Reading `cssRules` off any <link>ed sheet throws SecurityError,
+  // so a capability check that walks rules concludes "no tokens here" for every
+  // artifact that keeps its CSS in a file, and pins it light forever. The tokens
+  // resolve perfectly well; they are just not readable rule by rule. Asking the
+  // computed cascade is the only thing that sees them.
+  cli = await makeCli(LINKED);
+  await writeFile(join(cli.dir, "tokens.css"), LINKED_CSS);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  const surface = surfaceOf(page);
+  await expect(surface.locator("h2")).toBeVisible();
+  // The sheet really did load and its tokens really do resolve - otherwise the
+  // assertion below would be measuring a document with no styling at all.
+  await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(250, 246, 236)");
+
+  await page.locator('[data-test="theme-toggle"]').click();
+  await expect(surface.locator("html")).toHaveAttribute("data-lucid-theme", "dark");
+  await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(33, 29, 21)");
 });

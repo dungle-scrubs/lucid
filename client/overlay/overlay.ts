@@ -81,6 +81,11 @@ const coalesceByLine = (rects: readonly DOMRect[]): Rect[] => {
 
 const post = (message: OverlayMessage): void => window.parent.postMessage(message, "*");
 
+/** The token sheet Lucid injects into the artifact. Named once because
+ *  `canRenderDark` has to recognise and skip it: it declares the very tokens
+ *  that check looks for. */
+const THEME_STYLE_ID = "__lucid_theme_style";
+
 /**
  * The overlay (RFC §1, §5). Injected into the artifact iframe, mounted once
  * into a persistent Shadow-DOM host. Provides hover targeting, click/alt-click
@@ -306,9 +311,9 @@ export class LucidOverlay extends LitElement {
     const wanted = theme === "dark" && !this.canRenderDark() ? "light" : theme;
     document.documentElement.dataset.lucidTheme = wanted;
     this.retuneColorSchemeQueries(wanted);
-    if (document.getElementById("__lucid_theme_style")) return;
+    if (document.getElementById(THEME_STYLE_ID)) return;
     const style = document.createElement("style");
-    style.id = "__lucid_theme_style";
+    style.id = THEME_STYLE_ID;
     style.textContent = `
       :root[data-lucid-theme="light"] {
         --paper: #faf6ec;
@@ -340,20 +345,114 @@ export class LucidOverlay extends LitElement {
    * `prefers-color-scheme` block (so retuning the query reaches it). An
    * artifact with neither has exactly one appearance, and honouring that is
    * more useful than a dark rectangle full of invisible text.
+   *
+   * The question is about the artifact AS ITS AUTHOR WROTE IT, and both halves
+   * used to answer with Lucid's own work instead:
+   *
+   * - `getComputedStyle(:root).--paper` sees the token sheet `applyTheme`
+   *   injects, whose `:root[data-lucid-theme="light"]` block declares `--paper`
+   *   and `--ink`. From the second theme message onward every artifact declared
+   *   the tokens, so every artifact was dark-capable and this check stopped
+   *   meaning anything.
+   * - `rule.conditionText` is REWRITTEN by `retuneColorSchemeQueries`, to
+   *   `(min-width: 0px)` or `(max-width: 0px)`. After the first theme message no
+   *   rule mentions `prefers-color-scheme` at all, so an artifact that qualified
+   *   only on its own dark block stopped qualifying. `schemeQueries` keeps the
+   *   original condition and is the only trustworthy source from then on.
+   *
+   * Measured fresh on every call, never memoized: `markOverlayReady` fires both
+   * on the overlay's `ready` message and on the iframe's `load`, so a `<link>`
+   * sheet can land BETWEEN two theme messages. Freezing the first answer would
+   * lock such an artifact out of dark with no way back.
    */
   private canRenderDark(): boolean {
-    const root = getComputedStyle(document.documentElement);
-    if (root.getPropertyValue("--paper").trim() !== "") return true;
-    if (root.getPropertyValue("--ink").trim() !== "") return true;
-    for (const sheet of Array.from(document.styleSheets)) {
-      try {
-        for (const rule of Array.from(sheet.cssRules)) {
-          if (rule instanceof CSSMediaRule && /prefers-color-scheme/i.test(rule.conditionText)) {
-            return true;
-          }
+    return this.cascadeDeclaresTokens() || this.carriesOwnDarkForm();
+  }
+
+  /**
+   * Does the artifact route colour through the standard tokens?
+   *
+   * Asked of the RESOLVED cascade, because a rule walk cannot answer it. The
+   * artifact frame is sandboxed without `allow-same-origin` (Chrome.tsx), so it
+   * runs on an opaque origin - which is cross-origin with its own server. Every
+   * `<link>`ed sheet therefore throws `SecurityError` on `cssRules`, and a walk
+   * would conclude "no tokens" for the entire class of artifact that keeps its
+   * CSS in a file. Their tokens resolve perfectly well; they are simply not
+   * readable rule by rule.
+   *
+   * Lucid's own tokens are excluded by un-matching them rather than by skipping
+   * a sheet: `:root[data-lucid-theme=…]` is the only selector its injected sheet
+   * uses, so with the attribute absent its declarations cannot apply. Removed
+   * and restored inside one task, so nothing can paint in between.
+   */
+  private cascadeDeclaresTokens(): boolean {
+    const root = document.documentElement;
+    const previous = root.dataset.lucidTheme;
+    delete root.dataset.lucidTheme;
+    try {
+      const own = getComputedStyle(root);
+      return (
+        own.getPropertyValue("--paper").trim() !== "" || own.getPropertyValue("--ink").trim() !== ""
+      );
+    } finally {
+      if (previous !== undefined) root.dataset.lucidTheme = previous;
+    }
+  }
+
+  /**
+   * Does the artifact ship a dark form of its own - a `prefers-color-scheme`
+   * block Lucid can retune, or a rule keyed on the attribute Lucid sets?
+   *
+   * This one needs the rules: no computed value reveals that a document has a
+   * dark variant it is not currently showing. Sheets the sandbox makes
+   * unreadable are skipped, which is the right direction here - an unreadable
+   * dark block cannot be retuned either, so it would keep following the OS
+   * rather than the reader, and claiming it as a dark form would be a lie.
+   */
+  private carriesOwnDarkForm(): boolean {
+    const qualifies = (rules: CSSRuleList): boolean => {
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSMediaRule) {
+          const original = this.schemeQueries.get(rule) ?? rule.conditionText;
+          if (/prefers-color-scheme/i.test(original)) return true;
         }
+        // An artifact may key its own dark form off the attribute Lucid sets.
+        // `themeReadiness` in src/core/theme.ts already counts that as a dark
+        // form when it warns the author, so the viewer has to agree with it -
+        // otherwise `lucid open` stays silent and the artifact is then refused.
+        if (
+          rule instanceof CSSStyleRule &&
+          /data-lucid-theme\s*=\s*["']?dark/i.test(rule.selectorText)
+        ) {
+          return true;
+        }
+        // `@import` hides a whole sheet behind a single rule. Every other
+        // grouping at-rule - @media, @supports, @layer, @container, @scope, and
+        // CSS nesting - just exposes `cssRules`, so duck-typing covers the ones
+        // not invented yet rather than an allowlist that silently misses them.
+        if (rule instanceof CSSImportRule) {
+          try {
+            if (rule.styleSheet && qualifies(rule.styleSheet.cssRules)) return true;
+          } catch {
+            /* imported sheet unreadable from this origin */
+          }
+          continue;
+        }
+        const nested = (rule as Partial<CSSGroupingRule>).cssRules;
+        if (nested && qualifies(nested)) return true;
+      }
+      return false;
+    };
+
+    for (const sheet of Array.from(document.styleSheets)) {
+      // Every sheet Lucid injects, not just the token one: the diff and section
+      // sheets carry hardcoded colours today, and the first person to tokenise
+      // them would otherwise reinstate exactly the bug this method exists to fix.
+      if ((sheet.ownerNode as Element | null)?.id?.startsWith("__lucid_")) continue;
+      try {
+        if (qualifies(sheet.cssRules)) return true;
       } catch {
-        /* unreadable sheet: cannot judge from here */
+        /* opaque-origin or cross-origin sheet: unreadable from here */
       }
     }
     return false;
@@ -403,10 +502,23 @@ export class LucidOverlay extends LitElement {
           rewrite(rule.cssRules);
           continue;
         }
-        // @supports and @layer can wrap a color-scheme block.
-        if (rule instanceof CSSSupportsRule || rule instanceof CSSLayerBlockRule) {
-          rewrite(rule.cssRules);
+        // An imported sheet is a whole stylesheet behind one rule, and its dark
+        // block needs retuning like any other - left alone it keeps following
+        // the OS after the reader has chosen. Everything else that can wrap a
+        // color-scheme block (@supports, @layer, @container, @scope, nesting)
+        // exposes `cssRules`, so duck-typing covers them without an allowlist
+        // that quietly misses whatever CSS adds next. Kept in step with
+        // `carriesOwnDarkForm`, which has to find exactly what this can retune.
+        if (rule instanceof CSSImportRule) {
+          try {
+            if (rule.styleSheet) rewrite(rule.styleSheet.cssRules);
+          } catch {
+            /* imported sheet unreadable from this origin */
+          }
+          continue;
         }
+        const nested = (rule as Partial<CSSGroupingRule>).cssRules;
+        if (nested) rewrite(nested);
       }
     };
 
@@ -625,6 +737,10 @@ export class LucidOverlay extends LitElement {
       this.publishSectionIds();
     } else if (msg.type === "measure-content") {
       post({ source: "lucid-overlay", type: "content-width", width: this.measureContent() });
+    } else if (msg.type === "ping") {
+      // Inert by design - see the protocol. Answered from this same switch so
+      // the reply proves everything queued before it has already been handled.
+      post({ source: "lucid-overlay", type: "pong", nonce: msg.nonce });
     } else if (msg.type === "theme") {
       this.applyTheme(msg.theme);
     } else if (msg.type === "clear-pending") {
