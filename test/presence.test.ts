@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   harnessPidsIn,
+  headlessPidsIn,
   harnessSessionCwd,
   harnessSessionId,
   harnessSupportsPresence,
@@ -63,10 +64,11 @@ describe("realPs asks the OS and gets an answer back", () => {
       const out = await realPs([a.pid, b.pid]);
       const lines = out.split("\n").filter((l) => l.trim() !== "");
       expect(lines).toHaveLength(2);
-      // Both pids present, each followed by a command name - the shape
-      // `harnessPidsIn` parses. `comm` is the executed file's name: `sleep`.
+      // Both pids present, each followed by a command line - the shape
+      // `harnessPidsIn`/`headlessPidsIn` parse. `command` is the full argv, so
+      // `sleep 5` (not just `sleep`) is what the OS reports.
       expect(lines.map((l) => Number.parseInt(l.trim(), 10)).sort()).toEqual([a.pid, b.pid].sort());
-      for (const line of lines) expect(line).toMatch(/^\s*\d+\s+\S*sleep\s*$/);
+      for (const line of lines) expect(line).toMatch(/^\s*\d+\s+\S*sleep\b/);
     } finally {
       a.kill();
       b.kill();
@@ -114,6 +116,31 @@ describe("harnessPidsIn", () => {
   test("a pid that is a prefix of another is not confused with it", () => {
     // 50 and 501 both appear; only the one whose own line names claude counts.
     expect([...harnessPidsIn("50 sleep\n501 claude")]).toEqual([501]);
+  });
+});
+
+describe("headlessPidsIn - the hub's own attend turns, told apart from humans", () => {
+  test("a `-p` resume is headless; a bare interactive claude is not", () => {
+    const out = [
+      "501 claude --resume c5eb5258 -p the-prompt --allowedTools x", // attend turn
+      "502 claude --dangerously-skip-permissions", // a human at a REPL
+      "503 claude --resume abc --print hi", // long-flag form
+    ].join("\n");
+    expect([...headlessPidsIn(out)].sort()).toEqual([501, 503]);
+  });
+
+  test("a `-p` inside the prompt text is not mistaken for the flag", () => {
+    // ps joins argv into one line, so the prompt rides on it. Word boundaries
+    // keep "review the -p flag" from reading as headless - a false miss only
+    // suppresses an interactive claim, never invents one.
+    expect(headlessPidsIn("501 claude --dangerously-skip-permissions review the-p flag").size).toBe(
+      0,
+    );
+  });
+
+  test("empty and blank output yield nothing", () => {
+    expect(headlessPidsIn("").size).toBe(0);
+    expect(headlessPidsIn("\n  \n").size).toBe(0);
   });
 });
 
@@ -230,6 +257,35 @@ describe("livePresence finds a running conversation", () => {
       ).toBe(false);
     } finally {
       await proc.kill();
+    }
+  });
+
+  test("a resumed session that the hub is attending headlessly is NOT interactive", async () => {
+    // The exact production bug: the hub's attend engine resumes an artifact's
+    // session with `claude --resume <id> -p`, and a resumed conversation keeps
+    // its original `kind: interactive` in the session file. Without reading the
+    // argv, the panel says "running in claude-code · interactive" about the
+    // hub's own headless worker, flapping as each turn starts and ends. The
+    // `-p` in the command line is what tells them apart.
+    const proc = Bun.spawn(["sleep", "5"], { stdout: "ignore", stderr: "ignore" });
+    const restore = setProcessLister(async (pids) =>
+      pids.map((pid) => `${pid} claude --resume abc -p the-prompt --allowedTools x`).join("\n"),
+    );
+    try {
+      await writeSession(proc.pid, {
+        sessionId: "bbbbbbbb-0000-4000-8000-000000000009",
+        kind: "interactive", // inherited from the original human session
+      });
+      resetPresenceCache();
+      const live = await livePresence(dir);
+      // Live (the turn is running) but NOT interactive (no human).
+      expect(live.has("bbbbbbbb-0000-4000-8000-000000000009")).toBe(true);
+      expect(live_interactive(live, "bbbbbbbb-0000-4000-8000-000000000009")).toBe(false);
+    } finally {
+      restore();
+      proc.kill();
+      await proc.exited;
+      resetPresenceCache();
     }
   });
 
