@@ -397,9 +397,9 @@
           "expected": "Returns in a couple of seconds. The `**/log.ndjson` glob has no prune list (unlike scanRoots), so a monorepo is the regression to watch.",
           "risk": "medium",
           "kind": "functional",
-          "status": "declined",
-          "declineReason": "WRONG INSTRUMENT. A unit test that src/core/sessions.ts prunes what scanRoots prunes. A wall-clock assertion against a node_modules-sized tree is slow to build, slow to run and flaky to keep, and it would measure the machine as much as the code. See finding #64 - the prune list is genuinely missing today, which is the defect this row was reaching for.",
-          "builtCapability": "M5.3"
+          "status": "uncovered",
+          "builtCapability": "M5.3",
+          "blockedBy": "Finding #64: the claim is FALSE today - src/core/sessions.ts listSessions globs **/log.ndjson with dot:true and NO prune list while registry.ts has SCAN_PRUNE, so bare lucid walks node_modules in any monorepo. The row returns when the prune is shared - and returns as a UNIT test (listSessions prunes what scanRoots prunes), because a wall-clock e2e against a node_modules-sized tree measures the machine as much as the code. The D-079 guard moved this row here from declined: a claim the product fails is a defect gate, not a scope choice, whatever the right instrument is afterwards."
         },
         {
           "id": "status-live-first-ordering",
@@ -447,8 +447,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "WRONG INSTRUMENT. A doc-drift unit test asserting the paths docs/CONTRACT.md names resolve against src/core/paths.ts. Executing a bash block scraped out of markdown is the wrong instrument for what is a docs bug - see finding #65, which is that bug, found while ranking this row."
+          "status": "uncovered",
+          "blockedBy": "Finding #65: the claim is FALSE today - docs/CONTRACT.md documents the pre-move .lucid/<name>/ layout in four places and its statusline snippet greps a path that no longer exists, silently reporting no context usage. Returns when the doc is fixed - as a doc-drift UNIT test asserting the paths CONTRACT.md names resolve against src/core/paths.ts, not as a bash block scraped from markdown. Moved here from declined by the D-079 guard for the same reason as status-large-tree-performance."
         }
       ]
     },
