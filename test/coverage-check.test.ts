@@ -183,6 +183,40 @@ describe("checkLedger folds the outcomes it is given", () => {
     expect(problems).toHaveLength(1);
   });
 
+  test("a defect cannot be filed as a scope choice", () => {
+    // M6.2 declined 12 rows whose reason named a measured finding, which reads
+    // as "we chose not to test this" for scenarios the product cannot exhibit
+    // at all. hostile.e2e.ts's corpus guard caught it; this makes the rule
+    // enforceable rather than remembered (D-079).
+    const problems = checkLedger(
+      [
+        {
+          id: "hostile-csp-meta",
+          status: "declined",
+          declineReason:
+            "DEFECT-GATED. Finding #42: a document-authored default-src 'none' blocks the bootstrap.",
+        },
+      ],
+      { suites: [] },
+    );
+    expect(problems.map((p) => p.problem)).toEqual(["is declined but its reason names a finding"]);
+
+    // An ordinary scope decline is untouched - the rule is about reasons that
+    // point at a defect, not about declining being suspicious.
+    expect(
+      checkLedger(
+        [
+          {
+            id: "palette-empty-result",
+            status: "declined",
+            declineReason: "~0.9s for one string on a no-match query.",
+          },
+        ],
+        { suites: [] },
+      ),
+    ).toEqual([]);
+  });
+
   test("a non-canonical path cannot buy a row out of the run check", () => {
     // `./test/e2e/loop.e2e.ts` names a real e2e file. Before this guard the
     // leading "./" made it read as "not e2e", so the row skipped the report

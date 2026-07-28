@@ -186,6 +186,22 @@ export const checkLedger = (
           detail: "`declined` is the only status that closes a scenario without a test",
         });
       }
+      // `declined` is a SCOPE choice - we could test this and chose not to.
+      // A scenario the product cannot exhibit is a different thing, and
+      // filing it as declined records a defect as a decision: the row stops
+      // reading as debt, and the finding loses the one place that pointed at
+      // it. Those stay `uncovered` with a `blockedBy` naming the finding, so
+      // flipping them to covered when the defect is fixed is deliberate.
+      // M6.2 got this wrong for 12 rows and hostile.e2e.ts's corpus guard is
+      // what caught it (D-079).
+      if (/finding #\d+/i.test(row.declineReason ?? "")) {
+        problems.push({
+          id: row.id,
+          problem: "is declined but its reason names a finding",
+          detail:
+            "a scenario blocked by a measured defect is not a scope choice - leave it `uncovered` with that text in `blockedBy`, so the row stays visible as debt until the defect is fixed",
+        });
+      }
       continue;
     }
     if (row.status !== "covered") continue;

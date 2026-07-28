@@ -1898,9 +1898,9 @@
           "expected": "The tab bar scrolls horizontally, the page body does not, and the last tab plus \"+\" stay reachable and clickable.",
           "risk": "high",
           "kind": "visual",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #53: the shell does not reliably reach N tabs for N artifacts - measured six of twelve by the drawer (deterministic across five re-clicks) and five in 60s per-open. Twelve tabs never exist, so there is nothing to scroll. Returns when the shell converges.",
-          "builtCapability": "M5.3"
+          "status": "uncovered",
+          "builtCapability": "M5.3",
+          "blockedBy": "Finding #53: the shell does not reliably reach N tabs for N artifacts - measured six of twelve by the drawer (deterministic across five re-clicks) and five in 60s per-open. Twelve tabs never exist, so there is nothing to scroll. Returns when the shell converges."
         },
         {
           "id": "tabs-stream-cap-reconnects-on-activate",
@@ -1912,9 +1912,9 @@
           "expected": "The reactivated tab refolds its state and shows the new event live — never a frozen snapshot.",
           "risk": "high",
           "kind": "recovery",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #53: the ten-stream cap cannot be crossed while twelve tabs never open, so the eviction this row is about never happens. Returns with the same fix.",
-          "builtCapability": "M5.3"
+          "status": "uncovered",
+          "builtCapability": "M5.3",
+          "blockedBy": "Finding #53: the ten-stream cap cannot be crossed while twelve tabs never open, so the eviction this row is about never happens. Returns with the same fix."
         },
         {
           "id": "tab-attention-question-in-background",
@@ -1970,9 +1970,9 @@
           "expected": "At every moment the strip contains a data-active tab whose label matches the shown artifact; the strip is never empty under a surface.",
           "risk": "high",
           "kind": "concurrency",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #53: sampling the strip during cross-project opens is meaningless while the strip does not reliably reach N tabs by any path. Returns with the same fix.",
-          "builtCapability": "M5.4"
+          "status": "uncovered",
+          "builtCapability": "M5.4",
+          "blockedBy": "Finding #53: sampling the strip during cross-project opens is meaningless while the strip does not reliably reach N tabs by any path. Returns with the same fix."
         },
         {
           "id": "shell-under-the-panel-hidden-tabs-stay-mounted",
@@ -2158,8 +2158,8 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #56: measured ['Migration - lucid', 'Migration - lucid'] for two artifacts in one project. The qualifier fires, costs strip width and adds no information, so the row's claim - still tellable apart - is false today. test/tab-labels.test.ts records the measured behaviour, so a fix turns it red deliberately."
+          "status": "uncovered",
+          "blockedBy": "Finding #56: measured ['Migration - lucid', 'Migration - lucid'] for two artifacts in one project. The qualifier fires, costs strip width and adds no information, so the row's claim - still tellable apart - is false today. test/tab-labels.test.ts records the measured behaviour, so a fix turns it red deliberately."
         },
         {
           "id": "tabs-cross-project-name-collision",
@@ -2388,9 +2388,9 @@
           "expected": "12 tabs in lastSeen order with no duplicates, exactly one active (the newest), drawer closed, and the window still accepts input during and after the sequential opens.",
           "risk": "high",
           "kind": "functional",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #53 in its purest form - this row IS the defect: the drawer's own count read '12 artifacts' and six tabs opened, five re-clicks running. The N=2 form of the same claim is already covered by drawer-opens-whole-project, so what is missing is only the case that is broken.",
-          "builtCapability": "M5.3"
+          "status": "uncovered",
+          "builtCapability": "M5.3",
+          "blockedBy": "Finding #53 in its purest form - this row IS the defect: the drawer's own count read '12 artifacts' and six tabs opened, five re-clicks running. The N=2 form of the same claim is already covered by drawer-opens-whole-project, so what is missing is only the case that is broken."
         },
         {
           "id": "scope-hides-other-projects",
@@ -3192,9 +3192,9 @@
           "expected": "Both exit 0 with the same url and version, exactly one session_opened, and only one listening port.",
           "risk": "high",
           "kind": "concurrency",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Findings #54 and #55: two concurrent opens append two session_opened events (check-then-act, not guarded by appendEventsIf) and the loser orphans a __serve that `end` cannot reap and the listing cannot see. The row's true half - one url, one server - is already covered; asserting only that would answer the easy clause and leave the two-appenders state unmentioned. Returns when both are fixed.",
-          "builtCapability": "M5.4"
+          "status": "uncovered",
+          "builtCapability": "M5.4",
+          "blockedBy": "Findings #54 and #55: two concurrent opens append two session_opened events (check-then-act, not guarded by appendEventsIf) and the loser orphans a __serve that `end` cannot reap and the listing cannot see. The row's true half - one url, one server - is already covered; asserting only that would answer the easy clause and leave the two-appenders state unmentioned. Returns when both are fixed."
         },
         {
           "id": "hub-attend-env-opt-in-is-strict",
@@ -3798,8 +3798,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #42: a document-authored default-src 'none' blocks the bootstrap module and picking dies with no indication to the human."
+          "status": "uncovered",
+          "blockedBy": "Finding #42: a document-authored default-src 'none' blocks the bootstrap module and picking dies with no indication to the human."
         },
         {
           "id": "hostile-prevent-default",
@@ -3813,8 +3813,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #43: window-capture stopPropagation registered before the bootstrap starves the overlay's listeners silently."
+          "status": "uncovered",
+          "blockedBy": "Finding #43: window-capture stopPropagation registered before the bootstrap starves the overlay's listeners silently."
         },
         {
           "id": "hostile-competing-overlay",
@@ -3862,8 +3862,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #46 (D-065): 18k flat siblings hang resolveElementAnchor super-quadratically - the card never renders and `lucid wait` hangs. The trigger is sibling fan-out, not document bytes."
+          "status": "uncovered",
+          "blockedBy": "Finding #46 (D-065): 18k flat siblings hang resolveElementAnchor super-quadratically - the card never renders and `lucid wait` hangs. The trigger is sibling fan-out, not document bytes."
         },
         {
           "id": "hostile-malformed",
@@ -3877,8 +3877,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #44: inject.ts anchors on the first raw </body>, which is textarea TEXT in a parser-repaired document, so the bootstrap renders as page content."
+          "status": "uncovered",
+          "blockedBy": "Finding #44: inject.ts anchors on the first raw </body>, which is textarea TEXT in a parser-repaired document, so the bootstrap renders as page content."
         },
         {
           "id": "hostile-base-tag",
@@ -3892,8 +3892,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #45: a foreign <base> re-roots the path-absolute /__lucid/client.js to the hostile origin and the overlay never boots."
+          "status": "uncovered",
+          "blockedBy": "Finding #45: a foreign <base> re-roots the path-absolute /__lucid/client.js to the hostile origin and the overlay never boots."
         },
         {
           "id": "hostile-self-rewriting",
@@ -3907,8 +3907,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "DEFECT-GATED. Finding #47: resolution runs against the SAVED file, so a pick on hydrated content resolves positionally onto the skeleton and reports resolved:true with no low-confidence signal - a wrong answer that looks like a right one."
+          "status": "uncovered",
+          "blockedBy": "Finding #47: resolution runs against the SAVED file, so a pick on hydrated content resolves positionally onto the skeleton and reports resolved:true with no low-confidence signal - a wrong answer that looks like a right one."
         },
         {
           "id": "hostile-linked-stylesheet",

@@ -59,9 +59,23 @@ is a different problem with a different fix.
   already-open tab instead of opening a second one`
 - **First observed:** an M4.2 full-suite run. 142 passed, 1 flaky, 1 skipped,
   5.0m. Failed once, passed on retry.
-- **Occurrences since:** none observed. Same caveat as F-1 - the M6.1 gate run
-  carried this test green in 1.0s, which rules out nothing.
-- **Rate:** unmeasured (see above).
+- **Occurrences since:** the M6.1 gate run carried it green in 1.0s. It then
+  **flaked again on the `workers: 4` experiment** (finding #62) - the second
+  observed occurrence, and the first with a captured failure mode:
+
+  ```
+  Error: expect(locator).toBeFocused() failed
+  Locator:  locator('[data-test="palette-input"]')
+  Expected: focused / Received: inactive / Timeout: 10000ms
+  ```
+
+  The palette opened; the focus never arrived. That is a real narrowing - it
+  rules out the palette failing to open, and points at the focus handoff.
+- **Rate:** unmeasured, and now known to be **load-sensitive**: 2 occurrences
+  in roughly a dozen serial runs, one of which came on the first run under four
+  workers. If contention is the trigger, the serial rate and the parallel rate
+  are different numbers and both need measuring separately - which makes the
+  20-runs-per-arm requirement two arms wider, not narrower.
 - **What is known:** the same run carried the entire hostile corpus without
   incident, so whatever this is, it is not general instability under load. The
   test landed in M4.1 (#68) and flaked on the next full run after it.
