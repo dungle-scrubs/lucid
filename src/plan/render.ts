@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { parseHTML } from "linkedom";
 import { marked } from "marked";
 
@@ -14,6 +15,26 @@ export interface RenderOptions {
   readonly title?: string;
   readonly stage?: string;
 }
+
+/**
+ * Where `lucid plan render <doc>` puts its artifact: the `--out` path when one
+ * is given, otherwise the doc's own name with a trailing `.md` traded for
+ * `.lucid.html`.
+ *
+ * Always absolute. The derived path is printed back as `lucid open <path>`, and
+ * a relative one resolves against whatever directory the NEXT process happens to
+ * start in - which for an agent handing the path to a fresh shell is rarely the
+ * one the render ran in.
+ *
+ * The `$` anchor is load-bearing: an unanchored `.md` would eat the first match
+ * anywhere in the path, so a doc under a folder named `notes.md/` would be
+ * written somewhere that does not exist.
+ *
+ * Owns the derivation only - reading the doc, rendering it and writing the file
+ * stay with the CLI handler.
+ */
+export const planArtifactPath = (doc: string, out?: string): string =>
+  resolve(out ?? `${doc.replace(/\.md$/i, "")}.lucid.html`);
 
 const DECISION_RE = /^\s*D-\d+\s*$/;
 

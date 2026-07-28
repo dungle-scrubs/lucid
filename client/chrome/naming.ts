@@ -1,0 +1,108 @@
+import type { HubSession } from "./hub.ts";
+
+/**
+ * What the shell CALLS a session, and which project it files it under.
+ *
+ * Every function here is a fold of listing data into a string, a group, or a
+ * scope. None of them touch a store, a fetch, or the DOM - the listing comes
+ * in as an argument and a value comes back, which is what makes the awkward
+ * cases affordable to cover: an artifact that lives outside its own project, a
+ * name that collides across two projects, a tab the listing cannot place, a
+ * worktree that must not become a project of its own.
+ *
+ * What this module does NOT own: WIRING. Whether the tab bar actually renders
+ * `tabLabel`'s answer, whether the drawer paints a row per `byProject` group,
+ * whether the scope badge re-reads after `tabScope` widens it, and whether two
+ * tabs a human is looking at are visually tellable apart - those are claims
+ * about the shell, and they stay in the browser. It also does not own the
+ * LISTING: which sessions exist, which project the hub decided each belongs to
+ * (a worktree is resolved to its main repo server-side), and whether a dead
+ * registry pointer was pruned are all answered before the data gets here.
+ */
+
+/** What to call a session on screen: its document's title, else its file.
+ *  "Units that got away" says what a session holds; "test2.html" says where
+ *  it lives. */
+export const sessionLabel = (row: Pick<HubSession, "title" | "name">): string =>
+  row.title ?? row.name;
+
+/** Display name of a project root ("lucid" for /Users/x/dev/lucid). */
+export const projectName = (project: string): string =>
+  project.split("/").filter(Boolean).pop() ?? project;
+
+/**
+ * Where an artifact sits, said as briefly as it can be truthfully said: the
+ * path under its project, or - when it lives OUTSIDE the project, as every
+ * artifact in an agent's scratchpad does - just its filename. Slicing the
+ * project prefix off unconditionally produced sliced-up nonsense for those.
+ */
+export const artifactLabel = (artifact: string, project: string): string =>
+  artifact.startsWith(`${project}/`)
+    ? artifact.slice(project.length + 1)
+    : (artifact.split("/").pop() ?? artifact);
+
+/** Sessions grouped by project, insertion-ordered by the (name-sorted)
+ *  listing. A tab is a session; the PROJECT is how a human scans for it.
+ *  Grouping is by `project` alone, so a session in a worktree lands under the
+ *  main repo the hub resolved for it rather than opening a project of its own. */
+export const byProject = (sessions: readonly HubSession[]): Map<string, HubSession[]> => {
+  const groups = new Map<string, HubSession[]>();
+  for (const s of sessions) {
+    const list = groups.get(s.project);
+    if (list) list.push(s);
+    else groups.set(s.project, [s]);
+  }
+  return groups;
+};
+
+/** The distinct worktree checkouts a project's rows live in - what the drawer
+ *  counts as "+N worktrees". A SET, because several sessions in one checkout
+ *  are one worktree, and a project with none is not qualified at all. */
+export const worktreeRoots = (rows: readonly Pick<HubSession, "worktree">[]): Set<string> => {
+  const roots = new Set<string>();
+  for (const r of rows) if (r.worktree) roots.add(r.worktree);
+  return roots;
+};
+
+/** An open tab, as naming sees it: its session key and what its session is
+ *  called. The handle itself is the caller's business. */
+export interface OpenTab {
+  readonly key: string;
+  readonly name: string;
+}
+
+/**
+ * What a tab reads. Two open tabs both called "Migration plan" are
+ * indistinguishable, so a colliding name carries its project the way a browser
+ * qualifies same-titled tabs. A tab stays a SESSION - the project is only the
+ * qualifier, and an uncontested name never grows one.
+ *
+ * `open` is the whole roster including this tab; the collision is with the
+ * OTHERS. A tab whose project the listing cannot name goes unqualified rather
+ * than inventing one.
+ */
+export const tabLabel = (
+  tab: OpenTab,
+  open: readonly OpenTab[],
+  sessions: readonly Pick<HubSession, "artifact" | "project">[],
+): string => {
+  const collides = open.some((o) => o.key !== tab.key && o.name === tab.name);
+  if (!collides) return tab.name;
+  const project = sessions.find((s) => s.artifact === tab.key)?.project;
+  return project ? `${tab.name} · ${projectName(project)}` : tab.name;
+};
+
+/**
+ * The project scope activating a tab implies. The strip is project-scoped
+ * (D8), so landing on a tab from elsewhere (⌘K, `?s=` boot) rescopes to that
+ * tab's project.
+ *
+ * Null when the listing cannot place the tab - it has not caught up yet, or
+ * the artifact is gone. Widening to all projects is the honest answer: keeping
+ * the previous scope would badge one project's name over another project's
+ * artifact, which is the confusing state, and no scope is not a lie.
+ */
+export const tabScope = (
+  key: string,
+  sessions: readonly Pick<HubSession, "artifact" | "project">[],
+): string | null => sessions.find((s) => s.artifact === key)?.project ?? null;

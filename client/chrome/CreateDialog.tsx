@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createRoots, openTab, projectName, setCreateOpen, useHub } from "./hub.ts";
+import { createRoots, openTab, setCreateOpen, useHub } from "./hub.ts";
+import { projectName } from "./naming.ts";
 import { effortLadder, harnessInfoFor } from "./selection.ts";
 import { useShell } from "./shell.ts";
 import { handleize } from "../../src/core/title.ts";

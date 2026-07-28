@@ -181,6 +181,44 @@ describe("checkLedger folds the outcomes it is given", () => {
     );
     expect(problems).toHaveLength(1);
   });
+
+  test("a row covered by a unit test is not judged by a Playwright report", () => {
+    // D-018 routes the unit-shaped scenarios out of e2e. Their tests are real,
+    // but they run in `bun test` and are absent from this report by
+    // construction - reading that absence as a false coverage claim would
+    // punish exactly the move the milestone is making. The check that DOES
+    // vouch for them reads their source; it is the drift test below.
+    const empty = { suites: [] };
+    expect(
+      checkLedger(
+        [
+          {
+            id: "alt-modifier-ignored",
+            status: "covered",
+            testFile: "test/keymap.test.ts",
+            testName: "alt disqualifies every chord",
+          },
+        ],
+        empty,
+      ),
+    ).toEqual([]);
+
+    // The exemption is keyed on the PATH, not on absence: an e2e row missing
+    // from the same empty report is still a problem.
+    expect(
+      checkLedger(
+        [
+          {
+            id: "still-checked",
+            status: "covered",
+            testFile: "test/e2e/loop.e2e.ts",
+            testName: "gone",
+          },
+        ],
+        empty,
+      ),
+    ).toHaveLength(1);
+  });
 });
 
 describe("testTitlesIn returns specs, and only specs", () => {

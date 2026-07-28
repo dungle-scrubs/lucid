@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { addRoot, projectName } from "./hub.ts";
+import { addRoot } from "./hub.ts";
+import { projectName } from "./naming.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**

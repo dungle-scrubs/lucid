@@ -1,5 +1,6 @@
 import type { Anchor } from "../anchors/anchor.ts";
 import type { WaitPayload } from "../core/payload.ts";
+import { ArtifactError } from "../errors.ts";
 
 /**
  * Planner <- Lucid bridge (ingest half). Maps a `lucid wait` payload back onto
@@ -32,6 +33,26 @@ export interface IngestResult {
   /** Suggested plan-db commands (one per item) for the planner to run. */
   readonly commands: readonly string[];
 }
+
+/**
+ * Read `plan ingest`'s input text as a wait payload.
+ *
+ * A typed refusal rather than the raw `SyntaxError`: input arrives from a pipe,
+ * so the common failure is a shell that sent a log line or an error message
+ * where the payload should have been. `ArtifactError` is what the CLI turns
+ * into an exit-1 `ARTIFACT_ERROR` envelope, which is the only signal a script
+ * chaining `lucid wait | lucid plan ingest` can branch on.
+ *
+ * Owns the refusal only - reading stdin or `--payload`, and printing the
+ * result, stay with the CLI handler.
+ */
+export const parseWaitPayloadInput = (raw: string): WaitPayload => {
+  try {
+    return JSON.parse(raw) as WaitPayload;
+  } catch {
+    throw new ArtifactError({ message: "could not parse wait payload JSON from input" });
+  }
+};
 
 const refOf = (target: Anchor): string | undefined => {
   if (target.kind === "element" && target.lucidId && /^[DQ]-\d+$/.test(target.lucidId)) {

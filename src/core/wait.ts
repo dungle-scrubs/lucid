@@ -1,6 +1,6 @@
 import { NotFoundError, ValidationError } from "../errors.ts";
 import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
-import { parseCursor } from "./cursor.ts";
+import { parseCursor, sliceAfterCursor } from "./cursor.ts";
 import {
   foldLog,
   type AnnotationRecord,
@@ -106,11 +106,6 @@ const createWaker = (port: number, base = ""): Waker => {
     },
   };
 };
-
-const sliceDelta = <T extends { readonly seq: number }>(
-  items: readonly T[],
-  cursor: number | undefined,
-): readonly T[] => (cursor === undefined ? items : items.filter((i) => i.seq > cursor));
 
 const buildFromState = (
   paths: SessionPaths,
@@ -238,10 +233,10 @@ export const runWait = async (
         );
       }
 
-      const deltaAnnotations = sliceDelta(state.annotations, cursor);
-      const deltaForks = sliceDelta(state.forks, cursor);
-      const deltaMessages = sliceDelta(state.messages, cursor);
-      const deltaReverts = sliceDelta(state.reverts, cursor);
+      const deltaAnnotations = sliceAfterCursor(state.annotations, cursor);
+      const deltaForks = sliceAfterCursor(state.forks, cursor);
+      const deltaMessages = sliceAfterCursor(state.messages, cursor);
+      const deltaReverts = sliceAfterCursor(state.reverts, cursor);
       const deltaHumanMessages = deltaMessages.filter((m) => m.role === "human");
       const newAnswers = state.questions.some((q) => q.answered && (q.answerSeq ?? 0) > cursor);
       const reviewResolvedAfterCursor = state.reviewResolved && state.reviewToggleSeq > cursor;

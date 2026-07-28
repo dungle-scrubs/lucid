@@ -1,16 +1,8 @@
 import { Command } from "cmdk";
 import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
-import {
-  activateTab,
-  byProject,
-  closeTab,
-  openTab,
-  projectName,
-  sessionLabel,
-  setPaletteOpen,
-  useHub,
-} from "./hub.ts";
+import { activateTab, closeTab, openTab, setPaletteOpen, useHub } from "./hub.ts";
+import { byProject, projectName, sessionLabel } from "./naming.ts";
 import type { SessionHandle } from "./session.ts";
 import { getSession, useShell } from "./shell.ts";
 

@@ -732,10 +732,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/parsers.test.ts",
+          "testName": "a bare integer is an alias for evt_NNNNN, down to the delta it slices",
+          "mutation": "src/core/cursor.ts: remove the bare-integer branch in parseCursor (if (/^\\d+$/.test(trimmed)) -> if (false)). A second mutation, i.seq > cursor -> i.seq >= cursor in sliceAfterCursor, reds the off-by-one case - the alias is only worth anything if it slices the same delta."
         },
         {
           "id": "wait-ended-session",
@@ -1022,10 +1022,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/ask-group.test.ts",
+          "testName": "neither --text nor --group leaves nothing to ask",
+          "mutation": "src/cli/run.ts: neutralise the empty-text guard in runAsk (`if (text === undefined || text.trim() === \"\")` -> `if (false)`) - ask proceeds with nothing to ask"
         },
         {
           "id": "ask-text-and-group-are-exclusive",
@@ -1035,10 +1035,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/ask-group.test.ts",
+          "testName": "--group beside --text, --option or --multi is refused, never quietly preferred",
+          "mutation": "src/cli/run.ts: neutralise the exclusivity guard (`if (text !== undefined || (opts.options ?? []).length > 0 || opts.multi === true)` -> `if (false)`) - one of the two inputs is silently preferred"
         },
         {
           "id": "ask-multi-without-options",
@@ -1050,10 +1050,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/ask-group.test.ts",
+          "testName": "--multi with nothing to pick from does not claim a multi-select",
+          "mutation": "src/cli/run.ts: drop the options-present condition (`...(opts.multi && options.length > 0 ? { multi: true } : {})` -> `...(opts.multi ? { multi: true } : {})`) - the event claims a multi-select with no choices in it"
         },
         {
           "id": "ask-option-parsing-edges",
@@ -1094,10 +1094,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/ask-group.test.ts",
+          "testName": "an oversized group is refused before anything tries to parse it",
+          "mutation": "src/cli/ask-input.ts: neutralise the ceiling (`if (raw.length > MAX_GROUP_CHARS)` -> `if (false)`). ALSO verified against the ORDERING mutation: moving the size check to after JSON.parse turns the same test red, because the payload is both over the ceiling and unparseable - which is what proves the check runs first rather than merely running"
         },
         {
           "id": "ask-group-too-many-questions",
@@ -1107,10 +1107,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/ask-group.test.ts",
+          "testName": "six questions are refused, with the at-most-five rule in the issues",
+          "mutation": "src/core/question-contract.ts: neutralise the count guard (`if (group.length > MAX_QUESTIONS)` -> `if (false)`)"
         },
         {
           "id": "ask-group-choice-without-choices",
@@ -1120,10 +1120,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/ask-group.test.ts",
+          "testName": "a question that must be picked from, with nothing to pick from, is refused",
+          "mutation": "src/core/question-contract.ts: neutralise the choices guard (`if (q.answerShape !== \"free_text\" && q.choices.length === 0)` -> `if (false)`)"
         },
         {
           "id": "ask-group-empty-stdin",
@@ -1133,10 +1133,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/ask-group.test.ts",
+          "testName": "an empty stdin group is refused as an empty pipe, not as broken JSON",
+          "mutation": "src/cli/ask-input.ts: collapse the empty-pipe message into the generic one (`message: source === \"-\" ? \"no question group on stdin\" : `cannot read question group: ${source}`` -> the unconditional form) - a human who piped nothing is told the file is unreadable"
         },
         {
           "id": "ask-group-invalid-json",
@@ -1146,10 +1146,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/ask-group.test.ts",
+          "testName": "malformed group JSON reports the parse problem and names its source",
+          "mutation": "src/cli/ask-input.ts: drop the parse detail from the message (`question group is not valid JSON: ${(e as Error).message}` -> `bad question group (...)`) - the message stops naming what is wrong with the JSON"
         },
         {
           "id": "ask-no-session",
@@ -2179,10 +2179,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/tab-labels.test.ts",
+          "testName": "an artifact with no title is called by its filename",
+          "mutation": "client/chrome/naming.ts: drop the fallback in sessionLabel (`row.title ?? row.name` -> `row.title ?? \"\"`) - an untitled artifact gets a blank tab"
         },
         {
           "id": "tab-label-updates-live",
@@ -2214,7 +2214,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "PRODUCT DEFECT (finding #56): the qualifier does not disambiguate a SAME-project title collision. tabLabel qualifies a collision with projectName(project), so two artifacts in one project sharing a <title> both render the identical string - measured `[\"Migration · lucid\", \"Migration · lucid\"]` for /dev/lucid/plan.html and /dev/lucid/rollout.html. The qualifier fires, costs strip width, and adds no information; only the hover tooltip's path tells them apart. test/tab-labels.test.ts records the current behaviour as measured so a fix turns it red deliberately. The row stays uncovered because its claim - still tellable apart - is false today."
         },
         {
           "id": "tabs-cross-project-name-collision",
@@ -2226,10 +2227,10 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/tab-labels.test.ts",
+          "testName": "both colliding tabs carry their project",
+          "mutation": "client/chrome/naming.ts: neutralise the collision scan in tabLabel (`const collides = false;`) - same-named artifacts from two projects render the same string"
         },
         {
           "id": "tab-long-title-truncates",
@@ -2539,10 +2540,10 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/tab-labels.test.ts",
+          "testName": "a tab the listing cannot place widens the scope instead of lying",
+          "mutation": "client/chrome/naming.ts: in tabScope, replace `?? null` with `?? sessions[0]?.project ?? null` - an unplaceable tab scopes the strip to an arbitrary other project"
         },
         {
           "id": "drawer-open-close-routes",
@@ -2570,10 +2571,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/tab-labels.test.ts",
+          "testName": "a worktree session groups under its main repo, not beside it",
+          "mutation": "client/chrome/naming.ts: in byProject, key on the worktree instead of the repo (`groups.get(s.worktree ?? s.project)`) - a worktree session becomes its own project in the drawer. The sibling claim (`several sessions in one checkout are one worktree`) is measured separately by keying worktreeRoots per row rather than per checkout"
         },
         {
           "id": "drawer-project-with-nothing-left",
@@ -2645,10 +2646,10 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/tab-labels.test.ts",
+          "testName": "an artifact outside its project shows just its filename",
+          "mutation": "client/chrome/naming.ts: drop the startsWith branch in artifactLabel so it is always `artifact.slice(project.length + 1)` - an artifact outside its project shows a garbled slice of an unrelated path"
         },
         {
           "id": "add-folder-bad-path",
@@ -2727,10 +2728,10 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/registry.test.ts",
+          "testName": "a dead pointer is dropped from the listing AND pruned from the file",
+          "mutation": "src/core/registry.ts: neutralise the pointerAlive check in the listing fold so a dead pointer survives - the picker grows a phantom row for a session that is gone"
         },
         {
           "id": "session-data-deleted-while-open",
@@ -2867,7 +2868,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Stays in e2e: the map answers `palette` for either press; the TOGGLE lives in the shell's open/closed state and cmdk's own behaviour, which is paint."
         },
         {
           "id": "palette-with-no-active-session",
@@ -2880,7 +2882,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Stays in e2e: which groups render is cmdk's business, not the keyboard map's."
         },
         {
           "id": "palette-close-this-tab",
@@ -2893,7 +2896,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Stays in e2e: a palette ACTION, not a chord."
         },
         {
           "id": "palette-filters-by-project",
@@ -2906,7 +2910,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Stays in e2e: cmdk owns filtering."
         },
         {
           "id": "palette-annotation-jump",
@@ -2919,7 +2924,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Stays in e2e: needs a located annotation and a real surface to jump in."
         },
         {
           "id": "palette-cmdw-does-not-close-underneath",
@@ -2932,7 +2938,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Stays in e2e: the claim is about which listener wins while an overlay is open - a wiring question the pure map cannot answer."
         },
         {
           "id": "palette-while-hub-is-down",
@@ -2945,7 +2952,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Stays in e2e: needs a hub to drop."
         },
         {
           "id": "cmd-bracket-cycles-with-wrap",
@@ -2958,10 +2966,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/keymap.test.ts",
+          "testName": "] steps forward and [ steps back",
+          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
         },
         {
           "id": "cmd-bracket-uses-keycode",
@@ -2971,10 +2979,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/keymap.test.ts",
+          "testName": "brackets without shift are not stepping",
+          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
         },
         {
           "id": "cmd-w-on-pick-screen",
@@ -2984,10 +2992,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/keymap.test.ts",
+          "testName": "with nothing in front it is not ours to swallow",
+          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
         },
         {
           "id": "shortcuts-work-while-typing",
@@ -3000,7 +3008,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Stays in e2e: the claim is that the chord reaches the window handler AND inserts no character in the composer - two live surfaces."
         },
         {
           "id": "palette-empty-result",
@@ -3023,10 +3032,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/keymap.test.ts",
+          "testName": "a digit past the end does nothing, and swallows nothing",
+          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
         },
         {
           "id": "cmd-bracket-single-tab-noop",
@@ -3036,10 +3045,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/keymap.test.ts",
+          "testName": "one tab has nowhere to step, so nothing happens",
+          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
         },
         {
           "id": "alt-modifier-ignored",
@@ -3049,10 +3058,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/keymap.test.ts",
+          "testName": "alt disqualifies every chord",
+          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
         }
       ]
     },
@@ -3133,10 +3142,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/parsers.test.ts",
+          "testName": "negative, fractional and non-finite counts never reach the indicator",
+          "mutation": "src/core/progress.ts: drop the count guard (typeof v === \"number\" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined -> typeof v === \"number\" ? v : undefined). Composed with foldLog, so the assertion is against the payload the indicator actually renders, not against the sanitizer in isolation; -1 and 3.7 are truthy, so nothing passes coincidentally."
         },
         {
           "id": "context-stale-daemon-404",
@@ -3409,10 +3418,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/parsers.test.ts",
+          "testName": "every refusal falls back to the default hub port",
+          "mutation": "src/server/daemon.ts: drop the digits check in parseHubPort (if (!raw || !/^\\d{1,5}$/.test(raw)) -> if (!raw)) - \"0x1f\" then parses as 31 and the hub binds a port nobody asked for. A second mutation, dropping the range check, reds the out-of-TCP-range case."
         },
         {
           "id": "hub-restart-new-bundle-reloads",
@@ -3643,10 +3652,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/plan-bridge.test.ts",
+          "testName": "a doc renders beside itself as <doc>.lucid.html, and --out overrides that",
+          "mutation": "src/plan/render.ts: drop the --out override in planArtifactPath (resolve(out ?? `${doc}.lucid.html`) -> resolve(`${doc}.lucid.html`)). A second mutation on the same seam - dropping the $ anchor, /\\.md$/i -> /\\.md/i - reds the sibling case, which is what proves the derivation trims only a TRAILING extension."
         },
         {
           "id": "plan-ingest-quotes-escaped",
@@ -3656,10 +3665,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/plan-bridge.test.ts",
+          "testName": "quotes and backslashes stay inside one argument",
+          "mutation": "src/plan/ingest.ts: drop the backslash escape in esc (remove .replace(/\\\\/g, \"\\\\\\\\\")). The sibling case, a note that looks like a second command, reds under dropping the QUOTE escape - together they cover both halves of the shell-injection surface."
         },
         {
           "id": "plan-render-missing-doc",
@@ -3682,10 +3691,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/plan-bridge.test.ts",
+          "testName": "input that is not JSON is a typed refusal, not a raw SyntaxError",
+          "mutation": "src/plan/ingest.ts: in parseWaitPayloadInput, replace the ArtifactError throw with a silent empty payload - unparseable input ingests as if it were an empty review"
         },
         {
           "id": "plan-ingest-empty-payload",
@@ -3697,10 +3706,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/plan-bridge.test.ts",
+          "testName": "a payload with nothing in it invents no commands",
+          "mutation": "src/plan/ingest.ts: remove the approval guard (if (payload.reviewResolved) -> if (true)) - an empty payload produces a command list it has no basis for"
         }
       ]
     },

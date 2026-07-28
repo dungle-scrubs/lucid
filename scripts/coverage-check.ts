@@ -170,6 +170,15 @@ export const checkLedger = (
       });
       continue;
     }
+    // A row covered by a UNIT test (D-018 routes the unit-shaped out of e2e)
+    // cannot be vouched for by a Playwright report - it was never in the run.
+    // Skipping it here is not an exemption: `test/coverage-check.test.ts`
+    // reads every covered row's file and asserts the named test exists in its
+    // SOURCE, which is the stronger check of the two, and it runs in the unit
+    // suite where these tests live. Counted separately in the summary so the
+    // exemption stays visible rather than silent.
+    if (!row.testFile.startsWith("test/e2e/")) continue;
+
     // Both are non-empty here: the guard above is what makes them so.
     const status = ran.get(`${reportPath(row.testFile)}${KEY_SEP}${row.testName}`);
     // `expected` covers both a pass and a `test.fail()` that failed as declared
@@ -392,14 +401,15 @@ const main = async (argv: readonly string[]): Promise<number> => {
       for (const problem of problems) {
         failures.push(`${problem.id} ${problem.problem}: ${problem.detail}`);
       }
-      const distinct = new Set(
-        rows
-          .filter((row) => row.status === "covered")
-          .map((row) => `${row.testFile}${KEY_SEP}${row.testName}`),
-      ).size;
+      const covered = rows.filter((row) => row.status === "covered");
+      const byUnit = covered.filter((row) => !(row.testFile ?? "").startsWith("test/e2e/"));
+      const distinct = new Set(covered.map((row) => `${row.testFile}${KEY_SEP}${row.testName}`))
+        .size;
       console.log(
-        `cross-checked ${summary.covered} covered rows against ${reportPath} ` +
-          `(${distinct} distinct tests back them)`,
+        `cross-checked ${covered.length - byUnit.length} covered rows against ${reportPath} ` +
+          `(${distinct} distinct tests back all ${covered.length}); ` +
+          `${byUnit.length} are covered by unit tests, which this report cannot see - ` +
+          `test/coverage-check.test.ts checks those against their source`,
       );
     }
   }
