@@ -21,3 +21,4 @@ export * from "./hub.ts";
 export * from "./visual.ts";
 export * from "./fixtures.ts";
 export * from "./routes.ts";
+export * from "./scale.ts";

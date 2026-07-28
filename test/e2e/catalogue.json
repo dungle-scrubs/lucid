@@ -806,10 +806,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "a large backlog comes back as one parseable JSON document",
+          "mutation": "src/cli/main.ts: restore an Effect log line on stdout beside the payload (the m2.1 defect) - a 100-item backlog stops being one JSON document and every agent parsing stdout throws"
         },
         {
           "id": "wait-harness-resume-sidecar",
@@ -1939,7 +1939,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Needs a shell holding twelve tabs; the product reaches six by the drawer path (deterministically, and silently) and five per-open inside a 60s budget - plan finding #53. Asserting against six would pin a number nobody chose, and a retry loop in the harness would hide the defect. Uncovered until the shell converges on N tabs for N artifacts."
         },
         {
           "id": "tabs-stream-cap-reconnects-on-activate",
@@ -1955,7 +1956,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Same blocker as tabs-many-strip-scrolls (finding #53): the ten-stream cap cannot be crossed if twelve tabs never open, so the eviction this row is about never happens."
         },
         {
           "id": "tab-attention-question-in-background",
@@ -2455,7 +2457,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "This row IS the defect: picking a 12-artifact project opens six tabs and reports nothing (finding #53, measured deterministically across five re-clicks with the drawer's own count reading '12 artifacts'). Recorded rather than asserted against the broken count."
         },
         {
           "id": "scope-hides-other-projects",
@@ -2609,10 +2612,10 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "project headings stay put while a long list scrolls, and are not clickable",
+          "mutation": "client/chrome/Shell.tsx: drop `sticky` from the picker-project heading - the heading scrolls away from its own rows and nothing says which project the rows under the cursor belong to"
         },
         {
           "id": "picker-huge-list-internal-scroll",
@@ -2624,10 +2627,10 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "a long pick list scrolls inside itself, and its last row is clickable",
+          "mutation": "client/chrome/Shell.tsx: remove the pick list's max-height/overflow so the list grows with its rows - the page scrolls instead of the list and the bottom rows leave the window"
         },
         {
           "id": "picker-scratchpad-subtitle",
@@ -3362,10 +3365,10 @@
           "risk": "medium",
           "kind": "concurrency",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "opening more sessions than the fixed port pool still works",
+          "mutation": "src/server/ports.ts: drop the trailing 0 from sessionPortPool - the ninth session onward has no ephemeral fallback to bind and comes up dead, while the first eight look fine"
         },
         {
           "id": "hub-many-sessions",
@@ -3375,10 +3378,10 @@
           "risk": "medium",
           "kind": "concurrency",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "a hub hosting twenty sessions binds one port and lists them all",
+          "mutation": "src/cli/run.ts: skip the hubOpen path in runOpen (always spawn a dedicated server) - twenty sessions bind twenty ports instead of sharing the hub's one"
         },
         {
           "id": "open-registry-write-failure-is-advisory",
