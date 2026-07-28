@@ -325,6 +325,12 @@ export interface SessionState {
   editingId: string | null;
   editDraft: string;
   sending: boolean;
+  /** A feedback batch has been delivered and no agent has acked it yet - the
+   *  window between the annotation landing in the log and the first `agent_ack`
+   *  that opens `agentWorking`. Client-local, because the log has nothing new
+   *  to show during it: set when a send lands at least one item, cleared the
+   *  moment the agent speaks (a working window opens, or a version arrives). */
+  awaitingAck: boolean;
   /** A fork POST is in flight. Freezes the composer and disables Fork so a
    *  double-click cannot mint a second fork id the shared dedupe can't catch. */
   forking: boolean;
@@ -458,6 +464,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     editingId: null,
     editDraft: "",
     sending: false,
+    awaitingAck: false,
     forking: false,
     forkId: null,
     pastedImages: [],
@@ -552,6 +559,35 @@ export const createNotify = (store: SessionStore): Notify => {
  * it is work, and it lives in the drawer until it is settled; a card for it up
  * here would drift ever further above the reply it eventually produced.
  */
+/** The presence facts the delivered-waiting line reads, named so the choice
+ *  below is a table a test can state as data rather than a rendered component. */
+export interface AwaitPresence {
+  /** A human has the conversation open in a terminal (`attendantPresence.interactive`). */
+  readonly interactive: boolean;
+  /** Agents blocked in `wait` on this session (`agentsListening`). */
+  readonly listening: number;
+  /** The hub attends AND a harness session exists to resume (`attend && resumable`). */
+  readonly spawnable: boolean;
+  /** The attending harness's name, for the interactive line. */
+  readonly harness: string;
+}
+
+/**
+ * What to show in the working slot AFTER a feedback send and BEFORE the agent's
+ * first ack - the window the log cannot narrate because nothing new is in it
+ * yet. The wording is keyed on presence so it promises a response only when one
+ * is actually coming: `transient` lines expect an imminent ack (a shimmer),
+ * while the last line is a standing fact - nothing is attending, and delivery
+ * will sit until someone does. This is the same distinction `ListenerLine`
+ * makes BEFORE a send; this carries it through the send-to-ack gap.
+ */
+export const deliveredWaiting = (p: AwaitPresence): { text: string; transient: boolean } => {
+  if (p.interactive) return { text: `Delivered to ${p.harness} in the terminal`, transient: true };
+  if (p.listening > 0) return { text: "Delivered — waiting for the agent…", transient: true };
+  if (p.spawnable) return { text: "Delivered — starting a turn…", transient: true };
+  return { text: "Delivered — nothing is watching yet", transient: false };
+};
+
 export const buildTimeline = (
   annotations: readonly PayloadAnnotationLike[],
   messages: readonly ConversationMessage[],

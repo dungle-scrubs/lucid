@@ -343,7 +343,14 @@ export const createActions = (ctx: ActionsCtx) => {
     for (const q of get().queue) {
       if (sent.has(q.id)) for (const img of q.images) URL.revokeObjectURL(img.url);
     }
-    set((s) => ({ sending: false, queue: s.queue.filter((q) => !sent.has(q.id)) }));
+    // `awaitingAck` only when something actually landed: a send that delivered
+    // nothing (every POST threw) leaves the queue intact and its own warning,
+    // and must not claim the agent has feedback to answer.
+    set((s) => ({
+      sending: false,
+      queue: s.queue.filter((q) => !sent.has(q.id)),
+      ...(sent.size > 0 ? { awaitingAck: true } : {}),
+    }));
     applyDeferredSwapIfReady();
     pushHighlights();
   };
