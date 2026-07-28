@@ -428,7 +428,10 @@ const ConnectionLine = () => {
           <span
             data-test="reconnecting"
             data-scope={live ? "hub" : "session"}
-            data-retries={streamRetries}
+            // The counter belongs to the SESSION stream, so it is only
+            // meaningful on a session-scoped pill; on a hub-scoped one it
+            // would report 0 for a stream that is fine while the hub is not.
+            {...(live ? {} : { "data-retries": streamRetries })}
             className="flex items-center justify-center gap-1.5 border-t border-ink-700 pt-2 text-[10px] text-steel-400"
           >
             <span className="inline-block size-1.5 flex-none bg-steel-400" />

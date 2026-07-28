@@ -94,9 +94,14 @@ test("a note queued while a send is in flight is not swept away by it", async ({
   await queueNote(page, 'li[data-lucid-id="step-backfill"]', "A: the one that is sending");
   await on(page).sendQueue().click();
 
-  // Mid-flight: the human keeps working. B enters the queue while A's POST
-  // is held by the route.
+  // Mid-flight - and PINNED to be mid-flight: the send bar is disabled only
+  // while a send is in flight, so asserting it here is what stops this test
+  // from quietly passing on a loaded machine where queueNote outran the
+  // 2s hold and B was queued after the send had already settled.
+  await expect(on(page).sendQueue()).toBeDisabled();
+  // The human keeps working. B enters the queue while A's POST is held.
   await queueNote(page, "#note", "B: queued during A's flight");
+  await expect(on(page).sendQueue()).toBeDisabled();
 
   // When the send settles, A is a sent card - and B was reconciled against
   // LIVE state, not a pre-send snapshot, so it is still queued, note intact.
@@ -123,9 +128,14 @@ test("the composer is frozen while a fork POST is in flight, and cannot double-f
   await expect(on(page).fork()).toContainText("Forking…");
   await expect(on(page).fork()).toBeDisabled();
 
-  // After the flight: exactly ONE fork reached the log. The double-click
-  // this guards against would mint a second fork id the dedupe cannot
-  // collapse, so the count is the whole point.
+  // A second click, dispatched PAST the disabled attribute - a real human
+  // cannot press a disabled button, but this is the one assertion that
+  // distinguishes "the button is disabled" from "a second fork is
+  // impossible", and only the second is what the row claims. The guard that
+  // must hold is the composer's own re-entrancy check, not the pixel.
+  await on(page).fork().dispatchEvent("click");
+
+  // After the flight: exactly ONE fork reached the log.
   const feedback = (await cli.run([
     "wait",
     cli.artifact,

@@ -1,7 +1,7 @@
 import { on } from "./locators.ts";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./harness.ts";
-import { surfaceOf, waitTimeoutSeconds, type Cli } from "./helpers.ts";
+import { surfaceOf, type Cli } from "./helpers.ts";
 
 /**
  * The message outbox against a server that answers badly (M5.1).
@@ -103,45 +103,4 @@ test("Discard clears a message mid-flush, unblocks approve, and survives a reloa
   await page.goto(session.url);
   await expect(on(page).unsentMessage()).toHaveCount(0);
   await expect(page.locator('[data-role="human"]')).toHaveCount(0);
-});
-
-test("feedback landing between the read and the ack is not marked delivered", async ({
-  page,
-  cli,
-}) => {
-  // The D-056 scenario, made deterministic by holding the SECOND message's
-  // POST until after the agent's wait has returned and acked. Without that
-  // hold the window is a few milliseconds of server time and the test would
-  // be asserting a race.
-  const { cursor } = await openViewer(page, cli);
-
-  await on(page).messageInput().fill("A: read by the wait");
-  await on(page).sendMessage().click();
-  const chips = on(page).deliveryState();
-  await expect(chips).toHaveCount(1);
-  await expect(chips).toHaveAttribute("data-state", "recorded");
-
-  // The agent reads A and acks it. `covers` is the cursor it just READ.
-  const feedback = (await cli.run([
-    "wait",
-    cli.artifact,
-    "--since",
-    cursor,
-    "--timeout",
-    waitTimeoutSeconds(8),
-  ])) as { status: string; nextCursor: string };
-  expect(feedback.status).toBe("feedback");
-  await expect(chips.first()).toHaveAttribute("data-state", "delivered");
-
-  // B lands AFTER that ack. It belongs to the next batch, and an ack that
-  // claimed its own position rather than the cursor it read would mark it
-  // delivered to an agent that never saw it - the worst kind of wrong,
-  // because the human stops waiting for an answer that is not coming.
-  await on(page).messageInput().fill("B: landed after the ack");
-  await on(page).sendMessage().click();
-  await expect(chips).toHaveCount(2);
-  await expect(chips.last()).toHaveAttribute("data-state", "recorded");
-  // A is still delivered - the ack it earned was not retracted by B's
-  // arrival, which is the other way this could be wrong.
-  await expect(chips.first()).toHaveAttribute("data-state", "delivered");
 });

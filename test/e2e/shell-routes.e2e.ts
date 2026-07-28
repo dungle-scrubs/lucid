@@ -42,8 +42,13 @@ test("before the first listing arrives the screen says it is LOOKING, not empty"
   // "Looking" is the truth while nothing has answered. "No reviews here yet"
   // in this window is a claim the shell cannot support - and it is the one
   // that makes a person go and check whether their session is broken.
+  // The looking state is the assertion. The "No reviews here yet" absence
+  // that used to sit here could not fail - this hub HAS a session, so that
+  // string never renders whichever state the shell is in, and an assertion
+  // that cannot fail is decoration.
   await expect(page.getByText("Looking for sessions…")).toBeVisible();
-  await expect(page.getByText("No reviews here yet.")).toHaveCount(0);
+  // ...and nothing has been offered yet, which is what "still asking" means.
+  await expect(on(page).pickerRow()).toHaveCount(0);
 
   // ...and when the snapshot lands, the looking state gives way to the real
   // answer. Asserting the transition is what keeps this from passing against

@@ -18,6 +18,25 @@ export interface Config {
   /** URL prefix of this session's routes ("" on a dedicated server,
    *  "/s/<id>" under the daemon). Older servers omit it; treat as "". */
   readonly base?: string;
+  /** Cap on the fatal-stream reconnect backoff, ms (D-069). Declared here so
+   *  the field is type-connected end to end: it survived as an untyped extra
+   *  key on the runtime spread, which meant a rename on the server would keep
+   *  typecheck green while the cap silently stopped arriving - the M3.4
+   *  `reducedMotion` failure exactly. */
+  readonly sseMaxBackoffMs?: number;
+}
+
+/**
+ * What the SHELL page carries, as one declaration both sides import.
+ *
+ * The shell's payload is written by `src/server/daemon.ts` into a template
+ * string and read back by `client/chrome/hub.ts`; without a shared type those
+ * two spellings drift silently, which is the same failure this interface's
+ * sibling field above exists to prevent.
+ */
+export interface ShellConfig {
+  readonly mode: "shell";
+  readonly sseMaxBackoffMs?: number;
 }
 
 /**

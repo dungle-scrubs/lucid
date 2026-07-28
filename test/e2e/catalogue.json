@@ -556,10 +556,11 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "covered",
-          "testFile": "test/e2e/message-routes.e2e.ts",
-          "testName": "feedback landing between the read and the ack is not marked delivered",
-          "mutation": "src/cli/run.ts: ack with the log's latest seq instead of the cursor just read - feedback that landed after the read is marked delivered to an agent that never saw it"
+          "status": "declined",
+          "testFile": null,
+          "testName": null,
+          "mutation": null,
+          "declineReason": "The invariant is real but the window is not externally observable: runWaitCli reads the log, gets a payload, and appends the ack microseconds later inside one process with no seam between. Measured three ways - sending after wait returns lands after the ack (and left the row's own mutation green, which is how this was caught); holding the POST and releasing it as the wait starts lands before the read, so the message is legitimately in the batch; and asserting covers === payload.nextCursor is a tautology when nothing lands between. Route-intercept was expected to enable this when the row moved here; it does not, because the gap is server-internal rather than on the wire. Closed with the measurement rather than a test."
         },
         {
           "id": "wait-presence-acks-claim-nothing",
@@ -1257,7 +1258,7 @@
           "status": "covered",
           "testFile": "test/e2e/queue-routes.e2e.ts",
           "testName": "a note queued while a send is in flight is not swept away by it",
-          "mutation": "client/chrome/actions.ts: reconcile sendQueue against a pre-send snapshot instead of live state - the note queued mid-flight is swept away with the sent ones"
+          "mutation": "client/chrome/actions.ts: reconcile sendQueue against a pre-send snapshot instead of live state - the note queued mid-flight is swept away with the sent ones. The test pins the window with a disabled send bar on both sides of the queueing, so it cannot pass by queueing after the send settled."
         },
         {
           "id": "queue-is-lost-on-reload",
@@ -1467,7 +1468,7 @@
           "status": "covered",
           "testFile": "test/e2e/queue-routes.e2e.ts",
           "testName": "the composer is frozen while a fork POST is in flight, and cannot double-fork",
-          "mutation": "client/chrome/actions.ts: drop the `s.forking` arm of forkPending's re-entrancy guard - a second click mints a second fork id and the log holds two forks"
+          "mutation": "client/chrome/Panel.tsx: drop `forking ||` from the Fork button's disabled binding - the button never freezes and the Forking... label never appears (measured red). NOTE the double-fork half is defended TWICE - the forking re-entrancy guard and the stable forkId reuse - so no single-line mutation can produce two forks: dropping either one alone still yields one fork (both measured green). The test dispatches a real second click past the disabled attribute so the claim is asserted, but only the freeze is single-mutation-provable."
         },
         {
           "id": "annotation-image-chip-remove",

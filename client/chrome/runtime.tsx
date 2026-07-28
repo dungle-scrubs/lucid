@@ -105,7 +105,11 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
         const m = item.message;
         return {
           role: m.role === "human" ? "user" : "assistant",
-          id: `${m.role}-${m.at}`,
+          // The event's own seq, never `${m.role}-${m.at}`: one timestamp is
+          // stamped per APPEND at ms precision, so two messages in the same
+          // millisecond collided into one id - and a duplicate id makes
+          // assistant-ui throw and take the entire viewer down with it.
+          id: `${m.role}-${m.seq}`,
           createdAt: new Date(m.at),
           // The agent's own turn has nowhere to be delivered to, so it
           // carries no state rather than a meaningless "recorded".

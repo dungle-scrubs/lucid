@@ -67,6 +67,7 @@ const toMessage = (
   role: m.role,
   text: m.text,
   at: m.at,
+  seq: m.seq,
   ...(m.images && m.images.length > 0
     ? {
         images: m.images.map((img) => ({
