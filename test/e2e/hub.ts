@@ -10,8 +10,69 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect } from "@playwright/test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { hubPort, portBase } from "../../src/server/ports.ts";
 import { invoke, makeCli, MAIN, type Cli } from "./cli.ts";
 import { harnessEnv } from "./harness-env.ts";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * How far the harness's FIXED-port hubs sit above the product's own numbers.
+ *
+ * `hubPort(portBase(env))` alone is 17428 on slot 0 - the exact port the human's
+ * `lucid hub` is on while they work, which is measurably true on this machine
+ * right now. A suite that binds it either fails to start or, worse, is answered
+ * by their hub. So the offset is added to the BASE rather than to the port: the
+ * per-slot stride (20) is preserved, so slot N's fixed hub still cannot meet
+ * slot N+1's, and 100 is wide enough that no slot can land back on a default.
+ */
+const FIXED_HUB_BASE_OFFSET = 100;
+
+/**
+ * A fixed hub port this worker owns, for the scenarios that must restart a hub
+ * on the SAME port (reattach, self-recovery). Derived from `portBase`/`hubPort`
+ * rather than written down, so it moves with the suite's isolation instead of
+ * drifting away from it.
+ */
+export const fixedHubPort = (env: NodeJS.ProcessEnv = process.env): number =>
+  hubPort(portBase(env) + FIXED_HUB_BASE_OFFSET);
+
+/**
+ * Stop whatever is listening on a harness hub port, and wait for the port to go
+ * quiet.
+ *
+ * For hubs the PRODUCT started rather than the harness: `lucid app` spawns its
+ * own detached hub, which carries neither of the two signatures
+ * `gate.ts survivingProcesses` recognizes (no `lucid-e2e-` path, not `--port
+ * 0`), so the global teardown will not reap it. A test that runs `app` owns the
+ * hub it caused, and this is how it gives it back.
+ */
+export const killHubOnPort = async (port: number): Promise<void> => {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const pids = await execFileAsync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"]).then(
+      ({ stdout }) =>
+        stdout
+          .split("\n")
+          .map((line) => Number.parseInt(line.trim(), 10))
+          .filter((pid) => Number.isFinite(pid) && pid > 0),
+      () => [] as number[], // lsof exits 1 when nothing is listening
+    );
+    if (pids.length === 0) return;
+    for (const pid of pids) {
+      try {
+        // SIGKILL rather than SIGTERM: this runs in teardown, and a hub that
+        // takes its time closing streams would leave the next test binding a
+        // port that is still held.
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // already gone between the listing and the signal
+      }
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
 
 /**
  * A real `lucid hub` on an ephemeral port with an isolated registry - the shell
