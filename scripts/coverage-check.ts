@@ -119,23 +119,50 @@ const testsInReport = (report: PlaywrightReport): Map<string, string> => {
  * limit rather than the prefix matching an earlier version of this comment
  * claimed, which never existed.
  */
-export const testTitlesIn = (source: string): string[] => {
-  const titles: string[] = [];
+export interface TestDeclaration {
+  readonly title: string;
+  /** `test.skip` -> "skip". Empty string for a plain `test(`. */
+  readonly modifier: string;
+}
+
+/**
+ * Every `test(...)` declaration in a suite's source, with its modifier.
+ *
+ * The modifier is carried because a SKIPPED test still has its title in the
+ * source: for an e2e row the Playwright report catches that (a skipped test
+ * covers nothing), but a unit-covered row is not in any report, so without
+ * this the title alone would vouch for a test that never runs.
+ */
+export const testDeclarationsIn = (source: string): TestDeclaration[] => {
+  const found: TestDeclaration[] = [];
   // Three quote shapes, not two: biome rewrites a title CONTAINING a double
   // quote into single quotes, so `test('"+" deselects…')` is the formatter's
   // own canonical output - a parser blind to it refused a legal title.
   for (const match of source.matchAll(
-    /^[ \t]*test(?:\.(?:only|skip|fail|fixme))?\(\s*(?:`([^`${]*)`|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/gm,
+    /^[ \t]*test(?:\.(only|skip|fail|fixme|todo))?\(\s*(?:`([^`${]*)`|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/gm,
   )) {
-    const raw = match[1] ?? match[2] ?? match[3];
-    if (raw !== undefined) titles.push(raw.replace(/\\"/g, '"').replace(/\\'/g, "'"));
+    const raw = match[2] ?? match[3] ?? match[4];
+    if (raw !== undefined) {
+      found.push({
+        title: raw.replace(/\\"/g, '"').replace(/\\'/g, "'"),
+        modifier: match[1] ?? "",
+      });
+    }
   }
-  return titles;
+  return found;
 };
+
+export const testTitlesIn = (source: string): string[] =>
+  testDeclarationsIn(source).map((d) => d.title);
 
 /** Playwright reports files relative to `testDir` (`test/e2e`); the catalogue
  *  stores them repo-relative, because that is what a human can open. */
 const reportPath = (testFile: string): string => testFile.replace(/^test\/e2e\//, "");
+
+/** Repo-relative and free of "./" and "../" segments. The ledger's paths are
+ *  compared by prefix, so a non-canonical spelling changes their meaning. */
+export const canonicalPath = (testFile: string): string =>
+  testFile.replace(/^(?:\.\/)+/, "").replace(/\/(?:\.\/)+/g, "/");
 
 /**
  * Everything the ledger claims that this run does not support.
@@ -159,6 +186,22 @@ export const checkLedger = (
           detail: "`declined` is the only status that closes a scenario without a test",
         });
       }
+      // `declined` is a SCOPE choice - we could test this and chose not to.
+      // A scenario the product cannot exhibit is a different thing, and
+      // filing it as declined records a defect as a decision: the row stops
+      // reading as debt, and the finding loses the one place that pointed at
+      // it. Those stay `uncovered` with a `blockedBy` naming the finding, so
+      // flipping them to covered when the defect is fixed is deliberate.
+      // M6.2 got this wrong for 12 rows and hostile.e2e.ts's corpus guard is
+      // what caught it (D-079).
+      if (/finding #\d+/i.test(row.declineReason ?? "")) {
+        problems.push({
+          id: row.id,
+          problem: "is declined but its reason names a finding",
+          detail:
+            "a scenario blocked by a measured defect is not a scope choice - leave it `uncovered` with that text in `blockedBy`, so the row stays visible as debt until the defect is fixed",
+        });
+      }
       continue;
     }
     if (row.status !== "covered") continue;
@@ -170,6 +213,32 @@ export const checkLedger = (
       });
       continue;
     }
+    // The prefix below is a string compare, so the SPELLING of the path
+    // decides which check a row answers to. `./test/e2e/loop.e2e.ts` names a
+    // real e2e file, reads as "not e2e" here, and resolves fine in the source
+    // check - a two-character edit that exempts a row from run-verification
+    // while looking untouched. A path that is not already canonical is a
+    // ledger problem in its own right, not something to normalise silently.
+    if (row.testFile !== canonicalPath(row.testFile)) {
+      problems.push({
+        id: row.id,
+        problem: "names its test file in a non-canonical form",
+        detail: `${row.testFile} should be written as ${canonicalPath(row.testFile)} - the leading "./" or "../" changes which checks the row answers to`,
+      });
+      continue;
+    }
+
+    // A row covered by a UNIT test (D-018 routes the unit-shaped out of e2e)
+    // cannot be vouched for by a Playwright report - it was never in the run.
+    // Skipping it here is not an exemption: `test/coverage-check.test.ts`
+    // reads every covered row's file, asserts the named test exists in its
+    // SOURCE, and asserts it is not `test.skip`/`test.todo` - that second half
+    // is what makes it a real substitute rather than a weaker cousin, because
+    // a skipped test keeps its title in the source and would otherwise vouch
+    // for itself. Counted separately in the summary so the exemption stays
+    // visible rather than silent.
+    if (!row.testFile.startsWith("test/e2e/")) continue;
+
     // Both are non-empty here: the guard above is what makes them so.
     const status = ran.get(`${reportPath(row.testFile)}${KEY_SEP}${row.testName}`);
     // `expected` covers both a pass and a `test.fail()` that failed as declared
@@ -392,14 +461,15 @@ const main = async (argv: readonly string[]): Promise<number> => {
       for (const problem of problems) {
         failures.push(`${problem.id} ${problem.problem}: ${problem.detail}`);
       }
-      const distinct = new Set(
-        rows
-          .filter((row) => row.status === "covered")
-          .map((row) => `${row.testFile}${KEY_SEP}${row.testName}`),
-      ).size;
+      const covered = rows.filter((row) => row.status === "covered");
+      const byUnit = covered.filter((row) => !(row.testFile ?? "").startsWith("test/e2e/"));
+      const distinct = new Set(covered.map((row) => `${row.testFile}${KEY_SEP}${row.testName}`))
+        .size;
       console.log(
-        `cross-checked ${summary.covered} covered rows against ${reportPath} ` +
-          `(${distinct} distinct tests back them)`,
+        `cross-checked ${covered.length - byUnit.length} covered rows against ${reportPath} ` +
+          `(${distinct} distinct tests back all ${covered.length}); ` +
+          `${byUnit.length} are covered by unit tests, which this report cannot see - ` +
+          `test/coverage-check.test.ts checks those against their source`,
       );
     }
   }

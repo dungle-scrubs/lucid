@@ -8,7 +8,6 @@ import { readEvents } from "../core/log.ts";
 import { sessionPaths } from "../core/paths.ts";
 import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
 import { themeReadiness, themeWarning } from "../core/theme.ts";
-import type { WaitPayload } from "../core/payload.ts";
 import { registerSession } from "../core/registry.ts";
 import { sanitizeProgress } from "../core/progress.ts";
 import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
@@ -25,8 +24,8 @@ import {
 import { ArtifactError, NotFoundError, ServerError, ValidationError } from "../errors.ts";
 import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
-import { ingestPayload } from "../plan/ingest.ts";
-import { renderPlanDoc } from "../plan/render.ts";
+import { ingestPayload, parseWaitPayloadInput } from "../plan/ingest.ts";
+import { planArtifactPath, renderPlanDoc } from "../plan/render.ts";
 import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
 import {
   discoverLiveServer,
@@ -35,6 +34,7 @@ import {
   viewerUrl,
 } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
+import { decodeGroupText } from "./ask-input.ts";
 import {
   openBrowser,
   openChromeApp,
@@ -378,40 +378,16 @@ const parseOption = (raw: string): { label: string; description?: string } | und
 };
 
 /**
- * The most a question group's JSON may be before it is parsed. The normalizer
- * bounds every FIELD, but only after `JSON.parse` has already materialized
- * whatever a file or a pipe handed in; five questions of twelve choices fit in
- * a fraction of this, so anything past it is not a group.
+ * Read `--group`'s JSON: a file path, or "-" for stdin. Only the reading is
+ * here - what counts as an acceptable payload is `decodeGroupText`'s, so an
+ * empty pipe and an unreadable file are the same refusal from one place.
  */
-const MAX_GROUP_CHARS = 512 * 1024;
-
-/** Read `--group`'s JSON: a file path, or "-" for stdin. */
 const readGroupSource = async (source: string): Promise<unknown> => {
   const raw =
     source === "-"
       ? await Bun.stdin.text()
       : await readFile(resolve(source), "utf8").catch(() => "");
-  if (raw.trim() === "") {
-    throw new ValidationError({
-      message:
-        source === "-" ? "no question group on stdin" : `cannot read question group: ${source}`,
-      detail: { source },
-    });
-  }
-  if (raw.length > MAX_GROUP_CHARS) {
-    throw new ValidationError({
-      message: `question group is too large (max ${MAX_GROUP_CHARS} characters)`,
-      detail: { source },
-    });
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    throw new ValidationError({
-      message: `question group is not valid JSON: ${(e as Error).message}`,
-      detail: { source },
-    });
-  }
+  return decodeGroupText(raw, source);
 };
 
 export const runAsk = async (
@@ -731,7 +707,7 @@ export const runPlanRender = async (
     ...(options.title !== undefined ? { title: options.title } : {}),
     ...(options.stage !== undefined ? { stage: options.stage } : {}),
   });
-  const outPath = resolve(options.out ?? `${doc.replace(/\.md$/i, "")}.lucid.html`);
+  const outPath = planArtifactPath(doc, options.out);
   await writeFile(outPath, html);
   print({ artifact: outPath, next: `lucid open ${outPath}` });
 };
@@ -739,11 +715,5 @@ export const runPlanRender = async (
 /** `lucid plan ingest --plan <name>` - map a wait payload (stdin) to plan-db. */
 export const runPlanIngest = async (plan: string, payloadPath?: string): Promise<void> => {
   const raw = payloadPath ? await readFile(payloadPath, "utf8") : await Bun.stdin.text();
-  let payload: WaitPayload;
-  try {
-    payload = JSON.parse(raw) as WaitPayload;
-  } catch {
-    throw new ArtifactError({ message: "could not parse wait payload JSON from input" });
-  }
-  print(ingestPayload(payload, plan));
+  print(ingestPayload(parseWaitPayloadInput(raw), plan));
 };

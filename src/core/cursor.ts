@@ -30,3 +30,22 @@ export const parseCursor = (input: string | undefined): number | undefined => {
   }
   return undefined;
 };
+
+/**
+ * The records a cursor still owes its caller: everything strictly after it.
+ *
+ * Strictly `>`, never `>=`. The cursor names the last event the caller has
+ * ALREADY been handed, so `>=` would redeliver that one on every poll and an
+ * agent looping on `nextCursor` would re-apply the same annotation forever.
+ *
+ * An absent cursor is the bootstrap read (D-056), not "cursor zero": nothing
+ * has been seen, so everything is owed. Cursor `0` reaches the same set by a
+ * different route - it is a delta from before the first event.
+ *
+ * Owns the arithmetic only. Which list is sliced, and what a caller does with
+ * the result, stay with `wait`.
+ */
+export const sliceAfterCursor = <T extends { readonly seq: number }>(
+  items: readonly T[],
+  cursor: number | undefined,
+): readonly T[] => (cursor === undefined ? items : items.filter((i) => i.seq > cursor));

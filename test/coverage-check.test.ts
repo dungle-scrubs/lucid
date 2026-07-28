@@ -6,6 +6,7 @@ import {
   GRANDFATHERED_WITHOUT_MUTATION,
   mutationDebt,
   summarise,
+  testDeclarationsIn,
   testTitlesIn,
   unmutatedNewcomers,
 } from "../scripts/coverage-check.ts";
@@ -181,6 +182,124 @@ describe("checkLedger folds the outcomes it is given", () => {
     );
     expect(problems).toHaveLength(1);
   });
+
+  test("a defect cannot be filed as a scope choice", () => {
+    // M6.2 declined 12 rows whose reason named a measured finding, which reads
+    // as "we chose not to test this" for scenarios the product cannot exhibit
+    // at all. hostile.e2e.ts's corpus guard caught it; this makes the rule
+    // enforceable rather than remembered (D-079).
+    const problems = checkLedger(
+      [
+        {
+          id: "hostile-csp-meta",
+          status: "declined",
+          declineReason:
+            "DEFECT-GATED. Finding #42: a document-authored default-src 'none' blocks the bootstrap.",
+        },
+      ],
+      { suites: [] },
+    );
+    expect(problems.map((p) => p.problem)).toEqual(["is declined but its reason names a finding"]);
+
+    // An ordinary scope decline is untouched - the rule is about reasons that
+    // point at a defect, not about declining being suspicious.
+    expect(
+      checkLedger(
+        [
+          {
+            id: "palette-empty-result",
+            status: "declined",
+            declineReason: "~0.9s for one string on a no-match query.",
+          },
+        ],
+        { suites: [] },
+      ),
+    ).toEqual([]);
+  });
+
+  test("a non-canonical path cannot buy a row out of the run check", () => {
+    // `./test/e2e/loop.e2e.ts` names a real e2e file. Before this guard the
+    // leading "./" made it read as "not e2e", so the row skipped the report
+    // cross-check entirely while still resolving in the source check - a
+    // two-character edit that exempts a row from verification and looks like
+    // nothing in a diff.
+    const problems = checkLedger(
+      [
+        {
+          id: "sneaky",
+          status: "covered",
+          testFile: "./test/e2e/loop.e2e.ts",
+          testName: "gone",
+        },
+      ],
+      { suites: [] },
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]?.problem).toBe("names its test file in a non-canonical form");
+  });
+
+  test("a skipped declaration is told apart from a live one", () => {
+    // The title is in the source either way, which is exactly why the modifier
+    // has to be carried: for a unit-covered row the source is the ONLY witness.
+    const source = [
+      'test("a live one", () => {});',
+      'test.skip("a skipped one", () => {});',
+      'test.todo("a todo one");',
+      'test.fail("a declared failure", () => {});',
+    ].join("\n");
+    expect(testDeclarationsIn(source)).toEqual([
+      { title: "a live one", modifier: "" },
+      { title: "a skipped one", modifier: "skip" },
+      { title: "a todo one", modifier: "todo" },
+      { title: "a declared failure", modifier: "fail" },
+    ]);
+    // The older accessor keeps its shape - it is what the drift check used
+    // before the modifier existed, and other callers still read it.
+    expect(testTitlesIn(source)).toEqual([
+      "a live one",
+      "a skipped one",
+      "a todo one",
+      "a declared failure",
+    ]);
+  });
+
+  test("a row covered by a unit test is not judged by a Playwright report", () => {
+    // D-018 routes the unit-shaped scenarios out of e2e. Their tests are real,
+    // but they run in `bun test` and are absent from this report by
+    // construction - reading that absence as a false coverage claim would
+    // punish exactly the move the milestone is making. The check that DOES
+    // vouch for them reads their source; it is the drift test below.
+    const empty = { suites: [] };
+    expect(
+      checkLedger(
+        [
+          {
+            id: "alt-modifier-ignored",
+            status: "covered",
+            testFile: "test/keymap.test.ts",
+            testName: "alt disqualifies every chord",
+          },
+        ],
+        empty,
+      ),
+    ).toEqual([]);
+
+    // The exemption is keyed on the PATH, not on absence: an e2e row missing
+    // from the same empty report is still a problem.
+    expect(
+      checkLedger(
+        [
+          {
+            id: "still-checked",
+            status: "covered",
+            testFile: "test/e2e/loop.e2e.ts",
+            testName: "gone",
+          },
+        ],
+        empty,
+      ),
+    ).toHaveLength(1);
+  });
 });
 
 describe("testTitlesIn returns specs, and only specs", () => {
@@ -282,13 +401,25 @@ describe("the catalogue in this repository", () => {
     expect(covered.length).toBeGreaterThan(30);
 
     const missing: string[] = [];
+    const skipped: string[] = [];
     for (const row of covered) {
       const source = await Bun.file(join(REPO, row.testFile ?? "")).text();
-      if (!testTitlesIn(source).includes(row.testName ?? "")) {
+      const found = testDeclarationsIn(source).find((d) => d.title === row.testName);
+      if (!found) {
         missing.push(`${row.id} -> ${row.testFile} :: ${row.testName}`);
+        continue;
+      }
+      // A skipped test has its title in the source and covers nothing. The
+      // Playwright report says so for an e2e row ("claims a test that was
+      // skipped in this run"); a unit-covered row is in no report, so this is
+      // the only place that can say it. `fail` is exempt - a `test.fail()`
+      // that fails as declared is a real assertion (D-008).
+      if (found.modifier === "skip" || found.modifier === "todo") {
+        skipped.push(`${row.id} -> ${row.testFile} :: ${row.testName} (test.${found.modifier})`);
       }
     }
     expect(missing).toEqual([]);
+    expect(skipped).toEqual([]);
   });
 
   test("the totals are computed, and the hand-written summary is gone", async () => {

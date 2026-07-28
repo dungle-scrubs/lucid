@@ -2,7 +2,14 @@ import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { BUNDLE_SOURCES, bundleFreshness, ensureFreshBundle, sweepStaleRoots } from "./gate.ts";
+import {
+  BINARY_SOURCES,
+  BUNDLE_SOURCES,
+  bundleFreshness,
+  ensureFreshBundle,
+  sweepStaleRoots,
+} from "./gate.ts";
+import { BINARY } from "./cli.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -42,22 +49,53 @@ const globalSetup = async (): Promise<void> => {
   }
 
   // Built once per run rather than per test, and skipped when it is already
-  // newer than the bundle it embeds - CI runs `bun run build` in its own step
-  // seconds earlier, so an unconditional build here compiles the binary twice
-  // in every job and twice again on each platform of the nightly.
+  // newer than everything it is built from - CI runs `bun run build` in its own
+  // step seconds earlier, so an unconditional build here compiles the binary
+  // twice in every job and twice again on each platform of the nightly.
   //
-  // Deliberately a weaker check than the bundle's: nothing under test/ runs
-  // dist/lucid yet, since the harness spawns `bun run src/cli/main.ts`. Today
-  // this proves the binary COMPILES from this commit and nothing more. Phase 5
-  // introduces the first real consumer and has to tighten this to the binary's
-  // own inputs.
-  const binary = join(REPO, "dist", "lucid");
-  const binaryFresh = (await bundleFreshness(binary, [BUNDLE_PATH])).fresh;
-  if (binaryFresh) {
-    log("dist/lucid is current");
+  // Gated on the binary's OWN inputs since M6.2, which is the tightening the
+  // previous version asked its first real consumer to make. It used to compare
+  // dist/lucid against the embedded bundle alone: `compiled-binary-
+  // selfinvocation` drives `dist/lucid` and the code it is about lives in
+  // `src/cli/self.ts`, which that check could not see - so editing
+  // `selfInvocation` left a binary from the previous commit on disk and the
+  // test passed against code that is not in this one. Measured, not argued: a
+  // mutation of `selfInvocation` under the old check produced "dist/lucid is
+  // current" and a green run.
+  // The suite's own binary, not `dist/lucid`. A human's `lucid hub --attend`
+  // is a long-lived process executing that file, and this gate rebuilds on any
+  // src/ change - so pointing it at `dist/lucid` would overwrite a live
+  // executable on nearly every run.
+  const binary = BINARY;
+  const binarySources = BINARY_SOURCES.map((s) => join(REPO, ...s.split("/")));
+  const binaryFreshness = await bundleFreshness(binary, binarySources);
+  if (binaryFreshness.fresh) {
+    log(`${binary} is current`);
   } else {
-    await execFileAsync("bun", ["run", "build:binary"], { cwd: REPO });
-    log("dist/lucid built");
+    await execFileAsync("bun", ["run", "build:binary"], {
+      cwd: REPO,
+      env: { ...process.env, LUCID_BINARY_OUT: binary },
+    });
+    // Said out loud, like the bundle's: which input forced the recompile is
+    // the first question when a run rebuilds one unexpectedly.
+    log(`${binary} built (older than ${binaryFreshness.newestSourcePath})`);
+    // "The build exited 0" and "the artifact on disk is newer" are different
+    // claims, and only the second one makes a run about the shipped binary
+    // mean anything.
+    const after = await bundleFreshness(binary, binarySources);
+    if (!after.fresh) {
+      throw new Error(
+        [
+          "refusing to run: the e2e binary is still older than its sources after building it.",
+          `  binary: ${binary}`,
+          `    mtime ${after.bundleMtimeMs === undefined ? "(missing)" : new Date(after.bundleMtimeMs).toISOString()}`,
+          `  newest source: ${after.newestSourcePath}`,
+          `    mtime ${after.newestSourceMtimeMs === undefined ? "(none)" : new Date(after.newestSourceMtimeMs).toISOString()}`,
+          "Every assertion this run makes about the shipped artifact would be about",
+          "a binary compiled from a different commit.",
+        ].join("\n"),
+      );
+    }
   }
 
   const swept = await sweepStaleRoots({

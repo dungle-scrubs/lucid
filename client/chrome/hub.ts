@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
+import { sessionLabel, tabScope } from "./naming.ts";
 import type { SessionHandle } from "./session.ts";
 import { dropSession, ensureSession, getSession, useShell } from "./shell.ts";
 import type { ShellConfig } from "./types.ts";
@@ -36,24 +37,6 @@ export interface HubSession {
   readonly worktree?: string;
 }
 
-/** What to call a session on screen: its document's title, else its file. */
-export const sessionLabel = (row: HubSession): string => row.title ?? row.name;
-
-/** Display name of a project root ("lucid" for /Users/x/dev/lucid). */
-export const projectName = (project: string): string =>
-  project.split("/").filter(Boolean).pop() ?? project;
-
-/**
- * Where an artifact sits, said as briefly as it can be truthfully said: the
- * path under its project, or - when it lives OUTSIDE the project, as every
- * artifact in an agent's scratchpad does - just its filename. Slicing the
- * project prefix off unconditionally produced sliced-up nonsense for those.
- */
-export const artifactLabel = (artifact: string, project: string): string =>
-  artifact.startsWith(`${project}/`)
-    ? artifact.slice(project.length + 1)
-    : (artifact.split("/").pop() ?? artifact);
-
 /**
  * Every root `POST /hub/create` would accept: the grouping project of each
  * listed session, plus any worktree checkout - the hub lists a worktree as a
@@ -68,18 +51,6 @@ export const createRoots = (sessions: readonly HubSession[]): string[] => {
     if (s.worktree) roots.add(s.worktree);
   }
   return [...roots].sort();
-};
-
-/** Sessions grouped by project, insertion-ordered by the (name-sorted)
- *  listing. A tab is a session; the PROJECT is how a human scans for it. */
-export const byProject = (sessions: readonly HubSession[]): Map<string, HubSession[]> => {
-  const groups = new Map<string, HubSession[]>();
-  for (const s of sessions) {
-    const list = groups.get(s.project);
-    if (list) list.push(s);
-    else groups.set(s.project, [s]);
-  }
-  return groups;
 };
 
 interface HubState {
@@ -152,13 +123,12 @@ const lastActivated = new Map<string, number>();
 
 const activate = (key: string): void => {
   lastActivated.set(key, Date.now());
-  // Activating a tab follows it to its project: the strip is project-scoped
-  // (D8), so landing on a tab from elsewhere (⌘K, ?s boot) rescopes.
-  const project = useHub.getState().sessions.find((s) => s.artifact === key)?.project;
-  // Unknown project (the listing has not caught up with this tab yet): widen
-  // to all projects rather than keeping a scope this tab is not in. A stale
-  // scope over a foreign artifact is the confusing state; no scope is honest.
-  useShell.setState({ activeKey: key, activeProject: project ?? null });
+  // Activating a tab follows it to its project, and widens when the listing
+  // cannot place it - see `tabScope` for why the unplaceable case widens.
+  useShell.setState({
+    activeKey: key,
+    activeProject: tabScope(key, useHub.getState().sessions),
+  });
 };
 
 /**

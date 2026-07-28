@@ -5,20 +5,25 @@ import { SessionView } from "./Chrome.tsx";
 import { CreateDialog } from "./CreateDialog.tsx";
 import {
   activateTab,
-  artifactLabel,
-  byProject,
   closeTab,
   connectHub,
   openProject,
   openTab,
-  projectName,
-  sessionLabel,
   setCreateOpen,
   setPaletteOpen,
   useHub,
   visibleTabKeys,
   type HubSession,
 } from "./hub.ts";
+import { resolveShortcut } from "./keymap.ts";
+import {
+  artifactLabel,
+  byProject,
+  projectName,
+  sessionLabel,
+  tabLabel,
+  worktreeRoots,
+} from "./naming.ts";
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, persistTabs, readStoredTabs, setDrawerOpen, useShell } from "./shell.ts";
@@ -106,14 +111,17 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
   const openKeys = useShell((s) => s.sessionKeys);
   const sessions = useHub((s) => s.sessions);
   if (!handle) return null;
-  // Two open tabs named plan.html are indistinguishable; when names collide,
-  // the tab carries its project (browser-style disambiguation). A tab stays
-  // a SESSION - the project is just the qualifier.
-  const collides = openKeys.some(
-    (k) => k !== sessionKey && getSession(k)?.config.name === handle.config.name,
+  // What the tab reads, including the project qualifier a colliding name
+  // earns, is `tabLabel`'s decision (naming.ts); this only supplies the
+  // roster it needs.
+  const label = tabLabel(
+    { key: sessionKey, name: handle.config.name },
+    openKeys.flatMap((k) => {
+      const h = getSession(k);
+      return h ? [{ key: k, name: h.config.name }] : [];
+    }),
+    sessions,
   );
-  const project = collides ? sessions.find((s) => s.artifact === handle.key)?.project : undefined;
-  const label = project ? `${handle.config.name} · ${projectName(project)}` : handle.config.name;
   return (
     <div
       data-test="shell-tab"
@@ -268,7 +276,7 @@ const ProjectsDrawer = () => {
         </div>
         {[...byProject(sessions)].map(([project, rows]) => {
           const isActive = project === activeProject;
-          const worktrees = new Set(rows.map((r) => r.worktree).filter(Boolean));
+          const worktrees = worktreeRoots(rows);
           return (
             <Tooltip key={project}>
               <TooltipTrigger
@@ -605,44 +613,37 @@ export const Shell = () => {
 
   // The shell's own keyboard: ⌘K palette, ⌘W close the current tab, ⌘1-9 jump
   // to tab N, ⌘⇧[ / ⌘⇧] step tabs.
+  //
+  // The MAP is `resolveShortcut` (keymap.ts) - a pure function from chord and
+  // tab state to a decision - so the table can be exercised without a browser.
+  // This effect owns only the wiring: reading live state, carrying the
+  // decision out, and preventing the default exactly when the gesture is ours.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // The same bail `resolveShortcut` opens with, repeated here on purpose.
+      // This handler sees EVERY keystroke, including every character typed in
+      // the composer, and everything below it reads two stores and rebuilds
+      // the visible strip. Without this line that work happens per character.
+      // `resolveShortcut` still owns the rule - this is a cheap pre-filter that
+      // can only ever skip chords the map would have answered `none` to.
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      if (!e.shiftKey && (e.key === "k" || e.key === "K")) {
-        e.preventDefault();
+      const { sessionKeys: all, activeKey: current, activeProject: proj } = useShell.getState();
+      const rows = useHub.getState().sessions;
+      const action = resolveShortcut(e, {
+        keys: visibleTabKeys(all, rows, proj, current),
+        activeKey: current,
+      });
+      if (action.kind === "none") return;
+      e.preventDefault();
+      if (action.kind === "palette") {
         setPaletteOpen(!useHub.getState().paletteOpen);
         return;
       }
-      // ⌘digits index the VISIBLE (project-scoped) strip, like the pointer.
-      const { sessionKeys: all, activeKey: current, activeProject: proj } = useShell.getState();
-      const rows = useHub.getState().sessions;
-      const keys = visibleTabKeys(all, rows, proj, current);
-      // ⌘W closes the ARTIFACT in front of you, which is what the gesture means
-      // in a tabbed window - the session keeps running, exactly as the × does.
-      if (!e.shiftKey && (e.key === "w" || e.key === "W")) {
-        if (current !== null) {
-          e.preventDefault();
-          closeTab(current);
-        }
+      if (action.kind === "close") {
+        closeTab(action.key);
         return;
       }
-      const digit = Number.parseInt(e.key, 10);
-      if (!e.shiftKey && Number.isInteger(digit) && digit >= 1 && digit <= 9) {
-        const key = keys[digit - 1];
-        if (key) {
-          e.preventDefault();
-          activateTab(key);
-        }
-        return;
-      }
-      if (e.shiftKey && (e.code === "BracketLeft" || e.code === "BracketRight")) {
-        if (keys.length < 2 || current === null) return;
-        e.preventDefault();
-        const at = keys.indexOf(current);
-        const step = e.code === "BracketRight" ? 1 : -1;
-        const next = keys[(at + step + keys.length) % keys.length];
-        if (next) activateTab(next);
-      }
+      activateTab(action.key);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
