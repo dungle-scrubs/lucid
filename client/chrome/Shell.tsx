@@ -620,6 +620,13 @@ export const Shell = () => {
   // decision out, and preventing the default exactly when the gesture is ours.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // The same bail `resolveShortcut` opens with, repeated here on purpose.
+      // This handler sees EVERY keystroke, including every character typed in
+      // the composer, and everything below it reads two stores and rebuilds
+      // the visible strip. Without this line that work happens per character.
+      // `resolveShortcut` still owns the rule - this is a cheap pre-filter that
+      // can only ever skip chords the map would have answered `none` to.
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       const { sessionKeys: all, activeKey: current, activeProject: proj } = useShell.getState();
       const rows = useHub.getState().sessions;
       const action = resolveShortcut(e, {

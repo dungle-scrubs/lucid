@@ -41,8 +41,10 @@ is a different problem with a different fix.
   not eaten, and delivers itself on reconnect`
 - **First observed:** the M3.2 full-suite run. 95 passed, 1 flaky, 1 skipped,
   3.1m. Failed once, passed on retry.
-- **Occurrences since:** none observed. Not the same as "does not recur" - the
-  suite has not been run enough times to distinguish the two.
+- **Occurrences since:** none observed, across an unknown but small number of
+  full runs - including the M6.1 gate run (178 passed, 1 skipped, 7.9m, zero
+  flaky). That is not the same as "does not recur": one clean run is exactly
+  what a one-in-fifteen flake looks like most of the time.
 - **Rate:** unmeasured (see above).
 - **What is known:** the `regression` project carries its own copy of this
   behaviour, `f107e28-message-survives-a-dead-server`, and that copy has never
@@ -57,12 +59,31 @@ is a different problem with a different fix.
   already-open tab instead of opening a second one`
 - **First observed:** an M4.2 full-suite run. 142 passed, 1 flaky, 1 skipped,
   5.0m. Failed once, passed on retry.
-- **Occurrences since:** none observed. Same caveat as F-1.
+- **Occurrences since:** none observed. Same caveat as F-1 - the M6.1 gate run
+  carried this test green in 1.0s, which rules out nothing.
 - **Rate:** unmeasured (see above).
 - **What is known:** the same run carried the entire hostile corpus without
   incident, so whatever this is, it is not general instability under load. The
   test landed in M4.1 (#68) and flaked on the next full run after it.
 - **Plan-db:** finding #49.
+
+## Not a flake: the orphan the teardown reports
+
+Every full run ends with the global teardown reporting survivors, and the M6.1
+gate run reported one:
+
+```
+[e2e teardown] 1 process outlived the suite - killing:
+  33560  bun .../src/cli/main.ts __serve /tmp/lucid-e2e-.../plan.html
+```
+
+This is **not** intermittent and does not belong above. It is finding #55, a
+product defect: two simultaneous `lucid open` of one artifact leave a server
+with no descriptor, so `lucid end` cannot find it, the listing cannot see it,
+and it holds its port until someone kills it by hand. The teardown kills it, so
+the suite stays green and the machine stays clean - which is precisely why it
+needs to be written down somewhere. A defect whose only symptom is a line in a
+teardown log is one nobody will notice has stopped being fixed.
 
 ## Adding an entry
 

@@ -94,6 +94,10 @@ describe("what `lucid ask` needs before it will ask anything", () => {
     const paths = await openArtifact();
     await runAsk(paths.artifactPath, "What should we do?", { multi: true });
     const asked = foldLog((await readEvents(paths.logPath)).events).questions[0];
+    // The question must EXIST before its missing fields mean anything -
+    // `asked?.multi` is undefined just as readily when nothing was appended at
+    // all, which would make the two assertions below hold for the wrong reason.
+    expect(asked).toBeDefined();
     // A `multi` with no choices renders as the plain text box a free-text
     // question already is, so carrying the flag would only tell the agent's
     // own transcript that it offered a selection nobody was shown.

@@ -152,9 +152,22 @@ describe("bracket stepping", () => {
   });
 
   test("an active tab outside the visible strip has no position to step from", () => {
-    // The strip is project-scoped and the active tab can belong to another
-    // project. `indexOf` answers -1 there, and stepping from -1 would land on
-    // an arbitrary neighbour rather than doing nothing.
+    // An INVARIANT guard, not a reachable scenario - and the distinction is
+    // the point, because a test that reads as the latter while being the
+    // former is how a suite fills up with assertions that cost time and prove
+    // nothing.
+    //
+    // Today the shell cannot produce this state: `visibleTabKeys` keeps the
+    // active key unconditionally, `activateTab` returns early unless the
+    // handle exists, and `ensureSession` appends the key when it creates one.
+    // So `indexOf(activeKey) === -1` is unreachable end to end.
+    //
+    // The guard stays anyway, and this pins it: the strip is project-scoped,
+    // and the moment that scoping is allowed to drop the active tab - which is
+    // a plausible change, not a fanciful one - stepping from -1 would activate
+    // an arbitrary neighbour. Pre-extraction `Shell.tsx` had no such guard and
+    // would have done exactly that, so this IS a behaviour change rather than
+    // a pure extraction, and is recorded as one.
     expect(
       resolveShortcut(
         chord({ code: "BracketRight", shiftKey: true }),

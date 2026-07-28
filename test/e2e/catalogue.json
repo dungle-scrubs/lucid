@@ -2968,8 +2968,8 @@
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/keymap.test.ts",
-          "testName": "] steps forward and [ steps back",
-          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
+          "testName": "stepping wraps at both ends",
+          "mutation": "client/chrome/keymap.ts: drop the wraparound (`state.keys[(at + step + state.keys.length) % state.keys.length]` -> `state.keys[at + step]`) - stepping off either end falls off the strip instead of coming round"
         },
         {
           "id": "cmd-bracket-uses-keycode",
@@ -2981,8 +2981,8 @@
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/keymap.test.ts",
-          "testName": "brackets without shift are not stepping",
-          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
+          "testName": "] steps forward and [ steps back",
+          "mutation": "client/chrome/keymap.ts: bind on the produced character instead of the physical key (`chord.code === \"BracketLeft\" || chord.code === \"BracketRight\"` -> the same test against `chord.key`) - the chord stops working on any layout where shift+[ does not produce \"[\""
         },
         {
           "id": "cmd-w-on-pick-screen",
@@ -2995,7 +2995,7 @@
           "status": "covered",
           "testFile": "test/keymap.test.ts",
           "testName": "with nothing in front it is not ours to swallow",
-          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
+          "mutation": "client/chrome/keymap.ts: drop the close guard (`state.activeKey === null ? { kind: \"none\" } : ...` -> always close) - ⌘W on the pick screen resolves to a close with no tab to close"
         },
         {
           "id": "shortcuts-work-while-typing",
@@ -3035,7 +3035,7 @@
           "status": "covered",
           "testFile": "test/keymap.test.ts",
           "testName": "a digit past the end does nothing, and swallows nothing",
-          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
+          "mutation": "client/chrome/keymap.ts: drop the digit bounds check (`return key ? { kind: \"activate\", key } : { kind: \"none\" }` -> `return { kind: \"activate\", key }`) - ⌘5 with three tabs resolves to an activate for undefined"
         },
         {
           "id": "cmd-bracket-single-tab-noop",
@@ -3048,7 +3048,7 @@
           "status": "covered",
           "testFile": "test/keymap.test.ts",
           "testName": "one tab has nowhere to step, so nothing happens",
-          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
+          "mutation": "client/chrome/keymap.ts: drop the step guard (`if (state.keys.length < 2 || state.activeKey === null)`) - one tab steps to itself and the chord is swallowed for no effect"
         },
         {
           "id": "alt-modifier-ignored",
@@ -3061,7 +3061,7 @@
           "status": "covered",
           "testFile": "test/keymap.test.ts",
           "testName": "alt disqualifies every chord",
-          "mutation": "client/chrome/keymap.ts: relax the guard the row is about in resolveShortcut - drop the `chord.altKey` disqualifier, the `keys.length < 2` step guard, the `activeKey === null` close guard, or the `key ? ... : none` bounds check - and the corresponding unit case goes red in milliseconds. The map is a pure function, so every one of these is a one-line edit with no build and no browser."
+          "mutation": "client/chrome/keymap.ts: drop the alt disqualifier in resolveShortcut (`if (!(chord.metaKey || chord.ctrlKey) || chord.altKey)` -> `if (!(chord.metaKey || chord.ctrlKey))`) - ⌥⌘K is answered as if it were ⌘K, taking a chord that may belong to the OS"
         }
       ]
     },
@@ -3652,10 +3652,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/plan-bridge.test.ts",
-          "testName": "a doc renders beside itself as <doc>.lucid.html, and --out overrides that",
-          "mutation": "src/plan/render.ts: drop the --out override in planArtifactPath (resolve(out ?? `${doc}.lucid.html`) -> resolve(`${doc}.lucid.html`)). A second mutation on the same seam - dropping the $ anchor, /\\.md$/i -> /\\.md/i - reds the sibling case, which is what proves the derivation trims only a TRAILING extension."
+          "status": "uncovered",
+          "blockedBy": "PARTIALLY answered, and not enough to call covered. The DERIVATION half - <doc>.lucid.html by default, --out overriding it, only a trailing .md traded away - is unit-covered in test/plan-bridge.test.ts :: 'a doc renders beside itself as <doc>.lucid.html, and --out overrides that', measured red by dropping the --out override and again by dropping the $ anchor. What is NOT covered is what this row's `expected` actually claims: that plan render CREATES a file at that path and prints {artifact, next:\"lucid open ...\"} to stdout. The sibling row plan-render-open-roundtrip exercises the default-path write incidentally; nothing at all covers `--out` writing to exactly the out path. Needs one cheap CLI test, not a browser."
         },
         {
           "id": "plan-ingest-quotes-escaped",
