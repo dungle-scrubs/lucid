@@ -31,9 +31,6 @@ export interface SessionPaths {
    * committable and cannot drift as new sidecars are added.
    */
   readonly runDir: string;
-  /** Where a session's folder used to live, `<artifactDir>/.lucid/<name>`.
-   *  Kept so an existing session can be found and moved forward exactly once. */
-  readonly legacySessionDir: string;
   /** Append-only NDJSON source of truth. COMMITTED (stays under the record). */
   readonly logPath: string;
   /** Root of frozen, segment-scoped version snapshots. COMMITTED. */
@@ -84,7 +81,6 @@ export const sessionPaths = (input: string): SessionPaths => {
     name,
     sessionDir,
     runDir,
-    legacySessionDir: resolve(artifactDir, ".lucid", name),
     // Committed - the record's history stays directly under it.
     logPath: resolve(sessionDir, "log.ndjson"),
     versionsDir: resolve(sessionDir, "versions"),

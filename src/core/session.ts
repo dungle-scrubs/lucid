@@ -1,5 +1,5 @@
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { ArtifactError, ValidationError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
@@ -25,30 +25,6 @@ import { hashContent, validateStructure, writeSnapshot } from "./version.ts";
  * An existing file is never touched, so a team that wants part of the record
  * committed edits it (`!log.ndjson`) and keeps that forever.
  */
-/**
- * Move a session's folder out of the old `.lucid/` container, once.
- *
- * The record now sits beside its artifact (`lucid/plan.html` + `lucid/plan/`)
- * instead of inside a second, hidden `.lucid/` within the same folder. Sessions
- * that predate that keep working: the first open renames the folder forward.
- *
- * Never merges. If both exist, something already wrote the new location and
- * guessing which log is authoritative would be worse than leaving the old one
- * on disk untouched.
- */
-export const migrateLegacySessionDir = (paths: SessionPaths): void => {
-  if (existsSync(paths.sessionDir) || !existsSync(paths.legacySessionDir)) return;
-  try {
-    renameSync(paths.legacySessionDir, paths.sessionDir);
-  } catch {
-    return; // leave it where it is; nothing is lost, and the next open retries
-  }
-  try {
-    rmdirSync(dirname(paths.legacySessionDir)); // only if now empty
-  } catch {
-    /* other sessions still live there */
-  }
-};
 
 /**
  * Is `<dir>/<stem>/` somebody ELSE's directory?
@@ -123,7 +99,6 @@ const occupiedByOthers = (paths: SessionPaths): boolean => {
 };
 
 export const ensureSessionDirs = (paths: SessionPaths): void => {
-  migrateLegacySessionDir(paths);
   if (occupiedByOthers(paths)) {
     throw new ValidationError({
       message:

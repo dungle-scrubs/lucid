@@ -27,9 +27,10 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** Seed a session on disk: `<root>/<proj>/.lucid/<name>/log.ndjson`. */
+/** Seed a CANONICAL record on disk (plan 02): artifact AND record both under
+ *  `<root>/<proj>/.lucid/` - `.lucid/<name>.html` beside `.lucid/<name>/`. */
 const seedSession = async (root: string, proj: string, name: string): Promise<string> => {
-  const artifact = join(root, proj, `${name}.html`);
+  const artifact = join(root, proj, ".lucid", `${name}.html`);
   const sessionDir = join(root, proj, ".lucid", name);
   await mkdir(sessionDir, { recursive: true });
   const opened = {

@@ -80,3 +80,23 @@ describe("ensureSessionDirs: committable by default, never a bare *", () => {
     }
   });
 });
+
+describe("the dual-layout machinery is gone (plan 02, MB.2)", () => {
+  test("no SessionPaths field or migration for the old .lucid container", async () => {
+    // The one-time move to canonical is the migration tool's job (MB.4/MB.5),
+    // not an open-time rename. `migrateLegacySessionDir` and `legacySessionDir`
+    // were deleted; a reference would fail to typecheck, and this pins their
+    // absence in the source so a well-meaning re-introduction is loud.
+    const p = sessionPaths("/proj/.lucid/plan.html") as unknown as Record<string, unknown>;
+    expect("legacySessionDir" in p).toBe(false);
+    for (const file of [
+      "../src/core/session.ts",
+      "../src/core/paths.ts",
+      "../src/server/daemon.ts",
+    ]) {
+      const src = await Bun.file(new URL(file, import.meta.url)).text();
+      expect(src.includes("migrateLegacySessionDir")).toBe(false);
+      expect(src.includes("legacySessionDir")).toBe(false);
+    }
+  });
+});

@@ -141,7 +141,7 @@ describe("hub daemon", () => {
   });
 
   test("POST /hub/open registers, mounts, and answers the shell URL", async () => {
-    const artifact = join(root, "proj2", "plan.html");
+    const artifact = join(root, "proj2", ".lucid", "plan.html");
     await mkdir(join(root, "proj2", ".lucid", "plan"), { recursive: true });
     const opened = {
       seq: 1,
@@ -229,7 +229,7 @@ describe("hub daemon", () => {
       sessions: Array<{ artifact: string }>;
     };
     expect(after.sessions.map((s) => s.artifact)).toEqual([
-      canonicalArtifactPath(join(elsewhere, "old-plan.html")),
+      canonicalArtifactPath(join(elsewhere, ".lucid", "old-plan.html")),
     ]);
   });
 
@@ -277,7 +277,9 @@ describe("hub daemon", () => {
     expect(body.sessions).toHaveLength(1);
     expect(body.sessions[0]?.project).toBe(project);
     // And the artifact still points at where the file really is.
-    expect(body.sessions[0]?.artifact).toBe(canonicalArtifactPath(join(pad, "sdlc-flow.html")));
+    expect(body.sessions[0]?.artifact).toBe(
+      canonicalArtifactPath(join(pad, ".lucid", "sdlc-flow.html")),
+    );
   });
 
   test("POST /hub/roots answers the whole scanned set, not only the addition", async () => {
