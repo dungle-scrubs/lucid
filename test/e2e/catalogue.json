@@ -372,10 +372,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "a truncated artifact on resume warns instead of committing a broken version",
+          "mutation": "src/core/session.ts: drop the `structure.ok` guard on the reconciliation commit - a half-written file becomes a version anyone can revert to, and current.html stops holding the last good bytes"
         },
         {
           "id": "open-theme-warning-advisory",
@@ -443,10 +443,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "the listing puts live sessions first, then sorts by name",
+          "mutation": "src/core/sessions.ts: drop the live-first arm of the sort comparator (name only) - a dead session outranks the one you are looking at"
         },
         {
           "id": "status-hub-hosted-viewer-url",
@@ -623,10 +623,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "a dead server makes wait return suspended, well before its timeout",
+          "mutation": "src/core/wait.ts: neutralise the liveness arm in the wait loop (`if (!liveKnown)` -> `if (false)`) - the wait blocks to its full deadline against a server that is gone, so an agent burns its turn busy-waiting (measured red)"
         },
         {
           "id": "wait-two-waiters-both-get-the-batch",
@@ -901,10 +901,10 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "an edit made while nobody was serving becomes v2 on the next open",
+          "mutation": "src/core/session.ts: skip the reconciliation branch on resume (treat `changed` as false) - an edit made while nothing was watching never becomes a version and is invisible to review"
         },
         {
           "id": "end-idempotent",
@@ -940,10 +940,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "end after the server already died still clears the descriptor",
+          "mutation": "src/cli/run.ts: skip removeServerDescriptor on the !live branch of runEnd - server.json outlives the process and the next listing reports a ghost live session"
         },
         {
           "id": "end-while-viewer-open",
@@ -1174,10 +1174,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "a question asked while the server is down survives to the next open",
+          "mutation": "src/cli/run.ts: make runAsk require a live server (return/throw when discoverLiveServer answers undefined) - a question asked during an outage is lost rather than appended directly to the log"
         },
         {
           "id": "ask-group-missing-file",
@@ -3239,10 +3239,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "a hub that accepts a session and never serves it fails loudly, never split-brains",
+          "mutation": "src/cli/run.ts: neutralise the post-accept handshake guard (`if (!identity)` -> `if (false)`) - open silently serves a session the hub already owns, putting two appenders on one log (measured red against a stub hub that accepts and never serves; killing a real hub BEFORE open does not enter this branch and left the guard unproven)"
         },
         {
           "id": "open-stale-descriptor-recovered",
