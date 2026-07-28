@@ -1142,7 +1142,7 @@ export const createSessionHost = (
    * conversation is open in a terminal right now.
    *
    * Polled, because nothing writes to the LOG when a human opens or closes a
-   * terminal - and without a push the panel kept saying "open in claude-code"
+   * terminal - and without a push the panel kept saying "running in claude-code"
    * at a session that had exited, or offered a resume command for one already
    * running, until some unrelated event happened to land. Only broadcast on
    * CHANGE, and the sweep behind it is cached, so a quiet session costs a

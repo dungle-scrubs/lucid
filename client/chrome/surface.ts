@@ -138,6 +138,12 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
         messages: [...payload.messages],
         questions: [...(payload.questions ?? [])],
         agentWorking: payload.agentWorking ?? null,
+        // The agent has spoken once a working window opens or a new version
+        // lands - either closes the delivered-waiting gap. Cleared here rather
+        // than on a timer, so an unattended send (nothing ever acks) keeps
+        // saying "nothing is watching yet" truthfully instead of lapsing to
+        // silence.
+        awaitingAck: s.awaitingAck && payload.agentWorking == null && payload.version <= s.version,
         agentsListening: payload.agentsListening ?? 0,
         lastAttendant: payload.lastAttendant ?? null,
         attendantPresence: payload.attendantPresence ?? null,

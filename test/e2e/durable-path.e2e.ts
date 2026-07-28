@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CliFailure } from "./cli-result.ts";
 import { invoke } from "./cli.ts";
-import { harnessEnv } from "./harness-env.ts";
+import { DEAD_HUB_PORT, harnessEnv } from "./harness-env.ts";
 import { makeDurableArtifact, PLAN_V1, type DurableFixture } from "./helpers.ts";
 
 /**
@@ -34,9 +34,19 @@ test.afterEach(async () => {
   strays = [];
 });
 
-/** The harness env MINUS the temp opt-out - the refusal is the subject. */
+/** The harness env MINUS the temp opt-out - the refusal is the subject.
+ *
+ * `LUCID_HUB_PORT` is pinned dead, exactly as `launcher.e2e.ts` does, and for
+ * the same reason: `harnessEnv` does not set it, so without this the CLI's
+ * `open` inherits the port from the process and finds whatever hub the
+ * developer is running. That hub then HOSTS the session and answers with its
+ * own url, and the standalone-server path - the one that calls `recordOpen`
+ * and writes `LUCID_OPEN_LOG` - is never taken. The launch-recording test then
+ * reads an open log that was never written. Port 1 is privileged and never
+ * bound, so the dedicated-server path is deterministic whether or not a hub is
+ * up. */
 const strictEnv = (dir: string): Record<string, string> => {
-  const env = { ...harnessEnv(dir) };
+  const env = { ...harnessEnv(dir), LUCID_HUB_PORT: DEAD_HUB_PORT };
   delete (env as Record<string, string | undefined>).LUCID_ALLOW_TEMP;
   return env as Record<string, string>;
 };

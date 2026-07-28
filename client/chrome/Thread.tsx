@@ -25,6 +25,7 @@ import {
   Warnings,
 } from "./Panel.tsx";
 import { QaPart } from "./QaPart.tsx";
+import { deliveredWaiting } from "./store.ts";
 import { markdownComponents, prose, urlTransform } from "./ui/markdown.tsx";
 import { closeButtonSmall } from "./ui/close.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
@@ -196,6 +197,12 @@ const WORKING_STALE_MS = 10 * 60 * 1000;
 const WorkingIndicator = () => {
   const working = useSession((s) => s.agentWorking);
   const status = useSession((s) => s.status);
+  const awaitingAck = useSession((s) => s.awaitingAck);
+  const listening = useSession((s) => s.agentsListening);
+  const presence = useSession((s) => s.attendantPresence);
+  const attendant = useSession((s) => s.lastAttendant);
+  const resumable = useSession((s) => s.resumable);
+  const attend = useHub((s) => s.attend) === true;
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -203,6 +210,24 @@ const WorkingIndicator = () => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [working]);
+
+  // The delivered-to-ack gap: feedback is in the log, no working window is open
+  // yet, and the log has nothing new to render. Fill the SAME slot the working
+  // line will take, so "Delivered — waiting…" flows into "Updating the
+  // artifact…" as one story rather than a gap and then a jump.
+  if (!working && awaitingAck && status === "active") {
+    const { text, transient } = deliveredWaiting({
+      interactive: presence?.interactive === true,
+      listening,
+      spawnable: attend && resumable,
+      harness: attendant?.harness ?? "the agent",
+    });
+    return (
+      <div data-test="awaiting-ack" data-transient={transient} className="text-[12px]">
+        <span className={transient ? "shimmer text-fg/40" : "text-fg-muted"}>{text}</span>
+      </div>
+    );
+  }
 
   if (!working || status !== "active") return null;
   const elapsed = Math.max(0, now - new Date(working.since).getTime());
@@ -318,7 +343,7 @@ const ListenerLine = () => {
                 data-test="mode-term"
                 className="border-b border-dotted border-agent/40 text-[10px] uppercase tracking-[0.08em] text-agent"
               >
-                {`open in ${harness}`}
+                {`running in ${harness}`}
                 {presence.status ? ` · ${presence.status}` : ""}
               </span>
             }

@@ -77,20 +77,53 @@ export const harnessPidsIn = (psOutput: string): Set<number> => {
 };
 
 /**
- * Ask the OS for the command name behind each pid.
+ * The pids whose argv shows a HEADLESS invocation - `-p` / `--print`.
+ *
+ * `presenceFor` exists to tell the panel "a human is watching this in a
+ * terminal, do not drive turns". The hub's OWN attend engine resumes a session
+ * headlessly (`claude --resume <id> -p …`), and a resumed conversation keeps
+ * its original `kind` in the session file - so an attend turn on a session that
+ * WAS interactive re-registers as `kind: interactive` and gets misread as a
+ * person. The `kind` field cannot be trusted through a `-p` resume; the argv
+ * can, because print mode is exactly what "no human at a REPL" looks like.
+ *
+ * The token is matched with word boundaries so a `-p` sitting inside the
+ * prompt text (which `ps` joins into the same line) is not mistaken for the
+ * flag - and a false miss only ever SUPPRESSES an interactive claim, the safe
+ * direction: the panel falls back to spawn/listening, never up to a human that
+ * is not there.
+ */
+export const headlessPidsIn = (psOutput: string): Set<number> => {
+  const headless = new Set<number>();
+  for (const line of psOutput.split("\n")) {
+    const m = /^\s*(\d+)\s+(.*\S)\s*$/.exec(line);
+    if (!m?.[1] || !m[2]) continue;
+    if (/(?:^|\s)(?:-p|--print)(?:\s|$)/.test(m[2])) headless.add(Number.parseInt(m[1], 10));
+  }
+  return headless;
+};
+
+/**
+ * Ask the OS for the FULL command line behind each pid.
+ *
+ * `command`, not `comm`: `comm` is the executed file's name alone (`claude`),
+ * and `headlessPidsIn` needs to see the `-p` flag to tell an attend turn from a
+ * human's REPL - which lives in the argv, not the name. Liveness
+ * (`harnessPidsIn`) still just tests for "claude" anywhere on the line, so it is
+ * unaffected by the wider column.
  *
  * Injectable, and the reason is not tidiness. Proving that this check rejects a
- * recycled pid needs a live process whose `comm` contains "claude", and `comm`
- * on macOS comes from the name of the executed FILE - so a test can only
- * produce one by executing a file called `claude-something`. The fixture did
- * that by copying `/bin/sleep`, and a copied platform binary fails macOS code
- * signature validation: the process is SIGKILLed, and enough repetitions crash
- * `syspolicyd` outright and take new app launches down with it. Twice, on this
- * project, before anyone connected the two.
+ * recycled pid needs a live process whose command names "claude", and a test
+ * can only produce one by executing a file called `claude-something`. The
+ * fixture tried that by copying `/bin/sleep`, and a copied platform binary
+ * fails macOS code signature validation: the process is SIGKILLed, and enough
+ * repetitions crash `syspolicyd` outright and take new app launches down with
+ * it. Twice, on this project, before anyone connected the two.
  *
  * So the pid stays real - a plain `sleep`, genuinely running, genuinely
- * reaped - and only the NAME the OS would report is substituted. What the check
- * does with that name is `harnessPidsIn`, which is pure and tested directly.
+ * reaped - and only the STRING the OS would report is substituted. What the
+ * check does with that string is `harnessPidsIn`/`headlessPidsIn`, both pure
+ * and tested directly.
  *
  * Substituting it is not a licence to leave the real thing untested: everything
  * that can be wrong with `ps` - the flags, the pid list, the exit handling -
@@ -101,7 +134,7 @@ export const harnessPidsIn = (psOutput: string): Set<number> => {
 export type ProcessLister = (pids: readonly number[]) => Promise<string>;
 
 export const realPs: ProcessLister = async (pids) => {
-  const proc = Bun.spawn(["ps", "-p", pids.join(","), "-o", "pid=,comm="], {
+  const proc = Bun.spawn(["ps", "-p", pids.join(","), "-o", "pid=,command="], {
     stdout: "pipe",
     stderr: "ignore",
   });
@@ -129,14 +162,17 @@ export const resetProcessLister = (): void => {
   listProcesses = realPs;
 };
 
-const liveHarnessPids = async (pids: readonly number[]): Promise<Set<number>> => {
-  if (pids.length === 0) return new Set();
+const sweepHarnessPids = async (
+  pids: readonly number[],
+): Promise<{ live: Set<number>; headless: Set<number> }> => {
+  if (pids.length === 0) return { live: new Set(), headless: new Set() };
   try {
-    return harnessPidsIn(await listProcesses(pids));
+    const out = await listProcesses(pids);
+    return { live: harnessPidsIn(out), headless: headlessPidsIn(out) };
   } catch {
     // No `ps` (or it refused): report nothing rather than guessing a session
     // is live. Every caller's fallback is the pre-detection behaviour.
-    return new Set();
+    return { live: new Set(), headless: new Set() };
   }
 };
 
@@ -165,7 +201,7 @@ export const livePresence = async (dir?: string): Promise<Map<string, HarnessPre
     }
   }
 
-  const live = await liveHarnessPids(candidates.map((c) => c.pid as number));
+  const { live, headless } = await sweepHarnessPids(candidates.map((c) => c.pid as number));
   const byId = new Map<string, HarnessPresence>();
   for (const c of candidates) {
     const pid = c.pid as number;
@@ -174,7 +210,11 @@ export const livePresence = async (dir?: string): Promise<Map<string, HarnessPre
     const presence: HarnessPresence = {
       sessionId,
       pid,
-      interactive: c.kind === "interactive",
+      // A `-p` process is the hub's own headless attend turn, never a human at
+      // a terminal - so it is not interactive whatever `kind` the resumed
+      // session file inherited (see headlessPidsIn). The panel must not tell a
+      // reviewer "someone is watching this" about the hub's own worker.
+      interactive: c.kind === "interactive" && !headless.has(pid),
       ...(c.cwd ? { cwd: c.cwd } : {}),
       ...(c.status ? { status: c.status } : {}),
     };

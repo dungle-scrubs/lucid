@@ -47,6 +47,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   addFolderType: (): Locator => root.locator(hook("add-folder-type")),
   addToQueue: (): Locator => root.locator(hook("add-to-queue")),
   agentWorking: (): Locator => root.locator(hook("agent-working")),
+  awaitingAck: (): Locator => root.locator(hook("awaiting-ack")),
   allOpen: (): Locator => root.locator(hook("all-open")),
   annotation: (): Locator => root.locator(hook("annotation")),
   annotationChip: (): Locator => root.locator(hook("annotation-chip")),
