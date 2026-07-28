@@ -32,10 +32,10 @@
           "expected": "All refusals exit 1 with an error envelope. Today progress and context print `{ok:false,error:...}` with exit 0, so `if lucid progress ...` in a shell treats a no-op as success.",
           "risk": "high",
           "kind": "functional",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
+          "status": "covered",
+          "testFile": "test/e2e/regression/m2.2-refusals-exit-non-zero.e2e.ts",
+          "testName": "context --used with no --total refuses in the same envelope as progress and ask",
+          "mutation": "src/core/context.ts: let the percentage derive from --used alone (`used !== undefined && total !== undefined && total > 0` -> `used !== undefined && (total ?? used) > 0` with the matching divisor) - context --used with no --total exits 0. Reds ONLY this test; the pre-existing refusal test stays green because used===undefined still refuses. The fixture creates the session directory BY HAND, and that is load-bearing: on a bare artifact the mutated build gets past validation and dies on ENOENT writing the sidecar - still exit 1, still an envelope - so the test would pass for a reason unrelated to its claim. Measured both ways.",
           "builtCapability": "duplicated locally in two m2.x regression files"
         },
         {
@@ -48,11 +48,9 @@
           "expected": "One of the documented codes (VALIDATION_ERROR/NOT_FOUND/ARTIFACT_ERROR/SERVER_ERROR/LOG_ERROR). Today it is `EADDRINUSE` — a raw Bun error masquerading as a typed Lucid error, so an agent switching on the documented set falls through.",
           "risk": "medium",
           "kind": "functional",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "builtCapability": "duplicated locally in two m2.x regression files"
+          "status": "declined",
+          "builtCapability": "duplicated locally in two m2.x regression files",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "help-lists-every-command",
@@ -242,10 +240,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "open-both-layouts-present-never-merges",
@@ -258,10 +254,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "open-two-stems-collide",
@@ -274,10 +268,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "open-artifact-without-extension",
@@ -290,10 +282,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "symlinked-artifact-identity",
@@ -306,10 +296,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "path-with-spaces-and-unicode",
@@ -322,10 +310,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "open-missing-file",
@@ -335,10 +321,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "open-invalid-structure-fresh",
@@ -348,10 +332,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "open-invalid-structure-on-resume",
@@ -391,10 +373,8 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked low in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "status-skips-foreign-log-ndjson",
@@ -407,10 +387,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "status-large-tree-performance",
@@ -444,10 +422,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "status-attendant-surfaced",
@@ -688,10 +664,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "wait-future-cursor",
@@ -703,10 +677,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "wait-bare-integer-cursor",
@@ -731,10 +703,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "wait-unknown-session",
@@ -744,10 +714,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "wait-reply-reaches-the-thread",
@@ -805,10 +773,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "wait-resume-without-harness",
@@ -848,10 +814,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "open-idempotent-on-active",
@@ -864,10 +828,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "open-reconciles-edit-made-while-suspended",
@@ -893,10 +855,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "end-stops-server-and-frees-port",
@@ -906,10 +866,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "end-with-dead-server-cleans-descriptor",
@@ -1135,10 +1093,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "ask-with-dead-server-recorded",
@@ -1366,10 +1322,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "quick-reply-queues-canned-note",
@@ -1407,10 +1361,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "fork-disabled-with-multiple-spots",
@@ -1450,10 +1402,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "annotation-image-upload-failure-warns",
@@ -1478,10 +1428,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "remove-queued-while-editing-closes-editor",
@@ -1493,10 +1441,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "queue-controls-frozen-while-sending",
@@ -1521,10 +1467,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "queue-survives-panel-tab-switch",
@@ -1534,10 +1478,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "pick-opens-note-composer-focused",
@@ -1770,10 +1712,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "clipboard",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "copy-failure-tells-you-what-to-do",
@@ -2073,10 +2013,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "boot-s-identity-failure",
@@ -2089,10 +2027,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "boot-s-sets-scope-badge",
@@ -2186,10 +2122,8 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "tab-close-background-leaves-active-alone",
@@ -2201,10 +2135,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "tab-close-affordance-on-hover",
@@ -2375,10 +2307,10 @@
           "expected": "Each control receives its click — the fixed overlay is anchored below --lucid-shell-top and never covers the 37px bar.",
           "risk": "high",
           "kind": "visual",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
+          "status": "covered",
+          "testFile": "test/e2e/tabbar-overlays.e2e.ts",
+          "testName": "the open drawer never reaches the tab strip: the bar keeps taking clicks",
+          "mutation": "client/chrome/Shell.tsx: extend the drawer scrim to the viewport top (`top-(--lucid-shell-top,37px)` -> `top-0` in the scrim className) - the fixed z-30 overlay covers tab 1, tab 2, the + button and the scope badge, measured by isHittable. The fixture proves the hazard is real before exonerating it: bar box y 0-36, drawer panel from y 37, and the point 5px below the bar is owned by a position:fixed z-30 pointer-events:auto element outside the strip - only the scrim top edge keeps the bar working.",
           "builtCapability": "isHittable in test/e2e/visual.ts"
         },
         {
@@ -2485,10 +2417,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "drawer-worktree-grouping",
@@ -2516,10 +2446,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "drawer-on-empty-hub",
@@ -2586,10 +2514,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "add-folder-zero-reviews",
@@ -2610,10 +2536,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "add-folder-no-native-chooser",
@@ -2664,10 +2588,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "scope-clear-widens-picker",
@@ -2799,11 +2721,11 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
           "mutation": null,
-          "blockedBy": "Stays in e2e: which groups render is cmdk's business, not the keyboard map's."
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank (D-078), below the high-risk build line set for this pass. The earlier note stands and is folded in: Stays in e2e: which groups render is cmdk's business, not the keyboard map's. Returns through planner iterate when the cutoff moves."
         },
         {
           "id": "palette-close-this-tab",
@@ -2846,11 +2768,11 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
           "mutation": null,
-          "blockedBy": "Stays in e2e: the claim is about which listener wins while an overlay is open - a wiring question the pure map cannot answer."
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank (D-078), below the high-risk build line set for this pass. The earlier note stands and is folded in: Stays in e2e: the claim is about which listener wins while an overlay is open - a wiring question the pure map cannot answer. Returns through planner iterate when the cutoff moves."
         },
         {
           "id": "palette-while-hub-is-down",
@@ -2860,11 +2782,11 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
           "mutation": null,
-          "blockedBy": "Stays in e2e: needs a hub to drop."
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank (D-078), below the high-risk build line set for this pass. The earlier note stands and is folded in: Stays in e2e: needs a hub to drop. Returns through planner iterate when the cutoff moves."
         },
         {
           "id": "cmd-bracket-cycles-with-wrap",
@@ -2916,11 +2838,11 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
           "mutation": null,
-          "blockedBy": "Stays in e2e: the claim is that the chord reaches the window handler AND inserts no character in the composer - two live surfaces."
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank (D-078), below the high-risk build line set for this pass. The earlier note stands and is folded in: Stays in e2e: the claim is that the chord reaches the window handler AND inserts no character in the composer - two live surfaces. Returns through planner iterate when the cutoff moves."
         },
         {
           "id": "palette-empty-result",
@@ -3094,10 +3016,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "progress-done-exceeds-total",
@@ -3145,10 +3065,10 @@
           "expected": "A new server pid, NO session_ended event was written, and the earlier annotation is still delivered by wait. The bundle-freshness clause is deliberately dropped (D-078): the three claims above are what make a restart safe - a restart that writes session_ended silently ends a live review - and none of them needs the bundle-stamp capability to move, which is why that capability is not being built.",
           "risk": "high",
           "kind": "recovery",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/open-restart.e2e.ts",
+          "testName": "open --restart replaces the server pid without ending the session",
+          "mutation": "src/cli/run.ts: make --restart end the session instead of stopping the server (`if (options.restart) await stopServer(paths)` -> `await deliver(paths, { t: \"session_ended\" })`) - the log gains a session_ended and the test reds on the event list. Wrong-reason guards: server.json pids compared before/after (a reattach would make everything else trivially true), session_ended absence read from the log directly, the annotation written before anything is killed so its delivery is a real round trip through the replaced process. Bundle freshness deliberately not asserted (D-078)."
         },
         {
           "id": "open-hub-dies-mid-open",
@@ -3267,10 +3187,8 @@
           "risk": "medium",
           "kind": "concurrency",
           "needsCapability": "multi-window",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "open-many-sessions-port-pool",
@@ -3308,10 +3226,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "hub-invalid-env-port",
@@ -3383,10 +3299,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "log-corruption",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "log-corrupt-committed-line",
@@ -3398,10 +3312,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "log-corruption",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         }
       ]
     },
@@ -3575,10 +3487,8 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked low in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "plan-ingest-invalid-json",
@@ -3665,10 +3575,8 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "loopback-only-no-network",
@@ -3711,10 +3619,10 @@
           "expected": "Tab 3 activates and then closes — the portalled tooltip popup never intercepts the pointer.",
           "risk": "high",
           "kind": "visual",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
+          "status": "covered",
+          "testFile": "test/e2e/tabbar-overlays.e2e.ts",
+          "testName": "an open tab tooltip never reaches the strip: neighbours and their × stay hittable",
+          "mutation": "client/chrome/ui/tooltip.tsx: sideOffset = 6 -> -40 - the popup lands at y 16-41 across the strip and the left neighbour, its close button and the right neighbour all stop answering elementFromPoint. The fixture proves the tooltip is the interceptor KIND before exonerating it: portalled to body, z-index 100, pointer-events auto, with NO pointer-events:none anywhere in its chain - placement is the entire defence. Hovers the MIDDLE of three tabs so the popup has a neighbour on each side; an end tab can only exonerate one direction.",
           "builtCapability": "isHittable in test/e2e/visual.ts"
         },
         {
@@ -3739,10 +3647,8 @@
           "risk": "medium",
           "kind": "a11y",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "tabbar-keyboard-reachable",
@@ -3755,10 +3661,8 @@
           "risk": "medium",
           "kind": "a11y",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
         },
         {
           "id": "tabbar-contrast-both-themes",

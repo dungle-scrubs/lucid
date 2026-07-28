@@ -191,6 +191,18 @@ export const on = (root: Page | FrameLocator | Locator) => ({
 });
 
 /**
+ * The tooltip popup, wherever Base UI portalled it.
+ *
+ * Not a `data-test` hook and not on `on()`: the popup is not rendered by the
+ * chrome at all - `TooltipContent` portals it to `<body>`, outside the tree its
+ * trigger lives in, so it cannot be reached by scoping to the thing it
+ * describes. `data-slot` is shadcn's own contract for the vendored parts
+ * (client/chrome/ui/tooltip.tsx sets it), which is why this is not the
+ * class-coupled selector it looks like.
+ */
+export const tooltipPopup = (root: Page): Locator => root.locator('[data-slot="tooltip-content"]');
+
+/**
  * Selectors this file does NOT own.
  *
  * `[data-lucid-id="…"]` addresses elements inside the ARTIFACT, a document
