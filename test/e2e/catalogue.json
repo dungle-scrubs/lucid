@@ -189,10 +189,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "durable-path-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/durable-path.e2e.ts",
+          "testName": "open refuses an artifact under /tmp and names a durable path to use",
+          "mutation": "src/core/scratchpad.ts: make isVolatilePath always return false - `open` accepts an artifact the OS wipes on boot, taking the annotations and versions beside it"
         },
         {
           "id": "open-volatile-suggestion-recovers-project",
@@ -205,10 +205,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "durable-path-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/durable-path.e2e.ts",
+          "testName": "a durable artifact opens, and the launch it would have made is recorded",
+          "mutation": "src/cli/self.ts: drop the recordOpen call from the NO_OPEN branch - LUCID_OPEN_LOG records nothing and which launch path would have run is unobservable again"
         },
         {
           "id": "open-volatile-tmpdir-env",
@@ -221,10 +221,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "durable-path-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/durable-path.e2e.ts",
+          "testName": "$TMPDIR counts as volatile, not just the literal /tmp",
+          "mutation": "src/core/scratchpad.ts: drop the TMPDIR arm from volatileRoots() - a machine whose TMPDIR points outside /tmp loses work silently (measured red; the first version of this test used tmpdir() as its fixture, which resolves to /tmp in a worker and was caught by the hardcoded root instead)"
         },
         {
           "id": "open-allow-temp-optout",
@@ -234,10 +234,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "durable-path-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/durable-path.e2e.ts",
+          "testName": "only the exact string LUCID_ALLOW_TEMP=1 opts out",
+          "mutation": "src/core/scratchpad.ts: loosen the opt-out to truthiness (`if (process.env.LUCID_ALLOW_TEMP)`) - \"true\", \"yes\" and \"0\" all disable a guard against silent data loss"
         },
         {
           "id": "open-migrates-legacy-lucid-layout",
@@ -372,10 +372,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "a truncated artifact on resume warns instead of committing a broken version",
+          "mutation": "src/core/session.ts: drop the `structure.ok` guard on the reconciliation commit - a half-written file becomes a version anyone can revert to, and current.html stops holding the last good bytes"
         },
         {
           "id": "open-theme-warning-advisory",
@@ -443,10 +443,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "the listing puts live sessions first, then sorts by name",
+          "mutation": "src/core/sessions.ts: drop the live-first arm of the sort comparator (name only) - a dead session outranks the one you are looking at"
         },
         {
           "id": "status-hub-hosted-viewer-url",
@@ -556,10 +556,11 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
+          "status": "declined",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "declineReason": "The invariant is real but the window is not externally observable: runWaitCli reads the log, gets a payload, and appends the ack microseconds later inside one process with no seam between. Measured three ways - sending after wait returns lands after the ack (and left the row's own mutation green, which is how this was caught); holding the POST and releasing it as the wait starts lands before the read, so the message is legitimately in the batch; and asserting covers === payload.nextCursor is a tautology when nothing lands between. Route-intercept was expected to enable this when the row moved here; it does not, because the gap is server-internal rather than on the wire. Closed with the measurement rather than a test."
         },
         {
           "id": "wait-presence-acks-claim-nothing",
@@ -622,10 +623,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "a dead server makes wait return suspended, well before its timeout",
+          "mutation": "src/core/wait.ts: neutralise the liveness arm in the wait loop (`if (!liveKnown)` -> `if (false)`) - the wait blocks to its full deadline against a server that is gone, so an agent burns its turn busy-waiting (measured red)"
         },
         {
           "id": "wait-two-waiters-both-get-the-batch",
@@ -638,10 +639,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/concurrent.e2e.ts",
+          "testName": "two concurrent waits on one session both receive the batch",
+          "mutation": "src/core/wait.ts: make the feedback branch consume - append the ack BEFORE building the payload and filter the delta against it - so the second waiter finds an empty batch and reports waiting while an agent silently loses its work"
         },
         {
           "id": "wait-killed-and-rerun-redelivers",
@@ -654,10 +655,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/concurrent.e2e.ts",
+          "testName": "a killed wait consumes nothing - the rerun delivers the same batch",
+          "mutation": "src/core/wait.ts: mark the batch delivered at READ time rather than on the CLI's ack - a reader that dies before printing takes the batch with it, and the rerun reports waiting"
         },
         {
           "id": "wait-survives-server-restart-midflight",
@@ -673,7 +674,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Not written: needs a wait blocked in flight while `open --restart` replaces the server under it, and the restart path is the same one M4.1's open-restart-never-kills-the-hub covers from the hub side. Deferred to M6.2 with the other restart-timing work rather than written against a race this milestone did not build a seam for."
         },
         {
           "id": "wait-reply-with-dead-server-survives",
@@ -805,10 +807,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "a large backlog comes back as one parseable JSON document",
+          "mutation": "src/cli/main.ts: restore an Effect log line on stdout beside the payload (the m2.1 defect) - a 100-item backlog stops being one JSON document and every agent parsing stdout throws"
         },
         {
           "id": "wait-harness-resume-sidecar",
@@ -900,10 +902,10 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "an edit made while nobody was serving becomes v2 on the next open",
+          "mutation": "src/core/session.ts: skip the reconciliation branch on resume (treat `changed` as false) - an edit made while nothing was watching never becomes a version and is invisible to review"
         },
         {
           "id": "end-idempotent",
@@ -939,10 +941,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "end after the server already died still clears the descriptor",
+          "mutation": "src/cli/run.ts: skip removeServerDescriptor on the !live branch of runEnd - server.json outlives the process and the next listing reports a ghost live session"
         },
         {
           "id": "end-while-viewer-open",
@@ -1173,10 +1175,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "a question asked while the server is down survives to the next open",
+          "mutation": "src/cli/run.ts: make runAsk require a live server (return/throw when discoverLiveServer answers undefined) - a question asked during an outage is lost rather than appended directly to the log"
         },
         {
           "id": "ask-group-missing-file",
@@ -1238,10 +1240,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "a partial batch drops exactly the items that landed",
+          "mutation": "client/chrome/store.ts: drop buildTimeline's `.filter((q) => !sentIds.has(q.id))` - a landed annotation and its still-queued card share one id, assistant-ui throws, and the viewer unmounts to a blank page (measured: body length 0)"
         },
         {
           "id": "annotation-queued-mid-flight-survives-the-drain",
@@ -1254,10 +1256,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "a note queued while a send is in flight is not swept away by it",
+          "mutation": "client/chrome/actions.ts: reconcile sendQueue against a pre-send snapshot instead of live state - the note queued mid-flight is swept away with the sent ones. The test pins the window with a disabled send bar on both sides of the queueing, so it cannot pass by queueing after the send settled."
         },
         {
           "id": "queue-is-lost-on-reload",
@@ -1464,10 +1466,10 @@
           "risk": "medium",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "the composer is frozen while a fork POST is in flight, and cannot double-fork",
+          "mutation": "client/chrome/Panel.tsx: drop `forking ||` from the Fork button's disabled binding - the button never freezes and the Forking... label never appears (measured red). NOTE the double-fork half is defended TWICE - the forking re-entrancy guard and the stable forkId reuse - so no single-line mutation can produce two forks: dropping either one alone still yields one fork (both measured green). The test dispatches a real second click past the disabled attribute so the claim is asserted, but only the freeze is single-mutation-provable."
         },
         {
           "id": "annotation-image-chip-remove",
@@ -1493,10 +1495,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "an image that cannot upload says so instead of vanishing",
+          "mutation": "client/chrome/actions.ts: make uploadPaste's catch return null silently (remove the warn) - the image vanishes with no explanation"
         },
         {
           "id": "send-queue-refuses-empty-open-edit",
@@ -1536,10 +1538,10 @@
           "risk": "medium",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/queue-routes.e2e.ts",
+          "testName": "queue cards cannot be edited or removed mid-send, and the bar is down",
+          "mutation": "client/chrome/Panel.tsx: drop `disabled={sending}` from the queued card's edit control - a card edited mid-flight sends its old note while showing the new one"
         },
         {
           "id": "queue-blocks-session-switch",
@@ -1692,10 +1694,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/80faab5-a-verdict-is-not-retried.e2e.ts",
+          "testName": "a 4xx verdict fails once, immediately, with the server's reason",
+          "mutation": "client/chrome/transport.ts: remove the 4xx short-circuit - the verdict is re-POSTed five times over 14s"
         },
         {
           "id": "retry-state-is-per-message",
@@ -1708,10 +1710,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/80faab5-one-stuck-flush.e2e.ts",
+          "testName": "a stuck flush disables its own card's Retry, and no other's",
+          "mutation": "client/chrome/Panel.tsx: read the global `outboxSending` instead of `outboxSendingId === message.id` - every card reads Sending and the untouched card cannot be discarded"
         },
         {
           "id": "discard-works-during-a-stuck-flush",
@@ -1724,10 +1726,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/message-routes.e2e.ts",
+          "testName": "Discard clears a message mid-flush, unblocks approve, and survives a reload",
+          "mutation": "client/chrome/actions.ts: make discardOutboxMessage drop the entry from state without calling storage.forgetOutboxMessage - the card goes and the message re-sends itself after a reload"
         },
         {
           "id": "slow-send-becomes-visible-after-a-beat",
@@ -1740,10 +1742,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/80faab5-a-slow-send-is-visible.e2e.ts",
+          "testName": "a send that is taking a while says so, before it has failed",
+          "mutation": "client/chrome/Panel.tsx: raise SLOW_SEND_MS to 60_000 - a slow send shows nothing and is indistinguishable from a swallowed one"
         },
         {
           "id": "server-reason-reaches-the-human",
@@ -1756,10 +1758,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/message-routes.e2e.ts",
+          "testName": "the server's own reason for refusing is what the panel prints",
+          "mutation": "client/chrome/actions.ts: replace the reason-bearing warn with a bare \"Your message didn't send\" - the human cannot tell a busy log (retry works) from a gone hub (it never will)"
         },
         {
           "id": "outbox-drains-in-authored-order",
@@ -1938,7 +1940,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Needs a shell holding twelve tabs; the product reaches six by the drawer path (deterministically, and silently) and five per-open inside a 60s budget - plan finding #53. Asserting against six would pin a number nobody chose, and a retry loop in the harness would hide the defect. Uncovered until the shell converges on N tabs for N artifacts."
         },
         {
           "id": "tabs-stream-cap-reconnects-on-activate",
@@ -1954,7 +1957,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Same blocker as tabs-many-strip-scrolls (finding #53): the ten-stream cap cannot be crossed if twelve tabs never open, so the eviction this row is about never happens."
         },
         {
           "id": "tab-attention-question-in-background",
@@ -1995,10 +1999,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/concurrent.e2e.ts",
+          "testName": "a burst of opens produces one tab each, one active, and never an empty strip",
+          "mutation": "src/server/ports.ts: collapse sessionPortPool to a single fixed port - a burst of opens contends for one address and the losers come up dead or share a server"
         },
         {
           "id": "scope-active-tab-always-visible",
@@ -2014,7 +2018,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Blocked by finding #53 with the other tab-scale rows: it samples the strip repeatedly while three cross-project opens land, and the shell does not reliably reach N tabs for N artifacts by any path."
         },
         {
           "id": "shell-under-the-panel-hidden-tabs-stay-mounted",
@@ -2382,10 +2387,10 @@
           "risk": "high",
           "kind": "state",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/shell-routes.e2e.ts",
+          "testName": "before the first listing arrives the screen says it is LOOKING, not empty",
+          "mutation": "client/chrome/Shell.tsx: render the empty state before the first snapshot (drop the loaded guard) - the shell claims there are no reviews while it is still asking"
         },
         {
           "id": "picker-row-open-failure-reports-on-the-row",
@@ -2454,7 +2459,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "This row IS the defect: picking a 12-artifact project opens six tabs and reports nothing (finding #53, measured deterministically across five re-clicks with the drawer's own count reading '12 artifacts'). Recorded rather than asserted against the broken count."
         },
         {
           "id": "scope-hides-other-projects",
@@ -2608,10 +2614,10 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "project headings stay put while a long list scrolls, and are not clickable",
+          "mutation": "client/chrome/Shell.tsx: drop `sticky` from the picker-project heading - the heading scrolls away from its own rows and nothing says which project the rows under the cursor belong to"
         },
         {
           "id": "picker-huge-list-internal-scroll",
@@ -2623,10 +2629,10 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "a long pick list scrolls inside itself, and its last row is clickable",
+          "mutation": "client/chrome/Shell.tsx: remove the pick list's max-height/overflow so the list grows with its rows - the page scrolls instead of the list and the bottom rows leave the window"
         },
         {
           "id": "picker-scratchpad-subtitle",
@@ -2691,10 +2697,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/shell-routes.e2e.ts",
+          "testName": "with no OS chooser the folder icon falls back to a path field",
+          "mutation": "client/chrome/hub.ts: drop addRoot's 501 -> needsPath arm - a build with no native chooser is a dead end instead of a path field"
         },
         {
           "id": "add-folder-from-drawer-updates-drawer",
@@ -3140,10 +3146,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "route-intercept",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/shell-routes.e2e.ts",
+          "testName": "a server without /__lucid/context falls through to the sidecar, and says live:false",
+          "mutation": "src/cli/run.ts: print live:true regardless of the response (make the `if (res.ok)` guard unconditional) - a 404'd POST is reported to the agent as a live success"
         },
         {
           "id": "context-derives-and-clamps",
@@ -3238,10 +3244,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "kill-server",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/dead-server.e2e.ts",
+          "testName": "a hub that accepts a session and never serves it fails loudly, never split-brains",
+          "mutation": "src/cli/run.ts: neutralise the post-accept handshake guard (`if (!identity)` -> `if (false)`) - open silently serves a session the hub already owns, putting two appenders on one log (measured red against a stub hub that accepts and never serves; killing a real hub BEFORE open does not enter this branch and left the guard unproven)"
         },
         {
           "id": "open-stale-descriptor-recovered",
@@ -3273,7 +3279,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Partly covered: 'two simultaneous opens agree on the session they opened' asserts the same url, the same version, one live server, and a strictly ordered log - all measured true. The row's remaining clause, exactly ONE session_opened, is FALSE today: the product appends two (finding #54, a check-then-act race openSession does not guard with appendEventsIf), and the losing spawn leaves an orphaned __serve that `end` cannot reap and the listing cannot see (finding #55). Uncovered until both are fixed; asserting the true half alone would be answering the easy clause."
         },
         {
           "id": "hub-attend-env-opt-in-is-strict",
@@ -3361,10 +3368,10 @@
           "risk": "medium",
           "kind": "concurrency",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "opening more sessions than the fixed port pool still works",
+          "mutation": "src/server/ports.ts: drop the trailing 0 from sessionPortPool - the ninth session onward has no ephemeral fallback to bind and comes up dead, while the first eight look fine"
         },
         {
           "id": "hub-many-sessions",
@@ -3374,10 +3381,10 @@
           "risk": "medium",
           "kind": "concurrency",
           "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/scale.e2e.ts",
+          "testName": "a hub hosting twenty sessions binds one port and lists them all",
+          "mutation": "src/cli/run.ts: skip the hubOpen path in runOpen (always spawn a dedicated server) - twenty sessions bind twenty ports instead of sharing the hub's one"
         },
         {
           "id": "open-registry-write-failure-is-advisory",
@@ -3452,10 +3459,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/concurrent.e2e.ts",
+          "testName": "simultaneous writers all land, once each, in a strictly ordered log",
+          "mutation": "src/core/log.ts: drop withAppendLock from appendEventsIf (write without the exclusive lock) - concurrent writers interleave, seqs duplicate, and events are lost or the file is left unparseable"
         },
         {
           "id": "log-torn-tail-recovery",
@@ -3524,7 +3531,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Written, passed, and MEASURED vacuous: with no fork in the log the launcher spawns nothing, so the assertion holds whatever the dedupe code does - removing the handled-set check left it green. Needs a real fork driven to a real child."
         },
         {
           "id": "launch-yields-to-a-human-attendant",
@@ -3540,7 +3548,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Same measurement: removing the single-attendant guard left the test green, because the attend loop is never entered without a child. Needs a real fork-to-child fixture."
         },
         {
           "id": "launch-no-registry",
@@ -3582,10 +3591,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "stub-harness-launcher",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/launcher.e2e.ts",
+          "testName": "SIGINT stops the launcher without orphaning a child or the parent session",
+          "mutation": "src/launch/launcher.ts: ignore the abort signal in the attend loop (drop the `opts.signal?.aborted` early return) - the launcher keeps running after SIGINT and a human cannot stop it without hunting its pid"
         },
         {
           "id": "launch-no-session",
@@ -3595,10 +3604,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/launcher.e2e.ts",
+          "testName": "launch without a session refuses before it reads the registry",
+          "mutation": "src/cli/run.ts: neutralise runLaunchCli's session check (if (state.status === \"none\") -> if (false)) - launch proceeds on an artifact with no session and reports a registry problem instead (measured red)"
         }
       ]
     },

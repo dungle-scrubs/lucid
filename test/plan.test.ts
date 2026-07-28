@@ -87,7 +87,7 @@ describe("ingestPayload", () => {
         at: "t",
       },
     ],
-    messages: [{ role: "human", text: "tighten phase 2 overall", at: "t" }],
+    messages: [{ role: "human", text: "tighten phase 2 overall", at: "t", seq: 1 }],
   });
 
   test("maps each annotation to the right plan-db command by ledger ref", () => {

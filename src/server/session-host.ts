@@ -52,7 +52,7 @@ import {
 import { readDevAsset } from "./dev-assets.ts";
 import { injectOverlay } from "./inject.ts";
 import { resolveAsset, validateHeaders } from "./security.ts";
-import { renderViewer } from "./viewer.ts";
+import { renderViewer, sseMaxBackoffFromEnv } from "./viewer.ts";
 
 /**
  * One session's complete server behavior - routes, SSE fan-out, artifact
@@ -866,6 +866,9 @@ export const createSessionHost = (
           port: options.getPort(),
           version: await currentVersion(),
           base,
+          ...((backoff) => (backoff === undefined ? {} : { sseMaxBackoffMs: backoff }))(
+            sseMaxBackoffFromEnv(),
+          ),
         }),
         { headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
       );

@@ -103,6 +103,13 @@ export interface PayloadMessage {
   readonly role: "human" | "agent";
   readonly text: string;
   readonly at: string;
+  /** The message's own event seq - unique per append, where `at` is not: one
+   *  ISO timestamp is stamped per APPEND at millisecond precision, so two
+   *  messages written in the same millisecond share it. A viewer keying a
+   *  message by `role`+`at` therefore mints duplicate ids, and a duplicate id
+   *  makes assistant-ui's MessageRepository throw and unmount the whole
+   *  review surface (measured: 24 posts -> 6 collisions -> blank page). */
+  readonly seq: number;
   readonly images?: readonly PayloadImage[];
   /** Human turns only: an agent acked delivery of a batch this message was
    *  in (D20). An agent's own turn is never "delivered" to anyone. */

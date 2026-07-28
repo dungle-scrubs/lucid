@@ -47,12 +47,20 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
 
   LUCID_ALLOW_TEMP: "harness-switch",
   LUCID_NO_OPEN: "harness-switch",
+  // The D-015 observability seam: when set, every would-be browser launch
+  // is recorded instead of being merely suppressed. Per-suite, because only
+  // the suites that ASK what open would have done set it.
+  LUCID_OPEN_LOG: "per-suite",
   LUCID_IDLE_MS: "harness-switch",
 
   // A hub the human happens to be running would hijack `open` into daemon mode
   // and change what the tests see - but shell.e2e.ts needs its OWN hub, so the
   // value differs per suite and only the presence of a decision is enforced.
   LUCID_HUB_PORT: "per-suite",
+  // The D-015 reconnect-backoff cap: a suite that kills streams on purpose
+  // sets it on the processes IT spawns; everything else runs production
+  // patience. Presence of a decision is what the policy enforces.
+  LUCID_SSE_MAX_BACKOFF_MS: "per-suite",
   LUCID_HUB_ROOTS: "per-suite",
   LUCID_HUB_ATTEND: "per-suite",
   // Read by ports.ts to offset every port. Left unset on purpose: the default

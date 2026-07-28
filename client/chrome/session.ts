@@ -189,7 +189,7 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     // until the next report. bootstrap() is seq-guarded, so the extra fetch at
     // first open is harmless.
     es.onopen = () => {
-      set({ live: true });
+      set({ live: true, streamRetries: 0 });
       void surface.bootstrap();
       void loadSelection();
       retries = 0;
@@ -209,8 +209,12 @@ export const createSession = (config: SessionConfig): SessionHandle => {
       // "reconnecting…" forever while the server was healthy and answering.
       // Reopen it ourselves, backing off, so the pill is telling the truth.
       if (es.readyState !== EventSource.CLOSED || retry !== null) return;
-      const delay = Math.min(1000 * 2 ** retries, 15_000);
+      // The production ceiling is 15s; the server can hand down a lower cap
+      // (LUCID_SSE_MAX_BACKOFF_MS) so a harness that kills streams on
+      // purpose is not billed real-world patience. Never a higher one.
+      const delay = Math.min(1000 * 2 ** retries, config.sseMaxBackoffMs ?? 15_000, 15_000);
       retries += 1;
+      set({ streamRetries: retries });
       retry = setTimeout(() => {
         retry = null;
         // Only if nothing else has taken over the slot in the meantime.

@@ -3,6 +3,13 @@ import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
 import type { SessionHandle } from "./session.ts";
 import { dropSession, ensureSession, getSession, useShell } from "./shell.ts";
+import type { ShellConfig } from "./types.ts";
+
+/** The shell page's payload, read through its declared shape - `daemon.ts`
+ *  writes it and this reads it, so one type keeps the two spellings from
+ *  drifting silently past typecheck. */
+const shellConfig = (): ShellConfig | undefined =>
+  (window as { __LUCID_SHELL__?: ShellConfig }).__LUCID_SHELL__;
 
 /**
  * The shell's connection to the hub daemon: the session listing (every
@@ -224,6 +231,13 @@ export const openTab = async (row: HubSession): Promise<SessionHandle | null> =>
     name: sessionLabel(row),
     version: identity.version,
     base,
+    // The shell page carries the server's backoff cap (D-015) exactly the way
+    // the standalone viewer page does; sessions built here must not silently
+    // lose it or a hub-hosted tab reconnects on production patience under a
+    // harness that killed its stream on purpose.
+    ...((cap) => (typeof cap === "number" ? { sseMaxBackoffMs: cap } : {}))(
+      shellConfig()?.sseMaxBackoffMs,
+    ),
   });
   handle.connect();
   activate(handle.key);

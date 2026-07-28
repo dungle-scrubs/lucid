@@ -63,10 +63,27 @@ test("a stuck flush disables its own card's Retry, and no other's", async ({ pag
   // under the global-flag mutation both retries read "Sending…" together.
   await expect(on(second).retryUnsent()).toBeEnabled();
   await expect(on(second).discardUnsent()).toBeEnabled();
+  // Enabled is not the claim - USABLE is. A disabled-looking button that
+  // does nothing and a live one are the same pixel to a person mid-outage,
+  // so the second card is actually discarded while the first hangs.
+  await on(second).discardUnsent().click();
+  await expect(on(page).unsentMessage()).toHaveCount(1);
+  await expect(on(page).unsentMessage()).toContainText("first: the routing question");
 
-  // Let the flush finish: it drains the whole outbox through the held route,
-  // both messages land, and the cards clear - the stuck state was a window,
-  // not a destination.
-  await expect(page.locator('[data-role="human"]')).toHaveCount(2, { timeout: 20_000 });
+  // Let the flush finish: the ONE message still held drains through the
+  // route and its card clears - the stuck state was a window, not a
+  // destination. One bubble, not two: the discard above really did take a
+  // message out of the outbox rather than only off the screen.
+  await expect(page.locator('[data-role="human"]')).toHaveCount(1, { timeout: 20_000 });
+  await expect(page.locator('[data-role="human"]')).toContainText("first: the routing question");
   await expect(on(page).unsentMessage()).toHaveCount(0);
+
+  // ...and the discard was DURABLE. A reload restores the outbox from
+  // storage, so a card that comes back here means the discard cleared the
+  // render and left the localStorage key - the message would re-send itself
+  // later, which is the failure a person cannot see coming.
+  await page.goto("about:blank");
+  await page.goto(session.url);
+  await expect(on(page).unsentMessage()).toHaveCount(0);
+  await expect(page.locator('[data-role="human"]')).toHaveCount(1);
 });

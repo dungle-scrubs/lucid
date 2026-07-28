@@ -20,6 +20,7 @@ import {
   writeServerDescriptor,
 } from "./discovery.ts";
 import { escapeHtml } from "../core/escape.ts";
+import { sseMaxBackoffFromEnv } from "./viewer.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
 import { projectRoot } from "../core/sessions.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
@@ -170,7 +171,10 @@ const renderShellPage = (): string => `<!doctype html>
 <link rel="stylesheet" href="/__lucid/chrome.css" />
 </head>
 <body>
-<script>window.__LUCID_SHELL__ = { mode: "shell" };</script>
+<script>window.__LUCID_SHELL__ = { mode: "shell"${(() => {
+  const backoff = sseMaxBackoffFromEnv();
+  return backoff === undefined ? "" : `, sseMaxBackoffMs: ${backoff}`;
+})()} };</script>
 <div id="lucid-root"></div>
 <script type="module" src="/__lucid/chrome.js"></script>
 </body>

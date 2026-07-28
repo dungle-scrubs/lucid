@@ -46,4 +46,15 @@ test("a send that is taking a while says so, before it has failed", async ({ pag
     on(page).unsentMessage(),
     "a slow send showed nothing, so it was indistinguishable from a swallowed one",
   ).toContainText("Is this getting through?", { timeout: 10_000 });
+  // IN FLIGHT, said in the product's own words. "not delivered" here would be
+  // a lie about a request that is still running, and it is the word that
+  // makes a human retry something already on its way.
+  await expect(on(page).unsentMessage()).toContainText("sending…");
+  await expect(on(page).unsentMessage()).not.toContainText("not delivered");
+
+  // ...and when it lands the card goes, leaving exactly ONE bubble. A card
+  // that outlived its own success, or a second bubble from the retry
+  // schedule, are the two ways "visible" turns into "duplicated".
+  await expect(on(page).unsentMessage()).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.locator('[data-role="human"]')).toHaveCount(1);
 });

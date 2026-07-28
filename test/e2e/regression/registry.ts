@@ -349,6 +349,24 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     },
   },
   {
+    sha: "m5.1-message-id-collision",
+    broke:
+      "Two messages appended in the same millisecond shared a timeline id, assistant-ui threw, and the whole review surface unmounted to a blank page.",
+    testFile: "test/e2e/regression/m5.1-same-millisecond-messages.e2e.ts",
+    testName: "messages appended in the same millisecond render, and do not blank the page",
+    mutation: {
+      kind: "edit",
+      file: "client/chrome/runtime.tsx",
+      // The id, not the wire field: `seq` still rides the payload under this
+      // mutation, so the edit isolates the UI's choice of key rather than
+      // removing the data it keys on.
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the SOURCE being matched
+      find: "          id: `${m.role}-${m.seq}`,",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the SOURCE being matched
+      replace: "          id: `${m.role}-${m.at}`,",
+    },
+  },
+  {
     sha: "m4.1-queue-paste",
     broke:
       "The persisted queue stored the [Pasted text #N] placeholder - a pointer into the page-local paste store - so a reload restored the pointer and sent it to the agent verbatim, forty lines of nothing.",

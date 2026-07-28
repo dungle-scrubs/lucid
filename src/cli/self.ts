@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, openSync } from "node:fs";
+import { appendFileSync, existsSync, openSync } from "node:fs";
 import type { SessionPaths } from "../core/paths.ts";
 import {
   discoverLiveServer,
@@ -124,8 +124,40 @@ export const spawnHub = (port?: number, attend = false): void => {
  * `--app` flag is why the shell keeps ONE stable entry URL: a Dock icon
  * pinned to a rotating per-session port would go stale; 17428 never does.
  */
+/**
+ * Record what WOULD have been launched, when `LUCID_OPEN_LOG` names a file.
+ *
+ * `LUCID_NO_OPEN=1` stops a window appearing, which is what a harness needs -
+ * but it also makes the decision invisible, so "did `app` fall back to the
+ * default browser when no Chrome is installed?" has no answer short of
+ * watching a human's screen. This writes one NDJSON line per would-be launch
+ * (the D-015 observability seam): the argv, the url, and which path chose it.
+ *
+ * Append-only and best-effort: a launch is a side effect, and failing to
+ * record one must never fail the launch - or the seam would be a new way for
+ * `open` to break.
+ */
+const recordOpen = (
+  how: "chrome-app" | "browser" | "skipped",
+  url: string,
+  argv: readonly string[],
+): void => {
+  const path = process.env.LUCID_OPEN_LOG;
+  if (!path) return;
+  try {
+    appendFileSync(path, `${JSON.stringify({ how, url, argv, at: new Date().toISOString() })}\n`);
+  } catch {
+    /* recording a launch must never fail the launch */
+  }
+};
+
 export const openChromeApp = (url: string): boolean => {
-  if (process.env.LUCID_NO_OPEN === "1") return false;
+  if (process.env.LUCID_NO_OPEN === "1") {
+    // Still RECORDED: the harness needs to know which path would have run,
+    // and that is precisely what NO_OPEN otherwise hides.
+    recordOpen("skipped", url, []);
+    return false;
+  }
   if (process.platform !== "darwin") return false;
   // Every Chrome release channel counts (a machine with only Canary is
   // still a Chrome machine). Arc is deliberately absent: it accepts the
@@ -147,7 +179,9 @@ export const openChromeApp = (url: string): boolean => {
       existsSync(`/Applications/${app}.app`) || existsSync(`${home}/Applications/${app}.app`),
   );
   if (!installed) return false;
-  const child = spawn("open", ["-na", installed, "--args", `--app=${url}`], {
+  const argv = ["open", "-na", installed, "--args", `--app=${url}`];
+  recordOpen("chrome-app", url, argv);
+  const child = spawn(argv[0] as string, argv.slice(1), {
     detached: true,
     stdio: "ignore",
   });
@@ -157,9 +191,13 @@ export const openChromeApp = (url: string): boolean => {
 
 /** Open the system browser to a URL (best-effort, detached). Skipped if LUCID_NO_OPEN. */
 export const openBrowser = (url: string): void => {
-  if (process.env.LUCID_NO_OPEN === "1") return;
   const opener =
     process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  if (process.env.LUCID_NO_OPEN === "1") {
+    recordOpen("skipped", url, [opener, url]);
+    return;
+  }
+  recordOpen("browser", url, [opener, url]);
   try {
     const child = spawn(opener, [url], { detached: true, stdio: "ignore" });
     child.unref();
