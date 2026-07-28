@@ -160,6 +160,21 @@ const readCurrent = async (paths: SessionPaths): Promise<string | undefined> => 
   }
 };
 
+/** The bytes of a committed snapshot (`versions/s<seg>/v<n>.html`), or undefined
+ *  when it cannot be read. Unlike `current.html` this is COMMITTED, so it
+ *  survives a fresh pull and is the true reconciliation baseline (MB.3). */
+const readSnapshotBytes = async (
+  paths: SessionPaths,
+  segment: number,
+  version: number,
+): Promise<string | undefined> => {
+  try {
+    return await readFile(snapshotPath(paths, segment, version), "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
 export interface VersionCommit {
   readonly version: number;
   readonly hash: string;
@@ -231,9 +246,14 @@ export const openSession = async (
     });
     startedSegment = true;
   } else {
-    // ACTIVE or SUSPENDED: reconcile the file against current.html (D-061).
-    const current = await readCurrent(paths);
-    const changed = current === undefined || hashContent(html) !== hashContent(current);
+    // ACTIVE or SUSPENDED: reconcile the artifact against the newest committed
+    // SNAPSHOT (D-061, and plan 02 MB.3/D-012). NOT current.html: that is
+    // machine-local (run/) and absent on a freshly pulled record, where reading
+    // its absence as a change would mint a spurious version on every open. The
+    // snapshot is committed history and is the true baseline; current.html is
+    // only the serve cache, rebuilt below when a pull left it behind.
+    const baseline = await readSnapshotBytes(paths, before.segment, before.version);
+    const changed = baseline === undefined || hashContent(html) !== hashContent(baseline);
     if (changed) {
       if (structure.ok) {
         const nextVersion = before.version + 1;
@@ -256,6 +276,11 @@ export const openSession = async (
           detail: { path: paths.artifactPath },
         });
       }
+    } else if ((await readCurrent(paths)) === undefined) {
+      // Unchanged, but the serve cache is gone (a fresh pull dropped run/).
+      // Rebuild it from the artifact - which equals the baseline snapshot - so
+      // the session can be served without minting a version (MB.3).
+      atomicWrite(paths.currentHtml, html);
     }
     if (before.status === "suspended") {
       await appendEvent(paths.logPath, {
