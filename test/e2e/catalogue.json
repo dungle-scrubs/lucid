@@ -15,11 +15,11 @@
           "expected": "Each exits 1 and stdout is empty or a single `{error:{code,message,detail}}` envelope. Today all three emit an Effect log block (`[23:39:36] ERROR (#17): Error: {\"_tag\":\"CommandMismatch\"...}`) on stdout, so every agent doing JSON.parse(stdout) throws instead of reading a typed error.",
           "risk": "high",
           "kind": "functional",
-          "needsCapability": "raw-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/regression/m2.1-stdout-is-one-json-document.e2e.ts",
+          "testName": "a refused command puts one JSON envelope on stdout",
+          "mutation": "src/cli/main.ts: neutralise the top-level catchAll that renders the error envelope, so an Effect failure prints its own diagnostics alongside the JSON and stdout stops being one document. Registered in test/e2e/regression/registry.ts, which notes the measured detail that removing the stderr LOGGER alone leaves it green - the catch is the fix.",
+          "builtCapability": "duplicated locally in two m2.x regression files"
         },
         {
           "id": "exit-code-contract-is-uniform",
@@ -32,11 +32,11 @@
           "expected": "All refusals exit 1 with an error envelope. Today progress and context print `{ok:false,error:...}` with exit 0, so `if lucid progress ...` in a shell treats a no-op as success.",
           "risk": "high",
           "kind": "functional",
-          "needsCapability": "raw-cli",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "builtCapability": "duplicated locally in two m2.x regression files"
         },
         {
           "id": "error-codes-are-a-closed-set",
@@ -48,11 +48,11 @@
           "expected": "One of the documented codes (VALIDATION_ERROR/NOT_FOUND/ARTIFACT_ERROR/SERVER_ERROR/LOG_ERROR). Today it is `EADDRINUSE` — a raw Bun error masquerading as a typed Lucid error, so an agent switching on the documented set falls through.",
           "risk": "medium",
           "kind": "functional",
-          "needsCapability": "raw-cli",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "builtCapability": "duplicated locally in two m2.x regression files"
         },
         {
           "id": "help-lists-every-command",
@@ -61,11 +61,9 @@
           "expected": "Exit 0 with --since/--reply/--harness/--resume/--timeout, --group, --restart, --attend, --poll all documented. `__serve` is internal but currently leaks into the invalid-subcommand hint.",
           "risk": "low",
           "kind": "functional",
-          "needsCapability": "raw-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "WRONG INSTRUMENT. A unit test walking the Effect command tree and diffing declared Options against the rendered help text. Completeness is a STATIC property - a browser and a spawned process add nothing, and regression/m2.1 already proves --help exits 0 with output.",
+          "builtCapability": "duplicated locally in two m2.x regression files"
         },
         {
           "id": "version-flag-matches-package",
@@ -74,11 +72,9 @@
           "expected": "Identical. The value is a hand-maintained literal in main.ts with an `x-release-please-version` comment, so binary/release drift is possible.",
           "risk": "low",
           "kind": "functional",
-          "needsCapability": "raw-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "WRONG INSTRUMENT. A unit test comparing the version literal in src/cli/main.ts to package.json. No process needed; release-please owns the bump.",
+          "builtCapability": "duplicated locally in two m2.x regression files"
         },
         {
           "id": "plan-bare-usage-is-not-json",
@@ -87,11 +83,9 @@
           "expected": "Two usage lines on stdout, exit 0 — deliberately not JSON, which a scripted caller must not parse.",
           "risk": "low",
           "kind": "functional",
-          "needsCapability": "raw-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "OBSOLETE - this row asserts behaviour M2.1 deliberately DELETED, and building it would re-break the fix. It demands two usage lines on stdout and exit 0; src/cli/main.ts planCommand now writes the usage to STDERR and refuses on stdout in the envelope with exit 1, and its own comment names the old shape as 'both of the defects this milestone fixed, in the one command that did not go through either path'. regression/m2.1 asserts the current contract.",
+          "builtCapability": "duplicated locally in two m2.x regression files"
         },
         {
           "id": "launch-stdout-is-not-json",
@@ -100,11 +94,9 @@
           "expected": "Human-readable lines (`launcher watching plan for forks (Ctrl-C to stop)`). Documented as the one non-JSON long-running command besides `hub`.",
           "risk": "low",
           "kind": "functional",
-          "needsCapability": "raw-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.0s to assert that prose is prose, for the one command documented as never parsed. Nothing downstream reads `launch` stdout.",
+          "builtCapability": "duplicated locally in two m2.x regression files"
         }
       ]
     },
@@ -188,11 +180,11 @@
           "expected": "Exit 1, VALIDATION_ERROR saying the OS clears the directory, detail carrying {path, suggested}; no session folder, no log.ndjson, no server process.",
           "risk": "high",
           "kind": "functional",
-          "needsCapability": "durable-path-fixture",
           "status": "covered",
           "testFile": "test/e2e/durable-path.e2e.ts",
           "testName": "open refuses an artifact under /tmp and names a durable path to use",
-          "mutation": "src/core/scratchpad.ts: make isVolatilePath always return false - `open` accepts an artifact the OS wipes on boot, taking the annotations and versions beside it"
+          "mutation": "src/core/scratchpad.ts: make isVolatilePath always return false - `open` accepts an artifact the OS wipes on boot, taking the annotations and versions beside it",
+          "builtCapability": "M5.5 - durable-path.ts, on the barrel"
         },
         {
           "id": "open-volatile-suggestion-recovers-project",
@@ -204,11 +196,11 @@
           "expected": "detail.suggested is `/Users/kevin/dev/lucid/lucid/a.html`, not a literal `<your project>`; the missing-cwd case degrades to `<your project>/lucid/<name>` without crashing.",
           "risk": "medium",
           "kind": "functional",
-          "needsCapability": "durable-path-fixture",
           "status": "covered",
           "testFile": "test/e2e/durable-path.e2e.ts",
           "testName": "a durable artifact opens, and the launch it would have made is recorded",
-          "mutation": "src/cli/self.ts: drop the recordOpen call from the NO_OPEN branch - LUCID_OPEN_LOG records nothing and which launch path would have run is unobservable again"
+          "mutation": "src/cli/self.ts: drop the recordOpen call from the NO_OPEN branch - LUCID_OPEN_LOG records nothing and which launch path would have run is unobservable again",
+          "builtCapability": "M5.5 - durable-path.ts, on the barrel"
         },
         {
           "id": "open-volatile-tmpdir-env",
@@ -220,11 +212,11 @@
           "expected": "Refused with the same VALIDATION_ERROR — volatileRoots() includes resolve($TMPDIR).",
           "risk": "medium",
           "kind": "functional",
-          "needsCapability": "durable-path-fixture",
           "status": "covered",
           "testFile": "test/e2e/durable-path.e2e.ts",
           "testName": "$TMPDIR counts as volatile, not just the literal /tmp",
-          "mutation": "src/core/scratchpad.ts: drop the TMPDIR arm from volatileRoots() - a machine whose TMPDIR points outside /tmp loses work silently (measured red; the first version of this test used tmpdir() as its fixture, which resolves to /tmp in a worker and was caught by the hardcoded root instead)"
+          "mutation": "src/core/scratchpad.ts: drop the TMPDIR arm from volatileRoots() - a machine whose TMPDIR points outside /tmp loses work silently (measured red; the first version of this test used tmpdir() as its fixture, which resolves to /tmp in a worker and was caught by the hardcoded root instead)",
+          "builtCapability": "M5.5 - durable-path.ts, on the barrel"
         },
         {
           "id": "open-allow-temp-optout",
@@ -233,11 +225,11 @@
           "expected": "Opens under `=1`; refused under `=0` and unset.",
           "risk": "medium",
           "kind": "functional",
-          "needsCapability": "durable-path-fixture",
           "status": "covered",
           "testFile": "test/e2e/durable-path.e2e.ts",
           "testName": "only the exact string LUCID_ALLOW_TEMP=1 opts out",
-          "mutation": "src/core/scratchpad.ts: loosen the opt-out to truthiness (`if (process.env.LUCID_ALLOW_TEMP)`) - \"true\", \"yes\" and \"0\" all disable a guard against silent data loss"
+          "mutation": "src/core/scratchpad.ts: loosen the opt-out to truthiness (`if (process.env.LUCID_ALLOW_TEMP)`) - \"true\", \"yes\" and \"0\" all disable a guard against silent data loss",
+          "builtCapability": "M5.5 - durable-path.ts, on the barrel"
         },
         {
           "id": "open-migrates-legacy-lucid-layout",
@@ -371,11 +363,11 @@
           "expected": "Exit 0 with a STRUCTURE_INVALID warning, version unchanged, current.html still holding the last good bytes.",
           "risk": "medium",
           "kind": "recovery",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/dead-server.e2e.ts",
           "testName": "a truncated artifact on resume warns instead of committing a broken version",
-          "mutation": "src/core/session.ts: drop the `structure.ok` guard on the reconciliation commit - a half-written file becomes a version anyone can revert to, and current.html stops holding the last good bytes"
+          "mutation": "src/core/session.ts: drop the `structure.ok` guard on the reconciliation commit - a half-written file becomes a version anyone can revert to, and current.html stops holding the last good bytes",
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "open-theme-warning-advisory",
@@ -388,10 +380,8 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s. A missing THEME_NOT_ADAPTIVE warning still opens the artifact with a live url - the warning is advice, not a gate - and the theme behaviour itself is covered by four contrast.e2e.ts tests."
         },
         {
           "id": "status-empty-directory",
@@ -429,11 +419,9 @@
           "expected": "Returns in a couple of seconds. The `**/log.ndjson` glob has no prune list (unlike scanRoots), so a monorepo is the regression to watch.",
           "risk": "medium",
           "kind": "functional",
-          "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "WRONG INSTRUMENT. A unit test that src/core/sessions.ts prunes what scanRoots prunes. A wall-clock assertion against a node_modules-sized tree is slow to build, slow to run and flaky to keep, and it would measure the machine as much as the code. See finding #64 - the prune list is genuinely missing today, which is the defect this row was reaching for.",
+          "builtCapability": "M5.3"
         },
         {
           "id": "status-live-first-ordering",
@@ -442,11 +430,11 @@
           "expected": "live:true rows first, then suspended/ended by name; dead rows carry `resume: lucid open <path>`, live rows carry `viewer`.",
           "risk": "low",
           "kind": "functional",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/dead-server.e2e.ts",
           "testName": "the listing puts live sessions first, then sorts by name",
-          "mutation": "src/core/sessions.ts: drop the live-first arm of the sort comparator (name only) - a dead session outranks the one you are looking at"
+          "mutation": "src/core/sessions.ts: drop the live-first arm of the sort comparator (name only) - a dead session outranks the one you are looking at",
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "status-hub-hosted-viewer-url",
@@ -469,10 +457,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s for the same claim as wait-harness-resume-sidecar seen from the listing end. One test answers both, and that one is being built."
         },
         {
           "id": "docs-statusline-still-finds-the-record",
@@ -485,10 +471,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "WRONG INSTRUMENT. A doc-drift unit test asserting the paths docs/CONTRACT.md names resolve against src/core/paths.ts. Executing a bash block scraped out of markdown is the wrong instrument for what is a docs bug - see finding #65, which is that bug, found while ranking this row."
         }
       ]
     },
@@ -555,12 +539,12 @@
           "expected": "A shows delivered, B still shows recorded — the ack's `covers` is the cursor just read, not the ack's own position.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "route-intercept",
           "status": "declined",
           "testFile": null,
           "testName": null,
           "mutation": null,
-          "declineReason": "The invariant is real but the window is not externally observable: runWaitCli reads the log, gets a payload, and appends the ack microseconds later inside one process with no seam between. Measured three ways - sending after wait returns lands after the ack (and left the row's own mutation green, which is how this was caught); holding the POST and releasing it as the wait starts lands before the read, so the message is legitimately in the batch; and asserting covers === payload.nextCursor is a tautology when nothing lands between. Route-intercept was expected to enable this when the row moved here; it does not, because the gap is server-internal rather than on the wire. Closed with the measurement rather than a test."
+          "declineReason": "The invariant is real but the window is not externally observable: runWaitCli reads the log, gets a payload, and appends the ack microseconds later inside one process with no seam between. Measured three ways - sending after wait returns lands after the ack (and left the row's own mutation green, which is how this was caught); holding the POST and releasing it as the wait starts lands before the read, so the message is legitimately in the batch; and asserting covers === payload.nextCursor is a tautology when nothing lands between. Route-intercept was expected to enable this when the row moved here; it does not, because the gap is server-internal rather than on the wire. Closed with the measurement rather than a test.",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "wait-presence-acks-claim-nothing",
@@ -622,11 +606,11 @@
           "expected": "Returns \"suspended\" well before the timeout, so the agent stops the loop rather than busy-waiting.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/dead-server.e2e.ts",
           "testName": "a dead server makes wait return suspended, well before its timeout",
-          "mutation": "src/core/wait.ts: neutralise the liveness arm in the wait loop (`if (!liveKnown)` -> `if (false)`) - the wait blocks to its full deadline against a server that is gone, so an agent burns its turn busy-waiting (measured red)"
+          "mutation": "src/core/wait.ts: neutralise the liveness arm in the wait loop (`if (!liveKnown)` -> `if (false)`) - the wait blocks to its full deadline against a server that is gone, so an agent burns its turn busy-waiting (measured red)",
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "wait-two-waiters-both-get-the-batch",
@@ -638,11 +622,11 @@
           "expected": "Both return status feedback carrying the same annotation id (at-least-once, dedupe by id); neither hangs and the log stays parseable.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "concurrent-cli",
           "status": "covered",
           "testFile": "test/e2e/concurrent.e2e.ts",
           "testName": "two concurrent waits on one session both receive the batch",
-          "mutation": "src/core/wait.ts: make the feedback branch consume - append the ack BEFORE building the payload and filter the delta against it - so the second waiter finds an empty batch and reports waiting while an agent silently loses its work"
+          "mutation": "src/core/wait.ts: make the feedback branch consume - append the ack BEFORE building the payload and filter the delta against it - so the second waiter finds an empty batch and reports waiting while an agent silently loses its work",
+          "builtCapability": "M5.4"
         },
         {
           "id": "wait-killed-and-rerun-redelivers",
@@ -654,11 +638,11 @@
           "expected": "The annotation is delivered again with the same id — nothing is consumed by the killed process.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "concurrent-cli",
           "status": "covered",
           "testFile": "test/e2e/concurrent.e2e.ts",
           "testName": "a killed wait consumes nothing - the rerun delivers the same batch",
-          "mutation": "src/core/wait.ts: mark the batch delivered at READ time rather than on the CLI's ack - a reader that dies before printing takes the batch with it, and the rerun reports waiting"
+          "mutation": "src/core/wait.ts: mark the batch delivered at READ time rather than on the CLI's ack - a reader that dies before printing takes the batch with it, and the rerun reports waiting",
+          "builtCapability": "M5.4"
         },
         {
           "id": "wait-survives-server-restart-midflight",
@@ -670,12 +654,12 @@
           "expected": "The blocked wait reconnects its SSE stream and returns the annotation (heartbeat fallback at worst) instead of reporting suspended or hanging past the deadline.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "concurrent-cli",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
           "mutation": null,
-          "blockedBy": "Not written: needs a wait blocked in flight while `open --restart` replaces the server under it, and the restart path is the same one M4.1's open-restart-never-kills-the-hub covers from the hub side. Deferred to M6.2 with the other restart-timing work rather than written against a race this milestone did not build a seam for."
+          "blockedBy": "Not written: needs a wait blocked in flight while `open --restart` replaces the server under it, and the restart path is the same one M4.1's open-restart-never-kills-the-hub covers from the hub side. Deferred to M6.2 with the other restart-timing work rather than written against a race this milestone did not build a seam for.",
+          "builtCapability": "M5.4"
         },
         {
           "id": "wait-reply-with-dead-server-survives",
@@ -688,11 +672,11 @@
           "expected": "The reply was appended directly to the log under the lock and shows in the thread after the reopen, in order.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/loop.e2e.ts",
           "testName": "a message sent at a dead server is kept, not eaten, and delivers itself on reconnect",
-          "mutation": null
+          "mutation": null,
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "wait-timeout-is-seconds",
@@ -791,10 +775,8 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~0.8s. Worst case is one empty bubble and one stray log event: both visible, neither lossy."
         },
         {
           "id": "wait-huge-payload",
@@ -806,11 +788,11 @@
           "expected": "Parses cleanly; every annotation present with resolved/target/note; image paths absolute and readable; no truncation and no interleaved log output.",
           "risk": "medium",
           "kind": "functional",
-          "needsCapability": "scale-fixture",
           "status": "covered",
           "testFile": "test/e2e/scale.e2e.ts",
           "testName": "a large backlog comes back as one parseable JSON document",
-          "mutation": "src/cli/main.ts: restore an Effect log line on stdout beside the payload (the m2.1 defect) - a 100-item backlog stops being one JSON document and every agent parsing stdout throws"
+          "mutation": "src/cli/main.ts: restore an Effect log line on stdout beside the payload (the m2.1 defect) - a 100-item backlog stops being one JSON document and every agent parsing stdout throws",
+          "builtCapability": "M5.3"
         },
         {
           "id": "wait-harness-resume-sidecar",
@@ -838,10 +820,8 @@
           "risk": "low",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "WRONG INSTRUMENT. A unit test on the attendant-record derivation: harness defaulting to 'agent' is a one-branch pure function, the same shape M6.1 extracted into naming.ts and cursor.ts."
         },
         {
           "id": "wait-stamps-build-session-history",
@@ -854,10 +834,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "WRONG INSTRUMENT. Same seam. sessionHistory presence/absence and the per-session firstAt/lastAt/counts are a fold over events plus two env reads - ~5ms in bun rather than ~1.5s through a browser."
         },
         {
           "id": "wait-stamp-sanitized",
@@ -901,11 +879,11 @@
           "expected": "version:2 in the payload, the viewer renders the new content, and the previous version is still browsable in the diff view.",
           "risk": "medium",
           "kind": "state",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/dead-server.e2e.ts",
           "testName": "an edit made while nobody was serving becomes v2 on the next open",
-          "mutation": "src/core/session.ts: skip the reconciliation branch on resume (treat `changed` as false) - an edit made while nothing was watching never becomes a version and is invisible to review"
+          "mutation": "src/core/session.ts: skip the reconciliation branch on resume (treat `changed` as false) - an edit made while nothing was watching never becomes a version and is invisible to review",
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "end-idempotent",
@@ -940,11 +918,11 @@
           "expected": "Exit 0, status ended, server.json removed so the next listing shows no ghost live session.",
           "risk": "medium",
           "kind": "recovery",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/dead-server.e2e.ts",
           "testName": "end after the server already died still clears the descriptor",
-          "mutation": "src/cli/run.ts: skip removeServerDescriptor on the !live branch of runEnd - server.json outlives the process and the next listing reports a ghost live session"
+          "mutation": "src/cli/run.ts: skip removeServerDescriptor on the !live branch of runEnd - server.json outlives the process and the next listing reports a ghost live session",
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "end-while-viewer-open",
@@ -987,10 +965,8 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. Absorbed into the parameterized absent-target test at zero marginal cost. Standalone it buys a second copy of an assertion already made there."
         }
       ]
     },
@@ -1174,11 +1150,11 @@
           "expected": "Exit 0, and the question appears in the panel after the reopen (direct log append path).",
           "risk": "medium",
           "kind": "recovery",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/dead-server.e2e.ts",
           "testName": "a question asked while the server is down survives to the next open",
-          "mutation": "src/cli/run.ts: make runAsk require a live server (return/throw when discoverLiveServer answers undefined) - a question asked during an outage is lost rather than appended directly to the log"
+          "mutation": "src/cli/run.ts: make runAsk require a live server (return/throw when discoverLiveServer answers undefined) - a question asked during an outage is lost rather than appended directly to the log",
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "ask-group-missing-file",
@@ -1188,10 +1164,8 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "WRONG INSTRUMENT. test/ask-group.test.ts, which already holds seven group-validation refusals behind src/cli/ask-input.ts. An unreadable --group file is the eighth."
         },
         {
           "id": "ask-unknown-ref",
@@ -1201,10 +1175,8 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.3s for the degenerate case of a resolver already exercised by hostile-duplicate-ids and 9df5eae-ambiguous-fingerprint."
         }
       ]
     },
@@ -1239,11 +1211,11 @@
           "expected": "One [data-test=annotation] appears in the record, exactly two queued cards remain, and the warning names the failure once.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/queue-routes.e2e.ts",
           "testName": "a partial batch drops exactly the items that landed",
-          "mutation": "client/chrome/store.ts: drop buildTimeline's `.filter((q) => !sentIds.has(q.id))` - a landed annotation and its still-queued card share one id, assistant-ui throws, and the viewer unmounts to a blank page (measured: body length 0)"
+          "mutation": "client/chrome/store.ts: drop buildTimeline's `.filter((q) => !sentIds.has(q.id))` - a landed annotation and its still-queued card share one id, assistant-ui throws, and the viewer unmounts to a blank page (measured: body length 0)",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "annotation-queued-mid-flight-survives-the-drain",
@@ -1255,11 +1227,11 @@
           "expected": "When the send settles, A is a sent card and B is still a queued card with its note intact.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/queue-routes.e2e.ts",
           "testName": "a note queued while a send is in flight is not swept away by it",
-          "mutation": "client/chrome/actions.ts: reconcile sendQueue against a pre-send snapshot instead of live state - the note queued mid-flight is swept away with the sent ones. The test pins the window with a disabled send bar on both sides of the queueing, so it cannot pass by queueing after the send settled."
+          "mutation": "client/chrome/actions.ts: reconcile sendQueue against a pre-send snapshot instead of live state - the note queued mid-flight is swept away with the sent ones. The test pins the window with a disabled send bar on both sides of the queueing, so it cannot pass by queueing after the send settled.",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "queue-is-lost-on-reload",
@@ -1409,10 +1381,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.4s. The covered m4.1-quick-reply-merges has to drive the chip to set itself up, so the plain one-tap path is already exercised inside it."
         },
         {
           "id": "multi-spot-chip-remove-keeps-draft",
@@ -1450,10 +1420,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.5s to assert a disabled attribute and a tooltip string. The failure is a confusing but VISIBLE refusal, and fork's lossy paths are covered."
         },
         {
           "id": "composer-frozen-while-forking",
@@ -1465,11 +1433,11 @@
           "expected": "[data-test=annotation-note] is disabled, the button reads 'Forking…', and a second click cannot mint a second fork.",
           "risk": "medium",
           "kind": "concurrency",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/queue-routes.e2e.ts",
           "testName": "the composer is frozen while a fork POST is in flight, and cannot double-fork",
-          "mutation": "client/chrome/Panel.tsx: drop `forking ||` from the Fork button's disabled binding - the button never freezes and the Forking... label never appears (measured red). NOTE the double-fork half is defended TWICE - the forking re-entrancy guard and the stable forkId reuse - so no single-line mutation can produce two forks: dropping either one alone still yields one fork (both measured green). The test dispatches a real second click past the disabled attribute so the claim is asserted, but only the freeze is single-mutation-provable."
+          "mutation": "client/chrome/Panel.tsx: drop `forking ||` from the Fork button's disabled binding - the button never freezes and the Forking... label never appears (measured red). NOTE the double-fork half is defended TWICE - the forking re-entrancy guard and the stable forkId reuse - so no single-line mutation can produce two forks: dropping either one alone still yields one fork (both measured green). The test dispatches a real second click past the disabled attribute so the claim is asserted, but only the freeze is single-mutation-provable.",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "annotation-image-chip-remove",
@@ -1494,11 +1462,11 @@
           "expected": "No chip appears and a warning reads \"That image didn't upload - try again.\"",
           "risk": "medium",
           "kind": "recovery",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/queue-routes.e2e.ts",
           "testName": "an image that cannot upload says so instead of vanishing",
-          "mutation": "client/chrome/actions.ts: make uploadPaste's catch return null silently (remove the warn) - the image vanishes with no explanation"
+          "mutation": "client/chrome/actions.ts: make uploadPaste's catch return null silently (remove the warn) - the image vanishes with no explanation",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "send-queue-refuses-empty-open-edit",
@@ -1537,11 +1505,11 @@
           "expected": "edit-queued, Remove and send-queue are all disabled for the duration; after the send they are gone with the cards.",
           "risk": "medium",
           "kind": "concurrency",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/queue-routes.e2e.ts",
           "testName": "queue cards cannot be edited or removed mid-send, and the bar is down",
-          "mutation": "client/chrome/Panel.tsx: drop `disabled={sending}` from the queued card's edit control - a card edited mid-flight sends its old note while showing the new one"
+          "mutation": "client/chrome/Panel.tsx: drop `disabled={sending}` from the queued card's edit control - a card edited mid-flight sends its old note while showing the new one",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "queue-blocks-session-switch",
@@ -1623,10 +1591,8 @@
           "risk": "low",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.3s for the third route to one keepMounted claim. One route is pinned; the other two are the same mechanism."
         },
         {
           "id": "send-bar-pluralizes-and-hides",
@@ -1693,11 +1659,11 @@
           "expected": "Exactly one request goes out, the card flips to 'not delivered' within ~1s, and the warning names the different-session reason rather than a generic failure.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/regression/80faab5-a-verdict-is-not-retried.e2e.ts",
           "testName": "a 4xx verdict fails once, immediately, with the server's reason",
-          "mutation": "client/chrome/transport.ts: remove the 4xx short-circuit - the verdict is re-POSTed five times over 14s"
+          "mutation": "client/chrome/transport.ts: remove the 4xx short-circuit - the verdict is re-POSTed five times over 14s",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "retry-state-is-per-message",
@@ -1709,11 +1675,11 @@
           "expected": "Only the first card's button reads 'Sending…' and is disabled; the second card's Retry and Discard stay clickable, and Discard on it works immediately.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/regression/80faab5-one-stuck-flush.e2e.ts",
           "testName": "a stuck flush disables its own card's Retry, and no other's",
-          "mutation": "client/chrome/Panel.tsx: read the global `outboxSending` instead of `outboxSendingId === message.id` - every card reads Sending and the untouched card cannot be discarded"
+          "mutation": "client/chrome/Panel.tsx: read the global `outboxSending` instead of `outboxSendingId === message.id` - every card reads Sending and the untouched card cannot be discarded",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "discard-works-during-a-stuck-flush",
@@ -1725,11 +1691,11 @@
           "expected": "Both cards go, [data-test=approve] becomes enabled, and neither message returns after the reload (their localStorage keys were removed).",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/message-routes.e2e.ts",
           "testName": "Discard clears a message mid-flush, unblocks approve, and survives a reload",
-          "mutation": "client/chrome/actions.ts: make discardOutboxMessage drop the entry from state without calling storage.forgetOutboxMessage - the card goes and the message re-sends itself after a reload"
+          "mutation": "client/chrome/actions.ts: make discardOutboxMessage drop the entry from state without calling storage.forgetOutboxMessage - the card goes and the message re-sends itself after a reload",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "slow-send-becomes-visible-after-a-beat",
@@ -1741,11 +1707,11 @@
           "expected": "After ~1.2s a [data-test=unsent-message] appears under 'Sending' reading 'sending…' (not 'not delivered'); when the POST lands the card disappears and exactly ONE human bubble exists.",
           "risk": "high",
           "kind": "functional",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/regression/80faab5-a-slow-send-is-visible.e2e.ts",
           "testName": "a send that is taking a while says so, before it has failed",
-          "mutation": "client/chrome/Panel.tsx: raise SLOW_SEND_MS to 60_000 - a slow send shows nothing and is indistinguishable from a swallowed one"
+          "mutation": "client/chrome/Panel.tsx: raise SLOW_SEND_MS to 60_000 - a slow send shows nothing and is indistinguishable from a swallowed one",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "server-reason-reaches-the-human",
@@ -1757,11 +1723,11 @@
           "expected": "The warning reads \"Your message didn't send (HTTP 503 - the log is busy) - it's kept below, and you can retry it.\" — the server's reason, not a bare generic failure.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/message-routes.e2e.ts",
           "testName": "the server's own reason for refusing is what the panel prints",
-          "mutation": "client/chrome/actions.ts: replace the reason-bearing warn with a bare \"Your message didn't send\" - the human cannot tell a busy log (retry works) from a gone hub (it never will)"
+          "mutation": "client/chrome/actions.ts: replace the reason-bearing warn with a bare \"Your message didn't send\" - the human cannot tell a busy log (retry works) from a gone hub (it never will)",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "outbox-drains-in-authored-order",
@@ -1790,10 +1756,8 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~2.5s, and a 2s poll for the ABSENCE of a card is a flake generator - the wrong trade in a suite with failOnFlakyTests. The covered slow-send-becomes-visible-after-a-beat pins the same threshold from the other side, and a stutter loses no data."
         },
         {
           "id": "copy-unsent-puts-the-exact-text-on-the-clipboard",
@@ -1821,10 +1785,8 @@
           "risk": "low",
           "kind": "recovery",
           "needsCapability": "clipboard",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s for the error path of a button whose happy path is being built. Clipboard writes rarely fail in a focused page; nearly free to add later now that the capability exists."
         }
       ]
     },
@@ -1936,12 +1898,9 @@
           "expected": "The tab bar scrolls horizontally, the page body does not, and the last tab plus \"+\" stay reachable and clickable.",
           "risk": "high",
           "kind": "visual",
-          "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Needs a shell holding twelve tabs; the product reaches six by the drawer path (deterministically, and silently) and five per-open inside a 60s budget - plan finding #53. Asserting against six would pin a number nobody chose, and a retry loop in the harness would hide the defect. Uncovered until the shell converges on N tabs for N artifacts."
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #53: the shell does not reliably reach N tabs for N artifacts - measured six of twelve by the drawer (deterministic across five re-clicks) and five in 60s per-open. Twelve tabs never exist, so there is nothing to scroll. Returns when the shell converges.",
+          "builtCapability": "M5.3"
         },
         {
           "id": "tabs-stream-cap-reconnects-on-activate",
@@ -1953,12 +1912,9 @@
           "expected": "The reactivated tab refolds its state and shows the new event live — never a frozen snapshot.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Same blocker as tabs-many-strip-scrolls (finding #53): the ten-stream cap cannot be crossed if twelve tabs never open, so the eviction this row is about never happens."
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #53: the ten-stream cap cannot be crossed while twelve tabs never open, so the eviction this row is about never happens. Returns with the same fix.",
+          "builtCapability": "M5.3"
         },
         {
           "id": "tab-attention-question-in-background",
@@ -1998,11 +1954,11 @@
           "expected": "Five tabs, no duplicates, exactly one data-active tab, and the scope badge matching the artifact actually displayed.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "concurrent-cli",
           "status": "covered",
           "testFile": "test/e2e/concurrent.e2e.ts",
           "testName": "a burst of opens produces one tab each, one active, and never an empty strip",
-          "mutation": "src/server/ports.ts: collapse sessionPortPool to a single fixed port - a burst of opens contends for one address and the losers come up dead or share a server"
+          "mutation": "src/server/ports.ts: collapse sessionPortPool to a single fixed port - a burst of opens contends for one address and the losers come up dead or share a server",
+          "builtCapability": "M5.4"
         },
         {
           "id": "scope-active-tab-always-visible",
@@ -2014,12 +1970,9 @@
           "expected": "At every moment the strip contains a data-active tab whose label matches the shown artifact; the strip is never empty under a surface.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Blocked by finding #53 with the other tab-scale rows: it samples the strip repeatedly while three cross-project opens land, and the shell does not reliably reach N tabs for N artifacts by any path."
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #53: sampling the strip during cross-project opens is meaningless while the strip does not reliably reach N tabs by any path. Returns with the same fix.",
+          "builtCapability": "M5.4"
         },
         {
           "id": "shell-under-the-panel-hidden-tabs-stay-mounted",
@@ -2151,10 +2104,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s. A wrong scope on boot shows the wrong project's tabs - visible, and one click on 'all projects' widens out of it."
         },
         {
           "id": "reload-keeps-only-boot-tab",
@@ -2164,10 +2115,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "CONTRADICTS SHIPPED BEHAVIOUR - this row asserts that a reload restores only the ?s= tab and drops the others. regression/3bca9c0-reload-keeps-your-tabs.e2e.ts is a revert-verified test asserting the opposite: 'a reload keeps the tabs that were open, and the one in front'. The row describes pre-3bca9c0 behaviour, which was the bug."
         },
         {
           "id": "tab-label-falls-back-to-filename",
@@ -2195,10 +2144,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.3s. A stale tab label until the next listing snapshot is cosmetic and self-correcting; the fallback labelling itself is unit-covered."
         },
         {
           "id": "tabs-same-title-remain-distinguishable",
@@ -2211,11 +2158,8 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "PRODUCT DEFECT (finding #56): the qualifier does not disambiguate a SAME-project title collision. tabLabel qualifies a collision with projectName(project), so two artifacts in one project sharing a <title> both render the identical string - measured `[\"Migration · lucid\", \"Migration · lucid\"]` for /dev/lucid/plan.html and /dev/lucid/rollout.html. The qualifier fires, costs strip width, and adds no information; only the hover tooltip's path tells them apart. test/tab-labels.test.ts records the current behaviour as measured so a fix turns it red deliberately. The row stays uncovered because its claim - still tellable apart - is false today."
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #56: measured ['Migration - lucid', 'Migration - lucid'] for two artifacts in one project. The qualifier fires, costs strip width and adds no information, so the row's claim - still tellable apart - is false today. test/tab-labels.test.ts records the measured behaviour, so a fix turns it red deliberately."
         },
         {
           "id": "tabs-cross-project-name-collision",
@@ -2270,10 +2214,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s, and its load-bearing clause ('closes that tab only') is tab-close-background-leaves-active-alone, which is being built. What is left is hover paint."
         },
         {
           "id": "tab-close-all-then-cmdw-noop",
@@ -2283,10 +2225,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. Already answered by cmd-w-on-pick-screen in test/keymap.test.ts (M6.1). The remaining clause - the BROWSER tab is unaffected - is the browser's business, not Lucid's."
         },
         {
           "id": "tab-attention-working",
@@ -2298,10 +2238,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.4s. The dot's two halves are separately covered (tab-attention-question-in-background, and the working indicator in loop.e2e.ts); a missing dot means a human waits a beat longer to notice."
         },
         {
           "id": "panel-width-shared-across-tabs",
@@ -2311,10 +2249,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.5s. A reset panel width is an annoyance a human fixes by dragging once."
         },
         {
           "id": "tab-attention-approved",
@@ -2340,10 +2276,8 @@
           "risk": "low",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "WRONG INSTRUMENT. A pure dotKind(state) derivation behind a seam beside client/chrome/naming.ts - exactly the precedence shape M6.1 extracted for the keymap."
         },
         {
           "id": "sidebar-collapse-shared",
@@ -2353,10 +2287,8 @@
           "risk": "low",
           "kind": "state",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.3s. Same family and same tolerance as panel-width-shared-across-tabs."
         },
         {
           "id": "plus-blurs-itself",
@@ -2387,11 +2319,11 @@
           "expected": "\"Looking for sessions…\" shows during the delay; \"No reviews here yet\" never appears before the first snapshot.",
           "risk": "high",
           "kind": "state",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/shell-routes.e2e.ts",
           "testName": "before the first listing arrives the screen says it is LOOKING, not empty",
-          "mutation": "client/chrome/Shell.tsx: render the empty state before the first snapshot (drop the loaded guard) - the shell claims there are no reviews while it is still asking"
+          "mutation": "client/chrome/Shell.tsx: render the empty state before the first snapshot (drop the loaded guard) - the shell claims there are no reviews while it is still asking",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "picker-row-open-failure-reports-on-the-row",
@@ -2415,11 +2347,11 @@
           "expected": "The hit element is the row (or inside it) — no clipped popover or overlay intercepting.",
           "risk": "high",
           "kind": "visual",
-          "needsCapability": "hit-test",
           "status": "covered",
           "testFile": "test/e2e/shell.e2e.ts",
           "testName": "tabs scope to a project; the drawer switches; drafts survive",
-          "mutation": null
+          "mutation": null,
+          "builtCapability": "isHittable in test/e2e/visual.ts"
         },
         {
           "id": "picker-all-open-scoped-copy",
@@ -2443,11 +2375,11 @@
           "expected": "Each control receives its click — the fixed overlay is anchored below --lucid-shell-top and never covers the 37px bar.",
           "risk": "high",
           "kind": "visual",
-          "needsCapability": "hit-test",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "builtCapability": "isHittable in test/e2e/visual.ts"
         },
         {
           "id": "drawer-open-large-project",
@@ -2456,12 +2388,9 @@
           "expected": "12 tabs in lastSeen order with no duplicates, exactly one active (the newest), drawer closed, and the window still accepts input during and after the sequential opens.",
           "risk": "high",
           "kind": "functional",
-          "needsCapability": "scale-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "This row IS the defect: picking a 12-artifact project opens six tabs and reports nothing (finding #53, measured deterministically across five re-clicks with the drawer's own count reading '12 artifacts'). Recorded rather than asserted against the broken count."
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #53 in its purest form - this row IS the defect: the drawer's own count read '12 artifacts' and six tabs opened, five re-clicks running. The N=2 form of the same claim is already covered by drawer-opens-whole-project, so what is missing is only the case that is broken.",
+          "builtCapability": "M5.3"
         },
         {
           "id": "scope-hides-other-projects",
@@ -2600,10 +2529,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s. The empty-shell path is covered by picker-empty-names-its-roots; a drawer showing zero rows on an empty hub is the uninteresting case."
         },
         {
           "id": "picker-sticky-group-headings",
@@ -2614,11 +2541,11 @@
           "expected": "The owning project's heading is still visible at the top of the list viewport; clicking a heading opens nothing.",
           "risk": "medium",
           "kind": "visual",
-          "needsCapability": "scale-fixture",
           "status": "covered",
           "testFile": "test/e2e/scale.e2e.ts",
           "testName": "project headings stay put while a long list scrolls, and are not clickable",
-          "mutation": "client/chrome/Shell.tsx: drop `sticky` from the picker-project heading - the heading scrolls away from its own rows and nothing says which project the rows under the cursor belong to"
+          "mutation": "client/chrome/Shell.tsx: drop `sticky` from the picker-project heading - the heading scrolls away from its own rows and nothing says which project the rows under the cursor belong to",
+          "builtCapability": "M5.3"
         },
         {
           "id": "picker-huge-list-internal-scroll",
@@ -2629,11 +2556,11 @@
           "expected": "The list is capped (~60vh) with its own scrollbar, the page body does not scroll, and the last row is clickable.",
           "risk": "medium",
           "kind": "visual",
-          "needsCapability": "scale-fixture",
           "status": "covered",
           "testFile": "test/e2e/scale.e2e.ts",
           "testName": "a long pick list scrolls inside itself, and its last row is clickable",
-          "mutation": "client/chrome/Shell.tsx: remove the pick list's max-height/overflow so the list grows with its rows - the page scrolls instead of the list and the bottom rows leave the window"
+          "mutation": "client/chrome/Shell.tsx: remove the pick list's max-height/overflow so the list grows with its rows - the page scrolls instead of the list and the bottom rows leave the window",
+          "builtCapability": "M5.3"
         },
         {
           "id": "picker-scratchpad-subtitle",
@@ -2672,10 +2599,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s for copy quality on a SUCCESSFUL add. The folder is watched either way, so nothing is lost."
         },
         {
           "id": "add-folder-duplicate",
@@ -2697,11 +2622,11 @@
           "expected": "A path input appears instead of a dead-end failure; typing a path and Enter adds it.",
           "risk": "medium",
           "kind": "recovery",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/shell-routes.e2e.ts",
           "testName": "with no OS chooser the folder icon falls back to a path field",
-          "mutation": "client/chrome/hub.ts: drop addRoot's 501 -> needsPath arm - a build with no native chooser is a dead end instead of a path field"
+          "mutation": "client/chrome/hub.ts: drop addRoot's 501 -> needsPath arm - a build with no native chooser is a dead end instead of a path field",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "add-folder-from-drawer-updates-drawer",
@@ -2713,10 +2638,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.3s. Worst case the human closes and reopens the drawer to see the row they just added."
         },
         {
           "id": "stale-registry-pointer-not-listed",
@@ -2865,11 +2788,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Stays in e2e: the map answers `palette` for either press; the TOGGLE lives in the shell's open/closed state and cmdk's own behaviour, which is paint."
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.0s. A palette that reopens instead of toggling is still dismissed by Escape, and the toggle is cmdk's behaviour rather than Lucid's."
         },
         {
           "id": "palette-with-no-active-session",
@@ -2893,11 +2813,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Stays in e2e: a palette ACTION, not a chord."
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s. The dangerous half - a live neighbour is promoted - is covered via the x route in tab-close-promotes-a-live-neighbor."
         },
         {
           "id": "palette-filters-by-project",
@@ -2907,11 +2824,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Stays in e2e: cmdk owns filtering."
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.3s. cmdk owns filtering; a query that fails to narrow shows too much, which the human sees instantly."
         },
         {
           "id": "palette-annotation-jump",
@@ -2921,11 +2835,8 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Stays in e2e: needs a located annotation and a real surface to jump in."
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.6s. A jump that lands nowhere is a visibly broken convenience, not a lost annotation."
         },
         {
           "id": "palette-cmdw-does-not-close-underneath",
@@ -3019,10 +2930,8 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~0.9s for one string on a no-match query."
         },
         {
           "id": "cmd-digit-out-of-range",
@@ -3110,11 +3019,11 @@
           "expected": "First `{ok:true,live:true}` with the ring updating without a reload; second `{ok:true,live:false}` writing context.json; after the reopen the ring shows 90%.",
           "risk": "medium",
           "kind": "state",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/loop.e2e.ts",
           "testName": "context usage renders a header ring that updates live",
-          "mutation": null
+          "mutation": null,
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "intent-reply-vs-revise-copy",
@@ -3154,11 +3063,11 @@
           "expected": "live:false and the sidecar written — never a `live:true` success for a POST that 404'd.",
           "risk": "medium",
           "kind": "recovery",
-          "needsCapability": "route-intercept",
           "status": "covered",
           "testFile": "test/e2e/shell-routes.e2e.ts",
           "testName": "a server without /__lucid/context falls through to the sidecar, and says live:false",
-          "mutation": "src/cli/run.ts: print live:true regardless of the response (make the `if (res.ok)` guard unconditional) - a 404'd POST is reported to the agent as a live success"
+          "mutation": "src/cli/run.ts: print live:true regardless of the response (make the `if (res.ok)` guard unconditional) - a 404'd POST is reported to the agent as a live success",
+          "builtCapability": "M5.1 - routes.ts, on the barrel"
         },
         {
           "id": "context-derives-and-clamps",
@@ -3233,10 +3142,9 @@
             "Open a session, annotate from the browser, rebuild the client bundle",
             "Run `lucid open plan.html --restart`, reload the url, run `lucid wait --since <old cursor>`"
           ],
-          "expected": "A new server pid serves the freshly built bundle, no session_ended event was written, and the earlier annotation is still delivered by wait.",
+          "expected": "A new server pid, NO session_ended event was written, and the earlier annotation is still delivered by wait. The bundle-freshness clause is deliberately dropped (D-078): the three claims above are what make a restart safe - a restart that writes session_ended silently ends a live review - and none of them needs the bundle-stamp capability to move, which is why that capability is not being built.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "bundle-stamp",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
@@ -3252,11 +3160,11 @@
           "expected": "Exit 1 with SERVER_ERROR \"the hub accepted the session but its mount never answered\"; no dedicated per-session server behind the hub's mount (two appenders would corrupt the log).",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/dead-server.e2e.ts",
           "testName": "a hub that accepts a session and never serves it fails loudly, never split-brains",
-          "mutation": "src/cli/run.ts: neutralise the post-accept handshake guard (`if (!identity)` -> `if (false)`) - open silently serves a session the hub already owns, putting two appenders on one log (measured red against a stub hub that accepts and never serves; killing a real hub BEFORE open does not enter this branch and left the guard unproven)"
+          "mutation": "src/cli/run.ts: neutralise the post-accept handshake guard (`if (!identity)` -> `if (false)`) - open silently serves a session the hub already owns, putting two appenders on one log (measured red against a stub hub that accepts and never serves; killing a real hub BEFORE open does not enter this branch and left the guard unproven)",
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "open-stale-descriptor-recovered",
@@ -3268,11 +3176,11 @@
           "expected": "The handshake rejects the impostor (session path mismatch), the stale descriptor is removed, a fresh server is spawned, and the printed url points at the new port.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "kill-server",
           "status": "covered",
           "testFile": "test/e2e/loop.e2e.ts",
           "testName": "a stale viewer never posts its message into whichever session took its port",
-          "mutation": null
+          "mutation": null,
+          "builtCapability": "M5.2 - killSessionServer, on the barrel"
         },
         {
           "id": "open-concurrent-same-artifact",
@@ -3284,12 +3192,9 @@
           "expected": "Both exit 0 with the same url and version, exactly one session_opened, and only one listening port.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Partly covered: 'two simultaneous opens agree on the session they opened' asserts the same url, the same version, one live server, and a strictly ordered log - all measured true. The row's remaining clause, exactly ONE session_opened, is FALSE today: the product appends two (finding #54, a check-then-act race openSession does not guard with appendEventsIf), and the losing spawn leaves an orphaned __serve that `end` cannot reap and the listing cannot see (finding #55). Uncovered until both are fixed; asserting the true half alone would be answering the easy clause."
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Findings #54 and #55: two concurrent opens append two session_opened events (check-then-act, not guarded by appendEventsIf) and the loser orphans a __serve that `end` cannot reap and the listing cannot see. The row's true half - one url, one server - is already covered; asserting only that would answer the easy clause and leave the two-appenders state unmentioned. Returns when both are fixed.",
+          "builtCapability": "M5.4"
         },
         {
           "id": "hub-attend-env-opt-in-is-strict",
@@ -3376,11 +3281,11 @@
           "expected": "All 12 report live:true with distinct viewer urls (17412–17419 then ephemeral ports); none fail with a bind error.",
           "risk": "medium",
           "kind": "concurrency",
-          "needsCapability": "scale-fixture",
           "status": "covered",
           "testFile": "test/e2e/scale.e2e.ts",
           "testName": "opening more sessions than the fixed port pool still works",
-          "mutation": "src/server/ports.ts: drop the trailing 0 from sessionPortPool - the ninth session onward has no ephemeral fallback to bind and comes up dead, while the first eight look fine"
+          "mutation": "src/server/ports.ts: drop the trailing 0 from sessionPortPool - the ninth session onward has no ephemeral fallback to bind and comes up dead, while the first eight look fine",
+          "builtCapability": "M5.3"
         },
         {
           "id": "hub-many-sessions",
@@ -3389,11 +3294,11 @@
           "expected": "Exactly one listening port; all 20 appear in the listing and any one opens as a tab within a couple of seconds.",
           "risk": "medium",
           "kind": "concurrency",
-          "needsCapability": "scale-fixture",
           "status": "covered",
           "testFile": "test/e2e/scale.e2e.ts",
           "testName": "a hub hosting twenty sessions binds one port and lists them all",
-          "mutation": "src/cli/run.ts: skip the hubOpen path in runOpen (always spawn a dedicated server) - twenty sessions bind twenty ports instead of sharing the hub's one"
+          "mutation": "src/cli/run.ts: skip the hubOpen path in runOpen (always spawn a dedicated server) - twenty sessions bind twenty ports instead of sharing the hub's one",
+          "builtCapability": "M5.3"
         },
         {
           "id": "open-registry-write-failure-is-advisory",
@@ -3433,10 +3338,8 @@
           "risk": "low",
           "kind": "recovery",
           "needsCapability": "bundle-stamp",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "CAPABILITY NOT WORTH BUILDING. The only surviving user of bundle-stamp: open-restart-replaces-daemon survives with its bundle clause dropped, because the new pid, the absent session_ended and the still-delivered annotation are its load-bearing claims and none needs the stamp to move. Building a mid-test bundle-stamp mover - rebuild the chrome bundle, invalidate the served stamp, wait out a self-reload - repays a low-risk, dev-mode-only convenience that a human fixes with Cmd-R."
         },
         {
           "id": "two-windows-independent-scope",
@@ -3446,10 +3349,8 @@
           "risk": "low",
           "kind": "concurrency",
           "needsCapability": "multi-window",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.5s. The two multi-window rows carrying work-loss risk are being built; independent scope is a preference drifting between windows."
         }
       ]
     },
@@ -3467,11 +3368,11 @@
           "expected": "Every event present exactly once, seq strictly monotonic with no duplicates, every line parses, and the panel order matches the log order.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "concurrent-cli",
           "status": "covered",
           "testFile": "test/e2e/concurrent.e2e.ts",
           "testName": "simultaneous writers all land, once each, in a strictly ordered log",
-          "mutation": "src/core/log.ts: drop withAppendLock from appendEventsIf (write without the exclusive lock) - concurrent writers interleave, seqs duplicate, and events are lost or the file is left unparseable"
+          "mutation": "src/core/log.ts: drop withAppendLock from appendEventsIf (write without the exclusive lock) - concurrent writers interleave, seqs duplicate, and events are lost or the file is left unparseable",
+          "builtCapability": "M5.4"
         },
         {
           "id": "log-torn-tail-recovery",
@@ -3520,11 +3421,11 @@
           "expected": "The stub is invoked with substituted {id}/{seed}/{artifact}/{cwd}/{prompt}, the child artifact appears as a new session/tab, and the parent's fork is not folded into the parent artifact.",
           "risk": "high",
           "kind": "functional",
-          "needsCapability": "stub-harness-launcher",
           "status": "covered",
           "testFile": "test/e2e/loop.e2e.ts",
           "testName": "fork button spins the selection off; the request reaches wait as a fork",
-          "mutation": null
+          "mutation": null,
+          "builtCapability": "M5.6"
         },
         {
           "id": "launch-dedupes-handled-forks",
@@ -3536,12 +3437,12 @@
           "expected": "No second child is spawned for the same fork id; only genuinely new forks are acted on.",
           "risk": "high",
           "kind": "state",
-          "needsCapability": "stub-harness-launcher",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
           "mutation": null,
-          "blockedBy": "Written, passed, and MEASURED vacuous: with no fork in the log the launcher spawns nothing, so the assertion holds whatever the dedupe code does - removing the handled-set check left it green. Needs a real fork driven to a real child."
+          "blockedBy": "Written, passed, and MEASURED vacuous: with no fork in the log the launcher spawns nothing, so the assertion holds whatever the dedupe code does - removing the handled-set check left it green. Needs a real fork driven to a real child.",
+          "builtCapability": "M5.6"
         },
         {
           "id": "launch-yields-to-a-human-attendant",
@@ -3553,12 +3454,12 @@
           "expected": "The launcher logs that it is yielding to the attending harness and does not spawn a resume turn; the interactive attendant gets the batch.",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "stub-harness-launcher",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
           "mutation": null,
-          "blockedBy": "Same measurement: removing the single-attendant guard left the test green, because the attend loop is never entered without a child. Needs a real fork-to-child fixture."
+          "blockedBy": "Same measurement: removing the single-attendant guard left the test green, because the attend loop is never entered without a child. Needs a real fork-to-child fixture.",
+          "builtCapability": "M5.6"
         },
         {
           "id": "launch-no-registry",
@@ -3599,11 +3500,11 @@
           "expected": "The launcher exits, the in-flight child is completed or terminated (not orphaned holding the log lock), and the parent session stays usable.",
           "risk": "medium",
           "kind": "recovery",
-          "needsCapability": "stub-harness-launcher",
           "status": "covered",
           "testFile": "test/e2e/launcher.e2e.ts",
           "testName": "SIGINT stops the launcher without orphaning a child or the parent session",
-          "mutation": "src/launch/launcher.ts: ignore the abort signal in the attend loop (drop the `opts.signal?.aborted` early return) - the launcher keeps running after SIGINT and a human cannot stop it without hunting its pid"
+          "mutation": "src/launch/launcher.ts: ignore the abort signal in the attend loop (drop the `opts.signal?.aborted` early return) - the launcher keeps running after SIGINT and a human cannot stop it without hunting its pid",
+          "builtCapability": "M5.6"
         },
         {
           "id": "launch-no-session",
@@ -3795,10 +3696,8 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s. The printed hub url is documented as always usable by hand, which is the fallback's own safety net."
         }
       ]
     },
@@ -3816,11 +3715,11 @@
           "expected": "Tab 3 activates and then closes — the portalled tooltip popup never intercepts the pointer.",
           "risk": "high",
           "kind": "visual",
-          "needsCapability": "hit-test",
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "builtCapability": "isHittable in test/e2e/visual.ts"
         },
         {
           "id": "drawer-parallax-no-horizontal-scroll",
@@ -3833,10 +3732,8 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DOES NOT EARN ITS RUNTIME. ~1.2s. A body-level sideways scroll from a fixed transform is ugly and immediately visible. overflow.e2e.ts guards the viewport where content is unbounded and user-supplied; a parallax offset is neither."
         },
         {
           "id": "tabbar-a11y-labels",
@@ -3901,10 +3798,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #42: a document-authored default-src 'none' blocks the bootstrap module and picking dies with no indication to the human."
         },
         {
           "id": "hostile-prevent-default",
@@ -3918,10 +3813,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #43: window-capture stopPropagation registered before the bootstrap starves the overlay's listeners silently."
         },
         {
           "id": "hostile-competing-overlay",
@@ -3969,10 +3862,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #46 (D-065): 18k flat siblings hang resolveElementAnchor super-quadratically - the card never renders and `lucid wait` hangs. The trigger is sibling fan-out, not document bytes."
         },
         {
           "id": "hostile-malformed",
@@ -3986,10 +3877,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #44: inject.ts anchors on the first raw </body>, which is textarea TEXT in a parser-repaired document, so the bootstrap renders as page content."
         },
         {
           "id": "hostile-base-tag",
@@ -4003,10 +3892,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #45: a foreign <base> re-roots the path-absolute /__lucid/client.js to the hostile origin and the overlay never boots."
         },
         {
           "id": "hostile-self-rewriting",
@@ -4020,10 +3907,8 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "declined",
+          "declineReason": "DEFECT-GATED. Finding #47: resolution runs against the SAVED file, so a pick on hydrated content resolves positionally onto the skeleton and reports resolved:true with no low-confidence signal - a wrong answer that looks like a right one."
         },
         {
           "id": "hostile-linked-stylesheet",
