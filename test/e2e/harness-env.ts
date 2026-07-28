@@ -47,6 +47,10 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
 
   LUCID_ALLOW_TEMP: "harness-switch",
   LUCID_NO_OPEN: "harness-switch",
+  // The D-015 observability seam: when set, every would-be browser launch
+  // is recorded instead of being merely suppressed. Per-suite, because only
+  // the suites that ASK what open would have done set it.
+  LUCID_OPEN_LOG: "per-suite",
   LUCID_IDLE_MS: "harness-switch",
 
   // A hub the human happens to be running would hijack `open` into daemon mode

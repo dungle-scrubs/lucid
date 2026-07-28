@@ -189,10 +189,10 @@
           "risk": "high",
           "kind": "functional",
           "needsCapability": "durable-path-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/durable-path.e2e.ts",
+          "testName": "open refuses an artifact under /tmp and names a durable path to use",
+          "mutation": "src/core/scratchpad.ts: make isVolatilePath always return false - `open` accepts an artifact the OS wipes on boot, taking the annotations and versions beside it"
         },
         {
           "id": "open-volatile-suggestion-recovers-project",
@@ -205,10 +205,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "durable-path-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/durable-path.e2e.ts",
+          "testName": "a durable artifact opens, and the launch it would have made is recorded",
+          "mutation": "src/cli/self.ts: drop the recordOpen call from the NO_OPEN branch - LUCID_OPEN_LOG records nothing and which launch path would have run is unobservable again"
         },
         {
           "id": "open-volatile-tmpdir-env",
@@ -221,10 +221,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "durable-path-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/durable-path.e2e.ts",
+          "testName": "$TMPDIR counts as volatile, not just the literal /tmp",
+          "mutation": "src/core/scratchpad.ts: drop the TMPDIR arm from volatileRoots() - a machine whose TMPDIR points outside /tmp loses work silently (measured red; the first version of this test used tmpdir() as its fixture, which resolves to /tmp in a worker and was caught by the hardcoded root instead)"
         },
         {
           "id": "open-allow-temp-optout",
@@ -234,10 +234,10 @@
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "durable-path-fixture",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/durable-path.e2e.ts",
+          "testName": "only the exact string LUCID_ALLOW_TEMP=1 opts out",
+          "mutation": "src/core/scratchpad.ts: loosen the opt-out to truthiness (`if (process.env.LUCID_ALLOW_TEMP)`) - \"true\", \"yes\" and \"0\" all disable a guard against silent data loss"
         },
         {
           "id": "open-migrates-legacy-lucid-layout",
