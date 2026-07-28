@@ -456,7 +456,13 @@ describe("the sticky sidecar", () => {
     // Bounded on the way out too: a value only clipped on read would stop
     // matching its own registry entry, and every later resume would reject the
     // pick it had just accepted.
-    const paths = { sessionDir: dir } as SessionPaths;
+    // selection.json is machine-local, under run/ (plan 02).
+    const runDir = join(dir, "run");
+    const paths = {
+      sessionDir: dir,
+      runDir,
+      selectionPath: join(runDir, "selection.json"),
+    } as SessionPaths;
     await writeSelection(paths, { harness: "codex", model: "m".repeat(200), effort: " high " });
     const stored = (await Bun.file(selectionPath(paths)).json()) as Record<string, string>;
     expect(stored).toEqual((await readSelection(paths)) as unknown as Record<string, string>);

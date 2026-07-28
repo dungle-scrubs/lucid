@@ -16,7 +16,7 @@ const seedSession = async (proj: string, name: string): Promise<string> => {
   const artifact = join(root, proj, `${name}.html`);
   // The record sits beside its artifact: `notes.html` -> `notes/`.
   const sessionDir = join(root, proj, name);
-  await mkdir(sessionDir, { recursive: true });
+  await mkdir(join(sessionDir, "run"), { recursive: true });
   const opened = {
     seq: 1,
     at: "2026-01-01T00:00:00.000Z",

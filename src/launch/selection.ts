@@ -1,5 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { SessionPaths } from "../core/paths.ts";
 import type { SpawnRecipe } from "./recipes.ts";
 
@@ -193,8 +193,7 @@ export const sanitizeSelection = (input: unknown): ArtifactSelection | undefined
 };
 
 /** `.lucid/<name>/selection.json` - the sticky per-artifact selection. */
-export const selectionPath = (paths: SessionPaths): string =>
-  join(paths.sessionDir, "selection.json");
+export const selectionPath = (paths: SessionPaths): string => paths.selectionPath;
 
 /** Read the artifact's sticky selection. Absent or unreadable = none: the
  *  sidecar is advisory, and a corrupt one must not stall delivery. */
@@ -219,5 +218,9 @@ export const writeSelection = async (
   selection: ArtifactSelection,
 ): Promise<void> => {
   const clean = sanitizeSelection(selection) ?? {};
-  await writeFile(selectionPath(paths), `${JSON.stringify(clean, null, 2)}\n`);
+  // selection.json lives in run/ (plan 02); ensure it exists so a write
+  // before the record is fully set up cannot fail on a missing parent.
+  const target = selectionPath(paths);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, `${JSON.stringify(clean, null, 2)}\n`);
 };

@@ -1,4 +1,5 @@
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import { readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import type { SessionPaths } from "../core/paths.ts";
 
 /**
@@ -41,6 +42,9 @@ export const writeServerDescriptor = async (
   paths: SessionPaths,
   descriptor: ServerDescriptor,
 ): Promise<void> => {
+  // server.json is machine-local, under run/ (plan 02); a mount may write it
+  // before ensureSessionDirs has created run/, so mkdir defensively.
+  await mkdir(dirname(paths.serverJson), { recursive: true });
   await writeFile(paths.serverJson, `${JSON.stringify(descriptor, null, 2)}\n`);
 };
 

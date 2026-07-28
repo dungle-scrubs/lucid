@@ -1,5 +1,5 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { cursorSidecarPath, type SessionPaths } from "./paths.ts";
 
 /**
@@ -26,10 +26,9 @@ export const writeAttendantSidecar = async (
   paths: SessionPaths,
   attendant: Attendant,
 ): Promise<void> => {
-  await writeFile(
-    cursorSidecarPath(paths, attendant.harness),
-    `${JSON.stringify(attendant, null, 2)}\n`,
-  );
+  const target = cursorSidecarPath(paths, attendant.harness);
+  await mkdir(dirname(target), { recursive: true }); // sidecars live in run/ (plan 02)
+  await writeFile(target, `${JSON.stringify(attendant, null, 2)}\n`);
 };
 
 const isAttendant = (v: unknown): v is Attendant =>
@@ -44,9 +43,10 @@ const isAttendant = (v: unknown): v is Attendant =>
  * "who to resume" means the newest.
  */
 export const readLastAttendant = async (paths: SessionPaths): Promise<Attendant | undefined> => {
+  // The cursor sidecars are machine-scoped, so they live in run/ (plan 02).
   let names: string[];
   try {
-    names = await readdir(paths.sessionDir);
+    names = await readdir(paths.runDir);
   } catch {
     return undefined;
   }
@@ -54,7 +54,7 @@ export const readLastAttendant = async (paths: SessionPaths): Promise<Attendant 
   for (const name of names) {
     if (!/^cursor\..+\.json$/.test(name)) continue;
     try {
-      const parsed: unknown = JSON.parse(await readFile(join(paths.sessionDir, name), "utf8"));
+      const parsed: unknown = JSON.parse(await readFile(join(paths.runDir, name), "utf8"));
       if (isAttendant(parsed) && (!latest || parsed.at > latest.at)) latest = parsed;
     } catch {
       /* an unreadable sidecar is advisory data gone bad; skip it */

@@ -751,7 +751,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // Answer immediately: authoring is a whole agent turn, and the artifact
       // surfaces as a tab on its own `lucid open`. The claim is held until the
       // turn ends, so a retry while it runs is refused rather than doubled.
-      const outLog = join(paths.sessionDir, "create.out.log");
+      const outLog = paths.createLog;
       // A dead create turn is knowable the moment the child exits - waiting
       // out the dialog's own patience to report "check the log" turned a
       // seconds-fast failure (a harness over its usage limit) into two

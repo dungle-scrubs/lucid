@@ -15,7 +15,7 @@ const sessionWithDescriptor = async (
   const artifact = join(dir, "plan.html");
   await writeFile(artifact, "<!doctype html><title>t</title><h1>t</h1>");
   const paths = sessionPaths(artifact);
-  await mkdir(join(paths.sessionDir), { recursive: true });
+  await mkdir(paths.runDir, { recursive: true });
   await writeFile(
     paths.serverJson,
     JSON.stringify({ port, pid, session: artifact, startedAt: new Date(0).toISOString() }),

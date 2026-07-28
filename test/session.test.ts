@@ -570,7 +570,7 @@ describe("the session dir ignores itself", () => {
     await openSession(paths);
     // The record lands in whatever directory the artifact lives in - often a
     // repo - so it must not show up in `git status` unasked.
-    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("*\n");
+    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("run/\n");
   });
 
   test("the ignore file goes INSIDE the folder, never beside it", async () => {
@@ -591,7 +591,7 @@ describe("the session dir ignores itself", () => {
     expect(existsSync(join(paths.sessionDir, ".gitignore"))).toBe(false);
 
     await openSession(paths);
-    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("*\n");
+    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("run/\n");
   });
 
   test("an edited .gitignore is never overwritten", async () => {

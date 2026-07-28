@@ -83,6 +83,7 @@ const LUCID_WRITES = new Set([
   "context.json",
   "attend.out.log",
   "create.out.log",
+  "run",
 ]);
 
 /*
@@ -134,13 +135,18 @@ export const ensureSessionDirs = (paths: SessionPaths): void => {
   }
   mkdirSync(paths.sessionDir, { recursive: true });
   mkdirSync(paths.versionsDir, { recursive: true });
-  // The ignore file goes INSIDE the session folder, not beside it. One level up
-  // is now the folder holding the ARTIFACTS - a `*` there would have quietly
-  // ignored the very documents this is meant to protect.
+  // Machine-local runtime lives here; created up front so the append lock and
+  // the served copy have somewhere to land before the first write.
+  mkdirSync(paths.runDir, { recursive: true });
+  // The ignore file goes INSIDE the record, and names ONLY `run/` (plan 02,
+  // D-003). It MUST NOT be a bare `*`: the record is now committable history,
+  // and a `*` would exclude the very log and snapshots this is meant to keep -
+  // the R1 untracking trap. A single `run/` line also cannot drift as new
+  // machine-local sidecars are added: they land in run/ and are covered.
   const ignore = join(paths.sessionDir, ".gitignore");
   if (!existsSync(ignore)) {
     try {
-      writeFileSync(ignore, "*\n");
+      writeFileSync(ignore, "run/\n");
     } catch {
       /* self-ignoring is a courtesy; never fail a session over it */
     }
@@ -149,6 +155,11 @@ export const ensureSessionDirs = (paths: SessionPaths): void => {
 
 /** Atomic write within the session dir (temp-then-rename; same-dir rename). */
 export const atomicWrite = (absPath: string, content: string): void => {
+  // The target may live in `run/` (plan 02), which is machine-local and absent
+  // on a freshly pulled or newly mounted record. Recreate it: `run/` is derived
+  // state, so rebuilding the served copy under a missing run/ is exactly right
+  // (MB.3's fresh-pull-serves case). Idempotent.
+  mkdirSync(dirname(absPath), { recursive: true });
   const tmp = `${absPath}.tmp.${process.pid}`;
   writeSnapshot(tmp, content);
   renameSync(tmp, absPath);

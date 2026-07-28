@@ -1,5 +1,6 @@
 import { closeSync, fsyncSync, openSync, readFileSync, truncateSync, writeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { LogError } from "../errors.ts";
 import { hasId, type EventInput, type LogEvent } from "./events.ts";
 import { withAppendLock } from "./lock.ts";
@@ -132,7 +133,13 @@ export const appendEventsIf = async (
   inputs: readonly EventInput[],
 ): Promise<readonly LogEvent[]> => {
   if (inputs.length === 0) return [];
-  return withAppendLock(logPath, async () => {
+  // The lock is machine-local (plan 02, D-002), so it lives in the record's
+  // `run/` dir, not beside the committed log: `<record>/run/log.ndjson.lock`.
+  // Deriving it from the log's own dir keeps `log.ts` free of a SessionPaths
+  // dependency; `run/` is created by `ensureSessionDirs` and, defensively, by
+  // `withAppendLock` itself before it opens the lock.
+  const lockTarget = join(dirname(logPath), "run", "log.ndjson");
+  return withAppendLock(lockTarget, async () => {
     const { tornTail, events } = await readEvents(logPath);
     if (tornTail) truncateTornTail(logPath);
     if (!(await guard(events))) return [];
