@@ -3176,7 +3176,7 @@
           "status": "covered",
           "testFile": "test/e2e/two-windows.e2e.ts",
           "testName": "lucid open surfaces the tab in every open shell and pops no browser",
-          "mutation": "src/server/daemon.ts: remove the broadcast(\"event: open-tab...\") call from handleHubOpen - the second window never gains the tab. Verified by re-running the mutated build with the assertion order reversed so window 2 is checked FIRST, which is what proves the claim is not being carried by window 1."
+          "mutation": "src/server/daemon.ts: narrow the SSE broadcast to a single client (`for (const client of sseClients)` -> `for (const client of [...sseClients].slice(0, 1))` in broadcast) - the test reds on exactly `window 2 of 2`, which is the discriminating measurement: window 1 still works, so the red can only mean the broadcast failed to reach EVERY window. The earlier registered mutation (removing the open-tab broadcast call entirely) reds on window 1 - no window gains the tab - which demonstrates the broadcast exists but nothing about \"every\"; replaced by the M6.2 review (F4), which measured both."
         },
         {
           "id": "two-windows-close-is-local",

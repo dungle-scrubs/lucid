@@ -86,7 +86,7 @@ const globalSetup = async (): Promise<void> => {
     if (!after.fresh) {
       throw new Error(
         [
-          "refusing to run: dist/lucid is still older than its sources after building it.",
+          "refusing to run: the e2e binary is still older than its sources after building it.",
           `  binary: ${binary}`,
           `    mtime ${after.bundleMtimeMs === undefined ? "(missing)" : new Date(after.bundleMtimeMs).toISOString()}`,
           `  newest source: ${after.newestSourcePath}`,

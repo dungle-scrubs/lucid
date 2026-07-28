@@ -106,18 +106,19 @@ const REPO = join(import.meta.dirname, "..", "..");
 export const MAIN = join(REPO, "src", "cli", "main.ts");
 
 /**
- * The SHIPPED artifact: the single file `bun build --compile` produces (D-034)
- * and the only thing a user ever runs.
+ * The suite's OWN compiled binary - the same `bun build --compile` artifact a
+ * user gets as `dist/lucid`, built to a different path, and never `dist/lucid`
+ * itself: that one is what a human RUNS (`lucid hub --attend` holds it open
+ * for days), and rebuilding it under a running process overwrites a live
+ * executable (D-081).
  *
- * It is not the same program as `bun run src/cli/main.ts`, and the difference is
- * not cosmetic - `selfInvocation` (src/cli/self.ts) reads `process.argv[1]`,
- * which is the entry SCRIPT in dev and the first user ARGUMENT in the binary, so
- * every path that re-invokes the CLI as a child forks here. `global-setup.ts`
- * builds this every run and gates it on the sources it is built from.
+ * It is not the same program as `bun run src/cli/main.ts`, and the difference
+ * is not cosmetic - `selfInvocation` (src/cli/self.ts) reads
+ * `process.argv[1]`, which is the entry SCRIPT in dev and the first user
+ * ARGUMENT in the binary, so every path that re-invokes the CLI as a child
+ * forks here. `global-setup.ts` builds this every run and gates it on the
+ * sources it is built from.
  */
-/** The suite's OWN compiled binary, never `dist/lucid`. That one is what a
- *  human runs (`lucid hub --attend` holds it open for days), and rebuilding it
- *  under a running process overwrites a live executable. */
 export const BINARY = join(REPO, "dist", "lucid-e2e");
 
 /**
@@ -145,7 +146,7 @@ export interface Cli {
 
 export interface CliOptions {
   /**
-   * Drive the COMPILED binary (`dist/lucid`) instead of `bun run
+   * Drive the COMPILED binary (`dist/lucid-e2e`) instead of `bun run
    * src/cli/main.ts` - same commands, same env, the artifact a user installs.
    *
    * Additive on purpose (D-014): every existing caller keeps dev mode, and the

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { hubPort, portBase, sessionPortPool } from "../src/server/ports.ts";
+import { FIXED_HUB_BASE_OFFSET, WORKER_STRIDE } from "./e2e/hub-offset.ts";
 
 describe("portBase", () => {
   test("is zero when nothing asks for an offset", () => {
@@ -124,6 +125,23 @@ describe("the variable it reads", () => {
     // by run, into whatever else is listening on the machine.
     expect(portBase({ TEST_WORKER_INDEX: "37" })).toBe(0);
     expect(portBase({ TEST_PARALLEL_INDEX: "1" })).toBeGreaterThan(0);
+  });
+
+  test("a fixed harness hub can never land on any slot's default hub port", () => {
+    // 17428 + 20N + offset == 17428 + 20M has an integer solution exactly when
+    // the offset is a multiple of the stride. The first offset was 100 = 5x20,
+    // which made slot N's fixed hub IDENTICAL to slot N+5's default hub - so
+    // one worker's teardown SIGKILLed another worker's hub mid-test. Dormant
+    // at workers:1, fatal at six. This pins the arithmetic, not the number.
+    expect(FIXED_HUB_BASE_OFFSET % WORKER_STRIDE).not.toBe(0);
+    // And the direct form, for the first few hundred slots on both sides:
+    for (let n = 0; n < 200; n++) {
+      for (const m of [n, n + 1, n + 5, n + Math.floor(FIXED_HUB_BASE_OFFSET / WORKER_STRIDE)]) {
+        expect(hubPort(n * WORKER_STRIDE + FIXED_HUB_BASE_OFFSET)).not.toBe(
+          hubPort(m * WORKER_STRIDE),
+        );
+      }
+    }
   });
 
   test("an implausible slot stops shifting rather than producing an unbindable port", () => {

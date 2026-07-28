@@ -4,6 +4,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   fixedHubPort,
+  killHubOnPort,
   openIntoHub,
   PLAN_V1,
   startHub,
@@ -39,10 +40,22 @@ test.afterEach(async () => {
   cli = undefined;
   await hub?.stop();
   hub = undefined;
+  // A fixed-port hub is invisible to the global teardown's survivor sweep:
+  // `survivingProcesses` recognizes `lucid-e2e-` paths and `--port 0`, and a
+  // `hub --port 17538` carries neither (its temp dir rides in env, not argv).
+  // If this file's runner dies between startHub and stop(), nothing else will
+  // ever reap it, and the NEXT run's startHub({port}) dies with "hub exited
+  // early" for a cause that lives in a previous session. So this file sweeps
+  // its own port, both ways - after each test, and before the first bind.
+  await killHubOnPort(fixedHubPort());
   if (keptState !== undefined) {
     await rm(keptState, { recursive: true, force: true });
     keptState = undefined;
   }
+});
+
+test.beforeEach(async () => {
+  await killHubOnPort(fixedHubPort());
 });
 
 test("a hub restarted on the same port re-adopts open windows without a reload", async ({

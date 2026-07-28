@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readdir, readFile, rm, utimes, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  BINARY_SOURCES,
   BUNDLE_SOURCES,
   bundleFreshness,
   ensureFreshBundle,
@@ -297,6 +298,33 @@ describe("the declared bundle sources", () => {
   test("names roots that exist - a typo would silently cover nothing", async () => {
     const repo = join(import.meta.dirname, "..");
     for (const source of BUNDLE_SOURCES) {
+      expect(existsSync(join(repo, ...source.split("/")))).toBe(true);
+    }
+  });
+});
+
+describe("the declared binary sources", () => {
+  test("carry everything the compile embeds: the bundle's inputs, src, the build script, and the dependency graph", () => {
+    // `bun build --compile` embeds node_modules, so a `bun install` that
+    // changes a package changes the binary - and the lockfile is the input
+    // that records it. BINARY_SOURCES was first added without package.json or
+    // bun.lock (M6.2 review, F6), so an install left dist/lucid-e2e reported
+    // "current" while its embedded dependencies were last week's. This pins
+    // the members, not the mtime logic - bundleFreshness is tested above.
+    for (const required of [
+      ...BUNDLE_SOURCES,
+      "src",
+      "scripts/build-binary.ts",
+      "package.json",
+      "bun.lock",
+    ]) {
+      expect([...BINARY_SOURCES] as string[]).toContain(required);
+    }
+  });
+
+  test("names roots that exist", () => {
+    const repo = join(import.meta.dirname, "..");
+    for (const source of BINARY_SOURCES) {
       expect(existsSync(join(repo, ...source.split("/")))).toBe(true);
     }
   });

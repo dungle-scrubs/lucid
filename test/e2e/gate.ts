@@ -70,7 +70,17 @@ export const BUNDLE_SOURCES = [
  * exists to rule out - `selfInvocation` lives in `src/cli/self.ts`, which the
  * old bundle-only check could not see.
  */
-export const BINARY_SOURCES = [...BUNDLE_SOURCES, "src", "scripts/build-binary.ts"] as const;
+// `bun build --compile` embeds node_modules, so the dependency graph is as
+// much an input as the source: a `bun install` that changes a package must not
+// leave the binary reported "current". The lockfile is the cheap, sufficient
+// proxy - node_modules itself is too big to walk on every run.
+export const BINARY_SOURCES = [
+  ...BUNDLE_SOURCES,
+  "src",
+  "scripts/build-binary.ts",
+  "package.json",
+  "bun.lock",
+] as const;
 
 /**
  * The newest mtime among `sources`, and which file it belongs to.

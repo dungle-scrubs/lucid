@@ -29,9 +29,17 @@ export const secondWindow = async (browser: Browser, url: string): Promise<Shell
   // second window would animate while the first does not, and any geometry
   // asserted across the pair would be measured on two different products.
   const context = await browser.newContext({ reducedMotion: "reduce" });
-  const page = await context.newPage();
-  await page.goto(url);
-  return { page, close: () => context.close() };
+  try {
+    const page = await context.newPage();
+    await page.goto(url);
+    return { page, close: () => context.close() };
+  } catch (error) {
+    // The caller never receives a handle when goto throws, so nothing it does
+    // can close this context - without this, every failed boot leaks a browser
+    // context for the rest of the run.
+    await context.close();
+    throw error;
+  }
 };
 
 /**
