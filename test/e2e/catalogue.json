@@ -639,10 +639,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/concurrent.e2e.ts",
+          "testName": "two concurrent waits on one session both receive the batch",
+          "mutation": "src/core/wait.ts: make the feedback branch consume - append the ack BEFORE building the payload and filter the delta against it - so the second waiter finds an empty batch and reports waiting while an agent silently loses its work"
         },
         {
           "id": "wait-killed-and-rerun-redelivers",
@@ -655,10 +655,10 @@
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/concurrent.e2e.ts",
+          "testName": "a killed wait consumes nothing - the rerun delivers the same batch",
+          "mutation": "src/core/wait.ts: mark the batch delivered at READ time rather than on the CLI's ack - a reader that dies before printing takes the batch with it, and the rerun reports waiting"
         },
         {
           "id": "wait-survives-server-restart-midflight",
@@ -674,7 +674,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Not written: needs a wait blocked in flight while `open --restart` replaces the server under it, and the restart path is the same one M4.1's open-restart-never-kills-the-hub covers from the hub side. Deferred to M6.2 with the other restart-timing work rather than written against a race this milestone did not build a seam for."
         },
         {
           "id": "wait-reply-with-dead-server-survives",
@@ -1998,10 +1999,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/concurrent.e2e.ts",
+          "testName": "a burst of opens produces one tab each, one active, and never an empty strip",
+          "mutation": "src/server/ports.ts: collapse sessionPortPool to a single fixed port - a burst of opens contends for one address and the losers come up dead or share a server"
         },
         {
           "id": "scope-active-tab-always-visible",
@@ -2017,7 +2018,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Blocked by finding #53 with the other tab-scale rows: it samples the strip repeatedly while three cross-project opens land, and the shell does not reliably reach N tabs for N artifacts by any path."
         },
         {
           "id": "shell-under-the-panel-hidden-tabs-stay-mounted",
@@ -3277,7 +3279,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Partly covered: 'two simultaneous opens agree on the session they opened' asserts the same url, the same version, one live server, and a strictly ordered log - all measured true. The row's remaining clause, exactly ONE session_opened, is FALSE today: the product appends two (finding #54, a check-then-act race openSession does not guard with appendEventsIf), and the losing spawn leaves an orphaned __serve that `end` cannot reap and the listing cannot see (finding #55). Uncovered until both are fixed; asserting the true half alone would be answering the easy clause."
         },
         {
           "id": "hub-attend-env-opt-in-is-strict",
@@ -3456,10 +3459,10 @@
           "risk": "high",
           "kind": "concurrency",
           "needsCapability": "concurrent-cli",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/concurrent.e2e.ts",
+          "testName": "simultaneous writers all land, once each, in a strictly ordered log",
+          "mutation": "src/core/log.ts: drop withAppendLock from appendEventsIf (write without the exclusive lock) - concurrent writers interleave, seqs duplicate, and events are lost or the file is left unparseable"
         },
         {
           "id": "log-torn-tail-recovery",
