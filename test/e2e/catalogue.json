@@ -3531,7 +3531,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Written, passed, and MEASURED vacuous: with no fork in the log the launcher spawns nothing, so the assertion holds whatever the dedupe code does - removing the handled-set check left it green. Needs a real fork driven to a real child."
         },
         {
           "id": "launch-yields-to-a-human-attendant",
@@ -3547,7 +3548,8 @@
           "status": "uncovered",
           "testFile": null,
           "testName": null,
-          "mutation": null
+          "mutation": null,
+          "blockedBy": "Same measurement: removing the single-attendant guard left the test green, because the attend loop is never entered without a child. Needs a real fork-to-child fixture."
         },
         {
           "id": "launch-no-registry",
@@ -3589,10 +3591,10 @@
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "stub-harness-launcher",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/launcher.e2e.ts",
+          "testName": "SIGINT stops the launcher without orphaning a child or the parent session",
+          "mutation": "src/launch/launcher.ts: ignore the abort signal in the attend loop (drop the `opts.signal?.aborted` early return) - the launcher keeps running after SIGINT and a human cannot stop it without hunting its pid"
         },
         {
           "id": "launch-no-session",
@@ -3602,10 +3604,10 @@
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/launcher.e2e.ts",
+          "testName": "launch without a session refuses before it reads the registry",
+          "mutation": "src/cli/run.ts: neutralise runLaunchCli's session check (if (state.status === \"none\") -> if (false)) - launch proceeds on an artifact with no session and reports a registry problem instead (measured red)"
         }
       ]
     },
