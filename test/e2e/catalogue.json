@@ -630,11 +630,10 @@
           "expected": "The blocked wait reconnects its SSE stream and returns the annotation (heartbeat fallback at worst) instead of reporting suspended or hanging past the deadline.",
           "risk": "high",
           "kind": "recovery",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Not written: needs a wait blocked in flight while `open --restart` replaces the server under it, and the restart path is the same one M4.1's open-restart-never-kills-the-hub covers from the hub side. Deferred to M6.2 with the other restart-timing work rather than written against a race this milestone did not build a seam for.",
+          "status": "covered",
+          "testFile": "test/e2e/open-restart.e2e.ts",
+          "testName": "a wait already in flight is the one that returns the feedback after a restart",
+          "mutation": "src/core/wait.ts: in createWaker, remove the try/catch around the SSE connect+read inside the reconnect loop - the failed reconnect to the killed port becomes an unhandled rejection that kills the parked wait (exit 1, no payload; red 3/3). The wait is proven BLOCKED before the restart (the viewer's listener line flips to listening), the restart is real (server.json pid changes), the annotation is written only after it, and the assertion is on the stdout of the SAME invocation. 12/12 green on a repeat run.",
           "builtCapability": "M5.4"
         },
         {
@@ -3347,11 +3346,10 @@
           "expected": "No second child is spawned for the same fork id; only genuinely new forks are acted on.",
           "risk": "high",
           "kind": "state",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Written, passed, and MEASURED vacuous: with no fork in the log the launcher spawns nothing, so the assertion holds whatever the dedupe code does - removing the handled-set check left it green. Needs a real fork driven to a real child.",
+          "status": "covered",
+          "testFile": "test/e2e/launcher.e2e.ts",
+          "testName": "a restarted launcher does not re-spawn a fork it already handled",
+          "mutation": "src/launch/launcher.ts: in handleForks, stop filtering by the handled set (`const fresh = state.forks.filter((f) => !handled.has(f.id))` -> `const fresh = state.forks`) - 63 recorded spawn turns instead of 2, both fork ids repeated dozens of times. The vacuity that killed the M5.6 attempt (D-072) is closed by evidence the launcher ACTED: a real fork made from the viewer, read back from the log, the stub marker gaining exactly one line naming the child, handled.json containing the id - and a SECOND fork made before the restart, so the restarted launcher has genuine work and 'the marker did not grow for A' cannot mean 'it crashed on start'.",
           "builtCapability": "M5.6"
         },
         {
@@ -3364,11 +3362,10 @@
           "expected": "The launcher logs that it is yielding to the attending harness and does not spawn a resume turn; the interactive attendant gets the batch.",
           "risk": "high",
           "kind": "concurrency",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null,
-          "blockedBy": "Same measurement: removing the single-attendant guard left the test green, because the attend loop is never entered without a child. Needs a real fork-to-child fixture.",
+          "status": "covered",
+          "testFile": "test/e2e/launcher.e2e.ts",
+          "testName": "the launcher yields a child a human is attending and drives no resume turn",
+          "mutation": "src/launch/launcher.ts: in attendChild, delete the single-attendant guard at the top of the loop (the readLastAttendant check and its yielding return) - the launcher blocks in runWait on the child instead of yielding. The attendant is recorded the way the PRODUCT records one (lucid wait --harness inside the create turn writing cursor.claude-code.json), not hand-forged - ensureSessionDirs refuses a planted sidecar, which is why the faithful path is the only path. The yield is asserted BEFORE any feedback exists, which is the guard's actual contract; the second guard still fires under the mutation, so a bare no-resume-turn assertion would not have caught it.",
           "builtCapability": "M5.6"
         },
         {
@@ -3462,9 +3459,10 @@
           "expected": "First writes notes.lucid.html printing `{artifact, next:\"lucid open …\"}`; second writes exactly the --out path. Both paths absolute in the output.",
           "risk": "medium",
           "kind": "functional",
-          "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "PARTIALLY answered, and not enough to call covered. The DERIVATION half - <doc>.lucid.html by default, --out overriding it, only a trailing .md traded away - is unit-covered in test/plan-bridge.test.ts :: 'a doc renders beside itself as <doc>.lucid.html, and --out overrides that', measured red by dropping the --out override and again by dropping the $ anchor. What is NOT covered is what this row's `expected` actually claims: that plan render CREATES a file at that path and prints {artifact, next:\"lucid open ...\"} to stdout. The sibling row plan-render-open-roundtrip exercises the default-path write incidentally; nothing at all covers `--out` writing to exactly the out path. Needs one cheap CLI test, not a browser."
+          "status": "covered",
+          "testFile": "test/e2e/plan-render.e2e.ts",
+          "testName": "plan render writes the derived artifact, and --out lands exactly there",
+          "mutation": "src/cli/run.ts: two mutations, each verified alone - (a) in runPlanRender, ignore --out (`planArtifactPath(doc, options.out)` -> `planArtifactPath(doc)`): red on 'Expected custom.html, Received other.lucid.html'; (b) drop the `await writeFile(outPath, html)`: red on 'printed the path but wrote nothing there'. The derivation half stays unit-covered in test/plan-bridge.test.ts; this is only the write and the stdout envelope, which is exactly what the M6.1 review said was missing when it sent this row back to uncovered."
         },
         {
           "id": "plan-ingest-quotes-escaped",

@@ -2,7 +2,15 @@ import { on } from "./locators.ts";
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { PLAN_V1, makeCli, surfaceOf, waitTimeoutSeconds, type Cli } from "./helpers.ts";
+import {
+  PLAN_V1,
+  makeCli,
+  parsed,
+  startCli,
+  surfaceOf,
+  waitTimeoutSeconds,
+  type Cli,
+} from "./helpers.ts";
 
 /**
  * `lucid open --restart` - replacing the process without ending the review.
@@ -26,6 +34,15 @@ import { PLAN_V1, makeCli, surfaceOf, waitTimeoutSeconds, type Cli } from "./hel
  * The bundle-freshness clause of the scenario is deliberately dropped (D-078):
  * a served bundle carries no stamp to assert against, and none of the three
  * claims above needs one.
+ *
+ * The second test carries the same danger one step further out, to the agent:
+ * a `wait` is an agent's turn PARKED, often for minutes, and the restart
+ * happens under it rather than between its calls. A wait that answered
+ * `suspended` there would end that turn with nothing - the human's next
+ * annotation lands in a log nobody is reading - and one that never answered at
+ * all would hold the turn past its deadline. So the claim is about the SAME
+ * invocation: the one that was already blocked is the one that returns the
+ * feedback.
  */
 
 let cli: Cli | undefined;
@@ -107,4 +124,62 @@ test("open --restart replaces the server pid without ending the session", async 
   ])) as { status: string; annotations?: ReadonlyArray<{ note: string }> };
   expect(answer.status).toBe("feedback");
   expect(answer.annotations?.[0]?.note).toContain("written before the restart");
+});
+
+test("a wait already in flight is the one that returns the feedback after a restart", async ({
+  page,
+}) => {
+  test.slow();
+  cli = await makeCli(PLAN_V1);
+  const session = (await cli.run(["open", cli.artifact])) as { url: string; nextCursor: string };
+  const before = await descriptorOf(cli.dir);
+
+  // Blocked FIRST, with a deadline far longer than the restart takes. Re-running
+  // `wait` afterwards would prove nothing: any fresh invocation reads the log
+  // and finds the note. The claim is that the invocation which was already
+  // parked - one agent turn, mid-flight - comes back with it.
+  const waiting = startCli(cli.dir, [
+    "wait",
+    cli.artifact,
+    "--since",
+    session.nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(60),
+  ]);
+  // It is genuinely blocked, not still starting up: the viewer only says an
+  // agent is listening once the waiter's stream is connected to the server the
+  // restart is about to kill.
+  await page.goto(session.url);
+  await expect(on(page).listenerLine()).toHaveAttribute("data-listening", "true");
+
+  const restarted = (await cli.run(["open", cli.artifact, "--restart"])) as { url: string };
+  const after = await descriptorOf(cli.dir);
+  expect(
+    after.pid,
+    `--restart left pid ${after.pid} in server.json - nothing was replaced under the wait`,
+  ).not.toBe(before.pid);
+
+  // The human annotates in the RELOADED viewer, served by the new process.
+  await page.goto(restarted.url);
+  await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
+  await on(page).annotationNote().fill("written after the restart");
+  await on(page).addToQueue().click();
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
+
+  const finished = await waiting.done;
+  const payload = parsed<{
+    status?: string;
+    annotations?: ReadonlyArray<{ note: string }>;
+  }>(finished.stdout);
+  // Named separately from the status check: `suspended` and a hang are the two
+  // ways this fails, and they are different bugs. A wait that exited without a
+  // parseable payload is the second one wearing the first one's clothes.
+  expect(payload, `the blocked wait printed no payload (exit ${finished.code})`).toBeDefined();
+  expect(
+    payload?.status,
+    "the blocked wait reported the restart as the session going away",
+  ).not.toBe("suspended");
+  expect(payload?.status).toBe("feedback");
+  expect(payload?.annotations?.[0]?.note).toContain("written after the restart");
 });
