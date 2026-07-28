@@ -53,6 +53,26 @@ export const BUNDLE_SOURCES = [
 ] as const;
 
 /**
+ * Everything the COMPILED binary is built from, repo-relative.
+ *
+ * `dist/lucid` is `bun build --compile` over `src/cli/main.ts`, so its inputs
+ * are the whole of `src/` - which includes `src/server/client-bundle.
+ * generated.ts`, the browser bundle it embeds - plus the compile script itself.
+ * `BUNDLE_SOURCES` rides along because a change under `client/` reaches the
+ * binary THROUGH that generated file, and the two builds run in the same hook:
+ * a source that stales the bundle stales the binary a moment later.
+ *
+ * Coarse for the same reason `BUNDLE_SOURCES` is: a list of imported files goes
+ * stale the first time somebody adds an import, and a gate that reports fresh
+ * when it is not has no value at all. The cost is a recompile when a file the
+ * binary does not use changes; the alternative is a green run about a binary
+ * from a previous commit, which is exactly what `compiled-binary-selfinvocation`
+ * exists to rule out - `selfInvocation` lives in `src/cli/self.ts`, which the
+ * old bundle-only check could not see.
+ */
+export const BINARY_SOURCES = [...BUNDLE_SOURCES, "src", "scripts/build-binary.ts"] as const;
+
+/**
  * The newest mtime among `sources`, and which file it belongs to.
  *
  * Each entry may be a directory (walked recursively) or a single file - the

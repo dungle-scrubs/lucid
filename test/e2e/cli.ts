@@ -65,11 +65,16 @@ export const waitTimeoutSeconds = (base: number): string => {
 
 export const invoke = async (
   args: readonly string[],
-  options: Parameters<typeof execFileAsync>[2] & { timeout?: number },
+  options: Parameters<typeof execFileAsync>[2] & { timeout?: number; binary?: boolean },
 ): Promise<Record<string, unknown>> => {
+  // `binary` is the harness's, not execFile's. Split rather than passed
+  // through: node ignores unknown option keys today, which is exactly the kind
+  // of thing that stops being true in a major version.
+  const { binary, ...exec } = options ?? {};
+  const [command, argv] = spawnedAs(args, binary === true);
   let outcome: CliOutcome;
   try {
-    const { stdout, stderr } = await execFileAsync("bun", ["run", MAIN, ...args], options);
+    const { stdout, stderr } = await execFileAsync(command, argv, exec);
     outcome = { argv: args, code: 0, signal: null, stdout: String(stdout), stderr: String(stderr) };
   } catch (error) {
     const failed = error as NodeJS.ErrnoException & {
@@ -100,6 +105,32 @@ const REPO = join(import.meta.dirname, "..", "..");
  *  (a blocked `wait`) with an env of its own. */
 export const MAIN = join(REPO, "src", "cli", "main.ts");
 
+/**
+ * The SHIPPED artifact: the single file `bun build --compile` produces (D-034)
+ * and the only thing a user ever runs.
+ *
+ * It is not the same program as `bun run src/cli/main.ts`, and the difference is
+ * not cosmetic - `selfInvocation` (src/cli/self.ts) reads `process.argv[1]`,
+ * which is the entry SCRIPT in dev and the first user ARGUMENT in the binary, so
+ * every path that re-invokes the CLI as a child forks here. `global-setup.ts`
+ * builds this every run and gates it on the sources it is built from.
+ */
+/** The suite's OWN compiled binary, never `dist/lucid`. That one is what a
+ *  human runs (`lucid hub --attend` holds it open for days), and rebuilding it
+ *  under a running process overwrites a live executable. */
+export const BINARY = join(REPO, "dist", "lucid-e2e");
+
+/**
+ * The command line a CLI invocation actually runs as.
+ *
+ * One function so dev mode and the binary cannot drift apart in the four places
+ * that spawn: the args a caller passes are identical either way, which is the
+ * whole point - a test written against `bun run main.ts` becomes a test of the
+ * shipped artifact by flipping one flag.
+ */
+const spawnedAs = (args: readonly string[], binary: boolean): [string, string[]] =>
+  binary ? [BINARY, [...args]] : ["bun", ["run", MAIN, ...args]];
+
 export interface Cli {
   readonly dir: string;
   readonly artifact: string;
@@ -112,8 +143,21 @@ export interface Cli {
   cleanup(): Promise<void>;
 }
 
-/** Spawn a `lucid` CLI invocation (dev mode via bun) and parse its JSON output. */
-export const makeCli = async (initialHtml: string): Promise<Cli> => {
+export interface CliOptions {
+  /**
+   * Drive the COMPILED binary (`dist/lucid`) instead of `bun run
+   * src/cli/main.ts` - same commands, same env, the artifact a user installs.
+   *
+   * Additive on purpose (D-014): every existing caller keeps dev mode, and the
+   * scenarios about the shipped artifact ask for it explicitly rather than the
+   * suite guessing which one it is testing.
+   */
+  readonly binary?: boolean;
+}
+
+/** Spawn a `lucid` CLI invocation (dev mode via bun, or the compiled binary)
+ *  and parse its JSON output. */
+export const makeCli = async (initialHtml: string, options: CliOptions = {}): Promise<Cli> => {
   const dir = await mkdtemp(join(tmpdir(), "lucid-e2e-"));
   const artifact = join(dir, "plan.html");
   await writeFile(artifact, initialHtml);
@@ -126,6 +170,7 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
     invoke(args, {
       cwd,
       timeout: timeoutMs,
+      ...(options.binary === true ? { binary: true } : {}),
       env: {
         // The whole child environment, not a patch over `process.env` -
         // `harnessEnv` has to be able to REMOVE a name, not only add one.
@@ -150,7 +195,11 @@ export const makeCli = async (initialHtml: string): Promise<Cli> => {
     write: (html: string) => writeFile(artifact, html),
     cleanup: async () => {
       try {
-        await execFileAsync("bun", ["run", MAIN, "end", artifact], {
+        // Ended by the same program that opened it: a session opened by the
+        // binary has a descriptor naming the binary's own detached `__serve`,
+        // and cleanup that forked to dev mode would be testing a third thing.
+        const [command, argv] = spawnedAs(["end", artifact], options.binary === true);
+        await execFileAsync(command, argv, {
           cwd: dir,
           env: harnessEnv(dir),
         });

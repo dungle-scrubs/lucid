@@ -3223,11 +3223,10 @@
           "expected": "The reconnecting indicator clears on its own, both tabs come back with drafts intact, the new event appears in the open tab — no duplicate tabs, no stuck \"reconnecting…\", no manual reload.",
           "risk": "high",
           "kind": "recovery",
-          "needsCapability": "fixed-port-hub-restart",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/hub-restart.e2e.ts",
+          "testName": "a hub restarted on the same port re-adopts open windows without a reload",
+          "mutation": "src/server/daemon.ts: in handleSessionRoute, return json({error}, 404) instead of the final lazy remount - the reconnecting pill never clears and every open window is stranded with its drafts. The pill is asserted PRESENT after the kill and ABSENT after the restart, so it is a measured transition rather than a constant; drafts are asserted by value, so a page reload (the other way this could pass) would show empty fields."
         },
         {
           "id": "hub-drop-reports-once-then-exits-cleanly",
@@ -3255,11 +3254,10 @@
           "expected": "Both windows gain the tab, the CLI reports shells>0, and no second browser window is spawned (shells > 0 suppresses the launch).",
           "risk": "high",
           "kind": "concurrency",
-          "needsCapability": "multi-window",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/two-windows.e2e.ts",
+          "testName": "lucid open surfaces the tab in every open shell and pops no browser",
+          "mutation": "src/server/daemon.ts: remove the broadcast(\"event: open-tab...\") call from handleHubOpen - the second window never gains the tab. Verified by re-running the mutated build with the assertion order reversed so window 2 is checked FIRST, which is what proves the claim is not being carried by window 1."
         },
         {
           "id": "two-windows-close-is-local",
@@ -3626,11 +3624,10 @@
           "expected": "The first prints `{hub,app,status:\"running\"}`; the rest print `app:\"already-open\"` with shells>0 and open nothing. The reconnect beat is given whether or not the hub answered the first probe.",
           "risk": "high",
           "kind": "state",
-          "needsCapability": "fixed-port-hub-restart",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/app-window.e2e.ts",
+          "testName": "lucid app run repeatedly never stacks browser windows",
+          "mutation": "src/cli/run.ts: delete the `if (info.shells === 0) { ... }` reconnect-beat loop in runApp - a press during the browser's own retry window reports a fresh window and stacks one. The first press (no window yet) moves the launch log off zero, so 'the count did not move' later measures open's decision rather than a log nobody writes to."
         },
         {
           "id": "app-starts-hub-in-attend-mode",
@@ -3655,11 +3652,10 @@
           "expected": "The detached server starts and answers within the 8s window. selfInvocation drops the script argument only for the compiled binary, so a regression makes `open` time out with SERVER_ERROR in the shipped artifact while dev mode stays green.",
           "risk": "high",
           "kind": "functional",
-          "needsCapability": "compiled-binary",
-          "status": "uncovered",
-          "testFile": null,
-          "testName": null,
-          "mutation": null
+          "status": "covered",
+          "testFile": "test/e2e/compiled-binary.e2e.ts",
+          "testName": "the compiled binary spawns its own __serve and answers",
+          "mutation": "src/cli/self.ts: in selfInvocation, drop the .ts/.js branch (`if (arg1 && (arg1.endsWith('.ts') || ...))` -> `if (arg1)`) so argv[1] is always forwarded. The edit is a NO-OP in dev mode - forwarding main.ts is what dev already does - so the red can only come from the compiled binary, which is what proves the fixture drives the shipped artifact rather than bun. Re-measured after the suite's binary moved off dist/lucid."
         },
         {
           "id": "app-hub-fails-to-start",

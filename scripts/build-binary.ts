@@ -47,7 +47,12 @@ const proc = Bun.spawn(
     "--compile",
     resolve(root, "src/cli/main.ts"),
     "--outfile",
-    resolve(root, "dist/lucid"),
+    // The e2e suite builds its OWN copy here (dist/lucid-e2e). `dist/lucid` is
+    // the artifact a human runs - `lucid hub --attend` is a long-lived process
+    // executing that exact file - and a test run that rebuilds it overwrites a
+    // live executable. Nothing in the suite needs the human's binary, so it
+    // does not touch it.
+    resolve(root, process.env.LUCID_BINARY_OUT ?? "dist/lucid"),
   ],
   { cwd: root, stdout: "inherit", stderr: "inherit" },
 );
@@ -58,5 +63,5 @@ const code = await proc.exited;
 const swept = await sweepCompileScratch();
 if (code !== 0) throw new Error(`bun build --compile failed (exit ${code})`);
 console.log(
-  `built dist/lucid${swept > 0 ? ` (swept ${swept} compile intermediate${swept > 1 ? "s" : ""})` : ""}`,
+  `built ${process.env.LUCID_BINARY_OUT ?? "dist/lucid"}${swept > 0 ? ` (swept ${swept} compile intermediate${swept > 1 ? "s" : ""})` : ""}`,
 );
