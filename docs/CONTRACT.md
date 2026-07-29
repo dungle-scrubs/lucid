@@ -254,7 +254,7 @@ the artifact path) are unchanged for compatibility.
 ## Attendant identity (`--harness`, `--resume`)
 
 `lucid wait <file> --harness <name> --resume "<cmd>"` records an advisory
-sidecar (`.lucid/<name>/cursor.<harness>.json`) alongside the cursor: who last
+sidecar (`.lucid/<name>/run/cursor.<harness>.json`) alongside the cursor: who last
 took delivery, when, and - if the harness supplied one - the exact terminal
 command that resumes its conversation (including any autonomy flag, e.g.
 `claude --resume <id> --dangerously-skip-permissions`). The viewer and the
@@ -269,7 +269,7 @@ UNATTENDED turns run on. The vocabulary is per harness and comes from the
 harness registry ([LAUNCHER.md](LAUNCHER.md)); Lucid never invents a model name
 or an effort level.
 
-The pick sticks to the artifact in `.lucid/<name>/selection.json`:
+The pick sticks to the artifact in `.lucid/<name>/run/selection.json`:
 
 ```jsonc
 { "harness": "claude-code", "model": "opus-4.8", "effort": "high" }
@@ -319,7 +319,7 @@ limit - so the human can see how much runway the agent has left mid-review. Pass
 shows the token counts in its tooltip).
 
 It is advisory presence, stored in a last-value sidecar
-(`.lucid/<name>/context.json`), never a log event: usage updates every turn and
+(`.lucid/<name>/run/context.json`), never a log event: usage updates every turn and
 must not bloat the append-only log. No report means no ring, so a harness that
 does not post usage simply has no ring - nothing to configure.
 
@@ -341,7 +341,7 @@ if [ -n "$used_pct" ] && [ -n "$cwd" ]; then
         -X POST "http://127.0.0.1:$port/__lucid/context" \
         -H 'content-type: application/json' \
         -d "{\"pct\": ${used_pct}}" 2>/dev/null
-    done < <(find "$cwd" -maxdepth 4 -type f -name server.json -path '*/.lucid/*' 2>/dev/null)
+    done < <(find "$cwd" -maxdepth 5 -type f -path '*/.lucid/*/run/server.json' 2>/dev/null)
   } &
 fi
 ```
