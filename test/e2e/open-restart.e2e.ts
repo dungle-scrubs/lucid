@@ -58,7 +58,7 @@ interface Descriptor {
 }
 
 const descriptorOf = async (dir: string): Promise<Descriptor> =>
-  JSON.parse(await readFile(join(dir, "plan", "server.json"), "utf8")) as Descriptor;
+  JSON.parse(await readFile(join(dir, "plan", "run", "server.json"), "utf8")) as Descriptor;
 
 test("open --restart replaces the server pid without ending the session", async ({ page }) => {
   cli = await makeCli(PLAN_V1);

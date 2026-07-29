@@ -60,7 +60,7 @@ const writeFakeHarness = async (): Promise<{ exe: string; argvFile: string }> =>
   return { exe, argvFile };
 };
 
-const selectionFile = (c: Cli): string => join(c.dir, "plan", "selection.json");
+const selectionFile = (c: Cli): string => join(c.dir, "plan", "run", "selection.json");
 
 test.afterEach(async () => {
   listener?.kill("SIGKILL");
@@ -120,7 +120,7 @@ test("the create dialog offers the registry's models and the pick reaches the ar
 
   // And it STICKS to the artifact: every later unattended turn reuses it.
   const stuck = JSON.parse(
-    await readFile(join(cli.dir, "authored", "selection.json"), "utf8"),
+    await readFile(join(cli.dir, "authored", "run", "selection.json"), "utf8"),
   ) as Record<string, string>;
   expect(stuck).toMatchObject({ harness: "claude-code", model: "sonnet-5", effort: "xhigh" });
 });

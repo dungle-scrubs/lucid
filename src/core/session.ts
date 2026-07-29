@@ -1,5 +1,5 @@
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { ArtifactError, ValidationError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
@@ -25,30 +25,6 @@ import { hashContent, validateStructure, writeSnapshot } from "./version.ts";
  * An existing file is never touched, so a team that wants part of the record
  * committed edits it (`!log.ndjson`) and keeps that forever.
  */
-/**
- * Move a session's folder out of the old `.lucid/` container, once.
- *
- * The record now sits beside its artifact (`lucid/plan.html` + `lucid/plan/`)
- * instead of inside a second, hidden `.lucid/` within the same folder. Sessions
- * that predate that keep working: the first open renames the folder forward.
- *
- * Never merges. If both exist, something already wrote the new location and
- * guessing which log is authoritative would be worse than leaving the old one
- * on disk untouched.
- */
-export const migrateLegacySessionDir = (paths: SessionPaths): void => {
-  if (existsSync(paths.sessionDir) || !existsSync(paths.legacySessionDir)) return;
-  try {
-    renameSync(paths.legacySessionDir, paths.sessionDir);
-  } catch {
-    return; // leave it where it is; nothing is lost, and the next open retries
-  }
-  try {
-    rmdirSync(dirname(paths.legacySessionDir)); // only if now empty
-  } catch {
-    /* other sessions still live there */
-  }
-};
 
 /**
  * Is `<dir>/<stem>/` somebody ELSE's directory?
@@ -83,6 +59,7 @@ const LUCID_WRITES = new Set([
   "context.json",
   "attend.out.log",
   "create.out.log",
+  "run",
 ]);
 
 /*
@@ -122,7 +99,6 @@ const occupiedByOthers = (paths: SessionPaths): boolean => {
 };
 
 export const ensureSessionDirs = (paths: SessionPaths): void => {
-  migrateLegacySessionDir(paths);
   if (occupiedByOthers(paths)) {
     throw new ValidationError({
       message:
@@ -134,13 +110,18 @@ export const ensureSessionDirs = (paths: SessionPaths): void => {
   }
   mkdirSync(paths.sessionDir, { recursive: true });
   mkdirSync(paths.versionsDir, { recursive: true });
-  // The ignore file goes INSIDE the session folder, not beside it. One level up
-  // is now the folder holding the ARTIFACTS - a `*` there would have quietly
-  // ignored the very documents this is meant to protect.
+  // Machine-local runtime lives here; created up front so the append lock and
+  // the served copy have somewhere to land before the first write.
+  mkdirSync(paths.runDir, { recursive: true });
+  // The ignore file goes INSIDE the record, and names ONLY `run/` (plan 02,
+  // D-003). It MUST NOT be a bare `*`: the record is now committable history,
+  // and a `*` would exclude the very log and snapshots this is meant to keep -
+  // the R1 untracking trap. A single `run/` line also cannot drift as new
+  // machine-local sidecars are added: they land in run/ and are covered.
   const ignore = join(paths.sessionDir, ".gitignore");
   if (!existsSync(ignore)) {
     try {
-      writeFileSync(ignore, "*\n");
+      writeFileSync(ignore, "run/\n");
     } catch {
       /* self-ignoring is a courtesy; never fail a session over it */
     }
@@ -149,6 +130,11 @@ export const ensureSessionDirs = (paths: SessionPaths): void => {
 
 /** Atomic write within the session dir (temp-then-rename; same-dir rename). */
 export const atomicWrite = (absPath: string, content: string): void => {
+  // The target may live in `run/` (plan 02), which is machine-local and absent
+  // on a freshly pulled or newly mounted record. Recreate it: `run/` is derived
+  // state, so rebuilding the served copy under a missing run/ is exactly right
+  // (MB.3's fresh-pull-serves case). Idempotent.
+  mkdirSync(dirname(absPath), { recursive: true });
   const tmp = `${absPath}.tmp.${process.pid}`;
   writeSnapshot(tmp, content);
   renameSync(tmp, absPath);
@@ -169,6 +155,21 @@ export const readArtifact = async (paths: SessionPaths): Promise<string> => {
 const readCurrent = async (paths: SessionPaths): Promise<string | undefined> => {
   try {
     return await readFile(paths.currentHtml, "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
+/** The bytes of a committed snapshot (`versions/s<seg>/v<n>.html`), or undefined
+ *  when it cannot be read. Unlike `current.html` this is COMMITTED, so it
+ *  survives a fresh pull and is the true reconciliation baseline (MB.3). */
+const readSnapshotBytes = async (
+  paths: SessionPaths,
+  segment: number,
+  version: number,
+): Promise<string | undefined> => {
+  try {
+    return await readFile(snapshotPath(paths, segment, version), "utf8");
   } catch {
     return undefined;
   }
@@ -245,9 +246,14 @@ export const openSession = async (
     });
     startedSegment = true;
   } else {
-    // ACTIVE or SUSPENDED: reconcile the file against current.html (D-061).
-    const current = await readCurrent(paths);
-    const changed = current === undefined || hashContent(html) !== hashContent(current);
+    // ACTIVE or SUSPENDED: reconcile the artifact against the newest committed
+    // SNAPSHOT (D-061, and plan 02 MB.3/D-012). NOT current.html: that is
+    // machine-local (run/) and absent on a freshly pulled record, where reading
+    // its absence as a change would mint a spurious version on every open. The
+    // snapshot is committed history and is the true baseline; current.html is
+    // only the serve cache, rebuilt below when a pull left it behind.
+    const baseline = await readSnapshotBytes(paths, before.segment, before.version);
+    const changed = baseline === undefined || hashContent(html) !== hashContent(baseline);
     if (changed) {
       if (structure.ok) {
         const nextVersion = before.version + 1;
@@ -270,6 +276,11 @@ export const openSession = async (
           detail: { path: paths.artifactPath },
         });
       }
+    } else if ((await readCurrent(paths)) === undefined) {
+      // Unchanged, but the serve cache is gone (a fresh pull dropped run/).
+      // Rebuild it from the artifact - which equals the baseline snapshot - so
+      // the session can be served without minting a version (MB.3).
+      atomicWrite(paths.currentHtml, html);
     }
     if (before.status === "suspended") {
       await appendEvent(paths.logPath, {

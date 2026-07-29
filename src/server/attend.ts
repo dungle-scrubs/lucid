@@ -1,5 +1,4 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
 import { artifactAttendant } from "../core/attendant.ts";
 import { deliver } from "../core/deliver.ts";
 import { shellArg } from "../core/escape.ts";
@@ -361,7 +360,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       (e) => e.seq > through && (e.t === "version" || e.t === "agent_reply" || e.t === "question"),
     );
     if (spoke) return;
-    const output = await readFile(join(paths.sessionDir, "attend.out.log"), "utf8").catch(() => "");
+    const output = await readFile(paths.attendLog, "utf8").catch(() => "");
     const tail = output.trim().slice(-SILENT_TURN_TAIL).trim();
     if (tail === "") return;
     await deliver(paths, {
@@ -492,7 +491,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       /* presence is advisory; a failed ack must not cancel the delivery */
     });
     log(`attend ${paths.name}: delivering feedback via "${resolved.name}" resume`);
-    const code = await runSpawn(argv, cwd, join(paths.sessionDir, "attend.out.log"), {
+    const code = await runSpawn(argv, cwd, paths.attendLog, {
       harness: record.harness,
       sessionId: record.sessionId,
       // Only what the argv actually carries: a dropped stale pick must not
@@ -513,7 +512,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // A usage-limited harness is a WALL, not a flake: retrying burns nothing
     // but time, and the human sees feedback stuck at "recorded" with no clue
     // why. Name it in the viewer and stand down for the cool-off at once.
-    const output = await readFile(join(paths.sessionDir, "attend.out.log"), "utf8").catch(() => "");
+    const output = await readFile(paths.attendLog, "utf8").catch(() => "");
     const limit = detectUsageLimit(output);
     if (limit !== null) {
       fails = 0;
@@ -527,7 +526,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       fails = 0;
       pauseFor(ATTEND_COOLOFF_MS);
       log(
-        `attend ${paths.name}: resume failed ${MAX_ATTEND_FAILS}x (exit ${code}); pausing attendance for ${ATTEND_COOLOFF_MS / 60000} minutes - see ${join(paths.sessionDir, "attend.out.log")}`,
+        `attend ${paths.name}: resume failed ${MAX_ATTEND_FAILS}x (exit ${code}); pausing attendance for ${ATTEND_COOLOFF_MS / 60000} minutes - see ${paths.attendLog}`,
       );
       options.warn?.(
         "ATTEND_DELIVERY_FAILED",

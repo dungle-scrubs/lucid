@@ -1,6 +1,6 @@
-import { closeSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync } from "node:fs";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Anchor } from "../anchors/anchor.ts";
 import { readLastAttendant, writeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
@@ -208,6 +208,9 @@ export const runSpawn = async (
         LUCID_MODEL: undefined,
         LUCID_EFFORT: undefined,
       };
+  // The out-log is machine-local (plan 02); its `run/` parent may not exist
+  // yet when a fork's create turn spawns. mkdir defensively - idempotent.
+  mkdirSync(dirname(logFile), { recursive: true });
   const fd = openSync(logFile, "a");
   try {
     const proc = Bun.spawn(argv, {
@@ -298,11 +301,12 @@ const createChild = async (
   );
   const short = safeForkId(fork.id).slice(0, 8);
   log(`fork ${short}: spawning "${resolved.name}" -> ${childArtifact}`);
-  const code = await runSpawn(argv, parent.artifactDir, join(forkDir, "create.out.log"), {
+  const code = await runSpawn(argv, parent.artifactDir, join(forkDir, "run", "create.out.log"), {
     harness: resolved.name,
     sessionId: childSessionId,
   });
-  if (code !== 0) log(`fork ${short}: create turn exited ${code} (see ${forkDir}/create.out.log)`);
+  if (code !== 0)
+    log(`fork ${short}: create turn exited ${code} (see ${forkDir}/run/create.out.log)`);
 
   const open = opts.openChild ?? ensureChildOpen;
   if (!(await open(childPaths, opts.openBrowser ?? true))) {

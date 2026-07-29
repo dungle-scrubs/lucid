@@ -1,4 +1,5 @@
-import { closeSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync } from "node:fs";
+import { dirname } from "node:path";
 
 /**
  * Cross-process exclusive append lock (D-049). The RFC mandates an exclusive
@@ -84,6 +85,11 @@ export const withAppendLock = async <T>(
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<T> => {
   const lockPath = `${lockTargetPath}.lock`;
+  // The lock now lives in the record's `run/` dir (plan 02); ensure it exists
+  // so the FIRST append cannot race `ensureSessionDirs` and fail on a missing
+  // parent. Cheap and idempotent - recursive mkdir of an existing dir is a
+  // no-op.
+  mkdirSync(dirname(lockPath), { recursive: true });
 
   if (flock) {
     // openSync with 'a' creates the lockfile if absent and yields a real fd.

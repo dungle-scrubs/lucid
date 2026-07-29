@@ -153,20 +153,21 @@
           "mutation": "src/core/paths.ts: `canonicalArtifactPath` leaves a relative artifact path un-anchored instead of resolving it against cwd, so `open ./plan.html` reports the session id as `./plan.html` and the absolute-path claim collapses."
         },
         {
-          "id": "status-lists-both-layouts",
-          "title": "Bare `lucid` finds sessions in both the new and legacy layouts",
+          "id": "status-lists-sibling-and-canonical",
+          "title": "Bare `lucid` finds sibling and canonical records, each at its true artifact",
           "steps": [
-            "Create `<dir>/a/log.ndjson` and `<dir>/.lucid/b/log.ndjson`",
+            "Create a sibling record `<dir>/rollout/log.ndjson` beside `<dir>/rollout.html`",
+            "Create a canonical record `<dir>/.lucid/canon/log.ndjson` beside `<dir>/.lucid/canon.html`",
             "Run `lucid` in <dir>"
           ],
-          "expected": "Both listed once, each resolving to the right artifact path — no duplicates, no `.lucid` leaking into the reported path.",
+          "expected": "Both listed once, each resolving to its own artifact — the canonical row keeps `.lucid` in its path (that is where its artifact lives), the sibling row has none; no duplicates, no vanishing.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/e2e/session-wait.e2e.ts",
-          "testName": "bare lucid lists sessions in BOTH layouts, each once, at the right artifact",
-          "mutation": "src/core/sessions.ts: read the fold from the recomputed new-layout path instead of the globbed one - the legacy row folds to none on ENOENT and vanishes from the listing (registry m4.1-legacy-listing)"
+          "testName": "bare lucid lists sibling and canonical records, each once, at the right artifact",
+          "mutation": "src/core/sessions.ts: strip a trailing `.lucid` from the record's artifact dir - the canonical row resolves to `<dir>/<stem>.html` instead of `<dir>/.lucid/<stem>.html` and names the wrong file (registry mb2-canonical-listing)"
         },
         {
           "id": "open-refuses-volatile-tmp",

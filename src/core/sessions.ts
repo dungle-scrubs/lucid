@@ -29,9 +29,12 @@ export const projectRoot = async (paths: SessionPaths): Promise<string> => {
 
 export const listSessions = async (root: string): Promise<SessionSummary[]> => {
   const scanRoot = resolve(root);
-  // Every log, in either layout: `<dir>/<stem>/log.ndjson` (a session folder
-  // beside its artifact) and `<dir>/.lucid/<stem>/log.ndjson` (the old nested
-  // container, until that session is next opened and moves forward).
+  // Every record's `log.ndjson`: `<dir>/<stem>/log.ndjson`. In the canonical
+  // layout that `<dir>` is a project's `.lucid/`, so the artifact sits beside
+  // the record INSIDE `.lucid/` and the artifact dir is the record's own
+  // parent - no `.lucid` stripping (plan 02, MB.2). The old nested layout,
+  // where the artifact lived OUTSIDE `.lucid/`, is gone; the migration moves
+  // such records to canonical.
   const glob = new Glob("**/log.ndjson");
   const sessions: SessionSummary[] = [];
 
@@ -39,13 +42,7 @@ export const listSessions = async (root: string): Promise<SessionSummary[]> => {
     const parts = rel.split("/");
     const stem = parts.at(-2);
     if (stem === undefined) continue;
-    // Drop the `.lucid` level when it is there, so both layouts resolve to the
-    // same artifact directory.
-    const dirParts = parts.slice(0, -2);
-    const artifactDir = resolve(
-      scanRoot,
-      ...(dirParts.at(-1) === ".lucid" ? dirParts.slice(0, -1) : dirParts),
-    );
+    const artifactDir = resolve(scanRoot, ...parts.slice(0, -2));
 
     try {
       // The log the GLOB found, not the new-layout path recomputed from the

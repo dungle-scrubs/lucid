@@ -928,7 +928,7 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
       effort: "xhigh",
     });
     // Sticky: it survives on the artifact, not in the mount's memory.
-    expect(await Bun.file(join(paths.sessionDir, "selection.json")).json()).toEqual({
+    expect(await Bun.file(paths.selectionPath).json()).toEqual({
       harness: "claude-code",
       model: "sonnet-5",
       effort: "xhigh",
@@ -956,7 +956,7 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
       });
       expect(res.status).toBe(400);
     }
-    expect(await Bun.file(join(paths.sessionDir, "selection.json")).json()).toEqual({
+    expect(await Bun.file(paths.selectionPath).json()).toEqual({
       harness: "claude-code",
       model: "sonnet-5",
       effort: "xhigh",
@@ -978,7 +978,7 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
     });
     expect(badEffort.status).toBe(400);
     // Nothing was persisted by a refused pick.
-    expect(await Bun.file(join(paths.sessionDir, "selection.json")).exists()).toBe(false);
+    expect(await Bun.file(paths.selectionPath).exists()).toBe(false);
   });
 
   test("an unattended resume carries the sticky selection into the recipe's argv", async () => {
@@ -1007,7 +1007,7 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
     // The pick was legal when it was made; a human then edited the registry.
     await mkdir(paths.sessionDir, { recursive: true });
     await writeFile(
-      join(paths.sessionDir, "selection.json"),
+      paths.selectionPath,
       JSON.stringify({ harness: "claude-code", model: "opus-4.8", effort: "high" }),
     );
     const hub = await startDaemon();
@@ -1056,7 +1056,7 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
     expect(marker.model).toBe("opus-5");
     // The pick STICKS: the new artifact's later unattended turns reuse it.
     const child = sessionPaths(join(proj, "new-plan.html"));
-    expect(await Bun.file(join(child.sessionDir, "selection.json")).json()).toEqual({
+    expect(await Bun.file(child.selectionPath).json()).toEqual({
       harness: "claude-code",
       model: "opus-5",
       effort: "xhigh",

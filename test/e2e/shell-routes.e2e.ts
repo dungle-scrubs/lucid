@@ -1,6 +1,6 @@
 import { on } from "./locators.ts";
 import { expect, test } from "@playwright/test";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { CliFailure } from "./cli-result.ts";
@@ -123,9 +123,12 @@ test("a server without /__lucid/context falls through to the sidecar, and says l
 
   try {
     // Point the session's descriptor at the stub, so discovery hands the CLI
-    // a server that answers the handshake and nothing else.
+    // a server that answers the handshake and nothing else. The descriptor now
+    // lives under run/ (plan 02, MB.1); ensure it exists since `end` may have
+    // swept the runtime dir.
+    await mkdir(join(cli.dir, "plan", "run"), { recursive: true });
     await writeFile(
-      join(cli.dir, "plan", "server.json"),
+      join(cli.dir, "plan", "run", "server.json"),
       JSON.stringify({
         port,
         pid: process.pid,
@@ -156,7 +159,9 @@ test("a server without /__lucid/context falls through to the sidecar, and says l
 
     // ...and the fallback actually WROTE. `live:false` with no sidecar would
     // be the same lie wearing the other label.
-    const sidecar = JSON.parse(await readFile(join(cli.dir, "plan", "context.json"), "utf8")) as {
+    const sidecar = JSON.parse(
+      await readFile(join(cli.dir, "plan", "run", "context.json"), "utf8"),
+    ) as {
       pct?: number;
     };
     expect(sidecar.pct).toBe(55);

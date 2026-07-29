@@ -131,6 +131,26 @@ describe("openSession lifecycle", () => {
     expect(r.state.version).toBe(2); // reconciled
     expect(await readFile(paths.currentHtml, "utf8")).toBe(V2);
   });
+
+  test("a freshly pulled record (no run/) opens without minting a version (MB.3)", async () => {
+    // run/ is machine-local and gitignored, so a record pulled on another
+    // machine arrives with NO current.html - only its committed log and
+    // snapshots. The reconcile must compare the artifact against the newest
+    // committed SNAPSHOT, not the absent current.html: treating that absence as
+    // a change mints a spurious version on every open, forever (D-012).
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvent(paths.logPath, { t: "session_suspended" });
+    // Simulate the pull: the whole run/ dir (current.html, lock, ...) is gone,
+    // but the artifact and the committed versions/ snapshots remain unchanged.
+    await rm(paths.runDir, { recursive: true, force: true });
+
+    const r = await openSession(paths);
+    expect(r.state.status).toBe("active");
+    expect(r.state.version).toBe(1); // NOT 2 - the artifact matches the snapshot
+    // ...and the serve cache is rebuilt so the session can actually be served.
+    expect(await readFile(paths.currentHtml, "utf8")).toBe(V1);
+  });
 });
 
 describe("commitWatchedChange", () => {
@@ -570,7 +590,7 @@ describe("the session dir ignores itself", () => {
     await openSession(paths);
     // The record lands in whatever directory the artifact lives in - often a
     // repo - so it must not show up in `git status` unasked.
-    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("*\n");
+    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("run/\n");
   });
 
   test("the ignore file goes INSIDE the folder, never beside it", async () => {
@@ -591,7 +611,7 @@ describe("the session dir ignores itself", () => {
     expect(existsSync(join(paths.sessionDir, ".gitignore"))).toBe(false);
 
     await openSession(paths);
-    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("*\n");
+    expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("run/\n");
   });
 
   test("an edited .gitignore is never overwritten", async () => {
@@ -605,20 +625,11 @@ describe("the session dir ignores itself", () => {
     expect(await readFile(join(paths.sessionDir, ".gitignore"), "utf8")).toBe("*\n!log.ndjson\n");
   });
 
-  test("an existing session moves out of the old .lucid container, once", async () => {
-    // The whole point of the move: `lucid/plan.html` next to `lucid/plan/`,
-    // rather than a second hidden `.lucid/` inside the folder artifacts live in.
-    const paths = sessionPaths(artifact);
-    await mkdir(paths.legacySessionDir, { recursive: true });
-    await writeFile(join(paths.legacySessionDir, "log.ndjson"), "", "utf8");
-    await writeFile(join(paths.legacySessionDir, "marker"), "kept", "utf8");
-
-    await openSession(paths);
-    expect(await readFile(join(paths.sessionDir, "marker"), "utf8")).toBe("kept");
-    expect(existsSync(paths.legacySessionDir)).toBe(false);
-    // The emptied container goes with it, so nothing hidden is left behind.
-    expect(existsSync(join(dir, ".lucid"))).toBe(false);
-  });
+  // The legacy `.lucid/` container migration was DELETED in plan 02 MB.2: the
+  // canonical layout puts the record under `.lucid/` deliberately, and the
+  // one-time move to canonical is the migration TOOL's job (MB.4/MB.5), not an
+  // open-time rename. The test that exercised the old open-time move is gone
+  // with the behavior.
 });
 
 describe("attendant sidecars (D-051 identity)", () => {

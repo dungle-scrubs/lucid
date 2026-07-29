@@ -185,9 +185,12 @@ export const scanRoots = async (roots: readonly string[] = defaultRoots()): Prom
       if (!entry.isDirectory()) continue;
       const name = entry.name;
       if (!name.startsWith(".")) {
-        // `<artifactDir>/<stem>/log.ndjson` - a session folder beside the
-        // artifact it belongs to. Not recursed into: what is inside is its own
-        // record (versions, pasted bytes), never another session.
+        // `<dir>/<stem>/log.ndjson` - a record folder. In the canonical layout
+        // this `<dir>` is a project's `.lucid/` (the walk descends into it
+        // below), so `<cwd>/.lucid/<stem>/log.ndjson` is found by exactly this
+        // rule, and `resolveArtifactPath` reads the artifact out of the log and
+        // resolves it against `.lucid/` - no special case needed (plan 02,
+        // MB.2). Not recursed into: inside a record is its own state.
         try {
           await stat(join(dir, name, "log.ndjson"));
           found.add(await resolveArtifactPath(dir, name));
@@ -196,29 +199,11 @@ export const scanRoots = async (roots: readonly string[] = defaultRoots()): Prom
           /* no log here: an ordinary directory, keep walking */
         }
       }
-      if (name === ".lucid") {
-        // <artifactDir>/.lucid/<stem>/log.ndjson - one level, no recursion.
-        const lucidDir = join(dir, name);
-        let stems: Dirent[];
-        try {
-          stems = await readdir(lucidDir, { withFileTypes: true });
-        } catch {
-          continue;
-        }
-        for (const stemEntry of stems) {
-          if (!stemEntry.isDirectory()) continue;
-          try {
-            await stat(join(lucidDir, stemEntry.name, "log.ndjson"));
-          } catch {
-            continue; // no log: not a session
-          }
-          found.add(await resolveArtifactPath(dir, stemEntry.name));
-        }
-        continue;
-      }
-      // Dot-directories (.git, .cache, ...) and known dependency/build trees
-      // cannot contain a project's .lucid and dominate the walk time.
-      if (name.startsWith(".") || SCAN_PRUNE.has(name)) continue;
+      // Prune heavy trees. Descend `.lucid` - that is where canonical records
+      // live now - but skip every OTHER dot-directory (.git, .cache, ...),
+      // which cannot hold a project's records and dominate the walk time.
+      if (SCAN_PRUNE.has(name)) continue;
+      if (name.startsWith(".") && name !== ".lucid") continue;
       await walk(join(dir, name));
     }
   };
