@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, readFile, stat } from "node:fs/promises";
+import { createAttentionCache } from "../core/attention.ts";
 import { canonicalArtifactPath, sessionPaths, type SessionPaths } from "../core/paths.ts";
 import {
   addRoot,
@@ -209,6 +210,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   let stopped = false;
   let notifying = false;
   let lastSnapshot = "";
+  // Attention rides its OWN SSE event, deduped independently of the listing, so
+  // an agent working (a `working` flip) never rebroadcasts the listing (R3,
+  // D-016). The cache keeps an idle artifact at one stat per poll (M1.1).
+  let lastAttentionSnapshot = "";
+  const attentionCache = createAttentionCache();
 
   // ---- session mounts -------------------------------------------------------
 
@@ -539,6 +545,21 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     }
   };
 
+  /** The attention map every known session keys by its id. A per-session log
+   *  read is skipped by the cache when nothing changed, so an idle listing
+   *  costs one `stat` per artifact. Missing/unreadable logs are simply absent. */
+  const attentionSnapshot = (): string => {
+    const map: Record<string, ReturnType<typeof attentionCache.get>> = {};
+    for (const [id, artifact] of idToArtifact) {
+      try {
+        map[id] = attentionCache.get(sessionPaths(artifact).logPath);
+      } catch {
+        /* no log yet, or unreadable - no attention for this id */
+      }
+    }
+    return JSON.stringify(map);
+  };
+
   // Re-broadcast the current listing whenever it changes. Gated on having
   // subscribers so a quiet daemon does not re-scan the disk, and never tighter
   // than POLL_MS so there is no busy loop.
@@ -546,10 +567,18 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (sseClients.size === 0 || notifying) return;
     notifying = true;
     try {
+      // Listing and attention are deduped SEPARATELY: a `working` flip changes
+      // only the attention snapshot, so the listing frame is not re-sent (R3).
       const snap = await snapshot();
-      if (snap === lastSnapshot) return;
-      lastSnapshot = snap;
-      broadcast(`data: ${snap}\n\n`);
+      if (snap !== lastSnapshot) {
+        lastSnapshot = snap;
+        broadcast(`data: ${snap}\n\n`);
+      }
+      const att = attentionSnapshot();
+      if (att !== lastAttentionSnapshot) {
+        lastAttentionSnapshot = att;
+        broadcast(`event: attention\ndata: ${att}\n\n`);
+      }
     } finally {
       notifying = false;
     }
@@ -567,6 +596,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           try {
             const snap = await snapshot();
             controller.enqueue(encoder.encode(`data: ${snap}\n\n`));
+            // Prime attention too, so a fresh shell paints working state without
+            // waiting for the next flip.
+            controller.enqueue(
+              encoder.encode(`event: attention\ndata: ${attentionSnapshot()}\n\n`),
+            );
           } catch {
             // best-effort priming; the poll will catch up
           }
@@ -1000,6 +1034,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           harnesses,
           harnessInfo,
           ...(registry?.default !== undefined ? { defaultHarness: registry.default } : {}),
+          // The debug surface (M1.1 observability): the attention fold cache's
+          // hit/miss/entries, readable with `curl <hub>/hub/identity`.
+          debug: { attentionCache: attentionCache.stats() },
         },
         200,
         noStore,
