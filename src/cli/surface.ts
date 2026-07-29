@@ -22,8 +22,22 @@ import { soloViewerUrl, viewerUrl } from "../server/discovery.ts";
 
 export type Surface = "embedded" | "default";
 
-/** The environment variable a harness integration exports to opt in. */
-export const SURFACE_ENV = "LUCID_SURFACE";
+/**
+ * The environment a surface decision is read from.
+ *
+ * A declared field rather than a computed `env[SURFACE_ENV]` lookup, and not
+ * only for types: the harness's env-isolation scan reads `env.LUCID_X` and
+ * `readonly LUCID_X` out of the source, and a computed index is the one form
+ * it explicitly cannot see (`test/env-isolation.test.ts`). Written that way,
+ * a variable the plan tells every integration to EXPORT would have been
+ * invisible to the guard whose whole job is catching exactly that.
+ */
+export interface SurfaceEnv {
+  readonly LUCID_SURFACE?: string | undefined;
+  /** Everything else a real environment carries, unread here. Present so
+   *  `process.env` is assignable without a cast at the call site. */
+  readonly [key: string]: string | undefined;
+}
 
 /**
  * Read the surface from an environment snapshot.
@@ -37,8 +51,8 @@ export const SURFACE_ENV = "LUCID_SURFACE";
  * newer Lucid naming a surface this build does not have must not break the
  * CLI, and a surface it does not have is the surface it does have.
  */
-export const resolveSurface = (env: Record<string, string | undefined>): Surface =>
-  env[SURFACE_ENV]?.trim().toLowerCase() === "embedded" ? "embedded" : "default";
+export const resolveSurface = (env: SurfaceEnv): Surface =>
+  env.LUCID_SURFACE?.trim().toLowerCase() === "embedded" ? "embedded" : "default";
 
 /**
  * The URL an `open` should return, given the surface, whatever the hub already

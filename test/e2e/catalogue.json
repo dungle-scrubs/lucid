@@ -277,6 +277,40 @@
           "mutation": "src/core/session.ts: drop the stemCollision check in ensureSessionDirs (const owner: string | null = null) - the second open shares the first artifact's record and its log, and the refusal test reds"
         },
         {
+          "id": "embedded-surface-solo-url-no-hub",
+          "title": "LUCID_SURFACE=embedded returns the shell-free viewer and pops no browser",
+          "steps": [
+            "Export LUCID_SURFACE=embedded with no hub running",
+            "`lucid open <artifact>`, then fetch the printed url",
+            "Inspect LUCID_OPEN_LOG"
+          ],
+          "expected": "url is `/__lucid/viewer` on the session's own port, the page is the review UI with no shell around it, and the open-log is EMPTY - the embedded path does not reach openBrowser at all, which is a different claim from LUCID_NO_OPEN's `skipped` entry (plan 06, M1.4, D-012).",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/embedded-surface.e2e.ts",
+          "testName": "embedded with NO hub returns the solo viewer and launches no browser",
+          "mutation": "src/cli/run.ts: drop the `surface !== \"embedded\"` clause from wantsBrowser - both embedded arms red on the empty-log assertion"
+        },
+        {
+          "id": "embedded-surface-solo-url-hub-hosted",
+          "title": "The embedded surface changes the URL, never the topology",
+          "steps": [
+            "Start a hub, export LUCID_SURFACE=embedded",
+            "`lucid open <artifact>` and read the url",
+            "Fetch it and check for the shell chrome"
+          ],
+          "expected": "url is `<hub>/s/<id>/__lucid/viewer` - the hub's own port with the session's mount prefix, so the session stays hub-hosted with one appender and no second process. The page is the review UI with no tab strip. Without the variable the same open returns `<hub>/?s=<id>` and still launches a browser (plan 06, M1.4, D-006).",
+          "risk": "high",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/embedded-surface.e2e.ts",
+          "testName": "embedded with a hub UP returns the mounted solo viewer, still hub-hosted",
+          "mutation": "src/cli/surface.ts: write the embedded branch as `hubShell ?? soloViewerUrl(identity)` - the hub-hosted arm returns the shell url"
+        },
+        {
           "id": "open-non-canonical-artifact-location",
           "title": "An artifact outside the project's .lucid folder is refused, not quietly recorded",
           "steps": [
