@@ -6,6 +6,8 @@
  * subtree-only live-reload preserves it.
  */
 
+import { closeIndexOf } from "../core/html-scan.ts";
+
 /** The bootstrap markup, addressed at the session's own mount: `base` is ""
  *  on a dedicated server and "/s/<id>" under the daemon - an absolute
  *  `/__lucid/client.js` would 404 against the daemon's root. */
@@ -15,16 +17,17 @@ const overlayMarkup = (base: string): string => `
 <script type="module" src="${base}/__lucid/client.js"></script>
 `;
 
+/** The source index of the true `</body>`, or -1 when the document has none. */
+export const bodyCloseIndex = (html: string): number => closeIndexOf(html, "body");
+
 /** Inject the overlay bootstrap into an artifact HTML document. */
 export const injectOverlay = (artifactHtml: string, base = ""): string => {
   const markup = overlayMarkup(base);
-  const closingBody = /<\/body\s*>/i;
-  if (closingBody.test(artifactHtml)) {
-    return artifactHtml.replace(closingBody, `${markup}</body>`);
-  }
-  const closingHtml = /<\/html\s*>/i;
-  if (closingHtml.test(artifactHtml)) {
-    return artifactHtml.replace(closingHtml, `${markup}</html>`);
-  }
+  const spliceAt = (idx: number): string =>
+    artifactHtml.slice(0, idx) + markup + artifactHtml.slice(idx);
+  const body = bodyCloseIndex(artifactHtml);
+  if (body !== -1) return spliceAt(body);
+  const htmlClose = closeIndexOf(artifactHtml, "html");
+  if (htmlClose !== -1) return spliceAt(htmlClose);
   return artifactHtml + markup;
 };

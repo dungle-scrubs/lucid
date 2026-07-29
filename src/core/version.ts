@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { maskHiddenText } from "./html-scan.ts";
 
 /** `sha256:<hex>` of a string, matching the form recorded in `version` events. */
 export const hashContent = (content: string): string =>
@@ -53,7 +54,12 @@ export const validateStructure = (html: string): StructureResult => {
     return { ok: false, reason: "document does not end on a closed tag (truncated mid-tag)" };
   }
 
-  const lower = trimmed.toLowerCase();
+  // Structure lives in the VISIBLE source (plan 04, #44): a literal `</html>`
+  // inside a textarea, script, or comment is text to the parser and must be
+  // text to this check - counting it either balanced a truncated document or
+  // refused a legitimate one.
+  const visible = maskHiddenText(trimmed);
+  const lower = visible.toLowerCase();
   if (lower.includes("<html") && !lower.includes("</html>")) {
     return { ok: false, reason: "missing </html>" };
   }
@@ -62,8 +68,8 @@ export const validateStructure = (html: string): StructureResult => {
   }
 
   for (const tag of BALANCED_TAGS) {
-    const open = countOpen(trimmed, tag);
-    const close = countClose(trimmed, tag);
+    const open = countOpen(visible, tag);
+    const close = countClose(visible, tag);
     if (open !== close) {
       return {
         ok: false,

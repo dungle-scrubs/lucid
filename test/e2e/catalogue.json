@@ -3728,12 +3728,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "The bootstrap lands after the REAL body close and the loop works on the repaired tree. Today inject.ts anchors on the first raw closing-body - inside the textarea - and renders the bootstrap as content (plan finding #44).",
+          "expected": "The bootstrap lands after the REAL body close (the one the parser honors, via the shared maskHiddenText scanner) and the loop works on the repaired tree; structural validation likewise reads only visible markup, so the textarea's literal closing tags neither refuse the open nor take the splice (plan 04, M1.1, closes finding #44).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #44: inject.ts anchors on the first raw </body>, which is textarea TEXT in a parser-repaired document, so the bootstrap renders as page content."
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact the parser has to repair, with a literal </body> in a textarea",
+          "mutation": "src/server/inject.ts: put the raw-source regex back (bodyCloseIndex -> artifactHtml.search(/<\\/body\\s*>/i)) - the textarea splice test in test/inject.test.ts reds, and the bootstrap renders as textarea content here"
         },
         {
           "id": "hostile-base-tag",

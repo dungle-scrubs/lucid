@@ -71,10 +71,6 @@ export const HOSTILE_DEFECTS: ReadonlyMap<string, string> = new Map([
     "finding #43: window-capture handlers registered before the bootstrap starve picking, silently",
   ],
   [
-    "hostile-malformed",
-    "finding #44: inject.ts anchors on the FIRST raw </body>, which here is textarea text - the bootstrap renders as content",
-  ],
-  [
     "hostile-base-tag",
     "finding #45: a foreign <base> re-roots the path-absolute bootstrap src to the hostile origin",
   ],

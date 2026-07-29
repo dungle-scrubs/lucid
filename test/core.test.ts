@@ -529,3 +529,20 @@ describe("foldLog segments", () => {
     expect(foldLog(events.slice(0, 2)).reviewResolved).toBe(true);
   });
 });
+
+describe("validateStructure honors the parser's hiding rules (plan 04, #44)", () => {
+  test("literal closing tags inside a textarea are text, not structure", () => {
+    const html = `<!doctype html><html><head><title>t</title></head><body>
+<textarea>Paste </body> and </html> at the end.</textarea>
+</body></html>`;
+    expect(validateStructure(html).ok).toBe(true);
+  });
+
+  test("a commented-out </html> does not balance a real missing one", () => {
+    const html = `<!doctype html><html><head><title>t</title></head><body>
+<!-- </html> -->
+</body>`;
+    const r = validateStructure(html);
+    expect(r.ok).toBe(false); // the REAL closing root is still missing
+  });
+});
