@@ -30,8 +30,8 @@ describe("resolveView", () => {
 
   /**
    * An integration file from a newer Lucid must not break an older CLI: a
-   * value this build does not know is a surface it does not have, which is the
-   * default surface, not an error.
+   * value this build does not know is a view it does not have, which is the
+   * shell view, not an error.
    */
   test("an unknown value resolves to shell and does NOT throw", () => {
     expect(() => resolveView({ LUCID_VIEW: "banana" })).not.toThrow();
@@ -45,8 +45,8 @@ describe("resolveView", () => {
   });
 
   test("surrounding whitespace does not change the answer", () => {
-    // A shell export or an integration file can leave it; a surface that
-    // depends on invisible characters is a view nobody can debug.
+    // A shell export or an integration file can leave it; a view that depends
+    // on invisible characters is one nobody can debug.
     expect(resolveView({ LUCID_VIEW: "  solo  " })).toBe("solo");
   });
 
@@ -114,7 +114,7 @@ describe("every URL-emitting SITE honours the view (plan 06, review LOW-1/2)", (
   /**
    * The lesson from plan 05, which enforced a placement rule on the read side
    * while three writers kept emitting paths it refused: a rule honoured by one
-   * surface and ignored by its neighbours is worse than no rule, because the
+   * emitter and ignored by its neighbours is worse than no rule, because the
    * product then argues with itself.
    */
   test("the listing reports the view it is GIVEN, not the one its process carries", async () => {

@@ -40,7 +40,7 @@ describe("soloViewerUrl", () => {
   });
 
   test("viewerUrl and soloViewerUrl agree when there is no shell to differ about", () => {
-    // A dedicated server has no shell, so the two surfaces want the same page.
+    // A dedicated server has no shell, so the two views want the same page.
     const dedicated = identity({ port: 4310 });
     expect(soloViewerUrl(dedicated)).toBe(viewerUrl(dedicated));
   });

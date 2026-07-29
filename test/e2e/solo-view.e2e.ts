@@ -142,7 +142,7 @@ test("without the variable, the shell url and the browser launch are unchanged",
 test("an unknown view value falls back to shell rather than failing the open", async () => {
   hub = await startHub();
   cli = await makeCli(PLAN_V1);
-  // An integration file from a newer Lucid naming a surface this build does
+  // An integration file from a newer Lucid naming a view this build does
   // not have must not break the CLI.
   const opened = (await invoke(["open", cli.artifact], {
     cwd: cli.dir,

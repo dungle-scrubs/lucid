@@ -64,3 +64,106 @@ describe("docs/CONTRACT.md tracks the run/ split (plan 02)", () => {
     expect(contract).toContain(".lucid/<name>/run/");
   });
 });
+
+/**
+ * The embedded integration doc names an env var and a flag that the CODE has
+ * to keep answering to (plan 06, M2.1). A doc that instructs a harness author
+ * to export a variable nothing reads, or to pass a flag `lucid --help` does
+ * not list, sends them to the source to find out which of the two is wrong.
+ *
+ * Both directions, and the HELP text as well as the parser: a check that only
+ * looked at the parser would pass while the help stayed silent about the flag,
+ * which is the state this milestone found the CLI in.
+ */
+describe("docs/EMBEDDED.md tracks the code it instructs against (plan 06)", () => {
+  const embedded = readFileSync(join(REPO, "docs/EMBEDDED.md"), "utf8");
+  const viewSrc = readFileSync(join(REPO, "src/server/view.ts"), "utf8");
+  const runSrc = readFileSync(join(REPO, "src/cli/run.ts"), "utf8");
+  const mainSrc = readFileSync(join(REPO, "src/cli/main.ts"), "utf8");
+  const skill = readFileSync(join(REPO, "skills/lucid/SKILL.md"), "utf8");
+
+  test("the env var the doc tells harnesses to export is the one the code reads", () => {
+    expect(embedded).toContain("LUCID_VIEW=solo");
+    // Read off the source, not restated: renaming the field reds this.
+    expect(viewSrc).toContain("LUCID_VIEW");
+    expect(viewSrc).toContain('=== "solo"');
+  });
+
+  test("the drain flag is accepted BY WAIT, and the wait usage map says so", () => {
+    expect(embedded).toContain("--timeout 0");
+    // Wired into the WAIT command, not merely declared somewhere in the file.
+    // Asserting `Options.integer("timeout")` existed was theatre: removing
+    // `timeout: timeoutOpt` from wait's own record left every test green while
+    // the literal command this doc instructs died with "Received unknown
+    // argument: '--timeout'".
+    const waitCmd = /Command\.make\(\s*"wait",\s*\{[^}]*\}/s.exec(mainSrc)?.[0] ?? "";
+    expect(waitCmd, "could not find wait's Command.make record").not.toBe("");
+    expect(waitCmd).toContain("timeout:");
+    expect(waitCmd).toContain("since:");
+    // ...and advertised in the usage map. A doc naming a flag the CLI's own
+    // usage omits sends the reader to the source to check whether it is real.
+    const usage = /wait: "lucid wait <file>[^"]*"/.exec(runSrc)?.[0] ?? "";
+    expect(usage).toContain("--timeout");
+    expect(usage).toContain("--since");
+  });
+
+  test("the view field the doc documents is the one open PRINTS", () => {
+    expect(embedded).toContain('"view"');
+    // In the print payload, not merely somewhere in the file. `view,` alone
+    // was satisfied by the `selectOpenUrl({ view, ... })` call site, so
+    // deleting the field from `print({...})` left this green while the doc's
+    // "always present, in both views" became false.
+    // Anchored on the payload region rather than matched with a brace regex,
+    // which the nested `...(warnings.length > 0 ? {...} : {})` spread defeats.
+    const start = runSrc.indexOf("nextCursor: renderCursor(result.cursor),");
+    expect(start, "could not find open's print payload").toBeGreaterThan(-1);
+    const printed = runSrc.slice(start, runSrc.indexOf("});", start));
+    expect(printed).toContain("view,");
+    expect(printed).toContain("url,");
+  });
+
+  test("the doc warns that `warnings` is optional, because open really emits it", () => {
+    // Found by running the doc's own instructions: the example payload showed
+    // six keys, and a harness author parsing that shape strictly breaks the
+    // first time an artifact earns an advisory.
+    expect(embedded).toContain("warnings");
+    expect(runSrc).toContain("warnings.length > 0");
+  });
+
+  test("the skill points at the doc rather than restating it", () => {
+    expect(skill).toContain("docs/EMBEDDED.md");
+    expect(skill).toContain("LUCID_VIEW=solo");
+  });
+});
+
+/**
+ * CONTEXT.md is normative vocabulary, so a word defined twice there is worse
+ * than a word left undefined (plan 06, M2.2). This plan nearly gave **Surface**
+ * a second meaning; the check is that it still has exactly one, and that the
+ * concept it nearly collided with is present under its own name.
+ */
+describe("CONTEXT.md keeps one word to one meaning (plan 06)", () => {
+  const context = readFileSync(join(REPO, "CONTEXT.md"), "utf8");
+  const heading = (name: string): number =>
+    context.split("\n").filter((line) => line.trim() === `### ${name}`).length;
+
+  test("Surface and View are each defined exactly once", () => {
+    expect(heading("Surface")).toBe(1);
+    expect(heading("View")).toBe(1);
+  });
+
+  test("Surface still means the addressable rendering", () => {
+    const body = context.slice(context.indexOf("### Surface"));
+    expect(body.slice(0, 300)).toContain("addressable rendering");
+  });
+
+  test("View carries the invariant, and it is the one the code enforces", () => {
+    const body = context.slice(context.indexOf("### View"), context.indexOf("### Viewer"));
+    expect(body).toContain("presentation only");
+    expect(body).toContain("never process topology");
+    expect(body).toContain("LUCID_VIEW=solo");
+    // Both values named, so a reader of `view: "shell"` can find it here.
+    expect(body).toContain("**shell**");
+    expect(body).toContain("**solo**");
+  });
+});

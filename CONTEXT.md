@@ -56,6 +56,11 @@ The **addressable rendering** of the agent's output: the artifact plus the
 overlay that makes every part of it targetable. "Addressable surface" is
 Lucid's core concept.
 
+Not to be confused with **View** below, which is the *window a surface is
+presented in*. One word, one meaning: plan 06 nearly gave this one a second
+sense, and the two are a level apart - a surface is what you can point at, a
+view is where you are looking at it.
+
 ### Overlay
 The interaction layer Lucid injects into/over the artifact (built with Lit +
 Shadow DOM) that makes the surface addressable: hover targets, annotation
@@ -113,6 +118,34 @@ conversation log, the **composer queue** (the list of composed-but-unsent
 annotations - distinct from the log-side delivery queue `wait` drains), and
 controls. Distinct from the overlay - chrome is *around* the artifact, overlay
 is *on* it.
+
+### View
+**Which window a review is presented in** - not to be confused with Surface
+above. Two values, and `open` reports which one it resolved:
+
+- **shell** - the terminal harness's window over many sessions, with a tab
+  strip and a palette. The default; nothing about it changed when the other
+  arrived.
+- **solo** - one session and nothing around it. What a chat desktop app's
+  embedded browser pane shows, because the chat app already plays the role the
+  shell plays for a terminal harness: a tab strip inside a conversation pane
+  offers navigation the conversation already owns.
+
+Opted into per harness integration with `LUCID_VIEW=solo` (never by sniffing
+the host app, whose own env vars are undocumented and unstable). The invariant,
+which is the whole of it:
+
+> **A view decides presentation only - never process topology.**
+
+A hub still hosts the session if one is running, the hub is still the single
+appender, and there is no second process either way. What changes is which URL
+`open` returns and whether a browser is launched. See
+[docs/EMBEDDED.md](./docs/EMBEDDED.md) for the integration contract.
+
+### Shell
+The daemon-served window over MANY sessions: the tab strip, the palette, the
+pick screen. One process, one window, every open artifact as a tab. It is the
+`shell` view's presentation, and what the `solo` view deliberately omits.
 
 ### Viewer
 The whole Lucid window the human sees in the browser: chrome + surface.

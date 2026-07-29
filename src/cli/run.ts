@@ -237,7 +237,9 @@ export interface WaitCliOptions extends WaitOptions {
   readonly resume?: string;
 }
 
-/** `lucid wait <file> [--since] [--reply] [--harness] [--resume]` - block for feedback. */
+/** `lucid wait <file> [--since] [--timeout] [--reply] [--harness] [--resume]` - block
+ *  for feedback. `--timeout 0` is a DRAIN: one read of the log, whatever is
+ *  pending, no blocking (plan 06, D-016). */
 export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Promise<void> => {
   const paths = sessionPaths(file);
 
@@ -699,7 +701,7 @@ export const runStatus = async (): Promise<void> => {
     sessions,
     usage: {
       open: "lucid open <file>",
-      wait: "lucid wait <file> [--since <cursor>] [--reply <msg>] [--harness <id>] [--resume <cmd>]",
+      wait: "lucid wait <file> [--since <cursor>] [--timeout <seconds>: 0 drains] [--reply <msg>] [--harness <id>] [--resume <cmd>]",
       ask: 'lucid ask <file> --text "<q>" [--option "label|desc"]... [--multi] [--ref <id>]',
       progress: "lucid progress <file> [--label <text>] [--total <n>] [--done <n>]",
       context: "lucid context <file> [--pct <n>] [--used <n>] [--total <m>]",
