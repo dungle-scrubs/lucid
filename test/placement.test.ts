@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -21,6 +21,12 @@ import { canonicalArtifactLocation, sessionPaths } from "../src/core/paths.ts";
 const dirs: string[] = [];
 afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
+});
+
+/** The durable base these tests need (a /tmp fixture hits the volatile-path
+ *  refusal first) is swept whole, so a crashed run leaves nothing behind. */
+afterAll(async () => {
+  await rm(join(homedir(), ".cache", "lucid-placement-tests"), { recursive: true, force: true });
 });
 
 /** A project: a real temp dir with a `.git` in it. */
@@ -111,14 +117,40 @@ describe("a canonical path that is the SAME FILE is accepted (plan 05, F7)", () 
    * the `mv` is a no-op and the refusal never clears. Sameness is decided by
    * the filesystem, not by string equality.
    */
-  test("a case-variant of .lucid on a case-insensitive filesystem is not refused", async () => {
+  /** Case-INSENSITIVE only. Where `.Lucid` and `.lucid` are two directories,
+   *  refusing is correct and these say nothing. */
+  const caseInsensitive = async (root: string): Promise<boolean> => {
+    await mkdir(join(root, ".probe"), { recursive: true });
+    return existsSync(join(root, ".PROBE"));
+  };
+
+  test("the ON-DISK folder being `.Lucid` is accepted, not an unsatisfiable demand", async () => {
     const root = await project();
-    await mkdir(join(root, ".lucid"), { recursive: true });
-    const real = join(root, ".lucid", "p.html");
-    await writeFile(real, "<h1>p</h1>");
-    const variant = join(root, ".Lucid", "p.html");
-    if (!existsSync(variant)) return; // case-SENSITIVE fs: the variant is a different file, and refusing it is right
-    expect(canonicalArtifactLocation(variant)).toEqual({ ok: true });
+    if (!(await caseInsensitive(root))) return;
+    // The real directory is mis-cased. Refusing here told the human to move
+    // the file to where it already was: mkdir .lucid fails EEXIST, and the
+    // lowercase spelling realpaths straight back to `.Lucid`.
+    await mkdir(join(root, ".Lucid"), { recursive: true });
+    await writeFile(join(root, ".Lucid", "p.html"), "<h1>p</h1>");
+    expect(canonicalArtifactLocation(join(root, ".Lucid", "p.html"))).toEqual({ ok: true });
+    expect(canonicalArtifactLocation(join(root, ".lucid", "p.html"))).toEqual({ ok: true });
+  });
+
+  test("an artifact that does not exist YET under a mis-cased folder is accepted too", async () => {
+    const root = await project();
+    if (!(await caseInsensitive(root))) return;
+    await mkdir(join(root, ".Lucid"), { recursive: true });
+    // `open` is often about to create the file, so the check must decide on
+    // the directory rather than on a file it cannot stat.
+    expect(canonicalArtifactLocation(join(root, ".Lucid", "new.html"))).toEqual({ ok: true });
+  });
+
+  test("a genuinely absent artifact folder is still a real move, not waved through", async () => {
+    const root = await project();
+    expect(canonicalArtifactLocation(join(root, "docs", "p.html"))).toEqual({
+      ok: false,
+      canonical: join(root, ".lucid", "p.html"),
+    });
   });
 });
 
@@ -278,7 +310,9 @@ describe("the CLI open path inside a real project (plan 05, F5)", () => {
     await writeFile(doc, "# notes\n");
     const outPath = planArtifactPath(doc);
     expect(canonicalArtifactLocation(outPath)).toEqual({ ok: true });
-    expect(outPath).toBe(join(root, ".lucid", "notes.lucid.html"));
+    // Path-qualified: the artifact folder is FLAT, so the doc's location has
+    // to live in the name or two docs called notes.md collide.
+    expect(outPath).toBe(join(root, ".lucid", "docs-notes.lucid.html"));
   });
 
   test("`lucid plan render` outside a project keeps the beside-the-doc derivation", async () => {
@@ -295,5 +329,67 @@ describe("the CLI open path inside a real project (plan 05, F5)", () => {
     const root = await project();
     const out = join(root, "elsewhere.html");
     expect(planArtifactPath(join(root, "notes.md"), out)).toBe(out);
+  });
+});
+
+describe("plan render, actually run (plan 05, NEW-1/NEW-2)", () => {
+  const durable = async (): Promise<string> => {
+    const base = join(homedir(), ".cache", "lucid-placement-tests");
+    await mkdir(base, { recursive: true });
+    const d = await realpath(await mkdtemp(join(base, "r-")));
+    dirs.push(d);
+    await mkdir(join(d, ".git"), { recursive: true });
+    return d;
+  };
+
+  /**
+   * `planArtifactPath` alone was tested, never `runPlanRender` - the same gap
+   * shape that let the placement rule ship against writers that violated it.
+   * Both defects below shipped green through it.
+   */
+  test("the first render in a project creates the artifact folder instead of ENOENT", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const root = await durable();
+    await mkdir(join(root, "docs"), { recursive: true });
+    const doc = join(root, "docs", "notes.md");
+    await writeFile(doc, "# notes\n\nA claim.\n");
+    expect(existsSync(join(root, ".lucid"))).toBe(false);
+
+    await runPlanRender(doc, {});
+    const out = join(root, ".lucid", "docs-notes.lucid.html");
+    expect(existsSync(out)).toBe(true);
+    // And the path it just wrote is one its own `open` accepts.
+    expect(canonicalArtifactLocation(out)).toEqual({ ok: true });
+  });
+
+  test("two docs with the SAME basename in different folders do not collide", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const root = await durable();
+    for (const plan of ["01-alpha", "02-beta"]) {
+      await mkdir(join(root, ".plans", plan), { recursive: true });
+      await writeFile(join(root, ".plans", plan, "implementation.md"), `# ${plan}\n`);
+      await runPlanRender(join(root, ".plans", plan, "implementation.md"), {});
+    }
+    const alpha = join(root, ".lucid", "plans-01-alpha-implementation.lucid.html");
+    const beta = join(root, ".lucid", "plans-02-beta-implementation.lucid.html");
+    expect(existsSync(alpha)).toBe(true);
+    expect(existsSync(beta)).toBe(true);
+    // The overwrite was silent AND kept the basename, so the stem-collision
+    // guard passed and the second doc minted a new version inside the first
+    // one's review history.
+    expect(await Bun.file(alpha).text()).toContain("01-alpha");
+    expect(await Bun.file(beta).text()).toContain("02-beta");
+  });
+
+  test("re-rendering the SAME doc overwrites its own artifact - render is idempotent", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const root = await durable();
+    const doc = join(root, "notes.md");
+    await writeFile(doc, "# one\n");
+    await runPlanRender(doc, {});
+    await writeFile(doc, "# two\n");
+    await runPlanRender(doc, {});
+    const out = join(root, ".lucid", "notes.lucid.html");
+    expect(await Bun.file(out).text()).toContain("two");
   });
 });

@@ -1,4 +1,5 @@
-import { basename, dirname, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, dirname, relative, resolve } from "node:path";
 import { parseHTML } from "linkedom";
 import { marked } from "marked";
 import { ARTIFACT_DIR, projectRootOf } from "../core/paths.ts";
@@ -44,9 +45,44 @@ export interface RenderOptions {
 export const planArtifactPath = (doc: string, out?: string): string => {
   if (out !== undefined) return resolve(out);
   const docPath = resolve(doc);
-  const name = `${basename(docPath).replace(/\.md$/i, "")}.lucid.html`;
+  const stem = basename(docPath).replace(/\.md$/i, "");
   const root = projectRootOf(dirname(docPath));
-  return root === null ? resolve(dirname(docPath), name) : resolve(root, ARTIFACT_DIR, name);
+  if (root === null) return resolve(dirname(docPath), `${stem}.lucid.html`);
+  return resolve(
+    root,
+    ARTIFACT_DIR,
+    `${flatName(relative(root, dirname(docPath)), stem)}.lucid.html`,
+  );
+};
+
+/**
+ * A name unique across the project, because the artifact folder is FLAT.
+ *
+ * The directory tree used to supply uniqueness: every plan lives in its own
+ * folder and each carries an `implementation.md`. Rendering them all into one
+ * `.lucid/` collapsed six documents onto one path, and `writeFile` has no
+ * existence check - so rendering plan 02 silently overwrote plan 01's
+ * artifact. Worse, the basename is unchanged by the overwrite, so the
+ * stem-collision guard sees the record's own owner and passes: the next
+ * `lucid open` mints a new VERSION inside the first plan's session, and two
+ * unrelated documents share one review history.
+ *
+ * So the path is folded into the name. Long names are truncated with a hash of
+ * the full relative path, which keeps uniqueness where a filesystem's 255-byte
+ * limit would otherwise take it away.
+ */
+const NAME_BUDGET = 120;
+export const flatName = (relDir: string, stem: string): string => {
+  if (relDir === "" || relDir === ".") return stem;
+  const prefix = relDir
+    .split(/[/\\]/)
+    .map((seg) => seg.replace(/^\.+/, ""))
+    .filter((seg) => seg !== "")
+    .join("-");
+  const full = prefix === "" ? stem : `${prefix}-${stem}`;
+  if (full.length <= NAME_BUDGET) return full;
+  const digest = createHash("sha256").update(`${relDir}/${stem}`).digest("hex").slice(0, 8);
+  return `${full.slice(0, NAME_BUDGET - 9)}-${digest}`;
 };
 
 const DECISION_RE = /^\s*D-\d+\s*$/;

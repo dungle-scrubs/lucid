@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { writeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
@@ -722,6 +722,9 @@ export const runPlanRender = async (
     ...(options.stage !== undefined ? { stage: options.stage } : {}),
   });
   const outPath = planArtifactPath(doc, options.out);
+  // The artifact folder may not exist yet - this is often a project's FIRST
+  // render, and `writeFile` answered that with a bare ENOENT.
+  await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, html);
   print({ artifact: outPath, next: `lucid open ${outPath}` });
 };

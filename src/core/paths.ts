@@ -142,7 +142,20 @@ export const canonicalArtifactLocation = (
   const root = projectRootOf(dirname(abs));
   if (root === null) return { ok: true };
   const canonical = join(root, ARTIFACT_DIR, basename(abs));
-  return abs === canonical ? { ok: true } : { ok: false, canonical };
+  if (abs === canonical) return { ok: true };
+  // Sameness is the filesystem's to decide, not the string's. APFS is
+  // case-insensitive, so a project whose folder is really named `.Lucid`
+  // produced a demand nothing could satisfy: the canonical path already WAS
+  // the file, `mkdir .lucid` failed EEXIST, and querying the lowercase
+  // spelling realpath'd straight back to `.Lucid`. Compared on the DIRECTORY,
+  // because the basenames are equal by construction above and the artifact
+  // may not exist yet - `open` is often about to create it.
+  try {
+    if (realpathSync(dirname(abs)) === realpathSync(dirname(canonical))) return { ok: true };
+  } catch {
+    /* the canonical folder does not exist yet: a genuine move is needed */
+  }
+  return { ok: false, canonical };
 };
 
 /** Compute the full session layout for an artifact path. */

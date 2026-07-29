@@ -183,8 +183,9 @@ export const assertRecordAvailable = (paths: SessionPaths): void => {
   }
 };
 
-export const ensureSessionDirs = (paths: SessionPaths): void => {
-  assertRecordAvailable(paths);
+/** The mkdirs alone. `openSession` has already run the checks, and each one
+ *  reads `log.ndjson` off disk just to parse its first line. */
+const makeSessionDirs = (paths: SessionPaths): void => {
   mkdirSync(paths.sessionDir, { recursive: true });
   mkdirSync(paths.versionsDir, { recursive: true });
   // Machine-local runtime lives here; created up front so the append lock and
@@ -203,6 +204,17 @@ export const ensureSessionDirs = (paths: SessionPaths): void => {
       /* self-ignoring is a courtesy; never fail a session over it */
     }
   }
+};
+
+/**
+ * Check, then create. The entry point for every caller that has NOT already
+ * run the checks itself (`runServe`, tests); `openSession` runs them earlier,
+ * beside the other refusals, and creates through `makeSessionDirs` so the log
+ * is not read twice per open just to parse its first line.
+ */
+export const ensureSessionDirs = (paths: SessionPaths): void => {
+  assertRecordAvailable(paths);
+  makeSessionDirs(paths);
 };
 
 /** Atomic write within the session dir (temp-then-rename; same-dir rename). */
@@ -399,7 +411,7 @@ export const openSession = async (
     });
   }
 
-  ensureSessionDirs(paths);
+  makeSessionDirs(paths);
 
   let startedSegment = false;
 
