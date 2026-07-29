@@ -128,3 +128,68 @@ describe("assertNoStrandedRecord: the R3 migration guard", () => {
     expect(() => assertNoStrandedRecord(real)).not.toThrow();
   });
 });
+
+describe("stem collision: two artifacts, one record name (plan 05, M1.2, D-006)", () => {
+  const openInto = async (artifact: string, recordedName: string): Promise<void> => {
+    const { sessionPaths } = await import("../src/core/paths.ts");
+    const p = sessionPaths(artifact);
+    await mkdir(p.sessionDir, { recursive: true });
+    await writeFile(
+      p.logPath,
+      `${JSON.stringify({ seq: 1, at: "2026-01-01T00:00:00Z", t: "session_opened", segment: 1, version: 1, artifact: recordedName, hash: "h", path: "versions/s1/v1.html" })}\n`,
+    );
+  };
+
+  test("a second stem is REFUSED, naming the record and the artifact that owns it", async () => {
+    const { ensureSessionDirs } = await import("../src/core/session.ts");
+    const { sessionPaths } = await import("../src/core/paths.ts");
+    const dir = await tmp();
+    // plan.html owns <dir>/plan/ ...
+    await writeFile(join(dir, "plan.html"), "<h1>a</h1>");
+    await openInto(join(dir, "plan.html"), "plan.html");
+    // ...and plan.md derives the SAME record name.
+    await writeFile(join(dir, "plan.md"), "# a");
+
+    expect(() => ensureSessionDirs(sessionPaths(join(dir, "plan.md")))).toThrow(
+      /already the review record for/,
+    );
+  });
+
+  test("the refusal never appends to the first artifact's log", async () => {
+    const { ensureSessionDirs } = await import("../src/core/session.ts");
+    const { sessionPaths } = await import("../src/core/paths.ts");
+    const { readFile } = await import("node:fs/promises");
+    const dir = await tmp();
+    await writeFile(join(dir, "plan.html"), "<h1>a</h1>");
+    await openInto(join(dir, "plan.html"), "plan.html");
+    const before = await readFile(sessionPaths(join(dir, "plan.html")).logPath, "utf8");
+
+    await writeFile(join(dir, "plan.md"), "# a");
+    try {
+      ensureSessionDirs(sessionPaths(join(dir, "plan.md")));
+    } catch {
+      /* expected */
+    }
+    expect(await readFile(sessionPaths(join(dir, "plan.html")).logPath, "utf8")).toBe(before);
+  });
+
+  test("re-opening the SAME artifact is not a collision", async () => {
+    const { ensureSessionDirs } = await import("../src/core/session.ts");
+    const { sessionPaths } = await import("../src/core/paths.ts");
+    const dir = await tmp();
+    await writeFile(join(dir, "plan.html"), "<h1>a</h1>");
+    await openInto(join(dir, "plan.html"), "plan.html");
+    expect(() => ensureSessionDirs(sessionPaths(join(dir, "plan.html")))).not.toThrow();
+  });
+
+  test("a log that never recorded an artifact is left alone, not refused", async () => {
+    const { ensureSessionDirs } = await import("../src/core/session.ts");
+    const { sessionPaths } = await import("../src/core/paths.ts");
+    const dir = await tmp();
+    await writeFile(join(dir, "plan.md"), "# a");
+    const p = sessionPaths(join(dir, "plan.md"));
+    await mkdir(p.sessionDir, { recursive: true });
+    await writeFile(p.logPath, '{"seq":1,"t":"annotation","at":"2026-01-01T00:00:00Z"}\n');
+    expect(() => ensureSessionDirs(p)).not.toThrow();
+  });
+});

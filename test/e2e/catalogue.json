@@ -265,12 +265,14 @@
             "`lucid open <dir>/plan.html`, annotate, then `lucid open <dir>/plan.md`",
             "Run `lucid wait` on each"
           ],
-          "expected": "Two independent sessions, or an explicit refusal. Both currently resolve to `<dir>/plan/`, so the second open appends to the first one's log and the two reviews interleave.",
+          "expected": "An explicit refusal naming the record and the artifact that owns it: a record is named after its artifact with the extension dropped, so plan.html and plan.md want one folder. The second open is refused and the first artifact's log is never appended to (plan 05, M1.2, D-006).",
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
+          "status": "covered",
+          "testFile": "test/identity.test.ts",
+          "testName": "a second stem is REFUSED, naming the record and the artifact that owns it",
+          "mutation": "src/core/session.ts: drop the stemCollision check in ensureSessionDirs (const owner: string | null = null) - the second open shares the first artifact's record and its log, and the refusal test reds"
         },
         {
           "id": "open-artifact-without-extension",

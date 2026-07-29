@@ -2,6 +2,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -111,7 +112,52 @@ const occupiedByOthers = (paths: SessionPaths): boolean => {
   }
 };
 
+/**
+ * The artifact a record says it belongs to, read from its log's opening event
+ * (plan 05, M1.2). Sync and first-line-only: `ensureSessionDirs` runs before
+ * anything else on the open path, and `session_opened` is always the first
+ * event a record ever holds. Null when the record predates the stamp, is
+ * unreadable, or never opened - none of which is a collision.
+ */
+const recordedArtifact = (logPath: string): string | null => {
+  try {
+    const head = readFileSync(logPath, "utf8").split("\n", 1)[0] ?? "";
+    if (head.trim() === "") return null;
+    const first = JSON.parse(head) as { t?: string; artifact?: unknown };
+    return first.t === "session_opened" && typeof first.artifact === "string"
+      ? first.artifact
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Two artifacts whose names differ only by extension derive ONE record name -
+ * `plan.html` and `plan.md` both want `<dir>/plan/` - and the existing
+ * occupancy guard reads an existing log as "unmistakably ours". So the second
+ * open silently appended its versions and annotations to the FIRST artifact's
+ * history (D-006). The record names the artifact it belongs to; a different
+ * one is a collision, and the open is refused rather than merged.
+ */
+const stemCollision = (paths: SessionPaths): string | null => {
+  if (!existsSync(paths.logPath)) return null;
+  const owner = recordedArtifact(paths.logPath);
+  if (owner === null || owner === basename(paths.artifactPath)) return null;
+  return owner;
+};
+
 export const ensureSessionDirs = (paths: SessionPaths): void => {
+  const owner = stemCollision(paths);
+  if (owner !== null) {
+    throw new ValidationError({
+      message:
+        `refusing to open "${basename(paths.artifactPath)}": ${paths.sessionDir} is already the review record for "${owner}". ` +
+        `A record is named after its artifact with the extension dropped, so these two share one name and would share one history. ` +
+        `Rename one of them, or move it to its own folder, and open again.`,
+      detail: { record: paths.sessionDir, owner, opening: paths.artifactPath },
+    });
+  }
   if (occupiedByOthers(paths)) {
     throw new ValidationError({
       message:
