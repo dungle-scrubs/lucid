@@ -3666,12 +3666,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "Picking works, or the human is told the document is fighting the tooling. Today window-capture stopPropagation registered before the bootstrap starves the overlay listeners silently (plan finding #43).",
+          "expected": "Picking works: the overlay's listeners sit at WINDOW capture beside the artifact's, and stopPropagation cannot silence co-target listeners - only stopImmediatePropagation could, which is recorded as out of scope. The loop completes on the fixture (plan 04, M2.2, closes finding #43).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #43: window-capture stopPropagation registered before the bootstrap starves the overlay's listeners silently."
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact whose capture-phase handlers swallow every event",
+          "mutation": "client/overlay/overlay.ts: move the CLICK picking listener back to document capture (window.addEventListener('click', this.onClick, true) -> document.addEventListener) - the fixture's window-capture stopPropagation starves the commit click and its loop test reds (measured; the mousedown listener alone is not load-bearing)"
         },
         {
           "id": "hostile-competing-overlay",

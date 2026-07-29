@@ -185,6 +185,14 @@ test(
   survives("hostile-duplicate-ids"),
 );
 test(
+  "the loop survives an artifact whose capture-phase handlers swallow every event",
+  // Was defect #43: the artifact's window-capture stopPropagation ran ahead
+  // of the overlay's document-level listeners and starved picking. The
+  // overlay listens at window capture now (plan 04, M2.2) - co-target
+  // listeners all run regardless of stopPropagation.
+  survives("hostile-prevent-default"),
+);
+test(
   "the loop survives an artifact carrying its own CSP meta",
   // Was defect #42: the document-authored CSP blocked the injected bootstrap
   // silently. The meta is lifted into the response header with nonced

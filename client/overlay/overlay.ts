@@ -222,10 +222,17 @@ export class LucidOverlay extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
-    document.addEventListener("mousemove", this.onMouseMove, true);
-    document.addEventListener("mousedown", this.onMouseDown, true);
-    document.addEventListener("click", this.onClick, true);
-    document.addEventListener("mouseup", this.onMouseUp, true);
+    // Picking listens at WINDOW capture, not document (plan 04, M2.2, #43):
+    // the capture path runs window -> document -> target, so an artifact that
+    // registers window-capture handlers calling stopPropagation starves any
+    // document-level listener - while listeners on the SAME target all run
+    // regardless of stopPropagation (only stopImmediatePropagation silences
+    // co-target listeners, and an artifact hostile enough for that has taken
+    // the page from every tool). Same events, same targets, one rung higher.
+    window.addEventListener("mousemove", this.onMouseMove, true);
+    window.addEventListener("mousedown", this.onMouseDown, true);
+    window.addEventListener("click", this.onClick, true);
+    window.addEventListener("mouseup", this.onMouseUp, true);
     document.addEventListener("mouseleave", this.onMouseLeaveDoc);
     window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
     window.addEventListener("resize", this.onResize, { passive: true });
@@ -236,10 +243,10 @@ export class LucidOverlay extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    document.removeEventListener("mousemove", this.onMouseMove, true);
-    document.removeEventListener("mousedown", this.onMouseDown, true);
-    document.removeEventListener("click", this.onClick, true);
-    document.removeEventListener("mouseup", this.onMouseUp, true);
+    window.removeEventListener("mousemove", this.onMouseMove, true);
+    window.removeEventListener("mousedown", this.onMouseDown, true);
+    window.removeEventListener("click", this.onClick, true);
+    window.removeEventListener("mouseup", this.onMouseUp, true);
     document.removeEventListener("mouseleave", this.onMouseLeaveDoc);
     window.removeEventListener("scroll", this.onScroll, true);
     window.removeEventListener("resize", this.onResize);

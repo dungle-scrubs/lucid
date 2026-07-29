@@ -63,10 +63,6 @@ export interface HostileFixture {
  */
 export const HOSTILE_DEFECTS: ReadonlyMap<string, string> = new Map([
   [
-    "hostile-prevent-default",
-    "finding #43: window-capture handlers registered before the bootstrap starve picking, silently",
-  ],
-  [
     "hostile-base-tag",
     "finding #45: a foreign <base> re-roots the path-absolute bootstrap src to the hostile origin",
   ],
