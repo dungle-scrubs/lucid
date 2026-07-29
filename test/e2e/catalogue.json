@@ -277,6 +277,23 @@
           "mutation": "src/core/session.ts: drop the stemCollision check in ensureSessionDirs (const owner: string | null = null) - the second open shares the first artifact's record and its log, and the refusal test reds"
         },
         {
+          "id": "open-non-canonical-artifact-location",
+          "title": "An artifact outside the project's .lucid folder is refused, not quietly recorded",
+          "steps": [
+            "Create `<project>/lucid/plan.html` in a git project (the pre-02 convention)",
+            "Run `lucid open <project>/lucid/plan.html`",
+            "Inspect the exit code, the error, and whether a record folder appeared"
+          ],
+          "expected": "Refused with the canonical path named (`<project>/.lucid/plan.html`), exit non-zero, and NO record created at the wrong location. Placement is judged against the artifact's nearest enclosing .git, never the process cwd. A path with no enclosing .git - an agent scratchpad - is accepted, which is the only exemption; there is no opt-out flag (plan 05, M3.2, D-011/D-015/D-016).",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/placement.test.ts",
+          "testName": "the refusal names the canonical path, and creates NO record",
+          "mutation": "src/core/paths.ts: have canonicalArtifactLocation always return { ok: true } - six placement tests red, including the no-record assertion"
+        },
+        {
           "id": "open-artifact-without-extension",
           "title": "An artifact with no extension does not crash the layout",
           "steps": [
