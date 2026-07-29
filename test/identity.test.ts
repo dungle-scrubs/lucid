@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,8 +19,11 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
+/** A real temp dir. `realpath`, because macOS resolves /tmp -> /private/tmp and
+ *  the product canonicalizes: a test comparing paths against the un-resolved
+ *  spelling fails on the symlink it is not testing. */
 const tmp = async (): Promise<string> => {
-  const d = await mkdtemp(join(tmpdir(), "lucid-identity-"));
+  const d = await realpath(await mkdtemp(join(tmpdir(), "lucid-identity-")));
   dirs.push(d);
   return d;
 };
@@ -231,5 +234,60 @@ describe("a refusal leaves no phantom record (plan 05, M1.1)", () => {
 
     await openSession(paths);
     expect(existsSync(paths.logPath)).toBe(true);
+  });
+});
+
+describe("both layouts present: the canonical wins, the legacy is untouched (plan 05, M3.1)", () => {
+  /**
+   * Records used to live at `<dir>/.lucid/<stem>/`; they live at
+   * `<dir>/<stem>/` now (plan 02). A machine that pulled a repo migrated
+   * elsewhere can hold BOTH. The listing still reads a legacy folder so the
+   * history stays visible, but `open` must write only the canonical one and
+   * must never merge, choose by scan order, or overwrite the legacy bytes.
+   */
+  const legacyLogOf = (dir: string, stem: string): string =>
+    join(dir, ".lucid", stem, "log.ndjson");
+
+  test("open writes the canonical record and leaves the legacy log byte-for-byte", async () => {
+    const { openSession } = await import("../src/core/session.ts");
+    const dir = await tmp();
+    const artifact = join(dir, "plan.html");
+    await writeFile(artifact, "<!doctype html><html><body><h1>plan</h1></body></html>");
+
+    const legacy = legacyLogOf(dir, "plan");
+    await mkdir(join(dir, ".lucid", "plan"), { recursive: true });
+    const legacyBytes = `${JSON.stringify({ seq: 1, at: "2026-01-01T00:00:00Z", t: "session_opened", segment: 1, version: 1, artifact: "plan.html", hash: "legacy", path: "versions/s1/v1.html" })}\n`;
+    await writeFile(legacy, legacyBytes);
+
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+
+    // The canonical record is where the write landed...
+    expect(paths.logPath).toBe(join(dir, "plan", "log.ndjson"));
+    expect(existsSync(paths.logPath)).toBe(true);
+    // ...and the legacy log is exactly as it was. Not merged, not appended to.
+    const { readFile } = await import("node:fs/promises");
+    expect(await readFile(legacy, "utf8")).toBe(legacyBytes);
+  });
+
+  test("the canonical log is chosen even though the legacy one is older and alphabetically first", async () => {
+    const { openSession } = await import("../src/core/session.ts");
+    const { foldLog } = await import("../src/core/fold.ts");
+    const { readEvents } = await import("../src/core/log.ts");
+    const dir = await tmp();
+    const artifact = join(dir, "plan.html");
+    await writeFile(artifact, "<!doctype html><html><body><h1>plan</h1></body></html>");
+    await mkdir(join(dir, ".lucid", "plan"), { recursive: true });
+    await writeFile(
+      legacyLogOf(dir, "plan"),
+      `${JSON.stringify({ seq: 1, at: "2020-01-01T00:00:00Z", t: "session_opened", segment: 1, version: 1, artifact: "plan.html", hash: "legacy", path: "versions/s1/v1.html" })}\n`,
+    );
+
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    // v1 of a fresh record - never the legacy hash carried forward.
+    expect(state.version).toBe(1);
+    expect(paths.logPath.includes(".lucid")).toBe(false);
   });
 });

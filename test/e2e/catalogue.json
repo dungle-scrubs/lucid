@@ -255,8 +255,10 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
+          "status": "covered",
+          "testFile": "test/identity.test.ts",
+          "testName": "open writes the canonical record and leaves the legacy log byte-for-byte",
+          "mutation": "src/core/paths.ts: have sessionPaths prefer <dir>/.lucid/<stem>/ when it holds a log - scan order picks the legacy record and both both-layouts tests red"
         },
         {
           "id": "open-two-stems-collide",
