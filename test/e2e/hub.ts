@@ -6,7 +6,7 @@
 // visible rather than a merge conflict nobody reads.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect } from "@playwright/test";
@@ -170,7 +170,7 @@ export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
   // A caller-supplied dir is a RESTART onto existing state; only a hub that
   // made its own dir may destroy it on a failed startup.
   const ownsDir = options.dir === undefined;
-  const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "lucid-hub-e2e-")));
+  const dir = options.dir ?? (await realpath(await mkdtemp(join(tmpdir(), "lucid-hub-e2e-"))));
   if (options.harnesses !== undefined) {
     // The path `harnessEnv` already points LUCID_HARNESSES at; writing the file
     // is what turns it from "isolated and absent" into "isolated and stocked".

@@ -1,7 +1,7 @@
 import { inArtifact, on } from "./locators.ts";
 import { expect, test } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,7 +88,7 @@ const hubGet = async (port: number, path: string): Promise<Record<string, unknow
  * here - so the spawn lives with the test that needs it.
  */
 const startHubWithEnv = async (extra: Record<string, string>): Promise<LocalHub> => {
-  const dir = await mkdtemp(join(tmpdir(), "lucid-envhub-e2e-"));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-envhub-e2e-")));
   const env = { ...harnessEnv(dir), LUCID_HUB_ROOTS: dir, ...extra };
   const child: ChildProcess = spawn("bun", ["run", MAIN, "hub", "--port", "0"], {
     env,
@@ -455,7 +455,7 @@ test("a rendered plan opens, anchors on its D-NNN ids, and ingests back", async 
 });
 
 test("lucid app brings up a hub that actually drives delivery", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "lucid-app-e2e-"));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-app-e2e-")));
   const port = await freePort();
   // LUCID_NO_OPEN is already in harnessEnv, so no browser window opens; the
   // hub `app` spawns inherits this env, which is what keeps its scan and its
