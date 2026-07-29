@@ -3,7 +3,9 @@ import { useStore } from "zustand";
 import { AddFolder } from "./AddFolder.tsx";
 import { attentionStateOf, isUnseen } from "./attention.ts";
 import { SessionView } from "./Chrome.tsx";
+import { Command } from "cmdk";
 import { CreateDialog } from "./CreateDialog.tsx";
+import { SessionListGroups } from "./SessionList.tsx";
 import {
   activateTab,
   closeTab,
@@ -12,17 +14,9 @@ import {
   setCreateOpen,
   setPaletteOpen,
   useHub,
-  type HubSession,
 } from "./hub.ts";
 import { resolveShortcut } from "./keymap.ts";
-import {
-  artifactLabel,
-  byProject,
-  groupTabs,
-  projectName,
-  sessionLabel,
-  tabLabel,
-} from "./naming.ts";
+import { groupTabs, projectName, tabLabel } from "./naming.ts";
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, persistTabs, readStoredTabs, useShell } from "./shell.ts";
@@ -258,38 +252,6 @@ const NewTabButton = () => (
   </Tooltip>
 );
 
-const PickerRow = ({ row, subtitle }: { readonly row: HubSession; readonly subtitle?: string }) => {
-  const [failed, setFailed] = useState(false);
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            data-test="picker-row"
-            onClick={() => {
-              // openTab activates on success, which swaps the pick screen away on
-              // its own; a failure keeps the screen and says so on the row.
-              void openTab(row).then((h) => {
-                if (!h) setFailed(true);
-              });
-            }}
-            className="flex w-full snap-start cursor-pointer flex-col gap-0.5 px-3 py-1.5 text-left hover:bg-ink-700"
-          >
-            <span className="truncate text-[12px] text-fg">{sessionLabel(row)}</span>
-            <span className="truncate text-[10px] text-fg-faint">
-              {failed
-                ? "couldn't open - is the session's log readable?"
-                : (subtitle ?? row.artifact)}
-            </span>
-          </button>
-        }
-      />
-      <TooltipContent>{row.artifact}</TooltipContent>
-    </Tooltip>
-  );
-};
-
 /** The pick screen's own actions: quiet accent links, sized to the copy they
  *  sit beside - never buttons competing with the session list. */
 const emptyAction =
@@ -330,37 +292,26 @@ const EmptyShell = () => {
             <AddFolder className={emptyAction} />
             <NewArtifactButton testId="new-artifact" className={emptyAction} />
           </div>
-          <div className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] snap-y snap-proximity scroll-pt-9 flex-col overflow-y-auto border border-ink-600 bg-ink-800">
-            {[...byProject(sessions)].map(([project, rows], group) => (
-              <div
-                key={project}
-                data-test="picker-project"
-                // A RULE between groups, not just space: one unbroken run of
-                // rows with a faint heading every few lines gave the eye
-                // nothing to catch, and the headings read as row subtitles.
-                className={group > 0 ? "mt-1.5 border-t border-ink-600 pt-1" : ""}
-              >
-                {/* Sticky, so the project owning the rows you are looking at
-                    stays named while the list scrolls. Stacked, not
-                    side-by-side: a long name wrapped to a second line while
-                    the path sat beside its first, which read as a fault.
-
-                    A BAND, not an item: darker than the list it heads, ruled
-                    off below, small caps, and no hover. At row weight it read
-                    as the first clickable thing in each group - the one thing
-                    a section label must never look like. */}
-                <div className="sticky top-0 z-10 flex cursor-default flex-col gap-px border-b border-ink-700 bg-ink-900 px-3 pt-1.5 pb-1">
-                  <span className="text-[9px] font-semibold uppercase tracking-[1.1px] text-fg-muted">
-                    {projectName(project)}
-                  </span>
-                  <span className="truncate text-[9px] text-fg-faint">{project}</span>
-                </div>
-                {rows.map((s) => (
-                  <PickerRow key={s.id} row={s} subtitle={artifactLabel(s.artifact, project)} />
-                ))}
-              </div>
-            ))}
-          </div>
+          {/* The unified session list (M4.1, D-019): the same component the ⌘K
+              palette mounts over its backdrop, here inline with an undebounced
+              fuzzy filter (D-020) whose value folds the project name in. */}
+          <Command
+            data-test="picker"
+            label="Pick a session"
+            className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] flex-col border border-ink-600 bg-ink-800"
+          >
+            <Command.Input
+              data-test="picker-filter"
+              placeholder="Filter sessions…"
+              className="w-full border-b border-ink-600 bg-bg-inset px-3 py-2 font-sans text-[13px] text-fg outline-none placeholder:text-fg-faint"
+            />
+            <Command.List className="snap-y snap-proximity scroll-pt-9 overflow-y-auto pb-1">
+              <Command.Empty className="px-3 py-4 text-[12px] italic text-fg-faint">
+                No session matches.
+              </Command.Empty>
+              <SessionListGroups includeOpen={false} />
+            </Command.List>
+          </Command>
         </>
       ) : allOpen ? (
         // Everything in scope is already a tab. Saying "no reviews here yet"

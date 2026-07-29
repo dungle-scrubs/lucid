@@ -207,17 +207,16 @@ test("the command palette opens sessions and runs review actions", async ({ page
 
   const cmdK = process.platform === "darwin" ? chord("k") : "Control+k";
 
-  // ⌘K -> fuzzy to the second session -> Enter opens it as a tab.
+  // ⌘K -> the unified list (M4.1): the one OPENABLE session (the other is
+  // already a tab) opens as a NEW tab beside it - the strip shows every open
+  // tab now (M2.1), so a cross-project open adds, never replaces.
   await page.keyboard.press(cmdK);
   await expect(on(page).paletteInput()).toBeFocused();
-  await on(page).paletteInput().fill("open plan");
-  await page
-    .locator(`${hook("palette")} [cmdk-item]`, { hasText: "plan.html" })
-    .first()
-    .click();
+  const openableInPalette = on(page).palette().locator(hook("picker-row"));
+  await expect(openableInPalette).toHaveCount(1);
+  await openableInPalette.click();
   await expect(on(page).paletteOverlay()).toHaveCount(0);
-  // Cross-project open rescopes the strip: one visible tab in the new project.
-  await expect(on(page).shellTab()).toHaveCount(1);
+  await expect(on(page).shellTab()).toHaveCount(2);
   await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
 
   // ⌘K -> "toggle marks" runs an action on the ACTIVE session.

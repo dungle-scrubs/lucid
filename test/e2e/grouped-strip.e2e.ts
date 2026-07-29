@@ -283,3 +283,58 @@ test("an evicted background tab still raises its question dot (M3.1)", async ({ 
     "Rollout checklist",
   );
 });
+
+test("the pick screen lists across projects and narrows fuzzily (M4.1)", async ({ page }) => {
+  hub = await startHub();
+  const alpha = await openIntoHub(hub, planNamed("Alpha one", "Alpha one heading"));
+  cli = alpha.cli;
+  const alphaTwo = join(cli.dir, "alpha-two.html");
+  await writeFile(alphaTwo, planNamed("Alpha two", "Alpha two heading"), "utf8");
+  await cli.run(["open", alphaTwo]);
+  await cli.run(["end", alphaTwo]);
+  const beta = await openIntoHub(hub, planNamed("Beta one", "Beta one heading"));
+  cli2 = beta.cli;
+
+  // One tab open (Alpha one via ?s=); everything else is a place to GO.
+  await page.goto(alpha.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await on(page).tabAdd().click();
+
+  // Cross-project: both projects' openable sessions, grouped, in ONE list.
+  await expect(on(page).pickerProject()).toHaveCount(2);
+  await expect(on(page).pickerRow()).toHaveCount(2);
+
+  // Fuzzy, undebounced, and the project name is part of the value: typing a
+  // fragment of the OTHER project's name leaves only its rows.
+  await on(page).pickerFilter().fill("beta");
+  await expect(on(page).pickerRow()).toHaveCount(1);
+  await expect(on(page).pickerRow().first()).toContainText("Beta one");
+  await on(page).pickerFilter().fill("");
+  await expect(on(page).pickerRow()).toHaveCount(2);
+});
+
+test("a long list grows a recency band ordered by lastSeen; a short one does not (M4.1, D-024)", async ({
+  page,
+}) => {
+  hub = await startHub();
+  const first = await openIntoHub(hub, planNamed("Doc 0", "Doc 0 heading"));
+  cli = first.cli;
+  // Six MORE artifacts in the same project, opened in order, so lastSeen
+  // ordering is knowable: the last-opened is the band's first row.
+  for (let i = 1; i <= 6; i++) {
+    const p = join(cli.dir, `doc-${i}.html`);
+    await writeFile(p, planNamed(`Doc ${i}`, `Doc ${i} heading`), "utf8");
+    await cli.run(["open", p]);
+    await cli.run(["end", p]);
+  }
+
+  await page.goto(first.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await on(page).tabAdd().click();
+
+  // Six openable rows -> a band of five, newest first.
+  await expect(on(page).pickerRow()).toHaveCount(6);
+  const band = on(page).recentRow();
+  await expect(band).toHaveCount(5);
+  await expect(band.first()).toContainText("Doc 6"); // most recently seen
+});
