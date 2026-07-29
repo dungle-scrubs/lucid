@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { AddFolder } from "./AddFolder.tsx";
 import { attentionStateOf, isUnseen } from "./attention.ts";
+import { openSplit } from "./list.ts";
 import { SessionView } from "./Chrome.tsx";
 import { Command } from "cmdk";
 import { CreateDialog } from "./CreateDialog.tsx";
@@ -48,11 +49,20 @@ const TabAttention = ({ handle }: { readonly handle: SessionHandle }) => {
   const active = useShell((s) => s.activeKey === handle.key);
   const storeQuestions = useStore(handle.store, (s) => s.questions.some((q) => !q.answered));
   const storeWorking = useStore(handle.store, (s) => s.agentWorking !== null);
-  const storeResolved = useStore(handle.store, (s) => s.reviewResolved);
+  // Which source is FRESH follows the stream: a connected tab's own SSE is
+  // push (instant), so it joins the hub map in a union - set-fast from the
+  // push side, cleared within a poll tick. A disconnected (evicted) tab's
+  // store is FROZEN at eviction time; unioning it in would hold a stale dot
+  // forever, so only the hub speaks for it (M3.1) - with the frozen store as
+  // the last resort when the hub has no entry at all.
+  const live = handle.connected();
   const state = attentionStateOf({
-    openQuestions: hubEntry ? hubEntry.openQuestions : storeQuestions ? 1 : 0,
-    working: hubEntry ? hubEntry.working : storeWorking,
-    resolved: hubEntry ? hubEntry.resolved : storeResolved,
+    openQuestions: live
+      ? Math.max(hubEntry?.openQuestions ?? 0, storeQuestions ? 1 : 0)
+      : (hubEntry?.openQuestions ?? (storeQuestions ? 1 : 0)),
+    working: live
+      ? (hubEntry?.working ?? false) || storeWorking
+      : (hubEntry?.working ?? storeWorking),
     // The tab in FRONT is being looked at - unseen is a background-tab state
     // by definition (M3.2), and the marker map only knows hub-fed logs.
     unseen: !active && hubEntry !== undefined && isUnseen(hubEntry.lastEventSeq, viewed),
@@ -266,8 +276,7 @@ const EmptyShell = () => {
   // a tab is not an option - picking it would just switch to the tab sitting
   // a few pixels above. Same rule a browser's new-tab page follows: it shows
   // where you can go, not where you are.
-  const open = new Set(openKeys);
-  const sessions = allSessions.filter((s) => !open.has(s.artifact));
+  const { openable: sessions } = openSplit(allSessions, openKeys);
   /** Everything known is already a tab: a different state from "nothing here",
    *  and it must not borrow that screen's copy. */
   const allOpen = sessions.length === 0 && allSessions.length > 0;
@@ -375,6 +384,15 @@ const EmptyShell = () => {
   );
 };
 
+/** The fade marker wears the hidden dot's own color (D-023): a question is the
+ *  human's color, working the agent's, unseen the accent - same mapping the
+ *  dots themselves use. */
+const FADE_KIND_COLOR: Record<string, string> = {
+  question: "bg-user",
+  working: "bg-agent",
+  unseen: "bg-accent-bright",
+};
+
 /**
  * The grouped tab strip (plan 03, M2.2): one row, every open tab, grouped by
  * project. Each run is headed by an INERT group label (D-022 - a heading, not
@@ -390,8 +408,12 @@ const TabStrip = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [fades, setFades] = useState({ left: false, right: false });
   /** Attention dots hidden past an edge (D-023): the fade on that side wears a
-   *  marker, so an off-screen question is not an invisible one. */
-  const [hiddenAttn, setHiddenAttn] = useState({ left: false, right: false });
+   *  marker IN THE HIDDEN DOT'S OWN KIND, so an off-screen working tab is not
+   *  dressed as a question. Null = nothing hidden on that side. */
+  const [hiddenAttn, setHiddenAttn] = useState<{
+    left: string | null;
+    right: string | null;
+  }>({ left: null, right: null });
 
   const groups = groupTabs(sessionKeys, sessions);
 
@@ -403,16 +425,23 @@ const TabStrip = () => {
       // -1: fractional scroll widths round; a strip that fits must read as fitting.
       const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
       setFades((f) => (f.left === left && f.right === right ? f : { left, right }));
-      // Which side hides attention: a tab wearing a dot whose box sits fully
-      // outside the visible window. offsetLeft is layout position - unaffected
-      // by the scroll - so [scrollLeft, scrollLeft+clientWidth] is the window.
-      let attnLeft = false;
-      let attnRight = false;
+      // Which side hides attention, and of what KIND: a tab wearing a dot
+      // whose box sits fully outside the visible window. offsetLeft is layout
+      // position - unaffected by the scroll - so [scrollLeft, scrollLeft +
+      // clientWidth] is the window. When several kinds hide on one side the
+      // marker wears the most urgent (the resolver's own order).
+      const rank: Record<string, number> = { question: 3, working: 2, unseen: 1 };
+      let attnLeft: string | null = null;
+      let attnRight: string | null = null;
       for (const dot of el.querySelectorAll('[data-test="tab-attention"]')) {
         const tab = dot.closest('[data-test="shell-tab"]') as HTMLElement | null;
         if (!tab) continue;
-        if (tab.offsetLeft + tab.offsetWidth < el.scrollLeft) attnLeft = true;
-        else if (tab.offsetLeft > el.scrollLeft + el.clientWidth) attnRight = true;
+        const kind = dot.getAttribute("data-kind") ?? "unseen";
+        if (tab.offsetLeft + tab.offsetWidth < el.scrollLeft) {
+          if ((rank[kind] ?? 0) > (rank[attnLeft ?? ""] ?? 0)) attnLeft = kind;
+        } else if (tab.offsetLeft > el.scrollLeft + el.clientWidth) {
+          if ((rank[kind] ?? 0) > (rank[attnRight ?? ""] ?? 0)) attnRight = kind;
+        }
       }
       setHiddenAttn((a) =>
         a.left === attnLeft && a.right === attnRight ? a : { left: attnLeft, right: attnRight },
@@ -478,8 +507,13 @@ const TabStrip = () => {
           aria-hidden
           className="pointer-events-none absolute inset-y-0 left-0 flex w-8 items-center bg-gradient-to-r from-ink-900 to-transparent"
         >
-          {hiddenAttn.left ? (
-            <span data-test="fade-attention" data-side="left" className="ml-1 size-1.5 bg-user" />
+          {hiddenAttn.left !== null ? (
+            <span
+              data-test="fade-attention"
+              data-side="left"
+              data-kind={hiddenAttn.left}
+              className={`ml-1 size-1.5 ${FADE_KIND_COLOR[hiddenAttn.left] ?? "bg-accent-bright"}`}
+            />
           ) : null}
         </div>
       ) : null}
@@ -489,8 +523,13 @@ const TabStrip = () => {
           aria-hidden
           className="pointer-events-none absolute inset-y-0 right-0 flex w-8 items-center justify-end bg-gradient-to-l from-ink-900 to-transparent"
         >
-          {hiddenAttn.right ? (
-            <span data-test="fade-attention" data-side="right" className="mr-1 size-1.5 bg-user" />
+          {hiddenAttn.right !== null ? (
+            <span
+              data-test="fade-attention"
+              data-side="right"
+              data-kind={hiddenAttn.right}
+              className={`mr-1 size-1.5 ${FADE_KIND_COLOR[hiddenAttn.right] ?? "bg-accent-bright"}`}
+            />
           ) : null}
         </div>
       ) : null}
@@ -521,21 +560,31 @@ export const Shell = () => {
     if (stored.keys.length === 0) return;
     const byArtifact = new Map(sessions.map((s) => [s.artifact, s]));
     void (async () => {
+      // BACKGROUND opens (M3.2): restoring a window is not arriving at its
+      // tabs. A foreground open records a viewed mark per tab, which would
+      // wipe every unseen badge on the most ordinary gesture there is (⌘R).
+      // Only the tab that ends up in FRONT is arrived at.
+      const restored: string[] = [];
       for (const key of stored.keys) {
         const row = byArtifact.get(key);
-        if (row) await openTab(row);
+        if (row && (await openTab(row, { background: true })) !== null) restored.push(key);
       }
-      const active = stored.active !== null && byArtifact.has(stored.active) ? stored.active : null;
+      const active =
+        stored.active !== null && byArtifact.has(stored.active)
+          ? stored.active
+          : (restored.at(-1) ?? null);
       if (active !== null) activateTab(active);
     })();
   }, [sessions]);
 
   // Any change to the tab set - or the per-machine viewed marks (M3.2) - is
-  // worth remembering, including the restore above.
+  // worth remembering, including the restore above. Marks are pruned to the
+  // artifacts still known (listed or open), so the map cannot grow forever.
   useEffect(() => {
     if (!restoreHandled.current) return;
-    persistTabs({ keys: sessionKeys, active: activeKey, viewed: viewedSeq });
-  }, [sessionKeys, activeKey, viewedSeq]);
+    const known = new Set([...sessions.map((s) => s.artifact), ...sessionKeys]);
+    persistTabs({ keys: sessionKeys, active: activeKey, viewed: viewedSeq }, known);
+  }, [sessionKeys, activeKey, viewedSeq, sessions]);
 
   // `?s=<id>`: the tab `lucid open` asked for, honored once the listing
   // names it. Consumed only on SUCCESS - a transient identity miss leaves it

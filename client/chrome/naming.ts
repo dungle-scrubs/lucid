@@ -93,15 +93,6 @@ export const groupTabs = (
   return order.map((project) => ({ project, keys: keysByProject.get(project) as string[] }));
 };
 
-/** The distinct worktree checkouts a project's rows live in - what the drawer
- *  counts as "+N worktrees". A SET, because several sessions in one checkout
- *  are one worktree, and a project with none is not qualified at all. */
-export const worktreeRoots = (rows: readonly Pick<HubSession, "worktree">[]): Set<string> => {
-  const roots = new Set<string>();
-  for (const r of rows) if (r.worktree) roots.add(r.worktree);
-  return roots;
-};
-
 /** An open tab, as naming sees it: its session key and what its session is
  *  called. The handle itself is the caller's business. */
 export interface OpenTab {

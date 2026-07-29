@@ -1921,7 +1921,7 @@
           "kind": "state",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors (hidden tabs stay mounted, picker rows hittable) are re-covered under M2.2/M2.3. Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "background-tab-keeps-folding-events",
@@ -2273,7 +2273,7 @@
           "kind": "visual",
           "status": "declined",
           "builtCapability": "isHittable in test/e2e/visual.ts",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors (hidden tabs stay mounted, picker rows hittable) are re-covered under M2.2/M2.3. Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "picker-all-open-scoped-copy",
@@ -2295,7 +2295,7 @@
           "kind": "visual",
           "status": "declined",
           "builtCapability": "isHittable in test/e2e/visual.ts",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors (hidden tabs stay mounted, picker rows hittable) are re-covered under M2.2/M2.3. Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-open-large-project",
@@ -2315,7 +2315,7 @@
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors (hidden tabs stay mounted, picker rows hittable) are re-covered under M2.2/M2.3. Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-opens-whole-project",
@@ -2324,7 +2324,7 @@
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors (hidden tabs stay mounted, picker rows hittable) are re-covered under M2.2/M2.3. Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "picker-hides-open-artifacts",
@@ -2570,7 +2570,7 @@
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors (hidden tabs stay mounted, picker rows hittable) are re-covered under M2.2/M2.3. Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-counts-and-plurals",
@@ -2579,7 +2579,7 @@
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors (hidden tabs stay mounted, picker rows hittable) are re-covered under M2.2/M2.3. Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-header-has-add-folder-only",
@@ -2588,7 +2588,7 @@
           "kind": "visual",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors (hidden tabs stay mounted, picker rows hittable) are re-covered under M2.2/M2.3. Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-long-project-name-layout",
@@ -2643,7 +2643,7 @@
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors (hidden tabs stay mounted, picker rows hittable) are re-covered under M2.2/M2.3. Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "palette-opens-and-opens-a-session",

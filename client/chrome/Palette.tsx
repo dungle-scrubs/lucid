@@ -2,7 +2,7 @@ import { Command } from "cmdk";
 import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
 import { addRoot, closeTab, setPaletteOpen, useHub } from "./hub.ts";
-import { SessionListGroups } from "./SessionList.tsx";
+import { groupCls, itemCls, SessionListGroups } from "./SessionList.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, useShell } from "./shell.ts";
 
@@ -13,11 +13,6 @@ import { getSession, useShell } from "./shell.ts";
  * anywhere. Styled to the shell's own tokens (frost accent, mono, sharp
  * corners); cmdk is headless and brings none of its own.
  */
-
-const itemCls =
-  "flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[12px] text-fg data-[selected=true]:bg-ink-700 data-[selected=true]:text-fg-strong";
-const groupCls =
-  "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.8px] [&_[cmdk-group-heading]]:text-fg-faint";
 
 /** The active review's located annotations, each a jump target. Its own
  *  component so the store subscription only exists while a session is

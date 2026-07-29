@@ -192,11 +192,20 @@ const enforceStreamCap = (): void => {
  * identity through its mount (which is also what makes the daemon lazily
  * host a dormant one), then creates + connects its handle.
  */
-export const openTab = async (row: HubSession): Promise<SessionHandle | null> => {
+export const openTab = async (
+  row: HubSession,
+  opts?: {
+    /** Mount the tab WITHOUT bringing it to the front. Restoring a window is
+     *  not arriving at its tabs (M3.2): a foreground open records a viewed
+     *  mark and moves activeKey; a background one must do neither, or a ⌘R
+     *  silently marks every restored tab as read and wipes its unseen badge. */
+    readonly background?: boolean;
+  },
+): Promise<SessionHandle | null> => {
   const existing = getSession(row.artifact);
   if (existing) {
     if (!existing.connected()) existing.connect(); // reactivation refolds via bootstrap
-    activate(existing.key);
+    if (!opts?.background) activate(existing.key);
     enforceStreamCap();
     return existing;
   }
@@ -219,7 +228,7 @@ export const openTab = async (row: HubSession): Promise<SessionHandle | null> =>
     ),
   });
   handle.connect();
-  activate(handle.key);
+  if (!opts?.background) activate(handle.key);
   enforceStreamCap();
   return handle;
 };

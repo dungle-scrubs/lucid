@@ -112,10 +112,23 @@ export const readStoredTabs = (): PersistedTabs => {
 
 /** Remember which tabs are open, so a reload restores the window you had.
  *  Takes the snapshot rather than reading the store, so a caller can depend on
- *  exactly the values it is persisting. */
-export const persistTabs = (tabs: PersistedTabs): void => {
+ *  exactly the values it is persisting.
+ *
+ *  The viewed map is MERGED with what storage already holds, per key by MAX
+ *  seq (marks only ever advance), rather than overwritten: two windows share
+ *  one machine's marker set (D-025), and a whole-map write from a window
+ *  holding a minutes-old snapshot would silently resurrect unseen the other
+ *  window had cleared. `prune` (the artifacts still known) keeps the map from
+ *  growing one absolute path per artifact ever read, forever. */
+export const persistTabs = (tabs: PersistedTabs, prune?: ReadonlySet<string>): void => {
   try {
-    localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+    const stored = readStoredTabs().viewed;
+    const viewed: Record<string, number> = {};
+    for (const [k, v] of [...Object.entries(stored), ...Object.entries(tabs.viewed)]) {
+      if (prune !== undefined && !prune.has(k)) continue;
+      viewed[k] = Math.max(viewed[k] ?? 0, v);
+    }
+    localStorage.setItem(TABS_KEY, JSON.stringify({ ...tabs, viewed }));
   } catch {
     /* storage unavailable; the window simply reopens empty */
   }

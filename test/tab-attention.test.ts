@@ -10,32 +10,24 @@ import { attentionStateOf } from "../client/chrome/attention.ts";
 
 describe("attentionStateOf: precedence, one state per tab", () => {
   test("an open question outranks everything", () => {
-    expect(
-      attentionStateOf({ openQuestions: 2, working: true, resolved: true, unseen: true }),
-    ).toBe("question");
+    expect(attentionStateOf({ openQuestions: 2, working: true, unseen: true })).toBe("question");
   });
 
   test("working outranks unseen and settled", () => {
-    expect(
-      attentionStateOf({ openQuestions: 0, working: true, resolved: false, unseen: true }),
-    ).toBe("working");
+    expect(attentionStateOf({ openQuestions: 0, working: true, unseen: true })).toBe("working");
   });
 
   test("finished work the human has not looked at is finished-unseen", () => {
-    expect(
-      attentionStateOf({ openQuestions: 0, working: false, resolved: false, unseen: true }),
-    ).toBe("finished-unseen");
+    expect(attentionStateOf({ openQuestions: 0, working: false, unseen: true })).toBe(
+      "finished-unseen",
+    );
   });
 
-  test("resolved with nothing unseen is settled (the checkmark is not a demand)", () => {
-    expect(
-      attentionStateOf({ openQuestions: 0, working: false, resolved: true, unseen: false }),
-    ).toBe("settled");
+  test("nothing unseen and nothing owed is settled - approval carries no badge", () => {
+    expect(attentionStateOf({ openQuestions: 0, working: false, unseen: false })).toBe("settled");
   });
 
   test("nothing at all is settled", () => {
-    expect(
-      attentionStateOf({ openQuestions: 0, working: false, resolved: false, unseen: false }),
-    ).toBe("settled");
+    expect(attentionStateOf({ openQuestions: 0, working: false, unseen: false })).toBe("settled");
   });
 });

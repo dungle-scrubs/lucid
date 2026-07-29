@@ -338,3 +338,40 @@ test("a long list grows a recency band ordered by lastSeen; a short one does not
   await expect(band).toHaveCount(5);
   await expect(band.first()).toContainText("Doc 6"); // most recently seen
 });
+
+test("unseen badges survive a reload; restoring is not arriving (M3.2)", async ({ page }) => {
+  hub = await startHub();
+  const first = await openIntoHub(hub, PLAN_V1);
+  cli = first.cli;
+  const other = join(cli.dir, "rollout.html");
+  await writeFile(other, planNamed("Rollout checklist", "Rollout checklist"), "utf8");
+  await cli.run(["open", other]);
+
+  await page.goto(first.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await on(page).tabAdd().click();
+  await page.locator(hook("picker-row"), { hasText: "Rollout checklist" }).click();
+  await expect(on(page).shellTab()).toHaveCount(2);
+  // Land on A, so B is the background tab whose growth goes unseen.
+  await page.locator(hook("shell-tab"), { hasText: "Migration plan" }).click();
+  await expect(page.locator(`${hook("shell-tab")}[data-active="true"]`)).toContainText(
+    "Migration plan",
+  );
+
+  // B's log grows while B is in the background: an agent reply lands.
+  await cli.run(["wait", other, "--reply", "revised while you were away", "--timeout", "1"]);
+  const tabB = page.locator(hook("shell-tab"), { hasText: "Rollout checklist" });
+  await expect(tabB.locator(`${hook("tab-attention")}[data-kind="unseen"]`)).toHaveCount(1);
+
+  // ⌘R. The restore must NOT count as arriving at B: the badge survives.
+  await page.reload();
+  await expect(on(page).shellTab()).toHaveCount(2);
+  await expect(page.locator(`${hook("shell-tab")}[data-active="true"]`)).toContainText(
+    "Migration plan",
+  );
+  await expect(
+    page
+      .locator(hook("shell-tab"), { hasText: "Rollout checklist" })
+      .locator(`${hook("tab-attention")}[data-kind="unseen"]`),
+  ).toHaveCount(1);
+});

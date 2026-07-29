@@ -15,11 +15,8 @@ export interface AttentionInputs {
   readonly openQuestions: number;
   /** The agent-work window is open. */
   readonly working: boolean;
-  /** The review is approved. Approval on its own is SETTLED, not a demand:
-   *  the checkmark state is decoration the Tab may render, never a badge that
-   *  outranks unseen work. */
-  readonly resolved: boolean;
-  /** The log grew past what this machine last viewed (M3.2). */
+  /** The log grew past what this machine last viewed (M3.2). Approval carries
+   *  no badge of its own: an approved review with nothing unseen is settled. */
   readonly unseen: boolean;
 }
 

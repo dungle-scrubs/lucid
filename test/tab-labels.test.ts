@@ -7,7 +7,6 @@ import {
   projectName,
   sessionLabel,
   tabLabel,
-  worktreeRoots,
 } from "../client/chrome/naming.ts";
 
 /**
@@ -145,16 +144,6 @@ describe("a session in a git worktree", () => {
     const groups = byProject(listing);
     expect([...groups.keys()]).toEqual(["/dev/lucid"]);
     expect(groups.get("/dev/lucid")).toHaveLength(3);
-  });
-
-  test("several sessions in one checkout are one worktree", () => {
-    // The drawer's "+N worktrees" counts CHECKOUTS. Counting rows would
-    // report "+2 worktrees" for a single one holding two artifacts.
-    expect([...worktreeRoots(listing)]).toEqual(["/dev/lucid-wt"]);
-  });
-
-  test("a project with no worktrees is not qualified at all", () => {
-    expect(worktreeRoots([main]).size).toBe(0);
   });
 
   test("projects keep the listing's order, so the drawer does not reshuffle", () => {

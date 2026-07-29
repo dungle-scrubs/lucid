@@ -17,7 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 export const groupCls =
   "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[9px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[1.1px] [&_[cmdk-group-heading]]:text-fg-faint";
 export const itemCls =
-  "mx-1 flex cursor-pointer items-baseline gap-2 px-2 py-1.5 text-[12px] text-fg data-[selected=true]:bg-ink-700";
+  "mx-1 flex snap-start cursor-pointer items-baseline gap-2 px-2 py-1.5 text-[12px] text-fg data-[selected=true]:bg-ink-700 data-[selected=true]:text-fg-strong";
 
 /** A row that OPENS a session as a tab, reporting a failure on itself - the
  *  pick screen's contract, kept in both mounts. */
@@ -38,7 +38,7 @@ const OpenableRow = ({
           <Command.Item
             data-test="picker-row"
             value={`pick ${fuzzyValue(row)}`}
-            className={`${itemCls} snap-start flex-col !items-stretch gap-0.5`}
+            className={`${itemCls} flex-col !items-stretch gap-0.5`}
             onSelect={() => {
               // openTab activates on success, which swaps the pick screen away
               // on its own; a failure keeps the screen and says so on the row.
