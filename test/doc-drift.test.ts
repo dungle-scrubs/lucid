@@ -64,3 +64,49 @@ describe("docs/CONTRACT.md tracks the run/ split (plan 02)", () => {
     expect(contract).toContain(".lucid/<name>/run/");
   });
 });
+
+/**
+ * The embedded integration doc names an env var and a flag that the CODE has
+ * to keep answering to (plan 06, M2.1). A doc that instructs a harness author
+ * to export a variable nothing reads, or to pass a flag `lucid --help` does
+ * not list, sends them to the source to find out which of the two is wrong.
+ *
+ * Both directions, and the HELP text as well as the parser: a check that only
+ * looked at the parser would pass while the help stayed silent about the flag,
+ * which is the state this milestone found the CLI in.
+ */
+describe("docs/EMBEDDED.md tracks the code it instructs against (plan 06)", () => {
+  const embedded = readFileSync(join(REPO, "docs/EMBEDDED.md"), "utf8");
+  const surfaceSrc = readFileSync(join(REPO, "src/cli/surface.ts"), "utf8");
+  const runSrc = readFileSync(join(REPO, "src/cli/run.ts"), "utf8");
+  const mainSrc = readFileSync(join(REPO, "src/cli/main.ts"), "utf8");
+  const skill = readFileSync(join(REPO, "skills/lucid/SKILL.md"), "utf8");
+
+  test("the env var the doc tells harnesses to export is the one the code reads", () => {
+    expect(embedded).toContain("LUCID_SURFACE=embedded");
+    // Read off the source, not restated: renaming the field reds this.
+    expect(surfaceSrc).toContain("LUCID_SURFACE");
+    expect(surfaceSrc).toContain('=== "embedded"');
+  });
+
+  test("the drain flag is PARSED, and the wait help says so", () => {
+    expect(embedded).toContain("--timeout 0");
+    // Parsed...
+    expect(mainSrc).toContain('Options.integer("timeout")');
+    // ...and advertised. A doc naming a flag the CLI's own usage omits sends
+    // the reader to the source to check whether it is real.
+    const usage = /wait: "lucid wait <file>[^"]*"/.exec(runSrc)?.[0] ?? "";
+    expect(usage).toContain("--timeout");
+    expect(usage).toContain("--since");
+  });
+
+  test("the surface field the doc documents is the one open prints", () => {
+    expect(embedded).toContain('"surface"');
+    expect(runSrc).toContain("surface,");
+  });
+
+  test("the skill points at the doc rather than restating it", () => {
+    expect(skill).toContain("docs/EMBEDDED.md");
+    expect(skill).toContain("LUCID_SURFACE=embedded");
+  });
+});

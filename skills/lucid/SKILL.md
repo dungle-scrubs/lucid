@@ -371,6 +371,25 @@ process instead, so the terminal conversation stays free while feedback flows.
 - Tell the user the review is standing and how to end it (approve, or
   `lucid end`). Never leave one running silently.
 
+## Inside a chat desktop app (embedded)
+
+If you are running inside an app that embeds a browser pane next to the
+conversation - ChatGPT desktop, Claude desktop - that pane is a window over ONE
+session, and the app already plays the role the shell plays for a terminal
+harness. Your integration exports `LUCID_SURFACE=embedded`, and then:
+
+- `lucid open` returns the shell-free review URL in `url`, with
+  `"surface": "embedded"` beside it. **Surface the url in the pane; do not
+  expect a browser to open** - Lucid does not launch one on this path.
+- Feedback comes back by draining at the START of every turn, not by blocking:
+  `lucid wait <file> --since <cursor> --timeout 0` reads the log once, returns
+  whatever is pending, and never waits. Carry `nextCursor` forward.
+- Say the latency plainly if it comes up: annotations arrive with the human's
+  next chat message.
+
+Full detail, including the two alternatives and why they are not the default
+here: [docs/EMBEDDED.md](../../docs/EMBEDDED.md).
+
 ## Rules
 
 - One artifact = one file = one session. A genuinely new topic is a new file.
