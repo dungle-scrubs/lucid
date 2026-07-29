@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { resolveSurface } from "../src/cli/surface.ts";
+import { resolveSurface, selectOpenUrl } from "../src/cli/surface.ts";
+import { viewerUrl } from "../src/server/discovery.ts";
+import type { IdentityResponse } from "../src/server/discovery.ts";
 
 /**
  * Which SURFACE an open is for (plan 06, M1.1).
@@ -54,5 +56,58 @@ describe("resolveSurface", () => {
     const before = process.env.LUCID_SURFACE;
     expect(resolveSurface({ LUCID_SURFACE: "embedded" })).toBe("embedded");
     expect(process.env.LUCID_SURFACE).toBe(before);
+  });
+});
+
+describe("selectOpenUrl (plan 06, M1.3, D-015)", () => {
+  const identity = (over: Partial<IdentityResponse> = {}): IdentityResponse => ({
+    lucid: true,
+    session: "/p/.lucid/plan.html",
+    port: 17428,
+    version: 3,
+    ...over,
+  });
+
+  /**
+   * The case the whole plan exists for. `run.ts` assigns the hub's shell URL
+   * BEFORE this runs, so the embedded branch must discard it - not fall back
+   * to it. Written as `hubShell ?? solo(...)` it returns a perfectly valid URL
+   * for the wrong surface, which no error message would ever report.
+   */
+  test("embedded + a hub shell already assigned -> the SOLO url wins", () => {
+    const url = selectOpenUrl({
+      surface: "embedded",
+      hubShell: "http://127.0.0.1:17428/?s=a1b2c3",
+      identity: identity({ base: "/s/a1b2c3" }),
+    });
+    expect(url).toBe("http://127.0.0.1:17428/s/a1b2c3/__lucid/viewer");
+  });
+
+  test("default + a hub shell -> the shell url, byte for byte", () => {
+    const shell = "http://127.0.0.1:17428/?s=a1b2c3";
+    expect(
+      selectOpenUrl({
+        surface: "default",
+        hubShell: shell,
+        identity: identity({ base: "/s/a1b2c3" }),
+      }),
+    ).toBe(shell);
+  });
+
+  test("embedded + no hub shell -> the solo url for the dedicated server", () => {
+    expect(
+      selectOpenUrl({
+        surface: "embedded",
+        hubShell: undefined,
+        identity: identity({ port: 4310 }),
+      }),
+    ).toBe("http://127.0.0.1:4310/__lucid/viewer");
+  });
+
+  test("default + no hub shell -> exactly what viewerUrl says", () => {
+    const id = identity({ port: 4310 });
+    expect(selectOpenUrl({ surface: "default", hubShell: undefined, identity: id })).toBe(
+      viewerUrl(id),
+    );
   });
 });

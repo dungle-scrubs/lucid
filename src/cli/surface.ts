@@ -17,6 +17,9 @@
  *   inside a conversation pane offers navigation the conversation already owns.
  */
 
+import type { IdentityResponse } from "../server/discovery.ts";
+import { soloViewerUrl, viewerUrl } from "../server/discovery.ts";
+
 export type Surface = "embedded" | "default";
 
 /** The environment variable a harness integration exports to opt in. */
@@ -36,3 +39,24 @@ export const SURFACE_ENV = "LUCID_SURFACE";
  */
 export const resolveSurface = (env: Record<string, string | undefined>): Surface =>
   env[SURFACE_ENV]?.trim().toLowerCase() === "embedded" ? "embedded" : "default";
+
+/**
+ * The URL an `open` should return, given the surface, whatever the hub already
+ * answered, and the session's identity (plan 06, D-015).
+ *
+ * The embedded branch IGNORES `hubShell` rather than falling back to it, and
+ * that is the whole point of the seam. `run.ts` assigns the hub's shell URL
+ * before this runs, so written as `hubShell ?? soloViewerUrl(identity)` it
+ * keeps the shell URL under the embedded surface - handing the pane a
+ * perfectly valid URL for the wrong surface. It is the one line here with a
+ * silently wrong answer, which is why it is a unit assertion rather than
+ * something an end-to-end run has to bring a hub up to reach.
+ */
+export const selectOpenUrl = (args: {
+  readonly surface: Surface;
+  readonly hubShell: string | undefined;
+  readonly identity: IdentityResponse;
+}): string =>
+  args.surface === "embedded"
+    ? soloViewerUrl(args.identity)
+    : (args.hubShell ?? viewerUrl(args.identity));
