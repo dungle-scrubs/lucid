@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Lucid Workspace Overview</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; line-height: 1.6; }
+    h1 { font-size: 1.8rem; margin-bottom: 0.25rem; }
+    .subtitle { color: #666; margin-bottom: 2rem; }
+    h2 { font-size: 1.2rem; margin-top: 2rem; border-bottom: 1px solid #e5e5e5; padding-bottom: 0.25rem; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #eee; }
+    th { font-weight: 600; color: #555; font-size: 0.85rem; text-transform: uppercase; }
+    code { background: #f4f4f5; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+    .status { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; }
+    .status.mvp { background: #dbeafe; color: #1e40af; }
+    .status.deferred { background: #f3f4f6; color: #6b7280; }
+    ul { padding-left: 1.5rem; }
+    li { margin-bottom: 0.35rem; }
+  </style>
+</head>
+<body>
+  <h1>Lucid Workspace Overview</h1>
+  <p class="subtitle">Agent-agnostic CLI for addressable HTML artifacts and located agent-human review</p>
+
+  <h2>Status</h2>
+  <table>
+    <tr><td width="120">Version</td><td><code>0.1.0</code></td></tr>
+    <tr><td>Status</td><td><span class="status mvp">MVP</span></td></tr>
+    <tr><td>Runtimes</td><td>Bun, TypeScript 5.9</td></tr>
+    <tr><td>Stack</td><td>Effect (CLI), Lit + Shadow DOM (overlay)</td></tr>
+  </table>
+
+  <h2>Core Features</h2>
+  <ul>
+    <li><strong>Addressable surface</strong> — every element and text range in the artifact is targetable by annotation</li>
+    <li><strong>Located feedback loop</strong> — human markup flows back to the agent via append-only NDJSON event log</li>
+    <li><strong>Per-session loopback server</strong> — independent port and origin per artifact session</li>
+    <li><strong>Layered anchors</strong> — lucidId → fingerprint → DOM path, with quote-based text range resolution</li>
+    <li><strong>Orphaned handling</strong> — failed re-attachment surfaces in orphan tray, never silently drops feedback</li>
+    <li><strong>Cross-agent resume</strong> — any harness calls <code>lucid wait &lt;file&gt;</code> with no cursor to get full folded state from the append-only NDJSON event log, then continues iterating</li>
+  </ul>
+
+  <h2>CLI Commands</h2>
+  <table>
+    <tr><th>Command</th><th>Purpose</th></tr>
+    <tr><td><code>lucid open &lt;file&gt;</code></td><td>Serve artifact, open viewer, return opening cursor</td></tr>
+    <tr><td><code>lucid wait &lt;file&gt;</code></td><td>Block for located feedback (JSON on stdout)</td></tr>
+    <tr><td><code>lucid end &lt;file&gt;</code></td><td>End session, stop server</td></tr>
+  </table>
+
+  <h2>Deferred (Post-MVP)</h2>
+  <ul>
+    <li>Diff/revert UI between versions</li>
+    <li>Inbound image paste in annotations</li>
+    <li>Layout audit and polish</li>
+    <li>Auth/token hardening for non-loopback</li>
+    <li>Multi-artifact per session</li>
+  </ul>
+
+  <h2>Project Layout</h2>
+  <table>
+    <tr><td width="140"><code>src/cli/</code></td><td>Effect CLI entry, commands, daemon spawn</td></tr>
+    <tr><td><code>src/core/</code></td><td>Event log, fold, versions, watcher, cursor, lock</td></tr>
+    <tr><td><code>src/server/</code></td><td>Bun.serve daemon, overlay injection, viewer page</td></tr>
+    <tr><td><code>src/anchors/</code></td><td>Anchor schema, DOM capture and resolution</td></tr>
+    <tr><td><code>client/</code></td><td>Browser bundle: overlay + chrome (Lit)</td></tr>
+  </table>
+</body>
+</html>

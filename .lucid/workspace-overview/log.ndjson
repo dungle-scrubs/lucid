@@ -1,0 +1,26 @@
+{"t":"session_opened","segment":1,"artifact":"workspace-overview.html","version":1,"hash":"sha256:899fcc8d67b41d65e4f78e71d6a01e7fc027514c79f39189e48e67fa626d6c7d","path":"versions/s1/v1.html","seq":1,"at":"2026-06-21T17:22:37.164Z"}
+{"t":"review_resolved","seq":2,"at":"2026-06-21T17:23:46.815Z"}
+{"t":"annotation","id":"f6e36f92-dfe6-481f-8673-fea7578866e0","version":1,"target":{"kind":"element","fingerprint":"li#786c·\"Auth/token hardening for…\"","domPath":"ul:nth-child(10)>li:nth-child(4)","snippet":"<li>Auth/token hardening for non-loopback</li>"},"note":"what do we need an auth token for?","seq":3,"at":"2026-06-21T17:23:50.191Z"}
+{"t":"annotation","id":"3f94bfe4-7852-47ba-bde1-fbcb4121cf91","version":1,"target":{"kind":"element","fingerprint":"strong#aaea·\"Cross-agent resume\"","domPath":"ul:nth-child(6)>li:nth-child(6)>strong:nth-child(1)","snippet":"<strong>Cross-agent resume</strong>"},"note":"how do i cross agent resume?","seq":4,"at":"2026-06-21T17:23:50.199Z"}
+{"t":"version","version":2,"hash":"sha256:7f41fe4977ed835d175d52dab1ff9e54ddab7f10641980ea833c2665afe45edd","path":"versions/s1/v2.html","seq":5,"at":"2026-06-21T17:26:23.422Z"}
+{"t":"version","version":3,"hash":"sha256:139bb4e00ab3566bd7ccf959d23c64857aadd50e78571e476349b7eea66e3e02","path":"versions/s1/v3.html","seq":6,"at":"2026-06-21T17:26:32.985Z"}
+{"t":"review_reopened","seq":7,"at":"2026-06-21T17:26:49.695Z"}
+{"t":"review_resolved","seq":8,"at":"2026-06-21T17:26:58.738Z"}
+{"t":"prompt","id":"1ff15c9d-19f9-402f-840a-86e5bc68802a","refs":[],"text":"you got everything?","seq":9,"at":"2026-06-21T17:28:36.781Z"}
+{"t":"annotation","id":"54c7cac7-b373-4d39-9485-2c97199d0ca1","version":3,"target":{"kind":"element","fingerprint":"td#2296·\"Serve artifact, open vie…\"","domPath":"table:nth-child(8)>tbody:nth-child(1)>tr:nth-child(2)>td:nth-child(2)","snippet":"<td>Serve artifact, open viewer, return opening cursor</td>"},"note":"just a test here, what is an artifact?","seq":10,"at":"2026-06-21T17:30:02.289Z"}
+{"t":"annotation","id":"9f849b5e-0620-4d7f-a46a-9365f1709676","version":3,"target":{"kind":"element","fingerprint":"td#12da·\"Block for located feedba…\"","domPath":"table:nth-child(8)>tbody:nth-child(1)>tr:nth-child(3)>td:nth-child(2)","snippet":"<td>Block for located feedback (JSON on stdout)</td>"},"note":"what does lucid wait do?","seq":11,"at":"2026-06-21T17:30:45.091Z"}
+{"t":"version","version":4,"hash":"sha256:f28f546bc21155dcf36dae617838fd027e3000f48702675c3bd7dd246878c319","path":"versions/s1/v4.html","seq":12,"at":"2026-06-21T17:33:24.367Z"}
+{"t":"version","version":5,"hash":"sha256:5d6516c6d7a5319819ce1be2190defc2b016433ae9c503c8d2aadfe4e6eaadc7","path":"versions/s1/v5.html","seq":13,"at":"2026-06-21T17:33:37.861Z"}
+{"t":"session_suspended","seq":14,"at":"2026-06-21T18:14:52.351Z"}
+{"t":"session_resumed","segment":1,"seq":15,"at":"2026-06-22T01:45:55.114Z"}
+{"t":"annotation","id":"f59aec0a-08be-46c9-885f-5841a1754692","version":5,"target":{"kind":"element","fingerprint":"td#be02·\"Bun.serve daemon, overla…\"","domPath":"table:nth-child(13)>tbody:nth-child(1)>tr:nth-child(3)>td:nth-child(2)","snippet":"<td>Bun.serve daemon, overlay injection, viewer page</td>"},"note":"wHT's the purpose of this?","seq":16,"at":"2026-06-22T01:47:00.465Z"}
+{"t":"version","version":6,"hash":"sha256:36d329941bb816dac746e2ebd41b4d9889e23b69af176adba7ca39a20d6be27e","path":"versions/s1/v6.html","seq":17,"at":"2026-06-22T02:06:37.714Z"}
+{"t":"session_suspended","seq":18,"at":"2026-06-22T02:36:51.014Z"}
+{"t":"version","version":7,"hash":"sha256:ddbb4420b2d954bfe7ee622bcbf4f5c5d75f509abf0c2a422cf198118e88747a","path":"versions/s1/v7.html","seq":19,"at":"2026-07-16T09:10:41.561Z"}
+{"t":"session_resumed","segment":1,"seq":20,"at":"2026-07-16T09:10:41.562Z"}
+{"t":"session_ended","seq":21,"at":"2026-07-16T09:19:45.986Z"}
+{"t":"session_opened","segment":2,"artifact":"workspace-overview.html","version":1,"hash":"sha256:ddbb4420b2d954bfe7ee622bcbf4f5c5d75f509abf0c2a422cf198118e88747a","path":"versions/s2/v1.html","seq":22,"at":"2026-07-16T09:19:49.944Z"}
+{"t":"session_suspended","seq":23,"at":"2026-07-16T10:32:28.363Z"}
+{"t":"session_resumed","segment":2,"seq":24,"at":"2026-07-25T05:01:28.957Z"}
+{"t":"session_suspended","seq":25,"at":"2026-07-25T08:25:02.433Z"}
+{"t":"session_suspended","seq":26,"at":"2026-07-27T18:58:19.345Z"}
