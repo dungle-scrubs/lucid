@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
-import { sessionLabel, tabScope } from "./naming.ts";
+import { sessionLabel } from "./naming.ts";
 import type { SessionHandle } from "./session.ts";
 import { dropSession, ensureSession, getSession, useShell } from "./shell.ts";
 import type { ShellConfig } from "./types.ts";
@@ -123,47 +123,9 @@ const lastActivated = new Map<string, number>();
 
 const activate = (key: string): void => {
   lastActivated.set(key, Date.now());
-  // Activating a tab follows it to its project, and widens when the listing
-  // cannot place it - see `tabScope` for why the unplaceable case widens.
-  useShell.setState({
-    activeKey: key,
-    activeProject: tabScope(key, useHub.getState().sessions),
-  });
-};
-
-/**
- * Which open tabs the strip shows: the ones in the active project's scope, plus
- * the ACTIVE tab always.
- *
- * The active tab's presence is not a nicety - it is what makes the strip a way
- * out. Scope and active tab CAN disagree (a burst of `lucid open` activates
- * tabs faster than the listing names their projects), and a strip that filtered
- * the active tab away left the shell showing one project's artifact under
- * another project's badge, with no tab to click and no scope change that helped.
- *
- * A tab whose project the listing does not know yet also stays, rather than
- * vanishing mid-load.
- */
-export const visibleTabKeys = (
-  sessionKeys: readonly string[],
-  sessions: readonly Pick<HubSession, "artifact" | "project">[],
-  activeProject: string | null,
-  activeKey: string | null,
-): string[] => {
-  if (activeProject === null) return [...sessionKeys];
-  const projectOf = new Map(sessions.map((s) => [s.artifact, s.project]));
-  return sessionKeys.filter(
-    (k) => k === activeKey || (projectOf.get(k) ?? activeProject) === activeProject,
-  );
-};
-
-/** The most recently activated OPEN tab in a project, if any. */
-export const latestTabIn = (project: string): string | undefined => {
-  const rows = useHub.getState().sessions;
-  const inProject = new Set(rows.filter((s) => s.project === project).map((s) => s.artifact));
-  return [...useShell.getState().sessionKeys]
-    .filter((k) => inProject.has(k))
-    .sort((a, b) => (lastActivated.get(b) ?? 0) - (lastActivated.get(a) ?? 0))[0];
+  // The strip shows every open tab now (plan 03, M2.1): activating a tab no
+  // longer scopes the strip to a project.
+  useShell.setState({ activeKey: key });
 };
 
 const enforceStreamCap = (): void => {
@@ -213,33 +175,6 @@ export const openTab = async (row: HubSession): Promise<SessionHandle | null> =>
   activate(handle.key);
   enforceStreamCap();
   return handle;
-};
-
-/**
- * Open a whole project: every artifact in it becomes a tab, oldest first, so
- * the strip reads chronologically and the NEWEST ends up active.
- *
- * Picking a project used to land on a pick screen scoped to that project - a
- * second list to choose from, when choosing the project was already the
- * choice. A project is a body of work; opening it means opening its reviews.
- *
- * Sequential, not parallel: tab ORDER is the point, and these are loopback
- * requests. Background streams past the connection cap are dropped as usual -
- * the tabs stay, only their streams sleep.
- */
-export const openProject = async (project: string): Promise<void> => {
-  const rows = useHub.getState().sessions.filter((s) => s.project === project);
-  // Scope the strip first: tabs appear as they open, rather than after.
-  useShell.setState({ activeProject: project });
-  if (rows.length === 0) {
-    // Nothing to open (a project whose sessions just vanished): leave the
-    // scoped pick screen to say so rather than a blank window.
-    useShell.setState({ activeKey: null });
-    return;
-  }
-  for (const row of [...rows].sort((a, b) => a.lastSeen.localeCompare(b.lastSeen))) {
-    await openTab(row);
-  }
 };
 
 export const activateTab = (key: string): void => {

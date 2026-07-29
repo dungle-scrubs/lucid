@@ -6,7 +6,6 @@ import {
   projectName,
   sessionLabel,
   tabLabel,
-  tabScope,
   worktreeRoots,
 } from "../client/chrome/naming.ts";
 
@@ -180,27 +179,5 @@ describe("a session in a git worktree", () => {
   test("projects keep the listing's order, so the drawer does not reshuffle", () => {
     const other = row({ artifact: "/dev/tether/a.html", project: "/dev/tether" });
     expect([...byProject([main, other, wt1]).keys()]).toEqual(["/dev/lucid", "/dev/tether"]);
-  });
-});
-
-describe("the scope a tab implies", () => {
-  const listing = [
-    row({ artifact: "/dev/lucid/plan.html", project: "/dev/lucid" }),
-    row({ artifact: "/dev/tether/a.html", project: "/dev/tether" }),
-  ];
-
-  test("activating a tab scopes to its project", () => {
-    expect(tabScope("/dev/tether/a.html", listing)).toBe("/dev/tether");
-  });
-
-  test("a tab the listing cannot place widens the scope instead of lying", () => {
-    // The artifact was deleted or renamed, or the listing has not caught up.
-    // Any answer but null badges some other project's name over this
-    // artifact; no scope is the only honest one.
-    expect(tabScope("/dev/nowhere/gone.html", listing)).toBe(null);
-  });
-
-  test("an empty listing places nothing", () => {
-    expect(tabScope("/dev/lucid/plan.html", [])).toBe(null);
   });
 });

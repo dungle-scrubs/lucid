@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoots, openTab, setCreateOpen, useHub } from "./hub.ts";
 import { projectName } from "./naming.ts";
 import { effortLadder, harnessInfoFor } from "./selection.ts";
-import { useShell } from "./shell.ts";
 import { handleize } from "../../src/core/title.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { closeButton } from "./ui/close.ts";
@@ -65,7 +64,6 @@ const CreateDialogBody = () => {
   const defaultHarness = useHub((s) => s.defaultHarness);
   const harnessInfo = useHub((s) => s.harnessInfo);
   const createFailed = useHub((s) => s.createFailed);
-  const activeProject = useShell((s) => s.activeProject);
   /** Projects named through the folder chooser this session. The hub only
    *  lists projects that already hold a session, so without these a brand new
    *  folder is unreachable until something else puts an artifact in it. */
@@ -162,10 +160,9 @@ const CreateDialogBody = () => {
   useEffect(() => {
     setProject((current) => {
       if (current !== "") return current;
-      if (activeProject !== null && roots.includes(activeProject)) return activeProject;
       return roots[0] ?? "";
     });
-  }, [roots, activeProject]);
+  }, [roots]);
 
   // Model/effort are spoken in the CHOSEN harness's vocabulary, so a harness
   // change invalidates both picks rather than carrying a value the new recipe

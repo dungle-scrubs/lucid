@@ -7,27 +7,18 @@ import {
   activateTab,
   closeTab,
   connectHub,
-  openProject,
   openTab,
   setCreateOpen,
   setPaletteOpen,
   useHub,
-  visibleTabKeys,
   type HubSession,
 } from "./hub.ts";
 import { resolveShortcut } from "./keymap.ts";
-import {
-  artifactLabel,
-  byProject,
-  projectName,
-  sessionLabel,
-  tabLabel,
-  worktreeRoots,
-} from "./naming.ts";
+import { artifactLabel, byProject, projectName, sessionLabel, tabLabel } from "./naming.ts";
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
-import { getSession, persistTabs, readStoredTabs, setDrawerOpen, useShell } from "./shell.ts";
-import { closeButton, closeButtonSmall } from "./ui/close.ts";
+import { getSession, persistTabs, readStoredTabs, useShell } from "./shell.ts";
+import { closeButtonSmall } from "./ui/close.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
@@ -210,118 +201,6 @@ const NewArtifactButton = ({
   );
 };
 
-/**
- * The projects drawer (D7): GTM-style - slides in from the left, OVERLAYS
- * the content, and parallaxes it right while open. Projects list with
- * session counts; worktrees group under their main repo with a qualifier.
- * Selecting a project scopes the tab strip (D8) and OPENS the project: every
- * artifact in it becomes a tab, newest active.
- */
-const ProjectsDrawer = () => {
-  const open = useShell((s) => s.drawerOpen);
-  const activeProject = useShell((s) => s.activeProject);
-  const sessions = useHub((s) => s.sessions);
-
-  // Picking a project OPENS it - every artifact in it as a tab - rather than
-  // offering a second list to pick from.
-  const pick = (project: string): void => {
-    void openProject(project);
-    setDrawerOpen(false);
-  };
-
-  return (
-    <>
-      {open ? (
-        <button
-          type="button"
-          aria-label="Close the projects drawer"
-          onClick={() => setDrawerOpen(false)}
-          className="fixed inset-x-0 bottom-0 top-(--lucid-shell-top,37px) z-30 cursor-default bg-ink-900/40"
-        />
-      ) : null}
-      <aside
-        data-test="projects-drawer"
-        aria-hidden={!open}
-        className={`fixed bottom-0 left-0 top-(--lucid-shell-top,37px) z-40 flex w-[340px] flex-col overflow-y-auto border-r border-ink-500 bg-ink-800 py-2 shadow-[8px_0_30px_rgba(0,0,0,0.45)] transition-transform duration-200 ease-out ${
-          open ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <div className="flex items-center justify-between px-3 pb-2">
-          <span className="flex items-center gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.8px] text-fg-faint">
-              Projects
-            </span>
-            {/* At the TOP of the list it adds to, as an icon: the way to point
-                Lucid at a folder it has not scanned. */}
-            <AddFolder icon />
-          </span>
-          {/* Click-away and the scope badge both close it too, but a drawer with no visible
-              exit reads as a trap. */}
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  data-test="drawer-close"
-                  aria-label="Close the projects drawer"
-                  onClick={() => setDrawerOpen(false)}
-                  className={closeButton}
-                >
-                  ×
-                </button>
-              }
-            />
-            <TooltipContent>Close</TooltipContent>
-          </Tooltip>
-        </div>
-        {[...byProject(sessions)].map(([project, rows]) => {
-          const isActive = project === activeProject;
-          const worktrees = worktreeRoots(rows);
-          return (
-            <Tooltip key={project}>
-              <TooltipTrigger
-                render={
-                  <button
-                    key={project}
-                    type="button"
-                    data-test="drawer-project"
-                    data-active={isActive ? "true" : "false"}
-                    onClick={() => pick(project)}
-                    className={`flex w-full cursor-pointer flex-col gap-0.5 px-3 py-2 text-left ${
-                      isActive
-                        ? "bg-ink-700 shadow-[inset_2px_0_0_var(--color-accent)]"
-                        : "hover:bg-ink-700"
-                    }`}
-                  >
-                    {/* The name truncates and the count never moves: a long project
-                        name that wrapped would otherwise shove its own count onto a
-                        second line. */}
-                    <span className="flex w-full items-baseline gap-2">
-                      <span className="min-w-0 truncate text-[12px] font-semibold text-fg">
-                        {projectName(project)}
-                      </span>
-                      <span className="flex-none text-[10px] tabular-nums text-fg-faint">
-                        {rows.length} artifact{rows.length === 1 ? "" : "s"}
-                      </span>
-                    </span>
-                    <span className="truncate text-[10px] text-fg-faint">{project}</span>
-                    {worktrees.size > 0 ? (
-                      <span className="text-[10px] text-accent-bright">
-                        +{worktrees.size} worktree{worktrees.size === 1 ? "" : "s"}
-                      </span>
-                    ) : null}
-                  </button>
-                }
-              />
-              <TooltipContent>{project}</TooltipContent>
-            </Tooltip>
-          );
-        })}
-      </aside>
-    </>
-  );
-};
-
 /** The "+" opener: a NEW-TAB gesture, not a dropdown. It deselects the
  *  current tab, which lands the shell on the full-screen pick-a-session
  *  page (the same screen a fresh shell shows) - the way a browser's + gives
@@ -392,22 +271,16 @@ const EmptyShell = () => {
   const allSessions = useHub((s) => s.sessions);
   const loaded = useHub((s) => s.loaded);
   const roots = useHub((s) => s.roots);
-  const activeProject = useShell((s) => s.activeProject);
   const openKeys = useShell((s) => s.sessionKeys);
-  // Scoped like the strip (D8): inside a project, its artifacts; the way out
-  // is explicit, not implied.
-  const inScope =
-    activeProject === null ? allSessions : allSessions.filter((s) => s.project === activeProject);
   // What this screen offers is what you can OPEN. An artifact that is already
   // a tab is not an option - picking it would just switch to the tab sitting
-  // a few pixels above, and on a project with everything open the list read
-  // as a menu of things you already had. Same rule a browser's new-tab page
-  // follows: it shows where you can go, not where you are.
+  // a few pixels above. Same rule a browser's new-tab page follows: it shows
+  // where you can go, not where you are.
   const open = new Set(openKeys);
-  const sessions = inScope.filter((s) => !open.has(s.artifact));
-  /** Everything in scope is already a tab: a different state from "nothing
-   *  here", and it must not borrow that screen's copy. */
-  const allOpen = sessions.length === 0 && inScope.length > 0;
+  const sessions = allSessions.filter((s) => !open.has(s.artifact));
+  /** Everything known is already a tab: a different state from "nothing here",
+   *  and it must not borrow that screen's copy. */
+  const allOpen = sessions.length === 0 && allSessions.length > 0;
   // Until the first listing lands the truthful state is LOOKING, not empty -
   // claiming "no sessions" mid-scan told the human to go run a command.
   // pt-[12vh], not vertical centering: this screen and the ⌘K palette are
@@ -425,21 +298,7 @@ const EmptyShell = () => {
       {sessions.length > 0 ? (
         <>
           <div className="flex items-baseline gap-3">
-            <div className="text-[13px] text-fg-muted">
-              {activeProject === null
-                ? "Open a session to review."
-                : `Open an artifact in ${projectName(activeProject)}.`}
-            </div>
-            {activeProject !== null ? (
-              <button
-                type="button"
-                data-test="scope-clear"
-                onClick={() => useShell.setState({ activeProject: null })}
-                className="cursor-pointer text-[11px] text-fg-faint underline-offset-2 hover:text-fg hover:underline"
-              >
-                all projects
-              </button>
-            ) : null}
+            <div className="text-[13px] text-fg-muted">Open a session to review.</div>
             <NewArtifactButton testId="new-artifact" className={emptyAction} />
           </div>
           <div className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] snap-y snap-proximity scroll-pt-9 flex-col overflow-y-auto border border-ink-600 bg-ink-800">
@@ -480,24 +339,12 @@ const EmptyShell = () => {
         // the strip above, not this screen.
         <>
           <div data-test="all-open" className="text-[13px] text-fg-muted">
-            {activeProject === null
-              ? "Every session is already open."
-              : `Every artifact in ${projectName(activeProject)} is already open.`}
+            Every session is already open.
           </div>
           <div className="max-w-[440px] text-center text-[12px] leading-relaxed text-fg-faint">
-            Pick one from the tab strip above{activeProject === null ? "" : ", or widen the scope"}.
+            Pick one from the tab strip above.
           </div>
           <div className="flex items-baseline gap-3">
-            {activeProject !== null ? (
-              <button
-                type="button"
-                data-test="scope-clear"
-                onClick={() => useShell.setState({ activeProject: null })}
-                className={emptyAction}
-              >
-                all projects
-              </button>
-            ) : null}
             <NewArtifactButton testId="new-artifact" className={emptyAction} />
           </div>
         </>
@@ -550,15 +397,12 @@ const EmptyShell = () => {
 export const Shell = () => {
   const sessionKeys = useShell((s) => s.sessionKeys);
   const activeKey = useShell((s) => s.activeKey);
-  const activeProject = useShell((s) => s.activeProject);
-  const drawerOpen = useShell((s) => s.drawerOpen);
   const sessions = useHub((s) => s.sessions);
   const bootHandled = useRef(false);
   const restoreHandled = useRef(false);
 
-  // The strip is project-scoped (D8), and always includes the ACTIVE tab -
-  // see visibleTabKeys for why that second half matters.
-  const visibleKeys = visibleTabKeys(sessionKeys, sessions, activeProject, activeKey);
+  // The strip shows EVERY open tab now (plan 03, M2.1): no project scoping.
+  const visibleKeys = sessionKeys;
 
   useEffect(() => {
     connectHub();
@@ -581,16 +425,14 @@ export const Shell = () => {
       }
       const active = stored.active !== null && byArtifact.has(stored.active) ? stored.active : null;
       if (active !== null) activateTab(active);
-      // The scope is restored AFTER activation, which would otherwise rewrite it.
-      if (stored.project !== null) useShell.setState({ activeProject: stored.project });
     })();
   }, [sessions]);
 
   // Any change to the tab set is worth remembering, including the restore above.
   useEffect(() => {
     if (!restoreHandled.current) return;
-    persistTabs({ keys: sessionKeys, active: activeKey, project: activeProject });
-  }, [sessionKeys, activeKey, activeProject]);
+    persistTabs({ keys: sessionKeys, active: activeKey });
+  }, [sessionKeys, activeKey]);
 
   // `?s=<id>`: the tab `lucid open` asked for, honored once the listing
   // names it. Consumed only on SUCCESS - a transient identity miss leaves it
@@ -627,10 +469,9 @@ export const Shell = () => {
       // `resolveShortcut` still owns the rule - this is a cheap pre-filter that
       // can only ever skip chords the map would have answered `none` to.
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      const { sessionKeys: all, activeKey: current, activeProject: proj } = useShell.getState();
-      const rows = useHub.getState().sessions;
+      const { sessionKeys: all, activeKey: current } = useShell.getState();
       const action = resolveShortcut(e, {
-        keys: visibleTabKeys(all, rows, proj, current),
+        keys: [...all], // the whole strip - ⌘1-9 and brackets index every tab
         activeKey: current,
       });
       if (action.kind === "none") return;
@@ -663,51 +504,6 @@ export const Shell = () => {
         data-test="shell-tabbar"
         className="flex h-9 flex-none items-stretch overflow-x-auto border-b border-ink-600 bg-ink-900"
       >
-        {/* The one drawer control: a scope BADGE, not a tab cell - a
-            frost-tinted rectangle floating in the bar rather than filling
-            it, so nothing about it reads as a disabled sibling of the tabs.
-            It names the scoped project (or "Projects" unscoped) and toggles
-            the drawer that switches projects. */}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                data-test="drawer-toggle"
-                aria-expanded={drawerOpen}
-                onClick={(e) => {
-                  e.currentTarget.blur();
-                  // A toggle: the control that opened the drawer must also be able
-                  // to close it.
-                  setDrawerOpen(!useShell.getState().drawerOpen);
-                }}
-                className="mx-2 flex flex-none cursor-pointer items-center gap-1 self-center border border-accent/40 bg-accent/10 px-2.5 py-px text-[10px] font-semibold uppercase tracking-[0.8px] text-accent-bright outline-none hover:border-accent hover:bg-accent/20"
-              >
-                {activeProject !== null ? (
-                  <span data-test="scope-label">{projectName(activeProject)}</span>
-                ) : (
-                  "Projects"
-                )}
-                <svg
-                  viewBox="0 0 24 24"
-                  width="9"
-                  height="9"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </button>
-            }
-          />
-          <TooltipContent>
-            {activeProject !== null ? `${activeProject} - switch project` : "Projects"}
-          </TooltipContent>
-        </Tooltip>
         {visibleKeys.map((k) => (
           <Tab key={k} sessionKey={k} active={k === activeKey} />
         ))}
@@ -715,16 +511,10 @@ export const Shell = () => {
       </div>
       <Palette />
       <CreateDialog />
-      {/* GTM-drawer parallax (D7): the drawer OVERLAYS this region, and the
-          region also eases right while it is open - motion says "shifted
-          aside", not "replaced". EVERY open tab's view stays mounted; the
-          inactive ones hide with display:none (drafts survive switching).
-          Only the active view takes window listeners. */}
-      <div
-        className={`flex min-h-0 flex-1 flex-col transition-transform duration-200 ease-out ${
-          drawerOpen ? "translate-x-12" : "translate-x-0"
-        }`}
-      >
+      {/* EVERY open tab's view stays mounted; the inactive ones hide with
+          display:none (drafts survive switching). Only the active view takes
+          window listeners. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         {sessionKeys.map((k) => {
           const handle = getSession(k);
           if (!handle) return null;
@@ -737,7 +527,6 @@ export const Shell = () => {
         })}
         {active ? null : <EmptyShell />}
       </div>
-      <ProjectsDrawer />
     </div>
   );
 };

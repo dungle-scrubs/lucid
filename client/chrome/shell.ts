@@ -79,21 +79,21 @@ const TABS_KEY = "lucid.openTabs";
 interface PersistedTabs {
   readonly keys: readonly string[];
   readonly active: string | null;
-  readonly project: string | null;
 }
 
 export const readStoredTabs = (): PersistedTabs => {
   try {
+    // A persisted `project` key from the scoped-tab-strip era is tolerated and
+    // discarded (plan 03, M2.1): the strip is no longer project-scoped.
     const raw = JSON.parse(localStorage.getItem(TABS_KEY) ?? "") as Partial<PersistedTabs>;
     return {
       keys: Array.isArray(raw?.keys)
         ? raw.keys.filter((k): k is string => typeof k === "string")
         : [],
       active: typeof raw?.active === "string" ? raw.active : null,
-      project: typeof raw?.project === "string" ? raw.project : null,
     };
   } catch {
-    return { keys: [], active: null, project: null };
+    return { keys: [], active: null };
   }
 };
 
@@ -136,11 +136,6 @@ interface ShellState {
   sessionKeys: readonly string[];
   /** The session driving the render, or null before boot. */
   activeKey: string | null;
-  /** The project scoping the tab strip (artifact-first D8), or null for
-   *  all projects (fresh shell, nothing opened yet). */
-  activeProject: string | null;
-  /** The projects drawer (D7) is showing. */
-  drawerOpen: boolean;
 }
 
 export const useShell = create<ShellState>(() => ({
@@ -149,11 +144,7 @@ export const useShell = create<ShellState>(() => ({
   sidebarTab: "chat",
   sessionKeys: [],
   activeKey: null,
-  activeProject: null,
-  drawerOpen: false,
 }));
-
-export const setDrawerOpen = (open: boolean): void => useShell.setState({ drawerOpen: open });
 
 export const setChromeWidth = (w: number): void => useShell.setState({ chromeWidth: w });
 

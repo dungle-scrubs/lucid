@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { visibleTabKeys } from "../client/chrome/hub.ts";
 import { CHROME_MIN_WIDTH, defaultChromeWidth } from "../client/chrome/shell.ts";
 
 /**
@@ -34,43 +33,5 @@ describe("defaultChromeWidth", () => {
       expect(got).toBeGreaterThanOrEqual(last);
       last = got;
     }
-  });
-});
-
-describe("visibleTabKeys", () => {
-  const rows = [
-    { artifact: "/dev/sdlc/a.html", project: "/dev/sdlc" },
-    { artifact: "/dev/tether/b.html", project: "/dev/tether" },
-  ];
-  const keys = ["/dev/sdlc/a.html", "/dev/tether/b.html"];
-
-  test("no scope shows every open tab", () => {
-    expect(visibleTabKeys(keys, rows, null, keys[0] ?? null)).toEqual(keys);
-  });
-
-  test("a scope hides the other projects' tabs", () => {
-    expect(visibleTabKeys(keys, rows, "/dev/sdlc", "/dev/sdlc/a.html")).toEqual([
-      "/dev/sdlc/a.html",
-    ]);
-  });
-
-  // The dead end this guards: the scope said sdlc while the ACTIVE tab was a
-  // tether artifact, so the strip filtered away the only tab that could have
-  // changed it - a scope badge over a foreign artifact and nothing to click.
-  test("the active tab survives a scope it does not belong to", () => {
-    const visible = visibleTabKeys(keys, rows, "/dev/sdlc", "/dev/tether/b.html");
-    expect(visible).toContain("/dev/tether/b.html");
-    expect(visible).toContain("/dev/sdlc/a.html");
-  });
-
-  test("a tab the listing has not named yet stays visible", () => {
-    const withUnknown = [...keys, "/dev/new/c.html"];
-    expect(visibleTabKeys(withUnknown, rows, "/dev/sdlc", "/dev/sdlc/a.html")).toContain(
-      "/dev/new/c.html",
-    );
-  });
-
-  test("no active tab is not treated as one", () => {
-    expect(visibleTabKeys(keys, rows, "/dev/sdlc", null)).toEqual(["/dev/sdlc/a.html"]);
   });
 });

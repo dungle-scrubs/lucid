@@ -3,18 +3,18 @@ import type { HubSession } from "./hub.ts";
 /**
  * What the shell CALLS a session, and which project it files it under.
  *
- * Every function here is a fold of listing data into a string, a group, or a
- * scope. None of them touch a store, a fetch, or the DOM - the listing comes
- * in as an argument and a value comes back, which is what makes the awkward
- * cases affordable to cover: an artifact that lives outside its own project, a
- * name that collides across two projects, a tab the listing cannot place, a
- * worktree that must not become a project of its own.
+ * Every function here is a fold of listing data into a string or a group. None
+ * of them touch a store, a fetch, or the DOM - the listing comes in as an
+ * argument and a value comes back, which is what makes the awkward cases
+ * affordable to cover: an artifact that lives outside its own project, a name
+ * that collides across two projects, a worktree that must not become a project
+ * of its own.
  *
  * What this module does NOT own: WIRING. Whether the tab bar actually renders
- * `tabLabel`'s answer, whether the drawer paints a row per `byProject` group,
- * whether the scope badge re-reads after `tabScope` widens it, and whether two
- * tabs a human is looking at are visually tellable apart - those are claims
- * about the shell, and they stay in the browser. It also does not own the
+ * `tabLabel`'s answer, whether the grouped strip paints a heading per
+ * `byProject` group, and whether two tabs a human is looking at are visually
+ * tellable apart - those are claims about the shell, and they stay in the
+ * browser. It also does not own the
  * LISTING: which sessions exist, which project the hub decided each belongs to
  * (a worktree is resolved to its main repo server-side), and whether a dead
  * registry pointer was pruned are all answered before the data gets here.
@@ -91,18 +91,3 @@ export const tabLabel = (
   const project = sessions.find((s) => s.artifact === tab.key)?.project;
   return project ? `${tab.name} · ${projectName(project)}` : tab.name;
 };
-
-/**
- * The project scope activating a tab implies. The strip is project-scoped
- * (D8), so landing on a tab from elsewhere (⌘K, `?s=` boot) rescopes to that
- * tab's project.
- *
- * Null when the listing cannot place the tab - it has not caught up yet, or
- * the artifact is gone. Widening to all projects is the honest answer: keeping
- * the previous scope would badge one project's name over another project's
- * artifact, which is the confusing state, and no scope is not a lie.
- */
-export const tabScope = (
-  key: string,
-  sessions: readonly Pick<HubSession, "artifact" | "project">[],
-): string | null => sessions.find((s) => s.artifact === key)?.project ?? null;
