@@ -349,7 +349,7 @@ test("the palette activates an already-open tab instead of opening a second one"
   await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
 });
 
-test("⌘1-9 index the VISIBLE strip, never a tab hidden by the project scope", async ({ page }) => {
+test("⌘1-9 index the full tab strip in order, across projects (no scope)", async ({ page }) => {
   hub = await startHub();
   // Project A: two artifacts in one folder.
   const alpha = await openIntoHub(hub, planNamed("Alpha one", "Alpha one heading"));
@@ -364,38 +364,23 @@ test("⌘1-9 index the VISIBLE strip, never a tab hidden by the project scope", 
   await writeFile(betaTwo, planNamed("Beta two", "Beta two heading"), "utf8");
   await cli2.run(["open", betaTwo]);
 
-  // Open all four as tabs, project A first, so A's tabs are EARLIER in the
-  // roster than B's - which is what makes "index the visible strip" and
-  // "index every tab" give different answers.
+  // Open all four as tabs, project A first. The strip shows EVERY open tab now
+  // (plan 03, M2.1): opening across projects no longer hides A's tabs, so all
+  // four stay in the strip and ⌘1-4 index them in insertion order.
   await page.goto(alpha.shellUrl);
   await expect(on(page).shellTab()).toHaveCount(1);
-  await on(page).tabAdd().click();
-  await page.locator(hook("picker-row"), { hasText: "Alpha two" }).click();
-  await expect(on(page).shellTab()).toHaveCount(2);
+  for (const name of ["Alpha two", "Beta one", "Beta two"]) {
+    await on(page).tabAdd().click();
+    await page.locator(hook("picker-row"), { hasText: name }).click();
+  }
+  await expect(on(page).shellTab()).toHaveCount(4);
 
-  await on(page).tabAdd().click();
-  await on(page).scopeClear().click();
-  await page.locator(hook("picker-row"), { hasText: "Beta one" }).click();
-  // Opening across projects rescopes the strip: A's two tabs are still open,
-  // just not in this scope.
-  await expect(on(page).shellTab()).toHaveCount(1);
-  await on(page).tabAdd().click();
-  await page.locator(hook("picker-row"), { hasText: "Beta two" }).click();
-  await expect(on(page).shellTab()).toHaveCount(2);
-  await expect(activeTab(page)).toContainText("Beta two");
-
-  // ⌘1 is the FIRST tab of the strip you can see, not the first tab open.
+  // ⌘1 is the first tab of the whole strip; ⌘4 the last. No scope hides any.
   await page.keyboard.press(chord("1"));
-  await expect(activeTab(page)).toContainText("Beta one");
-  await expect(surfaceOf(page).locator("h1")).toContainText("Beta one heading");
-  await expect(on(page).shellTab()).toHaveCount(2);
-  await expect(tabNamed(page, "Alpha one")).toHaveCount(0);
-  await expect(tabNamed(page, "Alpha two")).toHaveCount(0);
-
-  // ⌘2 is the second one, and the scope never moved to project A.
-  await page.keyboard.press(chord("2"));
+  await expect(activeTab(page)).toContainText("Alpha one");
+  await expect(surfaceOf(page).locator("h1")).toContainText("Alpha one heading");
+  await page.keyboard.press(chord("4"));
   await expect(activeTab(page)).toContainText("Beta two");
   await expect(surfaceOf(page).locator("h1")).toContainText("Beta two heading");
-  await expect(on(page).shellTab()).toHaveCount(2);
-  await expect(tabNamed(page, "Alpha one")).toHaveCount(0);
+  await expect(on(page).shellTab()).toHaveCount(4);
 });

@@ -158,6 +158,12 @@ export interface HubOptions {
    * this can only make the wait shorter.
    */
   readonly sseMaxBackoffMs?: number;
+  /**
+   * Lower the shell's connected-stream cap (the M3.1 LUCID_STREAM_CAP
+   * seam), for the one suite that proves an evicted background tab's badge
+   * survives its stream.
+   */
+  readonly streamCap?: number;
 }
 
 export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
@@ -179,6 +185,7 @@ export const startHub = async (options: HubOptions = {}): Promise<Hub> => {
     ...(options.sseMaxBackoffMs === undefined
       ? {}
       : { LUCID_SSE_MAX_BACKOFF_MS: String(options.sseMaxBackoffMs) }),
+    ...(options.streamCap === undefined ? {} : { LUCID_STREAM_CAP: String(options.streamCap) }),
   };
   const child: ChildProcess = spawn(
     "bun",

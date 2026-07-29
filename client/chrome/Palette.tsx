@@ -1,8 +1,8 @@
 import { Command } from "cmdk";
 import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
-import { activateTab, closeTab, openTab, setPaletteOpen, useHub } from "./hub.ts";
-import { byProject, projectName, sessionLabel } from "./naming.ts";
+import { addRoot, closeTab, setPaletteOpen, useHub } from "./hub.ts";
+import { groupCls, itemCls, SessionListGroups } from "./SessionList.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, useShell } from "./shell.ts";
 
@@ -13,11 +13,6 @@ import { getSession, useShell } from "./shell.ts";
  * anywhere. Styled to the shell's own tokens (frost accent, mono, sharp
  * corners); cmdk is headless and brings none of its own.
  */
-
-const itemCls =
-  "flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[12px] text-fg data-[selected=true]:bg-ink-700 data-[selected=true]:text-fg-strong";
-const groupCls =
-  "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.8px] [&_[cmdk-group-heading]]:text-fg-faint";
 
 /** The active review's located annotations, each a jump target. Its own
  *  component so the store subscription only exists while a session is
@@ -53,8 +48,6 @@ const AnnotationItems = ({ handle }: { readonly handle: SessionHandle }) => {
 
 export const Palette = () => {
   const open = useHub((s) => s.paletteOpen);
-  const sessions = useHub((s) => s.sessions);
-  const openKeys = useShell((s) => s.sessionKeys);
   const activeKey = useShell((s) => s.activeKey);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -71,9 +64,6 @@ export const Palette = () => {
     close();
     fn();
   };
-
-  const openRows = sessions.filter((s) => openKeys.includes(s.artifact));
-  const otherRows = sessions.filter((s) => !openKeys.includes(s.artifact));
 
   return (
     // The overlay owns dismissal - and cannot strand a modal state: the
@@ -148,45 +138,29 @@ export const Palette = () => {
 
           {active ? <AnnotationItems handle={active} /> : null}
 
-          {openRows.length > 0 ? (
-            <Command.Group heading="Open tabs" className={groupCls}>
-              {openRows.map((s) => (
-                <Command.Item
-                  key={s.id}
-                  value={`tab ${sessionLabel(s)} ${s.name} ${projectName(s.project)} ${s.artifact}`}
-                  className={itemCls}
-                  onSelect={run(() => activateTab(s.artifact))}
-                >
-                  <span className="truncate">{sessionLabel(s)}</span>
-                  <span className="ml-auto truncate text-[10px] text-fg-faint">
-                    {projectName(s.project)}
-                  </span>
-                </Command.Item>
-              ))}
-            </Command.Group>
-          ) : null}
+          {/* The unified session list (M4.1, D-019): the same component the
+              pick screen mounts inline - recency band, open tabs, one group
+              per project, all fuzzy over values that fold the project in. */}
+          <SessionListGroups includeOpen onDone={close} />
 
-          {/* Sessions to open, one group per PROJECT: a tab is a session, and
-              the project heading is how a human scans a long list. The
-              project name also rides each item's value, so typing "lucid"
-              narrows to that project's sessions. */}
-          {[...byProject(otherRows)].map(([project, rows]) => (
-            <Command.Group key={project} heading={projectName(project)} className={groupCls}>
-              {rows.map((s) => (
-                <Command.Item
-                  key={s.id}
-                  value={`open ${sessionLabel(s)} ${s.name} ${projectName(s.project)} ${s.artifact}`}
-                  className={itemCls}
-                  onSelect={run(() => void openTab(s))}
-                >
-                  <span className="truncate">{sessionLabel(s)}</span>
-                  <span className="ml-auto truncate text-[10px] text-fg-faint">
-                    {s.artifact.slice(project.length + 1) || s.name}
-                  </span>
-                </Command.Item>
-              ))}
-            </Command.Group>
-          ))}
+          {/* Pointing Lucid at a new folder is a command, not only a pick-screen
+              affordance (D-007): the chooser opens directly; if this platform
+              has no chooser, land on the pick screen, whose AddFolder carries
+              the typed-path fallback. */}
+          <Command.Group heading="Shell" className={groupCls}>
+            <Command.Item
+              data-test="palette-add-folder"
+              value="add a project folder watch scan"
+              className={itemCls}
+              onSelect={run(() => {
+                void addRoot().then((outcome) => {
+                  if ("needsPath" in outcome) useShell.setState({ activeKey: null });
+                });
+              })}
+            >
+              Add a project folder…
+            </Command.Item>
+          </Command.Group>
         </Command.List>
       </Command>
     </div>

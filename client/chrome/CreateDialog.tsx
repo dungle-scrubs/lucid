@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoots, openTab, setCreateOpen, useHub } from "./hub.ts";
 import { projectName } from "./naming.ts";
 import { effortLadder, harnessInfoFor } from "./selection.ts";
-import { useShell } from "./shell.ts";
 import { handleize } from "../../src/core/title.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { closeButton } from "./ui/close.ts";
@@ -54,6 +53,24 @@ const hint = "ml-2 text-[10px] text-fg-faint";
  *  per-render identity would make them re-subscribe on every keystroke. */
 const close = (): void => setCreateOpen(false);
 
+/** The root the last create actually used (D-005): the best default for the
+ *  next one. Storage failures degrade to "no memory", never to an error. */
+const CREATE_ROOT_KEY = "lucid.createRoot";
+const readCreateRoot = (): string | null => {
+  try {
+    return localStorage.getItem(CREATE_ROOT_KEY);
+  } catch {
+    return null;
+  }
+};
+const persistCreateRoot = (root: string): void => {
+  try {
+    localStorage.setItem(CREATE_ROOT_KEY, root);
+  } catch {
+    /* storage unavailable; the next dialog simply asks again */
+  }
+};
+
 /**
  * Its own component so every open starts from a clean form: the parent mounts
  * it only while the dialog is showing, which is what resets the draft.
@@ -65,7 +82,6 @@ const CreateDialogBody = () => {
   const defaultHarness = useHub((s) => s.defaultHarness);
   const harnessInfo = useHub((s) => s.harnessInfo);
   const createFailed = useHub((s) => s.createFailed);
-  const activeProject = useShell((s) => s.activeProject);
   /** Projects named through the folder chooser this session. The hub only
    *  lists projects that already hold a session, so without these a brand new
    *  folder is unreachable until something else puts an artifact in it. */
@@ -156,16 +172,21 @@ const CreateDialogBody = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Prefill the project from the current scope once the listing is in. Only
-  // while the field is untouched, so a later listing frame cannot move a
-  // choice out from under the human.
+  // Prefill the project with the MOST RECENTLY USED root (D-005) once the
+  // listing is in - the human who authored into a project last time most
+  // likely wants it again. Only while the field is untouched, so a later
+  // listing frame cannot move a choice out from under them. A remembered root
+  // the listing no longer offers is ignored. With nothing remembered: a SOLE
+  // candidate is not a guess and is picked; several candidates mean the
+  // dialog ASKS (the field stays unselected) rather than guessing one.
   useEffect(() => {
     setProject((current) => {
       if (current !== "") return current;
-      if (activeProject !== null && roots.includes(activeProject)) return activeProject;
-      return roots[0] ?? "";
+      const remembered = readCreateRoot();
+      if (remembered !== null && roots.includes(remembered)) return remembered;
+      return roots.length === 1 ? (roots[0] ?? "") : "";
     });
-  }, [roots, activeProject]);
+  }, [roots]);
 
   // Model/effort are spoken in the CHOSEN harness's vocabulary, so a harness
   // change invalidates both picks rather than carrying a value the new recipe
@@ -288,6 +309,7 @@ const CreateDialogBody = () => {
     }
     // The hub's own path, not one rebuilt here: it joined project and name,
     // and the listing row will carry exactly that string.
+    persistCreateRoot(project); // the accepted root is the next dialog's default (D-005)
     setAuthoring(typeof body?.artifact === "string" ? body.artifact : `${project}/${name}`);
   };
 

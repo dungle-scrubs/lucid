@@ -66,10 +66,13 @@ test("the pick list comes to rest on a whole row, never half of one", async ({ p
 
   const settled = await page.evaluate(async () => {
     const first = document.querySelector('[data-test="picker-row"]');
-    // The scroll container is the parent of the project groups. Structural
-    // rather than class-based: a class is a spelling, and D-021 rejects
-    // selectors that break when someone renames one.
-    const list = first?.closest('[data-test="picker-project"]')?.parentElement;
+    // The scroll container is the NEAREST ANCESTOR that actually scrolls.
+    // Structural rather than class-based (a class is a spelling, D-021) - and
+    // ancestor-walking rather than parent-of-the-group, so a list library's
+    // intermediate wrapper divs (cmdk's sizer, since M4.1) cannot break the
+    // probe while leaving the behavior it protects intact.
+    let list = first?.parentElement ?? null;
+    while (list !== null && list.scrollHeight <= list.clientHeight) list = list.parentElement;
     if (!list) return { ok: false as const, reason: "no scroll container" };
 
     const rows = [...list.querySelectorAll('[data-test="picker-row"]')];

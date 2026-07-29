@@ -1917,15 +1917,11 @@
         {
           "id": "shell-under-the-panel-hidden-tabs-stay-mounted",
           "title": "Hidden tabs stay mounted so drafts and scroll survive switching",
-          "steps": ["Type an annotation note and a message draft in tab A, switch to B and back"],
-          "expected": "Both drafts intact and the thread scroll position preserved.",
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/e2e/shell.e2e.ts",
-          "testName": "tabs scope to a project; the drawer switches; drafts survive",
-          "mutation": null
+          "status": "declined",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "background-tab-keeps-folding-events",
@@ -2094,23 +2090,23 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #56: measured ['Migration - lucid', 'Migration - lucid'] for two artifacts in one project. The qualifier fires, costs strip width and adds no information, so the row's claim - still tellable apart - is false today. test/tab-labels.test.ts records the measured behaviour, so a fix turns it red deliberately."
+          "status": "covered",
+          "testFile": "test/e2e/grouped-strip.e2e.ts",
+          "testName": "two same-titled tabs in one project are told apart by their tooltips (finding #56)",
+          "mutation": "client/chrome/Shell.tsx: make the tab tooltip show the LABEL instead of the artifact path (TooltipContent {handle.key} -> {handle.config.name}) - both tooltips read \"Migration plan\" and nothing tells the twins apart (closes finding #56 via D-012/D-027: labels are allowed to match; the tooltip is the differentiator)"
         },
         {
           "id": "tabs-cross-project-name-collision",
-          "title": "Same-named artifacts from different projects carry a project qualifier",
-          "steps": [
-            "Open plan.html from project A and plan.html from project B (same title), widen the scope"
-          ],
-          "expected": "Both tabs read \"<title> · <project>\" — the browser-style disambiguation.",
+          "title": "Same-named artifacts from different projects are told apart by their group",
+          "steps": ["Open plan.html from project A and plan.html from project B (same title)"],
+          "expected": "Both tabs read the bare title (D-012); each sits under its own project's group heading, which is the disambiguation (D-027 - deliberately flips the old `· <project>` qualifier, closing e2e finding #56 by design).",
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/tab-labels.test.ts",
-          "testName": "both colliding tabs carry their project",
-          "mutation": "client/chrome/naming.ts: neutralise the collision scan in tabLabel (`const collides = false;`) - same-named artifacts from two projects render the same string"
+          "testName": "a cross-project collision stays title-only; group membership tells them apart",
+          "mutation": "client/chrome/naming.ts: make groupTabs merge every tab into the FIRST group (`projectOf.get(key) ?? key` -> a constant) - the two same-titled tabs land under one heading with nothing telling them apart"
         },
         {
           "id": "tab-long-title-truncates",
@@ -2273,17 +2269,11 @@
         {
           "id": "picker-row-truly-hittable",
           "title": "Picker rows are hittable by a real pointer, not just Playwright's auto-scroll",
-          "steps": [
-            "Open the pick screen with rows present, elementFromPoint at each row's center"
-          ],
-          "expected": "The hit element is the row (or inside it) — no clipped popover or overlay intercepting.",
           "risk": "high",
           "kind": "visual",
-          "status": "covered",
-          "testFile": "test/e2e/shell.e2e.ts",
-          "testName": "tabs scope to a project; the drawer switches; drafts survive",
-          "mutation": null,
-          "builtCapability": "isHittable in test/e2e/visual.ts"
+          "status": "declined",
+          "builtCapability": "isHittable in test/e2e/visual.ts",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "picker-all-open-scoped-copy",
@@ -2301,17 +2291,11 @@
         {
           "id": "drawer-open-does-not-block-tabbar",
           "title": "With the drawer open, the tab strip is still clickable",
-          "steps": [
-            "Open 2 tabs, open the drawer, click a tab then \"+\" then the badge without closing it"
-          ],
-          "expected": "Each control receives its click — the fixed overlay is anchored below --lucid-shell-top and never covers the 37px bar.",
           "risk": "high",
           "kind": "visual",
-          "status": "covered",
-          "testFile": "test/e2e/tabbar-overlays.e2e.ts",
-          "testName": "the open drawer never reaches the tab strip: the bar keeps taking clicks",
-          "mutation": "client/chrome/Shell.tsx: extend the drawer scrim to the viewport top (`top-(--lucid-shell-top,37px)` -> `top-0` in the scrim className) - the fixed z-30 overlay covers tab 1, tab 2, the + button and the scope badge, measured by isHittable. The fixture proves the hazard is real before exonerating it: bar box y 0-36, drawer panel from y 37, and the point 5px below the bar is owned by a position:fixed z-30 pointer-events:auto element outside the strip - only the scrim top edge keeps the bar working.",
-          "builtCapability": "isHittable in test/e2e/visual.ts"
+          "status": "declined",
+          "builtCapability": "isHittable in test/e2e/visual.ts",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-open-large-project",
@@ -2327,30 +2311,20 @@
         {
           "id": "scope-hides-other-projects",
           "title": "The strip is project-scoped; the other project's tab hides rather than closes",
-          "steps": [
-            "Open sessions in two projects, then open the second from the picker after widening scope"
-          ],
-          "expected": "One visible tab and a badge naming the second project; widening the scope brings the first tab back (it was never closed).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/e2e/shell.e2e.ts",
-          "testName": "tabs scope to a project; the drawer switches; drafts survive",
-          "mutation": null
+          "status": "declined",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-opens-whole-project",
           "title": "Picking a project opens every artifact in it as a tab, newest active",
-          "steps": ["Two artifacts in one project; open the drawer and click the project row"],
-          "expected": "Two tabs appear (oldest first), the newest is data-active, and no second pick list is shown.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/e2e/shell.e2e.ts",
-          "testName": "picking a project OPENS it: every artifact in it becomes a tab",
-          "mutation": null
+          "status": "declined",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "picker-hides-open-artifacts",
@@ -2401,10 +2375,8 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/tab-labels.test.ts",
-          "testName": "a tab the listing cannot place widens the scope instead of lying",
-          "mutation": "client/chrome/naming.ts: in tabScope, replace `?? null` with `?? sessions[0]?.project ?? null` - an unplaceable tab scopes the strip to an arbitrary other project"
+          "status": "declined",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope is deleted - the strip shows every open tab (M2.2 groups them), with no scope to widen. tabScope and the scope badge are gone, so there is no behavior left to cover. Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-open-close-routes",
@@ -2594,41 +2566,29 @@
         {
           "id": "scope-clear-widens-picker",
           "title": "\"all projects\" on the pick screen widens the scope",
-          "steps": ["Boot scoped to project A, click \"+\", click [data-test=scope-clear]"],
-          "expected": "Rows from every project appear and the badge reverts to \"Projects\".",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/e2e/shell.e2e.ts",
-          "testName": "tabs scope to a project; the drawer switches; drafts survive",
-          "mutation": null
+          "status": "declined",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-counts-and-plurals",
           "title": "Drawer project rows report accurate artifact counts",
-          "steps": ["Put 1 artifact in project A and 3 in project B, open the drawer"],
-          "expected": "\"1 artifact\" and \"3 artifacts\" — singular/plural correct and counts matching what picking the project opens.",
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/e2e/shell.e2e.ts",
-          "testName": "picking a project OPENS it: every artifact in it becomes a tab",
-          "mutation": null
+          "status": "declined",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-header-has-add-folder-only",
           "title": "The drawer header offers add-folder and not a duplicate New artifact",
-          "steps": ["Open the drawer and inspect its header"],
-          "expected": "[data-test=add-folder] present; [data-test=drawer-new-artifact] absent.",
           "risk": "low",
           "kind": "visual",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/e2e/shell.e2e.ts",
-          "testName": "⌘W closes the artifact in front of you; the drawer adds projects from its header",
-          "mutation": null
+          "status": "declined",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-long-project-name-layout",
@@ -2679,15 +2639,11 @@
         {
           "id": "cmd-digits-index-visible-tabs",
           "title": "⌘1-9 index the VISIBLE, project-scoped strip",
-          "steps": ["Open two tabs in project A and two in B, scope to B, press ⌘1 and ⌘2"],
-          "expected": "They select B's first and second visible tabs — never a hidden tab from project A.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "covered",
-          "testFile": "test/e2e/tabs-focus.e2e.ts",
-          "testName": "⌘1-9 index the VISIBLE strip, never a tab hidden by the project scope",
-          "mutation": "client/chrome/Shell.tsx: Index ⌘1-9 into every open tab instead of the project-scoped visible keys, so a digit can land on a tab the strip is not showing."
+          "status": "declined",
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "palette-opens-and-opens-a-session",

@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
-import { sessionLabel, tabScope } from "./naming.ts";
+import { sessionLabel } from "./naming.ts";
 import type { SessionHandle } from "./session.ts";
-import { dropSession, ensureSession, getSession, useShell } from "./shell.ts";
+import { dropSession, ensureSession, getSession, recordViewed, useShell } from "./shell.ts";
 import type { ShellConfig } from "./types.ts";
 
 /** The shell page's payload, read through its declared shape - `daemon.ts`
@@ -53,8 +53,22 @@ export const createRoots = (sessions: readonly HubSession[]): string[] => {
   return [...roots].sort();
 };
 
+/** One session's attention signals, as the hub's `event: attention` frame
+ *  carries them (keyed by session id; src/core/attention.ts is the source). */
+export interface HubAttention {
+  readonly openQuestions: number;
+  readonly working: boolean;
+  readonly resolved: boolean;
+  readonly lastEventSeq: number;
+}
+
 interface HubState {
   sessions: readonly HubSession[];
+  /** id -> attention, from the hub's own fold (plan 03, M3.1). Truth that does
+   *  NOT depend on any tab's stream: an evicted background tab's badge reads
+   *  from here. Empty until (and unless) the hub emits - a hub that never does
+   *  leaves every tab to its own fold, additively. */
+  attention: Readonly<Record<string, HubAttention>>;
   /** The first listing snapshot has arrived. Until then the shell is
    *  LOOKING, not empty - the ~/dev scan can take a moment, and "no
    *  sessions" before it lands would be a false claim. */
@@ -105,6 +119,7 @@ export const useHub = create<HubState>(() => ({
   defaultHarness: null,
   harnessInfo: [],
   createFailed: null,
+  attention: {},
 }));
 
 export const setPaletteOpen = (open: boolean): void => useHub.setState({ paletteOpen: open });
@@ -118,52 +133,45 @@ export const setCreateOpen = (open: boolean): void => useHub.setState({ createOp
  */
 const MAX_CONNECTED = 10;
 
+/** The effective cap: the shell page may carry a LUCID_STREAM_CAP override -
+ *  a test seam, since eviction is otherwise unreachable without 11 real tabs. */
+const streamCap = (): number => shellConfig()?.streamCap ?? MAX_CONNECTED;
+
 /** Activation recency per session key, for the eviction order. */
 const lastActivated = new Map<string, number>();
 
+/** The hub-attention seq for an artifact, when the hub has one. */
+const attentionSeqFor = (key: string): number | undefined => {
+  const { sessions, attention } = useHub.getState();
+  const id = sessions.find((s) => s.artifact === key)?.id;
+  return id !== undefined ? attention[id]?.lastEventSeq : undefined;
+};
+
 const activate = (key: string): void => {
   lastActivated.set(key, Date.now());
-  // Activating a tab follows it to its project, and widens when the listing
-  // cannot place it - see `tabScope` for why the unplaceable case widens.
-  useShell.setState({
-    activeKey: key,
-    activeProject: tabScope(key, useHub.getState().sessions),
-  });
+  // The strip shows every open tab now (plan 03, M2.1): activating a tab no
+  // longer scopes the strip to a project.
+  useShell.setState({ activeKey: key });
+  // Arrival is what clears unseen (M3.2): the human landing on the tab marks
+  // its log read up to here. Settling never does this - only activation and
+  // the in-front tracking below.
+  const seq = attentionSeqFor(key);
+  if (seq !== undefined) recordViewed(key, seq);
 };
 
 /**
- * Which open tabs the strip shows: the ones in the active project's scope, plus
- * the ACTIVE tab always.
- *
- * The active tab's presence is not a nicety - it is what makes the strip a way
- * out. Scope and active tab CAN disagree (a burst of `lucid open` activates
- * tabs faster than the listing names their projects), and a strip that filtered
- * the active tab away left the shell showing one project's artifact under
- * another project's badge, with no tab to click and no scope change that helped.
- *
- * A tab whose project the listing does not know yet also stays, rather than
- * vanishing mid-load.
+ * Apply one `event: attention` frame (M3.1/M3.2). The map replaces wholesale;
+ * the ACTIVE tab's viewed mark tracks its lastEventSeq - the human is looking
+ * at it, so what lands in front of them is seen as it lands. Every other
+ * tab's mark stays where it is: growth there is exactly what unseen means,
+ * and an agent settling must not fake an arrival.
  */
-export const visibleTabKeys = (
-  sessionKeys: readonly string[],
-  sessions: readonly Pick<HubSession, "artifact" | "project">[],
-  activeProject: string | null,
-  activeKey: string | null,
-): string[] => {
-  if (activeProject === null) return [...sessionKeys];
-  const projectOf = new Map(sessions.map((s) => [s.artifact, s.project]));
-  return sessionKeys.filter(
-    (k) => k === activeKey || (projectOf.get(k) ?? activeProject) === activeProject,
-  );
-};
-
-/** The most recently activated OPEN tab in a project, if any. */
-export const latestTabIn = (project: string): string | undefined => {
-  const rows = useHub.getState().sessions;
-  const inProject = new Set(rows.filter((s) => s.project === project).map((s) => s.artifact));
-  return [...useShell.getState().sessionKeys]
-    .filter((k) => inProject.has(k))
-    .sort((a, b) => (lastActivated.get(b) ?? 0) - (lastActivated.get(a) ?? 0))[0];
+export const applyAttentionFrame = (map: Readonly<Record<string, HubAttention>>): void => {
+  useHub.setState({ attention: map });
+  const { activeKey } = useShell.getState();
+  if (activeKey === null) return;
+  const seq = attentionSeqFor(activeKey);
+  if (seq !== undefined) recordViewed(activeKey, seq);
 };
 
 const enforceStreamCap = (): void => {
@@ -171,11 +179,12 @@ const enforceStreamCap = (): void => {
   const connected = sessionKeys
     .map((k) => getSession(k))
     .filter((h): h is SessionHandle => h?.connected() === true);
-  if (connected.length <= MAX_CONNECTED) return;
+  const cap = streamCap();
+  if (connected.length <= cap) return;
   const victims = connected
     .filter((h) => h.key !== activeKey)
     .sort((a, b) => (lastActivated.get(a.key) ?? 0) - (lastActivated.get(b.key) ?? 0));
-  for (const v of victims.slice(0, connected.length - MAX_CONNECTED)) v.disconnect();
+  for (const v of victims.slice(0, connected.length - cap)) v.disconnect();
 };
 
 /**
@@ -183,11 +192,20 @@ const enforceStreamCap = (): void => {
  * identity through its mount (which is also what makes the daemon lazily
  * host a dormant one), then creates + connects its handle.
  */
-export const openTab = async (row: HubSession): Promise<SessionHandle | null> => {
+export const openTab = async (
+  row: HubSession,
+  opts?: {
+    /** Mount the tab WITHOUT bringing it to the front. Restoring a window is
+     *  not arriving at its tabs (M3.2): a foreground open records a viewed
+     *  mark and moves activeKey; a background one must do neither, or a ⌘R
+     *  silently marks every restored tab as read and wipes its unseen badge. */
+    readonly background?: boolean;
+  },
+): Promise<SessionHandle | null> => {
   const existing = getSession(row.artifact);
   if (existing) {
     if (!existing.connected()) existing.connect(); // reactivation refolds via bootstrap
-    activate(existing.key);
+    if (!opts?.background) activate(existing.key);
     enforceStreamCap();
     return existing;
   }
@@ -210,36 +228,9 @@ export const openTab = async (row: HubSession): Promise<SessionHandle | null> =>
     ),
   });
   handle.connect();
-  activate(handle.key);
+  if (!opts?.background) activate(handle.key);
   enforceStreamCap();
   return handle;
-};
-
-/**
- * Open a whole project: every artifact in it becomes a tab, oldest first, so
- * the strip reads chronologically and the NEWEST ends up active.
- *
- * Picking a project used to land on a pick screen scoped to that project - a
- * second list to choose from, when choosing the project was already the
- * choice. A project is a body of work; opening it means opening its reviews.
- *
- * Sequential, not parallel: tab ORDER is the point, and these are loopback
- * requests. Background streams past the connection cap are dropped as usual -
- * the tabs stay, only their streams sleep.
- */
-export const openProject = async (project: string): Promise<void> => {
-  const rows = useHub.getState().sessions.filter((s) => s.project === project);
-  // Scope the strip first: tabs appear as they open, rather than after.
-  useShell.setState({ activeProject: project });
-  if (rows.length === 0) {
-    // Nothing to open (a project whose sessions just vanished): leave the
-    // scoped pick screen to say so rather than a blank window.
-    useShell.setState({ activeKey: null });
-    return;
-  }
-  for (const row of [...rows].sort((a, b) => a.lastSeen.localeCompare(b.lastSeen))) {
-    await openTab(row);
-  }
 };
 
 export const activateTab = (key: string): void => {
@@ -390,6 +381,15 @@ export const connectHub = (): void => {
       /* a frame we cannot parse is not worth tearing the stream down for */
     }
   };
+  // The hub's own per-artifact attention fold (plan 03, M3.1): keyed by
+  // session id, deduped server-side, independent of any tab's stream.
+  es.addEventListener("attention", (e) => {
+    try {
+      applyAttentionFrame(JSON.parse((e as MessageEvent).data) as Record<string, HubAttention>);
+    } catch {
+      /* a frame we cannot parse is not worth tearing the stream down for */
+    }
+  });
   // `lucid open` ran in a terminal: the daemon asks live windows to surface
   // the session as a tab so the CLI never has to pop a browser next to a
   // shell that is already up. The listing snapshot may not carry the row yet

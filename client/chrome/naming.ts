@@ -3,18 +3,18 @@ import type { HubSession } from "./hub.ts";
 /**
  * What the shell CALLS a session, and which project it files it under.
  *
- * Every function here is a fold of listing data into a string, a group, or a
- * scope. None of them touch a store, a fetch, or the DOM - the listing comes
- * in as an argument and a value comes back, which is what makes the awkward
- * cases affordable to cover: an artifact that lives outside its own project, a
- * name that collides across two projects, a tab the listing cannot place, a
- * worktree that must not become a project of its own.
+ * Every function here is a fold of listing data into a string or a group. None
+ * of them touch a store, a fetch, or the DOM - the listing comes in as an
+ * argument and a value comes back, which is what makes the awkward cases
+ * affordable to cover: an artifact that lives outside its own project, a name
+ * that collides across two projects, a worktree that must not become a project
+ * of its own.
  *
  * What this module does NOT own: WIRING. Whether the tab bar actually renders
- * `tabLabel`'s answer, whether the drawer paints a row per `byProject` group,
- * whether the scope badge re-reads after `tabScope` widens it, and whether two
- * tabs a human is looking at are visually tellable apart - those are claims
- * about the shell, and they stay in the browser. It also does not own the
+ * `tabLabel`'s answer, whether the grouped strip paints a heading per
+ * `byProject` group, and whether two tabs a human is looking at are visually
+ * tellable apart - those are claims about the shell, and they stay in the
+ * browser. It also does not own the
  * LISTING: which sessions exist, which project the hub decided each belongs to
  * (a worktree is resolved to its main repo server-side), and whether a dead
  * registry pointer was pruned are all answered before the data gets here.
@@ -55,13 +55,42 @@ export const byProject = (sessions: readonly HubSession[]): Map<string, HubSessi
   return groups;
 };
 
-/** The distinct worktree checkouts a project's rows live in - what the drawer
- *  counts as "+N worktrees". A SET, because several sessions in one checkout
- *  are one worktree, and a project with none is not qualified at all. */
-export const worktreeRoots = (rows: readonly Pick<HubSession, "worktree">[]): Set<string> => {
-  const roots = new Set<string>();
-  for (const r of rows) if (r.worktree) roots.add(r.worktree);
-  return roots;
+/** One run of the grouped tab strip: a project and its open tabs, in tab
+ *  order. */
+export interface TabGroup {
+  readonly project: string;
+  readonly keys: readonly string[];
+}
+
+/**
+ * The OPEN tabs, grouped by project for the strip (plan 03, M2.2). Unlike
+ * `byProject` (which orders by the name-sorted listing), groups here appear in
+ * FIRST-OPEN order and never reorder afterwards (D-010): a group sits where its
+ * first tab opened, so activating a tab or opening another in an existing group
+ * does not shuffle the bar. Keys within a group stay in open order. A worktree
+ * shares its main repo's group because `project` already resolves to the main
+ * repo server-side (D-002); a project with a single tab is an ordinary group of
+ * one (D-011). A tab the listing has not placed yet groups under its own key,
+ * so two unplaced tabs never wrongly merge.
+ */
+export const groupTabs = (
+  sessionKeys: readonly string[],
+  sessions: readonly Pick<HubSession, "artifact" | "project">[],
+): TabGroup[] => {
+  const projectOf = new Map(sessions.map((s) => [s.artifact, s.project]));
+  const order: string[] = [];
+  const keysByProject = new Map<string, string[]>();
+  for (const key of sessionKeys) {
+    const project = projectOf.get(key) ?? key;
+    let keys = keysByProject.get(project);
+    if (!keys) {
+      keys = [];
+      keysByProject.set(project, keys);
+      order.push(project);
+    }
+    keys.push(key);
+  }
+  return order.map((project) => ({ project, keys: keysByProject.get(project) as string[] }));
 };
 
 /** An open tab, as naming sees it: its session key and what its session is
@@ -72,37 +101,13 @@ export interface OpenTab {
 }
 
 /**
- * What a tab reads. Two open tabs both called "Migration plan" are
- * indistinguishable, so a colliding name carries its project the way a browser
- * qualifies same-titled tabs. A tab stays a SESSION - the project is only the
- * qualifier, and an uncontested name never grows one.
- *
- * `open` is the whole roster including this tab; the collision is with the
- * OTHERS. A tab whose project the listing cannot name goes unqualified rather
- * than inventing one.
+ * What a tab reads: its title, and ONLY its title (plan 03, D-012). The
+ * cross-project qualifier the label used to grow on a name collision is the
+ * GROUP's job now - the strip renders every tab under its project's heading
+ * (`groupTabs`), so "which project's Migration plan is this?" is answered by
+ * where the tab sits, not by a suffix eating the strip's width. Two same-titled
+ * tabs in ONE project are distinguished by each tab's tooltip (its artifact
+ * path), which is the tooltip's job in a browser too. This deliberately flips
+ * e2e finding #56's pinned behavior - by design (D-027).
  */
-export const tabLabel = (
-  tab: OpenTab,
-  open: readonly OpenTab[],
-  sessions: readonly Pick<HubSession, "artifact" | "project">[],
-): string => {
-  const collides = open.some((o) => o.key !== tab.key && o.name === tab.name);
-  if (!collides) return tab.name;
-  const project = sessions.find((s) => s.artifact === tab.key)?.project;
-  return project ? `${tab.name} · ${projectName(project)}` : tab.name;
-};
-
-/**
- * The project scope activating a tab implies. The strip is project-scoped
- * (D8), so landing on a tab from elsewhere (⌘K, `?s=` boot) rescopes to that
- * tab's project.
- *
- * Null when the listing cannot place the tab - it has not caught up yet, or
- * the artifact is gone. Widening to all projects is the honest answer: keeping
- * the previous scope would badge one project's name over another project's
- * artifact, which is the confusing state, and no scope is not a lie.
- */
-export const tabScope = (
-  key: string,
-  sessions: readonly Pick<HubSession, "artifact" | "project">[],
-): string | null => sessions.find((s) => s.artifact === key)?.project ?? null;
+export const tabLabel = (tab: OpenTab): string => tab.name;

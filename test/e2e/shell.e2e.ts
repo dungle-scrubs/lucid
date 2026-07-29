@@ -192,102 +192,6 @@ test("the new-artifact dialog validates the name and names the flag it needs", a
   await expect(on(page).createOverlay()).toHaveCount(0);
 });
 
-test("tabs scope to a project; the drawer switches; drafts survive", async ({ page }) => {
-  hub = await startHub();
-  const first = await openIntoHub(hub, PLAN_V1);
-  cli = first.cli;
-  const second = await openIntoHub(
-    hub,
-    PLAN_V1.replace("Database migration plan", "Rollout checklist"),
-  );
-  cli2 = second.cli;
-
-  await page.goto(first.shellUrl);
-  await expect(on(page).shellTab()).toHaveCount(1);
-  // The strip is project-scoped: the scope label names the boot session's project.
-  await expect(on(page).scopeLabel()).toBeVisible();
-
-  // "+" shows the pick screen SCOPED to this project; the second session
-  // lives in another project, so widen to all projects first. The row must
-  // be truly HITTABLE (elementFromPoint sees what a human sees - a clipped
-  // popover once passed playwright's auto-scroll and failed a real pointer).
-  await on(page).tabAdd().click();
-  await on(page).scopeClear().click();
-  const row = on(page).pickerRow().first();
-  await expect(row).toBeVisible();
-  const hittable = await row.evaluate((el) => {
-    const r = el.getBoundingClientRect();
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return hit !== null && (el === hit || el.contains(hit));
-  });
-  expect(hittable).toBe(true);
-  await page
-    .locator(hook("picker-project"), { hasText: second.cli.dir })
-    .locator(hook("picker-row"))
-    .first()
-    .click();
-
-  // Opening it rescopes the strip to ITS project: one visible tab, the other
-  // project's tab hidden, not gone.
-  await expect(on(page).shellTab()).toHaveCount(1);
-  await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
-
-  // Draft an annotation note AND a message here, then switch projects via
-  // the drawer. Views stay mounted (display:none), so assertions use :visible.
-  await surfaceOf(page).locator('li[data-lucid-id="step-backfill"]').click();
-  await page.locator(`${hook("annotation-note")}:visible`).fill("only for the checklist");
-  await page
-    .locator(`${hook("message-input")}:visible`)
-    .fill("an unsent message must survive a project switch");
-
-  await on(page).drawerToggle().click();
-  await expect(on(page).projectsDrawer()).toBeVisible();
-  await page.locator(hook("drawer-project"), { hasText: cli.dir }).click();
-  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
-  await expect(page.locator(`${hook("annotation-note")}:visible`)).toHaveCount(0);
-  await expect(page.locator(`${hook("message-input")}:visible`)).toHaveValue("");
-
-  // Back via the drawer: BOTH drafts survived - the annotation note in the
-  // session store, the message draft in assistant-ui component state, which
-  // is exactly why hidden views stay mounted.
-  await on(page).drawerToggle().click();
-  await page.locator(hook("drawer-project"), { hasText: second.cli.dir }).click();
-  await expect(page.locator(`${hook("annotation-note")}:visible`)).toHaveValue(
-    "only for the checklist",
-  );
-  await expect(page.locator(`${hook("message-input")}:visible`)).toHaveValue(
-    "an unsent message must survive a project switch",
-  );
-});
-
-test("picking a project OPENS it: every artifact in it becomes a tab", async ({ page }) => {
-  hub = await startHub();
-  const opened = await openIntoHub(hub, PLAN_V1);
-  cli = opened.cli;
-  // A second artifact in the SAME folder, so one project holds two sessions.
-  const second = join(cli.dir, "rollout.html");
-  await writeFile(second, PLAN_V1.replace("Migration plan", "Rollout checklist"));
-  await cli.run(["open", second]);
-
-  await page.goto(opened.shellUrl);
-  await expect(on(page).shellTab()).toHaveCount(1);
-
-  await on(page).drawerToggle().click();
-  const projectRow = page.locator(hook("drawer-project"), { hasText: cli.dir });
-  // Gate on the listing having BOTH before picking, so this tests the open
-  // behaviour rather than a race with the stream.
-  await expect(projectRow).toContainText("2 artifacts");
-  await projectRow.click();
-
-  // Both, as tabs - not a second list to choose from.
-  await expect(on(page).shellTab()).toHaveCount(2);
-  await expect(on(page).pickerRow()).toHaveCount(0);
-  // The newest is the one in front.
-  await expect(page.locator(`${hook("shell-tab")}[data-active="true"]`)).toContainText(
-    "Rollout checklist",
-  );
-});
-
 test("the command palette opens sessions and runs review actions", async ({ page }) => {
   hub = await startHub();
   const first = await openIntoHub(hub, PLAN_V1);
@@ -303,17 +207,16 @@ test("the command palette opens sessions and runs review actions", async ({ page
 
   const cmdK = process.platform === "darwin" ? chord("k") : "Control+k";
 
-  // ⌘K -> fuzzy to the second session -> Enter opens it as a tab.
+  // ⌘K -> the unified list (M4.1): the one OPENABLE session (the other is
+  // already a tab) opens as a NEW tab beside it - the strip shows every open
+  // tab now (M2.1), so a cross-project open adds, never replaces.
   await page.keyboard.press(cmdK);
   await expect(on(page).paletteInput()).toBeFocused();
-  await on(page).paletteInput().fill("open plan");
-  await page
-    .locator(`${hook("palette")} [cmdk-item]`, { hasText: "plan.html" })
-    .first()
-    .click();
+  const openableInPalette = on(page).palette().locator(hook("picker-row"));
+  await expect(openableInPalette).toHaveCount(1);
+  await openableInPalette.click();
   await expect(on(page).paletteOverlay()).toHaveCount(0);
-  // Cross-project open rescopes the strip: one visible tab in the new project.
-  await expect(on(page).shellTab()).toHaveCount(1);
+  await expect(on(page).shellTab()).toHaveCount(2);
   await expect(surfaceOf(page).locator("h1")).toContainText("Rollout checklist");
 
   // ⌘K -> "toggle marks" runs an action on the ACTIVE session.
@@ -329,14 +232,13 @@ test("the command palette opens sessions and runs review actions", async ({ page
   await expect(on(page).paletteOverlay()).toHaveCount(0);
 });
 
-test("⌘W closes the artifact in front of you; the drawer adds projects from its header", async ({
+test("⌘W closes the artifact in front of you; the closed tab is still openable", async ({
   page,
 }) => {
   hub = await startHub();
   const first = await openIntoHub(hub, PLAN_V1);
   cli = first.cli;
-  // A SECOND artifact in the SAME project, so both tabs sit in one scope and
-  // the strip shows two.
+  // A SECOND artifact, so the strip shows two and ⌘W has something to close.
   const other = join(first.cli.dir, "rollout.html");
   await writeFile(
     other,
@@ -356,18 +258,9 @@ test("⌘W closes the artifact in front of you; the drawer adds projects from it
   await page.keyboard.press(chord("w"));
   await expect(on(page).shellTab()).toHaveCount(1);
   // The session it closed is still listed by the hub - a closed tab is not a
-  // deleted artifact.
+  // deleted artifact, so the pick screen offers it again.
   await on(page).tabAdd().click();
   await expect(on(page).pickerRow()).toHaveCount(1);
-
-  // Adding a project lives at the TOP of the drawer, behind an icon; the
-  // drawer no longer repeats "New artifact", which the bar already offers.
-  await on(page).scopeLabel().click();
-  const drawer = on(page).projectsDrawer();
-  await expect(on(drawer).addFolder()).toBeVisible();
-  // `hook(...)` rather than a factory: this asserts the button is ABSENT, so
-  // the hook is not in the product for the generator to find.
-  await expect(drawer.locator(hook("drawer-new-artifact"))).toHaveCount(0);
 });
 
 test("a dropped hub reports itself ONCE, at the composer", async ({ page }) => {
@@ -384,4 +277,69 @@ test("a dropped hub reports itself ONCE, at the composer", async ({ page }) => {
   const indicator = on(page).reconnecting();
   await expect(indicator).toHaveCount(1);
   await expect(indicator).toBeVisible();
+});
+
+test("add-folder is reachable from the populated pick screen and the palette (M2.4, D-007)", async ({
+  page,
+}) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+  // A second, unopened artifact keeps the pick screen in its POPULATED state
+  // (rows to offer) - the state that used to lack the add-folder control.
+  const other = join(cli.dir, "rollout.html");
+  await writeFile(
+    other,
+    PLAN_V1.replace("<title>Migration plan</title>", "<title>Rollout checklist</title>"),
+    "utf8",
+  );
+  await cli.run(["open", other]);
+  await cli.run(["end", other]);
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await on(page).tabAdd().click();
+  await expect(on(page).pickerRow()).toHaveCount(1); // populated, not empty
+  await expect(on(page).addFolder()).toBeVisible(); // ...and correctable anyway
+
+  // The palette carries the same affordance as a command.
+  await page.keyboard.press(chord("k"));
+  await expect(on(page).paletteInput()).toBeFocused();
+  await expect(on(page).paletteAddFolder()).toBeVisible();
+});
+
+test("the create dialog defaults to the most recently used root (M2.4, D-005)", async ({
+  page,
+}) => {
+  hub = await startHub();
+  // TWO projects, so the default is a real choice: with nothing remembered the
+  // dialog must ask, and with a remembered root it must pick THAT one - the
+  // sole-candidate shortcut cannot fake either answer.
+  const first = await openIntoHub(hub, PLAN_V1);
+  cli = first.cli;
+  const second = await openIntoHub(
+    hub,
+    PLAN_V1.replace("<title>Migration plan</title>", "<title>Other plan</title>"),
+  );
+  cli2 = second.cli;
+
+  await page.goto(first.shellUrl);
+  // One TAB, but two LISTED projects - the dialog's roots come from the
+  // listing, so the default is a genuine two-way choice.
+  await expect(on(page).shellTab()).toHaveCount(1);
+
+  // Nothing remembered + two candidates: the field asks instead of guessing.
+  await on(page).tabAdd().click();
+  await on(page).newArtifact().click();
+  await expect(on(page).createDialog()).toBeVisible();
+  const projectTrigger = on(page).createProject();
+  const secondName = cli2.dir.split("/").pop() ?? "";
+  await expect(projectTrigger).not.toContainText(secondName);
+  await page.keyboard.press("Escape");
+
+  // Remembered root: the next dialog opens on it.
+  await page.evaluate((root) => localStorage.setItem("lucid.createRoot", root), cli2.dir);
+  await on(page).newArtifact().click();
+  await expect(on(page).createDialog()).toBeVisible();
+  await expect(on(page).createProject()).toContainText(secondName);
 });

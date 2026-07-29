@@ -79,30 +79,56 @@ const TABS_KEY = "lucid.openTabs";
 interface PersistedTabs {
   readonly keys: readonly string[];
   readonly active: string | null;
-  readonly project: string | null;
+  /** artifact -> last seq this MACHINE viewed (plan 03, M3.2, D-025). Two
+   *  windows on one machine share the set; another machine keeps its own. */
+  readonly viewed: Readonly<Record<string, number>>;
 }
 
 export const readStoredTabs = (): PersistedTabs => {
   try {
+    // A persisted `project` key from the scoped-tab-strip era is tolerated and
+    // discarded (plan 03, M2.1): the strip is no longer project-scoped.
     const raw = JSON.parse(localStorage.getItem(TABS_KEY) ?? "") as Partial<PersistedTabs>;
+    // A payload stored before the marker existed has no `viewed`: the empty
+    // map reads as ALL-SEEN (isUnseen treats an absent mark as seen), never as
+    // a wall of stale badges on upgrade.
+    const viewed: Record<string, number> = {};
+    if (raw?.viewed !== null && typeof raw?.viewed === "object") {
+      for (const [k, v] of Object.entries(raw.viewed)) {
+        if (typeof v === "number" && Number.isFinite(v)) viewed[k] = v;
+      }
+    }
     return {
       keys: Array.isArray(raw?.keys)
         ? raw.keys.filter((k): k is string => typeof k === "string")
         : [],
       active: typeof raw?.active === "string" ? raw.active : null,
-      project: typeof raw?.project === "string" ? raw.project : null,
+      viewed,
     };
   } catch {
-    return { keys: [], active: null, project: null };
+    return { keys: [], active: null, viewed: {} };
   }
 };
 
 /** Remember which tabs are open, so a reload restores the window you had.
  *  Takes the snapshot rather than reading the store, so a caller can depend on
- *  exactly the values it is persisting. */
-export const persistTabs = (tabs: PersistedTabs): void => {
+ *  exactly the values it is persisting.
+ *
+ *  The viewed map is MERGED with what storage already holds, per key by MAX
+ *  seq (marks only ever advance), rather than overwritten: two windows share
+ *  one machine's marker set (D-025), and a whole-map write from a window
+ *  holding a minutes-old snapshot would silently resurrect unseen the other
+ *  window had cleared. `prune` (the artifacts still known) keeps the map from
+ *  growing one absolute path per artifact ever read, forever. */
+export const persistTabs = (tabs: PersistedTabs, prune?: ReadonlySet<string>): void => {
   try {
-    localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+    const stored = readStoredTabs().viewed;
+    const viewed: Record<string, number> = {};
+    for (const [k, v] of [...Object.entries(stored), ...Object.entries(tabs.viewed)]) {
+      if (prune !== undefined && !prune.has(k)) continue;
+      viewed[k] = Math.max(viewed[k] ?? 0, v);
+    }
+    localStorage.setItem(TABS_KEY, JSON.stringify({ ...tabs, viewed }));
   } catch {
     /* storage unavailable; the window simply reopens empty */
   }
@@ -136,11 +162,9 @@ interface ShellState {
   sessionKeys: readonly string[];
   /** The session driving the render, or null before boot. */
   activeKey: string | null;
-  /** The project scoping the tab strip (artifact-first D8), or null for
-   *  all projects (fresh shell, nothing opened yet). */
-  activeProject: string | null;
-  /** The projects drawer (D7) is showing. */
-  drawerOpen: boolean;
+  /** artifact -> last seq this machine viewed (M3.2). Hydrated from storage so
+   *  a reload keeps the marks; persisted with the tab set. */
+  viewedSeq: Readonly<Record<string, number>>;
 }
 
 export const useShell = create<ShellState>(() => ({
@@ -149,11 +173,19 @@ export const useShell = create<ShellState>(() => ({
   sidebarTab: "chat",
   sessionKeys: [],
   activeKey: null,
-  activeProject: null,
-  drawerOpen: false,
+  viewedSeq: readStoredTabs().viewed,
 }));
 
-export const setDrawerOpen = (open: boolean): void => useShell.setState({ drawerOpen: open });
+/** Record how far this machine has read an artifact's log (M3.2). Called on
+ *  activation and, for the tab in FRONT, on every attention frame - the human
+ *  is looking at it, so what lands there is seen as it lands. */
+export const recordViewed = (key: string, seq: number): void =>
+  useShell.setState((s) => {
+    const current = s.viewedSeq[key];
+    return current !== undefined && current >= seq
+      ? s // never move a mark backwards
+      : { viewedSeq: { ...s.viewedSeq, [key]: seq } };
+  });
 
 export const setChromeWidth = (w: number): void => useShell.setState({ chromeWidth: w });
 

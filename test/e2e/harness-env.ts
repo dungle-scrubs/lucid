@@ -61,6 +61,9 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   // sets it on the processes IT spawns; everything else runs production
   // patience. Presence of a decision is what the policy enforces.
   LUCID_SSE_MAX_BACKOFF_MS: "per-suite",
+  // The M3.1 eviction seam: the connected-stream cap, lowered only by the
+  // suite that proves an evicted tab's badge survives its stream.
+  LUCID_STREAM_CAP: "per-suite",
   LUCID_HUB_ROOTS: "per-suite",
   LUCID_HUB_ATTEND: "per-suite",
   // Read by ports.ts to offset every port. Left unset on purpose: the default

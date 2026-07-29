@@ -3,11 +3,10 @@ import type { HubSession } from "../client/chrome/hub.ts";
 import {
   artifactLabel,
   byProject,
+  groupTabs,
   projectName,
   sessionLabel,
   tabLabel,
-  tabScope,
-  worktreeRoots,
 } from "../client/chrome/naming.ts";
 
 /**
@@ -55,58 +54,38 @@ describe("what a tab is called", () => {
   });
 });
 
-describe("a name that collides across projects", () => {
-  // Both artifacts are called plan.html and both declare the SAME title, so
-  // the shell hands each tab the identical name - which is the only way the
-  // qualifier branch is reached at all. They differ ONLY in project.
+describe("a tab shows only its title (D-012; flips e2e finding #56 by design)", () => {
+  // Both artifacts declare the SAME title and differ only in project - the
+  // exact fixture that used to earn a `· project` qualifier. The GROUP is the
+  // qualifier now: the strip renders each under its project's heading, so the
+  // label stays clean.
   const a = row({ artifact: "/dev/lucid/plan.html", project: "/dev/lucid", title: "Migration" });
   const b = row({ artifact: "/dev/tether/plan.html", project: "/dev/tether", title: "Migration" });
-  const listing = [a, b];
   const tabA = { key: a.artifact, name: sessionLabel(a) };
   const tabB = { key: b.artifact, name: sessionLabel(b) };
-  const open = [tabA, tabB];
 
-  test("the fixture really does collide on name and differ on project", () => {
-    // Guard on the fixture itself: two rows that quietly disagreed on name
-    // would never enter the qualifier branch, and every claim below would
-    // pass without exercising anything.
-    expect(sessionLabel(a)).toBe(sessionLabel(b));
-    expect(a.project).not.toBe(b.project);
+  test("a cross-project collision stays title-only; group membership tells them apart", () => {
+    expect(tabLabel(tabA)).toBe("Migration");
+    expect(tabLabel(tabB)).toBe("Migration");
+    // The distinction the labels no longer carry lives in the grouping.
+    const groups = groupTabs([tabA.key, tabB.key], [a, b]);
+    expect(groups.map((g) => g.project)).toEqual(["/dev/lucid", "/dev/tether"]);
   });
 
-  test("both colliding tabs carry their project", () => {
-    expect(tabLabel(tabA, open, listing)).toBe("Migration · lucid");
-    expect(tabLabel(tabB, open, listing)).toBe("Migration · tether");
+  test("an uncontested name is unchanged", () => {
+    expect(tabLabel(tabA)).toBe("Migration");
   });
 
-  test("an uncontested name is left alone", () => {
-    // The qualifier is disambiguation, not decoration. A lone tab that grew a
-    // project suffix would spend the strip's scarce width saying nothing.
-    expect(tabLabel(tabA, [tabA], listing)).toBe("Migration");
-  });
-
-  test("a collision the listing cannot place stays unqualified", () => {
-    // The tab is open but no listing row names its project (a burst of
-    // `lucid open` outruns the listing). A qualifier invented here would put
-    // some other project's name on this artifact.
-    const unplaced = { key: "/dev/nowhere/plan.html", name: "Migration" };
-    expect(tabLabel(unplaced, [unplaced, tabB], listing)).toBe("Migration");
-  });
-
-  test("two same-titled tabs in ONE project get a qualifier that does not tell them apart", () => {
-    // Measured, not desired: the qualifier is the PROJECT, so a collision
-    // inside one project produces two identical labels. What distinguishes
-    // them is each tab's tooltip (its artifact path) and the document it
-    // shows - neither of which this module owns, which is why the "tellable
-    // apart" scenario keeps a browser.
+  test("a same-project collision is a tooltip's job, not the label's", () => {
+    // Two same-titled tabs in one project read identically on the strip; each
+    // tab's tooltip (its artifact path) is what tells them apart - the same
+    // division of labor a browser uses.
     const c = row({
       artifact: "/dev/lucid/rollout.html",
       project: "/dev/lucid",
       title: "Migration",
     });
-    const sameProject = [tabA, { key: c.artifact, name: "Migration" }];
-    const labels = sameProject.map((t) => tabLabel(t, sameProject, [a, c]));
-    expect(labels).toEqual(["Migration · lucid", "Migration · lucid"]);
+    expect(tabLabel({ key: c.artifact, name: "Migration" })).toBe("Migration");
   });
 });
 
@@ -167,40 +146,52 @@ describe("a session in a git worktree", () => {
     expect(groups.get("/dev/lucid")).toHaveLength(3);
   });
 
-  test("several sessions in one checkout are one worktree", () => {
-    // The drawer's "+N worktrees" counts CHECKOUTS. Counting rows would
-    // report "+2 worktrees" for a single one holding two artifacts.
-    expect([...worktreeRoots(listing)]).toEqual(["/dev/lucid-wt"]);
-  });
-
-  test("a project with no worktrees is not qualified at all", () => {
-    expect(worktreeRoots([main]).size).toBe(0);
-  });
-
   test("projects keep the listing's order, so the drawer does not reshuffle", () => {
     const other = row({ artifact: "/dev/tether/a.html", project: "/dev/tether" });
     expect([...byProject([main, other, wt1]).keys()]).toEqual(["/dev/lucid", "/dev/tether"]);
   });
 });
 
-describe("the scope a tab implies", () => {
+describe("groupTabs: the strip's runs (plan 03, M2.2)", () => {
   const listing = [
-    row({ artifact: "/dev/lucid/plan.html", project: "/dev/lucid" }),
-    row({ artifact: "/dev/tether/a.html", project: "/dev/tether" }),
+    row({ artifact: "/dev/lucid/a.html", project: "/dev/lucid" }),
+    row({ artifact: "/dev/lucid/b.html", project: "/dev/lucid" }),
+    row({ artifact: "/dev/tether/c.html", project: "/dev/tether" }),
+    // a worktree checkout: `project` already resolves to the main repo.
+    row({ artifact: "/dev/wt/d.html", project: "/dev/lucid", worktree: "/dev/wt" }),
   ];
 
-  test("activating a tab scopes to its project", () => {
-    expect(tabScope("/dev/tether/a.html", listing)).toBe("/dev/tether");
+  test("groups appear in FIRST-OPEN order, keys in open order", () => {
+    const keys = ["/dev/tether/c.html", "/dev/lucid/a.html", "/dev/lucid/b.html"];
+    expect(groupTabs(keys, listing)).toEqual([
+      { project: "/dev/tether", keys: ["/dev/tether/c.html"] },
+      { project: "/dev/lucid", keys: ["/dev/lucid/a.html", "/dev/lucid/b.html"] },
+    ]);
   });
 
-  test("a tab the listing cannot place widens the scope instead of lying", () => {
-    // The artifact was deleted or renamed, or the listing has not caught up.
-    // Any answer but null badges some other project's name over this
-    // artifact; no scope is the only honest one.
-    expect(tabScope("/dev/nowhere/gone.html", listing)).toBe(null);
+  test("a group stays put when a later tab joins an EARLIER group", () => {
+    // tether opened first, then a lucid tab, then a SECOND lucid tab. lucid's
+    // group must not jump ahead of tether just because it grew.
+    const keys = ["/dev/tether/c.html", "/dev/lucid/a.html", "/dev/lucid/b.html"];
+    const order = groupTabs(keys, listing).map((g) => g.project);
+    expect(order).toEqual(["/dev/tether", "/dev/lucid"]);
   });
 
-  test("an empty listing places nothing", () => {
-    expect(tabScope("/dev/lucid/plan.html", [])).toBe(null);
+  test("a worktree tab shares its main repo's group", () => {
+    const keys = ["/dev/lucid/a.html", "/dev/wt/d.html"];
+    expect(groupTabs(keys, listing)).toEqual([
+      { project: "/dev/lucid", keys: ["/dev/lucid/a.html", "/dev/wt/d.html"] },
+    ]);
+  });
+
+  test("a single-tab project is an ordinary group of one", () => {
+    expect(groupTabs(["/dev/tether/c.html"], listing)).toEqual([
+      { project: "/dev/tether", keys: ["/dev/tether/c.html"] },
+    ]);
+  });
+
+  test("two tabs the listing has not placed do not merge", () => {
+    const groups = groupTabs(["/x/unplaced-1.html", "/x/unplaced-2.html"], listing);
+    expect(groups).toHaveLength(2);
   });
 });
