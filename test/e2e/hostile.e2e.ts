@@ -105,10 +105,10 @@ test("every corpus fixture is accounted for: surviving the loop, or a recorded d
  * the coverage drift check reads titles out of the SOURCE, and an
  * interpolated title deliberately cannot back a covered catalogue row.
  *
- * The five defect fixtures have no test here - not `test.fail()`, because an
- * expected-failure row cannot carry an honest mutation (D-052), and they
- * fail for five DIFFERENT product reasons the plan ledger records precisely.
- * Their catalogue rows stay uncovered; the guard above keeps the skip loud.
+ * The defect ledger is EMPTY as of plan 05 M2.2 - every fixture in the corpus
+ * now runs this loop. A future defect goes back in `HOSTILE_DEFECTS` with its
+ * finding, loses its test here, and its catalogue row returns to `uncovered`;
+ * the guard above enforces all three together in both directions.
  */
 const survives =
   (id: string) =>
@@ -148,13 +148,26 @@ const survives =
       waitTimeoutSeconds(8),
     ])) as {
       status: string;
-      annotations: { note: string; resolved: unknown; target: { snippet?: string } }[];
+      annotations: {
+        note: string;
+        resolved: unknown;
+        confidence?: string;
+        target: { snippet?: string };
+      }[];
     };
     expect(feedback.status).toBe("feedback");
     expect(feedback.annotations).toHaveLength(1);
     const annotation = feedback.annotations[0];
     expect(annotation?.note).toBe(fixture.note);
     expect(annotation?.resolved, "the anchor did not resolve against the artifact").toBeTruthy();
+    // How it resolved, asserted for EVERY fixture (plan 05, M2.2, #47) - not
+    // only the one that declares `"low"`. Undeclared means the fixture claims
+    // an exact match, so a fixture that quietly starts resolving by position
+    // reds here rather than passing as "resolved" like the rest.
+    expect(
+      annotation?.confidence,
+      `${id} reported confidence ${String(annotation?.confidence)}; the fixture declares ${String(fixture.confidence)}`,
+    ).toBe(fixture.confidence);
     // Unconditional: every fixture declares the text that pins its pick, so
     // an empty `picked` cannot quietly switch this assertion off.
     expect(annotation?.target.snippet ?? "").toContain(fixture.picked);
@@ -190,6 +203,16 @@ test(
   // document base, so a foreign <base href> re-rooted it. The src is
   // ORIGIN-absolute now (plan 04, M2.3) - <base> cannot move it.
   survives("hostile-base-tag"),
+);
+test(
+  "the loop survives an artifact that rewrites its own DOM after load",
+  // Was defect #47: resolution runs against the SAVED skeleton, so a document
+  // hydrated in the browser could only ever match by position - and the
+  // payload reported that guess as a plain `resolved: true`. It still matches
+  // by position; the annotation now says `confidence: "low"` (plan 05, M2.2),
+  // which is the honest floor. Correct live-DOM re-resolution is NOT built
+  // here (D-003).
+  survives("hostile-self-rewriting"),
 );
 test(
   "the loop survives an artifact whose capture-phase handlers swallow every event",

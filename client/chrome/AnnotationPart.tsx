@@ -17,6 +17,10 @@ export interface AnnotationData {
   /** Every spot the note covers when several were cmd-collected; `target` is
    *  always the first (the wire's rule, src/protocol/wire.ts). */
   readonly targets?: readonly Anchor[];
+  /** `"low"` when the anchor re-attached only by position (plan 05, M2.2,
+   *  #47): the mark sits on whatever occupies that slot now, not provably on
+   *  the thing that was pointed at. */
+  readonly confidence?: "low";
   readonly images?: readonly { readonly name: string; readonly file: string }[];
 }
 
@@ -84,6 +88,10 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
   const hovered = useSession((s) => s.hoveredId === data.id);
   const images: readonly MessageImage[] = data.images ?? [];
   const orphaned = data.index === null;
+  // Located, but only because something still occupies that slot. Saying
+  // "located" here is the lie #47 named: the card claims a match the resolver
+  // could not actually make.
+  const positional = !orphaned && data.confidence === "low";
   const enter = (): void => {
     setHovered(data.id);
     focus(data.id);
@@ -143,6 +151,23 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
         <span className="absolute bottom-full right-2 mb-px z-1 bg-rust-500/30 px-[7px] py-px text-[10px] text-rust-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           Orphaned anchor
         </span>
+      ) : positional ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                data-test="positional-anchor"
+                className="absolute bottom-full right-2 mb-px z-1 bg-brass-500/25 px-[7px] py-px text-[10px] text-brass-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]"
+              >
+                positional · v{data.version}
+              </span>
+            }
+          />
+          <TooltipContent>
+            Matched by position only - no id or unique fingerprint. The mark may be on whatever took
+            that spot rather than what was pointed at.
+          </TooltipContent>
+        </Tooltip>
       ) : (
         <span className="absolute bottom-full right-2 mb-px z-1 bg-sage-600/25 px-[7px] py-px text-[10px] text-sage-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           located · v{data.version}

@@ -49,6 +49,14 @@ export interface HostileFixture {
    *  loop runs - a linked sheet that 404'd would leave the document benign
    *  and the loop green while the fixture stopped attacking its seam. */
   readonly proof?: (surface: FrameLocator) => Promise<void>;
+  /**
+   * The confidence the DELIVERED annotation must report (plan 05, M2.2, #47).
+   * Undefined means the loop asserts the field is ABSENT - an exact match. A
+   * document whose real content is built at runtime cannot be matched exactly
+   * against the saved bytes, and saying so is the point: `"low"` is a passing
+   * result here, an unqualified `resolved: true` is the bug.
+   */
+  readonly confidence?: "low";
 }
 
 /**
@@ -61,12 +69,7 @@ export interface HostileFixture {
  * When a fix lands, its id moves out of this map and the fixture joins the
  * loop; the guard test makes forgetting that move impossible.
  */
-export const HOSTILE_DEFECTS: ReadonlyMap<string, string> = new Map([
-  [
-    "hostile-self-rewriting",
-    "finding #47: the rewritten DOM exists only in the browser - resolution falls through positionally onto the SAVED skeleton, so resolved:true delivers context the human never saw",
-  ],
-]);
+export const HOSTILE_DEFECTS: ReadonlyMap<string, string> = new Map([]);
 
 const page = (head: string, body: string): string => `<!doctype html>
 <html lang="en">
@@ -266,6 +269,12 @@ ${HUGE_BODY}
     pick: "#claim",
     note: "Announce the swap to screen readers.",
     picked: "hydrated view replaces the skeleton",
+    // Was finding #47. The rewritten DOM exists only in the browser, so
+    // resolution runs against the SAVED skeleton and can only land by
+    // position. It still resolves - what changed is that the payload now says
+    // so (plan 05, M2.2) instead of reporting a confident match on content the
+    // human never saw.
+    confidence: "low",
     settle: async (surface) => {
       await expect(surface.locator("#claim")).toBeVisible();
     },

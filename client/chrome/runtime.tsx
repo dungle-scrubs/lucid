@@ -96,6 +96,7 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
                   note: item.annotation.note,
                   target: item.annotation.target,
                   targets: item.annotation.targets,
+                  confidence: item.annotation.confidence,
                   images: item.annotation.images,
                 },
               },

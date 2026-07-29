@@ -3772,12 +3772,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "The delivered annotation resolves against the document AS PICKED. Today the rewritten DOM exists only in the browser: resolution runs against the saved file, the fingerprint matches nothing, and the positional fall-through lands on the skeleton - measured: a pick on the hydrated paragraph resolves to <p>Rendering...</p>, with resolved:true and no low-confidence signal (plan finding #47).",
+          "expected": "The delivered annotation resolves and SAYS HOW. The rewritten DOM exists only in the browser, so resolution runs against the saved file and can only land by position; the payload reports confidence:\"low\" rather than an unqualified resolved:true (plan 05, M2.2). This is finding #47's floor - stop lying - not correct live-DOM re-resolution, which is deliberately not built (D-003).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #47: resolution runs against the SAVED file, so a pick on hydrated content resolves positionally onto the skeleton and reports resolved:true with no low-confidence signal - a wrong answer that looks like a right one."
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact that rewrites its own DOM after load",
+          "mutation": "src/core/payload.ts: have confidenceOf return {} for a positional match - the delivered annotation carries no confidence and the fixture's declared \"low\" reds"
         },
         {
           "id": "hostile-linked-stylesheet",
