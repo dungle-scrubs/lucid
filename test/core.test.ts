@@ -563,3 +563,9 @@ describe("validateStructure honors the parser's hiding rules (plan 04, #44)", ()
     expect(r.ok).toBe(false); // the REAL closing root is still missing
   });
 });
+
+describe("close tags with internal whitespace (plan 04, F9)", () => {
+  test("a legal `</body\\n>` close satisfies the structural guard", () => {
+    expect(validateStructure("<html><body><p>a</p></body\n></html>").ok).toBe(true);
+  });
+});

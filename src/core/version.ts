@@ -60,10 +60,12 @@ export const validateStructure = (html: string): StructureResult => {
   // refused a legitimate one.
   const visible = maskHiddenText(trimmed);
   const lower = visible.toLowerCase();
-  if (lower.includes("<html") && !lower.includes("</html>")) {
+  // The same close-tag notion everywhere (D-019 review, F9): `</body\n>` is a
+  // legal close and must satisfy the guard that countClose would count.
+  if (lower.includes("<html") && !/<\/html\s*>/.test(lower)) {
     return { ok: false, reason: "missing </html>" };
   }
-  if (lower.includes("<body") && !lower.includes("</body>")) {
+  if (lower.includes("<body") && !/<\/body\s*>/.test(lower)) {
     return { ok: false, reason: "missing </body>" };
   }
 

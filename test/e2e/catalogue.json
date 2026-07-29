@@ -3720,7 +3720,7 @@
           "status": "covered",
           "testFile": "test/e2e/hostile.e2e.ts",
           "testName": "the loop survives an artifact with eighteen thousand sibling nodes",
-          "mutation": "src/anchors/dom.ts: off-by-one the one-pass index (map.set(child, i) instead of i+1) - every fingerprint hash shifts, the layer goes silent, and test/core.test.ts's ancestor-restructure recovery test reds (measured; the fix cannot change output)"
+          "mutation": "src/anchors/dom.ts: revert the fingerprint layer to the per-element sibling scan (drop sibIndexMapOf; compute indexAmongSiblings per element) - test/anchor-scale.test.ts reds by hanging past its timeout (measured: >120s pre-fix, killed; 65ms post-fix), which is this row's loop made unserviceable. The off-by-one variant reds test/core.test.ts's ancestor-restructure recovery instead."
         },
         {
           "id": "hostile-malformed",
