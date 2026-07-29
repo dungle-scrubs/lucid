@@ -79,6 +79,9 @@ const TABS_KEY = "lucid.openTabs";
 interface PersistedTabs {
   readonly keys: readonly string[];
   readonly active: string | null;
+  /** artifact -> last seq this MACHINE viewed (plan 03, M3.2, D-025). Two
+   *  windows on one machine share the set; another machine keeps its own. */
+  readonly viewed: Readonly<Record<string, number>>;
 }
 
 export const readStoredTabs = (): PersistedTabs => {
@@ -86,14 +89,24 @@ export const readStoredTabs = (): PersistedTabs => {
     // A persisted `project` key from the scoped-tab-strip era is tolerated and
     // discarded (plan 03, M2.1): the strip is no longer project-scoped.
     const raw = JSON.parse(localStorage.getItem(TABS_KEY) ?? "") as Partial<PersistedTabs>;
+    // A payload stored before the marker existed has no `viewed`: the empty
+    // map reads as ALL-SEEN (isUnseen treats an absent mark as seen), never as
+    // a wall of stale badges on upgrade.
+    const viewed: Record<string, number> = {};
+    if (raw?.viewed !== null && typeof raw?.viewed === "object") {
+      for (const [k, v] of Object.entries(raw.viewed)) {
+        if (typeof v === "number" && Number.isFinite(v)) viewed[k] = v;
+      }
+    }
     return {
       keys: Array.isArray(raw?.keys)
         ? raw.keys.filter((k): k is string => typeof k === "string")
         : [],
       active: typeof raw?.active === "string" ? raw.active : null,
+      viewed,
     };
   } catch {
-    return { keys: [], active: null };
+    return { keys: [], active: null, viewed: {} };
   }
 };
 
@@ -136,6 +149,9 @@ interface ShellState {
   sessionKeys: readonly string[];
   /** The session driving the render, or null before boot. */
   activeKey: string | null;
+  /** artifact -> last seq this machine viewed (M3.2). Hydrated from storage so
+   *  a reload keeps the marks; persisted with the tab set. */
+  viewedSeq: Readonly<Record<string, number>>;
 }
 
 export const useShell = create<ShellState>(() => ({
@@ -144,7 +160,19 @@ export const useShell = create<ShellState>(() => ({
   sidebarTab: "chat",
   sessionKeys: [],
   activeKey: null,
+  viewedSeq: readStoredTabs().viewed,
 }));
+
+/** Record how far this machine has read an artifact's log (M3.2). Called on
+ *  activation and, for the tab in FRONT, on every attention frame - the human
+ *  is looking at it, so what lands there is seen as it lands. */
+export const recordViewed = (key: string, seq: number): void =>
+  useShell.setState((s) => {
+    const current = s.viewedSeq[key];
+    return current !== undefined && current >= seq
+      ? s // never move a mark backwards
+      : { viewedSeq: { ...s.viewedSeq, [key]: seq } };
+  });
 
 export const setChromeWidth = (w: number): void => useShell.setState({ chromeWidth: w });
 

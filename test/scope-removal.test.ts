@@ -35,7 +35,7 @@ describe("readStoredTabs tolerates and discards a persisted project key", () => 
       JSON.stringify({ keys: ["a.html", "b.html"], active: "a.html", project: "/dev/x" }),
     );
     const got = readStoredTabs();
-    expect(got).toEqual({ keys: ["a.html", "b.html"], active: "a.html" });
+    expect(got).toEqual({ keys: ["a.html", "b.html"], active: "a.html", viewed: {} });
     expect("project" in got).toBe(false);
   });
 });

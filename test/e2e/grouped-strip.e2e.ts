@@ -241,3 +241,45 @@ test("two same-titled tabs in one project are told apart by their tooltips (find
   expect(first).not.toBe(second);
   expect([first, second].join(" ")).toContain("rollout.html");
 });
+
+test("an evicted background tab still raises its question dot (M3.1)", async ({ page }) => {
+  // Cap of ONE connected stream: opening the second tab evicts the first's.
+  // The evicted tab's own store goes quiet, so the dot below can only come
+  // from the hub's attention map - which is the milestone's claim.
+  hub = await startHub({ streamCap: 1 });
+  const first = await openIntoHub(hub, PLAN_V1);
+  cli = first.cli;
+  const other = join(cli.dir, "rollout.html");
+  await writeFile(other, planNamed("Rollout checklist", "Rollout checklist"), "utf8");
+  await cli.run(["open", other]);
+
+  await page.goto(first.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await on(page).tabAdd().click();
+  await page.locator(hook("picker-row"), { hasText: "Rollout checklist" }).click();
+  await expect(on(page).shellTab()).toHaveCount(2);
+  // The second tab is active; the first's stream is the cap's victim.
+
+  const group = join(cli.dir, "one-question.json");
+  await writeFile(
+    group,
+    JSON.stringify([
+      {
+        id: "q",
+        header: "Pick",
+        question: "Which one?",
+        choices: [{ id: "a", label: "A", recommended: true }],
+      },
+    ]),
+    "utf8",
+  );
+  await cli.run(["ask", cli.artifact, "--group", group]);
+
+  // The dot appears on the EVICTED tab, unactivated, fed by the hub.
+  const evicted = page.locator(hook("shell-tab"), { hasText: "Migration plan" });
+  await expect(evicted.locator(`${hook("tab-attention")}[data-kind="question"]`)).toHaveCount(1);
+  // And the front tab did not change - nothing was stolen to show it.
+  await expect(page.locator(`${hook("shell-tab")}[data-active="true"]`)).toContainText(
+    "Rollout checklist",
+  );
+});

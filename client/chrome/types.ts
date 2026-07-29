@@ -37,6 +37,9 @@ export interface Config {
 export interface ShellConfig {
   readonly mode: "shell";
   readonly sseMaxBackoffMs?: number;
+  /** Connected-stream cap override (LUCID_STREAM_CAP) - a test seam: the
+   *  eviction behavior is only exercisable without opening 11 real tabs. */
+  readonly streamCap?: number;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { AddFolder } from "./AddFolder.tsx";
+import { attentionStateOf, isUnseen } from "./attention.ts";
 import { SessionView } from "./Chrome.tsx";
 import { CreateDialog } from "./CreateDialog.tsx";
 import {
@@ -36,16 +37,33 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
  */
 
 /**
- * A tab's attention state, derived from its session's own store: the human
- * owes an answer (open questions), the agent is mid-revision, or the review
- * is settled. Primitive selectors, one per fact - a combined object selector
- * would defeat useSyncExternalStore's equality check.
+ * A tab's attention badge. The state is the pure resolver's decision
+ * (attention.ts, D-018); the INPUTS come from the hub's attention map first -
+ * truth that does not depend on this tab's own stream, so a background tab
+ * evicted from the connection cap still wears its question dot (M3.1) - and
+ * fall back to the session's own fold when the hub has no entry (a per-session
+ * server, or a hub that does not emit). Primitive selectors, one per fact - a
+ * combined object selector would defeat useSyncExternalStore's equality check.
  */
 const TabAttention = ({ handle }: { readonly handle: SessionHandle }) => {
-  const hasQuestions = useStore(handle.store, (s) => s.questions.some((q) => !q.answered));
-  const working = useStore(handle.store, (s) => s.agentWorking !== null);
-  const resolved = useStore(handle.store, (s) => s.reviewResolved);
-  if (hasQuestions) {
+  const hubEntry = useHub((s) => {
+    const id = s.sessions.find((row) => row.artifact === handle.key)?.id;
+    return id !== undefined ? s.attention[id] : undefined;
+  });
+  const viewed = useShell((s) => s.viewedSeq[handle.key]);
+  const active = useShell((s) => s.activeKey === handle.key);
+  const storeQuestions = useStore(handle.store, (s) => s.questions.some((q) => !q.answered));
+  const storeWorking = useStore(handle.store, (s) => s.agentWorking !== null);
+  const storeResolved = useStore(handle.store, (s) => s.reviewResolved);
+  const state = attentionStateOf({
+    openQuestions: hubEntry ? hubEntry.openQuestions : storeQuestions ? 1 : 0,
+    working: hubEntry ? hubEntry.working : storeWorking,
+    resolved: hubEntry ? hubEntry.resolved : storeResolved,
+    // The tab in FRONT is being looked at - unseen is a background-tab state
+    // by definition (M3.2), and the marker map only knows hub-fed logs.
+    unseen: !active && hubEntry !== undefined && isUnseen(hubEntry.lastEventSeq, viewed),
+  });
+  if (state === "question") {
     return (
       <Tooltip>
         <TooltipTrigger
@@ -63,7 +81,7 @@ const TabAttention = ({ handle }: { readonly handle: SessionHandle }) => {
       </Tooltip>
     );
   }
-  if (working) {
+  if (state === "working") {
     return (
       <Tooltip>
         <TooltipTrigger
@@ -81,23 +99,24 @@ const TabAttention = ({ handle }: { readonly handle: SessionHandle }) => {
       </Tooltip>
     );
   }
-  if (resolved) {
+  if (state === "finished-unseen") {
+    // The forever-tick is retired (M3.2): what used to be a permanent ✓ on
+    // every approved tab is now a marker that means "something landed here
+    // since you last looked", and the human arriving clears it.
     return (
       <Tooltip>
         <TooltipTrigger
           render={
             <span
               data-test="tab-attention"
-              data-kind="approved"
+              data-kind="unseen"
               role="img"
-              aria-label="Approved"
-              className="text-[10px] leading-none text-agent"
-            >
-              ✓
-            </span>
+              aria-label="Finished while you were away"
+              className="size-1.5 bg-accent-bright"
+            />
           }
         />
-        <TooltipContent>Approved</TooltipContent>
+        <TooltipContent>Finished while you were away</TooltipContent>
       </Tooltip>
     );
   }
@@ -531,6 +550,7 @@ const TabStrip = () => {
 export const Shell = () => {
   const sessionKeys = useShell((s) => s.sessionKeys);
   const activeKey = useShell((s) => s.activeKey);
+  const viewedSeq = useShell((s) => s.viewedSeq);
   const sessions = useHub((s) => s.sessions);
   const bootHandled = useRef(false);
   const restoreHandled = useRef(false);
@@ -559,11 +579,12 @@ export const Shell = () => {
     })();
   }, [sessions]);
 
-  // Any change to the tab set is worth remembering, including the restore above.
+  // Any change to the tab set - or the per-machine viewed marks (M3.2) - is
+  // worth remembering, including the restore above.
   useEffect(() => {
     if (!restoreHandled.current) return;
-    persistTabs({ keys: sessionKeys, active: activeKey });
-  }, [sessionKeys, activeKey]);
+    persistTabs({ keys: sessionKeys, active: activeKey, viewed: viewedSeq });
+  }, [sessionKeys, activeKey, viewedSeq]);
 
   // `?s=<id>`: the tab `lucid open` asked for, honored once the listing
   // names it. Consumed only on SUCCESS - a transient identity miss leaves it

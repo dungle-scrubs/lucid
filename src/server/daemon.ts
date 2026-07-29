@@ -173,7 +173,12 @@ const renderShellPage = (): string => `<!doctype html>
 <body>
 <script>window.__LUCID_SHELL__ = { mode: "shell"${(() => {
   const backoff = sseMaxBackoffFromEnv();
-  return backoff === undefined ? "" : `, sseMaxBackoffMs: ${backoff}`;
+  const rawCap = Number(process.env.LUCID_STREAM_CAP);
+  const cap = Number.isInteger(rawCap) && rawCap > 0 ? rawCap : undefined;
+  return (
+    (backoff === undefined ? "" : `, sseMaxBackoffMs: ${backoff}`) +
+    (cap === undefined ? "" : `, streamCap: ${cap}`)
+  );
 })()} };</script>
 <div id="lucid-root"></div>
 <script type="module" src="/__lucid/chrome.js"></script>
