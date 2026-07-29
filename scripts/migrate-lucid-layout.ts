@@ -9,10 +9,13 @@
  *  - **refuses the WHOLE run** if any destination already exists, before
  *    touching anything;
  *  - **writes a reversal manifest** (`--apply` only) that `--reverse` replays
- *    backwards to a byte-identical tree;
- *  - **integrity-checks** every migrated record - event count, log hash, seq
- *    monotonicity, snapshot count vs version events, and that every path a
- *    `version` event references resolves.
+ *    backwards to a byte-identical tree, DIRECTORIES included (it removes the
+ *    `run/` and new `.lucid/` dirs the forward run created);
+ *  - **integrity-checks** every migrated record by comparing before-vs-after -
+ *    event count, log hash, snapshot count, seq monotonicity, and any newly
+ *    dangling snapshot path are damage THIS run did (they fail it and exit
+ *    non-zero); corruption a record carried IN is a warning, never a failure,
+ *    since the migration is rename-only and did not cause it.
  *
  * The WHAT (which ops for which record) is the pure `src/core/migration.ts`;
  * this owns the I/O, the refusal, the manifest, and the checks.
@@ -24,7 +27,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import {
   invertOp,
@@ -76,9 +79,10 @@ const integrityOf = async (recordDir: string): Promise<Integrity> => {
   }
 
   const versionEvents = events.filter((e) => e.t === "version");
-  // Every path a version event references must resolve to a real snapshot.
+  // Every snapshot path ANY event references must resolve to a real file - not
+  // just `version` events (a `session_opened` carries the initial snapshot too).
   const dangling: string[] = [];
-  for (const e of versionEvents) {
+  for (const e of events) {
     if (e.path && !existsSync(join(recordDir, e.path))) dangling.push(e.path);
   }
   // Count the snapshot files actually on disk under versions/.
@@ -215,17 +219,38 @@ export const runReverse = async (manifestPath: string): Promise<void> => {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { ops: MigrationOp[] };
   // The manifest already holds the INVERSE ops in reverse order; apply as-is.
   for (const op of manifest.ops) await applyOp(op);
+
+  // Applying the inverse ops moves every file back but leaves the directories
+  // the forward run created (`<record>/run`, a sibling's new `<D>/.lucid`) now
+  // empty. Byte-identical is not enough - the dir set must match too. Remove
+  // exactly those two kinds of dir when empty, deepest-first; rmdir refuses a
+  // non-empty dir, so a pre-existing populated `.lucid/` is never touched.
+  const dirs = new Set<string>();
+  for (const op of manifest.ops) {
+    for (const path of op.kind === "rename" ? [op.from, op.to] : [op.path]) {
+      const parent = dirname(path);
+      if (basename(parent) === "run" || basename(parent) === ".lucid") dirs.add(parent);
+    }
+  }
+  for (const dir of [...dirs].sort((a, b) => b.length - a.length)) {
+    await rmdir(dir).catch(() => {}); // no-op if absent or non-empty
+  }
   console.log(`reversed ${manifest.ops.length} op(s) from ${manifestPath}`);
 };
 
-/** One migrated record's integrity problems, empty when it checks out. */
+/** The outcome of a migration run. */
 export interface MigrationResult {
   readonly migrated: number;
   readonly skipped: number;
   /** Absolute path to the reversal manifest, or null on a dry run. */
   readonly manifestPath: string | null;
-  /** Per-record integrity problems keyed by final record dir; empty = clean. */
+  /** Integrity problems THIS run caused, keyed by final record dir; empty =
+   *  clean. A non-empty map is a failed run (the caller exits non-zero). */
   readonly problems: Readonly<Record<string, readonly string[]>>;
+  /** Pre-existing corruption a record carried IN, keyed by its original dir.
+   *  Surfaced so the operator knows, but never fails the run - the migration is
+   *  rename-only and did not cause it (and cannot make it worse). */
+  readonly warnings: Readonly<Record<string, readonly string[]>>;
 }
 
 /**
@@ -270,16 +295,38 @@ export const runMigration = async (opts: {
 
   if (!apply) {
     console.log("\nDRY RUN - nothing written. Re-run with --apply to execute.");
-    return { migrated: 0, skipped: skipped.length, manifestPath: null, problems: {} };
+    return { migrated: 0, skipped: skipped.length, manifestPath: null, problems: {}, warnings: {} };
   }
 
   // Live. Integrity before, apply, integrity after, and a reversal manifest.
   const reversal: MigrationOp[] = [];
   const problems: Record<string, string[]> = {};
+  const warnings: Record<string, string[]> = {};
   for (const p of active) {
-    const before = await integrityOf(p.recordDir);
     const oldRecordDir = p.recordDir;
-    const oldArtifact = durable.find((r) => r.recordPath === oldRecordDir)?.artifact ?? "";
+    const inv = durable.find((r) => r.recordPath === oldRecordDir);
+    if (!inv || inv.artifact === null) {
+      // An active plan always has a non-null artifact (orphans are skipped) -
+      // if that ever breaks, refuse rather than default to "" and let an empty
+      // prefix corrupt every fork seed (a `"".replaceAll("")` inserts the
+      // target between every character).
+      throw new Error(`internal: active record ${oldRecordDir} has no inventory artifact`);
+    }
+    const oldArtifact = inv.artifact;
+
+    const before = await integrityOf(oldRecordDir);
+    // Pre-existing corruption is NOT this run's fault - the migration is
+    // rename-only. Surface it, but it never fails the run.
+    const carried: string[] = [];
+    if (!before.seqMonotonic) carried.push("seq not strictly increasing");
+    if (before.snapshotCount < before.versionEventCount)
+      carried.push("fewer snapshots than version events");
+    if (before.danglingSnapshotPaths.length > 0)
+      carried.push(`dangling snapshot path(s): ${before.danglingSnapshotPaths.join(", ")}`);
+    if (carried.length > 0) {
+      warnings[oldRecordDir] = carried;
+      console.warn(`PRE-EXISTING (not caused by this run) ${oldRecordDir}: ${carried.join("; ")}`);
+    }
 
     for (const op of p.ops) {
       await applyOp(op);
@@ -292,19 +339,24 @@ export const runMigration = async (opts: {
       ...(await rewriteForkSeeds(oldRecordDir, newRecordDir, oldArtifact, newArtifact)),
     );
 
+    // Migration-induced corruption only: the migration is rename-only, so every
+    // committed metric MUST be unchanged; a difference is damage THIS run did.
     const after = await integrityOf(newRecordDir);
     const found: string[] = [];
     if (after.eventCount !== before.eventCount) found.push("event count changed");
     if (after.logHash !== before.logHash) found.push("log bytes changed");
-    if (!after.seqMonotonic) found.push("seq not strictly increasing");
     if (after.snapshotCount !== before.snapshotCount) found.push("snapshot count changed");
-    if (after.snapshotCount < after.versionEventCount)
-      found.push("fewer snapshots than version events");
-    if (after.danglingSnapshotPaths.length > 0)
-      found.push(`dangling snapshot path(s): ${after.danglingSnapshotPaths.join(", ")}`);
+    if (before.seqMonotonic && !after.seqMonotonic) found.push("migration broke seq monotonicity");
+    const newlyDangling = after.danglingSnapshotPaths.filter(
+      (d) => !before.danglingSnapshotPaths.includes(d),
+    );
+    if (newlyDangling.length > 0)
+      found.push(`newly dangling snapshot path(s): ${newlyDangling.join(", ")}`);
     if (found.length > 0) {
       problems[newRecordDir] = found;
-      console.error(`INTEGRITY FAILURE for ${newRecordDir}: ${found.join("; ")}`);
+      console.error(
+        `INTEGRITY FAILURE (caused by this run) for ${newRecordDir}: ${found.join("; ")}`,
+      );
     }
   }
 
@@ -320,7 +372,7 @@ export const runMigration = async (opts: {
   const manifestPath = `${inventoryPath.replace(/\.json$/, "")}.reversal.json`;
   await writeFile(manifestPath, `${JSON.stringify({ ops: reversal.reverse() }, null, 2)}\n`);
   console.log(`\nmigrated ${active.length} record(s). Reversal manifest: ${manifestPath}`);
-  return { migrated: active.length, skipped: skipped.length, manifestPath, problems };
+  return { migrated: active.length, skipped: skipped.length, manifestPath, problems, warnings };
 };
 
 const main = async (): Promise<void> => {
@@ -331,7 +383,17 @@ const main = async (): Promise<void> => {
     process.exit(2);
   }
   try {
-    await runMigration({ inventoryPath: inventory, apply });
+    const result = await runMigration({ inventoryPath: inventory, apply });
+    // An integrity problem THIS run caused must be visible in the exit status,
+    // not just a red line above a green exit - the whole promise is "a mistake
+    // cannot lose review history", so a flagged run fails loudly.
+    const failed = Object.keys(result.problems).length;
+    if (failed > 0) {
+      console.error(
+        `\n${failed} record(s) failed integrity - see above. The reversal manifest undoes this run.`,
+      );
+      process.exit(1);
+    }
   } catch (err) {
     console.error(String(err instanceof Error ? err.message : err));
     process.exit(1);

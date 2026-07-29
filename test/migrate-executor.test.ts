@@ -97,15 +97,18 @@ const buildTree = async () => {
   return { root, inventoryPath, nestedDir, sibDir };
 };
 
-/** Snapshot every file under a dir as relative-path -> bytes, for byte-exact
- *  before/after comparison. */
+/** Snapshot every file AND directory under a dir, for exact before/after
+ *  comparison. Directories are recorded as `<dir>/` -> "" so the reversal test
+ *  catches an emptied-but-orphaned dir, not just changed file bytes. */
 const snapshot = async (dir: string): Promise<Record<string, string>> => {
   const out: Record<string, string> = {};
   const walk = async (d: string): Promise<void> => {
     for (const en of await readdir(d, { withFileTypes: true })) {
       const p = join(d, en.name);
-      if (en.isDirectory()) await walk(p);
-      else out[relative(dir, p)] = await readFile(p, "utf8");
+      if (en.isDirectory()) {
+        out[`${relative(dir, p)}/`] = "";
+        await walk(p);
+      } else out[relative(dir, p)] = await readFile(p, "utf8");
     }
   };
   await walk(dir);
@@ -186,6 +189,43 @@ describe("migrate executor", () => {
     await expect(runMigration({ inventoryPath, apply: true })).rejects.toThrow(/already exist/);
     // nothing moved
     expect(await snapshot(root)).toEqual(before);
+  });
+
+  // Pre-existing corruption is the record's, not the run's: a rename-only
+  // migration cannot fix it and must not be BLAMED for it. It surfaces as a
+  // warning, the run still succeeds (empty problems), and the exit stays clean.
+  test("pre-existing corruption is a warning, never a run failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lucid-migrate-"));
+    roots.push(root);
+    // A sibling record whose log references a snapshot that is NOT on disk.
+    const recDir = join(root, "broken");
+    await write(
+      join(recDir, "log.ndjson"),
+      '{"seq":1,"t":"version","path":"versions/gone.html"}\n',
+    );
+    await write(join(root, "broken.html"), "<h1>broken</h1>");
+    const inventoryPath = join(root, "inv.json");
+    await writeFile(
+      inventoryPath,
+      JSON.stringify({
+        records: [
+          {
+            artifact: join(root, "broken.html"),
+            layout: "sibling",
+            recordPath: recDir,
+            eventCount: 1,
+            logHash: "",
+            ephemeral: false,
+          },
+        ],
+      }),
+    );
+
+    const result = await runMigration({ inventoryPath, apply: true });
+    expect(result.migrated).toBe(1);
+    expect(result.problems).toEqual({}); // the run caused nothing
+    expect(Object.keys(result.warnings)).toEqual([recDir]); // but it flags the carry-in
+    expect(result.warnings[recDir]?.join(" ")).toContain("dangling");
   });
 
   // MUTATION (drop the manifest write): apply must return a manifest path and
