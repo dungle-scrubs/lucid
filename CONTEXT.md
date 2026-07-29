@@ -73,6 +73,40 @@ defensive re-mount is scoped and debounced: it fires only when the overlay's own
 nodes are removed or altered, never on arbitrary artifact DOM mutation, so a
 self-mutating or animated artifact does not thrash it (D-041).
 
+**Boot independence** (the normative invariant; plan 04): *the overlay's
+ability to boot and to resolve an anchor MUST NOT depend on any property the
+artifact author controls* - not its CSP, not its pre-registered handlers, not
+its markup shape, not its `<base>`, not its DOM size. Where the artifact can
+express such a property, injection neutralizes or overrides it **for the
+bootstrap specifically, leaving the artifact otherwise intact**. That second
+clause is the hard half, and every mechanism is shaped by it:
+
+- **CSP.** A document `<meta>` policy is lifted into the response header
+  (header and meta policies intersect, so a meta would block the injected
+  module whatever a header allowed), minus the directives a meta is *required*
+  to ignore - lifting `report-uri`, `report-to`, `frame-ancestors` or `sandbox`
+  would switch on something the author could not have meant. The script
+  directive grants the bootstrap the narrowest thing that works: the serving
+  origin when the author kept `'unsafe-inline'` (a nonce would make the browser
+  ignore it and strip the artifact's own inline content), a nonce otherwise.
+- **Styles.** The overlay adopts **constructed stylesheets**, which `style-src`
+  does not govern - so the author's `style-src` is never touched, no style
+  nonce exists, and no nonce is published on the page's global for an artifact
+  script to borrow.
+- **Events.** Picking listens at **window capture**, beside the artifact's own
+  handlers rather than below them: `stopPropagation` cannot silence a co-target
+  listener.
+- **URLs.** The bootstrap `src` is origin-absolute, so a document `<base>`
+  cannot re-root it.
+- **Markup and scale.** The bootstrap splices at the close the *parser* honors
+  (a literal `</body>` in a textarea, script, comment or attribute is text),
+  and anchor resolution indexes siblings in one pass, so neither a hostile
+  markup shape nor DOM fan-out can stop the loop.
+
+The corpus of hostile artifacts (`test/e2e/hostile-fixtures.ts`) is the
+permanent fence: every fixture must survive the full loop, and a fixture that
+cannot is a recorded defect with a named ledger entry, never a silent skip.
+
 ### Chrome
 The Lucid-owned panel surrounding the artifact: the composer, the
 conversation log, the **composer queue** (the list of composed-but-unsent
