@@ -53,6 +53,24 @@ const hint = "ml-2 text-[10px] text-fg-faint";
  *  per-render identity would make them re-subscribe on every keystroke. */
 const close = (): void => setCreateOpen(false);
 
+/** The root the last create actually used (D-005): the best default for the
+ *  next one. Storage failures degrade to "no memory", never to an error. */
+const CREATE_ROOT_KEY = "lucid.createRoot";
+const readCreateRoot = (): string | null => {
+  try {
+    return localStorage.getItem(CREATE_ROOT_KEY);
+  } catch {
+    return null;
+  }
+};
+const persistCreateRoot = (root: string): void => {
+  try {
+    localStorage.setItem(CREATE_ROOT_KEY, root);
+  } catch {
+    /* storage unavailable; the next dialog simply asks again */
+  }
+};
+
 /**
  * Its own component so every open starts from a clean form: the parent mounts
  * it only while the dialog is showing, which is what resets the draft.
@@ -154,13 +172,19 @@ const CreateDialogBody = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Prefill the project from the current scope once the listing is in. Only
-  // while the field is untouched, so a later listing frame cannot move a
-  // choice out from under the human.
+  // Prefill the project with the MOST RECENTLY USED root (D-005) once the
+  // listing is in - the human who authored into a project last time most
+  // likely wants it again. Only while the field is untouched, so a later
+  // listing frame cannot move a choice out from under them. A remembered root
+  // the listing no longer offers is ignored. With nothing remembered: a SOLE
+  // candidate is not a guess and is picked; several candidates mean the
+  // dialog ASKS (the field stays unselected) rather than guessing one.
   useEffect(() => {
     setProject((current) => {
       if (current !== "") return current;
-      return roots[0] ?? "";
+      const remembered = readCreateRoot();
+      if (remembered !== null && roots.includes(remembered)) return remembered;
+      return roots.length === 1 ? (roots[0] ?? "") : "";
     });
   }, [roots]);
 
@@ -285,6 +309,7 @@ const CreateDialogBody = () => {
     }
     // The hub's own path, not one rebuilt here: it joined project and name,
     // and the listing row will carry exactly that string.
+    persistCreateRoot(project); // the accepted root is the next dialog's default (D-005)
     setAuthoring(typeof body?.artifact === "string" ? body.artifact : `${project}/${name}`);
   };
 

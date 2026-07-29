@@ -279,3 +279,68 @@ test("a dropped hub reports itself ONCE, at the composer", async ({ page }) => {
   await expect(indicator).toHaveCount(1);
   await expect(indicator).toBeVisible();
 });
+
+test("add-folder is reachable from the populated pick screen and the palette (M2.4, D-007)", async ({
+  page,
+}) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+  // A second, unopened artifact keeps the pick screen in its POPULATED state
+  // (rows to offer) - the state that used to lack the add-folder control.
+  const other = join(cli.dir, "rollout.html");
+  await writeFile(
+    other,
+    PLAN_V1.replace("<title>Migration plan</title>", "<title>Rollout checklist</title>"),
+    "utf8",
+  );
+  await cli.run(["open", other]);
+  await cli.run(["end", other]);
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await on(page).tabAdd().click();
+  await expect(on(page).pickerRow()).toHaveCount(1); // populated, not empty
+  await expect(on(page).addFolder()).toBeVisible(); // ...and correctable anyway
+
+  // The palette carries the same affordance as a command.
+  await page.keyboard.press(chord("k"));
+  await expect(on(page).paletteInput()).toBeFocused();
+  await expect(on(page).paletteAddFolder()).toBeVisible();
+});
+
+test("the create dialog defaults to the most recently used root (M2.4, D-005)", async ({
+  page,
+}) => {
+  hub = await startHub();
+  // TWO projects, so the default is a real choice: with nothing remembered the
+  // dialog must ask, and with a remembered root it must pick THAT one - the
+  // sole-candidate shortcut cannot fake either answer.
+  const first = await openIntoHub(hub, PLAN_V1);
+  cli = first.cli;
+  const second = await openIntoHub(
+    hub,
+    PLAN_V1.replace("<title>Migration plan</title>", "<title>Other plan</title>"),
+  );
+  cli2 = second.cli;
+
+  await page.goto(first.shellUrl);
+  // One TAB, but two LISTED projects - the dialog's roots come from the
+  // listing, so the default is a genuine two-way choice.
+  await expect(on(page).shellTab()).toHaveCount(1);
+
+  // Nothing remembered + two candidates: the field asks instead of guessing.
+  await on(page).tabAdd().click();
+  await on(page).newArtifact().click();
+  await expect(on(page).createDialog()).toBeVisible();
+  const projectTrigger = on(page).createProject();
+  const secondName = cli2.dir.split("/").pop() ?? "";
+  await expect(projectTrigger).not.toContainText(secondName);
+  await page.keyboard.press("Escape");
+
+  // Remembered root: the next dialog opens on it.
+  await page.evaluate((root) => localStorage.setItem("lucid.createRoot", root), cli2.dir);
+  await on(page).newArtifact().click();
+  await expect(on(page).createDialog()).toBeVisible();
+  await expect(on(page).createProject()).toContainText(secondName);
+});

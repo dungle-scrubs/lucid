@@ -308,6 +308,7 @@ const EmptyShell = () => {
         <>
           <div className="flex items-baseline gap-3">
             <div className="text-[13px] text-fg-muted">Open a session to review.</div>
+            <AddFolder className={emptyAction} />
             <NewArtifactButton testId="new-artifact" className={emptyAction} />
           </div>
           <div className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] snap-y snap-proximity scroll-pt-9 flex-col overflow-y-auto border border-ink-600 bg-ink-800">
@@ -354,6 +355,7 @@ const EmptyShell = () => {
             Pick one from the tab strip above.
           </div>
           <div className="flex items-baseline gap-3">
+            <AddFolder className={emptyAction} />
             <NewArtifactButton testId="new-artifact" className={emptyAction} />
           </div>
         </>

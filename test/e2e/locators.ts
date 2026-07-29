@@ -120,6 +120,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   notice: (): Locator => root.locator(hook("notice")),
   orphan: (): Locator => root.locator(hook("orphan")),
   palette: (): Locator => root.locator(hook("palette")),
+  paletteAddFolder: (): Locator => root.locator(hook("palette-add-folder")),
   paletteInput: (): Locator => root.locator(hook("palette-input")),
   paletteOverlay: (): Locator => root.locator(hook("palette-overlay")),
   panelToggle: (): Locator => root.locator(hook("panel-toggle")),

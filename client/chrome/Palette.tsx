@@ -1,7 +1,7 @@
 import { Command } from "cmdk";
 import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
-import { activateTab, closeTab, openTab, setPaletteOpen, useHub } from "./hub.ts";
+import { activateTab, addRoot, closeTab, openTab, setPaletteOpen, useHub } from "./hub.ts";
 import { byProject, projectName, sessionLabel } from "./naming.ts";
 import type { SessionHandle } from "./session.ts";
 import { getSession, useShell } from "./shell.ts";
@@ -187,6 +187,25 @@ export const Palette = () => {
               ))}
             </Command.Group>
           ))}
+
+          {/* Pointing Lucid at a new folder is a command, not only a pick-screen
+              affordance (D-007): the chooser opens directly; if this platform
+              has no chooser, land on the pick screen, whose AddFolder carries
+              the typed-path fallback. */}
+          <Command.Group heading="Shell" className={groupCls}>
+            <Command.Item
+              data-test="palette-add-folder"
+              value="add a project folder watch scan"
+              className={itemCls}
+              onSelect={run(() => {
+                void addRoot().then((outcome) => {
+                  if ("needsPath" in outcome) useShell.setState({ activeKey: null });
+                });
+              })}
+            >
+              Add a project folder…
+            </Command.Item>
+          </Command.Group>
         </Command.List>
       </Command>
     </div>
