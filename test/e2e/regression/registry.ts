@@ -407,19 +407,20 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     },
   },
   {
-    sha: "m4.1-legacy-listing",
+    sha: "mb2-canonical-listing",
     broke:
-      "Bare `lucid` never listed a legacy .lucid/<stem>/ session: the glob found its log, the fold read the NEW-layout path, ENOENT folded to none, and the row was dropped.",
+      "A canonical `.lucid/<stem>/` record was listed at the wrong artifact: stripping `.lucid` from the record's parent resolved its artifact to `<dir>/<stem>.html` instead of `<dir>/.lucid/<stem>.html`, so the row named a file that is not the one being reviewed.",
     testFile: "test/e2e/session-wait.e2e.ts",
-    testName: "bare lucid lists sessions in BOTH layouts, each once, at the right artifact",
+    testName: "bare lucid lists sibling and canonical records, each once, at the right artifact",
     mutation: {
       kind: "edit",
       file: "src/core/sessions.ts",
-      // The old read: the new-layout path recomputed from the artifact dir,
-      // which for a legacy row names a file that does not exist.
-      find: "      const state = foldLog((await readEvents(resolve(scanRoot, rel))).events);",
+      // Reintroduce the deleted `.lucid`-stripping (plan 02, MB.2): the
+      // canonical layout addresses THROUGH `.lucid`, so dropping it from the
+      // artifact dir sends the canonical row to the wrong artifact path.
+      find: "    const artifactDir = resolve(scanRoot, ...parts.slice(0, -2));",
       replace:
-        '      const state = foldLog((await readEvents(resolve(artifactDir, stem, "log.ndjson"))).events);',
+        '    const artifactDir = resolve(scanRoot, ...parts.slice(0, -2)).replace(/\\/\\.lucid$/, "");',
     },
   },
   {
