@@ -34,15 +34,16 @@ node_modules/
 
 # Bun build temp artifacts
 *.bun-build
-workspace-overview.html
 
-# Artifacts authored into the repo root while testing the shell. They are
-# review material, not source - each keeps its own .lucid/ log beside it.
-/yo-yo.html
-/test*.html
-/asdf.html
+# Review records now live under `.lucid/` and are committable by default (plan
+# 02): the record's own `.gitignore` keeps only its machine-local `run/` out of
+# git. The old sibling-era rules that hid review HTML at the repo root
+# (workspace-overview.html, /yo-yo.html, /test*.html, /asdf.html) were the R1
+# trap and are gone; do not re-add a rule that ignores a `.lucid/**` artifact.
 
-# Artifacts recovered out of a harness's own edit history after /private/tmp was
-# cleared on reboot. Review material that happens to live here, same as above.
+# Loose HTML recovered from a harness's edit history after /private/tmp was
+# cleared - orphaned files, not records. The clean records that DO live under
+# lucid-recovered/.lucid/ stay ignored with the junk; commit them surgically if
+# ever wanted, rather than un-ignoring the whole recovery pile.
 /lucid-recovered/
 .claude/worktrees/
