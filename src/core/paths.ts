@@ -114,7 +114,7 @@ export const ARTIFACT_DIR = ".lucid";
  * The NEAREST, not the outermost: a package inside a monorepo keeps its own
  * `.lucid/`, which is where someone working in that package will look.
  */
-const projectRootOf = (dir: string): string | null => {
+export const projectRootOf = (dir: string): string | null => {
   let current = dir;
   for (;;) {
     if (existsSync(join(current, ".git"))) return current;

@@ -701,9 +701,13 @@ describe("hub attend mode", () => {
 
   test("POST /hub/create refuses to overwrite an existing artifact", async () => {
     const hub = await startDaemon(true);
+    // In `.lucid/`, which is where create now writes (plan 05, M3.2) - the
+    // existence check has to look at the path it is about to author.
+    await mkdir(join(proj, ".lucid"), { recursive: true });
+    await writeFile(join(proj, ".lucid", "taken.html"), DOC);
     const res = await post(hub.port, "/hub/create", {
       project: proj,
-      name: "plan.html",
+      name: "taken.html",
       prompt: "map the migration",
     });
     expect(res.status).toBe(409);
@@ -713,7 +717,8 @@ describe("hub attend mode", () => {
     const hub = await startDaemon(true);
     // stat() reports a dangling link as absent; creating "into" it would put
     // the artifact wherever the link points, outside the approved project.
-    await symlink(join(dir, "elsewhere", "gone.html"), join(proj, "linked.html"));
+    await mkdir(join(proj, ".lucid"), { recursive: true });
+    await symlink(join(dir, "elsewhere", "gone.html"), join(proj, ".lucid", "linked.html"));
     const res = await post(hub.port, "/hub/create", {
       project: proj,
       name: "linked.html",
@@ -760,16 +765,18 @@ describe("hub attend mode", () => {
     expect(res.status).toBe(202);
     const body = (await res.json()) as { ok: boolean; artifact: string };
     expect(body.ok).toBe(true);
-    expect(body.artifact).toBe(join(proj, "new-plan.html"));
+    // Into the project's artifact folder (plan 05, M3.2): the prompt tells the
+    // agent to `lucid open` this path, and open refuses anything outside it.
+    expect(body.artifact).toBe(join(proj, ".lucid", "new-plan.html"));
 
     const marker = await readMarker(createMarker);
     expect(marker.harness).toBe("stub");
     expect(marker.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(marker.cwd).toBe(realpathSync(proj));
     const argv = marker.argv as string[];
-    expect(argv[1]).toBe(join(proj, "new-plan.html"));
+    expect(argv[1]).toBe(join(proj, ".lucid", "new-plan.html"));
     expect(argv[2]).toContain("map the migration");
-    expect(argv[2]).toContain(`lucid open ${join(proj, "new-plan.html")}`);
+    expect(argv[2]).toContain(`lucid open ${join(proj, ".lucid", "new-plan.html")}`);
   }, 20_000);
 });
 
@@ -1055,7 +1062,7 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
     ]);
     expect(marker.model).toBe("opus-5");
     // The pick STICKS: the new artifact's later unattended turns reuse it.
-    const child = sessionPaths(join(proj, "new-plan.html"));
+    const child = sessionPaths(join(proj, ".lucid", "new-plan.html"));
     expect(await Bun.file(child.selectionPath).json()).toEqual({
       harness: "claude-code",
       model: "opus-5",

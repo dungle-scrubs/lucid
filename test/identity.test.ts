@@ -291,3 +291,24 @@ describe("both layouts present: the canonical wins, the legacy is untouched (pla
     expect(paths.logPath.includes(".lucid")).toBe(false);
   });
 });
+
+describe("the refusal a human gets is the most specific one (plan 05, F9)", () => {
+  test("plan.md colliding with plan.html names the COLLISION, not structural validation", async () => {
+    const { openSession } = await import("../src/core/session.ts");
+    const dir = await tmp();
+    await writeFile(join(dir, "plan.html"), "<!doctype html><html><body><h1>a</h1></body></html>");
+    const p = sessionPaths(join(dir, "plan.html"));
+    await mkdir(p.sessionDir, { recursive: true });
+    await writeFile(
+      p.logPath,
+      `${JSON.stringify({ seq: 1, at: "2026-01-01T00:00:00Z", t: "session_opened", segment: 1, version: 1, artifact: "plan.html", hash: "h", path: "versions/s1/v1.html" })}\n`,
+    );
+    // Markdown fails structural validation too. That is TRUE and unhelpful: the
+    // reason this open cannot proceed is the record it would have shared.
+    await writeFile(join(dir, "plan.md"), "# a");
+
+    await expect(openSession(sessionPaths(join(dir, "plan.md")))).rejects.toThrow(
+      /already the review record for/,
+    );
+  });
+});

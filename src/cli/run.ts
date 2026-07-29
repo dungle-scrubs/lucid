@@ -5,7 +5,7 @@ import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver } from "../core/deliver.ts";
 import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
-import { sessionPaths } from "../core/paths.ts";
+import { ARTIFACT_DIR, sessionPaths } from "../core/paths.ts";
 import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
 import { themeReadiness, themeWarning } from "../core/theme.ts";
 import { registerSession } from "../core/registry.ts";
@@ -108,8 +108,8 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
       message:
         `refusing to open an artifact in a temporary directory - the OS clears it (macOS wipes /private/tmp on every boot), ` +
         `and a session's annotations and versions live beside its artifact, so they would go too. ` +
-        `Write it somewhere durable, e.g. ${join(project, "lucid", basename(file))}, and open that.`,
-      detail: { path: resolve(file), suggested: join(project, "lucid", basename(file)) },
+        `Write it somewhere durable, e.g. ${join(project, ARTIFACT_DIR, basename(file))}, and open that.`,
+      detail: { path: resolve(file), suggested: join(project, ARTIFACT_DIR, basename(file)) },
     });
   }
   // Artifacts live at `<project>/.lucid/<name>.html` (plan 05, M3.2). Refused

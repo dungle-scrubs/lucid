@@ -16,6 +16,7 @@ import type { AttendantStamp, LogEvent } from "./events.ts";
 import { foldLog, type FoldedState } from "./fold.ts";
 import type { SessionPaths } from "./paths.ts";
 import {
+  ARTIFACT_DIR,
   canonicalArtifactLocation,
   canonicalArtifactPath,
   sessionName,
@@ -148,7 +149,19 @@ const stemCollision = (paths: SessionPaths): string | null => {
   return owner;
 };
 
-export const ensureSessionDirs = (paths: SessionPaths): void => {
+/**
+ * Every reason the record directory cannot be ours, checked WITHOUT creating
+ * anything (plan 05, M1.1/M3.2).
+ *
+ * Split out of `ensureSessionDirs` so the refusals can run early - beside the
+ * other refusals - while the mkdirs stay late. Two things depend on that
+ * split: a refused open must leave nothing on disk, and the refusal a human
+ * gets must be the most specific one. Ordering the artifact read first made
+ * `plan.md` colliding with `plan.html` report "artifact failed structural
+ * validation" instead of naming the collision, which is a true statement about
+ * the wrong problem.
+ */
+export const assertRecordAvailable = (paths: SessionPaths): void => {
   const owner = stemCollision(paths);
   if (owner !== null) {
     throw new ValidationError({
@@ -164,10 +177,14 @@ export const ensureSessionDirs = (paths: SessionPaths): void => {
       message:
         `refusing to write this session's record into ${paths.sessionDir} - that directory already exists and is not a Lucid session. ` +
         `The record is named after its artifact, so "${paths.name}.html" wants "${paths.name}/". ` +
-        `Rename the artifact, or move it into a folder of its own (e.g. lucid/${paths.name}.html).`,
+        `Rename the artifact, or move it into the project's artifact folder (${ARTIFACT_DIR}/${paths.name}.html).`,
       detail: { sessionDir: paths.sessionDir, artifact: paths.artifactPath },
     });
   }
+};
+
+export const ensureSessionDirs = (paths: SessionPaths): void => {
+  assertRecordAvailable(paths);
   mkdirSync(paths.sessionDir, { recursive: true });
   mkdirSync(paths.versionsDir, { recursive: true });
   // Machine-local runtime lives here; created up front so the append lock and
@@ -288,16 +305,33 @@ export interface OpenResult {
  * human's act, the same rule as 02's layout migration and M1.1's R3 guard: a
  * tool that relocates someone's file to satisfy its own convention is worse
  * than one that explains itself and stops.
+ *
+ * It must name the RECORD too when one exists. The record is derived from the
+ * artifact's location, so moving only the artifact - which is literally what
+ * the first version of this message asked for - leaves the history behind and
+ * the next open starts a fresh segment 1 at v1 with no annotations. An
+ * instruction that destroys a review when followed correctly is worse than the
+ * misplacement it corrects.
  */
 export const assertCanonicalLocation = (input: string): void => {
   const location = canonicalArtifactLocation(input);
   if (location.ok) return;
+  const paths = sessionPaths(input);
+  const record = existsSync(paths.logPath) ? paths.sessionDir : null;
+  const canonicalRecord = sessionPaths(location.canonical).sessionDir;
   throw new ValidationError({
     message:
-      `refusing to open "${input}" - artifacts live in the project's ".lucid" folder, and this one does not. ` +
-      `Move it to "${location.canonical}" and open that. ` +
-      `Nothing has been created; the record follows the artifact, so opening it here would leave a session beside a file that has to move anyway.`,
-    detail: { artifact: canonicalArtifactPath(input), canonical: location.canonical },
+      `refusing to open "${input}" - artifacts live in the project's "${ARTIFACT_DIR}" folder, and this one does not. ` +
+      (record === null
+        ? `Move it to "${location.canonical}" and open that. Nothing has been created here.`
+        : `This artifact already has a review record, and the record is derived from where the artifact sits - so move BOTH, or the history is left behind and the next open starts over at version 1: ` +
+          `the artifact to "${location.canonical}", and the record "${record}" to "${canonicalRecord}". ` +
+          `Nothing has been created or moved here.`),
+    detail: {
+      artifact: canonicalArtifactPath(input),
+      canonical: location.canonical,
+      ...(record === null ? {} : { record, canonicalRecord }),
+    },
   });
 };
 
@@ -351,6 +385,10 @@ export const openSession = async (
   // missing directory, so reading the log this early costs nothing.
   const warnings: Warning[] = [];
   const before = foldLog((await readEvents(paths.logPath)).events);
+  // Record availability BEFORE the artifact read: both refuse, and when both
+  // would, the collision is the more specific answer (a `.md` colliding with a
+  // `.html` fails structural validation too, which is true and unhelpful).
+  assertRecordAvailable(paths);
   const html = await readArtifact(paths);
   const structure = validateStructure(html);
   const opening = before.status === "none" || before.status === "ended";

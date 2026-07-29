@@ -1,6 +1,7 @@
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { parseHTML } from "linkedom";
 import { marked } from "marked";
+import { ARTIFACT_DIR, projectRootOf } from "../core/paths.ts";
 
 /**
  * Planner -> Lucid bridge (render half). Turns a planner living document
@@ -32,9 +33,21 @@ export interface RenderOptions {
  *
  * Owns the derivation only - reading the doc, rendering it and writing the file
  * stay with the CLI handler.
+ *
+ * The default lands in the project's artifact folder, NOT beside the markdown
+ * (plan 05, M3.2): the rendered page is an artifact, `open` refuses artifacts
+ * outside `.lucid/`, and this function prints the very `lucid open <path>` the
+ * human runs next. A doc outside any project keeps the beside-the-markdown
+ * derivation - there is no artifact folder to put it in. An explicit `--out`
+ * is always honoured; a human naming a path is not guessing.
  */
-export const planArtifactPath = (doc: string, out?: string): string =>
-  resolve(out ?? `${doc.replace(/\.md$/i, "")}.lucid.html`);
+export const planArtifactPath = (doc: string, out?: string): string => {
+  if (out !== undefined) return resolve(out);
+  const docPath = resolve(doc);
+  const name = `${basename(docPath).replace(/\.md$/i, "")}.lucid.html`;
+  const root = projectRootOf(dirname(docPath));
+  return root === null ? resolve(dirname(docPath), name) : resolve(root, ARTIFACT_DIR, name);
+};
 
 const DECISION_RE = /^\s*D-\d+\s*$/;
 

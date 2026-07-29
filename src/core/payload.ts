@@ -180,9 +180,19 @@ const resolveAnnotation = async (
   // Carry forward: does the anchor still attach to the current version? A
   // multi-target record stays live while ANY spot survives - the overlay
   // simply paints no mark for the spots that were edited away.
-  const matches = (record.targets ?? [record.target]).map((t) => anchorMatch(t, currentRoot));
-  if (matches.includes("exact")) return "exact";
-  return matches.includes("positional") ? "positional" : null;
+  // Short-circuits on the first EXACT hit, like the `.some(anchorResolves)`
+  // this replaced. Mapping every target instead cost a full
+  // `querySelectorAll("*")` + fingerprint pass per missing target on this hot
+  // path (`/__lucid/state`, which the viewer polls, and every `lucid wait`) -
+  // measured 5.5x on a 6-target annotation over an 8k-element document, which
+  // is the same shape #46 was hardened against.
+  let best: AnchorMatch | null = null;
+  for (const t of record.targets ?? [record.target]) {
+    const match = anchorMatch(t, currentRoot);
+    if (match === "exact") return "exact";
+    if (match === "positional") best = "positional";
+  }
+  return best;
 };
 
 /** The wire's qualifier for a resolution: only a positional-only hit earns one. */
