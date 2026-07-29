@@ -32,14 +32,10 @@ import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload, parseWaitPayloadInput } from "../plan/ingest.ts";
 import { planArtifactPath, renderPlanDoc, renderedSourceOf } from "../plan/render.ts";
 import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
-import {
-  discoverLiveServer,
-  loopbackFetch,
-  removeServerDescriptor,
-  viewerUrl,
-} from "../server/discovery.ts";
+import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { decodeGroupText } from "./ask-input.ts";
+import { resolveView, selectOpenUrl } from "../server/view.ts";
 import {
   openBrowser,
   openChromeApp,
@@ -184,8 +180,20 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     });
   }
 
-  url ??= viewerUrl(identity);
-  if (options.open !== false && !surfacedInShell) openBrowser(url);
+  // ONE override point (plan 06, D-014). The two `viaHub.shell` assignments
+  // above are deliberately untouched, which is what makes the default path
+  // unchanged by construction rather than by assertion - and editing the URL
+  // builder alone would have missed them, since `??=` never fires once the hub
+  // answered, and the hub-hosted case is exactly what this targets.
+  const view = resolveView(process.env);
+  url = selectOpenUrl({ view, hubShell: url, identity });
+  // The solo view must not REACH openBrowser - not merely suppress it.
+  // `recordOpen` writes a `skipped` entry when LUCID_NO_OPEN suppresses a
+  // launch, so "no browser entry" is satisfiable by a mechanism this path does
+  // not use, and the scenario asserting an empty open-log needs the call to be
+  // absent rather than quiet (D-012).
+  const wantsBrowser = view !== "solo" && options.open !== false && !surfacedInShell;
+  if (wantsBrowser) openBrowser(url);
 
   // Register a pointer in the global hub registry (Model B, Phase 0). Advisory:
   // a registry failure must never fail `open`.
@@ -213,6 +221,10 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     status: "active",
     nextCursor: renderCursor(result.cursor),
     url,
+    // The view is invisible unless stated, and a silent wrong URL is the
+    // failure this exists to remove: an agent, a log, or a human reading the
+    // payload can see WHY they got the URL they got.
+    view,
     ...(warnings.length > 0 ? { warnings } : {}),
   });
 };
@@ -672,7 +684,7 @@ export const runApp = async (): Promise<void> => {
 
 /** `lucid` (bare) - status over per-session server.json discovery (no global registry; D-065). */
 export const runStatus = async (): Promise<void> => {
-  const sessions = (await listSessions(process.cwd())).map((summary) => ({
+  const sessions = (await listSessions(process.cwd(), resolveView(process.env))).map((summary) => ({
     session: summary.session,
     status: summary.status,
     version: summary.version,

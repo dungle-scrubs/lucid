@@ -108,7 +108,14 @@ test("a fresh open prints exactly the fields an agent parses, and no warnings", 
     "status",
     "url",
     "version",
+    // Which VIEW the url is for (plan 06). Always present, so an agent can see
+    // WHY it got the url it got rather than inferring it from the shape.
+    "view",
   ]);
+
+  // The shell view for a terminal open, unchanged by the feature that added
+  // the field: this fixture exports no LUCID_VIEW.
+  expect(payload.view).toBe("shell");
 
   // The session id is the ABSOLUTE artifact path - it is what every later
   // command is addressed by, so a relative one would be unusable from

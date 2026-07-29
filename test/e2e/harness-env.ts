@@ -89,6 +89,14 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   // dist/chrome.js off their disk instead of the bundle compiled into this
   // commit - which silently voids the freshness gate 867520e exists to provide.
   LUCID_DEV_ASSETS: "clear",
+
+  // The view opt-in (plan 06). Cleared, not isolated, and the reason is the
+  // integration contract's own instruction: every chat-desktop harness EXPORTS
+  // `LUCID_VIEW=solo` into the agent's shell. A developer running this suite
+  // from such a session would flip every `open` in it onto the solo view - a
+  // different URL and no browser launch - and the suite would be measuring
+  // their harness rather than this commit.
+  LUCID_VIEW: "clear",
 };
 
 /**

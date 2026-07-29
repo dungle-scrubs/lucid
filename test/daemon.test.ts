@@ -127,6 +127,86 @@ describe("hub daemon", () => {
     expect(folded.version).toBe(1);
   });
 
+  /**
+   * The review page under a mount, in BOTH hosting shapes (plan 06).
+   *
+   * A solo-view URL is held by a chat app's pane across reloads, and a session
+   * can legitimately move onto a dedicated server later - the hub quit, an
+   * `open` ran, the hub came back. Proxied to that server, the viewer renders
+   * for base "" and every URL on the page addresses the hub ROOT: the page
+   * loads, `/__lucid/state` 404s, and the review UI sits there inert with no
+   * error anywhere.
+   */
+  test("/s/<id>/__lucid/viewer renders for the MOUNT, not the hub root", async () => {
+    const scanned = await seedSession("proj", "notes");
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+    const id = sessionId(scanned);
+
+    const res = await get(daemon.port, `/s/${id}/__lucid/viewer`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    // The base the page bakes in decides where every later request goes.
+    expect(html).toContain(`"base":"/s/${id}"`);
+    expect(html).toContain(`"port":${daemon.port}`);
+    expect(html).not.toContain('"base":""');
+  });
+
+  /**
+   * The same page when a DEDICATED server owns the session and the hub only
+   * PROXIES - the case the mounted test above cannot reach, and the one that
+   * was broken.
+   *
+   * Proxied, the inner server renders the review page for base "": every URL
+   * on it addresses the hub ROOT, `/__lucid/state` 404s, and the page sits
+   * there inert with no error anywhere. That mattered little while this URL
+   * was only reachable by typing it; the solo view hands it to a chat app's
+   * pane, which holds it across reloads.
+   *
+   * The "dedicated server" here is a stub that answers the handshake, because
+   * what is under test is the DAEMON's routing decision - which of the two
+   * renders the page - and not the inner server's own output.
+   */
+  test("/s/<id>/__lucid/viewer renders for the mount even when PROXIED", async () => {
+    const scanned = await seedSession("proj", "proxied");
+    const paths = sessionPaths(scanned);
+    await writeFile(paths.currentHtml, "<h1>Proxied</h1>");
+
+    let innerPort = 0;
+    const inner = Bun.serve({
+      port: 0,
+      fetch: (req): Response => {
+        const { pathname } = new URL(req.url);
+        if (pathname === "/__lucid/identity") {
+          return Response.json({ lucid: true, session: scanned, port: innerPort, version: 1 });
+        }
+        // What the real dedicated server would answer: rendered for base "".
+        return new Response(`<script>window.__LUCID__={"base":"","port":${innerPort}}</script>`, {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      },
+    });
+    innerPort = inner.port ?? 0;
+    await writeFile(
+      paths.serverJson,
+      JSON.stringify({ port: inner.port, pid: process.pid, startedAt: new Date(0).toISOString() }),
+    );
+
+    try {
+      daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+      const id = sessionId(scanned);
+      const res = await get(daemon.port, `/s/${id}/__lucid/viewer`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain(`"base":"/s/${id}"`);
+      expect(html).toContain(`"port":${daemon.port}`);
+      // The tell: the inner server's own answer names neither.
+      expect(html).not.toContain('"base":""');
+      expect(html).not.toContain(`"port":${inner.port}`);
+    } finally {
+      inner.stop(true);
+    }
+  });
+
   test("mounting writes a descriptor that names the daemon and the base", async () => {
     const scanned = await seedSession("proj", "notes");
     daemon = await runDaemon({ port: 0, roots: [root], registryPath });
