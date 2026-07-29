@@ -311,9 +311,19 @@ test("the pick screen lists across projects and narrows fuzzily (M4.1)", async (
   await expect(on(page).pickerProject()).toHaveCount(2);
   await expect(on(page).pickerRow()).toHaveCount(2);
 
-  // Fuzzy, undebounced, and the project name is part of the value: typing a
-  // fragment of the OTHER project's name leaves only its rows.
-  await on(page).pickerFilter().fill("beta");
+  // Fuzzy, undebounced, and the project name and artifact path are part of the
+  // value: typing a fragment of the OTHER session leaves only its rows.
+  //
+  // "Beta one" and not "beta", and the space is load-bearing. Matching is
+  // SUBSEQUENCE, and the value ends with the artifact's absolute path through
+  // a random `mkdtemp` directory - so a suffix supplying b, e, t, a in order
+  // makes the Alpha row match "beta" too. That is the whole of this test's
+  // intermittency: measured on a failing run, project `lucid-e2e-Bk2mEb` ->
+  // b(B) e(E) t(private) a(alpha) and two rows survived for the full timeout.
+  // A query containing a space can only be satisfied by the separators
+  // BETWEEN the value's fields, which pins the match to the label rather than
+  // to whatever the filesystem handed out.
+  await on(page).pickerFilter().fill("Beta one");
   await expect(on(page).pickerRow()).toHaveCount(1);
   await expect(on(page).pickerRow().first()).toContainText("Beta one");
   await on(page).pickerFilter().fill("");
