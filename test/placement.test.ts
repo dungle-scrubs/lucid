@@ -370,8 +370,10 @@ describe("plan render, actually run (plan 05, NEW-1/NEW-2)", () => {
       await writeFile(join(root, ".plans", plan, "implementation.md"), `# ${plan}\n`);
       await runPlanRender(join(root, ".plans", plan, "implementation.md"), {});
     }
-    const alpha = join(root, ".lucid", "plans-01-alpha-implementation.lucid.html");
-    const beta = join(root, ".lucid", "plans-02-beta-implementation.lucid.html");
+    // `.plans` -> `dot-plans` and the hyphen in `01-alpha` doubles: the fold
+    // is reversible, which is what keeps two docs from sharing one artifact.
+    const alpha = join(root, ".lucid", "dot-plans-01--alpha-implementation.lucid.html");
+    const beta = join(root, ".lucid", "dot-plans-02--beta-implementation.lucid.html");
     expect(existsSync(alpha)).toBe(true);
     expect(existsSync(beta)).toBe(true);
     // The overwrite was silent AND kept the basename, so the stem-collision
@@ -391,5 +393,64 @@ describe("plan render, actually run (plan 05, NEW-1/NEW-2)", () => {
     await runPlanRender(doc, {});
     const out = join(root, ".lucid", "notes.lucid.html");
     expect(await Bun.file(out).text()).toContain("two");
+  });
+});
+
+describe("flatName is injective - the whole design rests on it (plan 05, REMAINING-1)", () => {
+  /**
+   * With no existence check before `writeFile`, two docs mapping to one name
+   * overwrite silently - and because the basename is unchanged, the
+   * stem-collision guard passes and the next `open` mints a version inside
+   * the FIRST doc's session. So the fold has to be reversible.
+   *
+   * Each pair below collided under the first version, and each is an ordinary
+   * layout: this repo has `.plans/`, and hyphenated directory names are its
+   * house style.
+   */
+  const pairs: readonly [string, string, string, string][] = [
+    [".plans", "implementation", "plans", "implementation"], // leading dot was dropped
+    ["a-b", "c", "a", "b-c"], // `-` was separator AND segment character
+    ["plans/05", "impl", "plans", "05-impl"], // dir/file boundary erased
+    [".a/.b", "x", "a/b", "x"], // dots at depth
+    [".docs", "notes", "docs", "notes"],
+    ["dot-plans", "x", ".plans", "x"], // the escape must not collide with a real `dot-` dir
+  ];
+
+  test("no ordinary layout collides with another", async () => {
+    const { flatName } = await import("../src/plan/render.ts");
+    for (const [d1, s1, d2, s2] of pairs) {
+      expect(flatName(d1, s1), `${d1}/${s1} vs ${d2}/${s2}`).not.toBe(flatName(d2, s2));
+    }
+  });
+
+  test("a doc at the project root keeps its bare stem", async () => {
+    const { flatName } = await import("../src/plan/render.ts");
+    expect(flatName("", "notes")).toBe("notes");
+    expect(flatName(".", "notes")).toBe("notes");
+  });
+
+  test("the name stays inside the filesystem's BYTE limit, not its UTF-16 length", async () => {
+    const { flatName } = await import("../src/plan/render.ts");
+    // 100 CJK characters: ~103 UTF-16 units, so a LENGTH budget of 200 waves
+    // it through untruncated - at ~309 bytes, past NAME_MAX (255 on ext4, i.e.
+    // any Linux checkout of a committed record). The count has to discriminate
+    // between the two budgets or it measures nothing.
+    const name = `${flatName("計".repeat(100), "実装")}.lucid.html`;
+    expect(name.length).toBeLessThanOrEqual(200); // a length budget would pass this
+    expect(Buffer.byteLength(name, "utf8")).toBeLessThanOrEqual(255); // only a byte budget passes this
+  });
+
+  test("truncation never splits a surrogate pair", async () => {
+    const { flatName } = await import("../src/plan/render.ts");
+    const name = flatName("🙂".repeat(200), "x");
+    // Strip well-formed pairs; anything left in the surrogate range is a lone
+    // half - a filename that is not valid UTF-8, in bytes meant to be committed.
+    expect(/[\uD800-\uDFFF]/.test(name.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ""))).toBe(false);
+  });
+
+  test("two long docs that truncate to the same head still differ", async () => {
+    const { flatName } = await import("../src/plan/render.ts");
+    const long = "x".repeat(300);
+    expect(flatName(`${long}/a`, "impl")).not.toBe(flatName(`${long}/b`, "impl"));
   });
 });

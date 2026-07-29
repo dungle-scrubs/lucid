@@ -768,6 +768,13 @@ describe("hub attend mode", () => {
     // Into the project's artifact folder (plan 05, M3.2): the prompt tells the
     // agent to `lucid open` this path, and open refuses anything outside it.
     expect(body.artifact).toBe(join(proj, ".lucid", "new-plan.html"));
+    // And that path is one `open` ACCEPTS - the assertion F1 was missing. The
+    // create route emitting a path its own CLI refuses is exactly how the
+    // whole flow shipped dead: the project needs a `.git` for the placement
+    // rule to be live here at all, or this asserts nothing.
+    await mkdir(join(proj, ".git"), { recursive: true });
+    const { canonicalArtifactLocation } = await import("../src/core/paths.ts");
+    expect(canonicalArtifactLocation(body.artifact)).toEqual({ ok: true });
 
     const marker = await readMarker(createMarker);
     expect(marker.harness).toBe("stub");

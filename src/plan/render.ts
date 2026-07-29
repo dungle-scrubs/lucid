@@ -67,22 +67,61 @@ export const planArtifactPath = (doc: string, out?: string): string => {
  * `lucid open` mints a new VERSION inside the first plan's session, and two
  * unrelated documents share one review history.
  *
- * So the path is folded into the name. Long names are truncated with a hash of
- * the full relative path, which keeps uniqueness where a filesystem's 255-byte
- * limit would otherwise take it away.
+ * So the path is folded into the name - and the fold must be REVERSIBLE,
+ * because with no existence check the whole design rests on this function
+ * being injective. A first version was not: it dropped leading dots (`.plans/`
+ * and `plans/` became one name), used `-` as both separator and a legal
+ * segment character (`a-b/c` and `a/b-c` became one name), and erased the
+ * dir/file boundary (`plans/05/impl` and `plans/05-impl`). Every one of those
+ * is an ordinary layout, and hyphenated directory names are this repo's own
+ * house style.
+ *
+ * The encoding: a literal `-` doubles to `--`, segments join on a single `-`,
+ * and a leading `.` becomes a `dot-` prefix (itself unambiguous, since a real
+ * `dot-x` directory encodes as `dot--x`). Runs of hyphens are therefore even
+ * for escaped hyphens and odd where a separator sits, which is what makes the
+ * name decodable and the mapping one-to-one.
  */
-const NAME_BUDGET = 120;
+const encodeSegment = (seg: string): string => {
+  const escaped = seg.replace(/-/g, "--");
+  return escaped.startsWith(".") ? `dot-${escaped.slice(1)}` : escaped;
+};
+
+/**
+ * Bytes, not UTF-16 units: the limit being respected is the filesystem's
+ * (NAME_MAX is 255 BYTES on ext4, which is what a Linux checkout of a
+ * committed record hits), and one CJK character is three bytes to one unit.
+ * Left under 255 by more than the `.lucid.html` suffix, so the caller's
+ * concatenation cannot cross it either.
+ */
+const NAME_BUDGET_BYTES = 200;
+
 export const flatName = (relDir: string, stem: string): string => {
-  if (relDir === "" || relDir === ".") return stem;
-  const prefix = relDir
-    .split(/[/\\]/)
-    .map((seg) => seg.replace(/^\.+/, ""))
-    .filter((seg) => seg !== "")
-    .join("-");
-  const full = prefix === "" ? stem : `${prefix}-${stem}`;
-  if (full.length <= NAME_BUDGET) return full;
+  const encodedStem = encodeSegment(stem);
+  const segments =
+    relDir === "" || relDir === "."
+      ? []
+      : relDir
+          .split(/[/\\]/)
+          .filter((seg) => seg !== "" && seg !== ".")
+          .map(encodeSegment);
+  const full = [...segments, encodedStem].join("-");
+  if (Buffer.byteLength(full, "utf8") <= NAME_BUDGET_BYTES) return full;
+
+  // Past the budget the name is truncated, so uniqueness comes from a digest
+  // of the UNencoded input - which is what it was already keyed on.
   const digest = createHash("sha256").update(`${relDir}/${stem}`).digest("hex").slice(0, 8);
-  return `${full.slice(0, NAME_BUDGET - 9)}-${digest}`;
+  const suffix = `-${digest}`;
+  const room = NAME_BUDGET_BYTES - Buffer.byteLength(suffix, "utf8");
+  // By CODE POINT, so a surrogate pair is never split: `slice` cut one in half
+  // and produced a lone surrogate, i.e. a filename that is not valid UTF-8 -
+  // in bytes that are meant to be committed and read on another machine.
+  let head = "";
+  for (const ch of full) {
+    if (Buffer.byteLength(head + ch, "utf8") > room) break;
+    head += ch;
+  }
+  return `${head}${suffix}`;
 };
 
 const DECISION_RE = /^\s*D-\d+\s*$/;
