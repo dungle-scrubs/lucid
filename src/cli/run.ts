@@ -35,7 +35,7 @@ import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/d
 import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { decodeGroupText } from "./ask-input.ts";
-import { resolveView, selectOpenUrl } from "./view.ts";
+import { resolveView, selectOpenUrl } from "../server/view.ts";
 import {
   openBrowser,
   openChromeApp,
@@ -684,7 +684,7 @@ export const runApp = async (): Promise<void> => {
 
 /** `lucid` (bare) - status over per-session server.json discovery (no global registry; D-065). */
 export const runStatus = async (): Promise<void> => {
-  const sessions = (await listSessions(process.cwd())).map((summary) => ({
+  const sessions = (await listSessions(process.cwd(), resolveView(process.env))).map((summary) => ({
     session: summary.session,
     status: summary.status,
     version: summary.version,

@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { SessionSummary } from "../protocol/wire.ts";
 import { discoverLiveServer, readServerDescriptor } from "../server/discovery.ts";
-import { resolveView, selectOpenUrl } from "../cli/view.ts";
+import { selectOpenUrl, type View } from "../server/view.ts";
 import { readLastAttendant } from "./attendant.ts";
 import { foldLog } from "./fold.ts";
 import { readEvents } from "./log.ts";
@@ -28,11 +28,18 @@ export const projectRoot = async (paths: SessionPaths): Promise<string> => {
   }
 };
 
-export const listSessions = async (root: string): Promise<SessionSummary[]> => {
+/**
+ * @param view Which view the rows' `viewer` URLs are for. PASSED, never read
+ * off `process.env` here: a long-lived server would then serve whichever view
+ * the invocation that spawned it happened to carry, to every client that asks.
+ * Over HTTP the subject is the REQUESTER, so the session host asks for `shell`;
+ * `lucid` on a terminal is its own subject and passes what it resolved.
+ */
+export const listSessions = async (
+  root: string,
+  view: View = "shell",
+): Promise<SessionSummary[]> => {
   const scanRoot = resolve(root);
-  // Read ONCE for the whole listing rather than per row: one invocation is one
-  // view, and a row that disagreed with its neighbours would be a puzzle.
-  const view = resolveView(process.env);
   // Every record's `log.ndjson`: `<dir>/<stem>/log.ndjson`. In the canonical
   // layout that `<dir>` is a project's `.lucid/`, so the artifact sits beside
   // the record INSIDE `.lucid/` and the artifact dir is the record's own
@@ -87,7 +94,7 @@ export const listSessions = async (root: string): Promise<SessionSummary[]> => {
         // View-aware, exactly as `open`'s `url` is (plan 06): an integration
         // running in a chat app's pane lists sessions and surfaces `viewer`,
         // and handing it the shell URL there is the failure this plan exists
-        // to remove - one surface honouring the rule while another quietly
+        // to remove - one emitter honouring the rule while another quietly
         // emits the thing it forbids.
         ...(identity
           ? { viewer: selectOpenUrl({ view, hubShell: undefined, identity }) }

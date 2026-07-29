@@ -125,7 +125,7 @@ const mountIdOf = (identity: IdentityResponse): string | null =>
  *
  * That rejection is scoped to the shell, and `soloViewerUrl` below returns
  * exactly the URL rejected here (plan 06, D-013). The nesting hazard belongs
- * to the SURFACE, not to the URL: an embedded pane in a chat app has no outer
+ * to the VIEW, not to the URL: an embedded pane in a chat app has no outer
  * chrome to nest inside, and the chat app itself plays the shell's role there.
  * Read unscoped, this comment makes the sibling look like a mistake to delete.
  */

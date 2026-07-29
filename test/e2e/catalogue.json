@@ -308,7 +308,7 @@
           "status": "covered",
           "testFile": "test/e2e/solo-view.e2e.ts",
           "testName": "solo with a hub UP returns the mounted solo viewer, still hub-hosted",
-          "mutation": "src/cli/view.ts: write the solo branch as `hubShell ?? soloViewerUrl(identity)` - the hub-hosted arm returns the shell url"
+          "mutation": "src/server/view.ts: write the solo branch as `hubShell ?? soloViewerUrl(identity)` - the hub-hosted arm returns the shell url"
         },
         {
           "id": "open-non-canonical-artifact-location",

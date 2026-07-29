@@ -24,8 +24,8 @@
  *   pane offers navigation the conversation already owns.
  */
 
-import type { IdentityResponse } from "../server/discovery.ts";
-import { soloViewerUrl, viewerUrl } from "../server/discovery.ts";
+import type { IdentityResponse } from "./discovery.ts";
+import { soloViewerUrl, viewerUrl } from "./discovery.ts";
 
 export type View = "solo" | "shell";
 
@@ -79,3 +79,16 @@ export const selectOpenUrl = (args: {
   readonly identity: IdentityResponse;
 }): string =>
   args.view === "solo" ? soloViewerUrl(args.identity) : (args.hubShell ?? viewerUrl(args.identity));
+
+/**
+ * Whether a launch that WOULD open a browser window still should, given the
+ * view (plan 06).
+ *
+ * A predicate rather than an inline conjunct because the call site is inside a
+ * spawn-and-poll path: dropping the check there reds nothing, which is how the
+ * first version of this shipped untested. Every launch decision the product
+ * makes routes through here or through `selectOpenUrl`, so a new launcher gets
+ * the behaviour rather than having to remember it.
+ */
+export const wantsBrowserWindow = (requested: boolean, view: View): boolean =>
+  requested && view !== "solo";

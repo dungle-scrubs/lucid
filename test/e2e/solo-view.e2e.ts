@@ -18,7 +18,7 @@ import { on } from "./locators.ts";
  *
  * Inside a chat desktop app the browser pane is a window over ONE session -
  * the chat app already plays the role the shell plays for a terminal harness -
- * so `LUCID_VIEW=embedded` makes `open` return the shell-free review URL
+ * so `LUCID_VIEW=solo` makes `open` return the shell-free review URL
  * and pop no browser. Without it nothing changes at all, which is what the
  * control arms below are for.
  */
@@ -40,7 +40,8 @@ const launches = async (path: string): Promise<{ how: string; url: string }[]> =
     .map((line) => JSON.parse(line) as { how: string; url: string });
 
 /** The review UI, as opposed to the artifact-with-overlay mount root or the
- *  shell: the composer is the view a human types feedback into. */
+ *  shell: the composer is what a human types feedback into, and it is only on
+ *  the review page. */
 const showsTheReviewUi = async (page: import("@playwright/test").Page): Promise<void> => {
   await expect(on(page).messageInput()).toBeVisible({ timeout: 15_000 });
 };
