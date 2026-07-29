@@ -1,15 +1,5 @@
 import { css, html, LitElement, type PropertyValues } from "lit";
 
-/** A CSP-nonced <style>: when the server lifted a document CSP into a header
- *  (plan 04, #42) the bootstrap carried a nonce, and every style the overlay
- *  creates at runtime must wear it or the lifted policy blocks it. */
-const noncedStyle = (): HTMLStyleElement => {
-  const style = noncedStyle();
-  const nonce = (window as { __LUCID__?: { nonce?: string } }).__LUCID__?.nonce;
-  if (nonce) style.nonce = nonce;
-  return style;
-};
-
 import {
   type Anchor,
   captureElement,
@@ -24,6 +14,16 @@ import {
   type PayloadAnnotationLike,
   type QueuedAnchorLike,
 } from "../shared/protocol.ts";
+
+/** A CSP-nonced <style>: when the server lifted a document CSP into a header
+ *  (plan 04, #42) the bootstrap carried a nonce, and every style the overlay
+ *  creates at runtime must wear it or the lifted policy blocks it. */
+const noncedStyle = (): HTMLStyleElement => {
+  const style = document.createElement("style");
+  const nonce = (window as { __LUCID__?: { nonce?: string } }).__LUCID__?.nonce;
+  if (nonce) style.nonce = nonce;
+  return style;
+};
 
 const OVERLAY_ROOT_ID = "__lucid_overlay_root";
 const INTERACTIVE =
