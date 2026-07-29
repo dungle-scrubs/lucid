@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { parseHTML } from "linkedom";
 import { marked } from "marked";
-import { ARTIFACT_DIR, projectRootOf } from "../core/paths.ts";
+import { ARTIFACT_DIR, canonicalArtifactPath, projectRootOf } from "../core/paths.ts";
 
 /**
  * Planner -> Lucid bridge (render half). Turns a planner living document
@@ -32,8 +32,20 @@ export const SOURCE_META = "lucid:plan-source";
  * anything at all, and the only question is whether it declares a source.
  */
 export const renderedSourceOf = (html: string): string | null => {
-  const match = new RegExp(`<meta name="${SOURCE_META}" content="([^"]*)"`).exec(html);
-  return match?.[1] === undefined ? null : match[1].replace(/&amp;/g, "&").replace(/&quot;/g, '"');
+  // Bounded to the HEAD: the stamp is written there, and scanning the whole
+  // document would let a `<meta>` in the body of an UNSTAMPED page (one
+  // rendered before the stamp existed) answer for it.
+  const head = html.slice(0, html.search(/<\/head>/i) + 1 || html.length);
+  const match = new RegExp(`<meta name="${SOURCE_META}" content="([^"]*)"`).exec(head);
+  if (match?.[1] === undefined) return null;
+  // `&amp;` LAST, or a path containing the literal text `&quot;` decodes to a
+  // quote it never had - and `&lt;` was escaped on the way in and never
+  // unescaped, so a path containing `<` could not match its own stamp and the
+  // doc could never re-render its own artifact without --force.
+  return match[1]
+    .replace(/&lt;/g, "<")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
 };
 
 /**
@@ -62,7 +74,10 @@ export const renderedSourceOf = (html: string): string | null => {
  */
 export const planArtifactPath = (doc: string, out?: string): string => {
   if (out !== undefined) return resolve(out);
-  const docPath = resolve(doc);
+  // Realpath'd, like every other identity surface (plan 05, M1.1): a symlink
+  // and its target are ONE document, and deriving two artifact paths from them
+  // would mint two review sessions for one file.
+  const docPath = canonicalArtifactPath(doc);
   const stem = basename(docPath).replace(/\.md$/i, "");
   const root = projectRootOf(dirname(docPath));
   if (root === null) return resolve(dirname(docPath), `${stem}.lucid.html`);

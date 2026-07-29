@@ -534,8 +534,10 @@ describe("render refuses to overwrite another doc's artifact (plan 05, the safet
     // but does not make impossible.
     await expect(runPlanRender(b, { out: target })).rejects.toThrow(/refusing to overwrite/);
     const message = await runPlanRender(b, { out: target }).catch((e: Error) => e.message);
-    expect(message).toContain(a);
-    expect(message).toContain(b);
+    // Named by their project-relative spelling - the same form the stamp
+    // carries, so the message and the file agree.
+    expect(message).toContain("a.md");
+    expect(message).toContain("b.md");
     // And the first doc's artifact is untouched.
     expect(await Bun.file(target).text()).toContain("# a".replace("# ", ""));
   });
@@ -577,5 +579,48 @@ describe("render refuses to overwrite another doc's artifact (plan 05, the safet
     await mkdir(join(root, ".lucid"), { recursive: true });
     await writeFile(planArtifactPath(a), "<!doctype html><html><body>mine</body></html>");
     await expect(runPlanRender(a, {})).rejects.toThrow(/refusing to overwrite/);
+  });
+});
+
+describe("the stamp is portable and identity-consistent (plan 05, review nits 4/5)", () => {
+  const durable = async (): Promise<string> => {
+    const base = join(homedir(), ".cache", "lucid-placement-tests");
+    await mkdir(base, { recursive: true });
+    const d = await realpath(await mkdtemp(join(base, "s-")));
+    dirs.push(d);
+    await mkdir(join(d, ".git"), { recursive: true });
+    return d;
+  };
+
+  test("the recorded source is project-relative, not an absolute machine path", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const { planArtifactPath, renderedSourceOf } = await import("../src/plan/render.ts");
+    const root = await durable();
+    await mkdir(join(root, "docs"), { recursive: true });
+    const doc = join(root, "docs", "notes.md");
+    await writeFile(doc, "# notes\n");
+    await runPlanRender(doc, {});
+    const stamped = renderedSourceOf(await Bun.file(planArtifactPath(doc)).text());
+    // The artifact is committed and read on another machine, where
+    // /Users/<someone>/... compares equal to nothing.
+    expect(stamped).toBe(join("docs", "notes.md"));
+    expect(stamped?.startsWith("/")).toBe(false);
+  });
+
+  test("a symlinked doc is ONE document, like every other identity surface", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const { planArtifactPath } = await import("../src/plan/render.ts");
+    const { symlink } = await import("node:fs/promises");
+    const root = await durable();
+    const real = join(root, "notes.md");
+    await writeFile(real, "# notes\n");
+    const link = join(root, "link.md");
+    await symlink(real, link);
+
+    await runPlanRender(real, {});
+    // Same document through its other spelling: the same artifact, and NOT a
+    // refusal - which is what proves the stamp is realpath'd too.
+    await runPlanRender(link, {});
+    expect(planArtifactPath(link)).toBe(planArtifactPath(real));
   });
 });

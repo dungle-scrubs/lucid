@@ -1,11 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { writeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver } from "../core/deliver.ts";
 import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
-import { ARTIFACT_DIR, sessionPaths } from "../core/paths.ts";
+import { ARTIFACT_DIR, canonicalArtifactPath, projectRootOf, sessionPaths } from "../core/paths.ts";
 import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
 import { themeReadiness, themeWarning } from "../core/theme.ts";
 import { registerSession } from "../core/registry.ts";
@@ -719,7 +719,14 @@ export const runPlanRender = async (
       detail: { path: doc },
     });
   }
-  const source = resolve(doc);
+  // Realpath'd, like every other identity surface (plan 05, M1.1): a symlink
+  // and its target are one document, not two artifacts with two sessions. And
+  // project-RELATIVE where there is a project, because the stamp is written
+  // into a file meant to be committed and read on another machine, where an
+  // absolute /Users/<someone>/ path compares equal to nothing.
+  const abs = canonicalArtifactPath(doc);
+  const sourceRoot = projectRootOf(dirname(abs));
+  const source = sourceRoot === null ? abs : relative(sourceRoot, abs);
   const html = renderPlanDoc(markdown, {
     source,
     ...(options.title !== undefined ? { title: options.title } : {}),

@@ -103,3 +103,27 @@ describe("flatName gives distinct docs distinct names", () => {
     expect(flatName(`${long}${sep}a`, "b")).not.toBe(flatName(long, `a${sep}b`));
   });
 });
+
+describe("the source stamp round-trips (plan 05, review nits 1/2/4/5)", () => {
+  test("a path containing < or the literal text &quot; survives the round trip", async () => {
+    const { renderPlanDoc, renderedSourceOf } = await import("../src/plan/render.ts");
+    for (const source of ["/tmp/a<b/x.md", "/tmp/&quot;/x.md", "/tmp/a&b/x.md", '/tmp/a"b.md']) {
+      // A path that cannot match its own stamp can never re-render its own
+      // artifact without --force.
+      expect(renderedSourceOf(renderPlanDoc("# x\n", { source }))).toBe(source);
+    }
+  });
+
+  test("a <meta> in the document BODY cannot answer for the stamp", async () => {
+    const { renderPlanDoc, renderedSourceOf, SOURCE_META } = await import("../src/plan/render.ts");
+    const planted = `<meta name="${SOURCE_META}" content="/tmp/not-me.md" />`;
+    // Unstamped, with the fake in the body: the reader must find nothing
+    // rather than trusting content the document itself supplied.
+    const page = renderPlanDoc(`# x\n\n${planted}\n`, {});
+    expect(renderedSourceOf(page)).toBeNull();
+    // And with a real stamp, the head wins.
+    expect(renderedSourceOf(renderPlanDoc(`# x\n\n${planted}\n`, { source: "/tmp/me.md" }))).toBe(
+      "/tmp/me.md",
+    );
+  });
+});
