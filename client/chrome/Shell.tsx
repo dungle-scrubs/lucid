@@ -106,12 +106,24 @@ const TabAttention = ({ handle }: { readonly handle: SessionHandle }) => {
 
 const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly active: boolean }) => {
   const handle = getSession(sessionKey);
+  const ref = useRef<HTMLDivElement>(null);
+  // Reachability, centralised (plan 03, M2.3 / R1): EVERY activation path -
+  // click, palette, picker, ⌘digit/bracket, ?s= boot, CLI open, close
+  // promotion - funnels through `activate` flipping exactly one tab to
+  // active, so this one effect is the single line that guarantees the active
+  // tab is never parked outside the scrollable strip's viewport. It runs on
+  // the render that MAKES the tab active, so a tab that did not exist a tick
+  // ago (a fresh open) is scrolled once it is real - no DOM query races.
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [active]);
   if (!handle) return null;
   // Title only (D-012): the project a colliding name used to carry as a
   // qualifier is the GROUP heading's job now; the tooltip carries the path.
   const label = tabLabel({ key: sessionKey, name: handle.config.name });
   return (
     <div
+      ref={ref}
       data-test="shell-tab"
       data-active={active ? "true" : "false"}
       className={`group -ml-px flex min-w-0 max-w-[220px] flex-none items-center gap-1.5 border-x border-ink-600 px-3 text-[12px] ${
@@ -405,6 +417,9 @@ const TabStrip = () => {
   const sessions = useHub((s) => s.sessions);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [fades, setFades] = useState({ left: false, right: false });
+  /** Attention dots hidden past an edge (D-023): the fade on that side wears a
+   *  marker, so an off-screen question is not an invisible one. */
+  const [hiddenAttn, setHiddenAttn] = useState({ left: false, right: false });
 
   const groups = groupTabs(sessionKeys, sessions);
 
@@ -416,6 +431,20 @@ const TabStrip = () => {
       // -1: fractional scroll widths round; a strip that fits must read as fitting.
       const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
       setFades((f) => (f.left === left && f.right === right ? f : { left, right }));
+      // Which side hides attention: a tab wearing a dot whose box sits fully
+      // outside the visible window. offsetLeft is layout position - unaffected
+      // by the scroll - so [scrollLeft, scrollLeft+clientWidth] is the window.
+      let attnLeft = false;
+      let attnRight = false;
+      for (const dot of el.querySelectorAll('[data-test="tab-attention"]')) {
+        const tab = dot.closest('[data-test="shell-tab"]') as HTMLElement | null;
+        if (!tab) continue;
+        if (tab.offsetLeft + tab.offsetWidth < el.scrollLeft) attnLeft = true;
+        else if (tab.offsetLeft > el.scrollLeft + el.clientWidth) attnRight = true;
+      }
+      setHiddenAttn((a) =>
+        a.left === attnLeft && a.right === attnRight ? a : { left: attnLeft, right: attnRight },
+      );
     };
     measure();
     el.addEventListener("scroll", measure, { passive: true });
@@ -475,15 +504,23 @@ const TabStrip = () => {
         <div
           data-test="tabbar-fade-left"
           aria-hidden
-          className="pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-ink-900 to-transparent"
-        />
+          className="pointer-events-none absolute inset-y-0 left-0 flex w-8 items-center bg-gradient-to-r from-ink-900 to-transparent"
+        >
+          {hiddenAttn.left ? (
+            <span data-test="fade-attention" data-side="left" className="ml-1 size-1.5 bg-user" />
+          ) : null}
+        </div>
       ) : null}
       {fades.right ? (
         <div
           data-test="tabbar-fade-right"
           aria-hidden
-          className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-ink-900 to-transparent"
-        />
+          className="pointer-events-none absolute inset-y-0 right-0 flex w-8 items-center justify-end bg-gradient-to-l from-ink-900 to-transparent"
+        >
+          {hiddenAttn.right ? (
+            <span data-test="fade-attention" data-side="right" className="mr-1 size-1.5 bg-user" />
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

@@ -99,6 +99,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   editNote: (): Locator => root.locator(hook("edit-note")),
   editQueued: (): Locator => root.locator(hook("edit-queued")),
   enterDiff: (): Locator => root.locator(hook("enter-diff")),
+  fadeAttention: (): Locator => root.locator(hook("fade-attention")),
   foldToggle: (): Locator => root.locator(hook("fold-toggle")),
   foldedText: (): Locator => root.locator(hook("folded-text")),
   fork: (): Locator => root.locator(hook("fork")),

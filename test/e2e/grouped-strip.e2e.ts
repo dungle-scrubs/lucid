@@ -1,4 +1,4 @@
-import { hook, on } from "./locators.ts";
+import { chord, hook, on } from "./locators.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -124,4 +124,79 @@ test("edge fades exist only while content overflows that edge (D-013)", async ({
     });
   await expect(on(page).tabbarFadeLeft()).toHaveCount(1);
   await expect(on(page).tabbarFadeRight()).toHaveCount(0);
+});
+
+/** The active tab's box sits inside the scroller's visible window. */
+const activeTabInView = async (page: Page): Promise<boolean> =>
+  on(page)
+    .shellTabbar()
+    .evaluate((bar) => {
+      const scroller = bar.firstElementChild as HTMLElement;
+      const tab = scroller.querySelector('[data-test="shell-tab"][data-active="true"]');
+      if (!tab) return false;
+      const t = (tab as HTMLElement).getBoundingClientRect();
+      const s = scroller.getBoundingClientRect();
+      return t.left >= s.left - 1 && t.right <= s.right + 1;
+    });
+
+test("every activation path scrolls the tab into view on a narrow strip (M2.3, R1)", async ({
+  page,
+}) => {
+  await twoProjectsFourTabs(page);
+  await page.setViewportSize({ width: 480, height: 700 });
+  await expect(on(page).tabbarFadeRight()).toHaveCount(1); // genuinely overflowing
+
+  // ⌘1 - the FIRST tab, currently scrolled with. Then ⌘4 - the far end.
+  await page.keyboard.press(chord("1"));
+  await expect(page.locator(`${hook("shell-tab")}[data-active="true"]`)).toContainText("Beta one");
+  expect(await activeTabInView(page)).toBe(true);
+  await page.keyboard.press(chord("4"));
+  await expect(page.locator(`${hook("shell-tab")}[data-active="true"]`)).toContainText("Alpha two");
+  expect(await activeTabInView(page)).toBe(true);
+
+  // Palette selection is another path through the same choke point.
+  await page.keyboard.press(chord("k"));
+  await page.locator(`${hook("palette")} [cmdk-item]`, { hasText: "Beta two" }).click();
+  await expect(page.locator(`${hook("shell-tab")}[data-active="true"]`)).toContainText("Beta two");
+  expect(await activeTabInView(page)).toBe(true);
+
+  // Bracket-stepping walks the strip; each stop is visible.
+  await page.keyboard.press(`${chord("Shift+]")}`);
+  expect(await activeTabInView(page)).toBe(true);
+});
+
+test("an off-screen question marks the fade on its side (D-023)", async ({ page }) => {
+  await twoProjectsFourTabs(page);
+  await page.setViewportSize({ width: 480, height: 700 });
+
+  // Land on the FIRST tab so the last one is far off the right edge.
+  await page.keyboard.press(chord("1"));
+  expect(await activeTabInView(page)).toBe(true);
+  await expect(on(page).fadeAttention()).toHaveCount(0); // no attention yet
+
+  // A question lands on the far-right tab (Alpha two) while it is hidden.
+  const alphaTwo = join(cli?.dir ?? "", "alpha-two.html");
+  const group = join(cli?.dir ?? "", "one-question.json");
+  await writeFile(
+    group,
+    JSON.stringify([
+      {
+        id: "q",
+        header: "Pick",
+        question: "Which one?",
+        choices: [{ id: "a", label: "A", recommended: true }],
+      },
+    ]),
+    "utf8",
+  );
+  await cli?.run(["ask", alphaTwo, "--group", group]);
+
+  // The right fade wears the marker: hidden attention, said at the edge.
+  const marker = on(page).fadeAttention();
+  await expect(marker).toHaveCount(1);
+  await expect(marker).toHaveAttribute("data-side", "right");
+
+  // Scrolling the tab into view clears it - the attention is no longer hidden.
+  await page.keyboard.press(chord("4"));
+  await expect(on(page).fadeAttention()).toHaveCount(0);
 });
