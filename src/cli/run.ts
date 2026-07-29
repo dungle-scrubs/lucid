@@ -30,7 +30,7 @@ import { ArtifactError, NotFoundError, ServerError, ValidationError } from "../e
 import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload, parseWaitPayloadInput } from "../plan/ingest.ts";
-import { planArtifactPath, renderPlanDoc } from "../plan/render.ts";
+import { planArtifactPath, renderPlanDoc, renderedSourceOf } from "../plan/render.ts";
 import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
 import {
   discoverLiveServer,
@@ -701,6 +701,8 @@ export interface PlanRenderOptions {
   readonly out?: string;
   readonly title?: string;
   readonly stage?: string;
+  /** Overwrite an artifact rendered from a DIFFERENT doc. */
+  readonly force?: boolean;
 }
 
 /** `lucid plan render <doc.md>` - render a planner doc to a Lucid artifact. */
@@ -717,7 +719,9 @@ export const runPlanRender = async (
       detail: { path: doc },
     });
   }
+  const source = resolve(doc);
   const html = renderPlanDoc(markdown, {
+    source,
     ...(options.title !== undefined ? { title: options.title } : {}),
     ...(options.stage !== undefined ? { stage: options.stage } : {}),
   });
@@ -725,6 +729,24 @@ export const runPlanRender = async (
   // The artifact folder may not exist yet - this is often a project's FIRST
   // render, and `writeFile` answered that with a bare ENOENT.
   await mkdir(dirname(outPath), { recursive: true });
+  // The artifact folder is flat, so two docs can want one path. `flatName` is
+  // built to be injective and swept for it - but this refusal does not depend
+  // on that being true, which is the point: a silent overwrite here also
+  // silently attaches the next `open` to the FIRST doc's review history (the
+  // basename is unchanged, so the stem-collision guard passes). Loud beats
+  // provably-correct-this-time. Re-rendering the SAME doc still overwrites,
+  // which is what an idempotent render means.
+  const existing = await readFile(outPath, "utf8").catch(() => null);
+  const owner = existing === null ? null : renderedSourceOf(existing);
+  if (existing !== null && owner !== source && options.force !== true) {
+    throw new ValidationError({
+      message:
+        `refusing to overwrite ${outPath} - it was rendered from ${owner ?? "a document this render cannot identify"}, not from ${source}. ` +
+        `Two docs deriving one artifact would share one review history, and annotations would carry onto the other document's content. ` +
+        `Pass --out to write elsewhere, or --force to replace it.`,
+      detail: { artifact: outPath, renderedFrom: owner, rendering: source },
+    });
+  }
   await writeFile(outPath, html);
   print({ artifact: outPath, next: `lucid open ${outPath}` });
 };

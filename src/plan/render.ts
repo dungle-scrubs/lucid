@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { basename, dirname, relative, resolve } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import { parseHTML } from "linkedom";
 import { marked } from "marked";
 import { ARTIFACT_DIR, projectRootOf } from "../core/paths.ts";
@@ -16,7 +16,25 @@ import { ARTIFACT_DIR, projectRootOf } from "../core/paths.ts";
 export interface RenderOptions {
   readonly title?: string;
   readonly stage?: string;
+  /** The doc this was rendered FROM, recorded in the page so a later render
+   *  can tell "the same doc again" from "a different doc, same name". */
+  readonly source?: string;
 }
+
+/** The meta name carrying {@link RenderOptions.source}. */
+export const SOURCE_META = "lucid:plan-source";
+
+/**
+ * The doc an existing artifact was rendered from, or null when it carries no
+ * stamp (rendered before this existed, or not a rendered plan at all).
+ *
+ * Read with a regex rather than a DOM parse: this runs on a file that may be
+ * anything at all, and the only question is whether it declares a source.
+ */
+export const renderedSourceOf = (html: string): string | null => {
+  const match = new RegExp(`<meta name="${SOURCE_META}" content="([^"]*)"`).exec(html);
+  return match?.[1] === undefined ? null : match[1].replace(/&amp;/g, "&").replace(/&quot;/g, '"');
+};
 
 /**
  * Where `lucid plan render <doc>` puts its artifact: the `--out` path when one
@@ -58,71 +76,76 @@ export const planArtifactPath = (doc: string, out?: string): string => {
 /**
  * A name unique across the project, because the artifact folder is FLAT.
  *
- * The directory tree used to supply uniqueness: every plan lives in its own
- * folder and each carries an `implementation.md`. Rendering them all into one
- * `.lucid/` collapsed six documents onto one path, and `writeFile` has no
- * existence check - so rendering plan 02 silently overwrote plan 01's
- * artifact. Worse, the basename is unchanged by the overwrite, so the
- * stem-collision guard sees the record's own owner and passes: the next
- * `lucid open` mints a new VERSION inside the first plan's session, and two
- * unrelated documents share one review history.
+ * Every plan lives in its own folder and each carries an `implementation.md`,
+ * so rendering into one `.lucid/` collapses six documents onto one path. A
+ * collision here is silent in the worst way: the overwrite keeps the basename,
+ * so the stem-collision guard sees its own owner, and the next `lucid open`
+ * mints a new VERSION inside the first document's session.
  *
- * So the path is folded into the name - and the fold must be REVERSIBLE,
- * because with no existence check the whole design rests on this function
- * being injective. A first version was not: it dropped leading dots (`.plans/`
- * and `plans/` became one name), used `-` as both separator and a legal
- * segment character (`a-b/c` and `a/b-c` became one name), and erased the
- * dir/file boundary (`plans/05/impl` and `plans/05-impl`). Every one of those
- * is an ordinary layout, and hyphenated directory names are this repo's own
- * house style.
+ * Three hand-rolled reversible encodings were tried and all three were broken
+ * by inputs nobody had written down - doubling (`a-/a` and `a/-a` both spell
+ * `a---a`), a `dot-` marker (identical to a directory named `dot`), and
+ * splitting on a backslash (an ordinary POSIX filename character). The fourth
+ * was correct and unusable: it produced names beginning with `-`, which every
+ * CLI tool reads as a flag.
  *
- * The encoding: a literal `-` doubles to `--`, segments join on a single `-`,
- * and a leading `.` becomes a `dot-` prefix (itself unambiguous, since a real
- * `dot-x` directory encodes as `dot--x`). Runs of hyphens are therefore even
- * for escaped hyphens and odd where a separator sits, which is what makes the
- * name decodable and the mapping one-to-one.
+ * So the name stops trying to be reversible. A READABLE slug carries the path
+ * for a human reading `.lucid/`, and a digest over the canonical (segments,
+ * stem) pair carries uniqueness. The slug may be as lossy as it likes. And
+ * `runPlanRender` refuses to overwrite an artifact rendered from a different
+ * doc, so even a digest collision is a refusal rather than a silent merge -
+ * which is what makes this the safe shape rather than the clever one.
  */
-const encodeSegment = (seg: string): string => {
-  const escaped = seg.replace(/-/g, "--");
-  return escaped.startsWith(".") ? `dot-${escaped.slice(1)}` : escaped;
-};
-
-/**
- * Bytes, not UTF-16 units: the limit being respected is the filesystem's
- * (NAME_MAX is 255 BYTES on ext4, which is what a Linux checkout of a
- * committed record hits), and one CJK character is three bytes to one unit.
- * Left under 255 by more than the `.lucid.html` suffix, so the caller's
- * concatenation cannot cross it either.
- */
+const DIGEST_HEX = 12;
 const NAME_BUDGET_BYTES = 200;
 
-export const flatName = (relDir: string, stem: string): string => {
-  const encodedStem = encodeSegment(stem);
-  const segments =
-    relDir === "" || relDir === "."
-      ? []
-      : relDir
-          .split(/[/\\]/)
-          .filter((seg) => seg !== "" && seg !== ".")
-          .map(encodeSegment);
-  const full = [...segments, encodedStem].join("-");
-  if (Buffer.byteLength(full, "utf8") <= NAME_BUDGET_BYTES) return full;
+/** Path segments, canonical: `a/./b`, `a//b` and `a/b` are one directory. */
+const segmentsOf = (relDir: string): string[] =>
+  relDir === "" || relDir === "."
+    ? []
+    : // `sep`, not a `[/\\]` class: a backslash is an ORDINARY filename
+      // character on POSIX, so splitting on it made a single directory named
+      // `a\b` and the nested pair `a/b` one name.
+      relDir.split(sep).filter((s) => s !== "" && s !== ".");
 
-  // Past the budget the name is truncated, so uniqueness comes from a digest
-  // of the UNencoded input - which is what it was already keyed on.
-  const digest = createHash("sha256").update(`${relDir}/${stem}`).digest("hex").slice(0, 8);
+/** Readable, filesystem-safe, and deliberately lossy - the digest carries
+ *  uniqueness, so this only has to help a human recognise the file. */
+const slugOf = (parts: readonly string[]): string =>
+  parts
+    .join("-")
+    .replace(/^[.-]+/, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+
+export const flatName = (relDir: string, stem: string): string => {
+  const parts = [...segmentsOf(relDir), stem];
+  // Keyed on the ARRAY, not on a joined string: a concatenation is itself
+  // ambiguous over the pair it is meant to distinguish.
+  const digest = createHash("sha256")
+    .update(JSON.stringify(parts))
+    .digest("hex")
+    .slice(0, DIGEST_HEX);
+  const slug = slugOf(parts);
+  if (slug === "") return digest;
+
   const suffix = `-${digest}`;
   const room = NAME_BUDGET_BYTES - Buffer.byteLength(suffix, "utf8");
-  // By CODE POINT, so a surrogate pair is never split: `slice` cut one in half
-  // and produced a lone surrogate, i.e. a filename that is not valid UTF-8 -
-  // in bytes that are meant to be committed and read on another machine.
+  // By CODE POINT: `slice` cut a surrogate pair in half and produced a lone
+  // surrogate - a filename that is not valid UTF-8, in bytes meant to be
+  // committed and read on another machine. Bytes and not UTF-16 units because
+  // NAME_MAX is 255 BYTES on ext4, i.e. any Linux checkout of a record.
   let head = "";
-  for (const ch of full) {
+  for (const ch of slug) {
     if (Buffer.byteLength(head + ch, "utf8") > room) break;
     head += ch;
   }
   return `${head}${suffix}`;
 };
+
+/** Attribute-safe: the source is a filesystem path and may hold either quote. */
+const escapeAttr = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
 const DECISION_RE = /^\s*D-\d+\s*$/;
 
@@ -254,10 +277,14 @@ export const renderPlanDoc = (markdown: string, options: RenderOptions = {}): st
   const inner = document.body.innerHTML;
   const title = options.title ?? "Plan review";
   const eyebrow = options.stage ? `Plan review · ${options.stage}` : "Plan review";
+  const sourceStamp =
+    options.source === undefined
+      ? ""
+      : `<meta name="${SOURCE_META}" content="${escapeAttr(options.source)}" />`;
   return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${title}</title>
+${sourceStamp}<title>${title}</title>
 <style>${STYLE}</style></head>
 <body>
 <main class="doc">

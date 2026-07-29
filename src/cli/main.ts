@@ -192,15 +192,17 @@ const docArg = Args.file({ name: "doc" });
 const outOpt = Options.file("out").pipe(Options.optional);
 const titleOpt = Options.text("title").pipe(Options.optional);
 const stageOpt = Options.text("stage").pipe(Options.optional);
+const forceOpt = Options.boolean("force").pipe(Options.withDefault(false));
 const planRenderCommand = Command.make(
   "render",
-  { doc: docArg, out: outOpt, title: titleOpt, stage: stageOpt },
-  ({ doc, out, title, stage }) =>
+  { doc: docArg, out: outOpt, title: titleOpt, stage: stageOpt, force: forceOpt },
+  ({ doc, out, title, stage, force }) =>
     runEffect(() =>
       runPlanRender(doc, {
         out: Option.getOrUndefined(out),
         title: Option.getOrUndefined(title),
         stage: Option.getOrUndefined(stage),
+        force,
       }),
     ),
 );
@@ -219,7 +221,7 @@ const planCommand = Command.make("plan", {}, () =>
     // not go through either path. The usage goes to stderr where the words
     // belong, and the refusal answers on stdout in the envelope.
     process.stderr.write(
-      "lucid plan render <doc.md> [--out <file>] [--title <t>] [--stage <s>]\nlucid plan ingest --plan <name> [--payload <file>]  (or pipe `lucid wait` JSON to stdin)\n",
+      "lucid plan render <doc.md> [--out <file>] [--title <t>] [--stage <s>] [--force]\nlucid plan ingest --plan <name> [--payload <file>]  (or pipe `lucid wait` JSON to stdin)\n",
     );
     throw new LucidValidationError({
       message: "plan needs a subcommand - use one of 'render', 'ingest'",

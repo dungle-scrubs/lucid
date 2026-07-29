@@ -311,8 +311,9 @@ describe("the CLI open path inside a real project (plan 05, F5)", () => {
     const outPath = planArtifactPath(doc);
     expect(canonicalArtifactLocation(outPath)).toEqual({ ok: true });
     // Path-qualified: the artifact folder is FLAT, so the doc's location has
-    // to live in the name or two docs called notes.md collide.
-    expect(outPath).toBe(join(root, ".lucid", "docs-notes.lucid.html"));
+    // to live in the name or two docs called notes.md collide. A readable slug
+    // for the human plus a digest for uniqueness.
+    expect(outPath).toBe(join(root, ".lucid", "docs-notes-759cc11056a1.lucid.html"));
   });
 
   test("`lucid plan render` outside a project keeps the beside-the-doc derivation", async () => {
@@ -356,7 +357,7 @@ describe("plan render, actually run (plan 05, NEW-1/NEW-2)", () => {
     expect(existsSync(join(root, ".lucid"))).toBe(false);
 
     await runPlanRender(doc, {});
-    const out = join(root, ".lucid", "docs-notes.lucid.html");
+    const out = join(root, ".lucid", "docs-notes-759cc11056a1.lucid.html");
     expect(existsSync(out)).toBe(true);
     // And the path it just wrote is one its own `open` accepts.
     expect(canonicalArtifactLocation(out)).toEqual({ ok: true });
@@ -370,10 +371,8 @@ describe("plan render, actually run (plan 05, NEW-1/NEW-2)", () => {
       await writeFile(join(root, ".plans", plan, "implementation.md"), `# ${plan}\n`);
       await runPlanRender(join(root, ".plans", plan, "implementation.md"), {});
     }
-    // `.plans` -> `dot-plans` and the hyphen in `01-alpha` doubles: the fold
-    // is reversible, which is what keeps two docs from sharing one artifact.
-    const alpha = join(root, ".lucid", "dot-plans-01--alpha-implementation.lucid.html");
-    const beta = join(root, ".lucid", "dot-plans-02--beta-implementation.lucid.html");
+    const alpha = join(root, ".lucid", "plans-01-alpha-implementation-7046f555b85d.lucid.html");
+    const beta = join(root, ".lucid", "plans-02-beta-implementation-f9b3834d42bb.lucid.html");
     expect(existsSync(alpha)).toBe(true);
     expect(existsSync(beta)).toBe(true);
     // The overwrite was silent AND kept the basename, so the stem-collision
@@ -391,50 +390,45 @@ describe("plan render, actually run (plan 05, NEW-1/NEW-2)", () => {
     await runPlanRender(doc, {});
     await writeFile(doc, "# two\n");
     await runPlanRender(doc, {});
-    const out = join(root, ".lucid", "notes.lucid.html");
+    const out = join(root, ".lucid", "notes-ed60519b8a75.lucid.html");
     expect(await Bun.file(out).text()).toContain("two");
   });
 });
 
-describe("flatName is injective - the whole design rests on it (plan 05, REMAINING-1)", () => {
+describe("flatName: the name a human reads, and the digest that keeps it unique", () => {
   /**
-   * With no existence check before `writeFile`, two docs mapping to one name
-   * overwrite silently - and because the basename is unchanged, the
-   * stem-collision guard passes and the next `open` mints a version inside
-   * the FIRST doc's session. So the fold has to be reversible.
-   *
-   * Each pair below collided under the first version, and each is an ordinary
-   * layout: this repo has `.plans/`, and hyphenated directory names are its
-   * house style.
+   * The full property - distinct docs, distinct names - is swept by brute
+   * force in `test/flat-name.test.ts`. These are the surface facts.
    */
-  const pairs: readonly [string, string, string, string][] = [
-    [".plans", "implementation", "plans", "implementation"], // leading dot was dropped
-    ["a-b", "c", "a", "b-c"], // `-` was separator AND segment character
-    ["plans/05", "impl", "plans", "05-impl"], // dir/file boundary erased
-    [".a/.b", "x", "a/b", "x"], // dots at depth
-    [".docs", "notes", "docs", "notes"],
-    ["dot-plans", "x", ".plans", "x"], // the escape must not collide with a real `dot-` dir
-  ];
-
-  test("no ordinary layout collides with another", async () => {
+  test("a doc at the project root is slug + digest, with no path to carry", async () => {
     const { flatName } = await import("../src/plan/render.ts");
-    for (const [d1, s1, d2, s2] of pairs) {
-      expect(flatName(d1, s1), `${d1}/${s1} vs ${d2}/${s2}`).not.toBe(flatName(d2, s2));
-    }
+    expect(flatName("", "notes")).toMatch(/^notes-[0-9a-f]{12}$/);
+    expect(flatName("", "notes")).toBe(flatName(".", "notes"));
   });
 
-  test("a doc at the project root keeps its bare stem", async () => {
+  test("the slug carries the path for a human, the digest carries uniqueness", async () => {
     const { flatName } = await import("../src/plan/render.ts");
-    expect(flatName("", "notes")).toBe("notes");
-    expect(flatName(".", "notes")).toBe("notes");
+    const name = flatName(".plans/05-x", "implementation");
+    expect(name).toMatch(/^plans-05-x-implementation-[0-9a-f]{12}$/);
+  });
+
+  test("the name never starts with a hyphen - every CLI tool would read it as a flag", async () => {
+    const { flatName } = await import("../src/plan/render.ts");
+    for (const [d, st] of [
+      ["-a", "b"],
+      [".x", "y"],
+      ["--", "-"],
+      ["", "-z"],
+    ] as [string, string][]) {
+      expect(flatName(d, st).startsWith("-")).toBe(false);
+    }
   });
 
   test("the name stays inside the filesystem's BYTE limit, not its UTF-16 length", async () => {
     const { flatName } = await import("../src/plan/render.ts");
     // 100 CJK characters: ~103 UTF-16 units, so a LENGTH budget of 200 waves
     // it through untruncated - at ~309 bytes, past NAME_MAX (255 on ext4, i.e.
-    // any Linux checkout of a committed record). The count has to discriminate
-    // between the two budgets or it measures nothing.
+    // any Linux checkout of a committed record).
     const name = `${flatName("計".repeat(100), "実装")}.lucid.html`;
     expect(name.length).toBeLessThanOrEqual(200); // a length budget would pass this
     expect(Buffer.byteLength(name, "utf8")).toBeLessThanOrEqual(255); // only a byte budget passes this
@@ -443,14 +437,145 @@ describe("flatName is injective - the whole design rests on it (plan 05, REMAINI
   test("truncation never splits a surrogate pair", async () => {
     const { flatName } = await import("../src/plan/render.ts");
     const name = flatName("🙂".repeat(200), "x");
-    // Strip well-formed pairs; anything left in the surrogate range is a lone
-    // half - a filename that is not valid UTF-8, in bytes meant to be committed.
     expect(/[\uD800-\uDFFF]/.test(name.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ""))).toBe(false);
   });
+});
 
-  test("two long docs that truncate to the same head still differ", async () => {
-    const { flatName } = await import("../src/plan/render.ts");
-    const long = "x".repeat(300);
-    expect(flatName(`${long}/a`, "impl")).not.toBe(flatName(`${long}/b`, "impl"));
+describe("plan render, actually run (plan 05, NEW-1/NEW-2)", () => {
+  const durable = async (): Promise<string> => {
+    const base = join(homedir(), ".cache", "lucid-placement-tests");
+    await mkdir(base, { recursive: true });
+    const d = await realpath(await mkdtemp(join(base, "r-")));
+    dirs.push(d);
+    await mkdir(join(d, ".git"), { recursive: true });
+    return d;
+  };
+
+  /**
+   * `planArtifactPath` alone was tested, never `runPlanRender` - the same gap
+   * shape that let the placement rule ship against writers that violated it.
+   * Both defects below shipped green through it.
+   */
+  test("the first render in a project creates the artifact folder instead of ENOENT", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const root = await durable();
+    await mkdir(join(root, "docs"), { recursive: true });
+    const doc = join(root, "docs", "notes.md");
+    await writeFile(doc, "# notes\n\nA claim.\n");
+    expect(existsSync(join(root, ".lucid"))).toBe(false);
+
+    await runPlanRender(doc, {});
+    const out = join(root, ".lucid", "docs-notes-759cc11056a1.lucid.html");
+    expect(existsSync(out)).toBe(true);
+    // And the path it just wrote is one its own `open` accepts.
+    expect(canonicalArtifactLocation(out)).toEqual({ ok: true });
+  });
+
+  test("two docs with the SAME basename in different folders do not collide", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const root = await durable();
+    for (const plan of ["01-alpha", "02-beta"]) {
+      await mkdir(join(root, ".plans", plan), { recursive: true });
+      await writeFile(join(root, ".plans", plan, "implementation.md"), `# ${plan}\n`);
+      await runPlanRender(join(root, ".plans", plan, "implementation.md"), {});
+    }
+    const alpha = join(root, ".lucid", "plans-01-alpha-implementation-7046f555b85d.lucid.html");
+    const beta = join(root, ".lucid", "plans-02-beta-implementation-f9b3834d42bb.lucid.html");
+    expect(existsSync(alpha)).toBe(true);
+    expect(existsSync(beta)).toBe(true);
+    // The overwrite was silent AND kept the basename, so the stem-collision
+    // guard passed and the second doc minted a new version inside the first
+    // one's review history.
+    expect(await Bun.file(alpha).text()).toContain("01-alpha");
+    expect(await Bun.file(beta).text()).toContain("02-beta");
+  });
+
+  test("re-rendering the SAME doc overwrites its own artifact - render is idempotent", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const root = await durable();
+    const doc = join(root, "notes.md");
+    await writeFile(doc, "# one\n");
+    await runPlanRender(doc, {});
+    await writeFile(doc, "# two\n");
+    await runPlanRender(doc, {});
+    const out = join(root, ".lucid", "notes-ed60519b8a75.lucid.html");
+    expect(await Bun.file(out).text()).toContain("two");
+  });
+});
+
+describe("render refuses to overwrite another doc's artifact (plan 05, the safety net)", () => {
+  const durable = async (): Promise<string> => {
+    const base = join(homedir(), ".cache", "lucid-placement-tests");
+    await mkdir(base, { recursive: true });
+    const d = await realpath(await mkdtemp(join(base, "o-")));
+    dirs.push(d);
+    await mkdir(join(d, ".git"), { recursive: true });
+    return d;
+  };
+
+  /**
+   * The name function is collision-resistant, not provably injective - so the
+   * guarantee lives HERE. A silent overwrite would not merely lose a file: the
+   * basename survives it, so the stem-collision guard sees its own owner and
+   * the next `lucid open` mints a version inside the first doc's session.
+   */
+  test("an artifact rendered from a DIFFERENT doc is refused, naming both", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const { planArtifactPath } = await import("../src/plan/render.ts");
+    const root = await durable();
+    const a = join(root, "a.md");
+    const b = join(root, "b.md");
+    await writeFile(a, "# a\n");
+    await writeFile(b, "# b\n");
+    await runPlanRender(a, {});
+    const target = planArtifactPath(a);
+
+    // Force b onto a's artifact path - the collision the digest makes unlikely
+    // but does not make impossible.
+    await expect(runPlanRender(b, { out: target })).rejects.toThrow(/refusing to overwrite/);
+    const message = await runPlanRender(b, { out: target }).catch((e: Error) => e.message);
+    expect(message).toContain(a);
+    expect(message).toContain(b);
+    // And the first doc's artifact is untouched.
+    expect(await Bun.file(target).text()).toContain("# a".replace("# ", ""));
+  });
+
+  test("--force overwrites deliberately", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const { planArtifactPath } = await import("../src/plan/render.ts");
+    const root = await durable();
+    const a = join(root, "a.md");
+    const b = join(root, "b.md");
+    await writeFile(a, "# aaa\n");
+    await writeFile(b, "# bbb\n");
+    await runPlanRender(a, {});
+    const target = planArtifactPath(a);
+    await runPlanRender(b, { out: target, force: true });
+    expect(await Bun.file(target).text()).toContain("bbb");
+  });
+
+  test("re-rendering the same doc is never refused - render stays idempotent", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const { planArtifactPath } = await import("../src/plan/render.ts");
+    const root = await durable();
+    const a = join(root, "a.md");
+    await writeFile(a, "# one\n");
+    await runPlanRender(a, {});
+    await writeFile(a, "# two\n");
+    await runPlanRender(a, {});
+    expect(await Bun.file(planArtifactPath(a)).text()).toContain("two");
+  });
+
+  test("an artifact with no source stamp is treated as somebody else's", async () => {
+    const { runPlanRender } = await import("../src/cli/run.ts");
+    const { planArtifactPath } = await import("../src/plan/render.ts");
+    const root = await durable();
+    const a = join(root, "a.md");
+    await writeFile(a, "# a\n");
+    // A hand-written page, or one rendered before the stamp existed. Unknown
+    // provenance errs toward refusing - the recoverable direction.
+    await mkdir(join(root, ".lucid"), { recursive: true });
+    await writeFile(planArtifactPath(a), "<!doctype html><html><body>mine</body></html>");
+    await expect(runPlanRender(a, {})).rejects.toThrow(/refusing to overwrite/);
   });
 });
