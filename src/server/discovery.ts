@@ -111,16 +111,42 @@ export const discoverLiveServer = async (
   return handshake(descriptor.port, paths.artifactPath, descriptor.base ?? "");
 };
 
+/** The session's mount id when a server mounted it, else null. An
+ *  unrecognised base means this server did not mount the session, so there is
+ *  no prefix to carry - never string-concatenated into a URL. */
+const mountIdOf = (identity: IdentityResponse): string | null =>
+  /^\/s\/([a-f0-9]+)$/.exec(identity.base ?? "")?.[1] ?? null;
+
 /**
- * The URL a human opens for a live session. A dedicated server has its own
- * viewer page; a hub-mounted session (base "/s/<id>") is a TAB in the shell -
+ * The URL a human opens for a live session in the SHELL. A dedicated server
+ * has its own viewer page; a hub-mounted session (base "/s/<id>") is a TAB -
  * `<hub>/?s=<id>` - because `<hub>/s/<id>/__lucid/viewer` would render a
  * second chrome inside the one window.
+ *
+ * That rejection is scoped to the shell, and `soloViewerUrl` below returns
+ * exactly the URL rejected here (plan 06, D-013). The nesting hazard belongs
+ * to the SURFACE, not to the URL: an embedded pane in a chat app has no outer
+ * chrome to nest inside, and the chat app itself plays the shell's role there.
+ * Read unscoped, this comment makes the sibling look like a mistake to delete.
  */
 export const viewerUrl = (identity: IdentityResponse): string => {
-  const base = identity.base ?? "";
-  const mountId = /^\/s\/([a-f0-9]+)$/.exec(base)?.[1];
+  const mountId = mountIdOf(identity);
   return mountId
     ? `http://127.0.0.1:${identity.port}/?s=${mountId}`
     : `http://127.0.0.1:${identity.port}/__lucid/viewer`;
+};
+
+/**
+ * The same session's review UI with NO shell around it (plan 06, M1.2) - what
+ * a chat desktop app's embedded pane shows.
+ *
+ * No new route: `/__lucid/viewer` already serves the review UI, and the daemon
+ * routes `/s/<id>/*` into the same session-host body, so a hub-hosted session
+ * already has a shell-free URL. This only selects it. The mount prefix is
+ * carried, or the hub answers for a different session - or for none.
+ */
+export const soloViewerUrl = (identity: IdentityResponse): string => {
+  const mountId = mountIdOf(identity);
+  const base = mountId ? `/s/${mountId}` : "";
+  return `http://127.0.0.1:${identity.port}${base}/__lucid/viewer`;
 };
