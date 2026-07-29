@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 /**
@@ -95,6 +95,54 @@ export const canonicalArtifactPath = (input: string): string => {
       return abs;
     }
   }
+};
+
+/**
+ * The one folder artifacts live in, inside a project.
+ *
+ * Placement was documented (`skills/lucid/SKILL.md`) and unenforced, so an
+ * agent following the pre-02 convention wrote `<project>/lucid/<name>.html`
+ * and the record rule then correctly derived `<project>/lucid/.lucid/` -
+ * internally consistent, wrong place, found in the wild.
+ */
+export const ARTIFACT_DIR = ".lucid";
+
+/**
+ * The project an artifact belongs to: the nearest enclosing directory holding
+ * a `.git`, or null when there is none.
+ *
+ * The NEAREST, not the outermost: a package inside a monorepo keeps its own
+ * `.lucid/`, which is where someone working in that package will look.
+ */
+const projectRootOf = (dir: string): string | null => {
+  let current = dir;
+  for (;;) {
+    if (existsSync(join(current, ".git"))) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+};
+
+/**
+ * Is this artifact where artifacts go (plan 05, M3.2, D-011)?
+ *
+ * Judged against the artifact's own project root, NOT against `sessionPaths` -
+ * the record-beside-artifact rule is correct and unchanged; this is the
+ * separate question of where the ARTIFACT itself belongs.
+ *
+ * A path outside any project is ok, and that absence IS the escape hatch
+ * (D-015): an agent scratchpad has no root to be canonical against, and D-022's
+ * ephemeral records already live there. There is no opt-out flag.
+ */
+export const canonicalArtifactLocation = (
+  artifactPath: string,
+): { ok: true } | { ok: false; canonical: string } => {
+  const abs = canonicalArtifactPath(artifactPath);
+  const root = projectRootOf(dirname(abs));
+  if (root === null) return { ok: true };
+  const canonical = join(root, ARTIFACT_DIR, basename(abs));
+  return abs === canonical ? { ok: true } : { ok: false, canonical };
 };
 
 /** Compute the full session layout for an artifact path. */

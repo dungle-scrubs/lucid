@@ -16,6 +16,7 @@ import type { AttendantStamp, LogEvent } from "./events.ts";
 import { foldLog, type FoldedState } from "./fold.ts";
 import type { SessionPaths } from "./paths.ts";
 import {
+  canonicalArtifactLocation,
   canonicalArtifactPath,
   sessionName,
   sessionPaths,
@@ -273,6 +274,33 @@ export interface OpenResult {
  *  - resume on SUSPENDED: reconcile file vs current.html, session_resumed (D-061)
  *  - idempotent open on ACTIVE: reconcile only
  */
+/**
+ * Refuse an artifact that is not where artifacts go (plan 05, M3.2, D-011).
+ *
+ * The rule is `<project>/.lucid/<name>.html`, and it was documented and
+ * unenforced: an agent following the pre-02 convention wrote
+ * `<project>/lucid/<name>.html`, the record rule correctly derived
+ * `<project>/lucid/.lucid/`, and the result was internally consistent and in
+ * the wrong place. Found in the wild and moved by hand - the product must not
+ * depend on every agent having read the current skill.
+ *
+ * The refusal NAMES the canonical path and moves nothing. Migration is the
+ * human's act, the same rule as 02's layout migration and M1.1's R3 guard: a
+ * tool that relocates someone's file to satisfy its own convention is worse
+ * than one that explains itself and stops.
+ */
+export const assertCanonicalLocation = (input: string): void => {
+  const location = canonicalArtifactLocation(input);
+  if (location.ok) return;
+  throw new ValidationError({
+    message:
+      `refusing to open "${input}" - artifacts live in the project's ".lucid" folder, and this one does not. ` +
+      `Move it to "${location.canonical}" and open that. ` +
+      `Nothing has been created; the record follows the artifact, so opening it here would leave a session beside a file that has to move anyway.`,
+    detail: { artifact: canonicalArtifactPath(input), canonical: location.canonical },
+  });
+};
+
 /**
  * Refuse a realpath unification that would strand history (plan 05, M1.1, R3).
  *
