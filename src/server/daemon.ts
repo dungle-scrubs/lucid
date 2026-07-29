@@ -547,14 +547,19 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
 
   /** The attention map every known session keys by its id. A per-session log
    *  read is skipped by the cache when nothing changed, so an idle listing
-   *  costs one `stat` per artifact. Missing/unreadable logs are simply absent. */
+   *  costs one `stat` per artifact. A not-yet-created log (ENOENT) is simply
+   *  absent; any OTHER error (permission, corrupt committed line) is surfaced
+   *  once rather than silently masquerading as "no log yet". */
   const attentionSnapshot = (): string => {
     const map: Record<string, ReturnType<typeof attentionCache.get>> = {};
     for (const [id, artifact] of idToArtifact) {
       try {
         map[id] = attentionCache.get(sessionPaths(artifact).logPath);
-      } catch {
-        /* no log yet, or unreadable - no attention for this id */
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          console.error(`[hub] attention read failed for ${artifact}: ${(err as Error).message}`);
+        }
+        // Either way the id has no attention this pass; the badge just clears.
       }
     }
     return JSON.stringify(map);

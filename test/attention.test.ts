@@ -1,6 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { attentionOf, createAttentionCache } from "../src/core/attention.ts";
 import type { LogEvent } from "../src/core/events.ts";
+
+const dirs: string[] = [];
+afterEach(async () => {
+  for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
+});
 
 /**
  * The attention fold (plan 03, M1.1). `attentionOf` reduces a log to the four
@@ -49,6 +57,28 @@ describe("attentionOf: the four signals", () => {
   test("lastEventSeq is the monotonic high-water mark", () => {
     expect(attentionOf([opened]).lastEventSeq).toBe(1);
     expect(attentionOf([opened, ev({ t: "agent_ack", seq: 7 } as never)]).lastEventSeq).toBe(7);
+  });
+});
+
+describe("the cache's default reader matches readEvents (invariant: never disagree)", () => {
+  const withLog = async (content: string): Promise<string> => {
+    const dir = await mkdtemp(join(tmpdir(), "lucid-att-"));
+    dirs.push(dir);
+    const p = join(dir, "log.ndjson");
+    await writeFile(p, content);
+    return p;
+  };
+
+  test("a torn TRAILING line (crash mid-append) is tolerated", async () => {
+    const cache = createAttentionCache();
+    const p = await withLog(`${JSON.stringify(opened)}\n{"seq":2,"t":"agent_a`);
+    expect(cache.get(p).lastEventSeq).toBe(1); // torn tail dropped; opened stands
+  });
+
+  test("a corrupt COMMITTED line is fatal, not silently folded over", async () => {
+    const cache = createAttentionCache();
+    const p = await withLog(`not json\n${JSON.stringify(opened)}\n`);
+    expect(() => cache.get(p)).toThrow(/corrupt committed log line/);
   });
 });
 

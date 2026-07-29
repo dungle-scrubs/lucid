@@ -36,7 +36,9 @@ export interface Attention {
 export const attentionOf = (events: readonly LogEvent[]): Attention => {
   const s = foldLog(events);
   return {
-    openQuestions: s.questions.filter((q) => !q.answered && !q.skipped).length,
+    // `foldLog` marks a skipped or unclear question `answered:true` too, so
+    // `!answered` alone is the open count (a re-ask lands as a NEW question id).
+    openQuestions: s.questions.filter((q) => !q.answered).length,
     working: s.agentWorking != null,
     resolved: s.reviewResolved,
     lastEventSeq: s.highSeq,
@@ -62,16 +64,22 @@ const defaultStat = (logPath: string): StatKey => {
 };
 
 const defaultReadEvents = (logPath: string): LogEvent[] => {
-  const text = readFileSync(logPath, "utf8");
+  const content = readFileSync(logPath, "utf8");
+  if (content.length === 0) return [];
+  // Match `readEvents` (src/core/log.ts) exactly so attention can never disagree
+  // with the fold the app trusts: tolerate ONLY a torn trailing line (a crash
+  // mid-append), but treat a corrupt COMMITTED (newline-terminated) line as
+  // fatal rather than silently folding over the survivors.
+  const parts = content.split("\n");
+  parts.pop(); // the trailing "" (newline-terminated) or the torn last line
   const events: LogEvent[] = [];
-  for (const line of text.split("\n")) {
-    if (line.trim() === "") continue;
-    // Tolerate a torn trailing line (crash mid-append), exactly as readEvents
-    // does: a half-written last line is skipped, not fatal.
+  for (let i = 0; i < parts.length; i++) {
+    const line = parts[i];
+    if (line === undefined || line.trim() === "") continue;
     try {
       events.push(JSON.parse(line) as LogEvent);
     } catch {
-      /* torn tail */
+      throw new Error(`corrupt committed log line ${i + 1} in ${logPath}`);
     }
   }
   return events;
