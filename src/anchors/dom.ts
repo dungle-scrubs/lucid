@@ -48,11 +48,10 @@ const PREVIEW_LEN = 24;
  * identical status labels) still get distinct fingerprints; the human-readable
  * preview is unchanged.
  */
-export const computeFingerprint = (el: DomElementLike): string => {
+export const computeFingerprint = (el: DomElementLike, sibIndex?: number): string => {
   const tag = el.tagName.toLowerCase();
   const text = normalizeText(el.textContent ?? "");
-  const sibIndex = indexAmongSiblings(el);
-  const hash = shortHash(`${tag}|${sibIndex}|${text}`);
+  const hash = shortHash(`${tag}|${sibIndex ?? indexAmongSiblings(el)}|${text}`);
   const preview = text.length > PREVIEW_LEN ? `${text.slice(0, PREVIEW_LEN)}…` : text;
   return `${tag}#${hash}·"${preview}"`;
 };
@@ -60,12 +59,45 @@ export const computeFingerprint = (el: DomElementLike): string => {
 const indexAmongSiblings = (el: DomElementLike): number => {
   const parent = el.parentElement;
   if (!parent) return 1;
+  // Materialize ONCE: some DOMs (linkedom) pay a list walk per `children`
+  // access, which turns the innocent-looking indexed loop quadratic in the
+  // sibling count for a single call (#46).
+  const children = Array.from(parent.children);
   let n = 0;
-  for (let i = 0; i < parent.children.length; i++) {
+  for (const child of children) {
     n += 1;
-    if (parent.children[i] === el) return n;
+    if (child === el) return n;
   }
   return n;
+};
+
+/**
+ * Sibling indices for a whole document in ONE pass (plan 04, M1.2, #46).
+ * Computing each element's index by scanning its parent's children turns a
+ * flat N-sibling list super-quadratic (N scans of N children, and a child
+ * list some DOMs walk per access) - the shape that hung resolution on an 18k
+ * sibling artifact. Here every parent's child list is walked exactly once,
+ * so the whole map costs one traversal. The VALUES are identical to
+ * `indexAmongSiblings` by construction: 1-based position among ALL siblings.
+ */
+const sibIndexMapOf = (elements: readonly DomElementLike[]): Map<DomElementLike, number> => {
+  const map = new Map<DomElementLike, number>();
+  const walked = new Set<DomElementLike>();
+  for (const el of elements) {
+    const parent = el.parentElement;
+    if (!parent) {
+      map.set(el, 1);
+      continue;
+    }
+    if (walked.has(parent)) continue;
+    walked.add(parent);
+    const children = Array.from(parent.children);
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      if (child) map.set(child, i + 1);
+    }
+  }
+  return map;
 };
 
 /** Structural CSS path from the document body, e.g. `article>ol>li:nth-child(2)`. */
@@ -114,8 +146,12 @@ export const resolveElementAnchor = (
     // non-unique -> skip lucidId layer
   }
 
-  const byFingerprint = toArray(root.querySelectorAll("*")).filter(
-    (el) => computeFingerprint(el) === anchor.fingerprint,
+  // One-pass sibling indices, then fingerprints over the map (#46): identical
+  // values to the per-element scan, without the quadratic re-walk per element.
+  const all = toArray(root.querySelectorAll("*"));
+  const sibIndex = sibIndexMapOf(all);
+  const byFingerprint = all.filter(
+    (el) => computeFingerprint(el, sibIndex.get(el) ?? 1) === anchor.fingerprint,
   );
   // A unique fingerprint wins; a non-unique one is ambiguous (e.g. identical
   // status cells sharing a column position across table rows) and must fall

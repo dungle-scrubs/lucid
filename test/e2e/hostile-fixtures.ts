@@ -78,10 +78,6 @@ export const HOSTILE_DEFECTS: ReadonlyMap<string, string> = new Map([
     "hostile-self-rewriting",
     "finding #47: the rewritten DOM exists only in the browser - resolution falls through positionally onto the SAVED skeleton, so resolved:true delivers context the human never saw",
   ],
-  [
-    "hostile-huge-dom",
-    "finding #46 (diagnosis corrected by D-065): 18k flat siblings hang resolveElementAnchor super-quadratically - the committed card never renders AND lucid wait hangs; the trigger is sibling fan-out, not bytes",
-  ],
 ]);
 
 const page = (head: string, body: string): string => `<!doctype html>

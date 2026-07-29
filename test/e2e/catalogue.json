@@ -3713,12 +3713,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "The committed card renders within a human budget, or progress is visible. Today it is absent at 30s with the queue consumed and no warning - a silent half-delivered state (plan finding #46).",
+          "expected": "The committed card renders and `lucid wait` returns the resolved annotation: the sibling index is one pass (plan 04, M1.2, closes finding #46/D-065), so flat fan-out no longer hangs resolution. Behavior-identical to the per-element scan by construction (R4: the whole anchor corpus resolves the same).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #46 (D-065): 18k flat siblings hang resolveElementAnchor super-quadratically - the card never renders and `lucid wait` hangs. The trigger is sibling fan-out, not document bytes."
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact with eighteen thousand sibling nodes",
+          "mutation": "src/anchors/dom.ts: off-by-one the one-pass index (map.set(child, i) instead of i+1) - every fingerprint hash shifts, the layer goes silent, and test/core.test.ts's ancestor-restructure recovery test reds (measured; the fix cannot change output)"
         },
         {
           "id": "hostile-malformed",
@@ -3734,7 +3736,7 @@
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/e2e/hostile.e2e.ts",
-          "testName": "the loop survives an artifact the parser has to repair, with a literal </body> in a textarea",
+          "testName": "the loop survives an artifact the parser has to repair, holding a literal </body> in a textarea",
           "mutation": "src/server/inject.ts: put the raw-source regex back (bodyCloseIndex -> artifactHtml.search(/<\\/body\\s*>/i)) - the textarea splice test in test/inject.test.ts reds, and the bootstrap renders as textarea content here"
         },
         {
