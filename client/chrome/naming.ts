@@ -110,22 +110,13 @@ export interface OpenTab {
 }
 
 /**
- * What a tab reads. Two open tabs both called "Migration plan" are
- * indistinguishable, so a colliding name carries its project the way a browser
- * qualifies same-titled tabs. A tab stays a SESSION - the project is only the
- * qualifier, and an uncontested name never grows one.
- *
- * `open` is the whole roster including this tab; the collision is with the
- * OTHERS. A tab whose project the listing cannot name goes unqualified rather
- * than inventing one.
+ * What a tab reads: its title, and ONLY its title (plan 03, D-012). The
+ * cross-project qualifier the label used to grow on a name collision is the
+ * GROUP's job now - the strip renders every tab under its project's heading
+ * (`groupTabs`), so "which project's Migration plan is this?" is answered by
+ * where the tab sits, not by a suffix eating the strip's width. Two same-titled
+ * tabs in ONE project are distinguished by each tab's tooltip (its artifact
+ * path), which is the tooltip's job in a browser too. This deliberately flips
+ * e2e finding #56's pinned behavior - by design (D-027).
  */
-export const tabLabel = (
-  tab: OpenTab,
-  open: readonly OpenTab[],
-  sessions: readonly Pick<HubSession, "artifact" | "project">[],
-): string => {
-  const collides = open.some((o) => o.key !== tab.key && o.name === tab.name);
-  if (!collides) return tab.name;
-  const project = sessions.find((s) => s.artifact === tab.key)?.project;
-  return project ? `${tab.name} · ${projectName(project)}` : tab.name;
-};
+export const tabLabel = (tab: OpenTab): string => tab.name;

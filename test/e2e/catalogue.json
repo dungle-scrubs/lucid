@@ -2095,18 +2095,16 @@
         },
         {
           "id": "tabs-cross-project-name-collision",
-          "title": "Same-named artifacts from different projects carry a project qualifier",
-          "steps": [
-            "Open plan.html from project A and plan.html from project B (same title), widen the scope"
-          ],
-          "expected": "Both tabs read \"<title> · <project>\" — the browser-style disambiguation.",
+          "title": "Same-named artifacts from different projects are told apart by their group",
+          "steps": ["Open plan.html from project A and plan.html from project B (same title)"],
+          "expected": "Both tabs read the bare title (D-012); each sits under its own project's group heading, which is the disambiguation (D-027 - deliberately flips the old `· <project>` qualifier, closing e2e finding #56 by design).",
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/tab-labels.test.ts",
-          "testName": "both colliding tabs carry their project",
-          "mutation": "client/chrome/naming.ts: neutralise the collision scan in tabLabel (`const collides = false;`) - same-named artifacts from two projects render the same string"
+          "testName": "a cross-project collision stays title-only; group membership tells them apart",
+          "mutation": "client/chrome/naming.ts: make groupTabs merge every tab into the FIRST group (`projectOf.get(key) ?? key` -> a constant) - the two same-titled tabs land under one heading with nothing telling them apart"
         },
         {
           "id": "tab-long-title-truncates",

@@ -14,7 +14,14 @@ import {
   type HubSession,
 } from "./hub.ts";
 import { resolveShortcut } from "./keymap.ts";
-import { artifactLabel, byProject, projectName, sessionLabel, tabLabel } from "./naming.ts";
+import {
+  artifactLabel,
+  byProject,
+  groupTabs,
+  projectName,
+  sessionLabel,
+  tabLabel,
+} from "./naming.ts";
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, persistTabs, readStoredTabs, useShell } from "./shell.ts";
@@ -99,20 +106,10 @@ const TabAttention = ({ handle }: { readonly handle: SessionHandle }) => {
 
 const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly active: boolean }) => {
   const handle = getSession(sessionKey);
-  const openKeys = useShell((s) => s.sessionKeys);
-  const sessions = useHub((s) => s.sessions);
   if (!handle) return null;
-  // What the tab reads, including the project qualifier a colliding name
-  // earns, is `tabLabel`'s decision (naming.ts); this only supplies the
-  // roster it needs.
-  const label = tabLabel(
-    { key: sessionKey, name: handle.config.name },
-    openKeys.flatMap((k) => {
-      const h = getSession(k);
-      return h ? [{ key: k, name: h.config.name }] : [];
-    }),
-    sessions,
-  );
+  // Title only (D-012): the project a colliding name used to carry as a
+  // qualifier is the GROUP heading's job now; the tooltip carries the path.
+  const label = tabLabel({ key: sessionKey, name: handle.config.name });
   return (
     <div
       data-test="shell-tab"
@@ -394,15 +391,110 @@ const EmptyShell = () => {
   );
 };
 
+/**
+ * The grouped tab strip (plan 03, M2.2): one row, every open tab, grouped by
+ * project. Each run is headed by an INERT group label (D-022 - a heading, not
+ * a control; the scope machinery it might resurrect is deleted), a hairline
+ * rule separates groups, and an edge fade appears only while content actually
+ * extends past that edge (D-013) - a fade over nothing would claim hidden tabs
+ * that do not exist.
+ */
+const TabStrip = () => {
+  const sessionKeys = useShell((s) => s.sessionKeys);
+  const activeKey = useShell((s) => s.activeKey);
+  const sessions = useHub((s) => s.sessions);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [fades, setFades] = useState({ left: false, right: false });
+
+  const groups = groupTabs(sessionKeys, sessions);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = (): void => {
+      const left = el.scrollLeft > 0;
+      // -1: fractional scroll widths round; a strip that fits must read as fitting.
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setFades((f) => (f.left === left && f.right === right ? f : { left, right }));
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    // Content width moves without a scroll or resize event when a tab opens
+    // or closes; watching the scroller's children catches exactly that.
+    const mo = new MutationObserver(measure);
+    mo.observe(el, { childList: true, subtree: true });
+    return () => {
+      el.removeEventListener("scroll", measure);
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, []);
+
+  return (
+    <div
+      data-test="shell-tabbar"
+      className="relative flex h-9 flex-none items-stretch border-b border-ink-600 bg-ink-900"
+    >
+      <div ref={scrollRef} className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
+        {groups.map((group, i) => {
+          // A tab the listing has not placed yet groups under its own key
+          // (groupTabs's fallback): it gets no heading rather than a nonsense
+          // one, and earns its project's the moment the listing lands.
+          const placed = !group.keys.includes(group.project);
+          return (
+            <div key={group.project} data-test="tab-group" className="flex flex-none items-stretch">
+              {i > 0 ? (
+                <div aria-hidden className="w-px flex-none self-stretch bg-ink-500" />
+              ) : null}
+              {placed ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        data-test="group-label"
+                        className="max-w-[110px] flex-none cursor-default self-center truncate pl-3 pr-1.5 text-[9px] font-semibold uppercase tracking-[1.1px] text-fg-faint"
+                      >
+                        {projectName(group.project)}
+                      </span>
+                    }
+                  />
+                  <TooltipContent>{group.project}</TooltipContent>
+                </Tooltip>
+              ) : null}
+              {group.keys.map((k) => (
+                <Tab key={k} sessionKey={k} active={k === activeKey} />
+              ))}
+            </div>
+          );
+        })}
+        <NewTabButton />
+      </div>
+      {fades.left ? (
+        <div
+          data-test="tabbar-fade-left"
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-ink-900 to-transparent"
+        />
+      ) : null}
+      {fades.right ? (
+        <div
+          data-test="tabbar-fade-right"
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-ink-900 to-transparent"
+        />
+      ) : null}
+    </div>
+  );
+};
+
 export const Shell = () => {
   const sessionKeys = useShell((s) => s.sessionKeys);
   const activeKey = useShell((s) => s.activeKey);
   const sessions = useHub((s) => s.sessions);
   const bootHandled = useRef(false);
   const restoreHandled = useRef(false);
-
-  // The strip shows EVERY open tab now (plan 03, M2.1): no project scoping.
-  const visibleKeys = sessionKeys;
 
   useEffect(() => {
     connectHub();
@@ -500,15 +592,7 @@ export const Shell = () => {
       className="flex h-screen flex-col"
       style={{ "--lucid-shell-top": "37px" } as React.CSSProperties}
     >
-      <div
-        data-test="shell-tabbar"
-        className="flex h-9 flex-none items-stretch overflow-x-auto border-b border-ink-600 bg-ink-900"
-      >
-        {visibleKeys.map((k) => (
-          <Tab key={k} sessionKey={k} active={k === activeKey} />
-        ))}
-        <NewTabButton />
-      </div>
+      <TabStrip />
       <Palette />
       <CreateDialog />
       {/* EVERY open tab's view stays mounted; the inactive ones hide with
