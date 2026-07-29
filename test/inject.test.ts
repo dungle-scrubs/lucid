@@ -148,58 +148,126 @@ describe("the D-019 review's adversarial corpus (F2-F5, F7)", () => {
   });
 });
 
-describe("renderInjected: a document CSP is lifted, nonced, and honored (#42)", () => {
-  const withMeta = (policy: string): string =>
-    `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}" /><title>t</title></head><body><p>x</p></body></html>`;
+describe("renderInjected: the CSP lift changes as little as possible (#42)", () => {
+  const withMeta = (policy: string, body = "<p>x</p>"): string =>
+    `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}" /><title>t</title></head><body>${body}</body></html>`;
+  const render = async (html: string) => {
+    const { renderInjected } = await import("../src/server/inject.ts");
+    return renderInjected(html, "", "http://127.0.0.1:17429");
+  };
+  const csp = (out: { headers: Readonly<Record<string, string>> }): string =>
+    out.headers["content-security-policy"] ?? "";
 
   test("no meta: body injected, no header, no nonce", async () => {
-    const { renderInjected } = await import("../src/server/inject.ts");
-    const out = renderInjected(doc("<p>plain</p>"));
+    const out = await render(doc("<p>plain</p>"));
     expect(out.headers).toEqual({});
     expect(out.body).toContain("__lucid_overlay_root");
     expect(out.body).not.toContain("nonce=");
   });
 
-  test("a meta CSP is removed from the body and lifted into the header with nonces", async () => {
-    const { renderInjected } = await import("../src/server/inject.ts");
-    const out = renderInjected(withMeta("default-src 'none'; style-src 'unsafe-inline'"));
+  test("a restrictive meta is lifted and the bootstrap granted by nonce", async () => {
+    const out = await render(withMeta("default-src 'none'"));
     expect(out.body).not.toContain("http-equiv");
-    const csp = out.headers["content-security-policy"] ?? "";
-    // The document's own governance survives...
-    expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("style-src 'unsafe-inline'");
-    // ...and the bootstrap is permitted by nonce, derived from default-src
-    // with 'none' dropped (it only has meaning alone).
     const nonce = /nonce="([a-f0-9]+)"/.exec(out.body)?.[1] ?? "";
     expect(nonce.length).toBeGreaterThan(10);
-    expect(csp).toContain(`script-src 'nonce-${nonce}'`);
-    expect(csp).toContain(`style-src 'unsafe-inline' 'nonce-${nonce}'`);
-    // Both bootstrap scripts carry it, and the overlay can read it back.
-    expect(out.body).toContain(`nonce:"${nonce}"`);
+    expect(csp(out)).toContain(`script-src 'nonce-${nonce}'`);
+    expect(csp(out)).toContain("default-src 'none'");
   });
 
-  test("an existing script-src keeps its sources and gains only the nonce", async () => {
-    const { renderInjected } = await import("../src/server/inject.ts");
-    const out = renderInjected(withMeta("script-src 'self' https://cdn.example"));
-    const csp = out.headers["content-security-policy"] ?? "";
-    expect(csp).toMatch(/script-src 'self' https:\/\/cdn\.example 'nonce-[a-f0-9]+'/);
+  test("an artifact's 'unsafe-inline' is NEVER nullified by a nonce", async () => {
+    // A nonce in a source list makes the browser IGNORE 'unsafe-inline'
+    // (CSP3 6.7.3.2), which would strip an ordinary self-contained artifact's
+    // own inline scripts. The origin is granted instead.
+    const out = await render(withMeta("default-src 'self' 'unsafe-inline'"));
+    expect(csp(out)).toContain("'unsafe-inline'");
+    expect(csp(out)).not.toContain("nonce-");
+    expect(out.body).not.toContain("nonce=");
+    expect(csp(out)).toContain("http://127.0.0.1:17429");
+  });
+
+  test("style-src is never touched - the overlay adopts constructed sheets", async () => {
+    const out = await render(withMeta("default-src 'none'; style-src 'unsafe-inline'"));
+    expect(csp(out)).toContain("style-src 'unsafe-inline'");
+    expect(csp(out)).not.toMatch(/style-src[^;,]*nonce/);
+  });
+
+  test("the directives a meta must ignore are dropped, not switched on", async () => {
+    // report-uri in a meta is inert by spec; lifting it verbatim would hand a
+    // 'none' document a live network egress carrying its URI and a sample.
+    const out = await render(
+      withMeta(
+        "default-src 'none'; report-uri https://evil.example/c; frame-ancestors 'none'; sandbox",
+      ),
+    );
+    expect(csp(out)).not.toContain("report-uri");
+    expect(csp(out)).not.toContain("frame-ancestors");
+    expect(csp(out)).not.toContain("sandbox");
+    expect(csp(out)).toContain("default-src 'none'");
+  });
+
+  test("script-src-elem governs the bootstrap element when present", async () => {
+    const out = await render(withMeta("default-src 'none'; script-src-elem 'self'"));
+    expect(csp(out)).toMatch(/script-src-elem 'self' 'nonce-[a-f0-9]+'/);
+  });
+
+  test("an uppercase <META> is lifted too", async () => {
+    const html = `<!doctype html><html><head><META HTTP-EQUIV="Content-Security-Policy" CONTENT="default-src 'none'" /></head><body><p>x</p></body></html>`;
+    const out = await render(html);
+    expect(out.body).not.toMatch(/http-equiv/i);
+    expect(csp(out)).toContain("default-src 'none'");
+  });
+
+  test("a decoy data-content attribute does not stand in for the policy", async () => {
+    const html = `<!doctype html><html><head><meta data-content="decoy" http-equiv="Content-Security-Policy" content="default-src 'none'" /></head><body><p>x</p></body></html>`;
+    const out = await render(html);
+    expect(csp(out)).toContain("default-src 'none'");
+    expect(csp(out)).not.toContain("decoy");
+  });
+
+  test("a multi-line policy becomes a legal single-line header", async () => {
+    const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy"
+      content="default-src 'none';
+               img-src 'self'" /></head><body><p>x</p></body></html>`;
+    const out = await render(html);
+    expect(csp(out)).not.toMatch(/[\r\n]/);
+    expect(
+      () => new Response("x", { headers: out.headers as Record<string, string> }),
+    ).not.toThrow();
+  });
+
+  test("an entity-escaped policy is decoded before lifting", async () => {
+    const out = await render(withMeta("default-src &#39;none&#39;"));
+    expect(csp(out)).toContain("default-src 'none'");
+    expect(csp(out)).not.toContain("&#39;");
+  });
+
+  test("several metas all enforce, each granting the bootstrap", async () => {
+    const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'" /><meta http-equiv="Content-Security-Policy" content="script-src 'self'" /></head><body><p>x</p></body></html>`;
+    const out = await render(html);
+    const nonce = /nonce="([a-f0-9]+)"/.exec(out.body)?.[1] ?? "";
+    const policies = csp(out).split(", ");
+    expect(policies).toHaveLength(2);
+    for (const p of policies) expect(p).toContain(`'nonce-${nonce}'`);
   });
 
   test("a policy that never constrained scripts is not tightened", async () => {
-    const { renderInjected } = await import("../src/server/inject.ts");
-    const out = renderInjected(withMeta("img-src 'none'"));
-    const csp = out.headers["content-security-policy"] ?? "";
-    expect(csp).not.toContain("script-src"); // unrestricted stays unrestricted
-    expect(csp).toContain("img-src 'none'");
+    const out = await render(withMeta("img-src 'none'"));
+    expect(csp(out)).not.toContain("script-src");
+    expect(csp(out)).toContain("img-src 'none'");
   });
 
   test("a CSP meta quoted inside a textarea is text, not policy", async () => {
-    const { renderInjected } = await import("../src/server/inject.ts");
     const html = doc(
       `<textarea><meta http-equiv="Content-Security-Policy" content="default-src 'none'"></textarea>`,
     );
-    const out = renderInjected(html);
+    const out = await render(html);
     expect(out.headers).toEqual({});
-    expect(out.body).toContain("<meta http-equiv"); // untouched, it is content
+    expect(out.body).toContain("<meta http-equiv");
+  });
+
+  test("the nonce is not published on the page's global (no escape channel)", async () => {
+    const out = await render(withMeta("default-src 'none'"));
+    expect(out.body).toContain('window.__LUCID__={mode:"overlay"};');
+    expect(out.body).not.toContain("nonce:");
   });
 });

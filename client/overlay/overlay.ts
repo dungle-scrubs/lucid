@@ -15,14 +15,36 @@ import {
   type QueuedAnchorLike,
 } from "../shared/protocol.ts";
 
-/** A CSP-nonced <style>: when the server lifted a document CSP into a header
- *  (plan 04, #42) the bootstrap carried a nonce, and every style the overlay
- *  creates at runtime must wear it or the lifted policy blocks it. */
-const noncedStyle = (): HTMLStyleElement => {
-  const style = document.createElement("style");
-  const nonce = (window as { __LUCID__?: { nonce?: string } }).__LUCID__?.nonce;
-  if (nonce) style.nonce = nonce;
-  return style;
+/**
+ * A stylesheet the overlay adds to the ARTIFACT's document, as a constructed
+ * stylesheet rather than a `<style>` element (plan 04, #42).
+ *
+ * `style-src` governs style ELEMENTS; a constructed sheet adopted onto the
+ * document is not subject to it at all. That is what lets Lucid keep its
+ * hands off the artifact's own CSP: no style nonce to mint, nothing to append
+ * to the author's `style-src`, and no way to nullify an `'unsafe-inline'`
+ * they were relying on (a nonce in a source list makes the browser IGNORE
+ * `'unsafe-inline'`, which would strip the styling off an ordinary
+ * self-contained artifact).
+ *
+ * Keyed by id so each sheet is adopted once and can be dropped again, the
+ * same contract the `<style id=…>` elements had.
+ */
+const adopted = new Map<string, CSSStyleSheet>();
+
+const adoptStyle = (id: string, cssText: string): void => {
+  if (adopted.has(id)) return;
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(cssText);
+  adopted.set(id, sheet);
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+};
+
+const dropStyle = (id: string): void => {
+  const sheet = adopted.get(id);
+  if (!sheet) return;
+  adopted.delete(id);
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
 };
 
 const OVERLAY_ROOT_ID = "__lucid_overlay_root";
@@ -343,10 +365,9 @@ export class LucidOverlay extends LitElement {
     const wanted = theme === "dark" && !this.canRenderDark() ? "light" : theme;
     document.documentElement.dataset.lucidTheme = wanted;
     this.retuneColorSchemeQueries(wanted);
-    if (document.getElementById(THEME_STYLE_ID)) return;
-    const style = noncedStyle();
-    style.id = THEME_STYLE_ID;
-    style.textContent = `
+    adoptStyle(
+      THEME_STYLE_ID,
+      `
       :root[data-lucid-theme="light"] {
         --paper: #faf6ec;
         --ink: #211d15;
@@ -365,8 +386,8 @@ export class LucidOverlay extends LitElement {
         --accent-wash: rgba(203, 168, 90, 0.18);
         color-scheme: dark;
       }
-    `;
-    document.head.appendChild(style);
+    `,
+    );
   }
 
   /**
@@ -565,10 +586,9 @@ export class LucidOverlay extends LitElement {
 
   /** Inject the redline stylesheet into the artifact realm (sage/rust/brass). */
   private injectDiffStyles(): void {
-    if (document.getElementById("__lucid_diff_style")) return;
-    const style = noncedStyle();
-    style.id = "__lucid_diff_style";
-    style.textContent = `
+    adoptStyle(
+      "__lucid_diff_style",
+      `
       [data-diff="added"] { box-shadow: inset 3px 0 0 #8aa872; background: rgba(163,190,140,0.12); }
       [data-diff="changed"] { box-shadow: inset 3px 0 0 #a3be8c; }
       .lucid-diff-was, .lucid-diff-now { display: block; padding: 2px 6px; }
@@ -579,26 +599,25 @@ export class LucidOverlay extends LitElement {
       .lucid-diff-now::before { content: "now"; color: #6f8d59; }
       .lucid-ghost { display: block; opacity: 0.55; text-decoration: line-through; background: rgba(191,97,106,0.08); box-shadow: inset 3px 0 0 #bf616a; }
       [data-hunk].lucid-active { outline: 2px solid #5e81ac; outline-offset: 3px; scroll-margin: 80px; }
-    `;
-    document.head.appendChild(style);
+    `,
+    );
   }
 
   private removeDiffStyles(): void {
-    document.getElementById("__lucid_diff_style")?.remove();
+    dropStyle("__lucid_diff_style");
   }
 
   /** Injected once, survives artifact swaps (it lives in <head>, not the body
    *  the swap rebuilds). The outline fades to nothing so the emphasis is a
    *  glance, not a permanent mark on the artifact. */
   private injectSectionStyle(): void {
-    if (document.getElementById("__lucid_section_style")) return;
-    const style = noncedStyle();
-    style.id = "__lucid_section_style";
-    style.textContent = `
+    adoptStyle(
+      "__lucid_section_style",
+      `
       @keyframes __lucid_section_flash { from { outline-color: rgba(94,129,172,0.9); } to { outline-color: rgba(94,129,172,0); } }
       .__lucid_section_target { outline: 2px solid rgba(94,129,172,0.9); outline-offset: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
-    `;
-    document.head.appendChild(style);
+    `,
+    );
   }
 
   /** Scroll the artifact to a section by its `data-lucid-id` and flash it. The
