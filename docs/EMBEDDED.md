@@ -53,6 +53,11 @@ older CLI.
 }
 ```
 
+`warnings` may be present too, exactly as on a terminal open - an array of
+`{code, message}` when Lucid has something advisory to say about the artifact
+(a non-adaptive colour scheme, say). It is absent when there is nothing to
+report, so parse it as optional rather than expecting the shape above verbatim.
+
 Two things differ from a terminal open:
 
 - **`url` is the shell-free review UI.** `/__lucid/viewer` when the session has

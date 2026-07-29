@@ -105,6 +105,14 @@ describe("docs/EMBEDDED.md tracks the code it instructs against (plan 06)", () =
     expect(runSrc).toContain("view,");
   });
 
+  test("the doc warns that `warnings` is optional, because open really emits it", () => {
+    // Found by running the doc's own instructions: the example payload showed
+    // six keys, and a harness author parsing that shape strictly breaks the
+    // first time an artifact earns an advisory.
+    expect(embedded).toContain("warnings");
+    expect(runSrc).toContain("warnings.length > 0");
+  });
+
   test("the skill points at the doc rather than restating it", () => {
     expect(skill).toContain("docs/EMBEDDED.md");
     expect(skill).toContain("LUCID_VIEW=solo");
