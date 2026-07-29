@@ -148,7 +148,7 @@ ENDED path starts a fresh lifecycle **segment** in the same log rather than
 erroring (D-045). Multiple concurrent single-artifact sessions each run their own
 independent per-session loopback server and origin ("multi-session" - D-036); that
 is distinct from the deferred multi-artifact-per-session. Per-session discovery is
-via `.lucid/<name>/server.json`. **Model B superseded D-065's "no global session
+via `.lucid/<name>/run/server.json`. **Model B superseded D-065's "no global session
 registry":** a global pointer registry now exists at `<home>/.lucid/registry.json`,
 holding only pointers and `lastSeen` - never session data - and the **hub** unions it
 with a scan of its **roots** to produce the **listing**. Cross-filesystem enumeration
@@ -170,8 +170,10 @@ false-positive) - a resuming `open` writes `session_resumed`, `end` writes
 **high-entropy (UUIDv4) client-minted IDs** that the server dedupes against the IDs
 already in the log (D-044, D-057). The watcher **structurally** validates a settled
 file (closing root + balanced structure, not mere parseability) before committing a
-segment-scoped snapshot, and reconciles `<file>` against `current.html` on resume
-(D-061). Folding tolerates a torn trailing line (crash mid-append) and is
+segment-scoped snapshot, and reconciles `<file>` against the newest **committed
+snapshot** on resume - not the machine-local `run/current.html`, which a fresh pull
+may not have - rebuilding `current.html` from that snapshot when it is absent
+(D-061; plan 02). Folding tolerates a torn trailing line (crash mid-append) and is
 **per-field segment-scoped**: status, current version, `reviewResolved`, the live
 annotation set, and the orphan tray come from the latest segment, earlier segments
 are read-only history (D-056). Any harness resumes a session by calling `wait` with
@@ -191,7 +193,9 @@ D-050).
 The frozen HTML file for a version (`versions/vN.html`), referenced from the
 `version` event by path + `sha256` hash. The **snapshot** is the file; the
 **version** is the recorded revision/event. Distinct from `current.html`, which
-is Lucid's live copy of the latest `<file>`.
+is Lucid's live copy of the latest `<file>` - **machine-local**, so it lives
+under `run/` (`.lucid/<name>/run/current.html`) and is rebuilt from the newest
+snapshot when a fresh checkout lacks it, never committed (plan 02).
 
 ### Cursor
 The **caller-owned** delivery position passed to `wait` (`--since <cursor>`). It
@@ -276,7 +280,15 @@ The always-on loopback daemon (Model B): one process per machine that
 discovers every artifact under its **roots**, hosts each one in-process under
 an opaque id (`/s/<id>`), and serves the **shell** at `/`. Data never moves -
 a hosted artifact reads and writes its own co-located `.lucid/<name>/` exactly
-as a dedicated per-session server does. When an artifact already has a live
+as a dedicated per-session server does. **Canonical layout (plan 02):** the
+artifact and its record sit together under a project's `.lucid/`
+(`<project>/.lucid/<name>.html` beside `<project>/.lucid/<name>/`), so review
+history is committable and travels with the repo. Committed history (the log,
+`versions/`, `pasted/`, `forks/`) lives at the record root; everything
+machine-local (the served `current.html`, `server.json`, out-logs, the
+`context`/`selection`/`cursor` sidecars, the append lock) lives under `run/`,
+kept out of git by a single `run/` line in the record's `.gitignore`. When an
+artifact already has a live
 dedicated server, the hub proxies to it rather than hosting it, preserving the
 one-appender rule (D-049).
 _Avoid_: daemon, server (both are ambiguous - "server" is also the

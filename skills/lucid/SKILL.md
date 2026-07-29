@@ -59,16 +59,22 @@ Never fake the review loop, and never paste build instructions at the user.
    get feedback; keep each id unique within the document - duplicate ids are
    skipped during anchor resolution.
 
-   **Write it into the PROJECT, at `<project>/lucid/<name>.html` - never your
+   **Write it into the PROJECT, at `<git-root>/.lucid/<name>.html` - never your
    scratchpad, never `/tmp`.** This is not tidiness. A session's whole history -
    every annotation, version and reply - lives in a folder named after the
-   artifact beside it (`lucid/plan.html` -> `lucid/plan/`),
-   so the artifact's location decides where the review is stored. macOS clears
-   `/private/tmp` on every boot, and a scratchpad artifact takes weeks of
-   accumulated review with it when the machine restarts. `lucid open` refuses a
-   temporary path for exactly this reason. An artifact is content that outlives
-   the review; put it where the work lives. (Add `lucid/` to the project's
-   `.gitignore` if these should not be committed.)
+   artifact beside it, both under the project's `.lucid/` (`.lucid/plan.html` ->
+   `.lucid/plan/`), so the artifact's location decides where the review is
+   stored. macOS clears `/private/tmp` on every boot, and a scratchpad artifact
+   takes weeks of accumulated review with it when the machine restarts. `lucid
+   open` refuses a temporary path for exactly this reason. An artifact is content
+   that outlives the review; put it where the work lives.
+
+   **The review record is committable by default.** Its history (the log,
+   `versions/`, `pasted/`, `forks/`) is meant to travel with the repo; only the
+   record's `run/` subdir (the served copy, the server descriptor, out-logs, and
+   the machine-scoped sidecars) is machine-local, and a single `run/` line in the
+   record's own `.gitignore` keeps it out of git. Commit the record if the review
+   should be shared or portable across machines; nothing else needs ignoring.
 
    **Self-contained is not optional**: one inline `<style>`, system font stacks,
    no CDN, no remote assets. The artifact must render identically opened straight
