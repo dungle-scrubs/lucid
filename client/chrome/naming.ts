@@ -55,6 +55,44 @@ export const byProject = (sessions: readonly HubSession[]): Map<string, HubSessi
   return groups;
 };
 
+/** One run of the grouped tab strip: a project and its open tabs, in tab
+ *  order. */
+export interface TabGroup {
+  readonly project: string;
+  readonly keys: readonly string[];
+}
+
+/**
+ * The OPEN tabs, grouped by project for the strip (plan 03, M2.2). Unlike
+ * `byProject` (which orders by the name-sorted listing), groups here appear in
+ * FIRST-OPEN order and never reorder afterwards (D-010): a group sits where its
+ * first tab opened, so activating a tab or opening another in an existing group
+ * does not shuffle the bar. Keys within a group stay in open order. A worktree
+ * shares its main repo's group because `project` already resolves to the main
+ * repo server-side (D-002); a project with a single tab is an ordinary group of
+ * one (D-011). A tab the listing has not placed yet groups under its own key,
+ * so two unplaced tabs never wrongly merge.
+ */
+export const groupTabs = (
+  sessionKeys: readonly string[],
+  sessions: readonly Pick<HubSession, "artifact" | "project">[],
+): TabGroup[] => {
+  const projectOf = new Map(sessions.map((s) => [s.artifact, s.project]));
+  const order: string[] = [];
+  const keysByProject = new Map<string, string[]>();
+  for (const key of sessionKeys) {
+    const project = projectOf.get(key) ?? key;
+    let keys = keysByProject.get(project);
+    if (!keys) {
+      keys = [];
+      keysByProject.set(project, keys);
+      order.push(project);
+    }
+    keys.push(key);
+  }
+  return order.map((project) => ({ project, keys: keysByProject.get(project) as string[] }));
+};
+
 /** The distinct worktree checkouts a project's rows live in - what the drawer
  *  counts as "+N worktrees". A SET, because several sessions in one checkout
  *  are one worktree, and a project with none is not qualified at all. */

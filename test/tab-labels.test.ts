@@ -3,6 +3,7 @@ import type { HubSession } from "../client/chrome/hub.ts";
 import {
   artifactLabel,
   byProject,
+  groupTabs,
   projectName,
   sessionLabel,
   tabLabel,
@@ -179,5 +180,49 @@ describe("a session in a git worktree", () => {
   test("projects keep the listing's order, so the drawer does not reshuffle", () => {
     const other = row({ artifact: "/dev/tether/a.html", project: "/dev/tether" });
     expect([...byProject([main, other, wt1]).keys()]).toEqual(["/dev/lucid", "/dev/tether"]);
+  });
+});
+
+describe("groupTabs: the strip's runs (plan 03, M2.2)", () => {
+  const listing = [
+    row({ artifact: "/dev/lucid/a.html", project: "/dev/lucid" }),
+    row({ artifact: "/dev/lucid/b.html", project: "/dev/lucid" }),
+    row({ artifact: "/dev/tether/c.html", project: "/dev/tether" }),
+    // a worktree checkout: `project` already resolves to the main repo.
+    row({ artifact: "/dev/wt/d.html", project: "/dev/lucid", worktree: "/dev/wt" }),
+  ];
+
+  test("groups appear in FIRST-OPEN order, keys in open order", () => {
+    const keys = ["/dev/tether/c.html", "/dev/lucid/a.html", "/dev/lucid/b.html"];
+    expect(groupTabs(keys, listing)).toEqual([
+      { project: "/dev/tether", keys: ["/dev/tether/c.html"] },
+      { project: "/dev/lucid", keys: ["/dev/lucid/a.html", "/dev/lucid/b.html"] },
+    ]);
+  });
+
+  test("a group stays put when a later tab joins an EARLIER group", () => {
+    // tether opened first, then a lucid tab, then a SECOND lucid tab. lucid's
+    // group must not jump ahead of tether just because it grew.
+    const keys = ["/dev/tether/c.html", "/dev/lucid/a.html", "/dev/lucid/b.html"];
+    const order = groupTabs(keys, listing).map((g) => g.project);
+    expect(order).toEqual(["/dev/tether", "/dev/lucid"]);
+  });
+
+  test("a worktree tab shares its main repo's group", () => {
+    const keys = ["/dev/lucid/a.html", "/dev/wt/d.html"];
+    expect(groupTabs(keys, listing)).toEqual([
+      { project: "/dev/lucid", keys: ["/dev/lucid/a.html", "/dev/wt/d.html"] },
+    ]);
+  });
+
+  test("a single-tab project is an ordinary group of one", () => {
+    expect(groupTabs(["/dev/tether/c.html"], listing)).toEqual([
+      { project: "/dev/tether", keys: ["/dev/tether/c.html"] },
+    ]);
+  });
+
+  test("two tabs the listing has not placed do not merge", () => {
+    const groups = groupTabs(["/x/unplaced-1.html", "/x/unplaced-2.html"], listing);
+    expect(groups).toHaveLength(2);
   });
 });
