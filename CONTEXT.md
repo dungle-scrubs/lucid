@@ -142,6 +142,11 @@ appender, and there is no second process either way. What changes is which URL
 `open` returns and whether a browser is launched. See
 [docs/EMBEDDED.md](./docs/EMBEDDED.md) for the integration contract.
 
+### Shell
+The daemon-served window over MANY sessions: the tab strip, the palette, the
+pick screen. One process, one window, every open artifact as a tab. It is the
+`shell` view's presentation, and what the `solo` view deliberately omits.
+
 ### Viewer
 The whole Lucid window the human sees in the browser: chrome + surface.
 

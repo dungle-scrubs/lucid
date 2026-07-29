@@ -386,6 +386,10 @@ harness. Your integration exports `LUCID_VIEW=solo`, and then:
   whatever is pending, and never waits. Carry `nextCursor` forward.
 - Say the latency plainly if it comes up: annotations arrive with the human's
   next chat message.
+- **The status rules in the loop above are for a BLOCKING wait.** A drain that
+  answers `waiting` means "nothing pending right now" - end your turn and drain
+  again at the start of the next one. Re-running it in place is a busy-loop
+  against a human who is still typing.
 
 Full detail, including the two alternatives and why they are not the default
 here: [docs/EMBEDDED.md](../../docs/EMBEDDED.md).

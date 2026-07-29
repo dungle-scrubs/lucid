@@ -89,20 +89,37 @@ describe("docs/EMBEDDED.md tracks the code it instructs against (plan 06)", () =
     expect(viewSrc).toContain('=== "solo"');
   });
 
-  test("the drain flag is PARSED, and the wait help says so", () => {
+  test("the drain flag is accepted BY WAIT, and the wait usage map says so", () => {
     expect(embedded).toContain("--timeout 0");
-    // Parsed...
-    expect(mainSrc).toContain('Options.integer("timeout")');
-    // ...and advertised. A doc naming a flag the CLI's own usage omits sends
-    // the reader to the source to check whether it is real.
+    // Wired into the WAIT command, not merely declared somewhere in the file.
+    // Asserting `Options.integer("timeout")` existed was theatre: removing
+    // `timeout: timeoutOpt` from wait's own record left every test green while
+    // the literal command this doc instructs died with "Received unknown
+    // argument: '--timeout'".
+    const waitCmd = /Command\.make\(\s*"wait",\s*\{[^}]*\}/s.exec(mainSrc)?.[0] ?? "";
+    expect(waitCmd, "could not find wait's Command.make record").not.toBe("");
+    expect(waitCmd).toContain("timeout:");
+    expect(waitCmd).toContain("since:");
+    // ...and advertised in the usage map. A doc naming a flag the CLI's own
+    // usage omits sends the reader to the source to check whether it is real.
     const usage = /wait: "lucid wait <file>[^"]*"/.exec(runSrc)?.[0] ?? "";
     expect(usage).toContain("--timeout");
     expect(usage).toContain("--since");
   });
 
-  test("the view field the doc documents is the one open prints", () => {
+  test("the view field the doc documents is the one open PRINTS", () => {
     expect(embedded).toContain('"view"');
-    expect(runSrc).toContain("view,");
+    // In the print payload, not merely somewhere in the file. `view,` alone
+    // was satisfied by the `selectOpenUrl({ view, ... })` call site, so
+    // deleting the field from `print({...})` left this green while the doc's
+    // "always present, in both views" became false.
+    // Anchored on the payload region rather than matched with a brace regex,
+    // which the nested `...(warnings.length > 0 ? {...} : {})` spread defeats.
+    const start = runSrc.indexOf("nextCursor: renderCursor(result.cursor),");
+    expect(start, "could not find open's print payload").toBeGreaterThan(-1);
+    const printed = runSrc.slice(start, runSrc.indexOf("});", start));
+    expect(printed).toContain("view,");
+    expect(printed).toContain("url,");
   });
 
   test("the doc warns that `warnings` is optional, because open really emits it", () => {

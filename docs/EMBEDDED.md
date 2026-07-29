@@ -18,10 +18,12 @@ navigation the conversation already owns. The pane should show that one
 artifact with the full review UI and nothing around it.
 
 Lucid calls this the **view**, and it decides presentation only: never process
-topology. (Not to be confused with a *surface*, which in Lucid means the
-addressable rendering itself - the artifact plus the overlay that makes every
-part of it targetable. A view is the window a surface is presented in.) A hub still hosts the session if one is running, the hub is
-still the single appender, and there is no second process either way.
+topology. A hub still hosts the session if one is running, the hub is still the
+single appender, and there is no second process either way.
+
+Not to be confused with a *surface*, which in Lucid means the addressable
+rendering itself - the artifact plus the overlay that makes every part of it
+targetable. A view is the window a surface is presented in.
 
 ## What to export
 
@@ -37,7 +39,8 @@ same per-harness integration file that already carries `LUCID_HARNESS`,
 `LUCID_SESSION_ID` and `LUCID_MODEL` - variables measured reaching the session
 log's attendant stamp intact from inside these apps.
 
-A value Lucid does not recognise resolves to the shell view and is not an error, so an integration file written against a newer Lucid will not break an
+A value Lucid does not recognise resolves to the shell view and is not an
+error, so an integration file written against a newer Lucid will not break an
 older CLI.
 
 ## What `open` then returns
@@ -99,8 +102,9 @@ The loop, per turn:
 State the latency plainly to whoever you are integrating for: **annotations
 arrive with the human's next chat message.** Somebody who marks up the artifact
 and waits silently will see nothing happen. That is the honest cost of this
-option, and it buys full reliability with no concurrency hazards - the drain is
-one read, and the log is append-only.
+option, and what it buys is reliability with no concurrency hazards: the drain
+takes the append lock only to record that it delivered, and the log is
+append-only, so nothing it does can collide with the human still annotating.
 
 ## The two alternatives, and why neither is the embedded default
 
@@ -109,8 +113,13 @@ session headlessly, one turn per send, so feedback lands instantly. Not the
 default here for two reasons: the resumed turn happens outside the app's chat
 UI, so it is invisible in the conversation history the human is reading, and it
 risks two writers on one conversation when the human is mid-message in the app.
-Trusting it in this scenario needs harness presence detection - knowing whether
-the human's own session is live - which is filed separately and not built.
+
+Lucid does guard the second one - `src/core/presence.ts` checks whether the
+human's own session is live and `--attend` skips the turn when it is - but that
+guard only sees harnesses that publish their sessions, and a chat app's
+conversation is not one of them. So in a terminal harness attend is protected;
+in a pane it would be resuming blind, which is why the drain is the default
+here rather than a preference.
 
 **A background blocking `wait`.** No Lucid change at all: run `lucid wait`
 without `--timeout 0` as a background process and re-enter the conversation
