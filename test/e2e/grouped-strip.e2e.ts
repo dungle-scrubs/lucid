@@ -2,7 +2,14 @@ import { chord, hook, on } from "./locators.ts";
 import { expect, test, type Page } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { PLAN_V1, openIntoHub, startHub, type Cli, type Hub } from "./helpers.ts";
+import {
+  PLAN_V1,
+  openIntoHub,
+  startHub,
+  waitTimeoutSeconds,
+  type Cli,
+  type Hub,
+} from "./helpers.ts";
 
 /**
  * The grouped tab strip (plan 03, M2.2): every open tab in one row, grouped by
@@ -359,7 +366,14 @@ test("unseen badges survive a reload; restoring is not arriving (M3.2)", async (
   );
 
   // B's log grows while B is in the background: an agent reply lands.
-  await cli.run(["wait", other, "--reply", "revised while you were away", "--timeout", "1"]);
+  await cli.run([
+    "wait",
+    other,
+    "--reply",
+    "revised while you were away",
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ]);
   const tabB = page.locator(hook("shell-tab"), { hasText: "Rollout checklist" });
   await expect(tabB.locator(`${hook("tab-attention")}[data-kind="unseen"]`)).toHaveCount(1);
 
