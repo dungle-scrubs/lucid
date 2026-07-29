@@ -42,8 +42,9 @@ node_modules/
 # trap and are gone; do not re-add a rule that ignores a `.lucid/**` artifact.
 
 # Loose HTML recovered from a harness's edit history after /private/tmp was
-# cleared - orphaned files, not records. The clean records that DO live under
-# lucid-recovered/.lucid/ stay ignored with the junk; commit them surgically if
-# ever wanted, rather than un-ignoring the whole recovery pile.
-/lucid-recovered/
+# cleared - orphaned raw files, not records. Ignore ONLY the loose HTML; the
+# review records under lucid-recovered/**/.lucid/ are artifacts and MUST stay
+# committable (within a project, a .lucid/ artifact is never gitignored).
+/lucid-recovered/**/*.html
+!/lucid-recovered/**/.lucid/**
 .claude/worktrees/
