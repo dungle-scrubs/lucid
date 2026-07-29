@@ -193,3 +193,43 @@ describe("stem collision: two artifacts, one record name (plan 05, M1.2, D-006)"
     expect(() => ensureSessionDirs(p)).not.toThrow();
   });
 });
+
+describe("a refusal leaves no phantom record (plan 05, M1.1)", () => {
+  /**
+   * `open` created the record directory before it ever read the artifact, so a
+   * dangling symlink - or any unreadable file - exited 1 with a typed error AND
+   * left a `<stem>/` folder holding a lone `.gitignore` beside the artifact.
+   * The refusal is supposed to leave the directory exactly as it found it.
+   */
+  test("a dangling symlink refuses without creating the record directory", async () => {
+    const { openSession } = await import("../src/core/session.ts");
+    const dir = await tmp();
+    await symlink(join(dir, "gone.html"), join(dir, "dangling.html"));
+    const paths = sessionPaths(join(dir, "dangling.html"));
+
+    await expect(openSession(paths)).rejects.toThrow(/cannot read artifact/);
+    expect(existsSync(paths.sessionDir)).toBe(false);
+  });
+
+  test("an artifact that fails structural validation leaves nothing behind either", async () => {
+    const { openSession } = await import("../src/core/session.ts");
+    const dir = await tmp();
+    const bad = join(dir, "bad.html");
+    await writeFile(bad, "not html at all");
+    const paths = sessionPaths(bad);
+
+    await expect(openSession(paths)).rejects.toThrow(/structural validation/);
+    expect(existsSync(paths.sessionDir)).toBe(false);
+  });
+
+  test("a readable artifact still opens - the guard costs nothing on the happy path", async () => {
+    const { openSession } = await import("../src/core/session.ts");
+    const dir = await tmp();
+    const good = join(dir, "good.html");
+    await writeFile(good, "<!doctype html><html><body><h1>good</h1></body></html>");
+    const paths = sessionPaths(good);
+
+    await openSession(paths);
+    expect(existsSync(paths.logPath)).toBe(true);
+  });
+});

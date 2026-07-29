@@ -299,8 +299,10 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
+          "status": "covered",
+          "testFile": "test/identity.test.ts",
+          "testName": "a symlink and its target are ONE identity",
+          "mutation": "src/core/paths.ts: canonicalArtifactPath returns `abs` instead of `realpathSync(abs)` - the symlink and its target mint two identities again and six identity tests red, including the R3 stranded-record guard"
         },
         {
           "id": "path-with-spaces-and-unicode",

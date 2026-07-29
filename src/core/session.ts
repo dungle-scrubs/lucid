@@ -315,21 +315,29 @@ export const openSession = async (
   paths: SessionPaths,
   opts?: { readonly attendant?: AttendantStamp },
 ): Promise<OpenResult> => {
-  ensureSessionDirs(paths);
+  // Everything that can REFUSE runs before anything is created on disk. The
+  // directory used to be made first, so a dangling symlink or an unreadable
+  // file exited with a typed error and still left a `<stem>/` folder holding a
+  // lone `.gitignore` beside the artifact - litter from an open that never
+  // happened, and named exactly like a real record. `readEvents` tolerates a
+  // missing directory, so reading the log this early costs nothing.
   const warnings: Warning[] = [];
   const before = foldLog((await readEvents(paths.logPath)).events);
   const html = await readArtifact(paths);
   const structure = validateStructure(html);
+  const opening = before.status === "none" || before.status === "ended";
+  if (opening && !structure.ok) {
+    throw new ArtifactError({
+      message: `artifact failed structural validation: ${structure.reason}`,
+      detail: { path: paths.artifactPath },
+    });
+  }
+
+  ensureSessionDirs(paths);
 
   let startedSegment = false;
 
-  if (before.status === "none" || before.status === "ended") {
-    if (!structure.ok) {
-      throw new ArtifactError({
-        message: `artifact failed structural validation: ${structure.reason}`,
-        detail: { path: paths.artifactPath },
-      });
-    }
+  if (opening) {
     const segment = before.status === "none" ? 1 : before.segment + 1;
     const commit = commitVersionBytes(paths, html, segment, 1);
     await appendEvent(paths.logPath, {
