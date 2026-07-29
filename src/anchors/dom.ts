@@ -212,10 +212,17 @@ const rootText = (root: DomRootLike): string => {
 };
 
 /**
- * Resolve a range anchor: quote (exact text in prefix/suffix context) first,
- * then character position (D-047). Returns true if it re-attaches.
+ * Resolve a range anchor and say HOW it matched (plan 05, M2.1, D-007): quote
+ * (exact text in prefix/suffix context) first, then character position
+ * (D-047).
+ *
+ * The two are not equally trustworthy. The quote's prefix and suffix are what
+ * tie the text to the spot the human pointed at; when only the offsets line up,
+ * that context is gone and the same string now sits among different words. It
+ * still resolves - and reporting that without qualification is exactly the lie
+ * #47 is about - so the offset path is `positional`.
  */
-export const resolveRangeAnchor = (anchor: RangeAnchor, root: DomRootLike): boolean => {
+export const resolveRangeMatch = (anchor: RangeAnchor, root: DomRootLike): AnchorMatch | null => {
   const text = rootText(root);
   const { exact, prefix, suffix } = anchor.quote;
 
@@ -228,20 +235,31 @@ export const resolveRangeAnchor = (anchor: RangeAnchor, root: DomRootLike): bool
       const after = text.slice(idx + exact.length, idx + exact.length + suffix.length);
       const prefixOk = prefix.length === 0 || before.endsWith(prefix);
       const suffixOk = suffix.length === 0 || after.startsWith(suffix);
-      if (prefixOk && suffixOk) return true;
+      if (prefixOk && suffixOk) return "exact";
       from = idx + 1;
     }
   }
 
   const { start, end } = anchor.position;
   if (start >= 0 && end <= text.length && start < end) {
-    if (text.slice(start, end) === exact) return true;
+    if (text.slice(start, end) === exact) return "positional";
   }
-  return false;
+  return null;
 };
 
+/** Does this range anchor re-attach at all? The confidence-blind predicate. */
+export const resolveRangeAnchor = (anchor: RangeAnchor, root: DomRootLike): boolean =>
+  resolveRangeMatch(anchor, root) !== null;
+
+/**
+ * How sure is this anchor's re-attachment, for either kind? `null` when it does
+ * not re-attach - a miss is a miss, never a low-confidence guess.
+ */
+export const anchorMatch = (anchor: Anchor, root: DomRootLike): AnchorMatch | null =>
+  anchor.kind === "element"
+    ? (resolveElementMatch(anchor, root)?.match ?? null)
+    : resolveRangeMatch(anchor, root);
+
 /** Does this anchor re-attach to the given root? */
-export const anchorResolves = (anchor: Anchor, root: DomRootLike): boolean => {
-  if (anchor.kind === "element") return resolveElementAnchor(anchor, root) !== null;
-  return resolveRangeAnchor(anchor, root);
-};
+export const anchorResolves = (anchor: Anchor, root: DomRootLike): boolean =>
+  anchorMatch(anchor, root) !== null;

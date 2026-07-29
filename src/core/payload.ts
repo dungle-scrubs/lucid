@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseHTML } from "linkedom";
 import type { DomRootLike } from "../anchors/dom.ts";
-import { anchorResolves } from "../anchors/dom.ts";
+import { anchorMatch } from "../anchors/dom.ts";
+import type { AnchorMatch } from "../anchors/dom.ts";
 import type { Warning } from "../errors.ts";
 import type {
   PayloadAnnotation,
@@ -130,6 +131,12 @@ type ResolvableRecord = Pick<AnnotationRecord, "id" | "version" | "target" | "ta
  * artifact, applying the authored-version snapshot guard (D-023, D-035). A
  * record authored against a now-missing/mismatched snapshot is orphaned and
  * never re-anchored to current.
+ *
+ * Returns HOW it re-attached, not merely whether (plan 05, M2.1/M2.2): `null`
+ * for a miss, `"exact"` when an id or a unique fingerprint named it, and
+ * `"positional"` when only the slot lined up. A multi-target record takes the
+ * BEST of its spots - one exact hit is enough to stop qualifying the whole
+ * note, and the overlay paints nothing for the spots that were edited away.
  */
 const resolveAnnotation = async (
   record: ResolvableRecord,
@@ -139,7 +146,7 @@ const resolveAnnotation = async (
   warnings: Warning[],
   /** Noun for diagnostics so a fork's warning does not call it an annotation. */
   noun: "annotation" | "fork" = "annotation",
-): Promise<boolean> => {
+): Promise<AnchorMatch | null> => {
   // A client-supplied stamp outside [1, current] is never trusted; the
   // record orphans rather than re-pointing at the wrong target (D-066).
   if (!Number.isInteger(record.version) || record.version < 1 || record.version > state.version) {
@@ -148,7 +155,7 @@ const resolveAnnotation = async (
       message: `${noun} ${record.id} has out-of-range version ${record.version} (current ${state.version}); orphaned`,
       detail: { id: record.id, version: record.version, current: state.version },
     });
-    return false;
+    return null;
   }
   if (record.version < state.version) {
     const ref = versionRef(state, record.version);
@@ -158,7 +165,7 @@ const resolveAnnotation = async (
         message: `${noun} ${record.id} references unknown version ${record.version}`,
         detail: { id: record.id, version: record.version },
       });
-      return false;
+      return null;
     }
     const status = await verifySnapshot(snapshotAbsPath(ref.path), ref.hash);
     if (status !== "ok") {
@@ -167,14 +174,20 @@ const resolveAnnotation = async (
         message: `authored snapshot for v${record.version} is ${status}; ${noun} ${record.id} orphaned`,
         detail: { id: record.id, version: record.version, path: ref.path },
       });
-      return false;
+      return null;
     }
   }
   // Carry forward: does the anchor still attach to the current version? A
   // multi-target record stays live while ANY spot survives - the overlay
   // simply paints no mark for the spots that were edited away.
-  return (record.targets ?? [record.target]).some((t) => anchorResolves(t, currentRoot));
+  const matches = (record.targets ?? [record.target]).map((t) => anchorMatch(t, currentRoot));
+  if (matches.includes("exact")) return "exact";
+  return matches.includes("positional") ? "positional" : null;
 };
+
+/** The wire's qualifier for a resolution: only a positional-only hit earns one. */
+const confidenceOf = (match: AnchorMatch | null): { confidence?: "low" } =>
+  match === "positional" ? { confidence: "low" } : {};
 
 export interface BuildPayloadOptions {
   readonly session: string;
@@ -215,7 +228,8 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     annotations.push({
       id: a.id,
       version: a.version,
-      resolved,
+      resolved: resolved !== null,
+      ...confidenceOf(resolved),
       target: a.target,
       ...(a.targets && a.targets.length > 0 ? { targets: a.targets } : {}),
       note: a.note,
@@ -247,7 +261,8 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     forks.push({
       id: f.id,
       version: f.version,
-      resolved,
+      resolved: resolved !== null,
+      ...confidenceOf(resolved),
       target: f.target,
       note: f.note,
       at: f.at,

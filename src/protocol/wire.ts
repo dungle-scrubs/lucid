@@ -64,6 +64,18 @@ export interface PayloadAnnotation {
    * of them still attaches. Omitted for the single-target annotation.
    */
   readonly targets?: readonly Anchor[];
+  /**
+   * Present, and always `"low"`, when the anchor re-attached ONLY by position
+   * (plan 05, M2.2, finding #47): no `data-lucid-id` and no unique fingerprint
+   * matched, so this is whatever element or offset now occupies that slot
+   * rather than the thing the human pointed at. Absent means the match was
+   * exact - so an older reader, which knows nothing of this field, keeps
+   * reading `resolved` exactly as before.
+   *
+   * A miss is still `resolved: false`. This field never softens a failure into
+   * a maybe; it qualifies a success that is a guess.
+   */
+  readonly confidence?: "low";
   readonly note: string;
   readonly at: string;
   /** When the human wrote it; `at` is when it reached the log. */
@@ -91,6 +103,9 @@ export interface PayloadFork {
   readonly version: number;
   readonly resolved: boolean;
   readonly target: Anchor;
+  /** As on an annotation: present and `"low"` when the fork's region
+   *  re-attached only by position (plan 05, M2.2, #47). */
+  readonly confidence?: "low";
   readonly note: string;
   readonly at: string;
   readonly authoredAt?: string;
