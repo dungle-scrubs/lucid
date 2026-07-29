@@ -134,15 +134,39 @@ const toArray = (a: ArrayLike<DomElementLike>): DomElementLike[] => Array.from(a
  * falls through to the next (data-lucid-id -> fingerprint -> domPath) per
  * D-047; only the positional domPath is allowed to disambiguate.
  */
-export const resolveElementAnchor = (
+/**
+ * How sure a resolution is (plan 05, M2.1, D-007).
+ *
+ * `exact` - a `data-lucid-id` or a UNIQUE fingerprint named this element: the
+ * anchor found what it was pointing at.
+ * `positional` - only the domPath matched, so the element is whatever now
+ * occupies that slot. On a document whose real content is hydrated at runtime
+ * (finding #47) that is a guess dressed as a match, and the difference is what
+ * the low-confidence signal reports instead of lying.
+ */
+export type AnchorMatch = "exact" | "positional";
+
+export interface ResolvedElement {
+  readonly el: DomElementLike;
+  readonly match: AnchorMatch;
+}
+
+/**
+ * Resolve an element anchor against a root, in priority order
+ * lucidId -> fingerprint -> domPath (D-047), reporting HOW it matched.
+ * A layer whose match is not unique within the document is skipped and falls
+ * through to the next per D-047; only the positional domPath is allowed to
+ * disambiguate, and a match that only it could make is tagged `positional`.
+ */
+export const resolveElementMatch = (
   anchor: ElementAnchor,
   root: DomRootLike,
-): DomElementLike | null => {
+): ResolvedElement | null => {
   if (anchor.lucidId) {
     const matches = toArray(
       root.querySelectorAll(`[data-lucid-id="${cssEscape(anchor.lucidId)}"]`),
     );
-    if (matches.length === 1 && matches[0]) return matches[0];
+    if (matches.length === 1 && matches[0]) return { el: matches[0], match: "exact" };
     // non-unique -> skip lucidId layer
   }
 
@@ -156,18 +180,26 @@ export const resolveElementAnchor = (
   // A unique fingerprint wins; a non-unique one is ambiguous (e.g. identical
   // status cells sharing a column position across table rows) and must fall
   // through to the positional domPath, same as the lucidId layer above.
-  if (byFingerprint.length === 1 && byFingerprint[0]) return byFingerprint[0];
+  if (byFingerprint.length === 1 && byFingerprint[0]) {
+    return { el: byFingerprint[0], match: "exact" };
+  }
 
   if (anchor.domPath) {
     try {
       const match = root.querySelector(anchor.domPath);
-      if (match) return match;
+      if (match) return { el: match, match: "positional" };
     } catch {
       // invalid selector -> no match
     }
   }
   return null;
 };
+
+/** The resolved element alone - the shape every existing caller wants. */
+export const resolveElementAnchor = (
+  anchor: ElementAnchor,
+  root: DomRootLike,
+): DomElementLike | null => resolveElementMatch(anchor, root)?.el ?? null;
 
 const cssEscape = (s: string): string => s.replace(/["\\]/g, "\\$&");
 
