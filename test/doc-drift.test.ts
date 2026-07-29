@@ -77,7 +77,7 @@ describe("docs/CONTRACT.md tracks the run/ split (plan 02)", () => {
  */
 describe("docs/EMBEDDED.md tracks the code it instructs against (plan 06)", () => {
   const embedded = readFileSync(join(REPO, "docs/EMBEDDED.md"), "utf8");
-  const viewSrc = readFileSync(join(REPO, "src/cli/view.ts"), "utf8");
+  const viewSrc = readFileSync(join(REPO, "src/server/view.ts"), "utf8");
   const runSrc = readFileSync(join(REPO, "src/cli/run.ts"), "utf8");
   const mainSrc = readFileSync(join(REPO, "src/cli/main.ts"), "utf8");
   const skill = readFileSync(join(REPO, "skills/lucid/SKILL.md"), "utf8");
