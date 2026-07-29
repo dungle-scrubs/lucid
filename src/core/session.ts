@@ -1,5 +1,12 @@
-import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
 import { ArtifactError, ValidationError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
@@ -7,7 +14,13 @@ import { appendEvent, appendEventsIf, readEvents } from "./log.ts";
 import type { AttendantStamp, LogEvent } from "./events.ts";
 import { foldLog, type FoldedState } from "./fold.ts";
 import type { SessionPaths } from "./paths.ts";
-import { snapshotPath, snapshotRelPath } from "./paths.ts";
+import {
+  canonicalArtifactPath,
+  sessionName,
+  sessionPaths,
+  snapshotPath,
+  snapshotRelPath,
+} from "./paths.ts";
 import { hashContent, validateStructure, writeSnapshot } from "./version.ts";
 
 /**
@@ -214,6 +227,44 @@ export interface OpenResult {
  *  - resume on SUSPENDED: reconcile file vs current.html, session_resumed (D-061)
  *  - idempotent open on ACTIVE: reconcile only
  */
+/**
+ * Refuse a realpath unification that would strand history (plan 05, M1.1, R3).
+ *
+ * Identity is the artifact's REAL path now, so `lucid open link.html` and
+ * `lucid open plan.html` are one session. That is the fix - but if BOTH the
+ * link's old record and the target's record already hold a log, opening the
+ * link would silently land on the target's history and leave the link's
+ * annotations addressed by nothing. Nothing is merged automatically: the open
+ * refuses and names both records, so the human decides which history is the
+ * real one. The single-log case (only one side has history) unifies silently,
+ * which is the whole point.
+ */
+export const assertNoStrandedRecord = (input: string): void => {
+  const literal = isAbsolute(input) ? resolve(input) : resolve(process.cwd(), input);
+  const canonical = canonicalArtifactPath(input);
+  if (literal === canonical) return; // no link in play
+  // The literal record, computed WITHOUT canonicalizing - sessionPaths would
+  // resolve the link right back and compare a path with itself.
+  const literalLog = join(dirname(literal), sessionName(literal), "log.ndjson");
+  const canonicalLog = sessionPaths(canonical).logPath;
+  if (literalLog === canonicalLog) return;
+  if (!existsSync(literalLog) || !existsSync(canonicalLog)) return; // at most one history
+  // Both paths exist - but a parent-directory symlink (macOS /var -> /private/var)
+  // makes them the SAME file seen twice, which is one record, not two.
+  try {
+    if (realpathSync(literalLog) === realpathSync(canonicalLog)) return;
+  } catch {
+    return; // unreadable: let the open fail on its own terms
+  }
+  throw new ValidationError({
+    message:
+      `refusing to open: "${input}" resolves to "${canonical}", and BOTH paths already hold a review record with history. ` +
+      `A session's identity is the artifact's real path, so these would become one session - but merging two logs is not something Lucid will do behind you. ` +
+      `Keep the history you want and move or delete the other record (${dirname(literalLog)} or ${dirname(canonicalLog)}), then open again.`,
+    detail: { literal: literalLog, canonical: canonicalLog },
+  });
+};
+
 export const openSession = async (
   paths: SessionPaths,
   opts?: { readonly attendant?: AttendantStamp },

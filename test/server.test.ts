@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeAttendantSidecar } from "../src/core/attendant.ts";
@@ -41,7 +41,7 @@ const get = (path: string, headers: Record<string, string> = {}): Promise<Respon
   fetch(`http://127.0.0.1:${port}${path}`, { headers: { host: `127.0.0.1:${port}`, ...headers } });
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "lucid-srv-"));
+  dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-srv-")));
   paths = sessionPaths(join(dir, "plan.html"));
   await writeFile(paths.artifactPath, DOC);
   // a colocated asset + a secret dotfile + a disallowed type

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readLastAttendant, writeAttendantSidecar } from "../src/core/attendant.ts";
@@ -19,7 +19,7 @@ const V2 =
   "<html><body><article><ol><li>ONE</li><li>two</li><li>three</li></ol></article></body></html>";
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "lucid-test-"));
+  dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-test-")));
   artifact = join(dir, "plan.html");
   await writeFile(artifact, V1);
 });

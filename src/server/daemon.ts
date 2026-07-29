@@ -719,7 +719,17 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // A worktree is a listed root of its own, grouped under its main repo -
     // both are legitimate create targets; anything else is not a project the
     // hub knows about.
-    const known = listing.some((s) => s.project === project || s.worktree === project);
+    // Compare CANONICAL paths (plan 05, M1.1): the listing reports a project by
+    // its real path, and a caller - a dialog, a script, a human - may hand over
+    // any spelling that reaches the same folder.
+    const asked = canonicalArtifactPath(project);
+    const known = listing.some(
+      (s) =>
+        s.project === project ||
+        s.worktree === project ||
+        canonicalArtifactPath(s.project) === asked ||
+        (s.worktree !== undefined && canonicalArtifactPath(s.worktree) === asked),
+    );
     if (!known) return json({ error: "unknown project" }, 400);
     // Listed is not the same as PRESENT. A project can be deleted while its
     // reviews outlive it, and a scratchpad session's project is recovered from

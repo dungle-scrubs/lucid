@@ -11,7 +11,7 @@ import { themeReadiness, themeWarning } from "../core/theme.ts";
 import { registerSession } from "../core/registry.ts";
 import { sanitizeProgress } from "../core/progress.ts";
 import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
-import { ensureSessionDirs, openSession } from "../core/session.ts";
+import { assertNoStrandedRecord, ensureSessionDirs, openSession } from "../core/session.ts";
 import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
 import { sanitizeAttendant } from "../core/events.ts";
@@ -107,6 +107,10 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
       detail: { path: resolve(file), suggested: join(project, "lucid", basename(file)) },
     });
   }
+  // Identity is the artifact's REAL path (plan 05, M1.1): a symlink and its
+  // target are one session. Refuse first if unifying them would strand a
+  // second history (R3).
+  assertNoStrandedRecord(file);
   const paths = sessionPaths(file);
   const opener = attendantStamp();
   const result = await openSession(paths, opener ? { attendant: opener } : undefined);

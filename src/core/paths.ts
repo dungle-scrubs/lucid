@@ -1,4 +1,5 @@
-import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 /**
  * Resolved on-disk layout for one session. A session is identified by the
@@ -64,9 +65,37 @@ export const sessionName = (artifactPath: string): string => {
   return ext ? base.slice(0, -ext.length) : base;
 };
 
-/** Resolve a (possibly relative) artifact path to its canonical absolute form. */
-export const canonicalArtifactPath = (input: string): string =>
-  isAbsolute(input) ? resolve(input) : resolve(process.cwd(), input);
+/**
+ * Resolve a (possibly relative) artifact path to its canonical absolute form -
+ * symlinks included (plan 05, M1.1, #41).
+ *
+ * `resolve` alone normalizes `..` and relative segments but not links, so
+ * `lucid open plan.html` and `lucid open link-to-plan.html` minted TWO
+ * identities for one file: two records, two logs, and annotations landing in
+ * whichever the last invocation picked. A session's identity is the artifact's
+ * REAL path.
+ *
+ * An artifact `open` is about to create does not exist yet, so an unresolvable
+ * file falls back to its resolved DIRECTORY plus the name, and an unresolvable
+ * parent keeps the caller's own spelling - the refusal then names what the
+ * human typed rather than a phantom.
+ */
+export const canonicalArtifactPath = (input: string): string => {
+  const abs = isAbsolute(input) ? resolve(input) : resolve(process.cwd(), input);
+  try {
+    return realpathSync(abs); // the file itself, links and all
+  } catch {
+    // Not there (yet): `open` is about to create it, or the link dangles. The
+    // DIRECTORY still resolves, which is what keeps one identity per real
+    // folder; an unresolvable parent keeps the caller's own spelling so the
+    // refusal names what the human typed rather than a phantom.
+    try {
+      return join(realpathSync(dirname(abs)), basename(abs));
+    } catch {
+      return abs;
+    }
+  }
+};
 
 /** Compute the full session layout for an artifact path. */
 export const sessionPaths = (input: string): SessionPaths => {
