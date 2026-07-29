@@ -200,3 +200,44 @@ test("an off-screen question marks the fade on its side (D-023)", async ({ page 
   await page.keyboard.press(chord("4"));
   await expect(on(page).fadeAttention()).toHaveCount(0);
 });
+
+test("two same-titled tabs in one project are told apart by their tooltips (finding #56)", async ({
+  page,
+}) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+  // A second artifact in the SAME project with the IDENTICAL title - the
+  // fixture finding #56 measured. The labels are allowed to match now
+  // (title-only, D-012); the differentiator the row demands is the tooltip.
+  const twin = join(cli.dir, "rollout.html");
+  await writeFile(twin, PLAN_V1, "utf8");
+  await cli.run(["open", twin]);
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await on(page).tabAdd().click();
+  await page.locator(hook("picker-row")).first().click();
+  await expect(on(page).shellTab()).toHaveCount(2);
+
+  // Both labels identical and bare - and inside ONE group (same project).
+  await expect(on(page).tabGroup()).toHaveCount(1);
+  const tabs = on(page).shellTab();
+  await expect(tabs.nth(0)).toContainText("Migration plan");
+  await expect(tabs.nth(1)).toContainText("Migration plan");
+
+  // Hovering each shows ITS OWN artifact path: the tooltips differ even
+  // though the labels cannot.
+  const tipFor = async (i: number): Promise<string> => {
+    await tabs.nth(i).locator("button").first().hover();
+    const tip = page.locator('[data-slot="tooltip-content"]', { hasText: "/" }).last();
+    await expect(tip).toBeVisible();
+    const text = (await tip.textContent()) ?? "";
+    await page.mouse.move(0, 400); // dismiss before the next hover
+    return text;
+  };
+  const first = await tipFor(0);
+  const second = await tipFor(1);
+  expect(first).not.toBe(second);
+  expect([first, second].join(" ")).toContain("rollout.html");
+});

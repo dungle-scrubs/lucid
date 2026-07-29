@@ -2090,8 +2090,10 @@
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #56: measured ['Migration - lucid', 'Migration - lucid'] for two artifacts in one project. The qualifier fires, costs strip width and adds no information, so the row's claim - still tellable apart - is false today. test/tab-labels.test.ts records the measured behaviour, so a fix turns it red deliberately."
+          "status": "covered",
+          "testFile": "test/e2e/grouped-strip.e2e.ts",
+          "testName": "two same-titled tabs in one project are told apart by their tooltips (finding #56)",
+          "mutation": "client/chrome/Shell.tsx: make the tab tooltip show the LABEL instead of the artifact path (TooltipContent {handle.key} -> {handle.config.name}) - both tooltips read \"Migration plan\" and nothing tells the twins apart (closes finding #56 via D-012/D-027: labels are allowed to match; the tooltip is the differentiator)"
         },
         {
           "id": "tabs-cross-project-name-collision",
