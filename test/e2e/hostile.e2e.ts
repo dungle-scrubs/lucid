@@ -185,6 +185,13 @@ test(
   survives("hostile-duplicate-ids"),
 );
 test(
+  "the loop survives an artifact whose <base> re-roots every URL to a foreign origin",
+  // Was defect #45: the path-absolute bootstrap src resolved against the
+  // document base, so a foreign <base href> re-rooted it. The src is
+  // ORIGIN-absolute now (plan 04, M2.3) - <base> cannot move it.
+  survives("hostile-base-tag"),
+);
+test(
   "the loop survives an artifact whose capture-phase handlers swallow every event",
   // Was defect #43: the artifact's window-capture stopPropagation ran ahead
   // of the overlay's document-level listeners and starved picking. The

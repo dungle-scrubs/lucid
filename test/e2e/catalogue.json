@@ -3751,12 +3751,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "The injected script src is immune to the document base. Today the path-absolute /__lucid/client.js resolves against the hostile origin and the overlay never boots (plan finding #45).",
+          "expected": "The overlay boots from Lucid's own origin: the bootstrap src is ORIGIN-absolute (built from the request's origin at serve time), which a document <base href> cannot re-root (plan 04, M2.3, closes finding #45).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #45: a foreign <base> re-roots the path-absolute /__lucid/client.js to the hostile origin and the overlay never boots."
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact whose <base> re-roots every URL to a foreign origin",
+          "mutation": "src/server/inject.ts: drop the origin from the bootstrap src (back to base-only, src=\"${base}/__lucid/client.js\") - the fixture's <base> re-roots the module to the hostile origin, the bootstrap 404s there, the overlay never boots, and this fixture's loop test reds"
         },
         {
           "id": "hostile-self-rewriting",

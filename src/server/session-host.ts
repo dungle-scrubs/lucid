@@ -1063,7 +1063,7 @@ export const createSessionHost = (
           { status: 404, headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
         );
       }
-      const injected = renderInjected(html, base);
+      const injected = renderInjected(html, base, new URL(req.url).origin);
       return new Response(injected.body, {
         headers: { "content-type": "text/html; charset=utf-8", ...noStore, ...injected.headers },
       });

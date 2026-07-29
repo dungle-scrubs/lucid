@@ -63,10 +63,6 @@ export interface HostileFixture {
  */
 export const HOSTILE_DEFECTS: ReadonlyMap<string, string> = new Map([
   [
-    "hostile-base-tag",
-    "finding #45: a foreign <base> re-roots the path-absolute bootstrap src to the hostile origin",
-  ],
-  [
     "hostile-self-rewriting",
     "finding #47: the rewritten DOM exists only in the browser - resolution falls through positionally onto the SAVED skeleton, so resolved:true delivers context the human never saw",
   ],

@@ -14,16 +14,21 @@ import { closeIndexOf, maskHiddenText } from "../core/html-scan.ts";
  *  `/__lucid/client.js` would 404 against the daemon's root. With a `nonce`
  *  (the CSP path, #42) both script elements carry it, and the overlay reads
  *  it off `window.__LUCID__` to stamp the styles it creates at runtime. */
-const overlayMarkup = (base: string, nonce?: string): string => {
+const overlayMarkup = (base: string, nonce?: string, origin?: string): string => {
   const attr = nonce === undefined ? "" : ` nonce="${nonce}"`;
   const boot =
     nonce === undefined
       ? `window.__LUCID__={mode:"overlay"};`
       : `window.__LUCID__={mode:"overlay",nonce:"${nonce}"};`;
+  // ORIGIN-absolute when the server knows how it was addressed (plan 04,
+  // M2.3, #45): a path-absolute src resolves against the document base, so a
+  // foreign `<base href>` re-rooted the bootstrap to a hostile origin. A full
+  // origin is immune to `<base>`, and the element nonce (CSP path) authorizes
+  // the element regardless of its source list.
   return `
 <div id="__lucid_overlay_root" data-lucid-ignore="true"></div>
 <script${attr}>${boot}</script>
-<script type="module"${attr} src="${base}/__lucid/client.js"></script>
+<script type="module"${attr} src="${origin ?? ""}${base}/__lucid/client.js"></script>
 `;
 };
 
@@ -31,8 +36,13 @@ const overlayMarkup = (base: string, nonce?: string): string => {
 export const bodyCloseIndex = (html: string): number => closeIndexOf(html, "body");
 
 /** Inject the overlay bootstrap into an artifact HTML document. */
-export const injectOverlay = (artifactHtml: string, base = "", nonce?: string): string => {
-  const markup = overlayMarkup(base, nonce);
+export const injectOverlay = (
+  artifactHtml: string,
+  base = "",
+  nonce?: string,
+  origin?: string,
+): string => {
+  const markup = overlayMarkup(base, nonce, origin);
   const spliceAt = (idx: number): string =>
     artifactHtml.slice(0, idx) + markup + artifactHtml.slice(idx);
   const body = bodyCloseIndex(artifactHtml);
@@ -119,10 +129,14 @@ export interface InjectedDocument {
  * the nonce names only what Lucid injected. No meta, no header: an
  * unrestricted artifact stays unrestricted.
  */
-export const renderInjected = (artifactHtml: string, base = ""): InjectedDocument => {
+export const renderInjected = (
+  artifactHtml: string,
+  base = "",
+  origin?: string,
+): InjectedDocument => {
   const metas = findCspMetas(artifactHtml);
   if (metas.length === 0) {
-    return { body: injectOverlay(artifactHtml, base), headers: {} };
+    return { body: injectOverlay(artifactHtml, base, undefined, origin), headers: {} };
   }
   const nonce = randomUUID().replace(/-/g, "");
   let stripped = artifactHtml;
@@ -133,7 +147,7 @@ export const renderInjected = (artifactHtml: string, base = ""): InjectedDocumen
     .map((m) => allowNonce(allowNonce(m.policy, "script-src", nonce), "style-src", nonce))
     .join(", ");
   return {
-    body: injectOverlay(stripped, base, nonce),
+    body: injectOverlay(stripped, base, nonce, origin),
     headers: { "content-security-policy": lifted },
   };
 };

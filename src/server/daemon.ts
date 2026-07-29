@@ -510,7 +510,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       if (subPath === "/" && req.method === "GET") {
         const html = await readFile(paths.currentHtml, "utf8").catch(() => null);
         if (html === null) return json({ error: "artifact not available" }, 404);
-        const injected = renderInjected(html, `/s/${id}`);
+        const injected = renderInjected(html, `/s/${id}`, new URL(req.url).origin);
         return new Response(injected.body, {
           headers: { "content-type": "text/html; charset=utf-8", ...noStore, ...injected.headers },
         });
