@@ -1,7 +1,7 @@
 import { on } from "./locators.ts";
 import { expect, test } from "@playwright/test";
 import { realpathSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import { parseCursor } from "../../src/core/cursor.ts";
 import { CliFailure } from "./cli-result.ts";
@@ -253,37 +253,46 @@ test("re-opening an ended session starts segment 2 with a strictly greater curso
   expect(listed[0]?.version).toBe(1);
 });
 
-test("bare lucid lists sessions in BOTH layouts, each once, at the right artifact", async () => {
+test("bare lucid lists sibling and canonical records, each once, at the right artifact", async () => {
   cli = await makeCli(PLAN_THEMED);
-  // A second artifact in the same folder, so the listing has one session per
-  // layout to find - and a miss is attributable to the layout, not the folder.
+  // Two records in one folder, one per surviving layout, so a miss is
+  // attributable to the layout and not the folder (plan 02, MB.2 - the old
+  // nested/legacy layout is gone; discovery is canonical-only):
+  //  - SIBLING: artifact beside its record at `<dir>/rollout.html`
+  //  - CANONICAL: artifact and record both under `<dir>/.lucid/`, the shape
+  //    the migration brings every record to. `.lucid` is now PART of the
+  //    addressable path, not something stripped.
   const rollout = join(cli.dir, "rollout.html");
   await writeFile(rollout, PLAN_THEMED);
+  await mkdir(join(cli.dir, ".lucid"), { recursive: true });
+  const canon = join(cli.dir, ".lucid", "canon.html");
+  await writeFile(canon, PLAN_THEMED);
+
   await cli.run(["open", cli.artifact]);
   await cli.run(["open", rollout]);
   await cli.run(["end", rollout]);
-
-  // Fabricate the legacy layout the way history did: the session folder lives
-  // under `.lucid/` beside the artifact (src/core/paths.ts legacySessionDir)
-  // until its next open moves it forward. Ended first, so no live server holds
-  // a descriptor pointing at the old location.
-  await mkdir(join(cli.dir, ".lucid"), { recursive: true });
-  await rename(join(cli.dir, "rollout"), join(cli.dir, ".lucid", "rollout"));
+  await cli.run(["open", canon]);
+  await cli.run(["end", canon]);
 
   const status = (await cli.run([])) as { sessions: { session: string; status: string }[] };
   const paths = status.sessions.map((s) => s.session);
 
-  // Both, once each, and each resolving to its own artifact - the legacy row
-  // must not duplicate the modern one, vanish, or leak `.lucid` into the path
-  // an agent would address the session by. Compared by realpath, not by
-  // string: the live row reports the spelling its descriptor was opened
-  // under while the legacy row is reconstructed from the scan root's cwd,
-  // which the OS hands back realpathed - the same identity split the cleanup
-  // comment above documents. The same FILE is the claim; one spelling is not.
+  // Each once, resolving to its own artifact - the canonical row must not
+  // duplicate, vanish, or be reconstructed to the wrong place. Compared by
+  // realpath, not by string: a live row reports the spelling its descriptor
+  // was opened under while an ended row is reconstructed from the scan root's
+  // cwd, which the OS hands back realpathed (macOS symlinks /tmp). The same
+  // FILE is the claim; one spelling is not.
   expect(paths.map((p) => realpathSync(p)).sort()).toEqual(
-    [cli.artifact, rollout].map((p) => realpathSync(p)).sort(),
+    [cli.artifact, rollout, canon].map((p) => realpathSync(p)).sort(),
   );
-  for (const p of paths) expect(p).not.toContain(".lucid");
-  const legacyRow = status.sessions.find((s) => realpathSync(s.session) === realpathSync(rollout));
-  expect(legacyRow?.status).toBe("ended");
+  // The canonical row keeps `.lucid` in its path - that is where its artifact
+  // and record live - while the sibling row has none. The old contract
+  // stripped `.lucid`; the canonical-only contract addresses through it.
+  const canonRow = status.sessions.find((s) => realpathSync(s.session) === realpathSync(canon));
+  expect(canonRow?.session).toContain(".lucid");
+  expect(canonRow?.status).toBe("ended");
+  const rolloutRow = status.sessions.find((s) => realpathSync(s.session) === realpathSync(rollout));
+  expect(rolloutRow?.session).not.toContain(".lucid");
+  expect(rolloutRow?.status).toBe("ended");
 });

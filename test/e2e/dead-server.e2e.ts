@@ -152,7 +152,7 @@ test("a truncated artifact on resume warns instead of committing a broken versio
   expect(reopened.version, "a structurally invalid artifact was committed as a version").toBe(1);
 
   // The last good bytes are still what gets served.
-  const current = await readFile(join(cli.dir, "plan", "current.html"), "utf8");
+  const current = await readFile(join(cli.dir, "plan", "run", "current.html"), "utf8");
   expect(current).toContain("</html>");
 });
 

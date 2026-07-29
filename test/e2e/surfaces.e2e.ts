@@ -153,7 +153,9 @@ test.afterEach(async () => {
     // here - before the rm below destroys the only copy - and reap by it.
     if (pid === undefined) {
       try {
-        const descriptor = JSON.parse(await readFile(join(dir, "plan", "server.json"), "utf8")) as {
+        const descriptor = JSON.parse(
+          await readFile(join(dir, "plan", "run", "server.json"), "utf8"),
+        ) as {
           pid?: number;
         };
         pid = descriptor.pid;
@@ -196,7 +198,7 @@ test("a picker row that cannot open says so on itself and keeps the pick screen"
   // its identity route out of memory, which would make the deleted log
   // invisible and the whole scenario unexhibitable. The registry pointer -
   // and therefore the picker row - survives, because the artifact does.
-  const descriptor = join(cli.dir, "plan", "server.json");
+  const descriptor = join(cli.dir, "plan", "run", "server.json");
   await cli.run(["end", cli.artifact]);
   await expect
     .poll(
@@ -244,7 +246,7 @@ test("open --restart on a hub-hosted session leaves the hub and the other tab al
   // The hub's OWN pid, as it wrote it into the session it hosts. `/hub/identity`
   // does not carry one, and "the port still answers" alone would be satisfied
   // by a different process that took the port.
-  const secondDescriptor = join(cli.dir, "rollout", "server.json");
+  const secondDescriptor = join(cli.dir, "rollout", "run", "server.json");
   const hubPid = JSON.parse(await readFile(secondDescriptor, "utf8")) as {
     pid: number;
     base?: string;
@@ -477,7 +479,9 @@ test("lucid app brings up a hub that actually drives delivery", async () => {
   const artifact = join(dir, "plan.html");
   await writeFile(artifact, PLAN_V1, "utf8");
   await invoke(["open", artifact], { cwd: dir, env, timeout: 30_000 });
-  const descriptor = JSON.parse(await readFile(join(dir, "plan", "server.json"), "utf8")) as {
+  const descriptor = JSON.parse(
+    await readFile(join(dir, "plan", "run", "server.json"), "utf8"),
+  ) as {
     pid: number;
     base?: string;
   };
