@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, readFile, stat } from "node:fs/promises";
 import { createAttentionCache } from "../core/attention.ts";
 import {
@@ -25,7 +25,7 @@ import {
   writeServerDescriptor,
 } from "./discovery.ts";
 import { escapeHtml } from "../core/escape.ts";
-import { sseMaxBackoffFromEnv } from "./viewer.ts";
+import { renderViewer, sseMaxBackoffFromEnv } from "./viewer.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
 import { projectRoot } from "../core/sessions.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
@@ -519,6 +519,33 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         return new Response(injected.body, {
           headers: { "content-type": "text/html; charset=utf-8", ...noStore, ...injected.headers },
         });
+      }
+      // ...and the review page, for exactly the same reason. Proxied, the
+      // dedicated server renders it for base "" - so every URL on the page
+      // addresses the HUB ROOT instead of this mount, and `/__lucid/state`
+      // 404s into a review UI that loads and does nothing. Nobody sees an
+      // error; the page is simply inert.
+      //
+      // That mattered little while this URL was only reachable by typing it.
+      // The solo view (plan 06) hands it to a chat app's pane, where it is
+      // held across reloads - and a session can legitimately end up on a
+      // dedicated server later (the hub quit, an `open` ran, the hub came
+      // back). The version comes off the live server's own identity, which the
+      // handshake above already fetched.
+      if (subPath === "/__lucid/viewer" && req.method === "GET") {
+        return new Response(
+          renderViewer({
+            session: paths.artifactPath,
+            name: basename(paths.artifactPath),
+            port,
+            version: live.version,
+            base: `/s/${id}`,
+            ...((backoff) => (backoff === undefined ? {} : { sseMaxBackoffMs: backoff }))(
+              sseMaxBackoffFromEnv(),
+            ),
+          }),
+          { headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
+        );
       }
       const url = new URL(req.url);
       const init: RequestInit = {

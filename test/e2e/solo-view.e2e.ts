@@ -1,8 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 // `invoke` is off the barrel because it takes a raw env, and both halves of
-// this suite need one: `LUCID_SURFACE` is the thing under test and
+// this suite need one: `LUCID_VIEW` is the thing under test and
 // `LUCID_OPEN_LOG` is what makes a would-be browser launch observable.
 import { invoke } from "./cli.ts";
 import { makeCli, PLAN_V1, startHub, type Cli, type Hub } from "./helpers.ts";
@@ -13,11 +14,11 @@ import { harnessEnv } from "./harness-env.ts";
 import { on } from "./locators.ts";
 
 /**
- * The embedded solo surface (plan 06, M1.4).
+ * The solo view (plan 06, M1.4).
  *
  * Inside a chat desktop app the browser pane is a window over ONE session -
  * the chat app already plays the role the shell plays for a terminal harness -
- * so `LUCID_SURFACE=embedded` makes `open` return the shell-free review URL
+ * so `LUCID_VIEW=embedded` makes `open` return the shell-free review URL
  * and pop no browser. Without it nothing changes at all, which is what the
  * control arms below are for.
  */
@@ -39,16 +40,16 @@ const launches = async (path: string): Promise<{ how: string; url: string }[]> =
     .map((line) => JSON.parse(line) as { how: string; url: string });
 
 /** The review UI, as opposed to the artifact-with-overlay mount root or the
- *  shell: the composer is the surface a human types feedback into. */
+ *  shell: the composer is the view a human types feedback into. */
 const showsTheReviewUi = async (page: import("@playwright/test").Page): Promise<void> => {
   await expect(on(page).messageInput()).toBeVisible({ timeout: 15_000 });
 };
 
-test("embedded with NO hub returns the solo viewer and launches no browser", async ({ page }) => {
+test("solo with NO hub returns the solo viewer and launches no browser", async ({ page }) => {
   cli = await makeCli(PLAN_V1);
   const openLog = join(cli.dir, "open.ndjson");
   // NOT LUCID_NO_OPEN: that suppression path RECORDS a `skipped` entry, so an
-  // empty log under it would prove nothing about the surface (D-012). The
+  // empty log under it would prove nothing about the view (D-012). The
   // embedded path must not reach `openBrowser` at all.
   const opened = (await invoke(["open", cli.artifact], {
     cwd: cli.dir,
@@ -61,14 +62,18 @@ test("embedded with NO hub returns the solo viewer and launches no browser", asy
       // the developer happens to have running. Measured: without this the arm
       // hit a real hub on 17428 and asserted against somebody's live session.
       LUCID_HUB_PORT: "1",
-      LUCID_SURFACE: "embedded",
+      LUCID_VIEW: "solo",
       LUCID_OPEN_LOG: openLog,
     },
-  })) as { url: string; surface?: string };
+  })) as { url: string; view?: string };
 
-  expect(opened.surface).toBe("embedded");
+  expect(opened.view).toBe("solo");
+  // With no hub there is no shell to differ from, so this URL is the same one
+  // the shell view returns - `test/solo-url.test.ts` pins that equality. What
+  // this arm actually discriminates is the reported view and the empty log;
+  // the URL claim is carried by the hub arm below.
   expect(opened.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/__lucid\/viewer$/);
-  expect(await launches(openLog), "the embedded path reached openBrowser").toEqual([]);
+  expect(await launches(openLog), "the solo path reached openBrowser").toEqual([]);
 
   await page.goto(opened.url);
   await showsTheReviewUi(page);
@@ -76,26 +81,26 @@ test("embedded with NO hub returns the solo viewer and launches no browser", asy
   await expect(on(page).shellTabbar()).toHaveCount(0);
 });
 
-test("embedded with a hub UP returns the mounted solo viewer, still hub-hosted", async ({
-  page,
-}) => {
+test("solo with a hub UP returns the mounted solo viewer, still hub-hosted", async ({ page }) => {
   hub = await startHub();
   cli = await makeCli(PLAN_V1);
   const openLog = join(cli.dir, "open.ndjson");
   const opened = (await invoke(["open", cli.artifact], {
     cwd: cli.dir,
     timeout: 30_000,
-    env: { ...hub.env, LUCID_SURFACE: "embedded", LUCID_OPEN_LOG: openLog },
-  })) as { url: string; surface?: string };
+    env: { ...hub.env, LUCID_VIEW: "solo", LUCID_OPEN_LOG: openLog },
+  })) as { url: string; view?: string };
 
-  expect(opened.surface).toBe("embedded");
-  // The hub's port with the session's mount prefix - not a second process on a
-  // second port. Surface decides presentation only, never topology (D-006).
-  expect(opened.url).toBe(
-    `http://127.0.0.1:${hub.port}/s/${/\/s\/([a-f0-9]+)\//.exec(opened.url)?.[1]}/__lucid/viewer`,
-  );
-  expect(opened.url).toContain(`127.0.0.1:${hub.port}/s/`);
-  expect(await launches(openLog), "the embedded path reached openBrowser").toEqual([]);
+  expect(opened.view).toBe("solo");
+  // The hub's port with THIS session's mount prefix - not a second process on
+  // a second port. A view decides presentation only, never topology (D-006).
+  //
+  // The id is derived independently, the way the daemon derives it. Reading it
+  // back out of the url under test made the assertion self-referential: it
+  // caught a shell url, but a solo url for a DIFFERENT session passed.
+  const id = createHash("sha256").update(cli.artifact).digest("hex").slice(0, 16);
+  expect(opened.url).toBe(`http://127.0.0.1:${hub.port}/s/${id}/__lucid/viewer`);
+  expect(await launches(openLog), "the solo path reached openBrowser").toEqual([]);
 
   await page.goto(opened.url);
   await showsTheReviewUi(page);
@@ -109,7 +114,7 @@ test("embedded with a hub UP returns the mounted solo viewer, still hub-hosted",
  * `surfacedInShell` is pinned by opening NO shell window - `run.ts` already
  * skips the launch when the hub reports a live one, so an arm that happens to
  * have a window open is launch-free for a reason that has nothing to do with
- * the surface, and stops controlling anything.
+ * the view, and stops controlling anything.
  */
 test("without the variable, the shell url and the browser launch are unchanged", async ({
   page,
@@ -121,19 +126,19 @@ test("without the variable, the shell url and the browser launch are unchanged",
     cwd: cli.dir,
     timeout: 30_000,
     env: { ...hub.env, LUCID_OPEN_LOG: openLog },
-  })) as { url: string; surface?: string };
+  })) as { url: string; view?: string };
 
-  expect(opened.surface).toBe("default");
+  expect(opened.view).toBe("shell");
   expect(opened.url).toContain(`127.0.0.1:${hub.port}/?s=`);
   // No shell window is connected, so the launch genuinely happens - which is
-  // what makes the empty logs above attributable to the surface.
+  // what makes the empty logs above attributable to the view.
   expect((await launches(openLog)).length).toBe(1);
 
   await page.goto(opened.url);
   await expect(on(page).shellTab()).toHaveCount(1);
 });
 
-test("an unknown surface value falls back to default rather than failing the open", async () => {
+test("an unknown view value falls back to shell rather than failing the open", async () => {
   hub = await startHub();
   cli = await makeCli(PLAN_V1);
   // An integration file from a newer Lucid naming a surface this build does
@@ -141,9 +146,9 @@ test("an unknown surface value falls back to default rather than failing the ope
   const opened = (await invoke(["open", cli.artifact], {
     cwd: cli.dir,
     timeout: 30_000,
-    env: { ...hub.env, LUCID_SURFACE: "hologram" },
-  })) as { url: string; surface?: string };
+    env: { ...hub.env, LUCID_VIEW: "hologram" },
+  })) as { url: string; view?: string };
 
-  expect(opened.surface).toBe("default");
+  expect(opened.view).toBe("shell");
   expect(opened.url).toContain(`127.0.0.1:${hub.port}/?s=`);
 });

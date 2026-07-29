@@ -2,7 +2,8 @@ import { Glob } from "bun";
 import { stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { SessionSummary } from "../protocol/wire.ts";
-import { discoverLiveServer, readServerDescriptor, viewerUrl } from "../server/discovery.ts";
+import { discoverLiveServer, readServerDescriptor } from "../server/discovery.ts";
+import { resolveView, selectOpenUrl } from "../cli/view.ts";
 import { readLastAttendant } from "./attendant.ts";
 import { foldLog } from "./fold.ts";
 import { readEvents } from "./log.ts";
@@ -29,6 +30,9 @@ export const projectRoot = async (paths: SessionPaths): Promise<string> => {
 
 export const listSessions = async (root: string): Promise<SessionSummary[]> => {
   const scanRoot = resolve(root);
+  // Read ONCE for the whole listing rather than per row: one invocation is one
+  // view, and a row that disagreed with its neighbours would be a puzzle.
+  const view = resolveView(process.env);
   // Every record's `log.ndjson`: `<dir>/<stem>/log.ndjson`. In the canonical
   // layout that `<dir>` is a project's `.lucid/`, so the artifact sits beside
   // the record INSIDE `.lucid/` and the artifact dir is the record's own
@@ -80,7 +84,14 @@ export const listSessions = async (root: string): Promise<SessionSummary[]> => {
         segment: state.segment,
         annotations: state.annotations.length,
         live: identity !== undefined,
-        ...(identity ? { viewer: viewerUrl(identity) } : { resume: `lucid open ${artifactPath}` }),
+        // View-aware, exactly as `open`'s `url` is (plan 06): an integration
+        // running in a chat app's pane lists sessions and surfaces `viewer`,
+        // and handing it the shell URL there is the failure this plan exists
+        // to remove - one surface honouring the rule while another quietly
+        // emits the thing it forbids.
+        ...(identity
+          ? { viewer: selectOpenUrl({ view, hubShell: undefined, identity }) }
+          : { resume: `lucid open ${artifactPath}` }),
         ...(attendant
           ? {
               lastAttendant: {

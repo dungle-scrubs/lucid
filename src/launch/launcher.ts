@@ -13,6 +13,7 @@ import type { PayloadImage, WaitPayload } from "../core/payload.ts";
 import { openSession } from "../core/session.ts";
 import { runWait } from "../core/wait.ts";
 import { openBrowser, spawnServer, waitForServer } from "../cli/self.ts";
+import { resolveView } from "../cli/view.ts";
 import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
 import {
   buildArgv,
@@ -252,7 +253,13 @@ const ensureChildOpen = async (childPaths: SessionPaths, browser: boolean): Prom
   await removeServerDescriptor(childPaths);
   spawnServer(childPaths);
   const identity = await waitForServer(childPaths, 8000);
-  if (identity && browser) openBrowser(`http://127.0.0.1:${identity.port}/__lucid/viewer`);
+  // The view governs every launch, not only `open`'s (plan 06): a fork spawned
+  // from inside a chat app's pane must not pop a window over the human's
+  // conversation. The URL is already the solo one here - a fork's child gets
+  // its own dedicated server - so only the launch is in question.
+  if (identity && browser && resolveView(process.env) !== "solo") {
+    openBrowser(`http://127.0.0.1:${identity.port}/__lucid/viewer`);
+  }
   return identity !== undefined;
 };
 

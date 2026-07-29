@@ -35,7 +35,7 @@ import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/d
 import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { decodeGroupText } from "./ask-input.ts";
-import { resolveSurface, selectOpenUrl } from "./surface.ts";
+import { resolveView, selectOpenUrl } from "./view.ts";
 import {
   openBrowser,
   openChromeApp,
@@ -185,14 +185,14 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
   // unchanged by construction rather than by assertion - and editing the URL
   // builder alone would have missed them, since `??=` never fires once the hub
   // answered, and the hub-hosted case is exactly what this targets.
-  const surface = resolveSurface(process.env);
-  url = selectOpenUrl({ surface, hubShell: url, identity });
-  // The embedded surface must not REACH openBrowser - not merely suppress it.
+  const view = resolveView(process.env);
+  url = selectOpenUrl({ view, hubShell: url, identity });
+  // The solo view must not REACH openBrowser - not merely suppress it.
   // `recordOpen` writes a `skipped` entry when LUCID_NO_OPEN suppresses a
   // launch, so "no browser entry" is satisfiable by a mechanism this path does
   // not use, and the scenario asserting an empty open-log needs the call to be
   // absent rather than quiet (D-012).
-  const wantsBrowser = surface !== "embedded" && options.open !== false && !surfacedInShell;
+  const wantsBrowser = view !== "solo" && options.open !== false && !surfacedInShell;
   if (wantsBrowser) openBrowser(url);
 
   // Register a pointer in the global hub registry (Model B, Phase 0). Advisory:
@@ -221,10 +221,10 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     status: "active",
     nextCursor: renderCursor(result.cursor),
     url,
-    // The surface is invisible unless stated, and a silent wrong URL is the
+    // The view is invisible unless stated, and a silent wrong URL is the
     // failure this exists to remove: an agent, a log, or a human reading the
     // payload can see WHY they got the URL they got.
-    surface,
+    view,
     ...(warnings.length > 0 ? { warnings } : {}),
   });
 };
