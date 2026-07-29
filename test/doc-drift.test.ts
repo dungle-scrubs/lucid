@@ -77,16 +77,16 @@ describe("docs/CONTRACT.md tracks the run/ split (plan 02)", () => {
  */
 describe("docs/EMBEDDED.md tracks the code it instructs against (plan 06)", () => {
   const embedded = readFileSync(join(REPO, "docs/EMBEDDED.md"), "utf8");
-  const surfaceSrc = readFileSync(join(REPO, "src/cli/surface.ts"), "utf8");
+  const viewSrc = readFileSync(join(REPO, "src/cli/view.ts"), "utf8");
   const runSrc = readFileSync(join(REPO, "src/cli/run.ts"), "utf8");
   const mainSrc = readFileSync(join(REPO, "src/cli/main.ts"), "utf8");
   const skill = readFileSync(join(REPO, "skills/lucid/SKILL.md"), "utf8");
 
   test("the env var the doc tells harnesses to export is the one the code reads", () => {
-    expect(embedded).toContain("LUCID_SURFACE=embedded");
+    expect(embedded).toContain("LUCID_VIEW=solo");
     // Read off the source, not restated: renaming the field reds this.
-    expect(surfaceSrc).toContain("LUCID_SURFACE");
-    expect(surfaceSrc).toContain('=== "embedded"');
+    expect(viewSrc).toContain("LUCID_VIEW");
+    expect(viewSrc).toContain('=== "solo"');
   });
 
   test("the drain flag is PARSED, and the wait help says so", () => {
@@ -100,13 +100,45 @@ describe("docs/EMBEDDED.md tracks the code it instructs against (plan 06)", () =
     expect(usage).toContain("--since");
   });
 
-  test("the surface field the doc documents is the one open prints", () => {
-    expect(embedded).toContain('"surface"');
-    expect(runSrc).toContain("surface,");
+  test("the view field the doc documents is the one open prints", () => {
+    expect(embedded).toContain('"view"');
+    expect(runSrc).toContain("view,");
   });
 
   test("the skill points at the doc rather than restating it", () => {
     expect(skill).toContain("docs/EMBEDDED.md");
-    expect(skill).toContain("LUCID_SURFACE=embedded");
+    expect(skill).toContain("LUCID_VIEW=solo");
+  });
+});
+
+/**
+ * CONTEXT.md is normative vocabulary, so a word defined twice there is worse
+ * than a word left undefined (plan 06, M2.2). This plan nearly gave **Surface**
+ * a second meaning; the check is that it still has exactly one, and that the
+ * concept it nearly collided with is present under its own name.
+ */
+describe("CONTEXT.md keeps one word to one meaning (plan 06)", () => {
+  const context = readFileSync(join(REPO, "CONTEXT.md"), "utf8");
+  const heading = (name: string): number =>
+    context.split("\n").filter((line) => line.trim() === `### ${name}`).length;
+
+  test("Surface and View are each defined exactly once", () => {
+    expect(heading("Surface")).toBe(1);
+    expect(heading("View")).toBe(1);
+  });
+
+  test("Surface still means the addressable rendering", () => {
+    const body = context.slice(context.indexOf("### Surface"));
+    expect(body.slice(0, 300)).toContain("addressable rendering");
+  });
+
+  test("View carries the invariant, and it is the one the code enforces", () => {
+    const body = context.slice(context.indexOf("### View"), context.indexOf("### Viewer"));
+    expect(body).toContain("presentation only");
+    expect(body).toContain("never process topology");
+    expect(body).toContain("LUCID_VIEW=solo");
+    // Both values named, so a reader of `view: "shell"` can find it here.
+    expect(body).toContain("**shell**");
+    expect(body).toContain("**solo**");
   });
 });

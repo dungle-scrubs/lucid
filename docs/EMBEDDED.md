@@ -9,7 +9,7 @@ If you are integrating a terminal harness, you do not need this file. Nothing
 here changes the terminal path, and the defaults it describes are not the
 defaults there.
 
-## Why the pane is a different surface
+## Why the pane is a different view
 
 The embedded pane is a window over ONE session. The chat app already plays the
 role the shell plays for a terminal harness - it is where the human switches
@@ -17,8 +17,10 @@ between conversations - so a tab strip and a palette inside that pane offer
 navigation the conversation already owns. The pane should show that one
 artifact with the full review UI and nothing around it.
 
-Lucid calls this the **surface**, and it decides presentation only: never
-process topology. A hub still hosts the session if one is running, the hub is
+Lucid calls this the **view**, and it decides presentation only: never process
+topology. (Not to be confused with a *surface*, which in Lucid means the
+addressable rendering itself - the artifact plus the overlay that makes every
+part of it targetable. A view is the window a surface is presented in.) A hub still hosts the session if one is running, the hub is
 still the single appender, and there is no second process either way.
 
 ## What to export
@@ -26,7 +28,7 @@ still the single appender, and there is no second process either way.
 One variable, beside the ones your integration already exports:
 
 ```sh
-export LUCID_SURFACE=embedded
+export LUCID_VIEW=solo
 ```
 
 Sniffing the host app is deliberately not supported: those apps' own
@@ -35,8 +37,7 @@ same per-harness integration file that already carries `LUCID_HARNESS`,
 `LUCID_SESSION_ID` and `LUCID_MODEL` - variables measured reaching the session
 log's attendant stamp intact from inside these apps.
 
-A value Lucid does not recognise resolves to the default surface and is not an
-error, so an integration file written against a newer Lucid will not break an
+A value Lucid does not recognise resolves to the shell view and is not an error, so an integration file written against a newer Lucid will not break an
 older CLI.
 
 ## What `open` then returns
@@ -48,7 +49,7 @@ older CLI.
   "status": "active",
   "nextCursor": "evt_00001",
   "url": "http://127.0.0.1:17428/s/a1b2c3/__lucid/viewer",
-  "surface": "embedded"
+  "view": "solo"
 }
 ```
 
@@ -62,7 +63,7 @@ Two things differ from a terminal open:
   reach the launcher at all on this path, so nothing pops over the human's
   window.
 
-`surface` is always present, on both surfaces. Read it when a URL is not what
+The `view` field is always present, in both views. Read it when a URL is not what
 you expected: it says which decision produced it, rather than leaving you to
 infer that from the shape of the path.
 
@@ -115,13 +116,13 @@ is the recommendation for that app rather than this.
 
 ## When a terminal session unexpectedly loses its shell
 
-Check `surface` in the `open` payload first. `LUCID_SURFACE` exported in a
-terminal session - from a shell profile, or inherited from a parent agent
-process - makes every `open` in that shell return the solo URL and launch no
-browser. It is per-integration-file on purpose so this is a visible mistake
-rather than a silent one, and the payload names it.
+Check `view` in the `open` payload first. `LUCID_VIEW` exported in a terminal
+session - from a shell profile, or inherited from a parent agent
+process - makes every `open` in that shell return the solo URL and launch no browser. It
+is per-integration-file on purpose so this is a visible mistake rather than a
+silent one, and the payload names it.
 
 ## See also
 
-- [CONTRACT.md](./CONTRACT.md) - the wait payload and the loop, for every surface.
+- [CONTRACT.md](./CONTRACT.md) - the wait payload and the loop, in every view.
 - `skills/lucid/SKILL.md` - the one file an agent reads.

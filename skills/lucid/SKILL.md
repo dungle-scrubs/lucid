@@ -371,15 +371,15 @@ process instead, so the terminal conversation stays free while feedback flows.
 - Tell the user the review is standing and how to end it (approve, or
   `lucid end`). Never leave one running silently.
 
-## Inside a chat desktop app (embedded)
+## Inside a chat desktop app (the solo view)
 
 If you are running inside an app that embeds a browser pane next to the
 conversation - ChatGPT desktop, Claude desktop - that pane is a window over ONE
 session, and the app already plays the role the shell plays for a terminal
-harness. Your integration exports `LUCID_SURFACE=embedded`, and then:
+harness. Your integration exports `LUCID_VIEW=solo`, and then:
 
 - `lucid open` returns the shell-free review URL in `url`, with
-  `"surface": "embedded"` beside it. **Surface the url in the pane; do not
+  `"view": "solo"` beside it. **Surface the url in the pane; do not
   expect a browser to open** - Lucid does not launch one on this path.
 - Feedback comes back by draining at the START of every turn, not by blocking:
   `lucid wait <file> --since <cursor> --timeout 0` reads the log once, returns
