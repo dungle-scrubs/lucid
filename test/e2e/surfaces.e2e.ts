@@ -388,6 +388,12 @@ test("a rendered plan opens, anchors on its D-NNN ids, and ingests back", async 
     doc,
     "--out",
     cli.artifact,
+    // Deliberate: the fixture already wrote a placeholder at this path, and a
+    // render refuses to overwrite an artifact it did not render (plan 05) -
+    // unknown provenance counts as somebody else's, because overwriting a file
+    // that owns a live review record is how two documents come to share one
+    // history. Saying --force is the test stating what it means.
+    "--force",
     "--title",
     title,
     "--stage",
