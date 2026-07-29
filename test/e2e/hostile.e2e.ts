@@ -185,6 +185,29 @@ test(
   survives("hostile-duplicate-ids"),
 );
 test(
+  "the loop survives an artifact whose <base> re-roots every URL to a foreign origin",
+  // Was defect #45: the path-absolute bootstrap src resolved against the
+  // document base, so a foreign <base href> re-rooted it. The src is
+  // ORIGIN-absolute now (plan 04, M2.3) - <base> cannot move it.
+  survives("hostile-base-tag"),
+);
+test(
+  "the loop survives an artifact whose capture-phase handlers swallow every event",
+  // Was defect #43: the artifact's window-capture stopPropagation ran ahead
+  // of the overlay's document-level listeners and starved picking. The
+  // overlay listens at window capture now (plan 04, M2.2) - co-target
+  // listeners all run regardless of stopPropagation.
+  survives("hostile-prevent-default"),
+);
+test(
+  "the loop survives an artifact carrying its own CSP meta",
+  // Was defect #42: the document-authored CSP blocked the injected bootstrap
+  // silently. The meta is lifted into the response header with nonced
+  // script-src/style-src now (plan 04, M2.1) - the artifact's own governance
+  // survives; the nonce names only what Lucid injected.
+  survives("hostile-csp-meta"),
+);
+test(
   "the loop survives an artifact the parser has to repair, holding a literal </body> in a textarea",
   // Was defect #44: inject.ts anchored the bootstrap on the first raw
   // `</body>` in the source, which this fixture holds as textarea TEXT - the

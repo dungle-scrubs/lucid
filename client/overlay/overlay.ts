@@ -1,4 +1,5 @@
 import { css, html, LitElement, type PropertyValues } from "lit";
+
 import {
   type Anchor,
   captureElement,
@@ -13,6 +14,38 @@ import {
   type PayloadAnnotationLike,
   type QueuedAnchorLike,
 } from "../shared/protocol.ts";
+
+/**
+ * A stylesheet the overlay adds to the ARTIFACT's document, as a constructed
+ * stylesheet rather than a `<style>` element (plan 04, #42).
+ *
+ * `style-src` governs style ELEMENTS; a constructed sheet adopted onto the
+ * document is not subject to it at all. That is what lets Lucid keep its
+ * hands off the artifact's own CSP: no style nonce to mint, nothing to append
+ * to the author's `style-src`, and no way to nullify an `'unsafe-inline'`
+ * they were relying on (a nonce in a source list makes the browser IGNORE
+ * `'unsafe-inline'`, which would strip the styling off an ordinary
+ * self-contained artifact).
+ *
+ * Keyed by id so each sheet is adopted once and can be dropped again, the
+ * same contract the `<style id=…>` elements had.
+ */
+const adopted = new Map<string, CSSStyleSheet>();
+
+const adoptStyle = (id: string, cssText: string): void => {
+  if (adopted.has(id)) return;
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(cssText);
+  adopted.set(id, sheet);
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+};
+
+const dropStyle = (id: string): void => {
+  const sheet = adopted.get(id);
+  if (!sheet) return;
+  adopted.delete(id);
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+};
 
 const OVERLAY_ROOT_ID = "__lucid_overlay_root";
 const INTERACTIVE =
@@ -211,10 +244,17 @@ export class LucidOverlay extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
-    document.addEventListener("mousemove", this.onMouseMove, true);
-    document.addEventListener("mousedown", this.onMouseDown, true);
-    document.addEventListener("click", this.onClick, true);
-    document.addEventListener("mouseup", this.onMouseUp, true);
+    // Picking listens at WINDOW capture, not document (plan 04, M2.2, #43):
+    // the capture path runs window -> document -> target, so an artifact that
+    // registers window-capture handlers calling stopPropagation starves any
+    // document-level listener - while listeners on the SAME target all run
+    // regardless of stopPropagation (only stopImmediatePropagation silences
+    // co-target listeners, and an artifact hostile enough for that has taken
+    // the page from every tool). Same events, same targets, one rung higher.
+    window.addEventListener("mousemove", this.onMouseMove, true);
+    window.addEventListener("mousedown", this.onMouseDown, true);
+    window.addEventListener("click", this.onClick, true);
+    window.addEventListener("mouseup", this.onMouseUp, true);
     document.addEventListener("mouseleave", this.onMouseLeaveDoc);
     window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
     window.addEventListener("resize", this.onResize, { passive: true });
@@ -225,10 +265,10 @@ export class LucidOverlay extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    document.removeEventListener("mousemove", this.onMouseMove, true);
-    document.removeEventListener("mousedown", this.onMouseDown, true);
-    document.removeEventListener("click", this.onClick, true);
-    document.removeEventListener("mouseup", this.onMouseUp, true);
+    window.removeEventListener("mousemove", this.onMouseMove, true);
+    window.removeEventListener("mousedown", this.onMouseDown, true);
+    window.removeEventListener("click", this.onClick, true);
+    window.removeEventListener("mouseup", this.onMouseUp, true);
     document.removeEventListener("mouseleave", this.onMouseLeaveDoc);
     window.removeEventListener("scroll", this.onScroll, true);
     window.removeEventListener("resize", this.onResize);
@@ -325,10 +365,9 @@ export class LucidOverlay extends LitElement {
     const wanted = theme === "dark" && !this.canRenderDark() ? "light" : theme;
     document.documentElement.dataset.lucidTheme = wanted;
     this.retuneColorSchemeQueries(wanted);
-    if (document.getElementById(THEME_STYLE_ID)) return;
-    const style = document.createElement("style");
-    style.id = THEME_STYLE_ID;
-    style.textContent = `
+    adoptStyle(
+      THEME_STYLE_ID,
+      `
       :root[data-lucid-theme="light"] {
         --paper: #faf6ec;
         --ink: #211d15;
@@ -347,8 +386,8 @@ export class LucidOverlay extends LitElement {
         --accent-wash: rgba(203, 168, 90, 0.18);
         color-scheme: dark;
       }
-    `;
-    document.head.appendChild(style);
+    `,
+    );
   }
 
   /**
@@ -547,10 +586,9 @@ export class LucidOverlay extends LitElement {
 
   /** Inject the redline stylesheet into the artifact realm (sage/rust/brass). */
   private injectDiffStyles(): void {
-    if (document.getElementById("__lucid_diff_style")) return;
-    const style = document.createElement("style");
-    style.id = "__lucid_diff_style";
-    style.textContent = `
+    adoptStyle(
+      "__lucid_diff_style",
+      `
       [data-diff="added"] { box-shadow: inset 3px 0 0 #8aa872; background: rgba(163,190,140,0.12); }
       [data-diff="changed"] { box-shadow: inset 3px 0 0 #a3be8c; }
       .lucid-diff-was, .lucid-diff-now { display: block; padding: 2px 6px; }
@@ -561,26 +599,25 @@ export class LucidOverlay extends LitElement {
       .lucid-diff-now::before { content: "now"; color: #6f8d59; }
       .lucid-ghost { display: block; opacity: 0.55; text-decoration: line-through; background: rgba(191,97,106,0.08); box-shadow: inset 3px 0 0 #bf616a; }
       [data-hunk].lucid-active { outline: 2px solid #5e81ac; outline-offset: 3px; scroll-margin: 80px; }
-    `;
-    document.head.appendChild(style);
+    `,
+    );
   }
 
   private removeDiffStyles(): void {
-    document.getElementById("__lucid_diff_style")?.remove();
+    dropStyle("__lucid_diff_style");
   }
 
   /** Injected once, survives artifact swaps (it lives in <head>, not the body
    *  the swap rebuilds). The outline fades to nothing so the emphasis is a
    *  glance, not a permanent mark on the artifact. */
   private injectSectionStyle(): void {
-    if (document.getElementById("__lucid_section_style")) return;
-    const style = document.createElement("style");
-    style.id = "__lucid_section_style";
-    style.textContent = `
+    adoptStyle(
+      "__lucid_section_style",
+      `
       @keyframes __lucid_section_flash { from { outline-color: rgba(94,129,172,0.9); } to { outline-color: rgba(94,129,172,0); } }
       .__lucid_section_target { outline: 2px solid rgba(94,129,172,0.9); outline-offset: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
-    `;
-    document.head.appendChild(style);
+    `,
+    );
   }
 
   /** Scroll the artifact to a section by its `data-lucid-id` and flash it. The
