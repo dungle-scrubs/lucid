@@ -63,10 +63,6 @@ export interface HostileFixture {
  */
 export const HOSTILE_DEFECTS: ReadonlyMap<string, string> = new Map([
   [
-    "hostile-csp-meta",
-    "finding #42: the document's own CSP blocks the overlay bootstrap, silently",
-  ],
-  [
     "hostile-prevent-default",
     "finding #43: window-capture handlers registered before the bootstrap starve picking, silently",
   ],

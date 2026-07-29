@@ -43,7 +43,7 @@ import {
   FAVICON_SVG,
 } from "./client-bundle.generated.ts";
 import { devBundleStamp, readDevAsset } from "./dev-assets.ts";
-import { injectOverlay } from "./inject.ts";
+import { renderInjected } from "./inject.ts";
 import { hubPort, portBase } from "./ports.ts";
 import { validateHeaders } from "./security.ts";
 import { createSessionHost, type SessionHost } from "./session-host.ts";
@@ -510,8 +510,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       if (subPath === "/" && req.method === "GET") {
         const html = await readFile(paths.currentHtml, "utf8").catch(() => null);
         if (html === null) return json({ error: "artifact not available" }, 404);
-        return new Response(injectOverlay(html, `/s/${id}`), {
-          headers: { "content-type": "text/html; charset=utf-8", ...noStore },
+        const injected = renderInjected(html, `/s/${id}`);
+        return new Response(injected.body, {
+          headers: { "content-type": "text/html; charset=utf-8", ...noStore, ...injected.headers },
         });
       }
       const url = new URL(req.url);

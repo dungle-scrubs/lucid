@@ -3649,12 +3649,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "Either the overlay boots anyway (the served document is Lucid's own response) or the silenced state is surfaced. Today default-src 'none' blocks the bootstrap module and picking dies with no indication (plan finding #42).",
+          "expected": "The overlay boots and the loop completes: the document's CSP meta is LIFTED into the response header with script-src/style-src each granted a fresh nonce the bootstrap (and the overlay's runtime styles) carry - header+meta would otherwise intersect and block the injected module no matter what a header allowed. The artifact's own scripts/styles stay governed exactly as declared (plan 04, M2.1, closes finding #42).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #42: a document-authored default-src 'none' blocks the bootstrap module and picking dies with no indication to the human."
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact carrying its own CSP meta",
+          "mutation": "src/server/inject.ts: make renderInjected return the un-lifted document (body: injectOverlay(artifactHtml, base), headers: {}) when metas exist - the meta stays in the served copy, default-src 'none' blocks the bootstrap module, the overlay never boots, and this fixture's loop test reds"
         },
         {
           "id": "hostile-prevent-default",

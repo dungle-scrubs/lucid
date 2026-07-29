@@ -185,6 +185,14 @@ test(
   survives("hostile-duplicate-ids"),
 );
 test(
+  "the loop survives an artifact carrying its own CSP meta",
+  // Was defect #42: the document-authored CSP blocked the injected bootstrap
+  // silently. The meta is lifted into the response header with nonced
+  // script-src/style-src now (plan 04, M2.1) - the artifact's own governance
+  // survives; the nonce names only what Lucid injected.
+  survives("hostile-csp-meta"),
+);
+test(
   "the loop survives an artifact the parser has to repair, holding a literal </body> in a textarea",
   // Was defect #44: inject.ts anchored the bootstrap on the first raw
   // `</body>` in the source, which this fixture holds as textarea TEXT - the

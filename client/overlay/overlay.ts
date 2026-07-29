@@ -1,4 +1,15 @@
 import { css, html, LitElement, type PropertyValues } from "lit";
+
+/** A CSP-nonced <style>: when the server lifted a document CSP into a header
+ *  (plan 04, #42) the bootstrap carried a nonce, and every style the overlay
+ *  creates at runtime must wear it or the lifted policy blocks it. */
+const noncedStyle = (): HTMLStyleElement => {
+  const style = noncedStyle();
+  const nonce = (window as { __LUCID__?: { nonce?: string } }).__LUCID__?.nonce;
+  if (nonce) style.nonce = nonce;
+  return style;
+};
+
 import {
   type Anchor,
   captureElement,
@@ -326,7 +337,7 @@ export class LucidOverlay extends LitElement {
     document.documentElement.dataset.lucidTheme = wanted;
     this.retuneColorSchemeQueries(wanted);
     if (document.getElementById(THEME_STYLE_ID)) return;
-    const style = document.createElement("style");
+    const style = noncedStyle();
     style.id = THEME_STYLE_ID;
     style.textContent = `
       :root[data-lucid-theme="light"] {
@@ -548,7 +559,7 @@ export class LucidOverlay extends LitElement {
   /** Inject the redline stylesheet into the artifact realm (sage/rust/brass). */
   private injectDiffStyles(): void {
     if (document.getElementById("__lucid_diff_style")) return;
-    const style = document.createElement("style");
+    const style = noncedStyle();
     style.id = "__lucid_diff_style";
     style.textContent = `
       [data-diff="added"] { box-shadow: inset 3px 0 0 #8aa872; background: rgba(163,190,140,0.12); }
@@ -574,7 +585,7 @@ export class LucidOverlay extends LitElement {
    *  glance, not a permanent mark on the artifact. */
   private injectSectionStyle(): void {
     if (document.getElementById("__lucid_section_style")) return;
-    const style = document.createElement("style");
+    const style = noncedStyle();
     style.id = "__lucid_section_style";
     style.textContent = `
       @keyframes __lucid_section_flash { from { outline-color: rgba(94,129,172,0.9); } to { outline-color: rgba(94,129,172,0); } }

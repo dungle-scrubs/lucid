@@ -147,3 +147,59 @@ describe("the D-019 review's adversarial corpus (F2-F5, F7)", () => {
     expect(ms).toBeLessThan(120);
   });
 });
+
+describe("renderInjected: a document CSP is lifted, nonced, and honored (#42)", () => {
+  const withMeta = (policy: string): string =>
+    `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}" /><title>t</title></head><body><p>x</p></body></html>`;
+
+  test("no meta: body injected, no header, no nonce", async () => {
+    const { renderInjected } = await import("../src/server/inject.ts");
+    const out = renderInjected(doc("<p>plain</p>"));
+    expect(out.headers).toEqual({});
+    expect(out.body).toContain("__lucid_overlay_root");
+    expect(out.body).not.toContain("nonce=");
+  });
+
+  test("a meta CSP is removed from the body and lifted into the header with nonces", async () => {
+    const { renderInjected } = await import("../src/server/inject.ts");
+    const out = renderInjected(withMeta("default-src 'none'; style-src 'unsafe-inline'"));
+    expect(out.body).not.toContain("http-equiv");
+    const csp = out.headers["content-security-policy"] ?? "";
+    // The document's own governance survives...
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("style-src 'unsafe-inline'");
+    // ...and the bootstrap is permitted by nonce, derived from default-src
+    // with 'none' dropped (it only has meaning alone).
+    const nonce = /nonce="([a-f0-9]+)"/.exec(out.body)?.[1] ?? "";
+    expect(nonce.length).toBeGreaterThan(10);
+    expect(csp).toContain(`script-src 'nonce-${nonce}'`);
+    expect(csp).toContain(`style-src 'unsafe-inline' 'nonce-${nonce}'`);
+    // Both bootstrap scripts carry it, and the overlay can read it back.
+    expect(out.body).toContain(`nonce:"${nonce}"`);
+  });
+
+  test("an existing script-src keeps its sources and gains only the nonce", async () => {
+    const { renderInjected } = await import("../src/server/inject.ts");
+    const out = renderInjected(withMeta("script-src 'self' https://cdn.example"));
+    const csp = out.headers["content-security-policy"] ?? "";
+    expect(csp).toMatch(/script-src 'self' https:\/\/cdn\.example 'nonce-[a-f0-9]+'/);
+  });
+
+  test("a policy that never constrained scripts is not tightened", async () => {
+    const { renderInjected } = await import("../src/server/inject.ts");
+    const out = renderInjected(withMeta("img-src 'none'"));
+    const csp = out.headers["content-security-policy"] ?? "";
+    expect(csp).not.toContain("script-src"); // unrestricted stays unrestricted
+    expect(csp).toContain("img-src 'none'");
+  });
+
+  test("a CSP meta quoted inside a textarea is text, not policy", async () => {
+    const { renderInjected } = await import("../src/server/inject.ts");
+    const html = doc(
+      `<textarea><meta http-equiv="Content-Security-Policy" content="default-src 'none'"></textarea>`,
+    );
+    const out = renderInjected(html);
+    expect(out.headers).toEqual({});
+    expect(out.body).toContain("<meta http-equiv"); // untouched, it is content
+  });
+});

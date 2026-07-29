@@ -50,7 +50,7 @@ import {
   FAVICON_SVG,
 } from "./client-bundle.generated.ts";
 import { readDevAsset } from "./dev-assets.ts";
-import { injectOverlay } from "./inject.ts";
+import { renderInjected } from "./inject.ts";
 import { resolveAsset, validateHeaders } from "./security.ts";
 import { renderViewer, sseMaxBackoffFromEnv } from "./viewer.ts";
 
@@ -1063,8 +1063,9 @@ export const createSessionHost = (
           { status: 404, headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
         );
       }
-      return new Response(injectOverlay(html, base), {
-        headers: { "content-type": "text/html; charset=utf-8", ...noStore },
+      const injected = renderInjected(html, base);
+      return new Response(injected.body, {
+        headers: { "content-type": "text/html; charset=utf-8", ...noStore, ...injected.headers },
       });
     }
 
