@@ -71,20 +71,12 @@ export const HOSTILE_DEFECTS: ReadonlyMap<string, string> = new Map([
     "finding #43: window-capture handlers registered before the bootstrap starve picking, silently",
   ],
   [
-    "hostile-malformed",
-    "finding #44: inject.ts anchors on the FIRST raw </body>, which here is textarea text - the bootstrap renders as content",
-  ],
-  [
     "hostile-base-tag",
     "finding #45: a foreign <base> re-roots the path-absolute bootstrap src to the hostile origin",
   ],
   [
     "hostile-self-rewriting",
     "finding #47: the rewritten DOM exists only in the browser - resolution falls through positionally onto the SAVED skeleton, so resolved:true delivers context the human never saw",
-  ],
-  [
-    "hostile-huge-dom",
-    "finding #46 (diagnosis corrected by D-065): 18k flat siblings hang resolveElementAnchor super-quadratically - the committed card never renders AND lucid wait hangs; the trigger is sibling fan-out, not bytes",
   ],
 ]);
 

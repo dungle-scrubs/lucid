@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
-import type { DomRootLike } from "../src/anchors/dom.ts";
+import type { DomElementLike, DomRootLike } from "../src/anchors/dom.ts";
 import {
   anchorResolves,
   captureElementAnchor,
@@ -145,6 +145,23 @@ describe("anchors/dom", () => {
       const resolved = resolveElementAnchor(anchor, reRender);
       expect(resolved).toBe(rows[i]!);
     });
+  });
+
+  test("a restructured ancestor is survived by fingerprint when the domPath went stale", () => {
+    // The fingerprint layer's unique job: the element kept its place among its
+    // siblings but the structure ABOVE it changed (ol became ul), so the
+    // positional domPath matches nothing and only the content+structure
+    // fingerprint finds it. This is also the test an off-by-one in the
+    // one-pass sibling index MUST red (plan 04, M1.2): a shifted index
+    // changes every hash, the fingerprint layer goes silent, and the stale
+    // domPath cannot rescue it - resolution returns null.
+    const original = rootOf("<body><ol><li>alpha</li><li>beta</li><li>target row</li></ol></body>");
+    const target = original.querySelectorAll("li")[2] as DomElementLike;
+    const anchor = captureElementAnchor(target);
+
+    const reRender = rootOf("<body><ul><li>alpha</li><li>beta</li><li>target row</li></ul></body>");
+    const resolved = resolveElementAnchor(anchor, reRender);
+    expect(resolved?.textContent).toBe("target row");
   });
 
   test("resolves a range anchor by quote", () => {
@@ -527,5 +544,28 @@ describe("foldLog segments", () => {
     ];
     expect(foldLog(events).reviewResolved).toBe(false);
     expect(foldLog(events.slice(0, 2)).reviewResolved).toBe(true);
+  });
+});
+
+describe("validateStructure honors the parser's hiding rules (plan 04, #44)", () => {
+  test("literal closing tags inside a textarea are text, not structure", () => {
+    const html = `<!doctype html><html><head><title>t</title></head><body>
+<textarea>Paste </body> and </html> at the end.</textarea>
+</body></html>`;
+    expect(validateStructure(html).ok).toBe(true);
+  });
+
+  test("a commented-out </html> does not balance a real missing one", () => {
+    const html = `<!doctype html><html><head><title>t</title></head><body>
+<!-- </html> -->
+</body>`;
+    const r = validateStructure(html);
+    expect(r.ok).toBe(false); // the REAL closing root is still missing
+  });
+});
+
+describe("close tags with internal whitespace (plan 04, F9)", () => {
+  test("a legal `</body\\n>` close satisfies the structural guard", () => {
+    expect(validateStructure("<html><body><p>a</p></body\n></html>").ok).toBe(true);
   });
 });

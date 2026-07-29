@@ -3713,12 +3713,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "The committed card renders within a human budget, or progress is visible. Today it is absent at 30s with the queue consumed and no warning - a silent half-delivered state (plan finding #46).",
+          "expected": "The committed card renders and `lucid wait` returns the resolved annotation: the sibling index is one pass (plan 04, M1.2, closes finding #46/D-065), so flat fan-out no longer hangs resolution. Behavior-identical to the per-element scan by construction (R4: the whole anchor corpus resolves the same).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #46 (D-065): 18k flat siblings hang resolveElementAnchor super-quadratically - the card never renders and `lucid wait` hangs. The trigger is sibling fan-out, not document bytes."
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact with eighteen thousand sibling nodes",
+          "mutation": "src/anchors/dom.ts: revert the fingerprint layer to the per-element sibling scan (drop sibIndexMapOf; compute indexAmongSiblings per element) - test/anchor-scale.test.ts reds by hanging past its timeout (measured: >120s pre-fix, killed; 65ms post-fix), which is this row's loop made unserviceable. The off-by-one variant reds test/core.test.ts's ancestor-restructure recovery instead."
         },
         {
           "id": "hostile-malformed",
@@ -3728,12 +3730,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "The bootstrap lands after the REAL body close and the loop works on the repaired tree. Today inject.ts anchors on the first raw closing-body - inside the textarea - and renders the bootstrap as content (plan finding #44).",
+          "expected": "The bootstrap lands after the REAL body close (the one the parser honors, via the shared maskHiddenText scanner) and the loop works on the repaired tree; structural validation likewise reads only visible markup, so the textarea's literal closing tags neither refuse the open nor take the splice (plan 04, M1.1, closes finding #44).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #44: inject.ts anchors on the first raw </body>, which is textarea TEXT in a parser-repaired document, so the bootstrap renders as page content."
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact the parser has to repair, holding a literal </body> in a textarea",
+          "mutation": "src/server/inject.ts: put the raw-source regex back (bodyCloseIndex -> artifactHtml.search(/<\\/body\\s*>/i)) - the textarea splice test in test/inject.test.ts reds, and the bootstrap renders as textarea content here"
         },
         {
           "id": "hostile-base-tag",

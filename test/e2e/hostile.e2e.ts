@@ -184,6 +184,21 @@ test(
   "the loop survives an artifact stamping one data-lucid-id on four identical siblings",
   survives("hostile-duplicate-ids"),
 );
+test(
+  "the loop survives an artifact the parser has to repair, holding a literal </body> in a textarea",
+  // Was defect #44: inject.ts anchored the bootstrap on the first raw
+  // `</body>` in the source, which this fixture holds as textarea TEXT - the
+  // bootstrap rendered as content and the overlay never booted. The splice
+  // now lands at the close the parser honors (plan 04, M1.1).
+  survives("hostile-malformed"),
+);
+test(
+  "the loop survives an artifact with eighteen thousand sibling nodes",
+  // Was defect #46 (diagnosis D-065): the per-element sibling scan went
+  // super-quadratic on flat fan-out - the committed card never rendered and
+  // `lucid wait` hung. The index is one pass now (plan 04, M1.2).
+  survives("hostile-huge-dom"),
+);
 
 test("picking the third of four identically-stamped rows marks the THIRD", async ({ page }) => {
   // The duplicate-ids fixture's sharper half: payload resolution says "an
