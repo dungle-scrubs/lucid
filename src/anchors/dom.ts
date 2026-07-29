@@ -134,15 +134,39 @@ const toArray = (a: ArrayLike<DomElementLike>): DomElementLike[] => Array.from(a
  * falls through to the next (data-lucid-id -> fingerprint -> domPath) per
  * D-047; only the positional domPath is allowed to disambiguate.
  */
-export const resolveElementAnchor = (
+/**
+ * How sure a resolution is (plan 05, M2.1, D-007).
+ *
+ * `exact` - a `data-lucid-id` or a UNIQUE fingerprint named this element: the
+ * anchor found what it was pointing at.
+ * `positional` - only the domPath matched, so the element is whatever now
+ * occupies that slot. On a document whose real content is hydrated at runtime
+ * (finding #47) that is a guess dressed as a match, and the difference is what
+ * the low-confidence signal reports instead of lying.
+ */
+export type AnchorMatch = "exact" | "positional";
+
+export interface ResolvedElement {
+  readonly el: DomElementLike;
+  readonly match: AnchorMatch;
+}
+
+/**
+ * Resolve an element anchor against a root, in priority order
+ * lucidId -> fingerprint -> domPath (D-047), reporting HOW it matched.
+ * A layer whose match is not unique within the document is skipped and falls
+ * through to the next per D-047; only the positional domPath is allowed to
+ * disambiguate, and a match that only it could make is tagged `positional`.
+ */
+export const resolveElementMatch = (
   anchor: ElementAnchor,
   root: DomRootLike,
-): DomElementLike | null => {
+): ResolvedElement | null => {
   if (anchor.lucidId) {
     const matches = toArray(
       root.querySelectorAll(`[data-lucid-id="${cssEscape(anchor.lucidId)}"]`),
     );
-    if (matches.length === 1 && matches[0]) return matches[0];
+    if (matches.length === 1 && matches[0]) return { el: matches[0], match: "exact" };
     // non-unique -> skip lucidId layer
   }
 
@@ -156,18 +180,26 @@ export const resolveElementAnchor = (
   // A unique fingerprint wins; a non-unique one is ambiguous (e.g. identical
   // status cells sharing a column position across table rows) and must fall
   // through to the positional domPath, same as the lucidId layer above.
-  if (byFingerprint.length === 1 && byFingerprint[0]) return byFingerprint[0];
+  if (byFingerprint.length === 1 && byFingerprint[0]) {
+    return { el: byFingerprint[0], match: "exact" };
+  }
 
   if (anchor.domPath) {
     try {
       const match = root.querySelector(anchor.domPath);
-      if (match) return match;
+      if (match) return { el: match, match: "positional" };
     } catch {
       // invalid selector -> no match
     }
   }
   return null;
 };
+
+/** The resolved element alone - the shape every existing caller wants. */
+export const resolveElementAnchor = (
+  anchor: ElementAnchor,
+  root: DomRootLike,
+): DomElementLike | null => resolveElementMatch(anchor, root)?.el ?? null;
 
 const cssEscape = (s: string): string => s.replace(/["\\]/g, "\\$&");
 
@@ -180,10 +212,17 @@ const rootText = (root: DomRootLike): string => {
 };
 
 /**
- * Resolve a range anchor: quote (exact text in prefix/suffix context) first,
- * then character position (D-047). Returns true if it re-attaches.
+ * Resolve a range anchor and say HOW it matched (plan 05, M2.1, D-007): quote
+ * (exact text in prefix/suffix context) first, then character position
+ * (D-047).
+ *
+ * The two are not equally trustworthy. The quote's prefix and suffix are what
+ * tie the text to the spot the human pointed at; when only the offsets line up,
+ * that context is gone and the same string now sits among different words. It
+ * still resolves - and reporting that without qualification is exactly the lie
+ * #47 is about - so the offset path is `positional`.
  */
-export const resolveRangeAnchor = (anchor: RangeAnchor, root: DomRootLike): boolean => {
+export const resolveRangeMatch = (anchor: RangeAnchor, root: DomRootLike): AnchorMatch | null => {
   const text = rootText(root);
   const { exact, prefix, suffix } = anchor.quote;
 
@@ -196,20 +235,31 @@ export const resolveRangeAnchor = (anchor: RangeAnchor, root: DomRootLike): bool
       const after = text.slice(idx + exact.length, idx + exact.length + suffix.length);
       const prefixOk = prefix.length === 0 || before.endsWith(prefix);
       const suffixOk = suffix.length === 0 || after.startsWith(suffix);
-      if (prefixOk && suffixOk) return true;
+      if (prefixOk && suffixOk) return "exact";
       from = idx + 1;
     }
   }
 
   const { start, end } = anchor.position;
   if (start >= 0 && end <= text.length && start < end) {
-    if (text.slice(start, end) === exact) return true;
+    if (text.slice(start, end) === exact) return "positional";
   }
-  return false;
+  return null;
 };
 
+/** Does this range anchor re-attach at all? The confidence-blind predicate. */
+export const resolveRangeAnchor = (anchor: RangeAnchor, root: DomRootLike): boolean =>
+  resolveRangeMatch(anchor, root) !== null;
+
+/**
+ * How sure is this anchor's re-attachment, for either kind? `null` when it does
+ * not re-attach - a miss is a miss, never a low-confidence guess.
+ */
+export const anchorMatch = (anchor: Anchor, root: DomRootLike): AnchorMatch | null =>
+  anchor.kind === "element"
+    ? (resolveElementMatch(anchor, root)?.match ?? null)
+    : resolveRangeMatch(anchor, root);
+
 /** Does this anchor re-attach to the given root? */
-export const anchorResolves = (anchor: Anchor, root: DomRootLike): boolean => {
-  if (anchor.kind === "element") return resolveElementAnchor(anchor, root) !== null;
-  return resolveRangeAnchor(anchor, root);
-};
+export const anchorResolves = (anchor: Anchor, root: DomRootLike): boolean =>
+  anchorMatch(anchor, root) !== null;

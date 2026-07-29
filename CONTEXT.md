@@ -171,6 +171,27 @@ was authored against** first, then carries forward to the current version.
   character-position fallback; position offsets are relative to the artifact
   document body `textContent` (the W3C default - D-047).
 
+**The identity and resolution invariant** (plan 05):
+
+1. **A session is its artifact's REAL path.** Identity runs through
+   `realpath`, so a symlink and its target are one session with one record and
+   one log - never two histories for one document. Two records that BOTH hold
+   history are refused rather than merged behind you.
+2. **One record per name.** A record is named after its artifact with the
+   extension dropped, so `plan.html` and `plan.md` in one folder want one
+   folder; the second is refused, naming the record and the artifact that owns
+   it, and the first artifact's log is never appended to.
+3. **Resolution says HOW it matched, and a guess is never reported as a
+   match.** A `data-lucid-id` or a unique fingerprint is exact; a domPath
+   fall-through, or a range surviving only on character offsets, is
+   *positional* - the target is whatever now occupies that slot. The wire
+   carries `confidence: "low"` for those and the viewer marks them. A miss
+   stays unresolved; the qualifier applies to a success that is a guess, and
+   never softens a failure into a maybe.
+4. **A refusal creates nothing.** Every check that can refuse an `open` runs
+   before any directory is made, so a rejected artifact leaves no record
+   behind.
+
 ### Session
 One artifact under review, identified by its **canonical file path**,
 together with its event log and lifecycle (`open` -> `wait`/iterate ->
@@ -182,7 +203,11 @@ ENDED path starts a fresh lifecycle **segment** in the same log rather than
 erroring (D-045). Multiple concurrent single-artifact sessions each run their own
 independent per-session loopback server and origin ("multi-session" - D-036); that
 is distinct from the deferred multi-artifact-per-session. Per-session discovery is
-via `.lucid/<name>/run/server.json`. **Model B superseded D-065's "no global session
+via `<name>/run/server.json` inside the record. Since plan 02 the record sits
+BESIDE its artifact, whatever directory that is - `<dir>/plan.html` ->
+`<dir>/plan/`. With artifacts living at `<project>/.lucid/plan.html`, that
+makes the record `<project>/.lucid/plan/`; what plan 02 removed was the
+SECOND, hidden `.lucid/` nested inside the artifact's own folder. **Model B superseded D-065's "no global session
 registry":** a global pointer registry now exists at `<home>/.lucid/registry.json`,
 holding only pointers and `lastSeen` - never session data - and the **hub** unions it
 with a scan of its **roots** to produce the **listing**. Cross-filesystem enumeration

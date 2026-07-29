@@ -255,8 +255,10 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
+          "status": "covered",
+          "testFile": "test/identity.test.ts",
+          "testName": "open writes the canonical record and leaves the legacy log byte-for-byte",
+          "mutation": "src/core/paths.ts: have sessionPaths prefer <dir>/.lucid/<stem>/ when it holds a log - scan order picks the legacy record and both both-layouts tests red"
         },
         {
           "id": "open-two-stems-collide",
@@ -265,12 +267,31 @@
             "`lucid open <dir>/plan.html`, annotate, then `lucid open <dir>/plan.md`",
             "Run `lucid wait` on each"
           ],
-          "expected": "Two independent sessions, or an explicit refusal. Both currently resolve to `<dir>/plan/`, so the second open appends to the first one's log and the two reviews interleave.",
+          "expected": "An explicit refusal naming the record and the artifact that owns it: a record is named after its artifact with the extension dropped, so plan.html and plan.md want one folder. The second open is refused and the first artifact's log is never appended to (plan 05, M1.2, D-006).",
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
+          "status": "covered",
+          "testFile": "test/identity.test.ts",
+          "testName": "a second stem is REFUSED, naming the record and the artifact that owns it",
+          "mutation": "src/core/session.ts: drop the stemCollision check in ensureSessionDirs (const owner: string | null = null) - the second open shares the first artifact's record and its log, and the refusal test reds"
+        },
+        {
+          "id": "open-non-canonical-artifact-location",
+          "title": "An artifact outside the project's .lucid folder is refused, not quietly recorded",
+          "steps": [
+            "Create `<project>/lucid/plan.html` in a git project (the pre-02 convention)",
+            "Run `lucid open <project>/lucid/plan.html`",
+            "Inspect the exit code, the error, and whether a record folder appeared"
+          ],
+          "expected": "Refused with the canonical path named (`<project>/.lucid/plan.html`), exit non-zero, and NO record created at the wrong location. Placement is judged against the artifact's nearest enclosing .git, never the process cwd. A path with no enclosing .git - an agent scratchpad - is accepted, which is the only exemption; there is no opt-out flag (plan 05, M3.2, D-011/D-015/D-016).",
+          "risk": "medium",
+          "kind": "state",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/placement.test.ts",
+          "testName": "the refusal names the canonical path, and creates NO record",
+          "mutation": "src/core/paths.ts: have canonicalArtifactLocation always return { ok: true } - six placement tests red, including the no-record assertion"
         },
         {
           "id": "open-artifact-without-extension",
@@ -297,8 +318,10 @@
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
-          "status": "declined",
-          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
+          "status": "covered",
+          "testFile": "test/identity.test.ts",
+          "testName": "a symlink and its target are ONE identity",
+          "mutation": "src/core/paths.ts: canonicalArtifactPath returns `abs` instead of `realpathSync(abs)` - the symlink and its target mint two identities again and six identity tests red, including the R3 stranded-record guard"
         },
         {
           "id": "path-with-spaces-and-unicode",
@@ -3768,12 +3791,14 @@
             "Pick the fixture-declared element, write the note, queue, send",
             "lucid wait --since <cursor>: the annotation arrives with the right note and a resolved target"
           ],
-          "expected": "The delivered annotation resolves against the document AS PICKED. Today the rewritten DOM exists only in the browser: resolution runs against the saved file, the fingerprint matches nothing, and the positional fall-through lands on the skeleton - measured: a pick on the hydrated paragraph resolves to <p>Rendering...</p>, with resolved:true and no low-confidence signal (plan finding #47).",
+          "expected": "The delivered annotation resolves and SAYS HOW. The rewritten DOM exists only in the browser, so resolution runs against the saved file and can only land by position; the payload reports confidence:\"low\" rather than an unqualified resolved:true (plan 05, M2.2). This is finding #47's floor - stop lying - not correct live-DOM re-resolution, which is deliberately not built (D-003).",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
-          "status": "uncovered",
-          "blockedBy": "Finding #47: resolution runs against the SAVED file, so a pick on hydrated content resolves positionally onto the skeleton and reports resolved:true with no low-confidence signal - a wrong answer that looks like a right one."
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact that rewrites its own DOM after load",
+          "mutation": "src/core/payload.ts: have confidenceOf return {} for a positional match - the delivered annotation carries no confidence and the fixture's declared \"low\" reds"
         },
         {
           "id": "hostile-linked-stylesheet",

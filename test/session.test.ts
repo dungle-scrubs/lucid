@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readLastAttendant, writeAttendantSidecar } from "../src/core/attendant.ts";
+import { parseHTML } from "linkedom";
+import { captureElementAnchor } from "../src/anchors/dom.ts";
+import type { DomElementLike, DomRootLike } from "../src/anchors/dom.ts";
+import type { Anchor } from "../src/anchors/anchor.ts";
 import { foldLog } from "../src/core/fold.ts";
 import { appendEvent, appendEvents, readEvents } from "../src/core/log.ts";
 import { buildWaitPayload } from "../src/core/payload.ts";
@@ -19,7 +23,7 @@ const V2 =
   "<html><body><article><ol><li>ONE</li><li>two</li><li>three</li></ol></article></body></html>";
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "lucid-test-"));
+  dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-test-")));
   artifact = join(dir, "plan.html");
   await writeFile(artifact, V1);
 });
@@ -176,6 +180,13 @@ describe("commitWatchedChange", () => {
   });
 });
 
+/** A genuinely exact anchor for `<li>two</li>` in V1: captured, not spelled. */
+const exactAnchorForTwo = (): Anchor => {
+  const { document } = parseHTML(V1);
+  const root = document as unknown as DomRootLike;
+  return captureElementAnchor(root.querySelectorAll("li")[1] as DomElementLike);
+};
+
 describe("buildWaitPayload resolution", () => {
   test("resolved=true for an anchor that still attaches; orphan for one that does not", async () => {
     const paths = sessionPaths(artifact);
@@ -223,6 +234,105 @@ describe("buildWaitPayload resolution", () => {
     const orphan = payload.annotations.find((a) => a.id === "a-orphan");
     expect(keep?.resolved).toBe(true);
     expect(orphan?.resolved).toBe(false);
+  });
+
+  /**
+   * The floor of #47 (plan 05, M2.2): a resolution that survived only because
+   * something still occupies that slot is reported as a guess. Before this the
+   * payload said `resolved: true` and nothing else, so an agent acting on the
+   * note edited whatever had drifted into position.
+   */
+  test("a positional-only resolution is resolved AND carries confidence: low", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-guess",
+      version: 1,
+      target: {
+        // No lucidId, and a fingerprint that matches nothing in V1: only the
+        // domPath can land, and it lands on whatever sits in slot 2.
+        kind: "element",
+        fingerprint: 'li#zzzz·"a row that is not here"',
+        domPath: "article:nth-child(1)>ol:nth-child(1)>li:nth-child(2)",
+        snippet: "<li>drifted</li>",
+      },
+      note: "positional",
+    });
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const payload = await buildWaitPayload({
+      session: paths.artifactPath,
+      state,
+      status: "feedback",
+      currentHtml: await readFile(paths.currentHtml, "utf8"),
+      snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
+      annotations: state.annotations,
+      messages: state.messages,
+      nextSeq: state.highSeq,
+    });
+    const guess = payload.annotations.find((a) => a.id === "a-guess");
+    expect(guess?.resolved).toBe(true);
+    expect(guess?.confidence).toBe("low");
+  });
+
+  test("an EXACT resolution carries no confidence field at all (an older reader is unaffected)", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-exact",
+      version: 1,
+      // A REAL captured anchor. The hand-written `li#0000·"two"` used
+      // elsewhere in this file matches no element, so it resolves through the
+      // domPath - positional, which is the case below, not this one.
+      target: exactAnchorForTwo(),
+      note: "exact",
+    });
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const payload = await buildWaitPayload({
+      session: paths.artifactPath,
+      state,
+      status: "feedback",
+      currentHtml: await readFile(paths.currentHtml, "utf8"),
+      snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
+      annotations: state.annotations,
+      messages: state.messages,
+      nextSeq: state.highSeq,
+    });
+    const exact = payload.annotations.find((a) => a.id === "a-exact");
+    expect(exact?.resolved).toBe(true);
+    expect("confidence" in (exact ?? {})).toBe(false);
+  });
+
+  test("a MISS is resolved: false and never a low-confidence maybe", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-miss",
+      version: 1,
+      target: {
+        kind: "element",
+        fingerprint: 'li#zzzz·"gone"',
+        domPath: "article:nth-child(1)>ol:nth-child(1)>li:nth-child(9)",
+        snippet: "<li>gone</li>",
+      },
+      note: "miss",
+    });
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const payload = await buildWaitPayload({
+      session: paths.artifactPath,
+      state,
+      status: "feedback",
+      currentHtml: await readFile(paths.currentHtml, "utf8"),
+      snapshotAbsPath: (rel) => join(paths.sessionDir, rel),
+      annotations: state.annotations,
+      messages: state.messages,
+      nextSeq: state.highSeq,
+    });
+    const miss = payload.annotations.find((a) => a.id === "a-miss");
+    expect(miss?.resolved).toBe(false);
+    expect(miss?.confidence).toBeUndefined();
   });
 
   test("orphans (never re-anchors) when the authored-version snapshot is missing (D-035)", async () => {

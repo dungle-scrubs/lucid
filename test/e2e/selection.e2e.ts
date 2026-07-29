@@ -118,9 +118,11 @@ test("the create dialog offers the registry's models and the pick reaches the ar
   const argv = (await readFile(argvFile, "utf8")).trim().split("\n");
   expect(argv.slice(0, 5)).toEqual(["--model", "sonnet-5", "--effort", "xhigh", "--print"]);
 
-  // And it STICKS to the artifact: every later unattended turn reuses it.
+  // And it STICKS to the artifact: every later unattended turn reuses it. The
+  // record sits beside the artifact, and create authors into the project's
+  // `.lucid/` (plan 05, M3.2) - so the record is `.lucid/authored/`.
   const stuck = JSON.parse(
-    await readFile(join(cli.dir, "authored", "run", "selection.json"), "utf8"),
+    await readFile(join(cli.dir, ".lucid", "authored", "run", "selection.json"), "utf8"),
   ) as Record<string, string>;
   expect(stuck).toMatchObject({ harness: "claude-code", model: "sonnet-5", effort: "xhigh" });
 });

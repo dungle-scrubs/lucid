@@ -6,7 +6,7 @@ import { discoverLiveServer, readServerDescriptor, viewerUrl } from "../server/d
 import { readLastAttendant } from "./attendant.ts";
 import { foldLog } from "./fold.ts";
 import { readEvents } from "./log.ts";
-import { sessionPaths } from "./paths.ts";
+import { canonicalArtifactPath, sessionPaths } from "./paths.ts";
 import type { SessionPaths } from "./paths.ts";
 
 // The summary is wire contract (src/protocol/wire.ts); re-exported here so
@@ -53,9 +53,16 @@ export const listSessions = async (root: string): Promise<SessionSummary[]> => {
       const state = foldLog((await readEvents(resolve(scanRoot, rel))).events);
       if (state.status === "none") continue;
 
-      const reconstructed = resolve(artifactDir, state.artifact || `${stem}.html`);
+      // CANONICAL, like every other identity surface (plan 05, M1.1): the scan
+      // root is whatever spelling the roots file holds, and a listing row that
+      // reported `/tmp/x.html` while the session's own server reported
+      // `/private/tmp/x.html` gave the shell two keys for one session - the tab
+      // it opened could never be found again.
+      const reconstructed = canonicalArtifactPath(
+        resolve(artifactDir, state.artifact || `${stem}.html`),
+      );
       const descriptor = await readServerDescriptor(sessionPaths(reconstructed));
-      const artifactPath = descriptor?.session ?? reconstructed;
+      const artifactPath = canonicalArtifactPath(descriptor?.session ?? reconstructed);
       const canonical = sessionPaths(artifactPath);
       // Independent reads, and the first can burn a full handshake timeout on
       // a stale descriptor - inside a per-session loop the shell polls, so

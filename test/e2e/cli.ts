@@ -6,7 +6,7 @@
 // visible rather than a merge conflict nobody reads.
 
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, realpath, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -159,7 +159,10 @@ export interface CliOptions {
 /** Spawn a `lucid` CLI invocation (dev mode via bun, or the compiled binary)
  *  and parse its JSON output. */
 export const makeCli = async (initialHtml: string, options: CliOptions = {}): Promise<Cli> => {
-  const dir = await mkdtemp(join(tmpdir(), "lucid-e2e-"));
+  // REALPATH'd: identity is the artifact's real path (plan 05, M1.1), so a
+  // fixture rooted at /tmp (a symlink to /private/tmp on macOS) would hand the
+  // suite one spelling while every product surface reports the other.
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-e2e-")));
   const artifact = join(dir, "plan.html");
   await writeFile(artifact, initialHtml);
 

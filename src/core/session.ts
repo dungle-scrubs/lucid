@@ -1,5 +1,13 @@
-import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
 import { ArtifactError, ValidationError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
@@ -7,7 +15,15 @@ import { appendEvent, appendEventsIf, readEvents } from "./log.ts";
 import type { AttendantStamp, LogEvent } from "./events.ts";
 import { foldLog, type FoldedState } from "./fold.ts";
 import type { SessionPaths } from "./paths.ts";
-import { snapshotPath, snapshotRelPath } from "./paths.ts";
+import {
+  ARTIFACT_DIR,
+  canonicalArtifactLocation,
+  canonicalArtifactPath,
+  sessionName,
+  sessionPaths,
+  snapshotPath,
+  snapshotRelPath,
+} from "./paths.ts";
 import { hashContent, validateStructure, writeSnapshot } from "./version.ts";
 
 /**
@@ -98,16 +114,78 @@ const occupiedByOthers = (paths: SessionPaths): boolean => {
   }
 };
 
-export const ensureSessionDirs = (paths: SessionPaths): void => {
+/**
+ * The artifact a record says it belongs to, read from its log's opening event
+ * (plan 05, M1.2). Sync and first-line-only: `ensureSessionDirs` runs before
+ * anything else on the open path, and `session_opened` is always the first
+ * event a record ever holds. Null when the record predates the stamp, is
+ * unreadable, or never opened - none of which is a collision.
+ */
+const recordedArtifact = (logPath: string): string | null => {
+  try {
+    const head = readFileSync(logPath, "utf8").split("\n", 1)[0] ?? "";
+    if (head.trim() === "") return null;
+    const first = JSON.parse(head) as { t?: string; artifact?: unknown };
+    return first.t === "session_opened" && typeof first.artifact === "string"
+      ? first.artifact
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Two artifacts whose names differ only by extension derive ONE record name -
+ * `plan.html` and `plan.md` both want `<dir>/plan/` - and the existing
+ * occupancy guard reads an existing log as "unmistakably ours". So the second
+ * open silently appended its versions and annotations to the FIRST artifact's
+ * history (D-006). The record names the artifact it belongs to; a different
+ * one is a collision, and the open is refused rather than merged.
+ */
+const stemCollision = (paths: SessionPaths): string | null => {
+  if (!existsSync(paths.logPath)) return null;
+  const owner = recordedArtifact(paths.logPath);
+  if (owner === null || owner === basename(paths.artifactPath)) return null;
+  return owner;
+};
+
+/**
+ * Every reason the record directory cannot be ours, checked WITHOUT creating
+ * anything (plan 05, M1.1/M3.2).
+ *
+ * Split out of `ensureSessionDirs` so the refusals can run early - beside the
+ * other refusals - while the mkdirs stay late. Two things depend on that
+ * split: a refused open must leave nothing on disk, and the refusal a human
+ * gets must be the most specific one. Ordering the artifact read first made
+ * `plan.md` colliding with `plan.html` report "artifact failed structural
+ * validation" instead of naming the collision, which is a true statement about
+ * the wrong problem.
+ */
+export const assertRecordAvailable = (paths: SessionPaths): void => {
+  const owner = stemCollision(paths);
+  if (owner !== null) {
+    throw new ValidationError({
+      message:
+        `refusing to open "${basename(paths.artifactPath)}": ${paths.sessionDir} is already the review record for "${owner}". ` +
+        `A record is named after its artifact with the extension dropped, so these two share one name and would share one history. ` +
+        `Rename one of them, or move it to its own folder, and open again.`,
+      detail: { record: paths.sessionDir, owner, opening: paths.artifactPath },
+    });
+  }
   if (occupiedByOthers(paths)) {
     throw new ValidationError({
       message:
         `refusing to write this session's record into ${paths.sessionDir} - that directory already exists and is not a Lucid session. ` +
         `The record is named after its artifact, so "${paths.name}.html" wants "${paths.name}/". ` +
-        `Rename the artifact, or move it into a folder of its own (e.g. lucid/${paths.name}.html).`,
+        `Rename the artifact, or move it into the project's artifact folder (${ARTIFACT_DIR}/${paths.name}.html).`,
       detail: { sessionDir: paths.sessionDir, artifact: paths.artifactPath },
     });
   }
+};
+
+/** The mkdirs alone. `openSession` has already run the checks, and each one
+ *  reads `log.ndjson` off disk just to parse its first line. */
+const makeSessionDirs = (paths: SessionPaths): void => {
   mkdirSync(paths.sessionDir, { recursive: true });
   mkdirSync(paths.versionsDir, { recursive: true });
   // Machine-local runtime lives here; created up front so the append lock and
@@ -126,6 +204,17 @@ export const ensureSessionDirs = (paths: SessionPaths): void => {
       /* self-ignoring is a courtesy; never fail a session over it */
     }
   }
+};
+
+/**
+ * Check, then create. The entry point for every caller that has NOT already
+ * run the checks itself (`runServe`, tests); `openSession` runs them earlier,
+ * beside the other refusals, and creates through `makeSessionDirs` so the log
+ * is not read twice per open just to parse its first line.
+ */
+export const ensureSessionDirs = (paths: SessionPaths): void => {
+  assertRecordAvailable(paths);
+  makeSessionDirs(paths);
 };
 
 /** Atomic write within the session dir (temp-then-rename; same-dir rename). */
@@ -214,25 +303,119 @@ export interface OpenResult {
  *  - resume on SUSPENDED: reconcile file vs current.html, session_resumed (D-061)
  *  - idempotent open on ACTIVE: reconcile only
  */
+/**
+ * Refuse an artifact that is not where artifacts go (plan 05, M3.2, D-011).
+ *
+ * The rule is `<project>/.lucid/<name>.html`, and it was documented and
+ * unenforced: an agent following the pre-02 convention wrote
+ * `<project>/lucid/<name>.html`, the record rule correctly derived
+ * `<project>/lucid/.lucid/`, and the result was internally consistent and in
+ * the wrong place. Found in the wild and moved by hand - the product must not
+ * depend on every agent having read the current skill.
+ *
+ * The refusal NAMES the canonical path and moves nothing. Migration is the
+ * human's act, the same rule as 02's layout migration and M1.1's R3 guard: a
+ * tool that relocates someone's file to satisfy its own convention is worse
+ * than one that explains itself and stops.
+ *
+ * It must name the RECORD too when one exists. The record is derived from the
+ * artifact's location, so moving only the artifact - which is literally what
+ * the first version of this message asked for - leaves the history behind and
+ * the next open starts a fresh segment 1 at v1 with no annotations. An
+ * instruction that destroys a review when followed correctly is worse than the
+ * misplacement it corrects.
+ */
+export const assertCanonicalLocation = (input: string): void => {
+  const location = canonicalArtifactLocation(input);
+  if (location.ok) return;
+  const paths = sessionPaths(input);
+  const record = existsSync(paths.logPath) ? paths.sessionDir : null;
+  const canonicalRecord = sessionPaths(location.canonical).sessionDir;
+  throw new ValidationError({
+    message:
+      `refusing to open "${input}" - artifacts live in the project's "${ARTIFACT_DIR}" folder, and this one does not. ` +
+      (record === null
+        ? `Move it to "${location.canonical}" and open that. Nothing has been created here.`
+        : `This artifact already has a review record, and the record is derived from where the artifact sits - so move BOTH, or the history is left behind and the next open starts over at version 1: ` +
+          `the artifact to "${location.canonical}", and the record "${record}" to "${canonicalRecord}". ` +
+          `Nothing has been created or moved here.`),
+    detail: {
+      artifact: canonicalArtifactPath(input),
+      canonical: location.canonical,
+      ...(record === null ? {} : { record, canonicalRecord }),
+    },
+  });
+};
+
+/**
+ * Refuse a realpath unification that would strand history (plan 05, M1.1, R3).
+ *
+ * Identity is the artifact's REAL path now, so `lucid open link.html` and
+ * `lucid open plan.html` are one session. That is the fix - but if BOTH the
+ * link's old record and the target's record already hold a log, opening the
+ * link would silently land on the target's history and leave the link's
+ * annotations addressed by nothing. Nothing is merged automatically: the open
+ * refuses and names both records, so the human decides which history is the
+ * real one. The single-log case (only one side has history) unifies silently,
+ * which is the whole point.
+ */
+export const assertNoStrandedRecord = (input: string): void => {
+  const literal = isAbsolute(input) ? resolve(input) : resolve(process.cwd(), input);
+  const canonical = canonicalArtifactPath(input);
+  if (literal === canonical) return; // no link in play
+  // The literal record, computed WITHOUT canonicalizing - sessionPaths would
+  // resolve the link right back and compare a path with itself.
+  const literalLog = join(dirname(literal), sessionName(literal), "log.ndjson");
+  const canonicalLog = sessionPaths(canonical).logPath;
+  if (literalLog === canonicalLog) return;
+  if (!existsSync(literalLog) || !existsSync(canonicalLog)) return; // at most one history
+  // Both paths exist - but a parent-directory symlink (macOS /var -> /private/var)
+  // makes them the SAME file seen twice, which is one record, not two.
+  try {
+    if (realpathSync(literalLog) === realpathSync(canonicalLog)) return;
+  } catch {
+    return; // unreadable: let the open fail on its own terms
+  }
+  throw new ValidationError({
+    message:
+      `refusing to open: "${input}" resolves to "${canonical}", and BOTH paths already hold a review record with history. ` +
+      `A session's identity is the artifact's real path, so these would become one session - but merging two logs is not something Lucid will do behind you. ` +
+      `Keep the history you want and move or delete the other record (${dirname(literalLog)} or ${dirname(canonicalLog)}), then open again.`,
+    detail: { literal: literalLog, canonical: canonicalLog },
+  });
+};
+
 export const openSession = async (
   paths: SessionPaths,
   opts?: { readonly attendant?: AttendantStamp },
 ): Promise<OpenResult> => {
-  ensureSessionDirs(paths);
+  // Everything that can REFUSE runs before anything is created on disk. The
+  // directory used to be made first, so a dangling symlink or an unreadable
+  // file exited with a typed error and still left a `<stem>/` folder holding a
+  // lone `.gitignore` beside the artifact - litter from an open that never
+  // happened, and named exactly like a real record. `readEvents` tolerates a
+  // missing directory, so reading the log this early costs nothing.
   const warnings: Warning[] = [];
   const before = foldLog((await readEvents(paths.logPath)).events);
+  // Record availability BEFORE the artifact read: both refuse, and when both
+  // would, the collision is the more specific answer (a `.md` colliding with a
+  // `.html` fails structural validation too, which is true and unhelpful).
+  assertRecordAvailable(paths);
   const html = await readArtifact(paths);
   const structure = validateStructure(html);
+  const opening = before.status === "none" || before.status === "ended";
+  if (opening && !structure.ok) {
+    throw new ArtifactError({
+      message: `artifact failed structural validation: ${structure.reason}`,
+      detail: { path: paths.artifactPath },
+    });
+  }
+
+  makeSessionDirs(paths);
 
   let startedSegment = false;
 
-  if (before.status === "none" || before.status === "ended") {
-    if (!structure.ok) {
-      throw new ArtifactError({
-        message: `artifact failed structural validation: ${structure.reason}`,
-        detail: { path: paths.artifactPath },
-      });
-    }
+  if (opening) {
     const segment = before.status === "none" ? 1 : before.segment + 1;
     const commit = commitVersionBytes(paths, html, segment, 1);
     await appendEvent(paths.logPath, {

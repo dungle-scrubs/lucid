@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalArtifactPath, sessionPaths } from "../src/core/paths.ts";
@@ -42,7 +42,7 @@ const post = (port: number, path: string, body: unknown): Promise<Response> =>
   });
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "lucid-hub-"));
+  dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-hub-")));
   registryPath = join(dir, "registry.json");
   root = join(dir, "tree");
   await mkdir(root, { recursive: true });

@@ -36,7 +36,9 @@ describe("where plan render writes", () => {
     const explicit = planArtifactPath("notes.md", "out/custom.html");
     expect(derived.startsWith("/")).toBe(true);
     expect(explicit.startsWith("/")).toBe(true);
-    expect(derived.endsWith("/notes.lucid.html")).toBe(true);
+    // Slug + digest (plan 05): the artifact folder is flat, so the name has to
+    // distinguish two docs called notes.md in different folders.
+    expect(derived).toMatch(/\/notes-[0-9a-f]{12}\.lucid\.html$/);
     expect(explicit.endsWith("/out/custom.html")).toBe(true);
   });
 

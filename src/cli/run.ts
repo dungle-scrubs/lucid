@@ -1,17 +1,22 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { writeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver } from "../core/deliver.ts";
 import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
-import { sessionPaths } from "../core/paths.ts";
+import { ARTIFACT_DIR, canonicalArtifactPath, projectRootOf, sessionPaths } from "../core/paths.ts";
 import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
 import { themeReadiness, themeWarning } from "../core/theme.ts";
 import { registerSession } from "../core/registry.ts";
 import { sanitizeProgress } from "../core/progress.ts";
 import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
-import { ensureSessionDirs, openSession } from "../core/session.ts";
+import {
+  assertCanonicalLocation,
+  assertNoStrandedRecord,
+  ensureSessionDirs,
+  openSession,
+} from "../core/session.ts";
 import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
 import { sanitizeAttendant } from "../core/events.ts";
@@ -25,7 +30,7 @@ import { ArtifactError, NotFoundError, ServerError, ValidationError } from "../e
 import { runLaunch } from "../launch/launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload, parseWaitPayloadInput } from "../plan/ingest.ts";
-import { planArtifactPath, renderPlanDoc } from "../plan/render.ts";
+import { planArtifactPath, renderPlanDoc, renderedSourceOf } from "../plan/render.ts";
 import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
 import {
   discoverLiveServer,
@@ -103,10 +108,19 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
       message:
         `refusing to open an artifact in a temporary directory - the OS clears it (macOS wipes /private/tmp on every boot), ` +
         `and a session's annotations and versions live beside its artifact, so they would go too. ` +
-        `Write it somewhere durable, e.g. ${join(project, "lucid", basename(file))}, and open that.`,
-      detail: { path: resolve(file), suggested: join(project, "lucid", basename(file)) },
+        `Write it somewhere durable, e.g. ${join(project, ARTIFACT_DIR, basename(file))}, and open that.`,
+      detail: { path: resolve(file), suggested: join(project, ARTIFACT_DIR, basename(file)) },
     });
   }
+  // Artifacts live at `<project>/.lucid/<name>.html` (plan 05, M3.2). Refused
+  // before the identity guard: a misplaced artifact has to move regardless, so
+  // naming the place to move it to is more use than a report about the record
+  // it would have had here.
+  assertCanonicalLocation(file);
+  // Identity is the artifact's REAL path (plan 05, M1.1): a symlink and its
+  // target are one session. Refuse first if unifying them would strand a
+  // second history (R3).
+  assertNoStrandedRecord(file);
   const paths = sessionPaths(file);
   const opener = attendantStamp();
   const result = await openSession(paths, opener ? { attendant: opener } : undefined);
@@ -687,6 +701,8 @@ export interface PlanRenderOptions {
   readonly out?: string;
   readonly title?: string;
   readonly stage?: string;
+  /** Overwrite an artifact rendered from a DIFFERENT doc. */
+  readonly force?: boolean;
 }
 
 /** `lucid plan render <doc.md>` - render a planner doc to a Lucid artifact. */
@@ -703,11 +719,41 @@ export const runPlanRender = async (
       detail: { path: doc },
     });
   }
+  // Realpath'd, like every other identity surface (plan 05, M1.1): a symlink
+  // and its target are one document, not two artifacts with two sessions. And
+  // project-RELATIVE where there is a project, because the stamp is written
+  // into a file meant to be committed and read on another machine, where an
+  // absolute /Users/<someone>/ path compares equal to nothing.
+  const abs = canonicalArtifactPath(doc);
+  const sourceRoot = projectRootOf(dirname(abs));
+  const source = sourceRoot === null ? abs : relative(sourceRoot, abs);
   const html = renderPlanDoc(markdown, {
+    source,
     ...(options.title !== undefined ? { title: options.title } : {}),
     ...(options.stage !== undefined ? { stage: options.stage } : {}),
   });
   const outPath = planArtifactPath(doc, options.out);
+  // The artifact folder may not exist yet - this is often a project's FIRST
+  // render, and `writeFile` answered that with a bare ENOENT.
+  await mkdir(dirname(outPath), { recursive: true });
+  // The artifact folder is flat, so two docs can want one path. `flatName` is
+  // built to be injective and swept for it - but this refusal does not depend
+  // on that being true, which is the point: a silent overwrite here also
+  // silently attaches the next `open` to the FIRST doc's review history (the
+  // basename is unchanged, so the stem-collision guard passes). Loud beats
+  // provably-correct-this-time. Re-rendering the SAME doc still overwrites,
+  // which is what an idempotent render means.
+  const existing = await readFile(outPath, "utf8").catch(() => null);
+  const owner = existing === null ? null : renderedSourceOf(existing);
+  if (existing !== null && owner !== source && options.force !== true) {
+    throw new ValidationError({
+      message:
+        `refusing to overwrite ${outPath} - it was rendered from ${owner ?? "a document this render cannot identify"}, not from ${source}. ` +
+        `Two docs deriving one artifact would share one review history, and annotations would carry onto the other document's content. ` +
+        `Pass --out to write elsewhere, or --force to replace it.`,
+      detail: { artifact: outPath, renderedFrom: owner, rendering: source },
+    });
+  }
   await writeFile(outPath, html);
   print({ artifact: outPath, next: `lucid open ${outPath}` });
 };

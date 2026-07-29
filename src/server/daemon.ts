@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, readFile, stat } from "node:fs/promises";
 import { createAttentionCache } from "../core/attention.ts";
-import { canonicalArtifactPath, sessionPaths, type SessionPaths } from "../core/paths.ts";
+import {
+  ARTIFACT_DIR,
+  canonicalArtifactPath,
+  sessionPaths,
+  type SessionPaths,
+} from "../core/paths.ts";
 import {
   addRoot,
   defaultRoots,
@@ -719,7 +724,17 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // A worktree is a listed root of its own, grouped under its main repo -
     // both are legitimate create targets; anything else is not a project the
     // hub knows about.
-    const known = listing.some((s) => s.project === project || s.worktree === project);
+    // Compare CANONICAL paths (plan 05, M1.1): the listing reports a project by
+    // its real path, and a caller - a dialog, a script, a human - may hand over
+    // any spelling that reaches the same folder.
+    const asked = canonicalArtifactPath(project);
+    const known = listing.some(
+      (s) =>
+        s.project === project ||
+        s.worktree === project ||
+        canonicalArtifactPath(s.project) === asked ||
+        (s.worktree !== undefined && canonicalArtifactPath(s.worktree) === asked),
+    );
     if (!known) return json({ error: "unknown project" }, 400);
     // Listed is not the same as PRESENT. A project can be deleted while its
     // reviews outlive it, and a scratchpad session's project is recovered from
@@ -734,7 +749,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       return json({ error: "that project's folder no longer exists on disk" }, 409);
     }
 
-    const artifact = join(project, name);
+    // Into the project's artifact folder, never its root (plan 05, M3.2): the
+    // agent this spawns is told to `lucid open <artifact>`, and open refuses a
+    // path outside `.lucid/`. Writing to the root made the whole create flow
+    // dead-end on its own refusal.
+    const artifact = join(project, ARTIFACT_DIR, name);
     // lstat, not stat: a DANGLING symlink is absent to stat, and creating
     // "into" it would write the artifact wherever the link points - outside
     // the project the request was allowed to name.
@@ -784,6 +803,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         selArgs,
         resolved.recipe.spawn,
       );
+      // The artifact folder too: the agent writes the artifact itself, and it
+      // cannot write into a `.lucid/` that does not exist yet.
+      await mkdir(dirname(artifact), { recursive: true });
       await mkdir(paths.sessionDir, { recursive: true });
       // The pick STICKS to the artifact: every later unattended resume reads
       // this sidecar rather than re-deriving a model from the registry.

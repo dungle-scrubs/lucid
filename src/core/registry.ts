@@ -149,14 +149,18 @@ export const registerSession = async (
 
 /** Recover the recorded artifact basename from a session's log, if any. */
 const resolveArtifactPath = async (artifactDir: string, stem: string): Promise<string> => {
+  // CANONICAL, like every other identity (plan 05, M1.1): a scan that walked in
+  // through a symlinked root would otherwise report a second spelling of an
+  // artifact the registry already holds, and the listing's union would show
+  // one session twice.
   const probe = sessionPaths(resolve(artifactDir, `${stem}.html`));
   try {
     const state = foldLog((await readEvents(probe.logPath)).events);
-    if (state.artifact) return resolve(artifactDir, state.artifact);
+    if (state.artifact) return canonicalArtifactPath(resolve(artifactDir, state.artifact));
   } catch {
     // unreadable/corrupt log: fall back to the slug-derived name
   }
-  return resolve(artifactDir, `${stem}.html`);
+  return canonicalArtifactPath(resolve(artifactDir, `${stem}.html`));
 };
 
 /** Directories a session can never live under, pruned WITHOUT descending -

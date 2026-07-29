@@ -69,6 +69,13 @@ Never fake the review loop, and never paste build instructions at the user.
    open` refuses a temporary path for exactly this reason. An artifact is content
    that outlives the review; put it where the work lives.
 
+   **This is enforced, not advisory** (plan 05, M3.2). Inside a project, `lucid
+   open` refuses any artifact that is not at `<git-root>/.lucid/<name>` and names
+   the path to move it to; it creates no record at the wrong location and moves
+   nothing itself. There is no opt-out flag. A path with no enclosing `.git` -
+   an agent scratchpad - is accepted as-is, because there is no project folder
+   for it to be in.
+
    **The review record is committable by default.** Its history (the log,
    `versions/`, `pasted/`, `forks/`) is meant to travel with the repo; only the
    record's `run/` subdir (the served copy, the server descriptor, out-logs, and

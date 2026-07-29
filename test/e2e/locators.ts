@@ -124,6 +124,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   paletteInput: (): Locator => root.locator(hook("palette-input")),
   paletteOverlay: (): Locator => root.locator(hook("palette-overlay")),
   panelToggle: (): Locator => root.locator(hook("panel-toggle")),
+  positionalAnchor: (): Locator => root.locator(hook("positional-anchor")),
   pendingTargets: (): Locator => root.locator(hook("pending-targets")),
   picker: (): Locator => root.locator(hook("picker")),
   pickerFilter: (): Locator => root.locator(hook("picker-filter")),
