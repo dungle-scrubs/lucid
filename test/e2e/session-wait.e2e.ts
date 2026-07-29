@@ -106,9 +106,16 @@ test("a fresh open prints exactly the fields an agent parses, and no warnings", 
     "nextCursor",
     "session",
     "status",
+    // Which SURFACE the url is for (plan 06). Always present, so an agent can
+    // see WHY it got the url it got rather than inferring it from the shape.
+    "surface",
     "url",
     "version",
   ]);
+
+  // The default surface for a terminal open, unchanged by the feature that
+  // added the field: this fixture exports no LUCID_SURFACE.
+  expect(payload.surface).toBe("default");
 
   // The session id is the ABSOLUTE artifact path - it is what every later
   // command is addressed by, so a relative one would be unusable from
