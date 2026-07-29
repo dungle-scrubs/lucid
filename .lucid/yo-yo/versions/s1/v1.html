@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test artifact</title>
+<style>
+  :root {
+    --paper: #fbfaf7;
+    --ink: #1c1b19;
+    --ink-soft: #56534d;
+    --rule: #ddd9d0;
+    --accent: #7c6cff;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.65 ui-serif, Georgia, "Iowan Old Style", serif;
+  }
+  main {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: 4.5rem 1.75rem 6rem;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.9rem;
+  }
+  h1 {
+    font-size: 2.1rem;
+    line-height: 1.15;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    margin: 0 0 0.75rem;
+  }
+  .standfirst {
+    font-size: 1.075rem;
+    color: var(--ink-soft);
+    margin: 0 0 2.5rem;
+  }
+  h2 {
+    font-size: 0.78rem;
+    font-family: var(--mono);
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 2.75rem 0 0.9rem;
+    padding-bottom: 0.45rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  p { margin: 0 0 1rem; }
+  ol.checks {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: check;
+  }
+  ol.checks li {
+    counter-increment: check;
+    position: relative;
+    padding: 0.85rem 0 0.85rem 2.5rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  ol.checks li:last-child { border-bottom: 0; }
+  ol.checks li::before {
+    content: counter(check, decimal-leading-zero);
+    position: absolute;
+    left: 0;
+    top: 1rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--accent);
+  }
+  ol.checks b {
+    display: block;
+    font-weight: 600;
+    font-size: 0.98rem;
+  }
+  ol.checks span {
+    color: var(--ink-soft);
+    font-size: 0.92rem;
+  }
+  code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: #f1efe8;
+    padding: 0.1em 0.35em;
+    border-radius: 2px;
+  }
+  figure {
+    margin: 2rem 0;
+    text-align: center;
+  }
+  .yo { display: block; margin: 0 auto; }
+  .string { stroke: var(--ink); stroke-width: 1.5; }
+  .body-disc { fill: var(--accent); }
+  .axle { fill: var(--paper); }
+  figcaption {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-top: 0.9rem;
+  }
+  footer {
+    margin-top: 3.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+  }
+</style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Lucid · smoke test</p>
+  <h1>It came back up.</h1>
+  <p class="standfirst">You asked for a test. This is the whole round trip: an artifact written to disk, opened in the viewer, and waiting for your markup. Select any phrase below and leave a note on it - that is the half of the loop only you can run.</p>
+
+  <figure>
+    <svg class="yo" width="150" height="190" viewBox="0 0 150 190" role="img" aria-label="A yo-yo hanging on its string">
+      <line class="string" x1="75" y1="6" x2="75" y2="118"/>
+      <circle class="body-disc" cx="75" cy="140" r="42"/>
+      <circle class="axle" cx="75" cy="140" r="7"/>
+    </svg>
+    <figcaption>down is the easy part</figcaption>
+  </figure>
+
+  <h2>What this confirms</h2>
+  <ol class="checks">
+    <li>
+      <b>The file exists where it was asked for</b>
+      <span>Written to <code>yo-yo.html</code>, single document, no external assets - fonts, styles, and the drawing are all inline.</span>
+    </li>
+    <li>
+      <b>The viewer picked it up</b>
+      <span><code>lucid open</code> handed it to a session. If you are reading this in a browser tab, that leg passed.</span>
+    </li>
+    <li>
+      <b>The anchors are addressable</b>
+      <span>Headings, list items, and this paragraph are ordinary elements, so comments land on the exact text rather than on the page as a whole.</span>
+    </li>
+    <li>
+      <b>The return path is untested</b>
+      <span>Nothing here proves your feedback makes it back. Highlight something and comment on it - that is the check this document cannot run on its own.</span>
+    </li>
+  </ol>
+
+  <h2>Try this</h2>
+  <p>Mark up the caption under the drawing. It is deliberately a little glib, which makes it a good target: a one-word note on it exercises the same path a real correction would take, with nothing riding on the outcome.</p>
+
+  <footer>yo-yo.html · self-contained · no network calls</footer>
+</main>
+</body>
+</html>

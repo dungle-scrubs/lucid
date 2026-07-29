@@ -1,0 +1,2 @@
+{"t":"session_opened","segment":1,"artifact":"yo-yo.html","version":1,"hash":"sha256:71598bc445ae673ab0af80b59e72dd434490bc5eb1492fdb127ddd51cab3d212","path":"versions/s1/v1.html","attendant":{"harness":"claude-code","sessionId":"a03af0c0-dc12-45b2-873a-54c6598dd119","cwd":"/Users/kevin/dev/lucid","effort":"medium"},"seq":1,"at":"2026-07-26T01:25:01.436Z"}
+{"t":"session_suspended","seq":2,"at":"2026-07-27T18:58:24.348Z"}
