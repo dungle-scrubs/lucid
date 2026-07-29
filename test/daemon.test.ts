@@ -371,4 +371,71 @@ describe("hub daemon", () => {
     expect(buf).toContain('"sessions"');
     await reader!.cancel().catch(() => {});
   });
+
+  test("attention rides its own SSE event; the listing stays byte-identical when an agent works (R3, M1.2)", async () => {
+    await seedSession("proj", "notes");
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+
+    const reader = (await get(daemon.port, "/hub/events")).body?.getReader();
+    if (!reader) throw new Error("no SSE body");
+    const decoder = new TextDecoder();
+    const readUntil = async (pred: (b: string) => boolean, ms = 4000): Promise<string> => {
+      let buf = "";
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline && !pred(buf)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+      }
+      return buf;
+    };
+
+    // Primed with BOTH the listing and a (working:false) attention frame.
+    const primed = await readUntil((b) => b.includes("event: attention"));
+    expect(primed).toContain('"sessions"');
+    expect(primed).toContain("event: attention");
+    expect(primed).not.toContain('"working":true');
+
+    // The agent starts a turn: an ack with no output after it opens the window.
+    const logPath = join(root, "proj", "notes", "log.ndjson");
+    const ack = { seq: 2, at: "2026-01-01T00:00:01.000Z", t: "agent_ack", segment: 1 };
+    await writeFile(logPath, `${await readFile(logPath, "utf8")}${JSON.stringify(ack)}\n`);
+
+    const after = await readUntil((b) => b.includes('"working":true'));
+    expect(after).toContain("event: attention");
+    expect(after).toContain('"working":true'); // the ATTENTION frame carries it
+    // R3: the working state rides the attention event ONLY; the listing row
+    // never carries it. (Folding `working` into the listing row reds this.) A
+    // listing frame may still re-send for its own reasons (a `lastSeen` bump),
+    // so assert the ABSENCE of `working` in the listing, not the frame's.
+    const listingFrames = after
+      .split("\n\n")
+      .filter((f) => f.startsWith("data: ") && f.includes('"sessions"'));
+    for (const f of listingFrames) expect(f).not.toContain('"working"');
+
+    await reader.cancel().catch(() => {});
+  });
+
+  test("the attention fold cache exposes hit/miss on the hub debug surface (M1.1)", async () => {
+    await seedSession("proj", "notes");
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+
+    // Connect a shell and let the prime fold attention at least once.
+    const reader = (await get(daemon.port, "/hub/events")).body?.getReader();
+    const decoder = new TextDecoder();
+    const deadline = Date.now() + 4000;
+    let buf = "";
+    while (Date.now() < deadline && !buf.includes("event: attention")) {
+      const { value, done } = await reader!.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+    }
+
+    const identity = (await (await get(daemon.port, "/hub/identity")).json()) as {
+      debug?: { attentionCache?: { hits: number; misses: number; entries: number } };
+    };
+    expect(identity.debug?.attentionCache).toBeDefined();
+    expect(identity.debug?.attentionCache?.misses).toBeGreaterThanOrEqual(1);
+    await reader!.cancel().catch(() => {});
+  });
 });
