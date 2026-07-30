@@ -243,7 +243,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   // stderr default is /dev/null here (the hub is normally started detached),
   // so `LUCID_VERBOSE=anchors` on a hub-hosted session produced nothing at all
   // while the contract told the reader where to look for it.
-  setNarrationSink(log);
+  const restoreNarration = setNarrationSink(log);
   warnUnknownSubsystems();
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -1291,6 +1291,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const stop = async (): Promise<void> => {
     if (stopped) return;
     stopped = true;
+    restoreNarration();
     clearInterval(timer);
     for (const beat of heartbeats) clearInterval(beat);
     heartbeats.clear();

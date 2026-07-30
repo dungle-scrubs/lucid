@@ -399,9 +399,6 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     };
   };
 
-  /** Chars of a silent turn's own output to relay into the record. Enough for
-   *  a paragraph of reasoning, short of pasting a whole transcript. */
-
   /**
    * A turn that exited CLEAN but wrote nothing to the log - no new version, no
    * reply, no question. Usually it decided there was nothing to do ("that

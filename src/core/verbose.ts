@@ -59,9 +59,18 @@ const stderrSink = (line: string): void => {
  */
 let narrationSink: ((line: string) => void) | undefined;
 
-/** Point this process's narration at a durable sink. Called by the hub. */
-export const setNarrationSink = (sink: (line: string) => void): void => {
+/**
+ * Point this process's narration at a durable sink. Called by the hub.
+ * Returns a restore function: a daemon that stops must give the sink back,
+ * or every later trace in that process writes into a dead closure - which is
+ * the whole reason narration was being lost in the first place, one layer up.
+ */
+export const setNarrationSink = (sink: (line: string) => void): (() => void) => {
+  const previous = narrationSink;
   narrationSink = sink;
+  return () => {
+    narrationSink = previous;
+  };
 };
 
 /** Parse the flag: a comma-separated list, trimmed and lowercased, with `all`
@@ -88,17 +97,31 @@ export const unknownSubsystems = (env: VerboseEnv): string[] => {
     .filter((s) => s !== "" && !known.has(s));
 };
 
-/** Say so, once per process, when the flag names something unrecognised. */
-let warnedUnknown = false;
+/** Say so, once per process, when the flag names something unrecognised.
+ *
+ *  Through the NARRATION sink, not stderr: in the hub, stderr is /dev/null,
+ *  and a warning discarded there is the same defect this warning exists to
+ *  report - something that looks like it worked and did nothing. */
+const warnedSinks = new Set<unknown>();
 export const warnUnknownSubsystems = (env: VerboseEnv = ambientEnv()): void => {
-  if (warnedUnknown) return;
   const unknown = unknownSubsystems(env);
   if (unknown.length === 0) return;
-  warnedUnknown = true;
-  stderrSink(
+  // Once per SINK, not once per process. `lucid hub` warns from the CLI
+  // wrapper before the daemon installs its log, so a process-wide latch let
+  // that first stderr write - discarded in a detached hub - consume the only
+  // warning, and the durable sink never saw it. Each destination says it once.
+  const sink = narrationSink ?? stderrSink;
+  if (warnedSinks.has(sink)) return;
+  warnedSinks.add(sink);
+  sink(
     `[verbose] LUCID_VERBOSE names ${unknown.map((u) => `"${u}"`).join(", ")}, ` +
       `which is not a subsystem - known: ${VERBOSE_SUBSYSTEMS.join(", ")}, all`,
   );
+};
+
+/** Tests only: let one test process observe the per-sink warning again. */
+export const resetUnknownWarning = (): void => {
+  warnedSinks.clear();
 };
 
 /** Is this ONE subsystem loud? Scoped, so turning on anchors cannot drown the

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { realpathSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/events.ts";
@@ -755,6 +755,44 @@ describe("hub attend mode", () => {
     const codes = [a.status, b.status].sort();
     expect(codes).toEqual([202, 409]);
   }, 20_000);
+
+  test("a quiet turn's relayed reply never contains Lucid's own narration (#91 review)", async () => {
+    // The WIRING, not the helper: LUCID_VERBOSE propagates into the spawned
+    // turn, whose stderr IS the attend log this reply is read from, so a
+    // stub that writes only narration must relay NOTHING. Testing the pure
+    // filter left the call site free to regress silently.
+    const narrator = join(dir, "stub-narrator.ts");
+    await writeFile(
+      narrator,
+      `await Bun.write(process.argv[2] ?? "/dev/null", "");
+` +
+        `process.stderr.write("[anchors] fingerprint p#ab12 -> 1 match, exact\n");
+` +
+        `process.stderr.write("[attend] plan: spawn - spawning\n");
+`,
+    );
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "narrator",
+        harnesses: {
+          narrator: {
+            spawn: [process.execPath, "run", narrator, "{id}", "{artifact}", "{prompt}"],
+            resume: [process.execPath, "run", narrator, "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+    const { relayableTail } = await import("../src/server/attend.ts");
+    const onlyNarration = [
+      "[anchors] fingerprint p#ab12 -> 1 match, exact",
+      "   [attend] plan: spawn - spawning",
+    ].join("\n");
+    expect(relayableTail(onlyNarration)).toBe("");
+    // And the call site really uses it - a revert to the raw tail reds here.
+    const src = await readFile(join(import.meta.dir, "..", "src/server/attend.ts"), "utf8");
+    expect(src).toContain("const tail = relayableTail(output);");
+  });
 
   test("a live create turn broadcasts create-progress - the POSITIVE signal (M2.1)", async () => {
     // A stub that takes its time, so "still running" has a window to be

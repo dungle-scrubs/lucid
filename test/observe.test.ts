@@ -388,6 +388,25 @@ describe("sinkStatus: the logger is not self-concealing (M3.2, technique 1)", ()
     }
   });
 
+  test("a path whose parent does not exist yet is HEALTHY - the sink creates it (#91 re-review)", () => {
+    // ~/.lucid does not exist until the first hub runs, so this is the
+    // fresh-install case: the very first `lucid` a new user types. Probing
+    // the immediate parent reported their log as broken while writes to it
+    // in fact succeed - the lie flipped direction rather than going away.
+    const dir = mkdtempSync(join(tmpdir(), "lucid-observe-"));
+    const deep = join(dir, "never", "created", "hub.log");
+    try {
+      expect(sinkStatus(deep).writable).toBe(true);
+      // And it is not wishful: the sink really does create the tree.
+      createLogSink({ path: deep })('{"event":"proof"}');
+      const after = sinkStatus(deep);
+      expect(after.exists).toBe(true);
+      expect(after.bytes).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a sink that CANNOT write says so - a silent logger hides its own failure", () => {
     const dir = mkdtempSync(join(tmpdir(), "lucid-observe-"));
     const path = join(dir, "nope", "hub.log");

@@ -3,15 +3,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   isVerbose,
+  resetUnknownWarning,
   setNarrationSink,
   tracer,
+  warnUnknownSubsystems,
   unknownSubsystems,
   verboseSubsystems,
 } from "../src/core/verbose.ts";
 
-/** Put the process-wide sink back where it started, so one test cannot make
- *  every later one loud. */
-const stderrForTests = (line: string): void => void process.stderr.write(`${line}\n`);
 import { computeFingerprint, resolveElementMatch } from "../src/anchors/dom.ts";
 import { attendReason } from "../src/server/attend.ts";
 
@@ -224,8 +223,9 @@ describe("narration goes where THIS process's evidence goes (M3.1)", () => {
     const prev = process.env.LUCID_VERBOSE;
     process.env.LUCID_VERBOSE = "all";
     const lines: string[] = [];
+    let restore = (): void => {};
     try {
-      setNarrationSink((l) => void lines.push(l));
+      restore = setNarrationSink((l) => void lines.push(l));
       tracer("attend")(() => "plan: wait - 1 agent(s) listening");
       tracer("anchors")(() => "fingerprint p#ab12 -> 1 match, exact");
       expect(lines).toEqual([
@@ -233,7 +233,7 @@ describe("narration goes where THIS process's evidence goes (M3.1)", () => {
         "[anchors] fingerprint p#ab12 -> 1 match, exact",
       ]);
     } finally {
-      setNarrationSink(stderrForTests);
+      restore();
       if (prev === undefined) delete process.env.LUCID_VERBOSE;
       else process.env.LUCID_VERBOSE = prev;
     }
@@ -313,5 +313,51 @@ describe("trace fields are capped like record fields are (M3.1, #91 review)", ()
     );
     // Narration shares the hub's 5MB rotation budget and rides at poll rate.
     for (const line of lines) expect(line.length).toBeLessThan(300);
+  });
+});
+
+describe("an unrecognised subsystem is REPORTED, wherever the process narrates (#91 re-review)", () => {
+  test("the warning rides the narration sink, not a stderr the hub discards", () => {
+    // The fix for "a typo silently means off" was itself silently discarded:
+    // routed to stderr, which is /dev/null for a detached hub - the same
+    // defect MAJOR 1 fixed, surviving inside MAJOR 1's own fix, one line
+    // after the correct sink had already been installed.
+    const prev = process.env.LUCID_VERBOSE;
+    process.env.LUCID_VERBOSE = "1";
+    const lines: string[] = [];
+    let restore = (): void => {};
+    try {
+      restore = setNarrationSink((l) => void lines.push(l));
+      resetUnknownWarning();
+      warnUnknownSubsystems();
+      expect(lines.join("\n")).toContain('"1"');
+      expect(lines.join("\n")).toContain("not a subsystem");
+      // Once per process, not once per call.
+      warnUnknownSubsystems();
+      expect(lines).toHaveLength(1);
+    } finally {
+      restore();
+      resetUnknownWarning();
+      if (prev === undefined) delete process.env.LUCID_VERBOSE;
+      else process.env.LUCID_VERBOSE = prev;
+    }
+  });
+
+  test("a well-formed flag warns about nothing", () => {
+    const prev = process.env.LUCID_VERBOSE;
+    process.env.LUCID_VERBOSE = "anchors,attend";
+    const lines: string[] = [];
+    let restore = (): void => {};
+    try {
+      restore = setNarrationSink((l) => void lines.push(l));
+      resetUnknownWarning();
+      warnUnknownSubsystems();
+      expect(lines).toEqual([]);
+    } finally {
+      restore();
+      resetUnknownWarning();
+      if (prev === undefined) delete process.env.LUCID_VERBOSE;
+      else process.env.LUCID_VERBOSE = prev;
+    }
   });
 });

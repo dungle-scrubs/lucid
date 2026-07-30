@@ -363,13 +363,35 @@ export const sinkStatus = (path?: string): SinkStatus => {
   };
 };
 
-/** Can a line actually land at this path? The file if it exists, else the
- *  directory that would have to hold it. Returns the reason it cannot. */
+/**
+ * Can a line actually land at this path? The file if it exists, else the
+ * nearest EXISTING ancestor of where it would go - because the sink does
+ * `mkdirSync(recursive)` before writing, so a missing parent is not a
+ * failure, it is a directory about to be created. Probing the immediate
+ * parent called a healthy log broken on every fresh install (`~/.lucid` does
+ * not exist until the first hub runs), which is the first thing a new user
+ * would see. Returns the reason a write cannot land.
+ */
 const probeWritable = (path: string, exists: boolean): string | undefined => {
-  try {
-    accessSync(exists ? path : dirname(path), constants.W_OK);
-    return undefined;
-  } catch (err) {
-    return (err as Error).message;
+  if (exists) {
+    try {
+      accessSync(path, constants.W_OK);
+      return undefined;
+    } catch (err) {
+      return (err as Error).message;
+    }
+  }
+  let dir = dirname(path);
+  for (;;) {
+    try {
+      accessSync(dir, constants.W_OK);
+      return undefined;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return (err as Error).message;
+      const parent = dirname(dir);
+      // Root reached without an existing ancestor: nothing could create it.
+      if (parent === dir) return (err as Error).message;
+      dir = parent;
+    }
   }
 };
