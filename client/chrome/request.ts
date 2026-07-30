@@ -22,6 +22,16 @@ import { mintRequestId, REQUEST_ID_HEADER } from "../../src/core/request-id.ts";
  */
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
+/**
+ * For routes whose work is a RECURSIVE FILESYSTEM SCAN, not a lookup. Adding
+ * a broad folder walks it serially: measured at 16s for a whole home
+ * directory, which the default deadline aborted - and aborting is worse than
+ * useless there, because the hub persists the root BEFORE it scans, so the
+ * human saw "the hub did not answer" for an add that had in fact succeeded.
+ * Bounded, not exempt: a scan that takes minutes is still a broken scan.
+ */
+export const SCAN_TIMEOUT_MS = 120_000;
+
 export interface HubFetchInit extends RequestInit {
   /**
    * Override the deadline, or pass `null` for the ONE documented exemption:

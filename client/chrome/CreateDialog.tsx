@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { hubFetch } from "./request.ts";
+import { hubFetch, SCAN_TIMEOUT_MS } from "./request.ts";
 import { createRoots, openTab, setCreateOpen, useHub } from "./hub.ts";
 import { projectName } from "./naming.ts";
 import { effortLadder, harnessInfoFor } from "./selection.ts";
@@ -127,8 +127,9 @@ const CreateDialogBody = () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       // Exempt only when it opens the native chooser and waits on a human
-      // (M2.2); a typed path is a plain resolve and stays bounded.
-      ...(path ? {} : { timeoutMs: null }),
+      // (M2.2); a typed path resolves and registers, which walks the tree, so
+      // it takes the scan budget rather than the default.
+      ...(path ? { timeoutMs: SCAN_TIMEOUT_MS } : { timeoutMs: null }),
       body: JSON.stringify(path ? { path } : {}),
     }).catch(() => null);
     if (!res) {
@@ -183,6 +184,8 @@ const CreateDialogBody = () => {
   /** The artifact path the hub accepted, once it has: the dialog is now
    *  waiting for that session to appear rather than taking input. */
   const [authoring, setAuthoring] = useState<string | null>(null);
+  /** This dialog's own turn's last heartbeat, never another's. */
+  const progress = authoring === null ? undefined : createProgress[authoring];
   /** The hub stopped reporting - which is a fact about the HUB, not a verdict
    *  on the turn. */
   const [silent, setSilent] = useState(false);
@@ -243,7 +246,7 @@ const CreateDialogBody = () => {
 
   // Re-armed by every heartbeat: while the hub reports, this never fires, so
   // the dialog cannot accuse a turn the hub says is running.
-  const progressAt = createProgress?.artifact === authoring ? createProgress.at : null;
+  const progressAt = progress?.at ?? null;
   useEffect(() => {
     if (authoring === null) return;
     setSilent(false);
@@ -259,22 +262,28 @@ const CreateDialogBody = () => {
     return () => clearTimeout(timer);
   }, [authoring, progressAt]);
 
-  // The clock ticks locally for smoothness but is CORRECTED by every
-  // heartbeat, so what the human reads is the hub's own elapsed time for the
-  // turn - not this window's guess about it (a window opened late, or a
-  // reconnected stream, would otherwise show its own shorter clock).
+  // The clock ticks locally for smoothness but its ORIGIN is the hub's own
+  // elapsed time, re-based by every heartbeat - so what the human reads is
+  // the turn's real age, not this window's guess (a window opened late, or a
+  // reconnected stream, would otherwise show its own shorter clock). The tick
+  // reads the base through a ref so it cannot clobber the correction.
   const [elapsed, setElapsed] = useState(0);
+  const base = useRef<{ at: number; elapsedMs: number }>({ at: Date.now(), elapsedMs: 0 });
+  useEffect(() => {
+    if (progress === undefined) return;
+    base.current = { at: progress.at, elapsedMs: progress.elapsedMs };
+  }, [progress]);
   useEffect(() => {
     if (authoring === null) return;
+    base.current = { at: Date.now(), elapsedMs: 0 };
     setElapsed(0);
-    const started = Date.now();
-    const t = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    const t = setInterval(
+      () =>
+        setElapsed(Math.floor((base.current.elapsedMs + (Date.now() - base.current.at)) / 1000)),
+      1000,
+    );
     return () => clearInterval(t);
   }, [authoring]);
-  useEffect(() => {
-    if (createProgress?.artifact !== authoring) return;
-    setElapsed(Math.floor(createProgress.elapsedMs / 1000));
-  }, [createProgress, authoring]);
 
   const onTitle = (value: string): void => {
     setTitle(value);
@@ -762,9 +771,11 @@ const CreateDialogBody = () => {
                 </span>
                 <span className="text-[11px] text-fg-faint">{authoring}</span>
                 <span className="pt-1 text-[11px] text-fg-faint">
-                  {createProgress?.artifact === authoring
-                    ? "The hub is reporting this turn as running. A few minutes is normal; a failure interrupts this on its own."
-                    : "Waiting for the hub's first report. A few minutes is normal; a failure interrupts this on its own."}
+                  {silent
+                    ? "A few minutes is normal; a failure interrupts this on its own."
+                    : progressAt !== null
+                      ? "The hub is reporting this turn as running. A few minutes is normal; a failure interrupts this on its own."
+                      : "Waiting for the hub's first report. A few minutes is normal; a failure interrupts this on its own."}
                 </span>
               </>
             )}

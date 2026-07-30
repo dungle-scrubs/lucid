@@ -238,6 +238,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const log = resolveHubSink(opts);
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  /** Live create-turn heartbeats (M2.1), owned so `stop()` can end them: a
+   *  detached child outlives the hub, and its interval would otherwise keep
+   *  firing at nobody for the rest of that turn. */
+  const heartbeats = new Set<ReturnType<typeof setInterval>>();
   const encoder = new TextEncoder();
   let port = 0; // assigned once bound (below)
   let stopped = false;
@@ -915,6 +919,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // turn, but an interval nobody unrefs would keep a bare `node`-style
       // exit waiting on it.
       heartbeat.unref?.();
+      heartbeats.add(heartbeat);
 
       const reportFailure = async (code: number | string): Promise<void> => {
         const raw = await readFile(outLog, "utf8").catch(() => "");
@@ -950,6 +955,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         })
         .finally(() => {
           clearInterval(heartbeat);
+          heartbeats.delete(heartbeat);
           creating.delete(artifact);
         });
       handedOff = true;
@@ -1271,6 +1277,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
+    for (const beat of heartbeats) clearInterval(beat);
+    heartbeats.clear();
     for (const id of [...mounts.keys()]) await evict(id);
     for (const client of sseClients) {
       try {

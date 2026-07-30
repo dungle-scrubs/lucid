@@ -278,6 +278,17 @@ test("a slow create turn is reported as running, and never accused of failing (p
   // turn - well past the 15s silence window - nothing claims failure.
   await page.waitForTimeout(18_000);
   await expect(page.locator(hook("create-silent"))).toHaveCount(0);
-  await expect(on(page).createAuthoring()).not.toContainText("may have failed");
-  await expect(on(page).createAuthoring()).not.toContainText("stopped reporting");
+  await expect(on(page).createAuthoring()).toContainText("reporting this turn as running");
+
+  // The OTHER edge, which is what makes the first half mean anything: when
+  // the hub genuinely stops reporting, the dialog says exactly that - and
+  // says it about the HUB, not as a verdict on the turn.
+  await hub.stop();
+  hub = undefined;
+  await expect(page.locator(hook("create-silent"))).toBeVisible({ timeout: 25_000 });
+  await expect(page.locator(hook("create-silent"))).toContainText("stopped reporting");
+  await expect(page.locator(hook("create-silent"))).toContainText("does not mean it failed");
+  // And it does not sit UNDER a line still claiming the hub reports this turn:
+  // "a heartbeat once arrived" is not "the hub is reporting".
+  await expect(on(page).createAuthoring()).not.toContainText("reporting this turn as running");
 });

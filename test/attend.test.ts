@@ -799,7 +799,10 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
       const { value, done } = await reader!.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
-      for (const frame of buf.split("\n\n")) {
+      // Only COMPLETE frames: a chunk boundary mid-frame would otherwise
+      // hand JSON.parse a truncated data line and throw instead of retrying.
+      const frames = buf.split("\n\n");
+      for (const frame of frames.slice(0, -1)) {
         if (!frame.startsWith("event: create-progress")) continue;
         const line = frame.split("\n").find((l) => l.startsWith("data: "));
         if (line) progress = JSON.parse(line.slice(6)) as Record<string, unknown>;

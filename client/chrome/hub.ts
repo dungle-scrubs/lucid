@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { hubFetch } from "./request.ts";
+import { hubFetch, SCAN_TIMEOUT_MS } from "./request.ts";
 import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
 import { sessionLabel } from "./naming.ts";
@@ -106,16 +106,19 @@ interface HubState {
      *  turn - the dialog names the wall instead of showing a bare tail. */
     readonly usageLimit?: string;
   } | null;
-  /** The last heartbeat from a LIVE create turn (M2.1): proof of life, so the
-   *  dialog reports progress instead of inferring failure from a clock. `at`
-   *  is this window's receipt time - what "has the hub gone quiet" is measured
-   *  against, since the hub's own elapsed cannot say whether IT stopped. */
-  createProgress: {
-    readonly artifact: string;
-    readonly trace: string;
-    readonly elapsedMs: number;
-    readonly at: number;
-  } | null;
+  /** The last heartbeat from each LIVE create turn (M2.1), keyed by artifact:
+   *  proof of life, so the dialog reports progress instead of inferring
+   *  failure from a clock. `at` is this window's receipt time - what "has the
+   *  hub gone quiet" is measured against, since the hub's own elapsed cannot
+   *  say whether IT stopped.
+   *
+   *  Keyed, not a single slot: two creates can run at once (the dialog itself
+   *  invites it - "this dialog can be closed"), and one shared slot let the
+   *  OTHER turn's heartbeats keep re-arming this dialog's silence detector,
+   *  so a hub that stopped reporting THIS turn was never noticed. */
+  createProgress: Readonly<
+    Record<string, { readonly trace: string; readonly elapsedMs: number; readonly at: number }>
+  >;
 }
 
 export const useHub = create<HubState>(() => ({
@@ -130,7 +133,7 @@ export const useHub = create<HubState>(() => ({
   defaultHarness: null,
   harnessInfo: [],
   createFailed: null,
-  createProgress: null,
+  createProgress: {},
   attention: {},
 }));
 
@@ -352,11 +355,13 @@ export const addRoot = async (
   const res = await hubFetch("/hub/roots", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    // The ONE documented exemption (M2.2): with no path this opens a native
-    // folder chooser and waits for a human to browse, which is unbounded on
-    // purpose. The hub's own guard kills a chooser nobody answers, and that
-    // arrives here as a cancel. A path, though, is a plain add - bounded.
-    ...(opensChooser ? { timeoutMs: null } : {}),
+    // Two different unbounded things. With no path this opens a native folder
+    // chooser and WAITS ON A HUMAN browsing, which no deadline may cut short -
+    // the hub's own chooser guard bounds it instead, arriving here as a
+    // cancel. With a path there is no human, but the hub still walks the tree
+    // (16s for a home directory, measured), so it gets the scan budget rather
+    // than the default.
+    ...(opensChooser ? { timeoutMs: null } : { timeoutMs: SCAN_TIMEOUT_MS }),
     body: JSON.stringify(opensChooser ? {} : { path }),
   }).catch(() => null);
   if (!res) return { error: "The hub did not answer - it may have restarted. Reload the page." };
@@ -416,7 +421,8 @@ export const connectHub = (): void => {
     void (async () => {
       try {
         const { id } = JSON.parse((e as MessageEvent).data) as { id: string };
-        const listed = (await hubFetch("/hub/sessions").then((r) =>
+        // The listing unions a scan of every root - same walk, same budget.
+        const listed = (await hubFetch("/hub/sessions", { timeoutMs: SCAN_TIMEOUT_MS }).then((r) =>
           r.ok ? (r.json() as Promise<{ sessions: HubSession[] }>) : null,
         )) as { sessions: HubSession[] } | null;
         const row = listed?.sessions.find((s) => s.id === id);
@@ -453,7 +459,12 @@ export const connectHub = (): void => {
         trace: string;
         elapsedMs: number;
       };
-      useHub.setState({ createProgress: { artifact, trace, elapsedMs, at: Date.now() } });
+      useHub.setState((prev) => ({
+        createProgress: {
+          ...prev.createProgress,
+          [artifact]: { trace, elapsedMs, at: Date.now() },
+        },
+      }));
     } catch {
       /* malformed frame: the next heartbeat is 2s away */
     }
