@@ -238,6 +238,13 @@ export interface LogSinkOptions {
  * size check is a stat, not a tracked count, so an external truncation or
  * rotation self-corrects instead of poisoning every later decision.
  */
+/** The last write failure per sink path, so `lucid status` can report write
+ *  HEALTH rather than only file facts. A logger that fails silently is the one
+ *  failure mode that conceals itself - the file simply stays small and looks
+ *  idle. Module-level because the status reader is a different process's
+ *  concern in tests and the same process's in the hub. */
+const writeErrors = new Map<string, string>();
+
 export const createLogSink = (options: LogSinkOptions = {}): LineSink => {
   const path = hubLogPath(options.path);
   const maxBytes = options.maxBytes ?? LOG_MAX_BYTES;
@@ -259,11 +266,13 @@ export const createLogSink = (options: LogSinkOptions = {}): LineSink => {
         renameSync(path, `${path}.1`);
       }
       appendFileSync(path, line);
-    } catch {
-      // A sink that cannot write must never take a request down with it.
-      // Un-latch so a recreated ~/.lucid is picked up on the next line;
-      // M3.2 gives write health an inspection surface.
+      writeErrors.delete(path);
+    } catch (err) {
+      // A sink that cannot write must never take a request down with it - but
+      // it must not hide either, so the reason is kept for `lucid status`
+      // (M3.2). Un-latch so a recreated ~/.lucid is picked up on the next line.
       ready = false;
+      writeErrors.set(path, (err as Error).message);
     }
     try {
       options.mirror?.(message);
@@ -296,3 +305,50 @@ export const resolveHubSink = (options: HubSinkOptions = {}): LineSink =>
     ...(options.hubLogPath !== undefined ? { path: options.hubLogPath } : {}),
     mirror: options.mirror ?? stdoutSink,
   });
+
+export interface SinkStatus {
+  readonly path: string;
+  readonly exists: boolean;
+  readonly bytes: number;
+  /** A previous generation is on disk (`<path>.1`), so the cap has been hit
+   *  at least once and older evidence is one file away. */
+  readonly rotated: boolean;
+  /** False when the last write attempt failed. */
+  readonly writable: boolean;
+  /** Why the last write failed, when one did. */
+  readonly error?: string;
+}
+
+/**
+ * The sink's own state (M3.2 - technique 1 applied to the one module whose
+ * silence would be self-concealing). Answers "is anything being recorded, and
+ * where" without reading the implementation: the REAL resolved path, its real
+ * size, whether a generation has rotated, and whether writes are landing.
+ */
+export const sinkStatus = (path?: string): SinkStatus => {
+  const resolved = hubLogPath(path);
+  const error = writeErrors.get(resolved);
+  let bytes = 0;
+  let exists = false;
+  try {
+    bytes = statSync(resolved).size;
+    exists = true;
+  } catch {
+    // No file yet, or unreadable - both mean "nothing recorded here".
+  }
+  let rotated = false;
+  try {
+    statSync(`${resolved}.1`);
+    rotated = true;
+  } catch {
+    // No previous generation.
+  }
+  return {
+    path: resolved,
+    exists,
+    bytes,
+    rotated,
+    writable: error === undefined,
+    ...(error !== undefined ? { error } : {}),
+  };
+};
