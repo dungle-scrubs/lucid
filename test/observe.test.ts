@@ -1,11 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createLogSink,
   hubLogPath,
   inboundTrace,
+  sinkStatus,
   observeRequests,
   resolveHubSink,
   startRequest,
@@ -326,6 +335,103 @@ describe("resolveHubSink: the rotating file is the hub's DEFAULT, not a second p
       log("injected");
       expect(seen).toEqual(["injected"]);
       expect(existsSync(path)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("sinkStatus: the logger is not self-concealing (M3.2, technique 1)", () => {
+  test("reports the real path, size and generation - not a hardcoded guess", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lucid-observe-"));
+    const path = join(dir, "hub.log");
+    try {
+      const before = sinkStatus(path);
+      expect(before.path).toBe(path);
+      expect(before.exists).toBe(false);
+      expect(before.bytes).toBe(0);
+      expect(before.rotated).toBe(false);
+
+      const sink = createLogSink({ path, maxBytes: 100 });
+      sink("a".repeat(60));
+      const after = sinkStatus(path);
+      expect(after.exists).toBe(true);
+      expect(after.bytes).toBe(61);
+      expect(after.rotated).toBe(false);
+
+      sink("b".repeat(60));
+      expect(sinkStatus(path).rotated).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("write health is derived from DISK, not from this process having tried", () => {
+    // The status reader is `lucid status`, a DIFFERENT process from the hub
+    // that owns the sink - so an in-process error map is always empty there
+    // and `writable` was a hardcoded true. It reported a log whose every
+    // write was failing as "healthy but idle", which is precisely the
+    // self-concealing failure this field exists to expose.
+    const dir = mkdtempSync(join(tmpdir(), "lucid-observe-"));
+    const readonlyDir = join(dir, "ro");
+    mkdirSync(readonlyDir);
+    chmodSync(readonlyDir, 0o555);
+    try {
+      // Nothing in THIS process ever opened a sink here.
+      const status = sinkStatus(join(readonlyDir, "hub.log"));
+      expect(status.exists).toBe(false);
+      expect(status.writable).toBe(false);
+      expect(status.error).toBeTruthy();
+    } finally {
+      chmodSync(readonlyDir, 0o755);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a path whose parent does not exist yet is HEALTHY - the sink creates it (#91 re-review)", () => {
+    // ~/.lucid does not exist until the first hub runs, so this is the
+    // fresh-install case: the very first `lucid` a new user types. Probing
+    // the immediate parent reported their log as broken while writes to it
+    // in fact succeed - the lie flipped direction rather than going away.
+    const dir = mkdtempSync(join(tmpdir(), "lucid-observe-"));
+    const deep = join(dir, "never", "created", "hub.log");
+    try {
+      expect(sinkStatus(deep).writable).toBe(true);
+      // And it is not wishful: the sink really does create the tree.
+      createLogSink({ path: deep })('{"event":"proof"}');
+      const after = sinkStatus(deep);
+      expect(after.exists).toBe(true);
+      expect(after.bytes).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a sink that CANNOT write says so - a silent logger hides its own failure", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lucid-observe-"));
+    const path = join(dir, "nope", "hub.log");
+    try {
+      // A directory that cannot be created: the parent is a FILE.
+      writeFileSync(join(dir, "nope"), "not a directory");
+      const sink = createLogSink({ path });
+      sink("this cannot land");
+      const status = sinkStatus(path);
+      expect(status.exists).toBe(false);
+      expect(status.writable).toBe(false);
+      expect(status.error).toBeTruthy();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a healthy sink reports writable with no error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lucid-observe-"));
+    const path = join(dir, "hub.log");
+    try {
+      createLogSink({ path })("fine");
+      const status = sinkStatus(path);
+      expect(status.writable).toBe(true);
+      expect(status.error).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

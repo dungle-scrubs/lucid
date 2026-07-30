@@ -11,6 +11,7 @@ import {
   ValidationError as LucidValidationError,
   type LucidError,
 } from "../errors.ts";
+import { warnUnknownSubsystems } from "../core/verbose.ts";
 import {
   runApp,
   runAsk,
@@ -29,7 +30,16 @@ import {
 } from "./run.ts";
 
 /** Wrap an async command body: print structured error JSON + exit 1 on failure. */
-const runEffect = (fn: () => Promise<void>): Effect.Effect<void> =>
+const runEffect = (fn: () => Promise<void>): Effect.Effect<void> => {
+  // Said once, before the command runs: `LUCID_VERBOSE=1` is the likeliest
+  // thing a human types, and dropping it in silence is the failure the closed
+  // subsystem list exists to prevent. On stderr, since stdout is one JSON
+  // document.
+  warnUnknownSubsystems();
+  return runEffectBody(fn);
+};
+
+const runEffectBody = (fn: () => Promise<void>): Effect.Effect<void> =>
   Effect.tryPromise({ try: fn, catch: (e) => e }).pipe(
     Effect.catchAll((err) =>
       Effect.sync(() => {

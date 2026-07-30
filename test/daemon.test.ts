@@ -605,6 +605,69 @@ describe("the hub's wide event: every request emits (plan 07, M1.2)", () => {
   });
 });
 
+describe("the verbose flag governs internal narration ONLY (M3.1)", () => {
+  test("with LUCID_VERBOSE unset, the boundary records still emit - they are baseline evidence", async () => {
+    const prev = process.env.LUCID_VERBOSE;
+    delete process.env.LUCID_VERBOSE;
+    const lines: string[] = [];
+    try {
+      daemon = await runDaemon({
+        port: 0,
+        roots: [root],
+        registryPath,
+        log: (m) => void lines.push(m),
+      });
+      await get(daemon.port, "/hub/sessions");
+    } finally {
+      if (prev !== undefined) process.env.LUCID_VERBOSE = prev;
+    }
+    const records = lines
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    // Read as a blanket silence rule, technique 4 would cancel technique 2 and
+    // leave a program that emits nothing and calls that observability.
+    expect(records.find((r) => r.event === "request.start")).toBeDefined();
+    expect(records.find((r) => r.event === "request")).toBeDefined();
+  });
+
+  test("narration and records share the sink WITHOUT corrupting each other", async () => {
+    const prev = process.env.LUCID_VERBOSE;
+    process.env.LUCID_VERBOSE = "all";
+    const lines: string[] = [];
+    try {
+      daemon = await runDaemon({
+        port: 0,
+        roots: [root],
+        registryPath,
+        log: (m) => void lines.push(m),
+      });
+      await get(daemon.port, "/hub/sessions");
+      // Narration really is live in this process - asserting on a route that
+      // narrates nothing left the whole test passing because NOTHING was
+      // tracing, which is what the flag being import-time-snapshotted did.
+      const { tracer } = await import("../src/core/verbose.ts");
+      tracer("attend")(() => "synthetic: a turn declined");
+    } finally {
+      if (prev === undefined) delete process.env.LUCID_VERBOSE;
+      else process.env.LUCID_VERBOSE = prev;
+    }
+
+    // The hub installs its own log as the narration sink, so both land here.
+    const narration = lines.filter((l) => l.startsWith("[attend]"));
+    expect(narration.length).toBeGreaterThan(0);
+
+    // And the records are untouched by it: still exactly one exit for the
+    // request, and every JSON line still parses - a reader grepping the file
+    // is never handed a half-line spliced with a trace.
+    const records = lines.filter((l) => l.startsWith("{"));
+    for (const line of records) expect(() => JSON.parse(line)).not.toThrow();
+    const exits = records
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((r) => r.event === "request" && r.path === "/hub/sessions");
+    expect(exits).toHaveLength(1);
+  });
+});
+
 describe("the CLI carries the id to the hub (M1.3)", () => {
   test("hubOpen sends x-lucid-request, adopting LUCID_REQUEST_ID when a turn holds one", async () => {
     const artifact = await seedSession("proj", "notes");

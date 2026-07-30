@@ -376,7 +376,17 @@ process instead, so the terminal conversation stays free while feedback flows.
 If you are running inside an app that embeds a browser pane next to the
 conversation - ChatGPT desktop, Claude desktop - that pane is a window over ONE
 session, and the app already plays the role the shell plays for a terminal
-harness. Your integration exports `LUCID_VIEW=solo`, and then:
+harness.
+
+**Export this in the integration file that already exports `LUCID_HARNESS`:**
+
+```sh
+export LUCID_VIEW=solo
+```
+
+Without it Lucid serves the full shell - a tab strip and a project sidebar
+inside a pane that shows one review, which is chrome for a job the host app is
+already doing. With it:
 
 - `lucid open` returns the shell-free review URL in `url`, with
   `"view": "solo"` beside it. **Surface the url in the pane; do not

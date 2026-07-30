@@ -1,4 +1,5 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
+import { tracer } from "../core/verbose.ts";
 import { artifactAttendant } from "../core/attendant.ts";
 import { deliver } from "../core/deliver.ts";
 import { shellArg } from "../core/escape.ts";
@@ -120,21 +121,75 @@ export type AttendDecision = "spawn" | "wait" | "idle";
  * The whole delivery policy, as one pure function: no clock, no filesystem, no
  * process. Everything the watcher does around it is plumbing.
  */
-export const attendDecision = (input: AttendDecisionInput): AttendDecision => {
-  if (input.pendingFeedbackSeqs.length === 0) return "idle";
-  if (input.inFlight) return "wait";
+/** The decision AND the precondition that produced it (M3.1). "Why did this
+ *  turn not run" had no answer anywhere; the verdict alone cannot give one,
+ *  and a second copy of the rules would drift from the first. So the reasons
+ *  live here, beside the rules, and `attendDecision` is derived. */
+export interface AttendVerdict {
+  readonly decision: AttendDecision;
+  readonly reason: string;
+}
+
+/** How much of a quiet turn's own output is relayed as its reply. */
+const SILENT_TURN_TAIL = 600;
+
+/**
+ * What of a quiet turn's output may be relayed to the human as the agent's
+ * words. Lucid's OWN narration is not the agent's words: `LUCID_VERBOSE`
+ * propagates into the spawned turn (it inherits the environment) and that
+ * turn's stderr is the attend log this reads, so without the filter the tail
+ * can be `[anchors] …` lines - delivered as an `agent_reply`, shown in the
+ * viewer as something the agent said, and recorded permanently in log.ndjson.
+ */
+export const relayableTail = (output: string): string =>
+  output
+    .split("\n")
+    .filter((line) => !/^\[(anchors|attend|verbose)\]/.test(line.trimStart()))
+    .join("\n")
+    .trim()
+    .slice(-SILENT_TURN_TAIL)
+    .trim();
+
+export const attendReason = (input: AttendDecisionInput): AttendVerdict => {
+  if (input.pendingFeedbackSeqs.length === 0) {
+    return { decision: "idle", reason: "nothing pending: no undelivered feedback on this log" };
+  }
+  if (input.inFlight) {
+    return { decision: "wait", reason: "a delivery is already in flight for this artifact" };
+  }
   // A live interactive attendant always takes precedence (Kevin's rule): it
   // holds hour-long wait windows, and the hub only covers the gap after.
-  if (input.listening > 0) return "wait";
+  if (input.listening > 0) {
+    return {
+      decision: "wait",
+      reason: `${input.listening} agent(s) listening: a live waiter takes precedence over a spawn`,
+    };
+  }
   // Mid-turn counts as holding it: two resume processes editing one artifact
   // is the failure this engine exists to avoid, not a faster delivery.
   if (input.workingSince !== undefined && input.now - input.workingSince < input.workingGraceMs) {
-    return "wait";
+    return {
+      decision: "wait",
+      reason: `a turn is mid-flight (working ${input.now - input.workingSince}ms ago, grace ${input.workingGraceMs}ms)`,
+    };
   }
-  if (input.firstPendingAt === undefined) return "wait";
-  if (input.now - input.firstPendingAt < input.debounceMs) return "wait";
-  return "spawn";
+  if (input.firstPendingAt === undefined) {
+    return { decision: "wait", reason: "pending feedback has no recorded arrival time yet" };
+  }
+  if (input.now - input.firstPendingAt < input.debounceMs) {
+    return {
+      decision: "wait",
+      reason: `debounce: ${input.now - input.firstPendingAt}ms since the first pending item, need ${input.debounceMs}ms of quiet`,
+    };
+  }
+  return {
+    decision: "spawn",
+    reason: `spawning: ${input.pendingFeedbackSeqs.length} pending item(s), quiet for ${input.now - input.firstPendingAt}ms`,
+  };
 };
+
+export const attendDecision = (input: AttendDecisionInput): AttendDecision =>
+  attendReason(input).decision;
 
 export interface AttendantOptions {
   readonly paths: SessionPaths;
@@ -149,6 +204,8 @@ export interface AttendantOptions {
   /** Push a warning frame to the session's own subscribers - how a stalled
    *  delivery says WHY in the viewer, not only in the hub's stdout. */
   readonly warn?: (code: string, message: string) => void;
+  /** Internal narration sink (M3.1); tests inject, production reads the flag. */
+  readonly trace?: (message: () => string) => void;
 }
 
 export interface Attendant {
@@ -182,6 +239,11 @@ const usableCwd = async (recorded: string | undefined, fallback: string): Promis
  */
 export const createAttendant = (options: AttendantOptions): Attendant => {
   const { paths, log } = options;
+  // Narration rides this process's narration sink, which the hub points at
+  // its own rotating log (D-002) - a stderr default would be /dev/null in the
+  // only mode this engine runs in. INTERNAL: it never gates, and is never
+  // gated by, the always-on boundary records.
+  const trace = options.trace ?? tracer("attend");
   const debounceMs = options.debounceMs ?? DEFAULT_ATTEND_DEBOUNCE_MS;
   const workingGraceMs = options.workingGraceMs ?? DEFAULT_WORKING_GRACE_MS;
 
@@ -337,10 +399,6 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     };
   };
 
-  /** Chars of a silent turn's own output to relay into the record. Enough for
-   *  a paragraph of reasoning, short of pasting a whole transcript. */
-  const SILENT_TURN_TAIL = 600;
-
   /**
    * A turn that exited CLEAN but wrote nothing to the log - no new version, no
    * reply, no question. Usually it decided there was nothing to do ("that
@@ -361,7 +419,13 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     );
     if (spoke) return;
     const output = await readFile(paths.attendLog, "utf8").catch(() => "");
-    const tail = output.trim().slice(-SILENT_TURN_TAIL).trim();
+    // Lucid's OWN narration is not the agent's words. LUCID_VERBOSE propagates
+    // into the spawned turn (it inherits the environment), and that turn's
+    // stderr is this very file - so without this filter the last 600
+    // characters of a quiet turn can be `[anchors] …` lines, delivered into
+    // the artifact's log as an agent_reply and shown to the human in the
+    // viewer as something the agent said. Permanently, in log.ndjson.
+    const tail = relayableTail(output);
     if (tail === "") return;
     await deliver(paths, {
       t: "agent_reply",
@@ -651,7 +715,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // look like nothing was happening at all.
     const ourDeadClaim =
       !inFlight && ownClaimSeq !== 0 && state.deliveredThroughSeq === ownClaimSeq;
-    const decision = attendDecision({
+    const verdict = attendReason({
       pendingFeedbackSeqs,
       listening: options.agentsListening(),
       workingSince: state.agentWorking && !ourDeadClaim ? lastAckAt(events) : undefined,
@@ -661,7 +725,11 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       debounceMs,
       workingGraceMs,
     });
-    if (decision !== "spawn") return;
+    // "Why did this turn not run" had no answer before M3.1 - every pass that
+    // declined was indistinguishable from a poll that never happened. Silent
+    // unless LUCID_VERBOSE names `attend`.
+    trace(() => `${paths.name}: ${verdict.decision} - ${verdict.reason}`);
+    if (verdict.decision !== "spawn") return;
     // The human is IN that conversation right now. Resuming it headlessly
     // would put two processes on one harness session - the hub typing into a
     // window somebody is sitting at. `listening` cannot see this: a human

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { accessSync, appendFileSync, constants, mkdirSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { isLucidError } from "../errors.ts";
@@ -238,6 +238,13 @@ export interface LogSinkOptions {
  * size check is a stat, not a tracked count, so an external truncation or
  * rotation self-corrects instead of poisoning every later decision.
  */
+/** The last write failure per sink path, so `lucid status` can report write
+ *  HEALTH rather than only file facts. A logger that fails silently is the one
+ *  failure mode that conceals itself - the file simply stays small and looks
+ *  idle. Module-level because the status reader is a different process's
+ *  concern in tests and the same process's in the hub. */
+const writeErrors = new Map<string, string>();
+
 export const createLogSink = (options: LogSinkOptions = {}): LineSink => {
   const path = hubLogPath(options.path);
   const maxBytes = options.maxBytes ?? LOG_MAX_BYTES;
@@ -259,11 +266,13 @@ export const createLogSink = (options: LogSinkOptions = {}): LineSink => {
         renameSync(path, `${path}.1`);
       }
       appendFileSync(path, line);
-    } catch {
-      // A sink that cannot write must never take a request down with it.
-      // Un-latch so a recreated ~/.lucid is picked up on the next line;
-      // M3.2 gives write health an inspection surface.
+      writeErrors.delete(path);
+    } catch (err) {
+      // A sink that cannot write must never take a request down with it - but
+      // it must not hide either, so the reason is kept for `lucid status`
+      // (M3.2). Un-latch so a recreated ~/.lucid is picked up on the next line.
       ready = false;
+      writeErrors.set(path, (err as Error).message);
     }
     try {
       options.mirror?.(message);
@@ -296,3 +305,93 @@ export const resolveHubSink = (options: HubSinkOptions = {}): LineSink =>
     ...(options.hubLogPath !== undefined ? { path: options.hubLogPath } : {}),
     mirror: options.mirror ?? stdoutSink,
   });
+
+export interface SinkStatus {
+  readonly path: string;
+  readonly exists: boolean;
+  readonly bytes: number;
+  /** A previous generation is on disk (`<path>.1`), so the cap has been hit
+   *  at least once and older evidence is one file away. */
+  readonly rotated: boolean;
+  /** False when the last write attempt failed. */
+  readonly writable: boolean;
+  /** Why the last write failed, when one did. */
+  readonly error?: string;
+}
+
+/**
+ * The sink's own state (M3.2 - technique 1 applied to the one module whose
+ * silence would be self-concealing). Answers "is anything being recorded, and
+ * where" without reading the implementation: the REAL resolved path, its real
+ * size, whether a generation has rotated, and whether writes are landing.
+ */
+export const sinkStatus = (path?: string): SinkStatus => {
+  const resolved = hubLogPath(path);
+  let bytes = 0;
+  let exists = false;
+  try {
+    bytes = statSync(resolved).size;
+    exists = true;
+  } catch {
+    // No file yet, or unreadable - both mean "nothing recorded here".
+  }
+  let rotated = false;
+  try {
+    statSync(`${resolved}.1`);
+    rotated = true;
+  } catch {
+    // No previous generation.
+  }
+  // Health comes from DISK, not from this process having tried to write. The
+  // reader is `lucid status`, a different process from the hub that owns the
+  // sink - so an in-process error map is always empty here, and reporting
+  // `writable: true` off it made a log whose every write was failing look
+  // healthy and idle. That is the self-concealing failure this field exists
+  // to expose, reproduced by the field itself.
+  //
+  // The in-process record still wins when there IS one: it names the actual
+  // errno the sink hit, which beats re-deriving.
+  const recorded = writeErrors.get(resolved);
+  const probed = recorded ?? probeWritable(resolved, exists);
+  return {
+    path: resolved,
+    exists,
+    bytes,
+    rotated,
+    writable: probed === undefined,
+    ...(probed !== undefined ? { error: probed } : {}),
+  };
+};
+
+/**
+ * Can a line actually land at this path? The file if it exists, else the
+ * nearest EXISTING ancestor of where it would go - because the sink does
+ * `mkdirSync(recursive)` before writing, so a missing parent is not a
+ * failure, it is a directory about to be created. Probing the immediate
+ * parent called a healthy log broken on every fresh install (`~/.lucid` does
+ * not exist until the first hub runs), which is the first thing a new user
+ * would see. Returns the reason a write cannot land.
+ */
+const probeWritable = (path: string, exists: boolean): string | undefined => {
+  if (exists) {
+    try {
+      accessSync(path, constants.W_OK);
+      return undefined;
+    } catch (err) {
+      return (err as Error).message;
+    }
+  }
+  let dir = dirname(path);
+  for (;;) {
+    try {
+      accessSync(dir, constants.W_OK);
+      return undefined;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return (err as Error).message;
+      const parent = dirname(dir);
+      // Root reached without an existing ancestor: nothing could create it.
+      if (parent === dir) return (err as Error).message;
+      dir = parent;
+    }
+  }
+};

@@ -1,4 +1,5 @@
 import type { Anchor, ElementAnchor, RangeAnchor } from "./anchor.ts";
+import { tracer } from "../core/verbose.ts";
 
 /**
  * Shared anchor capture/resolution logic that operates against a minimal
@@ -127,6 +128,10 @@ export const captureElementAnchor = (el: DomElementLike): ElementAnchor => {
 
 const toArray = (a: ArrayLike<DomElementLike>): DomElementLike[] => Array.from(a);
 
+/** Built once from the environment: a no-op unless `LUCID_VERBOSE` names
+ *  `anchors`, so the silent default costs one call to an empty function. */
+const anchorTrace = tracer("anchors");
+
 /**
  * Resolve an element anchor against a root, in priority order
  * lucidId -> fingerprint -> domPath (D-047). Returns the matched element or
@@ -158,16 +163,59 @@ export interface ResolvedElement {
  * through to the next per D-047; only the positional domPath is allowed to
  * disambiguate, and a match that only it could make is tagged `positional`.
  */
+export interface ResolveOptions {
+  /** Narrates WHICH layer matched and why the others were skipped (M3.1).
+   *  Silent unless `LUCID_VERBOSE` names `anchors`; the default tracer is a
+   *  no-op, so this path costs nothing when nobody asked. */
+  readonly trace?: (message: () => string) => void;
+}
+
+/**
+ * A fingerprint with its text preview removed: `p#a1b2·"Q3 layoffs: cut 40%…"`
+ * becomes `p#a1b2`. The preview is REVIEW CONTENT (the element's own text),
+ * and narration lands in an uncapped `server.out.log` at poll rate - the same
+ * rule that keeps prompts and notes out of the request records applies to a
+ * trace on disk (D-005). The hash still identifies the fingerprint uniquely,
+ * which is what a human diagnosing a mismatch actually compares.
+ */
+const redactFingerprint = (fingerprint: string | undefined): string => {
+  if (fingerprint === undefined) return "(none)";
+  const stripped = fingerprint.replace(/·".*$/s, "");
+  // A fingerprint arrives off the wire and `parseAnchor` accepts any string,
+  // so one that never had the `·"` marker keeps whatever it did have. Cap it:
+  // an identifier longer than this is not an identifier, and narration now
+  // shares the hub's rotating log, where an oversized line rotates real
+  // evidence away.
+  return capTraceField(stripped);
+};
+
+/** Traces share the hub's 5 MB rotation budget and ride at poll rate; every
+ *  caller-influenced field is capped, exactly as the request records are. */
+const TRACE_FIELD_CAP = 120;
+const capTraceField = (value: string): string =>
+  value.length > TRACE_FIELD_CAP ? `${value.slice(0, TRACE_FIELD_CAP)}…` : value;
+
 export const resolveElementMatch = (
   anchor: ElementAnchor,
   root: DomRootLike,
+  options: ResolveOptions = {},
 ): ResolvedElement | null => {
+  const trace = options.trace ?? anchorTrace;
   if (anchor.lucidId) {
     const matches = toArray(
       root.querySelectorAll(`[data-lucid-id="${cssEscape(anchor.lucidId)}"]`),
     );
-    if (matches.length === 1 && matches[0]) return { el: matches[0], match: "exact" };
+    if (matches.length === 1 && matches[0]) {
+      trace(() => `lucidId "${capTraceField(anchor.lucidId ?? "")}" -> 1 match, exact`);
+      return { el: matches[0], match: "exact" };
+    }
     // non-unique -> skip lucidId layer
+    trace(
+      () =>
+        `lucidId "${capTraceField(anchor.lucidId ?? "")}" -> ${matches.length} matches, skipped (a layer must be unique to win)`,
+    );
+  } else {
+    trace(() => "lucidId absent on the anchor, skipped");
   }
 
   // One-pass sibling indices, then fingerprints over the map (#46): identical
@@ -181,17 +229,34 @@ export const resolveElementMatch = (
   // status cells sharing a column position across table rows) and must fall
   // through to the positional domPath, same as the lucidId layer above.
   if (byFingerprint.length === 1 && byFingerprint[0]) {
+    trace(() => `fingerprint ${redactFingerprint(anchor.fingerprint)} -> 1 match, exact`);
     return { el: byFingerprint[0], match: "exact" };
   }
+  trace(
+    () =>
+      `fingerprint ${redactFingerprint(anchor.fingerprint)} -> ${byFingerprint.length} matches over ${all.length} elements, ` +
+      `${byFingerprint.length === 0 ? "no match" : "ambiguous"}, falling through to domPath`,
+  );
 
   if (anchor.domPath) {
     try {
       const match = root.querySelector(anchor.domPath);
-      if (match) return { el: match, match: "positional" };
+      if (match) {
+        trace(
+          () =>
+            `domPath "${capTraceField(anchor.domPath ?? "")}" -> matched, POSITIONAL (whatever now occupies that slot)`,
+        );
+        return { el: match, match: "positional" };
+      }
+      trace(() => `domPath "${capTraceField(anchor.domPath ?? "")}" -> no match`);
     } catch {
       // invalid selector -> no match
+      trace(() => `domPath "${capTraceField(anchor.domPath ?? "")}" -> invalid selector`);
     }
+  } else {
+    trace(() => "domPath absent on the anchor");
   }
+  trace(() => "unresolved: no layer matched");
   return null;
 };
 

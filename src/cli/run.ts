@@ -32,6 +32,7 @@ import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload, parseWaitPayloadInput } from "../plan/ingest.ts";
 import { planArtifactPath, renderPlanDoc, renderedSourceOf } from "../plan/render.ts";
 import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
+import { sinkStatus } from "../server/observe.ts";
 import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { decodeGroupText } from "./ask-input.ts";
@@ -699,6 +700,18 @@ export const runStatus = async (): Promise<void> => {
   }));
   print({
     sessions,
+    // Where the program's own evidence goes, and whether it is landing (M3.2).
+    // "Is anything being recorded, and where" was answerable only by reading
+    // the source - and a logger that fails silently is the one failure mode
+    // that hides itself, because the file just stays small and looks idle.
+    //
+    // A LIVE hub is asked rather than re-derived: it may have been started
+    // from a shell with a different LUCID_HUB_LOG, or with an explicitly
+    // injected path this process cannot see, and reporting a file the writer
+    // is not writing to is the same lie in a new spelling.
+    log:
+      (await hubInfo(parseHubPort(process.env.LUCID_HUB_PORT) ?? HUB_PORT).catch(() => undefined))
+        ?.log ?? sinkStatus(),
     usage: {
       open: "lucid open <file>",
       wait: "lucid wait <file> [--since <cursor>] [--timeout <seconds>: 0 drains] [--reply <msg>] [--harness <id>] [--resume <cmd>]",

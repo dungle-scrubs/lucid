@@ -349,3 +349,44 @@ fi
 This posts to every live Lucid session in the working tree by reading each
 session's `server.json` port and hitting `POST /__lucid/context`. The endpoint
 takes the same `{pct}` / `{used,total}` body as the CLI.
+
+## Diagnosing Lucid itself
+
+Two questions the program used to answer with silence.
+
+**"What did the hub just do?"** Every hub request writes one structured line,
+always on, no flag - entry on arrival and exit with its status, joined by an
+`id`. A request that hung is an entry with no exit. `trace` carries across
+processes, so one grep follows a click through the CLI, the hub route, the
+session mount and any turn it spawned:
+
+```sh
+lucid                        # names the log's real path, size and write health
+grep <trace> ~/.lucid/hub.log
+```
+
+The file rotates once at 5 MB, and survives the hub being started detached -
+which is the normal case, and used to discard every line it wrote.
+
+**"Why did it do THAT?"** Internal narration is silent until you name a
+subsystem, because always-on tracing is noise:
+
+```sh
+export LUCID_VERBOSE=anchors     # or: attend, or anchors,attend, or all
+```
+
+- `anchors` - which layer resolved an annotation's target (`lucidId`,
+  fingerprint, or the positional `domPath`) and why the others were skipped.
+  The answer to "why did it highlight that element".
+- `attend` - which precondition stopped a headless turn from running (nothing
+  pending, an agent listening, mid-turn, debounce).
+
+Narration goes wherever that process's evidence goes: the hub writes it to the
+same rotating log as the records above (a detached hub's stderr is discarded,
+so anything written there would be lost, not quiet), and a standalone session
+server writes it to that session's `run/server.out.log`. A name the flag does
+not recognise is reported rather than ignored.
+
+The flag governs internal narration only. The request records above are
+baseline evidence and are never gated by it.
+

@@ -64,6 +64,12 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   // The D-015 reconnect-backoff cap: a suite that kills streams on purpose
   // sets it on the processes IT spawns; everything else runs production
   // patience. Presence of a decision is what the policy enforces.
+  // Internal narration (plan 07, M3.1). Cleared, not isolated: it is a
+  // behaviour switch, not a path, and a developer debugging anchors in their
+  // own shell must not make every spawned child in the suite loud - the
+  // narration lands in each session's server.out.log, which some suites read.
+  LUCID_VERBOSE: "clear",
+
   LUCID_SSE_MAX_BACKOFF_MS: "per-suite",
   // The M3.1 eviction seam: the connected-stream cap, lowered only by the
   // suite that proves an evicted tab's badge survives its stream.
