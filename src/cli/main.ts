@@ -6,6 +6,7 @@ import { Effect, Logger, Option } from "effect";
 // imports both. They are unrelated types with the same name; `isValidationError`
 // is TypeId-based so the runtime can never confuse them, but a reader can.
 import {
+  isLucidError,
   toErrorJson,
   ValidationError as LucidValidationError,
   type LucidError,
@@ -26,12 +27,6 @@ import {
   runStatus,
   runWaitCli,
 } from "./run.ts";
-
-const isLucidError = (e: unknown): e is LucidError =>
-  typeof e === "object" &&
-  e !== null &&
-  "code" in e &&
-  typeof (e as { code: unknown }).code === "string";
 
 /** Wrap an async command body: print structured error JSON + exit 1 on failure. */
 const runEffect = (fn: () => Promise<void>): Effect.Effect<void> =>

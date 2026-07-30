@@ -1,8 +1,7 @@
-import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import type { LucidError } from "../errors.ts";
+import { isLucidError } from "../errors.ts";
 
 /**
  * The wide-event boundary: one structured record per hub request, built as
@@ -10,6 +9,10 @@ import type { LucidError } from "../errors.ts";
  * record's SHAPE and its SINK - it owns neither routing nor any decision
  * about what a route does. Records carry identifiers and outcomes only,
  * never prompts, notes or artifact bodies (D-005).
+ *
+ * For a streaming route (SSE), the exit record fires when the Response is
+ * returned: `status` is real, and `durationMs` means time-to-headers there
+ * rather than the life of the stream.
  */
 
 /** One line in, no return - the shape every sink, mirror and log share. */
@@ -18,7 +21,8 @@ export type LineSink = (line: string) => void;
 export interface ObserveOptions {
   /** Where emitted lines go. Injected by tests; the hub passes its sink. */
   readonly sink: LineSink;
-  /** Epoch-ms clock, injectable so duration is deterministic under test. */
+  /** Millisecond clock (monotonic by default), injectable so duration is
+   *  deterministic under test. */
   readonly clock?: () => number;
 }
 
@@ -42,13 +46,20 @@ export interface RequestContext {
   readonly harness?: string;
 }
 
+/** What `fail` keeps of an error: the tag and the stable code. Every typed
+ *  error satisfies it structurally; message and detail have no field here. */
+export interface ErrorIdentity {
+  readonly _tag: string;
+  readonly code: string;
+}
+
 export interface RequestObservation {
   /** Merge named identifiers onto the record - attach, don't log. */
   attach(context: RequestContext): void;
   /** Stamp a typed error's identity onto the record: `error.type` is the
    *  tag, `error.code` the stable code - technique 3 feeding the event.
    *  Never the message or detail, which may carry the review's content. */
-  fail(error: LucidError): void;
+  fail(error: ErrorIdentity): void;
   /** Emit the exit record. Idempotent by contract: one record per request. */
   end(status: number): void;
 }
@@ -69,15 +80,19 @@ export const startRequest = (
   const context: { -readonly [K in keyof RequestContext]: RequestContext[K] } = {};
   let failure: { readonly type: string; readonly code: string } | undefined;
   let ended = false;
+  // An identifier longer than this is not an identifier. The cap is what
+  // stops one hostile create body from writing a line bigger than the log's
+  // own rotation budget and rotating real evidence away.
+  const cap = (value: string): string => value.slice(0, 256);
   return {
     attach(next: RequestContext): void {
-      if (next.artifact !== undefined) context.artifact = next.artifact;
-      if (next.project !== undefined) context.project = next.project;
-      if (next.session !== undefined) context.session = next.session;
-      if (next.view !== undefined) context.view = next.view;
-      if (next.harness !== undefined) context.harness = next.harness;
+      if (next.artifact !== undefined) context.artifact = cap(next.artifact);
+      if (next.project !== undefined) context.project = cap(next.project);
+      if (next.session !== undefined) context.session = cap(next.session);
+      if (next.view !== undefined) context.view = cap(next.view);
+      if (next.harness !== undefined) context.harness = cap(next.harness);
     },
-    fail(error: LucidError): void {
+    fail(error: ErrorIdentity): void {
       failure = { type: error._tag, code: error.code };
     },
     end(status: number): void {
@@ -101,14 +116,7 @@ export const startRequest = (
 
 /** A fresh request id: 16 hex chars, the same width `sessionId` uses.
  *  M1.3 teaches the boundary to ADOPT a well-formed inbound id instead. */
-const mintRequestId = (): string => randomBytes(8).toString("hex");
-
-/** A typed error, recognised across the throw boundary without importing
- *  every class: the stable `code` plus Effect's `_tag` are the contract. */
-const isLucidError = (err: unknown): err is LucidError =>
-  err instanceof Error &&
-  typeof (err as { code?: unknown }).code === "string" &&
-  typeof (err as { _tag?: unknown })._tag === "string";
+const mintRequestId = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
 
 /**
  * Wrap the hub's one request funnel so EVERY request emits - the wide event
@@ -133,6 +141,12 @@ export const observeRequests = (
       return response;
     } catch (err) {
       if (isLucidError(err)) observation.fail(err);
+      else if (err instanceof Error) {
+        // An UNTYPED throw is the failure class nobody predicted - the one
+        // the record must not stay silent about. The name is identity; the
+        // message stays out (it can quote anything, D-005).
+        observation.fail({ _tag: err.name, code: "UNKNOWN" });
+      }
       observation.end(500);
       throw err;
     }

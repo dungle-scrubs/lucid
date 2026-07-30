@@ -486,9 +486,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     req: Request,
     id: string,
     subPath: string,
-    observation?: RequestObservation,
+    observation: RequestObservation,
   ): Promise<Response> => {
-    observation?.attach({ session: id });
+    observation.attach({ session: id });
     let artifact = idToArtifact.get(id);
     if (artifact === undefined) {
       // Unknown id: refresh the derived map once (a session opened after the
@@ -728,7 +728,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    */
   const handleHubCreate = async (
     req: Request,
-    observation?: RequestObservation,
+    observation: RequestObservation,
   ): Promise<Response> => {
     if (!attend) {
       return json({ error: "create requires the hub's attend mode (lucid hub --attend)" }, 403);
@@ -738,7 +738,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const name = typeof body?.name === "string" ? body.name : "";
     // Attach the identifiers the moment they exist, so even a refused create
     // is a queryable record - identifiers, never the prompt (D-005).
-    observation?.attach({
+    observation.attach({
       project,
       artifact: name,
       ...(typeof body?.harness === "string" ? { harness: body.harness } : {}),
@@ -1069,7 +1069,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     );
   };
 
-  const handle = async (req: Request, observation?: RequestObservation): Promise<Response> => {
+  const handle = async (req: Request, observation: RequestObservation): Promise<Response> => {
     const { pathname } = new URL(req.url);
 
     const sessionMatch = /^\/s\/([a-f0-9]{16})(\/.*)?$/.exec(pathname);
@@ -1201,15 +1201,17 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     return json({ error: "not found" }, 404);
   };
 
+  // The wide event is made HERE, at the one funnel every route passes
+  // through (D-004) - no route can forget to log. Built once, not per request.
+  const observed = observeRequests({ sink: log }, handle);
+
   const server = Bun.serve({
     port: requestedPort,
     hostname: "127.0.0.1",
     idleTimeout: 0,
     async fetch(req) {
       try {
-        // The wide event is made HERE, at the one funnel every route passes
-        // through (D-004) - no route can forget to log.
-        return await observeRequests({ sink: log }, handle)(req);
+        return await observed(req);
       } catch (err) {
         return json({ error: `daemon error: ${(err as Error).message}` }, 500);
       }

@@ -166,6 +166,32 @@ describe("observeRequests: the funnel wrapper the daemon's fetch uses (M1.2)", (
     expect(exit.error).toEqual({ type: "ValidationError", code: "VALIDATION_ERROR" });
   });
 
+  test("an UNTYPED throw still leaves an identity: error.name, code UNKNOWN, message dropped", async () => {
+    const { lines, sink } = capture();
+    const observed = observeRequests({ sink }, async () => {
+      throw new TypeError("cannot read SENTINEL_SECRET of undefined");
+    });
+    await expect(observed(req("/hub/sessions"))).rejects.toThrow();
+
+    const exit = lines.map((l) => JSON.parse(l)).find((r) => r.event === "request");
+    expect(exit.status).toBe(500);
+    expect(exit.error).toEqual({ type: "TypeError", code: "UNKNOWN" });
+    expect(lines.join("\n")).not.toContain("SENTINEL_SECRET");
+  });
+
+  test("attached identifiers are capped: a megabyte name cannot rotate real evidence away", async () => {
+    const { lines, sink } = capture();
+    const observed = observeRequests({ sink }, async (_req, observation) => {
+      observation.attach({ artifact: "x".repeat(100_000), project: "/proj" });
+      return new Response("ok");
+    });
+    await observed(req("/hub/create", "POST"));
+
+    const exit = lines.map((l) => JSON.parse(l)).find((r) => r.event === "request");
+    expect((exit.artifact as string).length).toBeLessThanOrEqual(256);
+    expect(exit.project).toBe("/proj");
+  });
+
   test("the handler can attach route context, and it rides the exit record", async () => {
     const { lines, sink } = capture();
     const observed = observeRequests({ sink }, async (_req, observation) => {

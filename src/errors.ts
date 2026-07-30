@@ -43,6 +43,15 @@ export class LogError extends Data.TaggedError("LogError")<{
 
 export type LucidError = ValidationError | NotFoundError | ArtifactError | ServerError | LogError;
 
+/** A typed error, recognised across a throw boundary without importing every
+ *  class: the stable `code` plus the Data.TaggedError `_tag` are the class
+ *  contract, and both survive Effect's error channel. */
+export const isLucidError = (err: unknown): err is LucidError =>
+  typeof err === "object" &&
+  err !== null &&
+  typeof (err as { code?: unknown }).code === "string" &&
+  typeof (err as { _tag?: unknown })._tag === "string";
+
 export interface ErrorJson {
   readonly error: {
     readonly code: string;
