@@ -134,6 +134,21 @@ describe("docs/EMBEDDED.md tracks the code it instructs against (plan 06)", () =
     expect(skill).toContain("docs/EMBEDDED.md");
     expect(skill).toContain("LUCID_VIEW=solo");
   });
+
+  test("the skill INSTRUCTS the export, it does not merely mention it (plan 07, M3.3)", () => {
+    // The capability shipped in plan 06 and was never once exercised, because
+    // the skill described the export as something an integration already does
+    // ("Your integration exports ...") rather than telling the reader to do
+    // it. A mention is not an instruction, and the token alone was satisfied
+    // by prose - so this asserts the shell line an integrator can copy.
+    // The fence is built rather than written literally - a backtick fence
+    // inside a regex literal ends the enclosing expression.
+    const fenced = /`{3}sh\n[^`]*export LUCID_VIEW=solo/;
+    expect(skill).toMatch(fenced);
+    // And the same shape in the doc it defers to, so the two cannot drift
+    // into instructing differently.
+    expect(embedded).toMatch(fenced);
+  });
 });
 
 /**
