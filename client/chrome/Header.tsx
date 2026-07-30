@@ -1,7 +1,7 @@
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
+import { approveBlockedReason } from "./store.ts";
 import { setArtifactTheme, setSidebarOpen, useShell } from "./shell.ts";
 import { useTheme } from "./theme.ts";
-import { Kbd } from "./ui/kbd.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
@@ -214,14 +214,12 @@ const ApproveControls = () => {
   // A message the server never took is unsent work too - approving over it
   // would strand it behind a stop the agent has already acted on.
   const undelivered = useSession((s) => s.outbox.length);
-  const hasDraft = pendingTarget !== null && composerNote.trim().length > 0;
-  const blocked = queueLen > 0 || hasDraft || undelivered > 0;
-  const reason =
-    undelivered > 0
-      ? `Retry or discard your ${undelivered} undelivered message${undelivered > 1 ? "s" : ""} first`
-      : queueLen > 0
-        ? `Send or remove your ${queueLen} queued annotation${queueLen > 1 ? "s" : ""} first`
-        : "Queue or discard your draft annotation first";
+  const reason = approveBlockedReason({
+    queued: queueLen,
+    hasDraft: pendingTarget !== null && composerNote.trim().length > 0,
+    undelivered,
+  });
+  const blocked = reason !== null;
 
   if (resolved) {
     return (
@@ -252,17 +250,27 @@ const ApproveControls = () => {
         <TooltipTrigger
           render={
             <span data-test="approve-wrap" className="inline-flex">
+              {/* aria-disabled, not `disabled`. A truly disabled button emits no
+                  pointer events, so clicking the primary action produced
+                  NOTHING - no movement, no reason, and the explanation only on
+                  hover. The queue bar and the outbox card each say what is
+                  unfinished; a DRAFT annotation has neither, so the click was
+                  the only surface that could say it, and it was silent.
+                  aria-disabled keeps the button focusable and clickable (a
+                  clickable span is not keyboard-reachable) while still
+                  announcing itself as unavailable; `approveReview` already
+                  refuses and says why, for this path and for ⌘⇧↵ alike. */}
               <button
                 type="button"
                 data-test="approve"
-                disabled={blocked}
+                aria-disabled={blocked}
                 onClick={() => void approveReview()}
-                className="flex cursor-pointer items-center gap-1.5 border border-sage-600 bg-sage-600 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-cream-50 hover:bg-sage-500 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex cursor-pointer items-center gap-1.5 border border-sage-600 bg-sage-600 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.05em] text-cream-50 hover:bg-sage-500 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-sage-600"
               >
+                {/* No keycaps. They punched a busy little box into the one
+                    solid control in the header, for a shortcut this button is
+                    not how you learn - the tooltip and the palette carry it. */}
                 Approve review
-                {/* Keycaps borrow the label's cream so they don't punch a dark
-                    hole in the sage fill. Kept compact - the header is tight. */}
-                <Kbd className="border-cream-50/30 bg-cream-50/10 text-cream-50">⌘⇧↵</Kbd>
               </button>
             </span>
           }

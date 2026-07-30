@@ -177,6 +177,13 @@ export const revisePrompt = (payload: WaitPayload, artifact: string): string | n
     `Review feedback arrived on ${artifact}. Apply it and save the file (the viewer live-reloads):`,
     ...lines,
     `Edit only ${artifact}.`,
+    // The turn is the ONLY party that can know whether this feedback produces
+    // an edit or an answer - whoever spawned it delivered the feedback without
+    // reading it. This prompt is the whole instruction a driven turn gets, so
+    // the skill's version of this line cannot reach it: without this the
+    // viewer can never say "Updating the artifact…" truthfully, and says only
+    // "Agent responding…" for every turn.
+    `First, declare which is coming: \`lucid intent ${artifact} revise\` if you are going to change the file, or \`lucid intent ${artifact} reply\` if you are only answering. Then do the work.`,
   ].join("\n");
 };
 
@@ -447,7 +454,8 @@ export const attendChild = async (
     await deliver(child, {
       t: "agent_ack",
       id: crypto.randomUUID(),
-      intent: "revise",
+      // No intent, same reason as the hub's ack: an order to revise is not an
+      // outcome, and the turn declares what it is actually doing.
       ...(covers !== undefined ? { covers } : {}),
       // The CHILD session's identity (D18): the launcher acts on its behalf.
       attendant: { harness: harnessName, sessionId, cwd: child.artifactDir },

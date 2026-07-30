@@ -203,6 +203,22 @@ Never fake the review loop, and never paste build instructions at the user.
      write -> the viewer live-reloads) and/or reply with
      `lucid wait <file> --reply "<what you changed>" --since <cursor>`. Persist the
      new `nextCursor` and loop.
+     - **Say which of the two is coming, as soon as you know:**
+       ```
+       lucid intent <file> revise     # the artifact is about to change
+       lucid intent <file> reply      # you are answering, not editing
+       ```
+       You are the only party that can know this. Nothing spawned your turn
+       with that information - the hub delivers feedback without reading it -
+       so until you declare it the viewer says only "Agent responding…". With
+       `revise` it shows "Updating the artifact…" and puts an
+       update-on-the-way marker on the document itself, which is what tells a
+       human watching the page that their edit landed and a new version is
+       coming. Declare it once per turn, before the work, not after.
+
+       A promise, not a fact: the window still closes only on real output. Do
+       not say `revise` and then only reply - the human watched a spinner that
+       said their document was changing.
      - **If you farm the revision out to parallel subagents** (read-only audits,
        a workflow), tell the viewer so the human sees *why* the wait is long.
        At fan-out start, and again each time a subagent reports, call:

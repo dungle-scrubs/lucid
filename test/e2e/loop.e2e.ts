@@ -593,6 +593,14 @@ test("approve refuses while anything is unsent, so nothing is stranded", async (
     "draft annotation first",
   );
 
+  // And CLICKING says why, without hovering. A disabled button emits no
+  // pointer events, so the wrapper takes the click - otherwise the primary
+  // action is silently dead, which is what it looked like from the outside.
+  // The queue and the outbox each have their own visible card saying what is
+  // unfinished; a draft has neither, so this is the only surface that can.
+  await on(page).approveWrap().click();
+  await expect(on(page).warning()).toContainText("draft annotation");
+
   // Queued still blocks, and says how many.
   await on(page).addToQueue().click();
   await expect(approve).toBeDisabled();
@@ -1125,6 +1133,32 @@ test("declared revise intent puts an update-on-the-way spinner on the surface", 
   await cli.run(["wait", cli.artifact, "--reply", "done", "--timeout", waitTimeoutSeconds(1)]);
   await expect(on(page).surfaceUpdating()).toHaveCount(0);
   await expect(on(page).agentWorking()).toHaveCount(0);
+});
+
+test("a typed message says it landed immediately, and never claims an artifact update (findings #18, #19)", async ({
+  page,
+}) => {
+  await openViewer(page);
+
+  // Type into the composer and send. The gap this covers is real: a headless
+  // turn takes 3-4s to ack (attend's quiet window plus a poll), and the
+  // composer used to show NOTHING for all of it - `awaitingAck` was set on the
+  // annotation path and not the message path.
+  await on(page).messageInput().fill("hey");
+  await on(page).sendMessage().click();
+
+  // Immediately - not after the ack. One-shot, because an auto-retrying
+  // assertion would wait out the very window this is about.
+  await expect(on(page).awaitingAck()).toBeVisible({ timeout: 3000 });
+  await expect(on(page).awaitingAck()).toContainText("Delivered");
+
+  // NOT asserted here: that no spawner claims an update. This viewer has no
+  // hub and no agent, so nothing ever writes an ack - a `surfaceUpdating`
+  // count of 0 would be 0 whatever the spawners do, and would pass with the
+  // speculative intent restored. That behaviour is pinned where it is real:
+  // `test/attend.test.ts` (a live daemon spawning a stub, asserting the ack
+  // carries no intent) and `test/launch.test.ts` (the prompt tells the turn
+  // to declare it).
 });
 
 test("a dropped live connection shows a self-clearing indicator, not a warning pile", async ({

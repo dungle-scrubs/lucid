@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
 import type { Dirent } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -336,4 +338,77 @@ export const killSurvivors = async (
     }
   }
   return survivors;
+};
+
+/**
+ * Where the exclusive-run claim lives.
+ *
+ * NOT under `test-results/`: Playwright wipes its output directory at startup,
+ * so a lock there is deleted before `globalSetup` can read it - the guard
+ * silently never fires, which is how the first version of this passed its unit
+ * tests and did nothing at all in the suite. tmpdir is also the right SCOPE:
+ * the hazard is any run on this machine, not any run in this checkout.
+ */
+export const RUN_LOCK = join(tmpdir(), "lucid-e2e-run.lock");
+
+/**
+ * Claim the machine for one e2e run.
+ *
+ * Not tidiness - correctness. `killSurvivors` below SIGKILLs every process
+ * matching the repo's CLI, so a second Playwright run (even a single filtered
+ * spec) reaps the servers the first run is mid-test on. The victim then fails
+ * on a timeout indistinguishable from a flake, and the flake gate turns a
+ * green suite red while naming an innocent test. That happened twice, to two
+ * different tests, before anyone looked at the cause.
+ *
+ * A stale lock is TAKEN OVER: a crashed run must not wedge the suite shut,
+ * which would be a worse failure than the one being prevented.
+ */
+export const claimExclusiveRun = (
+  lockPath: string = RUN_LOCK,
+): { readonly ok: true } | { readonly ok: false; readonly reason: string } => {
+  try {
+    const held = JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: unknown };
+    if (typeof held.pid === "number" && held.pid !== process.pid && alive(held.pid)) {
+      return {
+        ok: false,
+        reason:
+          `another e2e run is live (pid ${held.pid}). Wait for it: this suite's teardown ` +
+          `kills every lucid process on the machine, so two runs corrupt each other - ` +
+          `the victim fails on a timeout that looks exactly like a flake.`,
+      };
+    }
+  } catch {
+    // No lock, or an unreadable one: either way this run may claim it.
+  }
+  mkdirSync(dirname(lockPath), { recursive: true });
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, at: Date.now() }));
+  return { ok: true };
+};
+
+/** Drop the claim. Safe to call when it was never held. */
+export const releaseExclusiveRun = (lockPath: string = RUN_LOCK): void => {
+  try {
+    const held = JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: unknown };
+    if (held.pid !== process.pid) return; // not ours to release
+    rmSync(lockPath, { force: true });
+  } catch {
+    // Nothing to release.
+  }
+};
+
+/**
+ * Is that pid still around? Signal 0 tests existence without touching it.
+ *
+ * EPERM means it EXISTS and belongs to someone else - treating that as dead
+ * would take over a live run's lock, which is the whole failure this guard
+ * prevents. Only ESRCH ("no such process") is dead.
+ */
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
 };

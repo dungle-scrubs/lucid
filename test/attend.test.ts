@@ -557,7 +557,13 @@ describe("hub attend mode", () => {
     expect(ack).toBeDefined();
     if (ack?.t !== "agent_ack") throw new Error("unreachable");
     expect(ack.covers).toBeGreaterThanOrEqual(annotation.seq);
-    expect(ack.intent).toBe("revise");
+    // And it declares NO intent. This ack is written BEFORE the turn has read
+    // a word, so it cannot know whether the artifact will change - claiming
+    // "revise" made the viewer announce "Updating the artifact…" for a "hey"
+    // that changed nothing. Intent is the agent's to declare (`lucid intent`)
+    // once it has read the feedback and decided; the delivery claim is not a
+    // promise about output.
+    expect(ack.intent).toBeUndefined();
     expect(ack.attendant?.sessionId).toBe("sess-1");
   }, 20_000);
 

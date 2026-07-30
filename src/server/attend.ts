@@ -542,7 +542,15 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     await deliver(paths, {
       t: "agent_ack",
       id: crypto.randomUUID(),
-      intent: "revise",
+      // NO intent. Not because the hub is blind - it is the party ORDERING a
+      // revision, in this function, and it refuses to spawn at all when the
+      // batch gives `revisePrompt` nothing to act on. It is because an order
+      // is not an outcome: the turn is what decides whether an edit actually
+      // follows, and "hey" produces a prompt the agent correctly declines. So
+      // the ack states the delivery it made and nothing about the output;
+      // `revisePrompt` tells the turn to declare that itself (`lucid intent`),
+      // and until it does the viewer says "Agent responding…", which is true
+      // of every running turn.
       covers: target,
       // The artifact's own session (D18): the hub acts on its behalf, and the
       // events the turn writes must not be attributed to the hub.

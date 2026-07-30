@@ -207,3 +207,31 @@ describe("CONTEXT.md keeps one word to one meaning (plan 06)", () => {
     expect(body).toContain("**solo**");
   });
 });
+
+describe("the turn's declared intent is instructed, not assumed (finding #18)", () => {
+  const skill = readFileSync(join(REPO, "skills/lucid/SKILL.md"), "utf8");
+  const attendSrc = readFileSync(join(REPO, "src/server/attend.ts"), "utf8");
+  const launcherSrc = readFileSync(join(REPO, "src/launch/launcher.ts"), "utf8");
+
+  test("no spawner claims an intent before the turn has read anything", () => {
+    // The hub and the launcher both write a delivery ack before the turn
+    // starts. A delivery claim is not a promise about output: claiming
+    // "revise" there made the viewer announce an artifact update for feedback
+    // that changed nothing.
+    expect(attendSrc).not.toContain('intent: "revise"');
+    expect(launcherSrc).not.toContain('intent: "revise"');
+  });
+
+  test("the skill tells the agent to declare it, since nothing else can", () => {
+    // Dropping the speculative claim without this would trade a lie for a
+    // missing signal - `lucid intent` existed and no instruction used it.
+    // The literal command, not the word "revise" - which appears in prose on
+    // main and made this vacuous. And the prompt too, since that is the only
+    // text a hub-driven turn ever reads.
+    expect(skill).toContain("lucid intent <file> revise");
+    const launcher = readFileSync(join(REPO, "src/launch/launcher.ts"), "utf8");
+    // A regex, not a string: `${artifact}` inside a plain string reads as a
+    // botched template literal and the linter says so, correctly.
+    expect(launcher).toMatch(/lucid intent \$\{artifact\} revise/);
+  });
+});
