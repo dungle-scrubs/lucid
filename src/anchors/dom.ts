@@ -170,6 +170,17 @@ export interface ResolveOptions {
   readonly trace?: (message: () => string) => void;
 }
 
+/**
+ * A fingerprint with its text preview removed: `p#a1b2·"Q3 layoffs: cut 40%…"`
+ * becomes `p#a1b2`. The preview is REVIEW CONTENT (the element's own text),
+ * and narration lands in an uncapped `server.out.log` at poll rate - the same
+ * rule that keeps prompts and notes out of the request records applies to a
+ * trace on disk (D-005). The hash still identifies the fingerprint uniquely,
+ * which is what a human diagnosing a mismatch actually compares.
+ */
+const redactFingerprint = (fingerprint: string | undefined): string =>
+  fingerprint === undefined ? "(none)" : fingerprint.replace(/·".*$/s, "");
+
 export const resolveElementMatch = (
   anchor: ElementAnchor,
   root: DomRootLike,
@@ -204,12 +215,12 @@ export const resolveElementMatch = (
   // status cells sharing a column position across table rows) and must fall
   // through to the positional domPath, same as the lucidId layer above.
   if (byFingerprint.length === 1 && byFingerprint[0]) {
-    trace(() => `fingerprint "${anchor.fingerprint}" -> 1 match, exact`);
+    trace(() => `fingerprint ${redactFingerprint(anchor.fingerprint)} -> 1 match, exact`);
     return { el: byFingerprint[0], match: "exact" };
   }
   trace(
     () =>
-      `fingerprint "${anchor.fingerprint}" -> ${byFingerprint.length} matches over ${all.length} elements, ` +
+      `fingerprint ${redactFingerprint(anchor.fingerprint)} -> ${byFingerprint.length} matches over ${all.length} elements, ` +
       `${byFingerprint.length === 0 ? "no match" : "ambiguous"}, falling through to domPath`,
   );
 

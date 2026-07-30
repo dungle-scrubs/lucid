@@ -646,14 +646,19 @@ describe("the verbose flag governs internal narration ONLY (M3.1)", () => {
       if (prev === undefined) delete process.env.LUCID_VERBOSE;
       else process.env.LUCID_VERBOSE = prev;
     }
-    // The narration goes to its own sink (stderr), never onto the record
-    // stream - one line per request stays one line per request.
+    // One line per request stays one line per request: narration never
+    // multiplies the records, and the boundary pair is untouched by the flag.
     const exits = lines
       .filter((l) => l.startsWith("{"))
       .map((l) => JSON.parse(l) as Record<string, unknown>)
       .filter((r) => r.event === "request" && r.path === "/hub/sessions");
     expect(exits).toHaveLength(1);
-    expect(lines.filter((l) => l.startsWith("[anchors]") || l.startsWith("[attend]"))).toEqual([]);
+    // Every record is still parseable JSON - narration shares the hub's sink
+    // (it must, or a detached hub discards it), so what matters is that a
+    // reader filtering for records is not handed a half-line.
+    for (const line of lines.filter((l) => l.startsWith("{"))) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
   });
 });
 

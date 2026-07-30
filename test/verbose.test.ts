@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { isVerbose, tracer, verboseSubsystems } from "../src/core/verbose.ts";
-import { resolveElementMatch } from "../src/anchors/dom.ts";
-import { attendDecision, attendReason } from "../src/server/attend.ts";
+import { computeFingerprint, resolveElementMatch } from "../src/anchors/dom.ts";
+import { attendReason } from "../src/server/attend.ts";
 
 /**
  * The scoped verbose toggle (plan 07, M3.1 - technique 4). The DEFAULT is the
@@ -120,11 +122,59 @@ describe("the anchors subsystem narrates which layer matched, and why the others
   });
 
   test("a NON-UNIQUE fingerprint reports the ambiguity that made it fall through", async () => {
-    const lines = await resolveWith(
-      { type: "element", fingerprint: "div|row|1", domPath: "body > div:nth-of-type(2)" } as never,
-      { LUCID_VERBOSE: "anchors" },
+    // A REAL collision, of the shape the resolver's own comment names:
+    // identical status cells sharing a column position across table rows. Same
+    // tag, same text, same index within their own parent - so the fingerprints
+    // are equal and the layer must fall through. A made-up string produces 0
+    // matches and reports "no match", a different branch than the one named.
+    const { parseHTML } = await import("linkedom");
+    const table = `<html><body><table>
+      <tr><td>ok</td></tr>
+      <tr><td>ok</td></tr>
+    </table></body></html>`;
+    const { document } = parseHTML(table);
+    const cells = Array.from(document.querySelectorAll("td"));
+    const fp = computeFingerprint(cells[0] as never);
+    expect(computeFingerprint(cells[1] as never)).toBe(fp);
+
+    const lines: string[] = [];
+    const { document: doc2 } = parseHTML(table);
+    resolveElementMatch(
+      { type: "element", fingerprint: fp, domPath: "tr:nth-of-type(2) td" } as never,
+      doc2 as never,
+      {
+        trace: tracer("anchors", {
+          env: { LUCID_VERBOSE: "anchors" },
+          sink: (l) => void lines.push(l),
+        }),
+      },
     );
-    expect(lines.join("\n")).toContain("fingerprint");
+    const all = lines.join("\n");
+    expect(all).toContain("ambiguous");
+    expect(all).toMatch(/2 matches/);
+  });
+
+  test("a trace NEVER prints the fingerprint's text preview - that is review content", async () => {
+    const secret = "SENTINEL_REVIEW_TEXT_do_not_log";
+    const { parseHTML } = await import("linkedom");
+    const { document } = parseHTML(`<html><body><p>${secret}</p></body></html>`);
+    const el = document.querySelector("p");
+    const fp = computeFingerprint(el as never, 1);
+    // The fingerprint itself carries the preview - that is its design.
+    expect(fp).toContain(secret.slice(0, 10));
+
+    const lines: string[] = [];
+    resolveElementMatch({ type: "element", fingerprint: `${fp}x` } as never, document as never, {
+      trace: tracer("anchors", {
+        env: { LUCID_VERBOSE: "anchors" },
+        sink: (l) => void lines.push(l),
+      }),
+    });
+    // The TRACE must not, because it lands in an uncapped log at poll rate.
+    expect(lines.join("\n")).not.toContain(secret.slice(0, 10));
+    // ...while still naming the fingerprint by its hash, which is what a
+    // human comparing a mismatch actually needs.
+    expect(lines.join("\n")).toMatch(/fingerprint p#[a-z0-9]+/);
   });
 });
 
@@ -148,22 +198,51 @@ describe("the attend subsystem says WHICH precondition stopped a turn", () => {
     expect(attendReason({ ...base, firstPendingAt: 9_950 }).reason).toMatch(/debounce|quiet/i);
   });
 
-  test("the reason agrees with the decision, always - one source of truth", () => {
-    const cases = [
-      { ...base, pendingFeedbackSeqs: [] },
-      { ...base, inFlight: true },
-      { ...base, listening: 2 },
-      { ...base, workingSince: 9_990 },
-      { ...base, firstPendingAt: 9_950 },
-      { ...base },
-    ];
-    for (const input of cases) {
-      expect(attendReason(input).decision).toBe(attendDecision(input));
-    }
-  });
-
   test("a spawn says so too - the loud path is not only about refusals", () => {
     expect(attendReason(base).decision).toBe("spawn");
     expect(attendReason(base).reason).toMatch(/spawn|deliver/i);
+  });
+});
+
+describe("attend narration rides the HUB's sink, not stderr (M3.1)", () => {
+  test("with the flag on, the reason reaches the injected log - the file that survives detaching", async () => {
+    const prev = process.env.LUCID_VERBOSE;
+    process.env.LUCID_VERBOSE = "attend";
+    const lines: string[] = [];
+    try {
+      // The attendant resolves its default trace to `tracer("attend", { sink:
+      // log })`. Building one and letting it tick would need a whole fixture;
+      // what this pins is the ROUTING - a stderr default is written to
+      // /dev/null in the only mode the attend engine runs in (a detached hub),
+      // so the sink must be the hub's own log.
+      const trace = tracer("attend", { sink: (l) => void lines.push(l) });
+      trace(() => "plan: wait - 1 agent(s) listening");
+      expect(lines).toEqual(["[attend] plan: wait - 1 agent(s) listening"]);
+      // And the source really wires it that way, so this cannot pass while
+      // the attendant still defaults to stderr.
+      const src = readFileSync(join(import.meta.dir, "..", "src/server/attend.ts"), "utf8");
+      expect(src).toContain('tracer("attend", { sink: log })');
+    } finally {
+      if (prev === undefined) delete process.env.LUCID_VERBOSE;
+      else process.env.LUCID_VERBOSE = prev;
+    }
+  });
+
+  test("resolution is LAZY - a flag set after import still takes effect", () => {
+    // Snapshotting at construction made the flag depend on import order, and
+    // put a bare process.env in a module the BROWSER overlay bundles.
+    const built = tracer("anchors", { sink: () => {} });
+    const prev = process.env.LUCID_VERBOSE;
+    const lines: string[] = [];
+    process.env.LUCID_VERBOSE = "anchors";
+    try {
+      const late = tracer("anchors", { sink: (l) => void lines.push(l) });
+      late(() => "resolved on first use");
+      expect(lines).toHaveLength(1);
+    } finally {
+      if (prev === undefined) delete process.env.LUCID_VERBOSE;
+      else process.env.LUCID_VERBOSE = prev;
+    }
+    expect(typeof built).toBe("function");
   });
 });

@@ -46,6 +46,31 @@ describe("paths.ts is the source of truth the docs must track", () => {
   });
 });
 
+describe("the diagnosis surface CONTRACT.md documents is the one that exists (plan 07)", () => {
+  const verboseSrc = readFileSync(join(REPO, "src/core/verbose.ts"), "utf8");
+  const observeSrc = readFileSync(join(REPO, "src/server/observe.ts"), "utf8");
+
+  test("every subsystem the doc names is one the code accepts, and vice versa", () => {
+    // A doc naming a subsystem the parser drops sends the reader to set a
+    // flag that silently does nothing - the exact failure LUCID_VIEW had.
+    const declared = /VERBOSE_SUBSYSTEMS = \[([^\]]*)\]/.exec(verboseSrc)?.[1] ?? "";
+    const names = [...declared.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) expect(contract).toContain(`\`${name}\``);
+    expect(contract).toContain("LUCID_VERBOSE");
+  });
+
+  test("the log path the doc tells you to grep is the one the code writes", () => {
+    expect(contract).toContain("~/.lucid/hub.log");
+    expect(observeSrc).toContain('resolve(homedir(), ".lucid", "hub.log")');
+  });
+
+  test("the doc states the rule that keeps the flag from cancelling the records", () => {
+    // Read as a blanket silence rule, technique 4 cancels technique 2.
+    expect(contract).toMatch(/never gated|not gated|always on/i);
+  });
+});
+
 describe("docs/CONTRACT.md tracks the run/ split (plan 02)", () => {
   // Each machine-local sidecar CONTRACT.md mentions must appear under
   // `.lucid/<name>/run/`, never directly under `.lucid/<name>/`.

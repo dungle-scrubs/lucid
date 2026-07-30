@@ -40,10 +40,25 @@ export const verboseSubsystems = (env: VerboseEnv): VerboseSubsystem[] => {
   return VERBOSE_SUBSYSTEMS.filter((s) => named.includes(s));
 };
 
+/** The ambient environment, or nothing at all. This module is imported by
+ *  `src/anchors/dom.ts`, which is bundled into the BROWSER overlay - a bare
+ *  `process.env` there is a ReferenceError at module load, and the overlay
+ *  never registers. The guard is why the flag is server-side only, which is
+ *  correct: there is no environment to read in a page. */
+const ambientEnv = (): VerboseEnv =>
+  typeof process === "undefined" ? {} : (process.env as VerboseEnv);
+
+/** The default narration sink. NOT stdout: `lucid`'s stdout is one JSON
+ *  document, so narration there would corrupt it. Absent in a browser, where
+ *  the flag cannot be set anyway. */
+const stderrSink = (line: string): void => {
+  if (typeof process !== "undefined") process.stderr.write(`${line}\n`);
+};
+
 /** Is this ONE subsystem loud? Scoped, so turning on anchors cannot drown the
  *  reader in attend. */
-export const isVerbose = (subsystem: VerboseSubsystem, env: VerboseEnv = process.env): boolean =>
-  verboseSubsystems(env).includes(subsystem);
+export const isVerbose = (subsystem: VerboseSubsystem, env?: VerboseEnv): boolean =>
+  verboseSubsystems(env ?? ambientEnv()).includes(subsystem);
 
 /** A narration line, produced only if anyone is listening. */
 export type TraceMessage = () => string;
@@ -66,8 +81,15 @@ export const tracer = (
   subsystem: VerboseSubsystem,
   options: TracerOptions = {},
 ): ((message: TraceMessage) => void) => {
-  const env = options.env ?? process.env;
-  if (!isVerbose(subsystem, env)) return () => {};
-  const sink = options.sink ?? ((line: string) => process.stderr.write(`${line}\n`));
-  return (message: TraceMessage): void => sink(`[${subsystem}] ${message()}`);
+  // Resolved on FIRST USE, not at construction. Two reasons, both real: this
+  // is constructed at module scope in files that also load in the browser
+  // (see `ambientEnv`), and a construction-time snapshot made the flag depend
+  // on import order rather than on the process's environment.
+  let enabled: boolean | undefined;
+  return (message: TraceMessage): void => {
+    enabled ??= isVerbose(subsystem, options.env);
+    if (!enabled) return;
+    const sink = options.sink ?? stderrSink;
+    sink(`[${subsystem}] ${message()}`);
+  };
 };

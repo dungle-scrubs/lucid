@@ -217,14 +217,16 @@ const usableCwd = async (recorded: string | undefined, fallback: string): Promis
  * From there it advances on two things: a delivery claim somebody else
  * recorded, and a turn of its own that exited clean.
  */
-/** Built once from the environment: a no-op unless `LUCID_VERBOSE` names
- *  `attend`. This narration is INTERNAL - it never gates, and is never gated
- *  by, the hub's always-on boundary records. */
-const attendTrace = tracer("attend");
-
 export const createAttendant = (options: AttendantOptions): Attendant => {
   const { paths, log } = options;
-  const trace = options.trace ?? attendTrace;
+  // Narration rides the hub's OWN sink, not stderr. The attend engine only
+  // ever runs inside the hub, and `lucid hub` is normally started detached
+  // with stdio "ignore" - so a stderr trace is written to /dev/null in the
+  // only mode this subsystem runs in. The sink is the rotating file that
+  // exists precisely because the hub's evidence must survive detaching
+  // (D-002). This narration is INTERNAL: it never gates, and is never gated
+  // by, the always-on boundary records.
+  const trace = options.trace ?? tracer("attend", { sink: log });
   const debounceMs = options.debounceMs ?? DEFAULT_ATTEND_DEBOUNCE_MS;
   const workingGraceMs = options.workingGraceMs ?? DEFAULT_WORKING_GRACE_MS;
 
