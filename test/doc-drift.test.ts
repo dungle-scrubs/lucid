@@ -225,7 +225,13 @@ describe("the turn's declared intent is instructed, not assumed (finding #18)", 
   test("the skill tells the agent to declare it, since nothing else can", () => {
     // Dropping the speculative claim without this would trade a lie for a
     // missing signal - `lucid intent` existed and no instruction used it.
-    expect(skill).toContain("lucid intent");
-    expect(skill).toMatch(/revise/);
+    // The literal command, not the word "revise" - which appears in prose on
+    // main and made this vacuous. And the prompt too, since that is the only
+    // text a hub-driven turn ever reads.
+    expect(skill).toContain("lucid intent <file> revise");
+    const launcher = readFileSync(join(REPO, "src/launch/launcher.ts"), "utf8");
+    // A regex, not a string: `${artifact}` inside a plain string reads as a
+    // botched template literal and the linter says so, correctly.
+    expect(launcher).toMatch(/lucid intent \$\{artifact\} revise/);
   });
 });

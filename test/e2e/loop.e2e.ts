@@ -1144,13 +1144,13 @@ test("a typed message says it landed immediately, and never claims an artifact u
   await expect(on(page).awaitingAck()).toBeVisible({ timeout: 3000 });
   await expect(on(page).awaitingAck()).toContainText("Delivered");
 
-  // And nothing claims the document is changing: no spawner may promise an
-  // edit before the turn has read a word. "hey" changes nothing.
-  expect(await on(page).surfaceUpdating().count()).toBe(0);
-  const working = await on(page).agentWorking().count();
-  if (working > 0) {
-    await expect(on(page).agentWorking()).not.toContainText("Updating the artifact");
-  }
+  // NOT asserted here: that no spawner claims an update. This viewer has no
+  // hub and no agent, so nothing ever writes an ack - a `surfaceUpdating`
+  // count of 0 would be 0 whatever the spawners do, and would pass with the
+  // speculative intent restored. That behaviour is pinned where it is real:
+  // `test/attend.test.ts` (a live daemon spawning a stub, asserting the ack
+  // carries no intent) and `test/launch.test.ts` (the prompt tells the turn
+  // to declare it).
 });
 
 test("a dropped live connection shows a self-clearing indicator, not a warning pile", async ({

@@ -25,6 +25,26 @@ const elementTarget = (snippet: string) => ({
   snippet,
 });
 
+describe("revisePrompt tells the turn to declare its intent (finding #18)", () => {
+  const payload = {
+    status: "feedback",
+    annotations: [],
+    messages: [{ role: "human", text: "tighten the second paragraph" }],
+    nextCursor: "evt_00001",
+  } as never;
+
+  test("the prompt names `lucid intent`, because it is the ONLY text a driven turn reads", () => {
+    // The skill's instruction cannot reach a hub- or launcher-driven turn: its
+    // whole instruction is this prompt. Without the line here, dropping the
+    // spawners' speculative "revise" leaves the update-on-the-way marker dead
+    // in production - and no test could notice, because every test that
+    // asserts the marker injects the intent itself.
+    const prompt = revisePrompt(payload, "/tmp/plan.html");
+    expect(prompt).toContain("lucid intent");
+    expect(prompt).toContain("/tmp/plan.html");
+  });
+});
+
 describe("revisePrompt locations", () => {
   const base: WaitPayload = {
     session: "/tmp/plan.html",
