@@ -9,7 +9,7 @@ import {
   legacyAnswerFields,
 } from "./question-draft.ts";
 import type { Notify, SessionStorage, SessionStore } from "./store.ts";
-import { hasComposerDraft, toWireImages, uuid } from "./store.ts";
+import { approveBlockedReason, hasComposerDraft, toWireImages, uuid } from "./store.ts";
 import type { Surface } from "./surface.ts";
 import type { Transport, UploadedAsset } from "./transport.ts";
 import type {
@@ -516,13 +516,17 @@ export const createActions = (ctx: ActionsCtx) => {
     // re-reads behind.
     const s = get();
     if (s.reviewResolved) return;
-    const hasDraft = s.pendingTarget !== null && s.composerNote.trim().length > 0;
     // The outbox counts: a message the server never took is unsent feedback in
-    // exactly the sense this guard exists for.
-    if (s.queue.length > 0 || hasDraft || s.outbox.length > 0) {
-      warn(
-        "Send or discard your unsent feedback before approving - the agent stops reading once you do.",
-      );
+    // exactly the sense this guard exists for. The reason is the SAME sentence
+    // the button's tooltip shows - one definition, so a click cannot say less
+    // than a hover.
+    const reason = approveBlockedReason({
+      queued: s.queue.length,
+      hasDraft: s.pendingTarget !== null && s.composerNote.trim().length > 0,
+      undelivered: s.outbox.length,
+    });
+    if (reason !== null) {
+      warn(`${reason} - the agent stops reading once you approve.`);
       return;
     }
     try {

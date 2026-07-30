@@ -36,6 +36,14 @@ export type OverlayMessage =
        *  The CHROME owns what they mean: meta collects into one draft, shift
        *  pins onto the open question's answer. The overlay only reports. */
       readonly modifiers?: { readonly meta: boolean; readonly shift: boolean };
+      /** The marked decision this pick sits inside, when it sits inside one
+       *  (additive). Resolved HERE because it needs the live DOM: the chrome
+       *  cannot walk the artifact's ancestors across an opaque origin. Present
+       *  for a pick on the marked element itself and for anything within it,
+       *  so the composer can offer Agree / Decline either way - and so
+       *  choosing one can answer the DECISION rather than the child that was
+       *  clicked. */
+      readonly decision?: Anchor;
     }
   | {
       readonly source: "lucid-overlay";

@@ -1,4 +1,5 @@
 import type { Anchor, ElementAnchor, RangeAnchor } from "../../src/anchors/anchor.ts";
+import { decisionAncestor } from "./decision.ts";
 import {
   captureElementAnchor,
   type DomElementLike,
@@ -87,6 +88,26 @@ export const captureRangeAnchor = (): RangeAnchor | undefined => {
 /** Capture an element anchor from a real DOM element. */
 export const captureElement = (el: Element): ElementAnchor =>
   captureElementAnchor(el as unknown as DomElementLike);
+
+/**
+ * The marked decision a picked element belongs to, as an anchor - the element
+ * itself when it is marked, else its nearest marked ancestor. Undefined when
+ * the pick is not inside one.
+ */
+export const captureDecision = (el: Element | null): ElementAnchor | undefined => {
+  const found = decisionAncestor(el);
+  return found ? captureElement(found) : undefined;
+};
+
+/** The decision a text selection sits inside: walked from the range's own
+ *  container, so selecting a phrase inside a recommendation still finds it. */
+export const captureSelectionDecision = (): ElementAnchor | undefined => {
+  const range = window.getSelection()?.getRangeAt(0);
+  if (!range) return undefined;
+  const node = range.commonAncestorContainer;
+  const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  return captureDecision(el);
+};
 
 /** Resolve an element anchor to a live element in the current document. */
 export const resolveElementInDocument = (anchor: ElementAnchor): Element | null =>

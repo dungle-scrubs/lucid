@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { deliveredWaiting, type AwaitPresence } from "../client/chrome/store.ts";
+import {
+  approveBlockedReason,
+  deliveredWaiting,
+  type AwaitPresence,
+} from "../client/chrome/store.ts";
 
 /**
  * The line shown between a feedback send and the agent's first ack.
@@ -109,5 +113,36 @@ describe("every send that lands opens the window, not just annotations", () => {
     const catchBlock = /\} catch \(e\) \{[\s\S]*?\n {8}\}/.exec(drain)?.[0] ?? "";
     expect(catchBlock, "could not find the drain's catch").not.toBe("");
     expect(catchBlock).not.toContain("awaitingAck");
+  });
+});
+
+/**
+ * Why Approve is refused (user report: the button "seems to not do anything").
+ *
+ * One function, because the tooltip and the click's warning are the same
+ * sentence and had two implementations - the header computed a specific reason
+ * while the action warned generically, so the click could not tell you the
+ * thing the hover already knew.
+ */
+describe("approveBlockedReason names the thing that is unfinished", () => {
+  const none = { queued: 0, hasDraft: false, undelivered: 0 };
+
+  test("nothing unfinished, no reason", () => {
+    expect(approveBlockedReason(none)).toBeNull();
+  });
+
+  test("an undelivered message wins - it is the one that can be lost", () => {
+    expect(approveBlockedReason({ ...none, undelivered: 2, queued: 1, hasDraft: true })).toContain(
+      "2 undelivered messages",
+    );
+  });
+
+  test("queued annotations, counted", () => {
+    expect(approveBlockedReason({ ...none, queued: 1 })).toContain("1 queued annotation");
+    expect(approveBlockedReason({ ...none, queued: 3 })).toContain("3 queued annotations");
+  });
+
+  test("a draft says so - the case with no card of its own anywhere else", () => {
+    expect(approveBlockedReason({ ...none, hasDraft: true })).toContain("draft annotation");
   });
 });

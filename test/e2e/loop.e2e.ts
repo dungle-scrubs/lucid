@@ -593,6 +593,14 @@ test("approve refuses while anything is unsent, so nothing is stranded", async (
     "draft annotation first",
   );
 
+  // And CLICKING says why, without hovering. A disabled button emits no
+  // pointer events, so the wrapper takes the click - otherwise the primary
+  // action is silently dead, which is what it looked like from the outside.
+  // The queue and the outbox each have their own visible card saying what is
+  // unfinished; a draft has neither, so this is the only surface that can.
+  await on(page).approveWrap().click();
+  await expect(on(page).warning()).toContainText("draft annotation");
+
   // Queued still blocks, and says how many.
   await on(page).addToQueue().click();
   await expect(approve).toBeDisabled();

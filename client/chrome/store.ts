@@ -588,6 +588,38 @@ export const deliveredWaiting = (p: AwaitPresence): { text: string; transient: b
   return { text: "Delivered — nothing is watching yet", transient: false };
 };
 
+/**
+ * Why Approve is refused, or null when it is not.
+ *
+ * ONE definition, because this sentence appears twice - the button's tooltip
+ * and the warning a click produces - and it had two implementations: the
+ * header computed a specific reason while the action warned generically, so
+ * clicking could not tell you what hovering already knew. The user's report
+ * was that the button "seems to not do anything".
+ *
+ * Ordered by what is most easily lost: an undelivered message the server never
+ * took, then queued annotations, then a draft. A draft is last but matters
+ * most here - the queue bar and the outbox card each say what is unfinished on
+ * their own, and a draft has no card anywhere, so this is the only surface
+ * that can speak for it.
+ */
+export const approveBlockedReason = (work: {
+  readonly queued: number;
+  readonly hasDraft: boolean;
+  readonly undelivered: number;
+}): string | null => {
+  if (work.undelivered > 0) {
+    const s = work.undelivered > 1 ? "s" : "";
+    return `Retry or discard your ${work.undelivered} undelivered message${s} first`;
+  }
+  if (work.queued > 0) {
+    const s = work.queued > 1 ? "s" : "";
+    return `Send or remove your ${work.queued} queued annotation${s} first`;
+  }
+  if (work.hasDraft) return "Queue or discard your draft annotation first";
+  return null;
+};
+
 export const buildTimeline = (
   annotations: readonly PayloadAnnotationLike[],
   messages: readonly ConversationMessage[],

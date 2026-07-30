@@ -2,7 +2,9 @@ import { css, html, LitElement, type PropertyValues } from "lit";
 
 import {
   type Anchor,
+  captureDecision,
   captureElement,
+  captureSelectionDecision,
   captureRangeAnchor,
   resolveElementInDocument,
   resolveRangeInDocument,
@@ -711,10 +713,12 @@ export class LucidOverlay extends LitElement {
     e.preventDefault();
     e.stopPropagation();
     const anchor = captureElement(target);
+    const decision = captureDecision(target);
     post({
       source: "lucid-overlay",
       type: "target-picked",
       anchor,
+      ...(decision ? { decision } : {}),
       // ctrl counts as meta, the chrome's own ⌘/ctrl equivalence: Meta is the
       // Super key on Windows/Linux, so metaKey alone would leave those viewers
       // with no collect gesture. No collision on macOS - ctrl-click fires
@@ -754,11 +758,13 @@ export class LucidOverlay extends LitElement {
       return;
     }
     const anchor = captureRangeAnchor();
+    const decision = captureSelectionDecision();
     if (anchor)
       post({
         source: "lucid-overlay",
         type: "target-picked",
         anchor,
+        ...(decision ? { decision } : {}),
         // ctrl-as-meta for the same reason as onClick above.
         modifiers: { meta: e.metaKey || e.ctrlKey, shift: e.shiftKey },
       });
