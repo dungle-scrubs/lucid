@@ -11,11 +11,21 @@ import type { LucidError } from "../errors.ts";
  * never prompts, notes or artifact bodies (D-005).
  */
 
+/** One line in, no return - the shape every sink, mirror and log share. */
+export type LineSink = (line: string) => void;
+
 export interface ObserveOptions {
   /** Where emitted lines go. Injected by tests; the hub passes its sink. */
-  readonly sink: (line: string) => void;
+  readonly sink: LineSink;
   /** Epoch-ms clock, injectable so duration is deterministic under test. */
   readonly clock?: () => number;
+}
+
+/** What a request is - the three identifiers no record makes sense without. */
+export interface RequestIdentity {
+  readonly method: string;
+  readonly path: string;
+  readonly id: string;
 }
 
 /**
@@ -35,32 +45,25 @@ export interface RequestObservation {
   /** Merge named identifiers onto the record - attach, don't log. */
   attach(context: RequestContext): void;
   /** Stamp a typed error's identity onto the record: `error.type` is the
-   *  tag, `error.code` the stable code - technique 3 feeding the event. */
+   *  tag, `error.code` the stable code - technique 3 feeding the event.
+   *  Never the message or detail, which may carry the review's content. */
   fail(error: LucidError): void;
   /** Emit the exit record. Idempotent by contract: one record per request. */
   end(status: number): void;
 }
 
 export const startRequest = (
-  method: string,
-  path: string,
-  id: string,
+  request: RequestIdentity,
   options: ObserveOptions,
 ): RequestObservation => {
+  const { method, path, id } = request;
   const clock = options.clock ?? Date.now;
   const startedAt = clock();
-  const context: {
-    artifact?: string;
-    project?: string;
-    session?: string;
-    view?: string;
-    harness?: string;
-  } = {};
+  const context: { -readonly [K in keyof RequestContext]: RequestContext[K] } = {};
   let failure: { readonly type: string; readonly code: string } | undefined;
   let ended = false;
   return {
     attach(next: RequestContext): void {
-      // Field by field, never a spread: an unknown key has nowhere to land.
       if (next.artifact !== undefined) context.artifact = next.artifact;
       if (next.project !== undefined) context.project = next.project;
       if (next.session !== undefined) context.session = next.session;
@@ -89,19 +92,29 @@ export const startRequest = (
   };
 };
 
-/** Default sink location - beside the registry, per the `~/.lucid` home
- *  convention (`src/core/registry.ts`). */
-export const defaultLogPath = (): string => resolve(homedir(), ".lucid", "hub.log");
+/** Resolve the hub log path: explicit override, then env, then default -
+ *  the same contract as `registryFilePath`, and `LUCID_HUB_LOG` is what
+ *  lets the test harness keep suite hubs out of the developer's real home
+ *  (ENV_POLICY: isolate). */
+export const hubLogPath = (path?: string): string => {
+  if (path) return path;
+  if (process.env.LUCID_HUB_LOG) return process.env.LUCID_HUB_LOG;
+  return resolve(homedir(), ".lucid", "hub.log");
+};
 
-/** One rotation at 5 MB: a request line is small, so this is months of
- *  evidence, and the cap plus a single previous generation bounds growth (R2). */
+/** One rotation at 5 MB - tens of thousands of request lines per
+ *  generation, and the cap plus a single previous generation bounds
+ *  growth (R2). */
 const LOG_MAX_BYTES = 5 * 1024 * 1024;
+
+/** The line every emitter used to end at: stdout, one message per line. */
+export const stdoutSink: LineSink = (m) => process.stdout.write(`${m}\n`);
 
 export interface LogSinkOptions {
   readonly path?: string;
   readonly maxBytes?: number;
   /** Also mirror each line here (stdout in the hub); tests omit it. */
-  readonly mirror?: (line: string) => void;
+  readonly mirror?: LineSink;
 }
 
 /**
@@ -109,10 +122,12 @@ export interface LogSinkOptions {
  * write that would cross the cap: the current file becomes `<path>.1`
  * (replacing the previous generation - exactly one is kept, D-002) and the
  * line starts a fresh file. Writes are synchronous so a crash right after a
- * request still leaves its line on disk - the whole point of the file.
+ * request still leaves its line on disk - the whole point of the file. The
+ * size check is a stat, not a tracked count, so an external truncation or
+ * rotation self-corrects instead of poisoning every later decision.
  */
-export const createLogSink = (options: LogSinkOptions = {}): ((message: string) => void) => {
-  const path = options.path ?? defaultLogPath();
+export const createLogSink = (options: LogSinkOptions = {}): LineSink => {
+  const path = hubLogPath(options.path);
   const maxBytes = options.maxBytes ?? LOG_MAX_BYTES;
   let ready = false;
   return (message: string): void => {
@@ -133,8 +148,10 @@ export const createLogSink = (options: LogSinkOptions = {}): ((message: string) 
       }
       appendFileSync(path, line);
     } catch {
-      // A sink that cannot write must never take a request down with it;
-      // `lucid status` reports write health instead (M3.2).
+      // A sink that cannot write must never take a request down with it.
+      // Un-latch so a recreated ~/.lucid is picked up on the next line;
+      // M3.2 gives write health an inspection surface.
+      ready = false;
     }
     options.mirror?.(message);
   };
@@ -143,21 +160,22 @@ export const createLogSink = (options: LogSinkOptions = {}): ((message: string) 
 export interface HubSinkOptions {
   /** An injected sink wins outright - tests and embedding callers keep the
    *  plain `(message: string) => void` contract they always had. */
-  readonly log?: (message: string) => void;
-  readonly logPath?: string;
+  readonly log?: LineSink;
+  readonly hubLogPath?: string;
   /** Where the file's lines are mirrored. Defaults to stdout, so a
    *  foreground hub still narrates. */
-  readonly mirror?: (line: string) => void;
+  readonly mirror?: LineSink;
 }
 
 /**
- * The hub's ONE sink (D-009). Every emitter - the request records, attend's
- * narration, the stray console call - resolves through here, so nothing is
- * left writing to bare stdout that evaporates when the hub runs detached.
+ * The hub's ONE sink (D-009). Every in-daemon emitter - the request
+ * records, attend's narration, the stray console call - resolves through
+ * here, so no hub evidence is left on bare stdout to evaporate when the
+ * hub runs detached.
  */
-export const resolveHubSink = (options: HubSinkOptions = {}): ((message: string) => void) =>
+export const resolveHubSink = (options: HubSinkOptions = {}): LineSink =>
   options.log ??
   createLogSink({
-    ...(options.logPath !== undefined ? { path: options.logPath } : {}),
-    mirror: options.mirror ?? ((m) => process.stdout.write(`${m}\n`)),
+    ...(options.hubLogPath !== undefined ? { path: options.hubLogPath } : {}),
+    mirror: options.mirror ?? stdoutSink,
   });

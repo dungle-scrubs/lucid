@@ -620,9 +620,6 @@ export const runHub = async (options: { port?: number; attend?: boolean } = {}):
     ...(roots && roots.length > 0 ? { roots } : {}),
     ...(attend ? { attend } : {}),
   });
-  process.stdout.write(
-    `lucid hub listening on http://127.0.0.1:${daemon.port}${attend ? " (attend mode: headless turns enabled)" : ""}\n`,
-  );
   await new Promise<void>((resolve) => {
     process.once("SIGINT", () => {
       void daemon.stop().then(resolve);

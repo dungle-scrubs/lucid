@@ -1,3 +1,4 @@
+import { stdoutSink } from "../server/observe.ts";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -277,7 +278,7 @@ const createChild = async (
   registry: HarnessRegistry,
   opts: LaunchOptions,
 ): Promise<CreatedChild> => {
-  const log = opts.log ?? ((m) => process.stdout.write(`${m}\n`));
+  const log = opts.log ?? stdoutSink;
   const childArtifact = childArtifactPath(parent, fork.id);
   const childPaths = sessionPaths(childArtifact);
   const childSessionId = crypto.randomUUID();
@@ -340,7 +341,7 @@ export const handleForks = async (
   registry: HarnessRegistry,
   opts: LaunchOptions = {},
 ): Promise<CreatedChild[]> => {
-  const log = opts.log ?? ((m) => process.stdout.write(`${m}\n`));
+  const log = opts.log ?? stdoutSink;
   const state = foldLog((await readEvents(parent.logPath)).events);
   const handled = await loadHandled(parent);
   const fresh = state.forks.filter((f) => !handled.has(f.id));
@@ -375,7 +376,7 @@ export const attendChild = async (
   opts: LaunchOptions,
   harnessName = "agent",
 ): Promise<void> => {
-  const log = opts.log ?? ((m) => process.stdout.write(`${m}\n`));
+  const log = opts.log ?? stdoutSink;
   if (!recipe.resume) {
     log(`${child.name}: recipe has no resume argv - forked artifact is one-shot`);
     return;
@@ -476,7 +477,7 @@ export const runLaunch = async (
   registry: HarnessRegistry,
   opts: LaunchOptions = {},
 ): Promise<void> => {
-  const log = opts.log ?? ((m) => process.stdout.write(`${m}\n`));
+  const log = opts.log ?? stdoutSink;
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
   log(`launcher watching ${parent.name} for forks (Ctrl-C to stop)`);
   for (;;) {

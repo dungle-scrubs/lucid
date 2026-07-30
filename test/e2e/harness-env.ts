@@ -44,6 +44,10 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   LUCID_REGISTRY: "isolate",
   LUCID_ROOTS: "isolate",
   LUCID_HARNESSES: "isolate",
+  // The hub's rotating request log (plan 07, D-009). Unset, every spawned hub
+  // appends to the developer's real ~/.lucid/hub.log - and parallel workers
+  // sharing one file can misrotate away the retained generation.
+  LUCID_HUB_LOG: "isolate",
 
   LUCID_ALLOW_TEMP: "harness-switch",
   LUCID_NO_OPEN: "harness-switch",
@@ -165,6 +169,7 @@ export const harnessEnv = (
     LUCID_CLAUDE_SESSIONS: join(dir, "claude-sessions"),
     LUCID_CLAUDE_PROJECTS: join(dir, "claude-projects"),
     LUCID_HARNESSES: join(dir, "harnesses.json"),
+    LUCID_HUB_LOG: join(dir, "hub.log"),
   };
 };
 

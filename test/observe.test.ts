@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLogSink, resolveHubSink, startRequest } from "../src/server/observe.ts";
+import { createLogSink, hubLogPath, resolveHubSink, startRequest } from "../src/server/observe.ts";
 import { NotFoundError, ValidationError } from "../src/errors.ts";
 
 /**
@@ -22,10 +22,10 @@ describe("startRequest: the record and its lifecycle", () => {
   test("a completed request emits one record with method, path, status, duration and id", () => {
     const { lines, sink } = capture();
     let t = 1000;
-    const req = startRequest("GET", "/hub/sessions", "abc123def456", {
-      sink,
-      clock: () => (t += 250),
-    });
+    const req = startRequest(
+      { method: "GET", path: "/hub/sessions", id: "abc123def456" },
+      { sink, clock: () => (t += 250) },
+    );
     req.end(200);
 
     const exits = lines.map((l) => JSON.parse(l)).filter((r) => r.event === "request");
@@ -40,12 +40,15 @@ describe("startRequest: the record and its lifecycle", () => {
 
   test("two attach calls merge rather than replace", () => {
     const { lines, sink } = capture();
-    const req = startRequest("POST", "/hub/create", "id1", { sink, clock: () => 0 });
+    const req = startRequest(
+      { method: "POST", path: "/hub/create", id: "id1" },
+      { sink, clock: () => 0 },
+    );
     req.attach({ artifact: "/proj/.lucid/plan.html", project: "/proj" });
     req.attach({ harness: "claude" });
     req.end(200);
 
-    const record = JSON.parse(lines.at(-1) ?? "{}");
+    const [record] = lines.map((l) => JSON.parse(l)).filter((r) => r.event === "request");
     expect(record.artifact).toBe("/proj/.lucid/plan.html");
     expect(record.project).toBe("/proj");
     expect(record.harness).toBe("claude");
@@ -53,17 +56,23 @@ describe("startRequest: the record and its lifecycle", () => {
 
   test("fail(err) lifts error.type and error.code off a typed error", () => {
     const { lines, sink } = capture();
-    const req = startRequest("POST", "/hub/create", "id2", { sink, clock: () => 0 });
+    const req = startRequest(
+      { method: "POST", path: "/hub/create", id: "id2" },
+      { sink, clock: () => 0 },
+    );
     req.fail(new NotFoundError({ message: "no such artifact" }));
     req.end(404);
 
-    const record = JSON.parse(lines.at(-1) ?? "{}");
+    const [record] = lines.map((l) => JSON.parse(l)).filter((r) => r.event === "request");
     expect(record.error).toEqual({ type: "NotFoundError", code: "NOT_FOUND" });
   });
 
   test("end called twice emits exactly once - a double emit double-counts every request", () => {
     const { lines, sink } = capture();
-    const req = startRequest("GET", "/hub/sessions", "id3", { sink, clock: () => 0 });
+    const req = startRequest(
+      { method: "GET", path: "/hub/sessions", id: "id3" },
+      { sink, clock: () => 0 },
+    );
     req.end(200);
     req.end(500);
 
@@ -77,7 +86,10 @@ describe("startRequest: the record and its lifecycle", () => {
     const NOTE = "SENTINEL_NOTE_this_heading_is_wrong";
     const HTML = "<h1>SENTINEL_HTML_artifact_body</h1>";
     const { lines, sink } = capture();
-    const req = startRequest("POST", "/hub/create", "id4", { sink, clock: () => 0 });
+    const req = startRequest(
+      { method: "POST", path: "/hub/create", id: "id4" },
+      { sink, clock: () => 0 },
+    );
     // A careless caller hands over content alongside the identifiers. The
     // cast models a JS call site TS cannot police - the RUNTIME must drop it.
     req.attach({
@@ -101,13 +113,27 @@ describe("startRequest: the record and its lifecycle", () => {
   });
 });
 
+describe("hubLogPath: explicit override, then env, then home (the registryFilePath contract)", () => {
+  test("LUCID_HUB_LOG steers the default - the tier the e2e harness isolates by", () => {
+    const prev = process.env.LUCID_HUB_LOG;
+    process.env.LUCID_HUB_LOG = "/tmp/steered/hub.log";
+    try {
+      expect(hubLogPath()).toBe("/tmp/steered/hub.log");
+      expect(hubLogPath("/explicit/hub.log")).toBe("/explicit/hub.log");
+    } finally {
+      if (prev === undefined) delete process.env.LUCID_HUB_LOG;
+      else process.env.LUCID_HUB_LOG = prev;
+    }
+  });
+});
+
 describe("resolveHubSink: the rotating file is the hub's DEFAULT, not a second path (D-009)", () => {
   test("with no log supplied, a message lands in the rotating file AND on the mirror", () => {
     const dir = mkdtempSync(join(tmpdir(), "lucid-observe-"));
     const path = join(dir, "hub.log");
     const mirrored: string[] = [];
     try {
-      const log = resolveHubSink({ logPath: path, mirror: (m) => void mirrored.push(m) });
+      const log = resolveHubSink({ hubLogPath: path, mirror: (m) => void mirrored.push(m) });
       log("attend plan: pausing attendance for 5 minutes");
       expect(readFileSync(path, "utf8")).toBe("attend plan: pausing attendance for 5 minutes\n");
       expect(mirrored).toEqual(["attend plan: pausing attendance for 5 minutes"]);
@@ -121,7 +147,7 @@ describe("resolveHubSink: the rotating file is the hub's DEFAULT, not a second p
     const path = join(dir, "hub.log");
     const seen: string[] = [];
     try {
-      const log = resolveHubSink({ log: (m: string) => void seen.push(m), logPath: path });
+      const log = resolveHubSink({ log: (m: string) => void seen.push(m), hubLogPath: path });
       log("injected");
       expect(seen).toEqual(["injected"]);
       expect(existsSync(path)).toBe(false);

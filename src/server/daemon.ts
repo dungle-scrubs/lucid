@@ -136,8 +136,10 @@ export interface DaemonOptions {
   /** Activity sink for attend-mode lines. Defaults to the rotating hub log
    *  mirrored to stdout (D-009), so a detached hub keeps its evidence. */
   readonly log?: (message: string) => void;
-  /** Injected hub-log file path (tests). Default `<home>/.lucid/hub.log`. */
-  readonly logPath?: string;
+  /** Injected hub-log file path (tests). Default: `LUCID_HUB_LOG`, else
+   *  `<home>/.lucid/hub.log`. Named for what it holds - `logPath` already
+   *  means a session's review log everywhere else in this file. */
+  readonly hubLogPath?: string;
 }
 
 export interface DaemonHandle {
@@ -1200,6 +1202,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     },
   });
   port = server.port ?? 0;
+
+  // The one line that matters most to a detached hub - which port it actually
+  // bound - through the sink, so it lands in the file and not only on the
+  // stdout that self.ts discards (D-009).
+  log(
+    `lucid hub listening on http://127.0.0.1:${port}${attend ? " (attend mode: headless turns enabled)" : ""}`,
+  );
 
   const timer = setInterval(() => void notify(), POLL_MS);
 
