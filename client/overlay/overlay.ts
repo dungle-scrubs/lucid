@@ -9,6 +9,7 @@ import {
   resolveElementInDocument,
   resolveRangeInDocument,
 } from "../shared/capture.ts";
+import { DECISION_ATTR } from "../shared/decision.ts";
 import {
   isChromeMessage,
   type ChromeMessage,
@@ -60,7 +61,7 @@ interface Rect {
   readonly height: number;
 }
 
-type MarkerState = "committed" | "queued" | "pending";
+type MarkerState = "committed" | "queued" | "pending" | "decision";
 
 /** Id prefix of the in-flight (pending) composer anchor markers - one per
  *  collected spot, suffixed by position. */
@@ -209,6 +210,16 @@ export class LucidOverlay extends LitElement {
       background: rgba(180, 142, 173, 0.16);
       border: 1.5px solid rgba(180, 142, 173, 0.95);
       box-shadow: 0 0 0 2px rgba(180, 142, 173, 0.22);
+    }
+    /* A decision the agent wants answered. Sage, not frost: the frost family
+       means "a review mark lives here", and this is not a mark - it is the
+       document declaring that this passage is a question. Drawn at rest and
+       drawn UNDER the marks (see the render order), because its whole job is
+       showing the human where the decision starts and ends, which they could
+       not otherwise see. Quiet enough to read the paper through. */
+    .marker.decision {
+      background: rgba(163, 190, 140, 0.10);
+      border: 1.5px dashed rgba(163, 190, 140, 0.75);
     }
     .marker.focused {
       background: rgba(136, 192, 208, 0.45);
@@ -833,6 +844,18 @@ export class LucidOverlay extends LitElement {
       return;
     }
     const markers: Omit<Marker, "stackIndex">[] = [];
+    // Decisions FIRST, so review marks paint over them: a decision outline is
+    // the ground the marks sit on, not a mark competing with them. Drawn at
+    // rest and read straight off the live DOM (no anchor round-trip needed -
+    // the document itself declares these), because the whole problem it solves
+    // is that a recommendation's boundary is invisible until something draws
+    // it, and you cannot aim at what you cannot see.
+    for (const el of document.querySelectorAll(`[${DECISION_ATTR}]`)) {
+      const rects = [el.getBoundingClientRect()];
+      if (rects.length > 0) {
+        markers.push({ id: `decision_${markers.length}`, state: "decision", index: 0, rects });
+      }
+    }
     // A multi-spot item paints one marker PER target, all sharing the item's
     // id (so focus lights every spot), but only ONE carries the number - the
     // badge names the item, and numbering every spot would fake N items. The

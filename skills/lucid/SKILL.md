@@ -59,6 +59,23 @@ Never fake the review loop, and never paste build instructions at the user.
    get feedback; keep each id unique within the document - duplicate ids are
    skipped during anchor resolution.
 
+   **Mark anything you want a yes or no on** with `data-lucid-decision` on the
+   element that holds it - a recommended action, a proposed default, an option
+   you are advising for:
+
+   ```html
+   <li data-lucid-id="rec-1" data-lucid-decision>
+     Adopt Prism over per-provider clients.
+   </li>
+   ```
+
+   The viewer outlines it on the page, so the human can see it is a question
+   and where it ends, and offers one-tap **Agree** / **Decline** for it -
+   including when they pick something nested inside it, in which case the
+   answer still lands on the marked element. Mark the smallest element that
+   contains the whole recommendation. Do not mark prose you are not asking
+   about: an outline that means nothing teaches them to ignore it.
+
    **Write it into the PROJECT, at `<git-root>/.lucid/<name>.html` - never your
    scratchpad, never `/tmp`.** This is not tidiness. A session's whole history -
    every annotation, version and reply - lives in a folder named after the

@@ -320,6 +320,11 @@ export interface SessionState {
    *  authoritative for everything that predates cmd-collection (fork, the
    *  approve guard, old overlays), so every write updates both together. */
   pendingTargets: readonly Anchor[];
+  /** The marked decision the current pick sits inside, when it does - resolved
+   *  by the overlay, which is the only side with the artifact's live DOM. Its
+   *  presence is what puts Agree / Decline on the composer, and choosing one
+   *  annotates THIS anchor rather than the child that was picked. */
+  pendingDecision: Anchor | null;
   composerNote: string;
   queue: QueuedAnnotation[];
   editingId: string | null;
@@ -464,6 +469,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     editingId: null,
     editDraft: "",
     sending: false,
+    pendingDecision: null,
     awaitingAck: false,
     forking: false,
     forkId: null,

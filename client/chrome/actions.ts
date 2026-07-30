@@ -10,6 +10,7 @@ import {
 } from "./question-draft.ts";
 import type { Notify, SessionStorage, SessionStore } from "./store.ts";
 import { approveBlockedReason, hasComposerDraft, toWireImages, uuid } from "./store.ts";
+import type { DecisionReply } from "../shared/decision.ts";
 import type { Surface } from "./surface.ts";
 import type { Transport, UploadedAsset } from "./transport.ts";
 import type {
@@ -147,6 +148,46 @@ export const createActions = (ctx: ActionsCtx) => {
     addToQueue();
   };
 
+  /**
+   * Answer a marked decision: Agree or Decline, one tap.
+   *
+   * The note lands on the DECISION, not on whatever was picked inside it. That
+   * is the whole point of the rule - a recommendation contains other pickable
+   * things and its boundary is invisible until the overlay draws it, so
+   * landing on a phrase inside it must still let you decide, and the decision
+   * is what gets answered. A typed note still annotates exactly what was
+   * picked; only these two chips retarget.
+   *
+   * Any draft note rides along, the way a quick reply's does (D-053): typing
+   * "the rollback worries me" and then tapping Decline sends both, because
+   * throwing away what someone just typed is never the helpful reading.
+   */
+  const queueDecision = (reply: DecisionReply): void => {
+    const s = get();
+    const decision = s.pendingDecision;
+    if (!decision) return;
+    const typed = s.composerNote.trim();
+    const item: QueuedAnnotation = {
+      id: uuid(),
+      target: decision,
+      targets: [decision],
+      note: typed ? `${reply}\n\n${typed}` : reply,
+      at: new Date().toISOString(),
+      images: s.pastedImages,
+    };
+    persistQueued(item);
+    set((prev) => ({
+      queue: [...prev.queue, item],
+      pendingTarget: null,
+      pendingTargets: [],
+      pendingDecision: null,
+      composerNote: "",
+      pastedImages: [],
+      forkId: null,
+    }));
+    pushHighlights();
+  };
+
   /** Spin the pending pick off into a new artifact + session instead of
    *  annotating it in place. Unlike an annotation, a fork is a single directive
    *  sent on click, not queued into the review - it asks for a NEW session, not
@@ -218,6 +259,7 @@ export const createActions = (ctx: ActionsCtx) => {
     set({
       pendingTarget: null,
       pendingTargets: [],
+      pendingDecision: null,
       composerNote: "",
       pastedImages: [],
       forkId: null,
@@ -1009,6 +1051,7 @@ export const createActions = (ctx: ActionsCtx) => {
     discardOutboxMessage,
     flushOutbox,
     approveReview,
+    queueDecision,
     toggleTargets,
     reopenReview,
     loadSessions,
