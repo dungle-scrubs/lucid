@@ -106,6 +106,16 @@ interface HubState {
      *  turn - the dialog names the wall instead of showing a bare tail. */
     readonly usageLimit?: string;
   } | null;
+  /** The last heartbeat from a LIVE create turn (M2.1): proof of life, so the
+   *  dialog reports progress instead of inferring failure from a clock. `at`
+   *  is this window's receipt time - what "has the hub gone quiet" is measured
+   *  against, since the hub's own elapsed cannot say whether IT stopped. */
+  createProgress: {
+    readonly artifact: string;
+    readonly trace: string;
+    readonly elapsedMs: number;
+    readonly at: number;
+  } | null;
 }
 
 export const useHub = create<HubState>(() => ({
@@ -120,6 +130,7 @@ export const useHub = create<HubState>(() => ({
   defaultHarness: null,
   harnessInfo: [],
   createFailed: null,
+  createProgress: null,
   attention: {},
 }));
 
@@ -337,13 +348,16 @@ export const addRoot = async (
   | { readonly needsPath: true }
   | { readonly error: string }
 > => {
-  // No deadline: with no path this opens a native folder chooser and waits for
-  // a human to browse, which is unbounded on purpose. The hub's own guard kills
-  // a chooser nobody answers, and that arrives here as a cancel.
+  const opensChooser = path === undefined || path === "";
   const res = await hubFetch("/hub/roots", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(path !== undefined && path !== "" ? { path } : {}),
+    // The ONE documented exemption (M2.2): with no path this opens a native
+    // folder chooser and waits for a human to browse, which is unbounded on
+    // purpose. The hub's own guard kills a chooser nobody answers, and that
+    // arrives here as a cancel. A path, though, is a plain add - bounded.
+    ...(opensChooser ? { timeoutMs: null } : {}),
+    body: JSON.stringify(opensChooser ? {} : { path }),
   }).catch(() => null);
   if (!res) return { error: "The hub did not answer - it may have restarted. Reload the page." };
   const body = (await res.json().catch(() => null)) as
@@ -426,6 +440,22 @@ export const connectHub = (): void => {
       });
     } catch {
       /* malformed frame: the dialog's own timeout still reports */
+    }
+  });
+  // A create turn is STILL RUNNING (M2.1). The dialog reports this rather
+  // than inferring health from a clock; `at` is stamped on receipt because
+  // the question the dialog asks is "did the HUB go quiet", which the hub's
+  // own elapsed number cannot answer.
+  es.addEventListener("create-progress", (e) => {
+    try {
+      const { artifact, trace, elapsedMs } = JSON.parse((e as MessageEvent).data) as {
+        artifact: string;
+        trace: string;
+        elapsedMs: number;
+      };
+      useHub.setState({ createProgress: { artifact, trace, elapsedMs, at: Date.now() } });
+    } catch {
+      /* malformed frame: the next heartbeat is 2s away */
     }
   });
   es.onopen = () => {

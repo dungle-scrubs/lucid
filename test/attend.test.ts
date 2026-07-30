@@ -756,6 +756,64 @@ describe("hub attend mode", () => {
     expect(codes).toEqual([202, 409]);
   }, 20_000);
 
+  test("a live create turn broadcasts create-progress - the POSITIVE signal (M2.1)", async () => {
+    // A stub that takes its time, so "still running" has a window to be
+    // observed in. The dialog's old two-minute accusation existed precisely
+    // because nothing said this.
+    const slowStub = join(dir, "stub-slow.ts");
+    await writeFile(
+      slowStub,
+      `await new Promise((r) => setTimeout(r, 2500));
+await Bun.write(${JSON.stringify(createMarker)}, "done");
+`,
+    );
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "slow",
+        harnesses: {
+          slow: { spawn: [process.execPath, "run", slowStub, "{id}", "{artifact}", "{prompt}"] },
+        },
+      }),
+    );
+    const hub = await startDaemon(true);
+
+    const reader = (
+      await fetch(`http://127.0.0.1:${hub.port}/hub/events`, {
+        headers: { host: `127.0.0.1:${hub.port}` },
+      })
+    ).body?.getReader();
+    const decoder = new TextDecoder();
+
+    await post(hub.port, "/hub/create", {
+      project: proj,
+      name: "slow.html",
+      prompt: "take your time",
+    });
+
+    // Read frames until a progress frame for this artifact arrives.
+    let buf = "";
+    const deadline = Date.now() + 8000;
+    let progress: Record<string, unknown> | undefined;
+    while (Date.now() < deadline && progress === undefined) {
+      const { value, done } = await reader!.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      for (const frame of buf.split("\n\n")) {
+        if (!frame.startsWith("event: create-progress")) continue;
+        const line = frame.split("\n").find((l) => l.startsWith("data: "));
+        if (line) progress = JSON.parse(line.slice(6)) as Record<string, unknown>;
+      }
+    }
+    await reader!.cancel().catch(() => {});
+
+    expect(progress).toBeDefined();
+    expect(progress?.artifact).toBe(join(proj, ".lucid", "slow.html"));
+    // The trace joins the progress frame to the click's request record.
+    expect(progress?.trace).toMatch(/^[a-f0-9]{16}$/);
+    expect(progress?.elapsedMs as number).toBeGreaterThan(0);
+  }, 20_000);
+
   test("the click's request id reaches the spawned turn as LUCID_REQUEST_ID (M1.3)", async () => {
     const hub = await startDaemon(true);
     const res = await fetch(`http://127.0.0.1:${hub.port}/hub/create`, {

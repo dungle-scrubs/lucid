@@ -81,3 +81,121 @@ describe("hubFetch stamps the trace - behaviourally, not by grep", () => {
     expect(seen[3]?.headers.get("accept")).toBe("text/html");
   });
 });
+
+describe("no client module hand-rolls a deadline", () => {
+  test("AbortSignal.timeout appears only in request.ts - the seam decides what a deadline means", () => {
+    const offenders = clientSources()
+      .filter((p) => !p.endsWith(`/${OWNER}`))
+      .filter((p) => /AbortSignal\.timeout\(/.test(readFileSync(p, "utf8")));
+    expect(offenders).toEqual([]);
+  });
+
+  test("every hubFetch call site is bounded or explicitly exempt", () => {
+    // A call site is fine if it passes no timeoutMs (inherits the default),
+    // passes a number, or passes null WITH the exemption named in place. What
+    // must not exist is an exemption with no reason beside it.
+    const exemptions: string[] = [];
+    for (const path of clientSources()) {
+      const source = readFileSync(path, "utf8");
+      for (const [index, line] of source.split("\n").entries()) {
+        if (!/timeoutMs: null/.test(line)) continue;
+        const context = source
+          .split("\n")
+          .slice(Math.max(0, index - 6), index)
+          .join(" ");
+        if (!/chooser|human/i.test(context)) exemptions.push(`${path}:${index + 1}`);
+      }
+    }
+    expect(exemptions).toEqual([]);
+  });
+});
+
+describe("hubFetch carries the deadline (plan 07, M2.2)", () => {
+  /** A fetch that never settles - the hang this milestone exists to bound. */
+  const hangingFetch = (): (() => void) => {
+    const real = globalThis.fetch;
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(init.signal?.reason ?? new Error("aborted")),
+        );
+      })) as typeof fetch;
+    return () => {
+      globalThis.fetch = real;
+    };
+  };
+
+  test("a fetch that never answers rejects by the deadline, naming the likely cause", async () => {
+    const { hubFetch } = await import("../client/chrome/request.ts");
+    const restore = hangingFetch();
+    try {
+      // Raced against a sentinel, NOT awaited bare: without a deadline the
+      // call never settles, and a bare await would hang the whole runner
+      // instead of reporting a failure. The race turns "never settles" into
+      // the assertable value it is.
+      const outcome = await Promise.race([
+        hubFetch("/hub/sessions", { timeoutMs: 150 }).then(
+          () => "resolved",
+          (err: unknown) => (err as Error).message,
+        ),
+        new Promise<string>((r) => setTimeout(() => r("NEVER SETTLED"), 1500)),
+      ]);
+      expect(outcome).toMatch(/hub did not answer/i);
+    } finally {
+      restore();
+    }
+  }, 5000);
+
+  test("the default deadline applies with no init at all - undefended is not a choice a call site can make", async () => {
+    const { DEFAULT_TIMEOUT_MS } = await import("../client/chrome/request.ts");
+    expect(DEFAULT_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(DEFAULT_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
+  });
+
+  test("timeoutMs: null is the documented exemption - a human browsing folders is slow on purpose", async () => {
+    const { hubFetch } = await import("../client/chrome/request.ts");
+    const restore = hangingFetch();
+    // The caller's own controller ends it: this test must not leave a promise
+    // pending forever, which would hold the whole runner open.
+    const ac = new AbortController();
+    try {
+      let settled = false;
+      const p = hubFetch("/hub/project", { timeoutMs: null, signal: ac.signal }).then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await new Promise((r) => setTimeout(r, 400));
+      expect(settled).toBe(false);
+      ac.abort(new Error("test teardown"));
+      await p;
+      expect(settled).toBe(true);
+    } finally {
+      restore();
+    }
+  }, 3000);
+
+  test("a caller's own signal still aborts - the deadline composes, it does not replace", async () => {
+    const { hubFetch } = await import("../client/chrome/request.ts");
+    const restore = hangingFetch();
+    try {
+      const ac = new AbortController();
+      const p = hubFetch("/hub/sessions", { signal: ac.signal, timeoutMs: 10_000 }).then(
+        () => "resolved",
+        (err: unknown) => (err as Error).message,
+      );
+      ac.abort(new Error("caller changed its mind"));
+      const outcome = await Promise.race([
+        p,
+        new Promise<string>((r) => setTimeout(() => r("NEVER SETTLED"), 1500)),
+      ]);
+      // The caller's own reason survives - it is not relabelled as unreachable.
+      expect(outcome).toBe("caller changed its mind");
+    } finally {
+      restore();
+    }
+  }, 3000);
+});

@@ -240,3 +240,44 @@ test("an attendant arriving mid-session is read afresh, not from the open tab's 
   await expect(pickers).toHaveAttribute("data-readonly", "true", { timeout: 20_000 });
   await expect(on(pickers).selectionModel()).toContainText("Sonnet 5");
 });
+
+test("a slow create turn is reported as running, and never accused of failing (plan 07, M2.1)", async ({
+  page,
+}) => {
+  // A harness that takes 20 seconds and then succeeds - longer than the
+  // dialog's silence window, which is the whole point: the two-minute
+  // accusation this replaces fired on turns exactly like this one, and a
+  // real 8-minute create was the case that exposed it.
+  fixtures = await mkdtemp(join(tmpdir(), "lucid-harness-e2e-"));
+  const exe = join(fixtures, "slow-harness");
+  await writeFile(exe, `#!/bin/sh\nsleep 20\nexit 0\n`);
+  await chmod(exe, 0o755);
+  hub = await startHub({
+    attend: true,
+    harnesses: { default: "slow", harnesses: { slow: { spawn: [exe, "{prompt}"] } } },
+  });
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await page.evaluate((root) => localStorage.setItem("lucid.createRoot", root), cli.dir);
+  await on(page).tabAdd().click();
+  await on(page).newArtifact().click();
+  await on(page).createName().fill("slow.html");
+  await on(page).createPrompt().fill("take your time");
+  await on(page).createSubmit().click();
+
+  // The hub SAYS it is running - the positive signal, not a clock.
+  await expect(on(page).createAuthoring()).toBeVisible();
+  await expect(on(page).createAuthoring()).toContainText("reporting this turn as running", {
+    timeout: 15_000,
+  });
+
+  // Past the old two-minute accusation's shape: after 18 seconds of a live
+  // turn - well past the 15s silence window - nothing claims failure.
+  await page.waitForTimeout(18_000);
+  await expect(page.locator(hook("create-silent"))).toHaveCount(0);
+  await expect(on(page).createAuthoring()).not.toContainText("may have failed");
+  await expect(on(page).createAuthoring()).not.toContainText("stopped reporting");
+});

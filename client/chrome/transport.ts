@@ -69,7 +69,9 @@ export const createTransport = (base: string): Transport => {
       try {
         const res = await hubFetch(`${base}${path}`, {
           ...init,
-          signal: AbortSignal.timeout(isPost ? POST_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
+          // Its own budgets, through the seam's parameter rather than a
+          // hand-rolled signal - one place decides what a deadline means.
+          timeoutMs: isPost ? POST_TIMEOUT_MS : REQUEST_TIMEOUT_MS,
         });
         if (res.ok) return res;
         // The body carries the server's own reason ("the log is busy"), which

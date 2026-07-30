@@ -105,6 +105,11 @@ const CHOOSER_TIMEOUT_MS = 5 * 60 * 1000;
  *  and the two are joined here, so no traversal is expressible. */
 const CREATE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.html$/;
 
+/** How often a live create turn says it is still alive (M2.1). Frequent
+ *  enough that the dialog can distinguish "running" from "the hub stopped
+ *  reporting" within seconds, cheap enough to be one SSE frame. */
+const CREATE_PROGRESS_MS = 2000;
+
 /** Upper bound on a create request's prompt (chars). */
 const MAX_CREATE_PROMPT = 4000;
 
@@ -890,6 +895,27 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // seconds-fast failure (a harness over its usage limit) into two
       // minutes of mystery silence. Broadcast the exit with the log's tail
       // so the dialog can say what actually happened, immediately.
+      // The POSITIVE signal (M2.1). The hub already knew when a turn DIED; it
+      // said nothing while one lived, so the dialog inferred health from a
+      // clock and accused a working 8-minute turn of failing at two minutes.
+      // A heartbeat while the child is alive is the fact the clock was
+      // standing in for - and it carries the trace, so a progress frame and
+      // the click's request record join with one grep.
+      const startedAt = Date.now();
+      const heartbeat = setInterval(() => {
+        broadcast(
+          `event: create-progress\ndata: ${JSON.stringify({
+            artifact,
+            trace: observation.trace,
+            elapsedMs: Date.now() - startedAt,
+          })}\n\n`,
+        );
+      }, CREATE_PROGRESS_MS);
+      // A heartbeat must never hold the process open: the hub outlives any one
+      // turn, but an interval nobody unrefs would keep a bare `node`-style
+      // exit waiting on it.
+      heartbeat.unref?.();
+
       const reportFailure = async (code: number | string): Promise<void> => {
         const raw = await readFile(outLog, "utf8").catch(() => "");
         const tail = raw.trim().split("\n").slice(-3).join("\n").slice(-500);
@@ -922,7 +948,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           log(`create ${name}: create turn failed: ${(err as Error).message}`);
           void reportFailure("spawn-error");
         })
-        .finally(() => creating.delete(artifact));
+        .finally(() => {
+          clearInterval(heartbeat);
+          creating.delete(artifact);
+        });
       handedOff = true;
 
       return json({ ok: true, artifact }, 202);

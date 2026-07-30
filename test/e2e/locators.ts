@@ -80,7 +80,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   createProjectPathAdd: (): Locator => root.locator(hook("create-project-path-add")),
   createPrompt: (): Locator => root.locator(hook("create-prompt")),
   createSubmit: (): Locator => root.locator(hook("create-submit")),
-  createTimeout: (): Locator => root.locator(hook("create-timeout")),
+  createSilent: (): Locator => root.locator(hook("create-silent")),
   createTitle: (): Locator => root.locator(hook("create-title")),
   createUsageLimit: (): Locator => root.locator(hook("create-usage-limit")),
   customAnswer: (): Locator => root.locator(hook("custom-answer")),

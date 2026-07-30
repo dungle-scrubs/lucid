@@ -34,10 +34,12 @@ const CREATE_TIMEOUT_MS = 15_000;
 
 const MAX_PROMPT = 4000;
 
-/** How long to wait for the authored artifact to surface as a session before
- *  saying so. Authoring is a whole agent turn - minutes is normal, silence
- *  past this is not. */
-const AUTHOR_TIMEOUT_MS = 120_000;
+/** How long the hub may go SILENT before the dialog says so (M2.1). Not a
+ *  failure clock: a live turn heartbeats every 2s, so missing several in a row
+ *  means the HUB stopped reporting - which is true and actionable - where the
+ *  old two-minute "the turn may have failed" accused a healthy 8-minute turn
+ *  of dying. A real failure still interrupts instantly via create-failed. */
+const PROGRESS_SILENCE_MS = 15_000;
 
 const ATTEND_HINT =
   "This hub does not spawn agents. Start it with attend mode to author artifacts:";
@@ -87,6 +89,7 @@ const CreateDialogBody = () => {
   const defaultHarness = useHub((s) => s.defaultHarness);
   const harnessInfo = useHub((s) => s.harnessInfo);
   const createFailed = useHub((s) => s.createFailed);
+  const createProgress = useHub((s) => s.createProgress);
   /** Projects named through the folder chooser this session. The hub only
    *  lists projects that already hold a session, so without these a brand new
    *  folder is unreachable until something else puts an artifact in it. */
@@ -123,6 +126,9 @@ const CreateDialogBody = () => {
     const res = await hubFetch("/hub/project", {
       method: "POST",
       headers: { "content-type": "application/json" },
+      // Exempt only when it opens the native chooser and waits on a human
+      // (M2.2); a typed path is a plain resolve and stays bounded.
+      ...(path ? {} : { timeoutMs: null }),
       body: JSON.stringify(path ? { path } : {}),
     }).catch(() => null);
     if (!res) {
@@ -177,7 +183,9 @@ const CreateDialogBody = () => {
   /** The artifact path the hub accepted, once it has: the dialog is now
    *  waiting for that session to appear rather than taking input. */
   const [authoring, setAuthoring] = useState<string | null>(null);
-  const [timedOut, setTimedOut] = useState(false);
+  /** The hub stopped reporting - which is a fact about the HUB, not a verdict
+   *  on the turn. */
+  const [silent, setSilent] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -233,16 +241,28 @@ const CreateDialogBody = () => {
     void openTab(row);
   }, [authoring, sessions]);
 
+  // Re-armed by every heartbeat: while the hub reports, this never fires, so
+  // the dialog cannot accuse a turn the hub says is running.
+  const progressAt = createProgress?.artifact === authoring ? createProgress.at : null;
   useEffect(() => {
     if (authoring === null) return;
-    const timer = setTimeout(() => setTimedOut(true), AUTHOR_TIMEOUT_MS);
+    setSilent(false);
+    // Armed from the AGE of the last heartbeat, not from now: a frame that
+    // arrived while this effect was re-running must not buy the hub a fresh
+    // full window, or a hub reporting once every 14s would look healthy
+    // forever.
+    const since = progressAt ?? Date.now();
+    const timer = setTimeout(
+      () => setSilent(true),
+      Math.max(0, PROGRESS_SILENCE_MS - (Date.now() - since)),
+    );
     return () => clearTimeout(timer);
-  }, [authoring]);
+  }, [authoring, progressAt]);
 
-  // A headless turn prints NOTHING until it finishes, so the log stays empty
-  // and the dialog has no evidence of life to show. The clock is that
-  // evidence: a failure now arrives on its own (create-failed), so a running
-  // clock means the turn is still going, not that anything is wedged.
+  // The clock ticks locally for smoothness but is CORRECTED by every
+  // heartbeat, so what the human reads is the hub's own elapsed time for the
+  // turn - not this window's guess about it (a window opened late, or a
+  // reconnected stream, would otherwise show its own shorter clock).
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     if (authoring === null) return;
@@ -251,6 +271,10 @@ const CreateDialogBody = () => {
     const t = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
     return () => clearInterval(t);
   }, [authoring]);
+  useEffect(() => {
+    if (createProgress?.artifact !== authoring) return;
+    setElapsed(Math.floor(createProgress.elapsedMs / 1000));
+  }, [createProgress, authoring]);
 
   const onTitle = (value: string): void => {
     setTitle(value);
@@ -303,7 +327,7 @@ const CreateDialogBody = () => {
     // all (the classic case: the hub was restarted under an open window, and the
     // page is posting down a socket to a process that no longer exists).
     const res = await hubFetch("/hub/create", {
-      signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
+      timeoutMs: CREATE_TIMEOUT_MS,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -738,19 +762,21 @@ const CreateDialogBody = () => {
                 </span>
                 <span className="text-[11px] text-fg-faint">{authoring}</span>
                 <span className="pt-1 text-[11px] text-fg-faint">
-                  A headless turn prints nothing until it finishes, so there is no progress to show.
-                  A few minutes is normal; a failure interrupts this on its own.
+                  {createProgress?.artifact === authoring
+                    ? "The hub is reporting this turn as running. A few minutes is normal; a failure interrupts this on its own."
+                    : "Waiting for the hub's first report. A few minutes is normal; a failure interrupts this on its own."}
                 </span>
               </>
             )}
-            {timedOut && createFailed?.artifact !== authoring ? (
-              <span data-test="create-timeout" className="pt-1 text-[11px] text-fg-muted">
-                Still nothing after two minutes. The turn may have failed - check{" "}
+            {silent && createFailed?.artifact !== authoring ? (
+              <span data-test="create-silent" className="pt-1 text-[11px] text-fg-muted">
+                The hub has stopped reporting on this turn. That does not mean it failed - it means
+                this window is no longer being told. Check{" "}
                 <code className="bg-ink-700 px-1">
                   .lucid/{name.replace(/\.html$/, "")}/create.out.log
                 </code>{" "}
-                in the project. This dialog can be closed; the tab still appears on its own if the
-                artifact lands.
+                in the project, or whether the hub is still running. This dialog can be closed; the
+                tab still appears on its own if the artifact lands.
               </span>
             ) : null}
           </div>
