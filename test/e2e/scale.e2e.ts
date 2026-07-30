@@ -112,10 +112,13 @@ test("a long pick list scrolls inside itself, and its last row is clickable", as
   opened = [...artifacts];
 
   await page.goto(hub.url);
-  // The hub scans only its own dir, so point it at the project.
-  await on(page).addFolderType().first().click();
-  await on(page).addFolderPath().first().fill(cli.dir);
-  await on(page).addFolderPathAdd().first().click();
+  // The hub scans only its own dir, so point it at the project - through the
+  // endpoint the folder chooser posts to, since a test cannot drive a native
+  // dialog.
+  const rooted = await page.request.post(`http://127.0.0.1:${hub.port}/hub/roots`, {
+    data: { path: cli.dir },
+  });
+  expect(rooted.ok(), await rooted.text()).toBe(true);
   await expect(on(page).pickerRow()).toHaveCount(40, { timeout: 30_000 });
 
   // The PAGE does not scroll: the list owns its overflow, or the pick screen
@@ -148,9 +151,13 @@ test("project headings stay put while a long list scrolls, and are not clickable
   opened = [...artifacts];
 
   await page.goto(hub.url);
-  await on(page).addFolderType().first().click();
-  await on(page).addFolderPath().first().fill(cli.dir);
-  await on(page).addFolderPathAdd().first().click();
+  // The endpoint the folder chooser posts to: adding a root from the browser is
+  // a native dialog now, which a test cannot drive. This scenario is about 30
+  // rows and a sticky heading, not about how the root arrived.
+  const added = await page.request.post(`http://127.0.0.1:${hub.port}/hub/roots`, {
+    data: { path: cli.dir },
+  });
+  expect(added.ok(), await added.text()).toBe(true);
   await expect(on(page).pickerRow()).toHaveCount(30, { timeout: 30_000 });
 
   const heading = on(page).pickerProject().first();

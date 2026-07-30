@@ -84,9 +84,17 @@ test("?s= for a session the listing does not name yet is retried, not dropped", 
 
   // Point the hub at the folder that holds it. Nothing here opens a tab - it
   // adds a scan root, so the next snapshot names the id.
-  await on(page).addFolderType().first().click();
-  await on(page).addFolderPath().first().fill(cli.dir);
-  await on(page).addFolderPathAdd().first().click();
+  //
+  // Through the API rather than the UI: adding a root from the browser is a
+  // native folder chooser now (the paste-a-path field is gone), and a test
+  // cannot drive one. What this test is about is what happens AFTER a root
+  // lands - the pending tab opening itself - so the route that puts it there is
+  // incidental, and the endpoint is the same one the chooser posts to.
+  // `hub.url` already ends in a slash - joining another one 404s.
+  const added = await page.request.post(`http://127.0.0.1:${hub.port}/hub/roots`, {
+    data: { path: cli.dir },
+  });
+  expect(added.ok(), await added.text()).toBe(true);
 
   // The tab opens ITSELF. The id was still pending from boot, so the snapshot
   // that finally names it is honored - no second navigation, no click on a row.

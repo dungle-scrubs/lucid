@@ -41,10 +41,7 @@ export const hook = (name: string): string => `[data-test="${name}"]`;
 export const on = (root: Page | FrameLocator | Locator) => ({
   addFolder: (): Locator => root.locator(hook("add-folder")),
   addFolderError: (): Locator => root.locator(hook("add-folder-error")),
-  addFolderPath: (): Locator => root.locator(hook("add-folder-path")),
-  addFolderPathAdd: (): Locator => root.locator(hook("add-folder-path-add")),
   addFolderResult: (): Locator => root.locator(hook("add-folder-result")),
-  addFolderType: (): Locator => root.locator(hook("add-folder-type")),
   addToQueue: (): Locator => root.locator(hook("add-to-queue")),
   agentWorking: (): Locator => root.locator(hook("agent-working")),
   awaitingAck: (): Locator => root.locator(hook("awaiting-ack")),

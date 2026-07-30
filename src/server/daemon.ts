@@ -87,6 +87,12 @@ const DEFAULT_SESSION_IDLE_MS = 30 * 60 * 1000;
 /** How often each mount's delivery watcher evaluates, in attend mode. */
 const DEFAULT_ATTEND_POLL_MS = 1000;
 
+/** How long a folder chooser may stay open before the request gives up. A human
+ *  browsing folders is slow on purpose, so this is a hang guard rather than an
+ *  interaction budget: a dialog nobody can see must not hold the browser's
+ *  fetch open for the life of the process. */
+const CHOOSER_TIMEOUT_MS = 5 * 60 * 1000;
+
 /** A new artifact's filename, as `POST /hub/create` accepts it: a plain
  *  `.html` basename, never a path - the project root comes from the listing
  *  and the two are joined here, so no traversal is expressible. */
@@ -762,7 +768,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         canonicalArtifactPath(s.project) === asked ||
         (s.worktree !== undefined && canonicalArtifactPath(s.worktree) === asked),
     );
-    if (!known) return json({ error: "unknown project" }, 400);
+    // A folder the human ADDED is a project even before it holds anything.
+    // Judging only by the listing meant a freshly added, empty folder could be
+    // picked in the dialog and then refused as "unknown project" on submit -
+    // the folder was registered for scanning but never became somewhere you
+    // could author INTO, which is the same split that made adding one feel like
+    // it had done nothing at all.
+    const rooted =
+      known || (await scanRootSet()).some((root) => canonicalArtifactPath(root) === asked);
+    if (!rooted) return json({ error: "unknown project" }, 400);
     // Listed is not the same as PRESENT. A project can be deleted while its
     // reviews outlive it, and a scratchpad session's project is recovered from
     // an encoded path whose deepest component may no longer exist - authoring
@@ -907,32 +921,39 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (picked === "") {
       if (process.platform !== "darwin") {
         return {
-          res: json({ error: "no folder chooser here - type or paste a path instead" }, 501),
+          res: json({ error: "no folder chooser on this platform" }, 501),
         };
       }
       // AppleScript returns an alias; POSIX path makes it a real path. A
       // cancel exits non-zero, which is not an error to report - the human
       // simply changed their mind.
-      // Activated first, and shown BY System Events: an unactivated osascript
-      // puts its chooser behind the window the human is looking at, which is
-      // indistinguishable from the button doing nothing.
+      //
+      // The chooser runs in osascript's OWN process, activated by `me`. Routing
+      // it through `tell application "System Events"` made the dialog System
+      // Events' to display, which costs an Automation (TCC) grant this process
+      // may not hold and several seconds before anything appears - and when the
+      // grant is missing the button looks like it does nothing at all. Nothing
+      // here needs System Events: `activate` on `me` brings osascript forward,
+      // which is the only reason it was involved.
       const proc = Bun.spawn(
         [
           "osascript",
           "-e",
-          'tell application "System Events"',
-          "-e",
-          "activate",
+          "tell me to activate",
           "-e",
           `set picked to choose folder with prompt "${prompt}"`,
-          "-e",
-          "end tell",
           "-e",
           "POSIX path of picked",
         ],
         { stdout: "pipe", stderr: "pipe" },
       );
+      // A chooser nobody can see must not hold the request open forever: the
+      // browser is waiting on this fetch, and a spinner with no dialog behind
+      // it is the worst of both. Generous, because a human browsing folders is
+      // slow on purpose - this is a hang guard, not an interaction budget.
+      const timer = setTimeout(() => proc.kill(), CHOOSER_TIMEOUT_MS);
       const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+      clearTimeout(timer);
       if (code !== 0) return { res: json({ cancelled: true }, 200, noStore) };
       picked = out.trim();
     }
@@ -1006,8 +1027,25 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // resolveProject reads an ARTIFACT's location, so ask it about a file that
     // would live directly in this folder. Nothing is created or written.
     const proj = await resolveProject(join(dir, "artifact.html"));
+    // Naming a project REGISTERS it. This route used to resolve a path and
+    // return it, persisting nothing - so the folder existed only in the
+    // dialog's React state, and `/hub/create` (which validates against real
+    // projects) refused it as unknown the moment you pressed the button.
+    //
+    // That was the architecture failing rather than a missing check: "project"
+    // was a value DERIVED per session from its artifact's path, so a project
+    // holding no sessions had nowhere to exist. The scan roots are the one
+    // place a project can be recorded before it holds anything, so naming one
+    // writes there - the same store the folder chooser on the roots route uses.
+    await addRoot(proj.project, rootsPath);
+    void notify();
     return json(
-      { project: proj.project, ...(proj.worktree ? { worktree: proj.worktree } : {}), chosen: dir },
+      {
+        project: proj.project,
+        ...(proj.worktree ? { worktree: proj.worktree } : {}),
+        chosen: dir,
+        roots: await scanRootSet(),
+      },
       200,
       noStore,
     );

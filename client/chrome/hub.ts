@@ -336,12 +336,15 @@ export const addRoot = async (
   | { readonly needsPath: true }
   | { readonly error: string }
 > => {
+  // No deadline: with no path this opens a native folder chooser and waits for
+  // a human to browse, which is unbounded on purpose. The hub's own guard kills
+  // a chooser nobody answers, and that arrives here as a cancel.
   const res = await fetch("/hub/roots", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(path !== undefined && path !== "" ? { path } : {}),
   }).catch(() => null);
-  if (!res) return { error: "The hub did not answer." };
+  if (!res) return { error: "The hub did not answer - it may have restarted. Reload the page." };
   const body = (await res.json().catch(() => null)) as
     | (Partial<AddedRoot> & {
         cancelled?: boolean;

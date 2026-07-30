@@ -24,15 +24,11 @@ export const AddFolder = ({
   readonly className?: string;
   readonly label?: string;
   /** Render as a folder+ icon (the projects drawer header) rather than a text
-   *  button. The icon goes straight to the OS chooser: no path field until
-   *  something actually needs one. */
+   *  button. Both go straight to the OS chooser. */
   readonly icon?: boolean;
   /** Ran after a folder is added - the drawer closes itself on its way out. */
   readonly onAdded?: () => void;
 }) => {
-  /** The chooser is unavailable (not macOS, or it failed): take a path. */
-  const [typing, setTyping] = useState(false);
-  const [typedPath, setTypedPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,7 +41,9 @@ export const AddFolder = ({
       const outcome = await addRoot(path);
       if ("cancelled" in outcome) return;
       if ("needsPath" in outcome) {
-        setTyping(true);
+        // The chooser is macOS-only. Nothing to fall back to now that the path
+        // field is gone, so say so rather than failing silently.
+        setError("This build has no folder chooser on this platform.");
         return;
       }
       if ("error" in outcome) {
@@ -62,8 +60,6 @@ export const AddFolder = ({
           ? `Watching ${projectName(root)}, but no reviews are stored in it. Agents usually write artifacts to their session scratchpad - those are already listed here, under the project they were about.`
           : `Found ${found} ${found === 1 ? "review" : "reviews"} in ${projectName(root)}.`,
       );
-      setTyping(false);
-      setTypedPath("");
       onAdded?.();
     } finally {
       setBusy(false);
@@ -117,7 +113,14 @@ export const AddFolder = ({
     // No alignment of its own: this sits in a centred pick screen and in a
     // left-aligned drawer, and a component that centres its own status text
     // under a left-aligned button is what read as broken.
-    <div className={`flex max-w-[440px] flex-col gap-1.5 ${icon ? "" : ""}`}>
+    //
+    // `relative` with the status hung BELOW it (see the absolute block at the
+    // end): the outcome text runs to a couple of lines, and in the flow it grew
+    // this control to 440px inside a one-line row - shoving "New artifact" to
+    // the far edge and leaving the row looking broken the moment a folder was
+    // picked. Out of flow, the row keeps its shape and the message still lands
+    // directly under the button that produced it.
+    <div className="relative flex flex-col">
       <span className="flex items-baseline gap-2">
         <Tooltip>
           <TooltipTrigger render={trigger} />
@@ -127,66 +130,22 @@ export const AddFolder = ({
               : "Point Lucid at a folder and it lists the sessions already inside it"}
           </TooltipContent>
         </Tooltip>
-        {/* Not a fallback for a missing chooser - a first-class route. The
-            artifacts a human is usually hunting for sit under an agent's
-            scratchpad in /private/tmp, which macOS HIDES in the native
-            chooser; pasting the path is the only practical way there. */}
-        {typing || icon ? null : (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  data-test="add-folder-type"
-                  onClick={(e) => {
-                    e.currentTarget.blur();
-                    setTyping(true);
-                  }}
-                  className="cursor-pointer text-[10px] text-fg-faint underline-offset-2 hover:text-fg hover:underline"
-                >
-                  paste a path
-                </button>
-              }
-            />
-            <TooltipContent>Type or paste a folder path</TooltipContent>
-          </Tooltip>
-        )}
       </span>
-      {typing ? (
-        <div className="flex items-center gap-1.5">
-          <input
-            data-test="add-folder-path"
-            value={typedPath}
-            onChange={(e) => setTypedPath(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void add(typedPath);
-              }
-            }}
-            placeholder="/Users/you/dev/project"
-            spellCheck={false}
-            className="w-[280px] border border-ink-600 bg-bg-inset px-2 py-1 text-[12px] text-fg outline-none placeholder:text-fg-faint focus-visible:annot-outline"
-          />
-          <button
-            type="button"
-            data-test="add-folder-path-add"
-            disabled={busy}
-            onClick={() => void add(typedPath)}
-            className="cursor-pointer border border-ink-600 bg-ink-700 px-2 py-1 text-[11px] text-fg hover:bg-ink-600"
-          >
-            Add
-          </button>
-        </div>
-      ) : null}
-      {error !== null ? (
-        <span data-test="add-folder-error" className="text-[10px] text-rust-300">
-          {error}
-        </span>
-      ) : null}
-      {result !== null ? (
-        <span data-test="add-folder-result" className="text-[10px] leading-relaxed text-fg-faint">
-          {result}
+      {error !== null || result !== null ? (
+        <span className="absolute left-0 top-full z-10 mt-1 w-[320px] text-left">
+          {error !== null ? (
+            <span data-test="add-folder-error" className="block text-[10px] text-rust-300">
+              {error}
+            </span>
+          ) : null}
+          {result !== null ? (
+            <span
+              data-test="add-folder-result"
+              className="block text-[10px] leading-relaxed text-fg-faint"
+            >
+              {result}
+            </span>
+          ) : null}
         </span>
       ) : null}
     </div>

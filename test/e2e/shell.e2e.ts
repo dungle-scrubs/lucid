@@ -119,11 +119,15 @@ test("an empty shell can point itself at a folder and find the sessions in it", 
   // It says where it looked, which is what makes the miss correctable.
   await expect(page.locator("code", { hasText: hub.dir })).toBeVisible();
 
-  // Paste the folder rather than opening the native chooser - the same route a
-  // human needs for a scratchpad path Finder will not show them.
-  await on(page).addFolderType().first().click();
-  await on(page).addFolderPath().first().fill(cli.dir);
-  await on(page).addFolderPathAdd().first().click();
+  // Through the endpoint the chooser posts to, not the UI: adding a root from
+  // the browser is a native folder chooser now, and a test cannot drive one.
+  // What this scenario is about is the LISTING arriving over the stream once a
+  // root lands - no reload, no restart - so how the root got there is
+  // incidental to it.
+  const added = await page.request.post(`http://127.0.0.1:${hub.port}/hub/roots`, {
+    data: { path: cli.dir },
+  });
+  expect(added.ok(), await added.text()).toBe(true);
 
   // The listing IS the confirmation, and it arrives over the stream - no
   // reload, no restart. (Not asserted on the status line: success replaces
@@ -300,7 +304,7 @@ test("add-folder is reachable from the populated pick screen and the palette (M2
   await expect(on(page).shellTab()).toHaveCount(1);
   await on(page).tabAdd().click();
   await expect(on(page).pickerRow()).toHaveCount(1); // populated, not empty
-  await expect(on(page).addFolder()).toBeVisible(); // ...and correctable anyway
+  await expect(on(page).newArtifact()).toBeVisible(); // ...and the one way onward
 
   // The palette carries the same affordance as a command.
   await page.keyboard.press(chord("k"));

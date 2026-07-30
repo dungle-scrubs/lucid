@@ -27,6 +27,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 const CREATE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.html$/;
 
 /** Matches the hub's MAX_CREATE_PROMPT. */
+/** How long to wait for the hub to accept a create before saying it did not.
+ *  The route hands off to a detached process, so a healthy answer is fast. */
+const CREATE_TIMEOUT_MS = 15_000;
+
 const MAX_PROMPT = 4000;
 
 /** How long to wait for the authored artifact to surface as a session before
@@ -91,9 +95,21 @@ const CreateDialogBody = () => {
   const [typedPath, setTypedPath] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
 
+  /**
+   * Every folder a human can author into: the ones already holding a session,
+   * the hub's own SCAN ROOTS, and anything named through this dialog's chooser.
+   *
+   * The scan roots were missing, and that was the whole of "I added a folder
+   * and it did not become a project". Adding a folder registers it with the hub
+   * so reviews inside it are listed; it did not make the folder somewhere you
+   * could author INTO, so a brand new project stayed invisible here and the
+   * question "what did that actually do?" had no good answer. One list, one
+   * meaning: a folder you added is a project.
+   */
+  const hubRoots = useHub((s) => s.roots);
   const roots = useMemo(
-    () => [...new Set([...createRoots(sessions), ...added])].sort(),
-    [sessions, added],
+    () => [...new Set([...createRoots(sessions), ...hubRoots, ...added])].sort(),
+    [sessions, hubRoots, added],
   );
 
   /**
@@ -115,6 +131,8 @@ const CreateDialogBody = () => {
     const body = (await res.json().catch(() => null)) as {
       project?: string;
       worktree?: string;
+      /** The hub's effective scan roots after registering this one. */
+      roots?: readonly string[];
       cancelled?: boolean;
       error?: string;
     } | null;
@@ -132,6 +150,10 @@ const CreateDialogBody = () => {
     // already defines, never a second one for the human to maintain.
     const target = body.worktree ?? body.project;
     setAdded((prev) => [...new Set([...prev, target])]);
+    // The hub registered it; keep this window's copy of the roots in step so the
+    // project survives closing and reopening the dialog, and shows up in the
+    // "looking in" line like any other.
+    if (body.roots !== undefined) useHub.setState({ roots: [...body.roots] });
     setProject(target);
     setTyping(false);
     setTypedPath("");
@@ -273,7 +295,14 @@ const CreateDialogBody = () => {
   const submit = async (): Promise<void> => {
     setError(null);
     setSending(true);
+    // A deadline, because the alternative is a button that says "Sending…"
+    // forever. The hub answers this route in well under a second - it validates,
+    // claims the name and hands the turn off to a detached process, so anything
+    // approaching this budget means the request is not going to be answered at
+    // all (the classic case: the hub was restarted under an open window, and the
+    // page is posting down a socket to a process that no longer exists).
     const res = await fetch("/hub/create", {
+      signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -288,7 +317,7 @@ const CreateDialogBody = () => {
     }).catch(() => null);
     setSending(false);
     if (!res) {
-      setError("The hub did not answer. Is it still running?");
+      setError("The hub did not answer - it may have restarted. Reload the page and try again.");
       return;
     }
     const body = (await res.json().catch(() => null)) as {

@@ -875,3 +875,45 @@ describe("a session folder never colonises someone else's directory", () => {
     expect(existsSync(paths.logPath)).toBe(true);
   });
 });
+
+describe(".lucid is never a project (live review)", () => {
+  /**
+   * The canonical layout puts the artifact at `<project>/.lucid/<name>.html`,
+   * so the no-checkout fallback landed on the artifact's own directory - which
+   * IS `.lucid` - and the listing grouped those reviews under a heading naming
+   * Lucid's own plumbing instead of the human's work.
+   */
+  test("a project without a checkout is the folder ABOVE .lucid", async () => {
+    const { projectRoot } = await import("../src/core/sessions.ts");
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-proj-")));
+    await mkdir(join(dir, "artifacts", ".lucid"), { recursive: true });
+    const artifact = join(dir, "artifacts", ".lucid", "plan.html");
+    await writeFile(artifact, V1);
+
+    expect(await projectRoot(sessionPaths(artifact))).toBe(join(dir, "artifacts"));
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("a checkout still wins over the folder walk", async () => {
+    const { projectRoot } = await import("../src/core/sessions.ts");
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-proj-")));
+    await mkdir(join(dir, "repo", ".git"), { recursive: true });
+    await mkdir(join(dir, "repo", ".lucid"), { recursive: true });
+    const artifact = join(dir, "repo", ".lucid", "plan.html");
+    await writeFile(artifact, V1);
+
+    expect(await projectRoot(sessionPaths(artifact))).toBe(join(dir, "repo"));
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("an artifact NOT in a .lucid folder keeps its own directory", async () => {
+    const { projectRoot } = await import("../src/core/sessions.ts");
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-proj-")));
+    await mkdir(join(dir, "loose"), { recursive: true });
+    const artifact = join(dir, "loose", "plan.html");
+    await writeFile(artifact, V1);
+
+    expect(await projectRoot(sessionPaths(artifact))).toBe(join(dir, "loose"));
+    await rm(dir, { recursive: true, force: true });
+  });
+});

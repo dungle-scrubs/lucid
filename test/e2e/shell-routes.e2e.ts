@@ -78,17 +78,18 @@ test("with no OS chooser the folder icon falls back to a path field", async ({ p
   await page.goto(hub.url);
   await expect(page.locator("code", { hasText: hub.dir })).toBeVisible();
 
+  // The chooser is reached through New artifact now - naming a project belongs
+  // where a project is needed, and the pick screen offers one action.
+  await on(page).newArtifact().first().click();
   await on(page).addFolder().first().click();
-  const field = on(page).addFolderPath().first();
-  await expect(field, "a 501 left the human with no way to name a folder").toBeVisible();
 
-  // Typing the path completes the job the chooser could not start. The
-  // listing arriving is the proof - a fallback that renders a field and
-  // then swallows what is typed into it is the dead end it replaced.
-  await field.fill(cli.dir);
-  await on(page).addFolderPathAdd().first().click();
-  await expect(on(page).pickerRow()).toHaveCount(1, { timeout: 20_000 });
-  await expect(on(page).pickerRow().first()).toContainText("Migration plan");
+  // A platform with no chooser SAYS so. There is no typed-path fallback any
+  // more - the folder chooser is the only route in, and its own dialog handles
+  // hidden paths (cmd-shift-G). What matters is that a 501 surfaces as a
+  // message rather than a button that silently does nothing, which is what an
+  // unhandled refusal looks like from the outside.
+  await expect(on(page).addFolderError()).toBeVisible();
+  await expect(on(page).addFolderError()).toContainText("no folder chooser", { ignoreCase: true });
 });
 
 test("a server without /__lucid/context falls through to the sidecar, and says live:false", async () => {
