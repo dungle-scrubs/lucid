@@ -1,4 +1,5 @@
 import type { Anchor, ElementAnchor, RangeAnchor } from "./anchor.ts";
+import { tracer } from "../core/verbose.ts";
 
 /**
  * Shared anchor capture/resolution logic that operates against a minimal
@@ -127,6 +128,10 @@ export const captureElementAnchor = (el: DomElementLike): ElementAnchor => {
 
 const toArray = (a: ArrayLike<DomElementLike>): DomElementLike[] => Array.from(a);
 
+/** Built once from the environment: a no-op unless `LUCID_VERBOSE` names
+ *  `anchors`, so the silent default costs one call to an empty function. */
+const anchorTrace = tracer("anchors");
+
 /**
  * Resolve an element anchor against a root, in priority order
  * lucidId -> fingerprint -> domPath (D-047). Returns the matched element or
@@ -158,16 +163,34 @@ export interface ResolvedElement {
  * through to the next per D-047; only the positional domPath is allowed to
  * disambiguate, and a match that only it could make is tagged `positional`.
  */
+export interface ResolveOptions {
+  /** Narrates WHICH layer matched and why the others were skipped (M3.1).
+   *  Silent unless `LUCID_VERBOSE` names `anchors`; the default tracer is a
+   *  no-op, so this path costs nothing when nobody asked. */
+  readonly trace?: (message: () => string) => void;
+}
+
 export const resolveElementMatch = (
   anchor: ElementAnchor,
   root: DomRootLike,
+  options: ResolveOptions = {},
 ): ResolvedElement | null => {
+  const trace = options.trace ?? anchorTrace;
   if (anchor.lucidId) {
     const matches = toArray(
       root.querySelectorAll(`[data-lucid-id="${cssEscape(anchor.lucidId)}"]`),
     );
-    if (matches.length === 1 && matches[0]) return { el: matches[0], match: "exact" };
+    if (matches.length === 1 && matches[0]) {
+      trace(() => `lucidId "${anchor.lucidId}" -> 1 match, exact`);
+      return { el: matches[0], match: "exact" };
+    }
     // non-unique -> skip lucidId layer
+    trace(
+      () =>
+        `lucidId "${anchor.lucidId}" -> ${matches.length} matches, skipped (a layer must be unique to win)`,
+    );
+  } else {
+    trace(() => "lucidId absent on the anchor, skipped");
   }
 
   // One-pass sibling indices, then fingerprints over the map (#46): identical
@@ -181,17 +204,34 @@ export const resolveElementMatch = (
   // status cells sharing a column position across table rows) and must fall
   // through to the positional domPath, same as the lucidId layer above.
   if (byFingerprint.length === 1 && byFingerprint[0]) {
+    trace(() => `fingerprint "${anchor.fingerprint}" -> 1 match, exact`);
     return { el: byFingerprint[0], match: "exact" };
   }
+  trace(
+    () =>
+      `fingerprint "${anchor.fingerprint}" -> ${byFingerprint.length} matches over ${all.length} elements, ` +
+      `${byFingerprint.length === 0 ? "no match" : "ambiguous"}, falling through to domPath`,
+  );
 
   if (anchor.domPath) {
     try {
       const match = root.querySelector(anchor.domPath);
-      if (match) return { el: match, match: "positional" };
+      if (match) {
+        trace(
+          () =>
+            `domPath "${anchor.domPath}" -> matched, POSITIONAL (whatever now occupies that slot)`,
+        );
+        return { el: match, match: "positional" };
+      }
+      trace(() => `domPath "${anchor.domPath}" -> no match`);
     } catch {
       // invalid selector -> no match
+      trace(() => `domPath "${anchor.domPath}" -> invalid selector`);
     }
+  } else {
+    trace(() => "domPath absent on the anchor");
   }
+  trace(() => "unresolved: no layer matched");
   return null;
 };
 

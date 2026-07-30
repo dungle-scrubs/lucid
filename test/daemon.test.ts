@@ -605,6 +605,58 @@ describe("the hub's wide event: every request emits (plan 07, M1.2)", () => {
   });
 });
 
+describe("the verbose flag governs internal narration ONLY (M3.1)", () => {
+  test("with LUCID_VERBOSE unset, the boundary records still emit - they are baseline evidence", async () => {
+    const prev = process.env.LUCID_VERBOSE;
+    delete process.env.LUCID_VERBOSE;
+    const lines: string[] = [];
+    try {
+      daemon = await runDaemon({
+        port: 0,
+        roots: [root],
+        registryPath,
+        log: (m) => void lines.push(m),
+      });
+      await get(daemon.port, "/hub/sessions");
+    } finally {
+      if (prev !== undefined) process.env.LUCID_VERBOSE = prev;
+    }
+    const records = lines
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    // Read as a blanket silence rule, technique 4 would cancel technique 2 and
+    // leave a program that emits nothing and calls that observability.
+    expect(records.find((r) => r.event === "request.start")).toBeDefined();
+    expect(records.find((r) => r.event === "request")).toBeDefined();
+  });
+
+  test("and no internal narration leaks into the records when the flag IS set", async () => {
+    const prev = process.env.LUCID_VERBOSE;
+    process.env.LUCID_VERBOSE = "all";
+    const lines: string[] = [];
+    try {
+      daemon = await runDaemon({
+        port: 0,
+        roots: [root],
+        registryPath,
+        log: (m) => void lines.push(m),
+      });
+      await get(daemon.port, "/hub/sessions");
+    } finally {
+      if (prev === undefined) delete process.env.LUCID_VERBOSE;
+      else process.env.LUCID_VERBOSE = prev;
+    }
+    // The narration goes to its own sink (stderr), never onto the record
+    // stream - one line per request stays one line per request.
+    const exits = lines
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((r) => r.event === "request" && r.path === "/hub/sessions");
+    expect(exits).toHaveLength(1);
+    expect(lines.filter((l) => l.startsWith("[anchors]") || l.startsWith("[attend]"))).toEqual([]);
+  });
+});
+
 describe("the CLI carries the id to the hub (M1.3)", () => {
   test("hubOpen sends x-lucid-request, adopting LUCID_REQUEST_ID when a turn holds one", async () => {
     const artifact = await seedSession("proj", "notes");
