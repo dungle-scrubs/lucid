@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -354,6 +362,28 @@ describe("sinkStatus: the logger is not self-concealing (M3.2, technique 1)", ()
       sink("b".repeat(60));
       expect(sinkStatus(path).rotated).toBe(true);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("write health is derived from DISK, not from this process having tried", () => {
+    // The status reader is `lucid status`, a DIFFERENT process from the hub
+    // that owns the sink - so an in-process error map is always empty there
+    // and `writable` was a hardcoded true. It reported a log whose every
+    // write was failing as "healthy but idle", which is precisely the
+    // self-concealing failure this field exists to expose.
+    const dir = mkdtempSync(join(tmpdir(), "lucid-observe-"));
+    const readonlyDir = join(dir, "ro");
+    mkdirSync(readonlyDir);
+    chmodSync(readonlyDir, 0o555);
+    try {
+      // Nothing in THIS process ever opened a sink here.
+      const status = sinkStatus(join(readonlyDir, "hub.log"));
+      expect(status.exists).toBe(false);
+      expect(status.writable).toBe(false);
+      expect(status.error).toBeTruthy();
+    } finally {
+      chmodSync(readonlyDir, 0o755);
       rmSync(dir, { recursive: true, force: true });
     }
   });

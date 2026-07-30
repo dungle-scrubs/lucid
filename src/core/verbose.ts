@@ -30,16 +30,6 @@ export interface VerboseEnv {
   readonly [key: string]: string | undefined;
 }
 
-/** Parse the flag: a comma-separated list, trimmed and lowercased, with `all`
- *  as the one spelling for "be loud everywhere". */
-export const verboseSubsystems = (env: VerboseEnv): VerboseSubsystem[] => {
-  const raw = env.LUCID_VERBOSE?.trim().toLowerCase() ?? "";
-  if (raw === "") return [];
-  const named = raw.split(",").map((s) => s.trim());
-  if (named.includes("all")) return [...VERBOSE_SUBSYSTEMS];
-  return VERBOSE_SUBSYSTEMS.filter((s) => named.includes(s));
-};
-
 /** The ambient environment, or nothing at all. This module is imported by
  *  `src/anchors/dom.ts`, which is bundled into the BROWSER overlay - a bare
  *  `process.env` there is a ReferenceError at module load, and the overlay
@@ -53,6 +43,62 @@ const ambientEnv = (): VerboseEnv =>
  *  the flag cannot be set anyway. */
 const stderrSink = (line: string): void => {
   if (typeof process !== "undefined") process.stderr.write(`${line}\n`);
+};
+
+/**
+ * Where THIS process's narration goes. One place decides, because the answer
+ * differs per process and a module-level default cannot know which it is in:
+ * the hub is normally started detached with stdio "ignore", so stderr there is
+ * /dev/null - narration written to it is not quiet, it is LOST, which is worse
+ * than being off because the flag looks like it did something.
+ *
+ * The hub points this at its own rotating log (the file that exists precisely
+ * because a detached hub's evidence must survive). Everything else - the CLI,
+ * a standalone session server whose stderr is captured to `run/server.out.log`
+ * - leaves it at stderr, which is right for them.
+ */
+let narrationSink: ((line: string) => void) | undefined;
+
+/** Point this process's narration at a durable sink. Called by the hub. */
+export const setNarrationSink = (sink: (line: string) => void): void => {
+  narrationSink = sink;
+};
+
+/** Parse the flag: a comma-separated list, trimmed and lowercased, with `all`
+ *  as the one spelling for "be loud everywhere". */
+export const verboseSubsystems = (env: VerboseEnv): VerboseSubsystem[] => {
+  const raw = env.LUCID_VERBOSE?.trim().toLowerCase() ?? "";
+  if (raw === "") return [];
+  const named = raw.split(",").map((s) => s.trim());
+  if (named.includes("all")) return [...VERBOSE_SUBSYSTEMS];
+  return VERBOSE_SUBSYSTEMS.filter((s) => named.includes(s));
+};
+
+/** The names in the flag that name nothing. `LUCID_VERBOSE=1` is the single
+ *  most likely thing a human types, and dropping it in silence is the failure
+ *  this list being "closed and checkable" was supposed to prevent - a flag
+ *  that looks set and does nothing. */
+export const unknownSubsystems = (env: VerboseEnv): string[] => {
+  const raw = env.LUCID_VERBOSE?.trim().toLowerCase() ?? "";
+  if (raw === "") return [];
+  const known = new Set<string>([...VERBOSE_SUBSYSTEMS, "all"]);
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "" && !known.has(s));
+};
+
+/** Say so, once per process, when the flag names something unrecognised. */
+let warnedUnknown = false;
+export const warnUnknownSubsystems = (env: VerboseEnv = ambientEnv()): void => {
+  if (warnedUnknown) return;
+  const unknown = unknownSubsystems(env);
+  if (unknown.length === 0) return;
+  warnedUnknown = true;
+  stderrSink(
+    `[verbose] LUCID_VERBOSE names ${unknown.map((u) => `"${u}"`).join(", ")}, ` +
+      `which is not a subsystem - known: ${VERBOSE_SUBSYSTEMS.join(", ")}, all`,
+  );
 };
 
 /** Is this ONE subsystem loud? Scoped, so turning on anchors cannot drown the
@@ -89,7 +135,9 @@ export const tracer = (
   return (message: TraceMessage): void => {
     enabled ??= isVerbose(subsystem, options.env);
     if (!enabled) return;
-    const sink = options.sink ?? stderrSink;
+    // Resolved per line, not at construction: the hub installs its sink after
+    // this module's importers have already built their tracers.
+    const sink = options.sink ?? narrationSink ?? stderrSink;
     sink(`[${subsystem}] ${message()}`);
   };
 };

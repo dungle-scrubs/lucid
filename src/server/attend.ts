@@ -130,6 +130,26 @@ export interface AttendVerdict {
   readonly reason: string;
 }
 
+/** How much of a quiet turn's own output is relayed as its reply. */
+const SILENT_TURN_TAIL = 600;
+
+/**
+ * What of a quiet turn's output may be relayed to the human as the agent's
+ * words. Lucid's OWN narration is not the agent's words: `LUCID_VERBOSE`
+ * propagates into the spawned turn (it inherits the environment) and that
+ * turn's stderr is the attend log this reads, so without the filter the tail
+ * can be `[anchors] …` lines - delivered as an `agent_reply`, shown in the
+ * viewer as something the agent said, and recorded permanently in log.ndjson.
+ */
+export const relayableTail = (output: string): string =>
+  output
+    .split("\n")
+    .filter((line) => !/^\[(anchors|attend|verbose)\]/.test(line.trimStart()))
+    .join("\n")
+    .trim()
+    .slice(-SILENT_TURN_TAIL)
+    .trim();
+
 export const attendReason = (input: AttendDecisionInput): AttendVerdict => {
   if (input.pendingFeedbackSeqs.length === 0) {
     return { decision: "idle", reason: "nothing pending: no undelivered feedback on this log" };
@@ -219,14 +239,11 @@ const usableCwd = async (recorded: string | undefined, fallback: string): Promis
  */
 export const createAttendant = (options: AttendantOptions): Attendant => {
   const { paths, log } = options;
-  // Narration rides the hub's OWN sink, not stderr. The attend engine only
-  // ever runs inside the hub, and `lucid hub` is normally started detached
-  // with stdio "ignore" - so a stderr trace is written to /dev/null in the
-  // only mode this subsystem runs in. The sink is the rotating file that
-  // exists precisely because the hub's evidence must survive detaching
-  // (D-002). This narration is INTERNAL: it never gates, and is never gated
-  // by, the always-on boundary records.
-  const trace = options.trace ?? tracer("attend", { sink: log });
+  // Narration rides this process's narration sink, which the hub points at
+  // its own rotating log (D-002) - a stderr default would be /dev/null in the
+  // only mode this engine runs in. INTERNAL: it never gates, and is never
+  // gated by, the always-on boundary records.
+  const trace = options.trace ?? tracer("attend");
   const debounceMs = options.debounceMs ?? DEFAULT_ATTEND_DEBOUNCE_MS;
   const workingGraceMs = options.workingGraceMs ?? DEFAULT_WORKING_GRACE_MS;
 
@@ -384,7 +401,6 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
 
   /** Chars of a silent turn's own output to relay into the record. Enough for
    *  a paragraph of reasoning, short of pasting a whole transcript. */
-  const SILENT_TURN_TAIL = 600;
 
   /**
    * A turn that exited CLEAN but wrote nothing to the log - no new version, no
@@ -406,7 +422,13 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     );
     if (spoke) return;
     const output = await readFile(paths.attendLog, "utf8").catch(() => "");
-    const tail = output.trim().slice(-SILENT_TURN_TAIL).trim();
+    // Lucid's OWN narration is not the agent's words. LUCID_VERBOSE propagates
+    // into the spawned turn (it inherits the environment), and that turn's
+    // stderr is this very file - so without this filter the last 600
+    // characters of a quiet turn can be `[anchors] …` lines, delivered into
+    // the artifact's log as an agent_reply and shown to the human in the
+    // viewer as something the agent said. Permanently, in log.ndjson.
+    const tail = relayableTail(output);
     if (tail === "") return;
     await deliver(paths, {
       t: "agent_reply",

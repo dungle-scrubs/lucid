@@ -178,8 +178,22 @@ export interface ResolveOptions {
  * trace on disk (D-005). The hash still identifies the fingerprint uniquely,
  * which is what a human diagnosing a mismatch actually compares.
  */
-const redactFingerprint = (fingerprint: string | undefined): string =>
-  fingerprint === undefined ? "(none)" : fingerprint.replace(/·".*$/s, "");
+const redactFingerprint = (fingerprint: string | undefined): string => {
+  if (fingerprint === undefined) return "(none)";
+  const stripped = fingerprint.replace(/·".*$/s, "");
+  // A fingerprint arrives off the wire and `parseAnchor` accepts any string,
+  // so one that never had the `·"` marker keeps whatever it did have. Cap it:
+  // an identifier longer than this is not an identifier, and narration now
+  // shares the hub's rotating log, where an oversized line rotates real
+  // evidence away.
+  return capTraceField(stripped);
+};
+
+/** Traces share the hub's 5 MB rotation budget and ride at poll rate; every
+ *  caller-influenced field is capped, exactly as the request records are. */
+const TRACE_FIELD_CAP = 120;
+const capTraceField = (value: string): string =>
+  value.length > TRACE_FIELD_CAP ? `${value.slice(0, TRACE_FIELD_CAP)}…` : value;
 
 export const resolveElementMatch = (
   anchor: ElementAnchor,
@@ -192,13 +206,13 @@ export const resolveElementMatch = (
       root.querySelectorAll(`[data-lucid-id="${cssEscape(anchor.lucidId)}"]`),
     );
     if (matches.length === 1 && matches[0]) {
-      trace(() => `lucidId "${anchor.lucidId}" -> 1 match, exact`);
+      trace(() => `lucidId "${capTraceField(anchor.lucidId ?? "")}" -> 1 match, exact`);
       return { el: matches[0], match: "exact" };
     }
     // non-unique -> skip lucidId layer
     trace(
       () =>
-        `lucidId "${anchor.lucidId}" -> ${matches.length} matches, skipped (a layer must be unique to win)`,
+        `lucidId "${capTraceField(anchor.lucidId ?? "")}" -> ${matches.length} matches, skipped (a layer must be unique to win)`,
     );
   } else {
     trace(() => "lucidId absent on the anchor, skipped");
@@ -230,14 +244,14 @@ export const resolveElementMatch = (
       if (match) {
         trace(
           () =>
-            `domPath "${anchor.domPath}" -> matched, POSITIONAL (whatever now occupies that slot)`,
+            `domPath "${capTraceField(anchor.domPath ?? "")}" -> matched, POSITIONAL (whatever now occupies that slot)`,
         );
         return { el: match, match: "positional" };
       }
-      trace(() => `domPath "${anchor.domPath}" -> no match`);
+      trace(() => `domPath "${capTraceField(anchor.domPath ?? "")}" -> no match`);
     } catch {
       // invalid selector -> no match
-      trace(() => `domPath "${anchor.domPath}" -> invalid selector`);
+      trace(() => `domPath "${capTraceField(anchor.domPath ?? "")}" -> invalid selector`);
     }
   } else {
     trace(() => "domPath absent on the anchor");

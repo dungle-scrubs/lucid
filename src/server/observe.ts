@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { accessSync, appendFileSync, constants, mkdirSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { isLucidError } from "../errors.ts";
@@ -327,7 +327,6 @@ export interface SinkStatus {
  */
 export const sinkStatus = (path?: string): SinkStatus => {
   const resolved = hubLogPath(path);
-  const error = writeErrors.get(resolved);
   let bytes = 0;
   let exists = false;
   try {
@@ -343,12 +342,34 @@ export const sinkStatus = (path?: string): SinkStatus => {
   } catch {
     // No previous generation.
   }
+  // Health comes from DISK, not from this process having tried to write. The
+  // reader is `lucid status`, a different process from the hub that owns the
+  // sink - so an in-process error map is always empty here, and reporting
+  // `writable: true` off it made a log whose every write was failing look
+  // healthy and idle. That is the self-concealing failure this field exists
+  // to expose, reproduced by the field itself.
+  //
+  // The in-process record still wins when there IS one: it names the actual
+  // errno the sink hit, which beats re-deriving.
+  const recorded = writeErrors.get(resolved);
+  const probed = recorded ?? probeWritable(resolved, exists);
   return {
     path: resolved,
     exists,
     bytes,
     rotated,
-    writable: error === undefined,
-    ...(error !== undefined ? { error } : {}),
+    writable: probed === undefined,
+    ...(probed !== undefined ? { error: probed } : {}),
   };
+};
+
+/** Can a line actually land at this path? The file if it exists, else the
+ *  directory that would have to hold it. Returns the reason it cannot. */
+const probeWritable = (path: string, exists: boolean): string | undefined => {
+  try {
+    accessSync(exists ? path : dirname(path), constants.W_OK);
+    return undefined;
+  } catch (err) {
+    return (err as Error).message;
+  }
 };

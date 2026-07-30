@@ -630,7 +630,7 @@ describe("the verbose flag governs internal narration ONLY (M3.1)", () => {
     expect(records.find((r) => r.event === "request")).toBeDefined();
   });
 
-  test("and no internal narration leaks into the records when the flag IS set", async () => {
+  test("narration and records share the sink WITHOUT corrupting each other", async () => {
     const prev = process.env.LUCID_VERBOSE;
     process.env.LUCID_VERBOSE = "all";
     const lines: string[] = [];
@@ -642,23 +642,29 @@ describe("the verbose flag governs internal narration ONLY (M3.1)", () => {
         log: (m) => void lines.push(m),
       });
       await get(daemon.port, "/hub/sessions");
+      // Narration really is live in this process - asserting on a route that
+      // narrates nothing left the whole test passing because NOTHING was
+      // tracing, which is what the flag being import-time-snapshotted did.
+      const { tracer } = await import("../src/core/verbose.ts");
+      tracer("attend")(() => "synthetic: a turn declined");
     } finally {
       if (prev === undefined) delete process.env.LUCID_VERBOSE;
       else process.env.LUCID_VERBOSE = prev;
     }
-    // One line per request stays one line per request: narration never
-    // multiplies the records, and the boundary pair is untouched by the flag.
-    const exits = lines
-      .filter((l) => l.startsWith("{"))
+
+    // The hub installs its own log as the narration sink, so both land here.
+    const narration = lines.filter((l) => l.startsWith("[attend]"));
+    expect(narration.length).toBeGreaterThan(0);
+
+    // And the records are untouched by it: still exactly one exit for the
+    // request, and every JSON line still parses - a reader grepping the file
+    // is never handed a half-line spliced with a trace.
+    const records = lines.filter((l) => l.startsWith("{"));
+    for (const line of records) expect(() => JSON.parse(line)).not.toThrow();
+    const exits = records
       .map((l) => JSON.parse(l) as Record<string, unknown>)
       .filter((r) => r.event === "request" && r.path === "/hub/sessions");
     expect(exits).toHaveLength(1);
-    // Every record is still parseable JSON - narration shares the hub's sink
-    // (it must, or a detached hub discards it), so what matters is that a
-    // reader filtering for records is not handed a half-line.
-    for (const line of lines.filter((l) => l.startsWith("{"))) {
-      expect(() => JSON.parse(line)).not.toThrow();
-    }
   });
 });
 

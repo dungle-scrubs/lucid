@@ -372,16 +372,20 @@ which is the normal case, and used to discard every line it wrote.
 subsystem, because always-on tracing is noise:
 
 ```sh
-export LUCID_VERBOSE=anchors     # or: attend, or a,b, or all
+export LUCID_VERBOSE=anchors     # or: attend, or anchors,attend, or all
 ```
 
 - `anchors` - which layer resolved an annotation's target (`lucidId`,
   fingerprint, or the positional `domPath`) and why the others were skipped.
-  The answer to "why did it highlight that element". Lands in the session's
-  `run/server.out.log`.
+  The answer to "why did it highlight that element".
 - `attend` - which precondition stopped a headless turn from running (nothing
-  pending, an agent listening, mid-turn, debounce). Lands in the hub log, so a
-  detached hub still keeps it.
+  pending, an agent listening, mid-turn, debounce).
+
+Narration goes wherever that process's evidence goes: the hub writes it to the
+same rotating log as the records above (a detached hub's stderr is discarded,
+so anything written there would be lost, not quiet), and a standalone session
+server writes it to that session's `run/server.out.log`. A name the flag does
+not recognise is reported rather than ignored.
 
 The flag governs internal narration only. The request records above are
 baseline evidence and are never gated by it.

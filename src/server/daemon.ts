@@ -43,10 +43,13 @@ import { createArtifactPrompt, createAttendant, type Attendant } from "./attend.
 import {
   cliRequestId,
   observeRequests,
+  sinkStatus,
+  type SinkStatus,
   REQUEST_ID_HEADER,
   resolveHubSink,
   type RequestObservation,
 } from "./observe.ts";
+import { setNarrationSink, warnUnknownSubsystems } from "../core/verbose.ts";
 import {
   CHROME_BUNDLE,
   CHROME_CSS,
@@ -236,6 +239,12 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const attend = opts.attend === true;
   const attendPollMs = opts.attendPollMs ?? DEFAULT_ATTEND_POLL_MS;
   const log = resolveHubSink(opts);
+  // Every subsystem's narration goes where the hub's own evidence goes. A
+  // stderr default is /dev/null here (the hub is normally started detached),
+  // so `LUCID_VERBOSE=anchors` on a hub-hosted session produced nothing at all
+  // while the contract told the reader where to look for it.
+  setNarrationSink(log);
+  warnUnknownSubsystems();
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   /** Live create-turn heartbeats (M2.1), owned so `stop()` can end them: a
@@ -1198,6 +1207,12 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           // The debug surface (M1.1 observability): the attention fold cache's
           // hit/miss/entries, readable with `curl <hub>/hub/identity`.
           debug: { attentionCache: attentionCache.stats() },
+          // The hub's OWN view of its log (M3.2). `lucid status` runs in a
+          // different process and can resolve a different LUCID_HUB_LOG - or
+          // miss an explicitly injected path entirely - so asking beats
+          // re-deriving: the writer is the only process that knows where its
+          // evidence actually goes.
+          log: sinkStatus(opts.hubLogPath),
         },
         200,
         noStore,
@@ -1312,6 +1327,9 @@ export interface HubInfo {
   readonly shells: number;
   /** True when the hub runs the attend engine (headless turns + create). */
   readonly attend: boolean;
+  /** The hub's own view of where its evidence goes, and whether it is landing
+   *  (M3.2). Absent from an older hub, which is why the reader falls back. */
+  readonly log?: SinkStatus;
 }
 
 /** The hub's identity on `port`, or undefined when none answers. */
@@ -1328,12 +1346,26 @@ export const hubInfo = async (port = HUB_PORT): Promise<HubInfo | undefined> => 
     });
     clearTimeout(timer);
     if (!probe.ok) return undefined;
-    const who = (await probe.json()) as { lucid?: unknown; shells?: unknown; attend?: unknown };
+    const who = (await probe.json()) as {
+      lucid?: unknown;
+      shells?: unknown;
+      attend?: unknown;
+      log?: unknown;
+    };
     if (who.lucid !== "hub") return undefined;
+    // The hub's own log view rides along when it reports one; an older hub
+    // reports none and the caller falls back to deriving its own.
+    const log =
+      who.log !== null &&
+      typeof who.log === "object" &&
+      typeof (who.log as SinkStatus).path === "string"
+        ? (who.log as SinkStatus)
+        : undefined;
     return {
       port,
       shells: typeof who.shells === "number" ? who.shells : 0,
       attend: who.attend === true,
+      ...(log ? { log } : {}),
     };
   } catch {
     return undefined;

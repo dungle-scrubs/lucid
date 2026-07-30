@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isVerbose, tracer, verboseSubsystems } from "../src/core/verbose.ts";
+import {
+  isVerbose,
+  setNarrationSink,
+  tracer,
+  unknownSubsystems,
+  verboseSubsystems,
+} from "../src/core/verbose.ts";
+
+/** Put the process-wide sink back where it started, so one test cannot make
+ *  every later one loud. */
+const stderrForTests = (line: string): void => void process.stderr.write(`${line}\n`);
 import { computeFingerprint, resolveElementMatch } from "../src/anchors/dom.ts";
 import { attendReason } from "../src/server/attend.ts";
 
@@ -204,28 +214,44 @@ describe("the attend subsystem says WHICH precondition stopped a turn", () => {
   });
 });
 
-describe("attend narration rides the HUB's sink, not stderr (M3.1)", () => {
-  test("with the flag on, the reason reaches the injected log - the file that survives detaching", async () => {
+describe("narration goes where THIS process's evidence goes (M3.1)", () => {
+  test("setNarrationSink redirects EVERY subsystem's default - not one wired by hand", () => {
+    // The hub is normally started detached with stdio "ignore", so a stderr
+    // default is /dev/null there: narration written to it is not quiet, it is
+    // LOST, which is worse than off because the flag looks like it worked.
+    // One process-wide sink, so no subsystem can be forgotten - `anchors` was,
+    // when only `attend` had been wired by hand.
     const prev = process.env.LUCID_VERBOSE;
-    process.env.LUCID_VERBOSE = "attend";
+    process.env.LUCID_VERBOSE = "all";
     const lines: string[] = [];
     try {
-      // The attendant resolves its default trace to `tracer("attend", { sink:
-      // log })`. Building one and letting it tick would need a whole fixture;
-      // what this pins is the ROUTING - a stderr default is written to
-      // /dev/null in the only mode the attend engine runs in (a detached hub),
-      // so the sink must be the hub's own log.
-      const trace = tracer("attend", { sink: (l) => void lines.push(l) });
-      trace(() => "plan: wait - 1 agent(s) listening");
-      expect(lines).toEqual(["[attend] plan: wait - 1 agent(s) listening"]);
-      // And the source really wires it that way, so this cannot pass while
-      // the attendant still defaults to stderr.
-      const src = readFileSync(join(import.meta.dir, "..", "src/server/attend.ts"), "utf8");
-      expect(src).toContain('tracer("attend", { sink: log })');
+      setNarrationSink((l) => void lines.push(l));
+      tracer("attend")(() => "plan: wait - 1 agent(s) listening");
+      tracer("anchors")(() => "fingerprint p#ab12 -> 1 match, exact");
+      expect(lines).toEqual([
+        "[attend] plan: wait - 1 agent(s) listening",
+        "[anchors] fingerprint p#ab12 -> 1 match, exact",
+      ]);
     } finally {
+      setNarrationSink(stderrForTests);
       if (prev === undefined) delete process.env.LUCID_VERBOSE;
       else process.env.LUCID_VERBOSE = prev;
     }
+  });
+
+  test("the hub installs it, so a hub-hosted session's narration is not discarded", () => {
+    // Asserted on the source: the wiring is one line and its absence is
+    // invisible at runtime until somebody sets the flag on a real hub.
+    const src = readFileSync(join(import.meta.dir, "..", "src/server/daemon.ts"), "utf8");
+    expect(src).toContain("setNarrationSink(log)");
+  });
+
+  test("a flag naming nothing SAYS so - a silent no-op is the failure this list exists to prevent", () => {
+    expect(unknownSubsystems({ LUCID_VERBOSE: "1" })).toEqual(["1"]);
+    expect(unknownSubsystems({ LUCID_VERBOSE: "anchor" })).toEqual(["anchor"]);
+    expect(unknownSubsystems({ LUCID_VERBOSE: "anchors,attend" })).toEqual([]);
+    expect(unknownSubsystems({ LUCID_VERBOSE: "all" })).toEqual([]);
+    expect(unknownSubsystems({})).toEqual([]);
   });
 
   test("resolution is LAZY - a flag set after import still takes effect", () => {
@@ -244,5 +270,48 @@ describe("attend narration rides the HUB's sink, not stderr (M3.1)", () => {
       else process.env.LUCID_VERBOSE = prev;
     }
     expect(typeof built).toBe("function");
+  });
+});
+
+describe("narration cannot be laundered into the review log (M3.1, #91 review)", () => {
+  test("a quiet turn's relayed reply strips Lucid's own trace lines", async () => {
+    const { relayableTail } = await import("../src/server/attend.ts");
+    // LUCID_VERBOSE propagates into the spawned turn, whose stderr IS the
+    // attend log - so the tail of a quiet turn can be pure narration, and it
+    // used to be delivered as an agent_reply the human sees in the viewer.
+    const output = [
+      "[anchors] lucidId absent on the anchor, skipped",
+      "[anchors] fingerprint p#ab12 -> 1 match, exact",
+      "[attend] plan: spawning",
+    ].join("\n");
+    expect(relayableTail(output)).toBe("");
+
+    // A real reply still comes through, narration around it stripped.
+    const mixed = [
+      "[anchors] noise",
+      "No conversation found with session ID: abc",
+      "[attend] x",
+    ].join("\n");
+    expect(relayableTail(mixed)).toBe("No conversation found with session ID: abc");
+  });
+});
+
+describe("trace fields are capped like record fields are (M3.1, #91 review)", () => {
+  test("an off-shape fingerprint from the wire cannot write an oversized line", async () => {
+    const { parseHTML } = await import("linkedom");
+    const { document } = parseHTML("<html><body><p>x</p></body></html>");
+    const lines: string[] = [];
+    resolveElementMatch(
+      { type: "element", fingerprint: "z".repeat(5000), lucidId: "y".repeat(5000) } as never,
+      document as never,
+      {
+        trace: tracer("anchors", {
+          env: { LUCID_VERBOSE: "anchors" },
+          sink: (l) => void lines.push(l),
+        }),
+      },
+    );
+    // Narration shares the hub's 5MB rotation budget and rides at poll rate.
+    for (const line of lines) expect(line.length).toBeLessThan(300);
   });
 });
