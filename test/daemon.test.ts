@@ -578,8 +578,13 @@ describe("the hub's wide event: every request emits (plan 07, M1.2)", () => {
 
     const exit = records(lines).find((r) => r.event === "request" && r.path === "/hub/create");
     expect(exit?.project).toBe(root);
-    expect(exit?.artifact).toBe("not a valid name!");
+    // A name that fails CREATE_NAME is not an identifier - it is whatever
+    // the caller typed, which could be content. It never reaches the record
+    // (adversarial review of #89); the 400 plus project/harness still make
+    // the refusal queryable.
+    expect(exit?.artifact).toBeUndefined();
     expect(exit?.harness).toBe("claude");
+    expect(lines.join("\n")).not.toContain("not a valid name!");
     expect(lines.join("\n")).not.toContain("SENTINEL_PROMPT_never_logged");
   });
 
@@ -627,5 +632,45 @@ describe("the CLI carries the id to the hub (M1.3)", () => {
     // The turn's own hub call joins the click that spawned it - one grep.
     expect(exit?.trace).toBe("0123456789abcdef");
     expect(exit?.id).not.toBe("0123456789abcdef");
+  });
+});
+
+describe("no request escapes the record (adversarial review of #89)", () => {
+  test("an authority-form target (CONNECT) still emits entry and exit", async () => {
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    // fetch cannot send CONNECT; write the raw request line ourselves.
+    const { connect } = await import("node:net");
+    const raw = await new Promise<string>((resolve, reject) => {
+      const sock = connect(daemon?.port ?? 0, "127.0.0.1", () => {
+        sock.write(
+          `CONNECT 127.0.0.1:${daemon?.port} HTTP/1.1\r\nHost: 127.0.0.1:${daemon?.port}\r\n\r\n`,
+        );
+      });
+      let buf = "";
+      sock.on("data", (d) => {
+        buf += d.toString();
+      });
+      sock.on("end", () => resolve(buf));
+      sock.on("error", reject);
+      setTimeout(() => {
+        sock.end();
+      }, 1500);
+    });
+    expect(raw).toContain("HTTP/1.1");
+
+    const records = lines
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const entry = records.find((r) => r.event === "request.start" && r.method === "CONNECT");
+    const exit = records.find((r) => r.event === "request" && r.method === "CONNECT");
+    // The unparseable target rides as the raw string - evidence beats purity.
+    expect(entry).toBeDefined();
+    expect(exit).toBeDefined();
   });
 });

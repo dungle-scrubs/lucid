@@ -534,14 +534,13 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       );
       return;
     }
-    // The harness's own last words, inline. "exited 1" alone sent every
-    // diagnosis on a hunt through a log file for what turns out to be a
-    // one-line answer ("No conversation found with session ID: …").
-    const reason = output.trim().split("\n").filter(Boolean).at(-1)?.slice(0, 160);
+    // A POINTER to the harness's own last words, not the words themselves:
+    // this line now lands in the retained hub log (D-009), and a failed
+    // turn's final output can be reply text - review content the log must
+    // never hold (R1). The named file keeps the one-line diagnosis one
+    // step away instead of a hunt.
     log(
-      `attend ${paths.name}: resume exited ${code} (attempt ${fails}); will retry the batch${
-        reason ? ` - ${reason}` : ""
-      }`,
+      `attend ${paths.name}: resume exited ${code} (attempt ${fails}); will retry the batch - last output: ${paths.attendLog}`,
     );
   };
 

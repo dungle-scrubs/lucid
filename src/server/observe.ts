@@ -77,11 +77,21 @@ export interface RequestObservation {
   end(status: number): void;
 }
 
+/** An identifier longer than this is not an identifier. Caps every
+ *  caller-influenced string on the record, so no single request can write a
+ *  line bigger than the log's own rotation budget and rotate real evidence
+ *  away (R2) - the create body was never the biggest lever; the request
+ *  target itself was. */
+const FIELD_CAP = 256;
+const capField = (value: string): string => value.slice(0, FIELD_CAP);
+
 export const startRequest = (
   request: RequestIdentity,
   options: ObserveOptions,
 ): RequestObservation => {
-  const { method, path, id } = request;
+  const method = capField(request.method);
+  const path = capField(request.path);
+  const { id } = request;
   const trace = request.trace ?? id;
   // performance.now, not Date.now: sub-ms resolution means a fast loopback
   // route still records a real, non-zero duration.
@@ -94,19 +104,15 @@ export const startRequest = (
   const context: { -readonly [K in keyof RequestContext]: RequestContext[K] } = {};
   let failure: { readonly type: string; readonly code: string } | undefined;
   let ended = false;
-  // An identifier longer than this is not an identifier. The cap is what
-  // stops one hostile create body from writing a line bigger than the log's
-  // own rotation budget and rotating real evidence away.
-  const cap = (value: string): string => value.slice(0, 256);
   return {
     id,
     trace,
     attach(next: RequestContext): void {
-      if (next.artifact !== undefined) context.artifact = cap(next.artifact);
-      if (next.project !== undefined) context.project = cap(next.project);
-      if (next.session !== undefined) context.session = cap(next.session);
-      if (next.view !== undefined) context.view = cap(next.view);
-      if (next.harness !== undefined) context.harness = cap(next.harness);
+      if (next.artifact !== undefined) context.artifact = capField(next.artifact);
+      if (next.project !== undefined) context.project = capField(next.project);
+      if (next.session !== undefined) context.session = capField(next.session);
+      if (next.view !== undefined) context.view = capField(next.view);
+      if (next.harness !== undefined) context.harness = capField(next.harness);
     },
     fail(error: ErrorIdentity): void {
       failure = { type: error._tag, code: error.code };
@@ -159,13 +165,24 @@ export const observeRequests = (
   handler: (req: Request, observation: RequestObservation) => Promise<Response>,
 ): ((req: Request) => Promise<Response>) => {
   return async (req: Request): Promise<Response> => {
-    const { pathname } = new URL(req.url);
+    // NEVER let path derivation lose the record: an authority-form target
+    // (CONNECT host:port) is not a parseable URL, and a throw here - before
+    // the observation exists - was the one request that produced a Response
+    // with zero evidence. The raw target rides instead; evidence beats
+    // purity (adversarial review of #89).
+    let pathname: string;
+    try {
+      pathname = new URL(req.url).pathname;
+    } catch {
+      pathname = req.url;
+    }
+    const trace = inboundTrace(req.headers);
     const observation = startRequest(
       {
         method: req.method,
         path: pathname,
         id: mintRequestId(),
-        ...(inboundTrace(req.headers) !== undefined ? { trace: inboundTrace(req.headers) } : {}),
+        ...(trace !== undefined ? { trace } : {}),
       },
       options,
     );
@@ -248,7 +265,12 @@ export const createLogSink = (options: LogSinkOptions = {}): LineSink => {
       // M3.2 gives write health an inspection surface.
       ready = false;
     }
-    options.mirror?.(message);
+    try {
+      options.mirror?.(message);
+    } catch {
+      // A closed stdout pipe must not turn every request into a 500 - the
+      // file already has the line, which is the copy that matters.
+    }
   };
 };
 

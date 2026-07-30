@@ -57,7 +57,9 @@ test("before the first listing arrives the screen says it is LOOKING, not empty"
   await expect(page.getByText("Looking for sessions…")).toHaveCount(0);
 });
 
-test("with no OS chooser the folder icon falls back to a path field", async ({ page }) => {
+test("with no OS chooser the add-project affordance falls back to a path field", async ({
+  page,
+}) => {
   // Attend on: /hub/project (chooser AND typed add) is authoring machinery,
   // and a review-only hub 403s it before any chooser question arises.
   hub = await startHub({ attend: true });

@@ -743,10 +743,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const project = typeof body?.project === "string" ? body.project : "";
     const name = typeof body?.name === "string" ? body.name : "";
     // Attach the identifiers the moment they exist, so even a refused create
-    // is a queryable record - identifiers, never the prompt (D-005).
+    // is a queryable record - identifiers, never the prompt (D-005). The
+    // name only counts as an identifier once it LOOKS like one: a string
+    // that fails CREATE_NAME is whatever the caller typed, which could be
+    // content, so it stays out and the 400 speaks for it.
     observation.attach({
       project,
-      artifact: name,
+      ...(CREATE_NAME.test(name) ? { artifact: name } : {}),
       ...(typeof body?.harness === "string" ? { harness: body.harness } : {}),
     });
     const prompt = typeof body?.prompt === "string" ? body.prompt : "";

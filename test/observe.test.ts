@@ -180,6 +180,16 @@ describe("observeRequests: the funnel wrapper the daemon's fetch uses (M1.2)", (
     expect(lines.join("\n")).not.toContain("SENTINEL_SECRET");
   });
 
+  test("the PATH is capped too - a 16k request target must not eat the rotation budget (R2)", async () => {
+    const { lines, sink } = capture();
+    const observed = observeRequests({ sink }, async () => new Response("ok"));
+    await observed(req(`/hub/${"x".repeat(16_000)}`));
+
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(1024);
+    }
+  });
+
   test("attached identifiers are capped: a megabyte name cannot rotate real evidence away", async () => {
     const { lines, sink } = capture();
     const observed = observeRequests({ sink }, async (_req, observation) => {
