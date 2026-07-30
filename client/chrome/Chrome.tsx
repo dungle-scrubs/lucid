@@ -147,7 +147,16 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
           actions.discardPending();
           return;
         }
-        set({ pendingTargets: next, pendingTarget: next[0] ?? null, forkId: null });
+        set({
+          pendingTargets: next,
+          pendingTarget: next[0] ?? null,
+          // The decision this pick belongs to, or none. On a cmd-collect the
+          // LATEST pick decides: that is the one the human just pointed at,
+          // and offering Agree for a decision they collected three picks ago
+          // would answer something they have moved on from.
+          pendingDecision: msg.decision ?? null,
+          forkId: null,
+        });
         surface.pushHighlights();
       } else if (msg.type === "annotation-hover") {
         set({ hoveredId: msg.id });

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { hubFetch } from "./request.ts";
 import type { SelectionResponse } from "../../src/protocol/wire.ts";
 import { QUICK_REPLIES } from "./actions.ts";
+import { DECISION_REPLIES } from "../shared/decision.ts";
 import { TargetSnippet } from "./AnnotationPart.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
@@ -642,12 +643,14 @@ export const PendingComposer = () => {
     discardPending,
     forkPending,
     queueQuickReply,
+    queueDecision,
     removePastedImage,
     removePendingTarget,
     setComposerNote,
   } = useActions();
   const { pastes } = useSessionHandle();
   const pendingTarget = useSession((s) => s.pendingTarget);
+  const pendingDecision = useSession((s) => s.pendingDecision);
   const pendingTargets = useSession((s) => s.pendingTargets);
   const composerNote = useSession((s) => s.composerNote);
   const pastedImages = useSession((s) => s.pastedImages);
@@ -729,7 +732,13 @@ export const PendingComposer = () => {
           />
           {/* One-tap canned notes. Clicking queues that note for this pick, the
               same as typing it and pressing Enter - no textarea detour for the
-              asks that recur. */}
+              asks that recur.
+
+              The decision chips sit BESIDE them, not instead of them: a
+              recommendation you do not understand still needs "What is this?"
+              before you can agree to it. They appear only when the pick is
+              inside an element the agent marked, and they answer that marked
+              element rather than the child that was clicked. */}
           <div className="flex flex-wrap gap-1.5">
             {QUICK_REPLIES.map((r) => (
               <button
@@ -742,6 +751,20 @@ export const PendingComposer = () => {
                 {r}
               </button>
             ))}
+            {pendingDecision
+              ? DECISION_REPLIES.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    data-test="decision-reply"
+                    data-reply={r}
+                    onClick={() => queueDecision(r)}
+                    className="cursor-pointer border border-sage-600 bg-sage-600/15 px-2.5 py-1 text-[11px] font-semibold text-sage-200 hover:bg-sage-600/30 hover:text-fg"
+                  >
+                    {r}
+                  </button>
+                ))
+              : null}
           </div>
           <div className="flex items-center gap-2">
             <button

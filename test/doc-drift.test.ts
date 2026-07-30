@@ -235,3 +235,18 @@ describe("the turn's declared intent is instructed, not assumed (finding #18)", 
     expect(launcher).toMatch(/lucid intent \$\{artifact\} revise/);
   });
 });
+
+describe("the decision marker the skill teaches is the one the code reads", () => {
+  test("the attribute name matches, so a marked artifact really gets the chips", () => {
+    const skill = readFileSync(join(REPO, "skills/lucid/SKILL.md"), "utf8");
+    const decisionSrc = readFileSync(join(REPO, "client/shared/decision.ts"), "utf8");
+    const attr = /DECISION_ATTR = "([^"]+)"/.exec(decisionSrc)?.[1] ?? "";
+    expect(attr).not.toBe("");
+    expect(skill).toContain(attr);
+    // And the labels, so the doc cannot promise a button that says something else.
+    const replies = /DECISION_REPLIES = \[([^\]]*)\]/.exec(decisionSrc)?.[1] ?? "";
+    for (const label of [...replies.matchAll(/"([^"]+)"/g)].map((m) => m[1])) {
+      expect(skill).toContain(label as string);
+    }
+  });
+});

@@ -142,6 +142,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   questionText: (): Locator => root.locator(hook("question-text")),
   queuedAnnotation: (): Locator => root.locator(hook("queued-annotation")),
   quickReply: (): Locator => root.locator(hook("quick-reply")),
+  decisionReply: (): Locator => root.locator(hook("decision-reply")),
   reask: (): Locator => root.locator(hook("reask")),
   removeQueued: (): Locator => root.locator(hook("remove-queued")),
   reason: (): Locator => root.locator(hook("reason")),
