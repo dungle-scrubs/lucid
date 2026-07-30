@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { hubFetch } from "./request.ts";
 import { createRoots, openTab, setCreateOpen, useHub } from "./hub.ts";
 import { projectName } from "./naming.ts";
 import { effortLadder, harnessInfoFor } from "./selection.ts";
@@ -119,7 +120,7 @@ const CreateDialogBody = () => {
    */
   const addProject = async (path?: string): Promise<void> => {
     setAddError(null);
-    const res = await fetch("/hub/project", {
+    const res = await hubFetch("/hub/project", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(path ? { path } : {}),
@@ -301,7 +302,7 @@ const CreateDialogBody = () => {
     // approaching this budget means the request is not going to be answered at
     // all (the classic case: the hub was restarted under an open window, and the
     // page is posting down a socket to a process that no longer exists).
-    const res = await fetch("/hub/create", {
+    const res = await hubFetch("/hub/create", {
       signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
       method: "POST",
       headers: { "content-type": "application/json" },

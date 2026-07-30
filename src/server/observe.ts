@@ -54,6 +54,9 @@ export interface ErrorIdentity {
 }
 
 export interface RequestObservation {
+  /** The record's id - what a route hands to work that OUTLIVES the request
+   *  (a spawned turn), so the offspring's records join the click's. */
+  readonly id: string;
   /** Merge named identifiers onto the record - attach, don't log. */
   attach(context: RequestContext): void;
   /** Stamp a typed error's identity onto the record: `error.type` is the
@@ -85,6 +88,7 @@ export const startRequest = (
   // own rotation budget and rotating real evidence away.
   const cap = (value: string): string => value.slice(0, 256);
   return {
+    id,
     attach(next: RequestContext): void {
       if (next.artifact !== undefined) context.artifact = cap(next.artifact);
       if (next.project !== undefined) context.project = cap(next.project);
@@ -114,9 +118,33 @@ export const startRequest = (
   };
 };
 
-/** A fresh request id: 16 hex chars, the same width `sessionId` uses.
- *  M1.3 teaches the boundary to ADOPT a well-formed inbound id instead. */
+/** A fresh request id: 16 hex chars, the same width `sessionId` uses. */
 const mintRequestId = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+
+/** The header the id travels on, every hop: browser -> hub, CLI -> hub. */
+export const REQUEST_ID_HEADER = "x-lucid-request";
+
+/** Exactly 16 lowercase hex chars - anchored, fixed width. Anything else is
+ *  REPLACED, never sanitised-and-kept: an arbitrary-length or non-hex value
+ *  must not reach a log line (R4, the log-injection guard - and the reason
+ *  this is a seam rather than a one-liner). */
+const WELL_FORMED_ID = /^[a-f0-9]{16}$/;
+
+/** The id a CLI process sends: adopt `LUCID_REQUEST_ID` when a spawned turn
+ *  holds one (its hub calls then join the click that spawned it), mint
+ *  otherwise. Malformed values are replaced, same as the header rule. */
+export const cliRequestId = (env: NodeJS.ProcessEnv = process.env): string => {
+  const held = env.LUCID_REQUEST_ID;
+  return held !== undefined && WELL_FORMED_ID.test(held) ? held : mintRequestId();
+};
+
+/** Adopt a well-formed inbound id, mint one otherwise (M1.3). Adoption is
+ *  what joins the four hops: the caller that already holds an id sees the
+ *  hub's records carry the SAME one. */
+export const requestId = (headers: Headers): string => {
+  const inbound = headers.get(REQUEST_ID_HEADER);
+  return inbound !== null && WELL_FORMED_ID.test(inbound) ? inbound : mintRequestId();
+};
 
 /**
  * Wrap the hub's one request funnel so EVERY request emits - the wide event
@@ -132,7 +160,7 @@ export const observeRequests = (
   return async (req: Request): Promise<Response> => {
     const { pathname } = new URL(req.url);
     const observation = startRequest(
-      { method: req.method, path: pathname, id: mintRequestId() },
+      { method: req.method, path: pathname, id: requestId(req.headers) },
       options,
     );
     try {

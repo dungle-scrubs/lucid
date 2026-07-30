@@ -188,7 +188,17 @@ export const runSpawn = async (
   argv: string[],
   cwd: string,
   logFile: string,
-  identity?: { harness: string; sessionId: string; model?: string; effort?: string },
+  identity?: {
+    harness: string;
+    sessionId: string;
+    model?: string;
+    effort?: string;
+    /** The hub request that caused this spawn (M1.3): stamped into the child
+     *  env so the turn's own hub calls carry the click's id. Absent for a
+     *  spawn no request caused (attend's poll) - and then CLEARED, so a
+     *  stale inherited id cannot claim the wrong click. */
+    requestId?: string;
+  },
 ): Promise<number> => {
   // The child is its OWN harness session: inheriting the launcher's
   // LUCID_SESSION_ID would stamp the child's events as the parent
@@ -202,6 +212,7 @@ export const runSpawn = async (
         LUCID_SESSION_ID: identity.sessionId,
         LUCID_MODEL: identity.model,
         LUCID_EFFORT: identity.effort,
+        LUCID_REQUEST_ID: identity.requestId,
       }
     : {
         ...process.env,
@@ -209,6 +220,7 @@ export const runSpawn = async (
         LUCID_SESSION_ID: undefined,
         LUCID_MODEL: undefined,
         LUCID_EFFORT: undefined,
+        LUCID_REQUEST_ID: undefined,
       };
   // The out-log is machine-local (plan 02); its `run/` parent may not exist
   // yet when a fork's create turn spawns. mkdir defensively - idempotent.

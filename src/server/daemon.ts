@@ -40,7 +40,13 @@ import {
 } from "../launch/selection.ts";
 import type { HarnessInfo } from "../protocol/wire.ts";
 import { createArtifactPrompt, createAttendant, type Attendant } from "./attend.ts";
-import { observeRequests, resolveHubSink, type RequestObservation } from "./observe.ts";
+import {
+  cliRequestId,
+  observeRequests,
+  REQUEST_ID_HEADER,
+  resolveHubSink,
+  type RequestObservation,
+} from "./observe.ts";
 import {
   CHROME_BUNDLE,
   CHROME_CSS,
@@ -899,6 +905,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       void runSpawn(argv, project, outLog, {
         harness: resolved.name,
         sessionId: childSessionId,
+        requestId: observation.id,
         ...(selection?.model !== undefined ? { model: selection.model } : {}),
         ...(selection?.effort !== undefined ? { effort: selection.effort } : {}),
       })
@@ -1316,7 +1323,7 @@ export const hubOpen = async (
     if (!(await hubAlive(port))) return undefined;
     const res = await loopbackFetch(port, "/hub/open", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", [REQUEST_ID_HEADER]: cliRequestId() },
       body: JSON.stringify({ artifact }),
     });
     if (!res.ok) return undefined;

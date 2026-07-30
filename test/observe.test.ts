@@ -6,6 +6,7 @@ import {
   createLogSink,
   hubLogPath,
   observeRequests,
+  requestId,
   resolveHubSink,
   startRequest,
 } from "../src/server/observe.ts";
@@ -192,6 +193,20 @@ describe("observeRequests: the funnel wrapper the daemon's fetch uses (M1.2)", (
     expect(exit.project).toBe("/proj");
   });
 
+  test("an inbound x-lucid-request is adopted, so the caller's id joins the hub's records", async () => {
+    const { lines, sink } = capture();
+    const observed = observeRequests({ sink }, async () => new Response("ok"));
+    await observed(
+      new Request("http://127.0.0.1:9/hub/open", {
+        method: "POST",
+        headers: { "x-lucid-request": "feedc0ffee123456" },
+      }),
+    );
+
+    const exit = lines.map((l) => JSON.parse(l)).find((r) => r.event === "request");
+    expect(exit.id).toBe("feedc0ffee123456");
+  });
+
   test("the handler can attach route context, and it rides the exit record", async () => {
     const { lines, sink } = capture();
     const observed = observeRequests({ sink }, async (_req, observation) => {
@@ -202,6 +217,34 @@ describe("observeRequests: the funnel wrapper the daemon's fetch uses (M1.2)", (
 
     const exit = lines.map((l) => JSON.parse(l)).find((r) => r.event === "request");
     expect(exit.session).toBe("abc123");
+  });
+});
+
+describe("requestId: adopt a well-formed inbound id, mint otherwise (M1.3)", () => {
+  const headers = (value?: string) =>
+    new Headers(value === undefined ? {} : { "x-lucid-request": value });
+
+  test("a well-formed inbound id is adopted", () => {
+    expect(requestId(headers("abc123def4567890"))).toBe("abc123def4567890");
+  });
+
+  test("a missing id is minted", () => {
+    expect(requestId(headers())).toMatch(/^[a-f0-9]{16}$/);
+  });
+
+  test("a malformed id is REPLACED, not sanitised-and-kept - the log-injection guard (R4)", () => {
+    for (const hostile of [
+      "short",
+      "ABC123DEF4567890", // case is part of well-formed
+      "abc123def456789012345678", // arbitrary length
+      'abc123","fake":"1', // a JSON-injection attempt (raw newlines never
+      // get this far - the Headers layer itself rejects them)
+      "../../etc/passwd",
+    ]) {
+      const id = requestId(headers(hostile));
+      expect(id).toMatch(/^[a-f0-9]{16}$/);
+      expect(id).not.toBe(hostile);
+    }
   });
 });
 

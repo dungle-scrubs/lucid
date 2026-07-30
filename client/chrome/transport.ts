@@ -6,6 +6,8 @@
  * would read another session's data the moment two share an origin.
  */
 
+import { hubFetch } from "./request.ts";
+
 /** What `POST <base>/__lucid/asset` returns: the server-decided identity of a
  *  stored blob. */
 export interface UploadedAsset {
@@ -65,7 +67,7 @@ export const createTransport = (base: string): Transport => {
     let lastErr: unknown;
     for (let i = 0; i < attempts; i++) {
       try {
-        const res = await fetch(`${base}${path}`, {
+        const res = await hubFetch(`${base}${path}`, {
           ...init,
           signal: AbortSignal.timeout(isPost ? POST_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
         });
@@ -108,7 +110,7 @@ export const createTransport = (base: string): Transport => {
    * event referencing them does, because the agent reads them off disk.
    */
   const uploadAsset = async (file: File): Promise<UploadedAsset> => {
-    const res = await fetch(`${base}/__lucid/asset`, {
+    const res = await hubFetch(`${base}/__lucid/asset`, {
       method: "POST",
       headers: { "content-type": file.type, "x-lucid-filename": file.name || "pasted" },
       body: file,

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalArtifactPath, sessionPaths } from "../src/core/paths.ts";
 import { registerSession } from "../src/core/registry.ts";
-import { runDaemon, sessionId, type DaemonHandle } from "../src/server/daemon.ts";
+import { hubOpen, runDaemon, sessionId, type DaemonHandle } from "../src/server/daemon.ts";
 import type { ServerDescriptor } from "../src/server/discovery.ts";
 
 let dir: string;
@@ -597,5 +597,34 @@ describe("the hub's wide event: every request emits (plan 07, M1.2)", () => {
 
     const exit = records(lines).find((r) => r.event === "request" && r.session === id);
     expect(exit).toBeDefined();
+  });
+});
+
+describe("the CLI carries the id to the hub (M1.3)", () => {
+  test("hubOpen sends x-lucid-request, adopting LUCID_REQUEST_ID when a turn holds one", async () => {
+    const artifact = await seedSession("proj", "notes");
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    const prev = process.env.LUCID_REQUEST_ID;
+    process.env.LUCID_REQUEST_ID = "0123456789abcdef";
+    try {
+      const result = await hubOpen(artifact, daemon.port);
+      expect(result?.ok).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.LUCID_REQUEST_ID;
+      else process.env.LUCID_REQUEST_ID = prev;
+    }
+
+    const exit = lines
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((r) => r.event === "request" && r.path === "/hub/open");
+    // The turn's own hub call joins the click that spawned it - one grep.
+    expect(exit?.id).toBe("0123456789abcdef");
   });
 });

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { hubFetch } from "./request.ts";
 import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
 import { sessionLabel } from "./naming.ts";
@@ -210,7 +211,7 @@ export const openTab = async (
     return existing;
   }
   const base = `/s/${row.id}`;
-  const identity = await fetch(`${base}/__lucid/identity`)
+  const identity = await hubFetch(`${base}/__lucid/identity`)
     .then((r) => (r.ok ? (r.json() as Promise<{ session: string; version: number }>) : null))
     .catch(() => null);
   if (!identity) return null;
@@ -284,7 +285,7 @@ let bundleStamp: string | null = null;
  * long as the window stays open.
  */
 const refreshIdentity = (): void => {
-  void fetch("/hub/identity")
+  void hubFetch("/hub/identity")
     .then((r) =>
       r.ok
         ? (r.json() as Promise<{
@@ -339,7 +340,7 @@ export const addRoot = async (
   // No deadline: with no path this opens a native folder chooser and waits for
   // a human to browse, which is unbounded on purpose. The hub's own guard kills
   // a chooser nobody answers, and that arrives here as a cancel.
-  const res = await fetch("/hub/roots", {
+  const res = await hubFetch("/hub/roots", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(path !== undefined && path !== "" ? { path } : {}),
@@ -401,7 +402,7 @@ export const connectHub = (): void => {
     void (async () => {
       try {
         const { id } = JSON.parse((e as MessageEvent).data) as { id: string };
-        const listed = (await fetch("/hub/sessions").then((r) =>
+        const listed = (await hubFetch("/hub/sessions").then((r) =>
           r.ok ? (r.json() as Promise<{ sessions: HubSession[] }>) : null,
         )) as { sessions: HubSession[] } | null;
         const row = listed?.sessions.find((s) => s.id === id);

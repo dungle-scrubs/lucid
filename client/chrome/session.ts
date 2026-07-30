@@ -1,4 +1,5 @@
 import type { LogEvent } from "../../src/core/events.ts";
+import { hubFetch } from "./request.ts";
 import type { ContextUsage, SelectionResponse } from "../../src/protocol/wire.ts";
 import { createActions, type SessionActions } from "./actions.ts";
 import { createPastes, type Pastes } from "./pastes.ts";
@@ -104,7 +105,7 @@ export const createSession = (config: SessionConfig): SessionHandle => {
    *  otherwise keep offering the vocabulary it started with. A server that
    *  predates the route answers 404 and the pickers stay off. */
   const loadSelection = async (): Promise<void> => {
-    const res = await fetch(`${config.base}/__lucid/selection`).catch(() => null);
+    const res = await hubFetch(`${config.base}/__lucid/selection`).catch(() => null);
     if (!res?.ok) return;
     const body = (await res.json().catch(() => null)) as SelectionResponse | null;
     if (body) applySelection(body);
