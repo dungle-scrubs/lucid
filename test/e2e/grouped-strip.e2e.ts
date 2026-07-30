@@ -118,7 +118,14 @@ test("edge fades exist only while content overflows that edge (D-013)", async ({
 
   // Narrow window: content extends past the right edge only - the left edge
   // is at scroll 0 and must NOT claim hidden tabs.
-  await page.setViewportSize({ width: 520, height: 700 });
+  //
+  // 320, with room to spare, and not 520: the project headings sit ON their
+  // frame's top edge now rather than inline, so they take no horizontal space
+  // and the strip reclaimed all of it - these four tabs measure ~380px
+  // together, so 520 genuinely fits and correctly fades nothing. A width well
+  // under the content, rather than just under it, keeps this test about
+  // overflow instead of about the current padding.
+  await page.setViewportSize({ width: 320, height: 700 });
   await expect(on(page).tabbarFadeRight()).toHaveCount(1);
   await expect(on(page).tabbarFadeLeft()).toHaveCount(0);
 
@@ -150,7 +157,7 @@ test("every activation path scrolls the tab into view on a narrow strip (M2.3, R
   page,
 }) => {
   await twoProjectsFourTabs(page);
-  await page.setViewportSize({ width: 480, height: 700 });
+  await page.setViewportSize({ width: 320, height: 700 });
   await expect(on(page).tabbarFadeRight()).toHaveCount(1); // genuinely overflowing
 
   // ⌘1 - the FIRST tab, currently scrolled with. Then ⌘4 - the far end.
@@ -174,7 +181,9 @@ test("every activation path scrolls the tab into view on a narrow strip (M2.3, R
 
 test("an off-screen question marks the fade on its side (D-023)", async ({ page }) => {
   await twoProjectsFourTabs(page);
-  await page.setViewportSize({ width: 480, height: 700 });
+  // Narrower than the overflow tests above: the marker means a tab whose box is
+  // FULLY past the edge, and at 320 the last of these four only straddles it.
+  await page.setViewportSize({ width: 240, height: 700 });
 
   // Land on the FIRST tab so the last one is far off the right edge.
   await page.keyboard.press(chord("1"));

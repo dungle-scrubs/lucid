@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { SessionSummary } from "../protocol/wire.ts";
 import { discoverLiveServer, readServerDescriptor } from "../server/discovery.ts";
 import { selectOpenUrl, type View } from "../server/view.ts";
+import { ARTIFACT_DIR } from "./paths.ts";
 import { readLastAttendant } from "./attendant.ts";
 import { foldLog } from "./fold.ts";
 import { readEvents } from "./log.ts";
@@ -14,7 +15,20 @@ import type { SessionPaths } from "./paths.ts";
 // server-side callers keep importing it from the module that produces it.
 export type { SessionSummary } from "../protocol/wire.ts";
 
+/**
+ * The project a session belongs to: the nearest enclosing checkout, or - when
+ * there is no checkout above it - the folder the artifact sits in.
+ *
+ * With one exception, and it is structural rather than a heuristic: `.lucid` is
+ * LUCID's folder inside a project, never a project itself. In the canonical
+ * layout the artifact lives at `<project>/.lucid/<name>.html`, so the fallback
+ * landed on `.lucid` for any project without a `.git` - and the listing then
+ * grouped those reviews under a heading called ".lucid", which names Lucid's
+ * own plumbing rather than the human's work.
+ */
 export const projectRoot = async (paths: SessionPaths): Promise<string> => {
+  const fallback =
+    basename(paths.artifactDir) === ARTIFACT_DIR ? dirname(paths.artifactDir) : paths.artifactDir;
   let current = paths.artifactDir;
   while (true) {
     try {
@@ -22,7 +36,7 @@ export const projectRoot = async (paths: SessionPaths): Promise<string> => {
       return current;
     } catch {
       const parent = dirname(current);
-      if (parent === current) return paths.artifactDir;
+      if (parent === current) return fallback;
       current = parent;
     }
   }

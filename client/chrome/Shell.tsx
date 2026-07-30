@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
-import { AddFolder } from "./AddFolder.tsx";
 import { attentionStateOf, isUnseen } from "./attention.ts";
-import { openSplit } from "./list.ts";
+import { matchScore, openSplit } from "./list.ts";
 import { SessionView } from "./Chrome.tsx";
 import { Command } from "cmdk";
 import { CreateDialog } from "./CreateDialog.tsx";
@@ -21,7 +20,6 @@ import { groupTabs, projectName, tabLabel } from "./naming.ts";
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, persistTabs, readStoredTabs, useShell } from "./shell.ts";
-import { closeButtonSmall } from "./ui/close.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
@@ -149,10 +147,15 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
       ref={ref}
       data-test="shell-tab"
       data-active={active ? "true" : "false"}
-      className={`group -ml-px flex min-w-0 max-w-[220px] flex-none items-center gap-1.5 border-x border-ink-600 px-3 text-[12px] ${
+      // ONE hairline per boundary, and it belongs to the tab on its right:
+      // `border-x` on every tab drew two lines at every seam (the group's own
+      // frame supplies the outer edges), which read as a double rule and left
+      // each tab an open-topped box. `first:border-l-0` keeps the frame's left
+      // edge single.
+      className={`group flex min-w-0 max-w-[220px] flex-none items-center border-l border-ink-600 pl-2 text-[12px] first:border-l-0 ${
         active
-          ? "bg-ink-850 text-fg-strong shadow-[inset_0_2px_0_var(--color-accent)]"
-          : "bg-ink-900 text-fg-muted hover:bg-ink-800 hover:text-fg"
+          ? "bg-ink-800 text-fg-strong shadow-[inset_0_2px_0_var(--color-accent)]"
+          : "text-fg-muted hover:bg-ink-850 hover:text-fg"
       }`}
     >
       <Tooltip>
@@ -178,7 +181,12 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
               data-test="tab-close"
               aria-label={`Close ${handle.config.name}`}
               onClick={() => closeTab(sessionKey)}
-              className={`${closeButtonSmall} group-hover:opacity-100 focus-visible:opacity-100 ${
+              /* No hover plate and no side padding, unlike every other × in the
+                 chrome: a filled square inside a tab read as a second, nested
+                 control, and the gap around it left the tab's right edge
+                 looking padded on one side only. Brightening the glyph is the
+                 whole affordance here. */
+              className={`flex size-5 shrink-0 cursor-pointer items-center justify-center text-[14px] leading-none text-fg-faint hover:text-fg-strong focus-visible:annot-outline group-hover:opacity-100 focus-visible:opacity-100 ${
                 active ? "opacity-100" : "opacity-0"
               }`}
             >
@@ -252,7 +260,11 @@ const NewTabButton = () => (
             e.currentTarget.blur();
             useShell.setState({ activeKey: null });
           }}
-          className="cursor-pointer px-3 py-[7px] text-[14px] leading-none text-fg-muted outline-none hover:bg-ink-800 hover:text-fg"
+          // Sits on the groups' baseline and matches their height, but wears no
+          // frame: a bordered box here read as an empty THIRD group, which is
+          // what a project's frame means now. An affordance, not a container -
+          // so it earns a background only under the pointer.
+          className="flex h-[30px] flex-none cursor-pointer items-center px-2.5 text-[14px] leading-none text-fg-muted outline-none hover:bg-ink-850 hover:text-fg"
         >
           +
         </button>
@@ -298,7 +310,12 @@ const EmptyShell = () => {
         <>
           <div className="flex items-baseline gap-3">
             <div className="text-[13px] text-fg-muted">Open a session to review.</div>
-            <AddFolder className={emptyAction} />
+            {/* ONE way in. "Add a project" sat here as a peer and did something
+                different from what it looked like: it registered a folder to
+                SCAN for existing reviews, which answered nothing for a human
+                who had just made an empty folder and wanted to put something in
+                it. Naming a project belongs where a project is needed - inside
+                the dialog that authors into one. */}
             <NewArtifactButton testId="new-artifact" className={emptyAction} />
           </div>
           {/* The unified session list (M4.1, D-019): the same component the ⌘K
@@ -307,6 +324,11 @@ const EmptyShell = () => {
           <Command
             data-test="picker"
             label="Pick a session"
+            /* Our own scorer, not cmdk's: its default is a bare subsequence
+               test, and the value folds in an absolute path - so five letters
+               gathered from across a hundred characters counted as a match and
+               the screen offered an unrelated document (list.ts, matchScore). */
+            filter={matchScore}
             className="flex max-h-[60vh] w-[560px] max-w-[calc(100vw-48px)] flex-col border border-ink-600 bg-ink-800"
           >
             <Command.Input
@@ -334,7 +356,6 @@ const EmptyShell = () => {
             Pick one from the tab strip above.
           </div>
           <div className="flex items-baseline gap-3">
-            <AddFolder className={emptyAction} />
             <NewArtifactButton testId="new-artifact" className={emptyAction} />
           </div>
         </>
@@ -350,11 +371,11 @@ const EmptyShell = () => {
             <br />
             (By hand: <code className="bg-ink-700 px-1">lucid open &lt;artifact&gt;.html</code>)
           </div>
-          {/* Where it LOOKED, and how to correct that. An empty listing is
-              usually a wrong root rather than an absent history - artifacts
-              live wherever the agent wrote them, which is often not ~/dev -
-              so the folder chooser belongs on THIS screen, not only in a
-              dialog that opens once a session already exists. */}
+          {/* Where it LOOKED, which is the correctable fact: an empty listing
+              is usually a wrong root rather than an absent history, since
+              artifacts live wherever the agent wrote them and that is often not
+              ~/dev. Naming a folder happens inside New artifact, next to the
+              project it is being named for. */}
           <div className="flex flex-col items-center gap-2 border-t border-ink-700 pt-4">
             <div className="max-w-[460px] text-center text-[11px] leading-relaxed text-fg-faint">
               {roots.length > 0 ? (
@@ -367,16 +388,14 @@ const EmptyShell = () => {
                     </span>
                   ))}
                   {" - project checkouts and agent scratchpads. Work kept somewhere else? "}
-                  Add it and the reviews already inside it appear here.
+                  Name that folder in New artifact and the reviews already inside it appear here
+                  too.
                 </>
               ) : (
-                <>Add a project and any reviews already inside it appear here.</>
+                <>Name a project in New artifact and any reviews already inside it appear here.</>
               )}
             </div>
-            <div className="flex flex-col items-center gap-2">
-              <AddFolder className={emptyAction} />
-              <NewArtifactButton testId="new-artifact" className={emptyAction} />
-            </div>
+            <NewArtifactButton testId="new-artifact" className={emptyAction} />
           </div>
         </>
       )}
@@ -426,20 +445,27 @@ const TabStrip = () => {
       const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
       setFades((f) => (f.left === left && f.right === right ? f : { left, right }));
       // Which side hides attention, and of what KIND: a tab wearing a dot
-      // whose box sits fully outside the visible window. offsetLeft is layout
-      // position - unaffected by the scroll - so [scrollLeft, scrollLeft +
-      // clientWidth] is the window. When several kinds hide on one side the
-      // marker wears the most urgent (the resolver's own order).
+      // whose box sits fully outside the visible window. When several kinds
+      // hide on one side the marker wears the most urgent (the resolver's own
+      // order).
+      //
+      // Compared as RECTS, in viewport coordinates. `offsetLeft` was measured
+      // from the nearest positioned ancestor, which is the group frame now that
+      // a project's tabs live inside one - so every tab reported a position a
+      // few pixels from its own group's left edge and no tab ever read as
+      // off-screen. A rect is a rect wherever the element sits.
       const rank: Record<string, number> = { question: 3, working: 2, unseen: 1 };
       let attnLeft: string | null = null;
       let attnRight: string | null = null;
+      const view = el.getBoundingClientRect();
       for (const dot of el.querySelectorAll('[data-test="tab-attention"]')) {
         const tab = dot.closest('[data-test="shell-tab"]') as HTMLElement | null;
         if (!tab) continue;
         const kind = dot.getAttribute("data-kind") ?? "unseen";
-        if (tab.offsetLeft + tab.offsetWidth < el.scrollLeft) {
+        const box = tab.getBoundingClientRect();
+        if (box.right < view.left) {
           if ((rank[kind] ?? 0) > (rank[attnLeft ?? ""] ?? 0)) attnLeft = kind;
-        } else if (tab.offsetLeft > el.scrollLeft + el.clientWidth) {
+        } else if (box.left > view.right) {
           if ((rank[kind] ?? 0) > (rank[attnRight ?? ""] ?? 0)) attnRight = kind;
         }
       }
@@ -465,26 +491,41 @@ const TabStrip = () => {
   return (
     <div
       data-test="shell-tabbar"
-      className="relative flex h-9 flex-none items-stretch border-b border-ink-600 bg-ink-900"
+      className="relative flex h-[46px] flex-none items-end border-b border-ink-600 bg-ink-900"
     >
-      <div ref={scrollRef} className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
-        {groups.map((group, i) => {
+      <div
+        ref={scrollRef}
+        /* One gap value in both axes: 6px below each frame (pb-1.5), and the
+           same 6px at the strip's edges and between frames. Wider horizontal
+           gaps made the row read as three loose objects rather than a set. */
+        className="flex min-w-0 flex-1 items-end gap-1.5 overflow-x-auto px-1.5 pb-1.5"
+      >
+        {groups.map((group) => {
           // A tab the listing has not placed yet groups under its own key
           // (groupTabs's fallback): it gets no heading rather than a nonsense
           // one, and earns its project's the moment the listing lands.
           const placed = !group.keys.includes(group.project);
           return (
-            <div key={group.project} data-test="tab-group" className="flex flex-none items-stretch">
-              {i > 0 ? (
-                <div aria-hidden className="w-px flex-none self-stretch bg-ink-500" />
-              ) : null}
+            <div
+              key={group.project}
+              data-test="tab-group"
+              /* The project's tabs live INSIDE its frame, and the heading
+                 straddles the frame's top edge - so a project reads as the
+                 parent of its tabs rather than as another tab beside them,
+                 which is what a heading sitting inline at the same level read
+                 as. `mt-2` reserves the room the heading overhangs into. */
+              className="relative mt-2 flex h-[30px] flex-none items-stretch border border-ink-600"
+            >
               {placed ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <span
                         data-test="group-label"
-                        className="max-w-[110px] flex-none cursor-default self-center truncate pl-3 pr-1.5 text-[9px] font-semibold uppercase tracking-[1.1px] text-fg-faint"
+                        /* Centred ON the top border, with the bar's own
+                           background behind it, so the frame appears to break
+                           for the name instead of the name floating over it. */
+                        className="pointer-events-auto absolute -top-px left-2 z-1 max-w-[140px] -translate-y-1/2 cursor-default truncate bg-ink-900 px-1 text-[9px] font-semibold uppercase leading-none tracking-[1.1px] text-fg-faint"
                       >
                         {projectName(group.project)}
                       </span>

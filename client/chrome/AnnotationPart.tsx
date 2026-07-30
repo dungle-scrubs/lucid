@@ -139,7 +139,7 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
       }`}
     >
       {orphaned ? null : (
-        <span className="absolute -top-px -left-px z-1 flex size-5 -translate-x-[33%] -translate-y-[33%] items-center justify-center bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+        <span className="absolute -top-px -left-px z-1 flex size-5 -translate-x-[33%] -translate-y-[33%] items-center justify-center rounded-full bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           {data.index}
         </span>
       )}

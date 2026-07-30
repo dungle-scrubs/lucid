@@ -59,9 +59,12 @@ test("the pick list comes to rest on a whole row, never half of one", async ({ p
   }
 
   await page.goto(`http://127.0.0.1:${hub.port}/`);
-  await on(page).addFolderType().first().click();
-  await on(page).addFolderPath().first().fill(cli.dir);
-  await on(page).addFolderPathAdd().first().click();
+  // The endpoint the folder chooser posts to - a test cannot drive a native
+  // dialog, and this scenario is about the ROWS, not about how the root landed.
+  const added = await page.request.post(`http://127.0.0.1:${hub.port}/hub/roots`, {
+    data: { path: cli.dir },
+  });
+  expect(added.ok(), await added.text()).toBe(true);
   await expect(on(page).pickerRow()).toHaveCount(ROWS);
 
   const settled = await page.evaluate(async () => {

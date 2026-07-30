@@ -218,6 +218,10 @@ export class LucidOverlay extends LitElement {
       transform: translate(-50%, -50%);
       width: 20px;
       height: 20px;
+      /* The ONE rounded thing in the interface, and deliberately so: everything
+         else is square, so a circle reads as a different KIND of object - a
+         marker pinned onto the document rather than a piece of the chrome. */
+      border-radius: 9999px;
       color: #1a202c;
       font-size: 11px;
       font-weight: 700;

@@ -148,7 +148,6 @@ const Composer = () => {
   const { pastes } = useSessionHandle();
   return (
     <ComposerPrimitive.Root className="flex flex-col gap-2 border-t border-ink-600 bg-bg p-[14px]">
-      <ListenerLine />
       <div className="flex flex-wrap gap-1.5 empty:hidden">
         <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
       </div>
@@ -299,123 +298,6 @@ const WorkingIndicator = () => {
 };
 
 /**
- * Presence above the prompt: is anyone on the other end right now. Listening
- * (an agent blocked in wait, its waker connected) is distinct from working
- * (delivery acked, output pending) - while working the agent is deliberately
- * disconnected, so this line yields to the working indicator rather than
- * contradicting it.
- */
-const ListenerLine = () => {
-  const listening = useSession((s) => s.agentsListening);
-  // Does the hub drive delivery itself? Null in the standalone viewer, where
-  // there is no hub and nothing spawns - the same as false, for this line.
-  const attend = useHub((s) => s.attend) === true;
-  const resumable = useSession((s) => s.resumable);
-  const status = useSession((s) => s.status);
-  const presence = useSession((s) => s.attendantPresence);
-  const attendant = useSession((s) => s.lastAttendant);
-  if (status !== "active") return null;
-
-  // A turn is RUNNING: this line stays on the MODE and says nothing about it.
-  // Three places reported one running turn - the pill on the artifact, the
-  // working card in the transcript (which carries the elapsed time and the
-  // stale state), and a shimmer here. This one's only unique value was being
-  // visible when the transcript is scrolled up, which is not worth a third
-  // voice for the same fact.
-
-  // Someone has this conversation OPEN in a terminal. That outranks the
-  // listener count, which only sees an agent blocked in `wait` and so reads
-  // zero for a human mid-thought - the state where the old line said "no
-  // agent connected" about a session running two windows away.
-  if (presence?.interactive) {
-    const harness = attendant?.harness ?? "the agent";
-    return (
-      <div
-        data-test="listener-line"
-        data-presence="interactive"
-        className="flex items-center justify-center gap-1.5 text-center"
-      >
-        <span className="size-1.5 flex-none bg-agent" aria-hidden="true" />
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                data-test="mode-term"
-                className="border-b border-dotted border-agent/40 text-[10px] uppercase tracking-[0.08em] text-agent"
-              >
-                {`running in ${harness}`}
-                {presence.status ? ` · ${presence.status}` : ""}
-              </span>
-            }
-          />
-          <TooltipContent>
-            {`That conversation is open in a terminal${presence.cwd ? ` (${presence.cwd})` : ""}. `}
-            Your message goes to it - Lucid will not start a second process on the same session.
-          </TooltipContent>
-        </Tooltip>
-      </div>
-    );
-  }
-
-  if (listening > 0) {
-    return (
-      <div
-        data-test="listener-line"
-        data-listening="true"
-        className="flex items-center justify-center text-center text-[11px] text-agent"
-      >
-        {listening === 1 ? "agent listening" : `${listening} agents listening`}
-      </div>
-    );
-  }
-
-  // Nothing is running. What happens when you send depends entirely on whether
-  // this hub attends: with attend on it RESUMES the recorded session headlessly
-  // for one turn, which is a thing Lucid does - not a thing it waits for. The
-  // old line ("delivered when one checks in") described the review-only hub and
-  // was simply untrue here, implying some agent would wander back on its own.
-  //
-  // Named as a TERM with the explanation on hover, not a sentence: this sits
-  // above the composer on every turn, and a line of prose that never changes
-  // is a line of prose nobody reads after the first time.
-  const harness = attendant?.harness ?? "the agent";
-  // "Spawn mode" is a promise that sending starts a turn. It can only be kept
-  // when a harness conversation exists to resume - an artifact nobody has
-  // attended (hand-written, recovered from a backup) has none, and the engine
-  // declines every time with "no harness session recorded". Announcing spawn
-  // mode there left feedback sitting under a claim that a reply was coming.
-  const spawnable = attend && resumable;
-  return (
-    <div
-      data-test="listener-line"
-      data-listening="false"
-      data-mode={spawnable ? "spawn" : attend ? "unattached" : "recorded"}
-      className="flex items-center justify-center text-center"
-    >
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <span
-              data-test="mode-term"
-              className="border-b border-dotted border-ink-500 text-[10px] uppercase tracking-[0.08em] text-fg-faint hover:text-fg"
-            >
-              {spawnable ? "spawn mode" : attend ? "no agent session" : "recording only"}
-            </span>
-          }
-        />
-        <TooltipContent>
-          {spawnable
-            ? `Nothing is running. Sending resumes ${harness} headlessly - one turn per send, on the model and effort picked below.`
-            : attend
-              ? "No agent conversation is recorded on this artifact, so there is nothing to resume - it was written by hand, or recovered from a backup. Your feedback is saved and the next agent that opens it reads everything waiting."
-              : `Nothing is running, and this hub does not spawn agents. Feedback is recorded and delivered the next time ${harness} checks in. Start the hub with --attend to have it drive turns itself.`}
-        </TooltipContent>
-      </Tooltip>
-    </div>
-  );
-};
-
-/**
  * The bottom of the panel, under the send button: who is on the other end, and
  * - when nobody is - the way to become them.
  *
@@ -469,18 +351,63 @@ const ConnectionLine = () => {
   );
 };
 
+/**
+ * Who would answer, and in what MODE - one line, under the composer.
+ *
+ * The mode used to be announced twice: a term above the composer and
+ * "headless turns" here, which are the same fact in two places and two
+ * vocabularies. This is the one badge now, and it carries the term the mode
+ * actually has (spawn mode / no agent session / recording only) rather than a
+ * description of the transport.
+ */
 const AttendanceFooter = () => {
   const status = useSession((s) => s.status);
   const presence = useSession((s) => s.attendantPresence);
   const attendant = useSession((s) => s.lastAttendant);
+  const attend = useHub((s) => s.attend) === true;
+  const resumable = useSession((s) => s.resumable);
   if (status !== "active" || !attendant?.harness) return null;
   const interactive = presence?.interactive === true;
+  const spawnable = attend && resumable;
+  const harness = attendant.harness;
+  // Interactive wins: a human sitting in that conversation is the fact that
+  // matters, and nothing is being spawned while they are.
+  const mode = interactive
+    ? "interactive"
+    : spawnable
+      ? "spawn mode"
+      : attend
+        ? "no agent session"
+        : "recording only";
   return (
-    <div className="flex flex-col items-center gap-1 border-t border-ink-700 pt-2">
-      <span data-test="harness-line" className="text-[10px] text-fg-faint">
-        {attendant.harness}
-        {interactive ? " · interactive" : " · headless turns"}
-      </span>
+    <div
+      data-test="listener-line"
+      data-mode={
+        interactive ? "interactive" : spawnable ? "spawn" : attend ? "unattached" : "recorded"
+      }
+      className="flex flex-col items-center gap-1 border-t border-ink-700 pt-2"
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              data-test="harness-line"
+              className="cursor-default text-[10px] text-fg-faint hover:text-fg"
+            >
+              {harness} · <span data-test="mode-term">{mode}</span>
+            </span>
+          }
+        />
+        <TooltipContent>
+          {interactive
+            ? `${harness} is open in a terminal. Your feedback goes to that conversation; nothing is spawned while somebody is sitting in it.`
+            : spawnable
+              ? `Nothing is running. Sending resumes ${harness} headlessly - one turn per send, on the model and effort picked above.`
+              : attend
+                ? "No agent conversation is recorded on this artifact, so there is nothing to resume - it was written by hand, or recovered from a backup. Your feedback is saved and the next agent that opens it reads everything waiting."
+                : `Nothing is running, and this hub does not spawn agents. Feedback is recorded and delivered the next time ${harness} checks in. Start the hub with --attend to have it drive turns itself.`}
+        </TooltipContent>
+      </Tooltip>
       {interactive ? null : <ResumeHint />}
     </div>
   );
@@ -594,7 +521,22 @@ const ScrollToLatest = () => {
       );
     check();
     el.addEventListener("scroll", check, { passive: true });
-    return () => el.removeEventListener("scroll", check);
+    // Scroll and those three lengths are not the only things that move where
+    // "bottom" is. A working line appearing, a card growing as its text
+    // streams, an image finishing its layout, the panel being resized - none
+    // fire a scroll event and none change a length, so the button could latch
+    // "there is more below" over a transcript that was already at its end and
+    // never clear. Watching the box and its subtree is what actually tracks the
+    // question being asked.
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    const mo = new MutationObserver(check);
+    mo.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => {
+      el.removeEventListener("scroll", check);
+      ro.disconnect();
+      mo.disconnect();
+    };
   }, [tick]);
 
   return (

@@ -94,7 +94,7 @@ test("lucid app run repeatedly never stacks browser windows", async ({ page }) =
   // The window the first press stood for. An empty hub shows the add-a-folder
   // screen; its presence means this window is connected and counted.
   await page.goto(first.hub);
-  await expect(on(page).addFolderType().first()).toBeVisible();
+  await expect(on(page).newArtifact().first()).toBeVisible();
 
   // Presses two, three and four, against a live hub with a live window.
   for (const press of [2, 3, 4]) {
