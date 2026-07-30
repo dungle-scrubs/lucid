@@ -364,24 +364,36 @@ const AttendanceFooter = () => {
   const status = useSession((s) => s.status);
   const presence = useSession((s) => s.attendantPresence);
   const attendant = useSession((s) => s.lastAttendant);
+  const listening = useSession((s) => s.agentsListening);
   const attend = useHub((s) => s.attend) === true;
   const resumable = useSession((s) => s.resumable);
-  if (status !== "active" || !attendant?.harness) return null;
+  // Always rendered on an active session, attendant or not: a hand-written
+  // artifact still has a mode ("recording only"), and the LIVE state below
+  // has to be able to appear the moment a waker connects. Gating on the
+  // attendant made the line vanish exactly where it had the most to say.
+  if (status !== "active") return null;
   const interactive = presence?.interactive === true;
   const spawnable = attend && resumable;
-  const harness = attendant.harness;
+  const harness = attendant?.harness;
   // Interactive wins: a human sitting in that conversation is the fact that
-  // matters, and nothing is being spawned while they are.
+  // matters, and nothing is being spawned while they are. A LISTENING agent
+  // (blocked in `lucid wait`) beats every recorded mode - it is presence,
+  // not configuration: feedback sends straight to it.
   const mode = interactive
     ? "interactive"
-    : spawnable
-      ? "spawn mode"
-      : attend
-        ? "no agent session"
-        : "recording only";
+    : listening > 0
+      ? listening === 1
+        ? "agent listening"
+        : `${listening} agents listening`
+      : spawnable
+        ? "spawn mode"
+        : attend
+          ? "no agent session"
+          : "recording only";
   return (
     <div
       data-test="listener-line"
+      data-listening={listening > 0 ? "true" : "false"}
       data-mode={
         interactive ? "interactive" : spawnable ? "spawn" : attend ? "unattached" : "recorded"
       }
@@ -392,23 +404,31 @@ const AttendanceFooter = () => {
           render={
             <span
               data-test="harness-line"
-              className="cursor-default text-[10px] text-fg-faint hover:text-fg"
+              className={`cursor-default text-[10px] ${listening > 0 ? "text-agent" : "text-fg-faint hover:text-fg"}`}
             >
-              {harness} · <span data-test="mode-term">{mode}</span>
+              {harness ? (
+                <>
+                  {harness} · <span data-test="mode-term">{mode}</span>
+                </>
+              ) : (
+                <span data-test="mode-term">{mode}</span>
+              )}
             </span>
           }
         />
         <TooltipContent>
           {interactive
-            ? `${harness} is open in a terminal. Your feedback goes to that conversation; nothing is spawned while somebody is sitting in it.`
-            : spawnable
-              ? `Nothing is running. Sending resumes ${harness} headlessly - one turn per send, on the model and effort picked above.`
-              : attend
-                ? "No agent conversation is recorded on this artifact, so there is nothing to resume - it was written by hand, or recovered from a backup. Your feedback is saved and the next agent that opens it reads everything waiting."
-                : `Nothing is running, and this hub does not spawn agents. Feedback is recorded and delivered the next time ${harness} checks in. Start the hub with --attend to have it drive turns itself.`}
+            ? `${harness ?? "The agent"} is open in a terminal. Your feedback goes to that conversation; nothing is spawned while somebody is sitting in it.`
+            : listening > 0
+              ? "An agent is blocked in `lucid wait` on this session right now - feedback sends straight to it, no spawn involved."
+              : spawnable
+                ? `Nothing is running. Sending resumes ${harness ?? "the agent"} headlessly - one turn per send, on the model and effort picked above.`
+                : attend
+                  ? "No agent conversation is recorded on this artifact, so there is nothing to resume - it was written by hand, or recovered from a backup. Your feedback is saved and the next agent that opens it reads everything waiting."
+                  : `Nothing is running, and this hub does not spawn agents. Feedback is recorded and delivered the next time ${harness ?? "the agent"} checks in. Start the hub with --attend to have it drive turns itself.`}
         </TooltipContent>
       </Tooltip>
-      {interactive ? null : <ResumeHint />}
+      {interactive || listening > 0 ? null : <ResumeHint />}
     </div>
   );
 };

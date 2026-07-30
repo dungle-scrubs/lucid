@@ -57,6 +57,7 @@ const writeStub = async (scriptPath: string, markerPath: string): Promise<void> 
   argv: process.argv.slice(2),
   harness: process.env.LUCID_HARNESS ?? null,
   sessionId: process.env.LUCID_SESSION_ID ?? null,
+  requestId: process.env.LUCID_REQUEST_ID ?? null,
   cwd: process.cwd(),
 }));
 `,
@@ -754,6 +755,25 @@ describe("hub attend mode", () => {
     const codes = [a.status, b.status].sort();
     expect(codes).toEqual([202, 409]);
   }, 20_000);
+
+  test("the click's request id reaches the spawned turn as LUCID_REQUEST_ID (M1.3)", async () => {
+    const hub = await startDaemon(true);
+    const res = await fetch(`http://127.0.0.1:${hub.port}/hub/create`, {
+      method: "POST",
+      headers: {
+        host: `127.0.0.1:${hub.port}`,
+        "content-type": "application/json",
+        "x-lucid-request": "beefcafe12345678",
+      },
+      body: JSON.stringify({ project: proj, name: "traced.html", prompt: "map it" }),
+    });
+    expect(res.status).toBe(202);
+
+    const marker = await readMarker(createMarker);
+    // The spawned turn holds the SAME id the click carried - this is what
+    // makes an authoring turn traceable back to the click (D-001).
+    expect(marker.requestId).toBe("beefcafe12345678");
+  });
 
   test("POST /hub/create answers 202 and spawns the recipe with a child identity", async () => {
     const hub = await startDaemon(true);

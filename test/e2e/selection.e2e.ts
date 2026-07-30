@@ -83,6 +83,9 @@ test("the create dialog offers the registry's models and the pick reaches the ar
 
   await page.goto(opened.shellUrl);
   await expect(on(page).shellTab()).toHaveCount(1);
+  // Two root candidates post-#88 (the session's project + the scan root), so
+  // the dialog would ask; this test is about the pickers, so remember one.
+  await page.evaluate((root) => localStorage.setItem("lucid.createRoot", root), cli.dir);
   await on(page).tabAdd().click();
   await on(page).newArtifact().click();
 

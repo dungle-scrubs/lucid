@@ -41,6 +41,13 @@ import {
 import type { HarnessInfo } from "../protocol/wire.ts";
 import { createArtifactPrompt, createAttendant, type Attendant } from "./attend.ts";
 import {
+  cliRequestId,
+  observeRequests,
+  REQUEST_ID_HEADER,
+  resolveHubSink,
+  type RequestObservation,
+} from "./observe.ts";
+import {
   CHROME_BUNDLE,
   CHROME_CSS,
   CLIENT_BUNDLE,
@@ -132,8 +139,13 @@ export interface DaemonOptions {
   readonly attendDebounceMs?: number;
   /** How often each mount's delivery watcher evaluates (ms; tests). */
   readonly attendPollMs?: number;
-  /** Activity sink for attend-mode lines. Defaults to stdout. */
+  /** Activity sink for attend-mode lines. Defaults to the rotating hub log
+   *  mirrored to stdout (D-009), so a detached hub keeps its evidence. */
   readonly log?: (message: string) => void;
+  /** Injected hub-log file path (tests). Default: `LUCID_HUB_LOG`, else
+   *  `<home>/.lucid/hub.log`. Named for what it holds - `logPath` already
+   *  means a session's review log everywhere else in this file. */
+  readonly hubLogPath?: string;
 }
 
 export interface DaemonHandle {
@@ -218,7 +230,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const sessionIdleMs = opts.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
   const attend = opts.attend === true;
   const attendPollMs = opts.attendPollMs ?? DEFAULT_ATTEND_POLL_MS;
-  const log = opts.log ?? ((m: string) => process.stdout.write(`${m}\n`));
+  const log = resolveHubSink(opts);
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
@@ -480,7 +492,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     req: Request,
     id: string,
     subPath: string,
+    observation: RequestObservation,
   ): Promise<Response> => {
+    observation.attach({ session: id });
     let artifact = idToArtifact.get(id);
     if (artifact === undefined) {
       // Unknown id: refresh the derived map once (a session opened after the
@@ -601,7 +615,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         map[id] = attentionCache.get(sessionPaths(artifact).logPath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-          console.error(`[hub] attention read failed for ${artifact}: ${(err as Error).message}`);
+          log(`[hub] attention read failed for ${artifact}: ${(err as Error).message}`);
         }
         // Either way the id has no attention this pass; the badge just clears.
       }
@@ -718,13 +732,26 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    * the two are joined here - so no request can name a path outside a project
    * the hub already knows. Every value reaches the harness as argv.
    */
-  const handleHubCreate = async (req: Request): Promise<Response> => {
+  const handleHubCreate = async (
+    req: Request,
+    observation: RequestObservation,
+  ): Promise<Response> => {
     if (!attend) {
       return json({ error: "create requires the hub's attend mode (lucid hub --attend)" }, 403);
     }
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     const project = typeof body?.project === "string" ? body.project : "";
     const name = typeof body?.name === "string" ? body.name : "";
+    // Attach the identifiers the moment they exist, so even a refused create
+    // is a queryable record - identifiers, never the prompt (D-005). The
+    // name only counts as an identifier once it LOOKS like one: a string
+    // that fails CREATE_NAME is whatever the caller typed, which could be
+    // content, so it stays out and the 400 speaks for it.
+    observation.attach({
+      project,
+      ...(CREATE_NAME.test(name) ? { artifact: name } : {}),
+      ...(typeof body?.harness === "string" ? { harness: body.harness } : {}),
+    });
     const prompt = typeof body?.prompt === "string" ? body.prompt : "";
     // The document's own name, bounded and control-stripped like every other
     // human string that rides into a spawn argv.
@@ -881,6 +908,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       void runSpawn(argv, project, outLog, {
         harness: resolved.name,
         sessionId: childSessionId,
+        requestId: observation.trace,
         ...(selection?.model !== undefined ? { model: selection.model } : {}),
         ...(selection?.effort !== undefined ? { effort: selection.effort } : {}),
       })
@@ -1051,7 +1079,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     );
   };
 
-  const handle = async (req: Request): Promise<Response> => {
+  const handle = async (req: Request, observation: RequestObservation): Promise<Response> => {
     const { pathname } = new URL(req.url);
 
     const sessionMatch = /^\/s\/([a-f0-9]{16})(\/.*)?$/.exec(pathname);
@@ -1090,7 +1118,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           headers: { location: `/s/${sessionMatch[1]}/${search}` },
         });
       }
-      return handleSessionRoute(req, sessionMatch[1], sessionMatch[2] || "/");
+      return handleSessionRoute(req, sessionMatch[1], sessionMatch[2] || "/", observation);
     }
 
     if (pathname === "/hub/identity" && req.method === "GET") {
@@ -1147,7 +1175,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       return handleHubOpen(req);
     }
     if (pathname === "/hub/create" && req.method === "POST") {
-      return handleHubCreate(req);
+      return handleHubCreate(req, observation);
     }
     if (pathname === "/hub/project" && req.method === "POST") {
       return handleHubProject(req);
@@ -1183,19 +1211,30 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     return json({ error: "not found" }, 404);
   };
 
+  // The wide event is made HERE, at the one funnel every route passes
+  // through (D-004) - no route can forget to log. Built once, not per request.
+  const observed = observeRequests({ sink: log }, handle);
+
   const server = Bun.serve({
     port: requestedPort,
     hostname: "127.0.0.1",
     idleTimeout: 0,
     async fetch(req) {
       try {
-        return await handle(req);
+        return await observed(req);
       } catch (err) {
         return json({ error: `daemon error: ${(err as Error).message}` }, 500);
       }
     },
   });
   port = server.port ?? 0;
+
+  // The one line that matters most to a detached hub - which port it actually
+  // bound - through the sink, so it lands in the file and not only on the
+  // stdout that self.ts discards (D-009).
+  log(
+    `lucid hub listening on http://127.0.0.1:${port}${attend ? " (attend mode: headless turns enabled)" : ""}`,
+  );
 
   const timer = setInterval(() => void notify(), POLL_MS);
 
@@ -1243,7 +1282,13 @@ export const hubInfo = async (port = HUB_PORT): Promise<HubInfo | undefined> => 
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HUB_PROBE_TIMEOUT_MS);
-    const probe = await loopbackFetch(port, "/hub/identity", { signal: controller.signal });
+    const probe = await loopbackFetch(port, "/hub/identity", {
+      signal: controller.signal,
+      // The probe rides the same trace as the open it fronts - without this,
+      // every `lucid open` emits one un-joined record right before the
+      // joined one.
+      headers: { [REQUEST_ID_HEADER]: cliRequestId() },
+    });
     clearTimeout(timer);
     if (!probe.ok) return undefined;
     const who = (await probe.json()) as { lucid?: unknown; shells?: unknown; attend?: unknown };
@@ -1287,7 +1332,7 @@ export const hubOpen = async (
     if (!(await hubAlive(port))) return undefined;
     const res = await loopbackFetch(port, "/hub/open", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", [REQUEST_ID_HEADER]: cliRequestId() },
       body: JSON.stringify({ artifact }),
     });
     if (!res.ok) return undefined;

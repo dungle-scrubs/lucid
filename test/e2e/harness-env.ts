@@ -44,6 +44,10 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   LUCID_REGISTRY: "isolate",
   LUCID_ROOTS: "isolate",
   LUCID_HARNESSES: "isolate",
+  // The hub's rotating request log (plan 07, D-009). Unset, every spawned hub
+  // appends to the developer's real ~/.lucid/hub.log - and parallel workers
+  // sharing one file can misrotate away the retained generation.
+  LUCID_HUB_LOG: "isolate",
 
   LUCID_ALLOW_TEMP: "harness-switch",
   LUCID_NO_OPEN: "harness-switch",
@@ -82,6 +86,12 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   LUCID_MODEL: "clear",
   LUCID_EFFORT: "clear",
   LUCID_SESSION_ID: "clear",
+  // Written for spawned turns by the hub's create path (plan 07, M1.3) and
+  // read back by cliRequestId, which joins a turn's hub calls to the click
+  // that spawned it. Inherited from a developer's agent session, it would
+  // stamp every request this suite makes with THAT session's stale id -
+  // false correlation, same failure shape as LUCID_SESSION_ID.
+  LUCID_REQUEST_ID: "clear",
 
   // `devAssetsDir()` (src/server/dev-assets.ts:17) reads this on EVERY asset
   // request in every server, with no dev-mode gate of any kind. Left inherited,
@@ -165,6 +175,7 @@ export const harnessEnv = (
     LUCID_CLAUDE_SESSIONS: join(dir, "claude-sessions"),
     LUCID_CLAUDE_PROJECTS: join(dir, "claude-projects"),
     LUCID_HARNESSES: join(dir, "harnesses.json"),
+    LUCID_HUB_LOG: join(dir, "hub.log"),
   };
 };
 

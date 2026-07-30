@@ -1,4 +1,5 @@
 import type { Anchor } from "../anchors/anchor.ts";
+import { WELL_FORMED_ID } from "./request-id.ts";
 import type { AgentProgress, QuestionOption } from "../protocol/wire.ts";
 import type { ItemAnswer, QuestionItem } from "./question-contract.ts";
 
@@ -37,6 +38,10 @@ export interface AttendantStamp {
   readonly model?: string;
   /** Effort/reasoning level the session runs at, same provenance as `model`. */
   readonly effort?: string;
+  /** The hub request that caused this turn (plan 07, M1.3): the click's
+   *  trace, inherited via LUCID_REQUEST_ID, so an authored event points back
+   *  at the request log line that started it. */
+  readonly trace?: string;
 }
 
 /** Strip control characters (incl. the NUL a naive dedupe key would collide
@@ -71,12 +76,16 @@ export const sanitizeAttendant = (input: unknown): AttendantStamp | undefined =>
   const cwd = cleanStampField(o.cwd, 1024);
   const model = cleanStampField(o.model, 128);
   const effort = cleanStampField(o.effort, 32);
+  // Stricter than the text fields: a trace is well-formed hex or it is
+  // nothing (R4) - no truncation, no cleaning, no keeping.
+  const trace = typeof o.trace === "string" && WELL_FORMED_ID.test(o.trace) ? o.trace : undefined;
   return {
     harness,
     ...(sessionId ? { sessionId } : {}),
     ...(cwd ? { cwd } : {}),
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
+    ...(trace ? { trace } : {}),
   };
 };
 

@@ -274,6 +274,13 @@ describe("sanitizeAttendant", () => {
 
   test("a stamp without them is unchanged (they are optional)", () => {
     expect(sanitizeAttendant({ harness: "pi" })).toEqual({ harness: "pi" });
+    // The trace (plan 07, M1.3): well-formed rides, anything else is DROPPED
+    // outright - the log-injection rule (R4), stricter than the text fields.
+    expect(sanitizeAttendant({ harness: "pi", trace: "abc123def4567890" })).toEqual({
+      harness: "pi",
+      trace: "abc123def4567890",
+    });
+    expect(sanitizeAttendant({ harness: "pi", trace: "NOT-HEX" })).toEqual({ harness: "pi" });
     expect(sanitizeAttendant({ harness: "pi", model: 7, effort: null })).toEqual({ harness: "pi" });
   });
 });

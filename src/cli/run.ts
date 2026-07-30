@@ -77,6 +77,9 @@ const attendantStamp = (harness?: string): AttendantStamp | undefined => {
     cwd: process.cwd(),
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
+    // The click's trace (plan 07, M1.3): a spawned turn holds it in
+    // LUCID_REQUEST_ID, and the sanitizer drops anything not well-formed.
+    ...(process.env.LUCID_REQUEST_ID ? { trace: process.env.LUCID_REQUEST_ID } : {}),
   });
 };
 
@@ -620,9 +623,6 @@ export const runHub = async (options: { port?: number; attend?: boolean } = {}):
     ...(roots && roots.length > 0 ? { roots } : {}),
     ...(attend ? { attend } : {}),
   });
-  process.stdout.write(
-    `lucid hub listening on http://127.0.0.1:${daemon.port}${attend ? " (attend mode: headless turns enabled)" : ""}\n`,
-  );
   await new Promise<void>((resolve) => {
     process.once("SIGINT", () => {
       void daemon.stop().then(resolve);

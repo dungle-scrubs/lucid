@@ -2577,7 +2577,7 @@
           "kind": "recovery",
           "status": "covered",
           "testFile": "test/e2e/shell-routes.e2e.ts",
-          "testName": "with no OS chooser the folder icon falls back to a path field",
+          "testName": "with no OS chooser the add-project affordance falls back to a path field",
           "mutation": "client/chrome/hub.ts: drop addRoot's 501 -> needsPath arm - a build with no native chooser is a dead end instead of a path field",
           "builtCapability": "M5.1 - routes.ts, on the barrel"
         },

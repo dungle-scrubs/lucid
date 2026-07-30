@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalArtifactPath, sessionPaths } from "../src/core/paths.ts";
 import { registerSession } from "../src/core/registry.ts";
-import { runDaemon, sessionId, type DaemonHandle } from "../src/server/daemon.ts";
+import { hubOpen, runDaemon, sessionId, type DaemonHandle } from "../src/server/daemon.ts";
 import type { ServerDescriptor } from "../src/server/discovery.ts";
 
 let dir: string;
@@ -517,5 +517,160 @@ describe("hub daemon", () => {
     expect(identity.debug?.attentionCache).toBeDefined();
     expect(identity.debug?.attentionCache?.misses).toBeGreaterThanOrEqual(1);
     await reader!.cancel().catch(() => {});
+  });
+});
+
+describe("the hub's wide event: every request emits (plan 07, M1.2)", () => {
+  const records = (lines: string[]) =>
+    lines.filter((l) => l.startsWith("{")).map((l) => JSON.parse(l) as Record<string, unknown>);
+
+  test("a listing request emits entry and exit: status 200, a real duration, one id", async () => {
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    const res = await get(daemon.port, "/hub/sessions");
+    expect(res.status).toBe(200);
+
+    const entry = records(lines).find(
+      (r) => r.event === "request.start" && r.path === "/hub/sessions",
+    );
+    const exit = records(lines).find((r) => r.event === "request" && r.path === "/hub/sessions");
+    expect(entry).toBeDefined();
+    expect(exit).toBeDefined();
+    expect(exit?.status).toBe(200);
+    expect(exit?.durationMs as number).toBeGreaterThan(0);
+    expect(exit?.id).toBe(entry?.id);
+  });
+
+  test("an unknown path emits its 404 - the miss is evidence too", async () => {
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    await get(daemon.port, "/no/such/route");
+
+    const exit = records(lines).find((r) => r.event === "request" && r.path === "/no/such/route");
+    expect(exit?.status).toBe(404);
+  });
+
+  test("a refused create still carries its identifiers - and never the prompt", async () => {
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      attend: true,
+      log: (m) => void lines.push(m),
+    });
+    await post(daemon.port, "/hub/create", {
+      project: root,
+      name: "not a valid name!",
+      prompt: "SENTINEL_PROMPT_never_logged",
+      harness: "claude",
+    });
+
+    const exit = records(lines).find((r) => r.event === "request" && r.path === "/hub/create");
+    expect(exit?.project).toBe(root);
+    // A name that fails CREATE_NAME is not an identifier - it is whatever
+    // the caller typed, which could be content. It never reaches the record
+    // (adversarial review of #89); the 400 plus project/harness still make
+    // the refusal queryable.
+    expect(exit?.artifact).toBeUndefined();
+    expect(exit?.harness).toBe("claude");
+    expect(lines.join("\n")).not.toContain("not a valid name!");
+    expect(lines.join("\n")).not.toContain("SENTINEL_PROMPT_never_logged");
+  });
+
+  test("a session route attaches the session id where the route knows it", async () => {
+    const artifact = await seedSession("proj", "notes");
+    const id = sessionId(artifact);
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    await get(daemon.port, `/s/${id}/`);
+
+    const exit = records(lines).find((r) => r.event === "request" && r.session === id);
+    expect(exit).toBeDefined();
+  });
+});
+
+describe("the CLI carries the id to the hub (M1.3)", () => {
+  test("hubOpen sends x-lucid-request, adopting LUCID_REQUEST_ID when a turn holds one", async () => {
+    const artifact = await seedSession("proj", "notes");
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    const prev = process.env.LUCID_REQUEST_ID;
+    process.env.LUCID_REQUEST_ID = "0123456789abcdef";
+    try {
+      const result = await hubOpen(artifact, daemon.port);
+      expect(result?.ok).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.LUCID_REQUEST_ID;
+      else process.env.LUCID_REQUEST_ID = prev;
+    }
+
+    const exit = lines
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((r) => r.event === "request" && r.path === "/hub/open");
+    // The turn's own hub call joins the click that spawned it - one grep.
+    expect(exit?.trace).toBe("0123456789abcdef");
+    expect(exit?.id).not.toBe("0123456789abcdef");
+  });
+});
+
+describe("no request escapes the record (adversarial review of #89)", () => {
+  test("an authority-form target (CONNECT) still emits entry and exit", async () => {
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    // fetch cannot send CONNECT; write the raw request line ourselves.
+    const { connect } = await import("node:net");
+    const raw = await new Promise<string>((resolve, reject) => {
+      const sock = connect(daemon?.port ?? 0, "127.0.0.1", () => {
+        sock.write(
+          `CONNECT 127.0.0.1:${daemon?.port} HTTP/1.1\r\nHost: 127.0.0.1:${daemon?.port}\r\n\r\n`,
+        );
+      });
+      let buf = "";
+      sock.on("data", (d) => {
+        buf += d.toString();
+      });
+      sock.on("end", () => resolve(buf));
+      sock.on("error", reject);
+      setTimeout(() => {
+        sock.end();
+      }, 1500);
+    });
+    expect(raw).toContain("HTTP/1.1");
+
+    const records = lines
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const entry = records.find((r) => r.event === "request.start" && r.method === "CONNECT");
+    const exit = records.find((r) => r.event === "request" && r.method === "CONNECT");
+    // The unparseable target rides as the raw string - evidence beats purity.
+    expect(entry).toBeDefined();
+    expect(exit).toBeDefined();
   });
 });

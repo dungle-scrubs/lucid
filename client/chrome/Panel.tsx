@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { hubFetch } from "./request.ts";
 import type { SelectionResponse } from "../../src/protocol/wire.ts";
 import { QUICK_REPLIES } from "./actions.ts";
 import { TargetSnippet } from "./AnnotationPart.tsx";
@@ -531,7 +532,7 @@ export const SelectionPickers = () => {
   /** A POST replaces the whole selection, so both fields ride every write. */
   const commit = async (model: string, effort: string): Promise<void> => {
     setBusy(true);
-    const res = await fetch(`${transport.base}/__lucid/selection`, {
+    const res = await hubFetch(`${transport.base}/__lucid/selection`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model, effort }),
