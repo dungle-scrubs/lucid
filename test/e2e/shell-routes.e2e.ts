@@ -58,7 +58,9 @@ test("before the first listing arrives the screen says it is LOOKING, not empty"
 });
 
 test("with no OS chooser the folder icon falls back to a path field", async ({ page }) => {
-  hub = await startHub();
+  // Attend on: /hub/project (chooser AND typed add) is authoring machinery,
+  // and a review-only hub 403s it before any chooser question arises.
+  hub = await startHub({ attend: true });
   cli = await makeCli(PLAN_V1);
   await cli.run(["open", cli.artifact]);
 
@@ -66,7 +68,7 @@ test("with no OS chooser the folder icon falls back to a path field", async ({ p
   // the client asks the OS to open a picker. A build without one answers
   // 501; the same route with a path is a plain add and must still work,
   // which is the whole point of the fallback.
-  await page.route("**/hub/roots", async (route) => {
+  await page.route("**/hub/project", async (route) => {
     const body = route.request().postData() ?? "";
     if (body.includes("path")) return route.continue();
     return route.fulfill({
@@ -79,17 +81,20 @@ test("with no OS chooser the folder icon falls back to a path field", async ({ p
   await expect(page.locator("code", { hasText: hub.dir })).toBeVisible();
 
   // The chooser is reached through New artifact now - naming a project belongs
-  // where a project is needed, and the pick screen offers one action.
+  // where a project is needed, and the create dialog carries the one add
+  // affordance (#88).
   await on(page).newArtifact().first().click();
-  await on(page).addFolder().first().click();
+  await on(page).createAddProject().first().click();
 
-  // A platform with no chooser SAYS so. There is no typed-path fallback any
-  // more - the folder chooser is the only route in, and its own dialog handles
-  // hidden paths (cmd-shift-G). What matters is that a 501 surfaces as a
-  // message rather than a button that silently does nothing, which is what an
-  // unhandled refusal looks like from the outside.
-  await expect(on(page).addFolderError()).toBeVisible();
-  await expect(on(page).addFolderError()).toContainText("no folder chooser", { ignoreCase: true });
+  // A platform with no chooser falls back to a TYPED path field - the 501
+  // must surface as a way forward, not a button that silently does nothing.
+  await expect(on(page).createProjectPath()).toBeVisible();
+  await on(page).createProjectPath().fill(cli.dir);
+  await on(page).createProjectPathAdd().click();
+
+  // The typed path took the plain add route (it carried `path`, so the
+  // interception let it through) and the project is now selected.
+  await expect(on(page).createProject()).toContainText(cli.dir.split("/").pop() ?? "");
 });
 
 test("a server without /__lucid/context falls through to the sidecar, and says live:false", async () => {

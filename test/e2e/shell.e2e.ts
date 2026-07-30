@@ -171,9 +171,14 @@ test("the new-artifact dialog validates the name and names the flag it needs", a
   await page.goto(opened.shellUrl);
   await expect(on(page).shellTab()).toHaveCount(1);
 
+  // The session's project AND the hub's scan root are both candidates now
+  // (#88 unions them), so the dialog would ASK - this test is about the name
+  // field, so remember the root the way a returning human would have.
+  await page.evaluate((root) => localStorage.setItem("lucid.createRoot", root), cli.dir);
   await on(page).tabAdd().click();
   await on(page).newArtifact().click();
   await expect(on(page).createDialog()).toBeVisible();
+  await expect(on(page).createProject()).toContainText(cli.dir.split("/").pop() ?? "");
 
   // Live validation, because the hub joins the name onto a project root it
   // already knows: a path is never a filename.
