@@ -40,6 +40,7 @@ import {
 } from "../launch/selection.ts";
 import type { HarnessInfo } from "../protocol/wire.ts";
 import { createArtifactPrompt, createAttendant, type Attendant } from "./attend.ts";
+import { resolveHubSink } from "./observe.ts";
 import {
   CHROME_BUNDLE,
   CHROME_CSS,
@@ -132,8 +133,11 @@ export interface DaemonOptions {
   readonly attendDebounceMs?: number;
   /** How often each mount's delivery watcher evaluates (ms; tests). */
   readonly attendPollMs?: number;
-  /** Activity sink for attend-mode lines. Defaults to stdout. */
+  /** Activity sink for attend-mode lines. Defaults to the rotating hub log
+   *  mirrored to stdout (D-009), so a detached hub keeps its evidence. */
   readonly log?: (message: string) => void;
+  /** Injected hub-log file path (tests). Default `<home>/.lucid/hub.log`. */
+  readonly logPath?: string;
 }
 
 export interface DaemonHandle {
@@ -218,7 +222,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const sessionIdleMs = opts.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
   const attend = opts.attend === true;
   const attendPollMs = opts.attendPollMs ?? DEFAULT_ATTEND_POLL_MS;
-  const log = opts.log ?? ((m: string) => process.stdout.write(`${m}\n`));
+  const log = resolveHubSink(opts);
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
@@ -601,7 +605,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         map[id] = attentionCache.get(sessionPaths(artifact).logPath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-          console.error(`[hub] attention read failed for ${artifact}: ${(err as Error).message}`);
+          log(`[hub] attention read failed for ${artifact}: ${(err as Error).message}`);
         }
         // Either way the id has no attention this pass; the badge just clears.
       }
