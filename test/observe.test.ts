@@ -5,8 +5,8 @@ import { join } from "node:path";
 import {
   createLogSink,
   hubLogPath,
+  inboundTrace,
   observeRequests,
-  requestId,
   resolveHubSink,
   startRequest,
 } from "../src/server/observe.ts";
@@ -193,7 +193,7 @@ describe("observeRequests: the funnel wrapper the daemon's fetch uses (M1.2)", (
     expect(exit.project).toBe("/proj");
   });
 
-  test("an inbound x-lucid-request is adopted, so the caller's id joins the hub's records", async () => {
+  test("an inbound x-lucid-request becomes the TRACE; the id stays the record's own (D-011)", async () => {
     const { lines, sink } = capture();
     const observed = observeRequests({ sink }, async () => new Response("ok"));
     await observed(
@@ -204,7 +204,39 @@ describe("observeRequests: the funnel wrapper the daemon's fetch uses (M1.2)", (
     );
 
     const exit = lines.map((l) => JSON.parse(l)).find((r) => r.event === "request");
-    expect(exit.id).toBe("feedc0ffee123456");
+    expect(exit.trace).toBe("feedc0ffee123456");
+    expect(exit.id).toMatch(/^[a-f0-9]{16}$/);
+    expect(exit.id).not.toBe("feedc0ffee123456");
+  });
+
+  test("two requests sharing a trace keep DISTINCT ids - the hang signal survives the join (D-011)", async () => {
+    const { lines, sink } = capture();
+    const observed = observeRequests({ sink }, async () => new Response("ok"));
+    const withTrace = () =>
+      new Request("http://127.0.0.1:9/hub/open", {
+        method: "POST",
+        headers: { "x-lucid-request": "feedc0ffee123456" },
+      });
+    await observed(withTrace());
+    await observed(withTrace());
+
+    const exits = lines.map((l) => JSON.parse(l)).filter((r) => r.event === "request");
+    expect(exits).toHaveLength(2);
+    expect(exits[0].trace).toBe("feedc0ffee123456");
+    expect(exits[1].trace).toBe("feedc0ffee123456");
+    expect(exits[0].id).not.toBe(exits[1].id);
+    // And each entry pairs its exit by id, 1:1.
+    const entries = lines.map((l) => JSON.parse(l)).filter((r) => r.event === "request.start");
+    expect(entries.map((r) => r.id).sort()).toEqual(exits.map((r) => r.id).sort());
+  });
+
+  test("with no inbound trace, the trace IS the record's id - every record joins something", async () => {
+    const { lines, sink } = capture();
+    const observed = observeRequests({ sink }, async () => new Response("ok"));
+    await observed(new Request("http://127.0.0.1:9/hub/sessions"));
+
+    const exit = lines.map((l) => JSON.parse(l)).find((r) => r.event === "request");
+    expect(exit.trace).toBe(exit.id);
   });
 
   test("the handler can attach route context, and it rides the exit record", async () => {
@@ -220,19 +252,19 @@ describe("observeRequests: the funnel wrapper the daemon's fetch uses (M1.2)", (
   });
 });
 
-describe("requestId: adopt a well-formed inbound id, mint otherwise (M1.3)", () => {
+describe("inboundTrace: adopt a well-formed inbound trace, refuse anything else (M1.3)", () => {
   const headers = (value?: string) =>
     new Headers(value === undefined ? {} : { "x-lucid-request": value });
 
-  test("a well-formed inbound id is adopted", () => {
-    expect(requestId(headers("abc123def4567890"))).toBe("abc123def4567890");
+  test("a well-formed inbound trace is adopted", () => {
+    expect(inboundTrace(headers("abc123def4567890"))).toBe("abc123def4567890");
   });
 
-  test("a missing id is minted", () => {
-    expect(requestId(headers())).toMatch(/^[a-f0-9]{16}$/);
+  test("a missing trace adopts nothing", () => {
+    expect(inboundTrace(headers())).toBeUndefined();
   });
 
-  test("a malformed id is REPLACED, not sanitised-and-kept - the log-injection guard (R4)", () => {
+  test("a malformed trace is REFUSED outright - the log-injection guard (R4)", () => {
     for (const hostile of [
       "short",
       "ABC123DEF4567890", // case is part of well-formed
@@ -241,9 +273,7 @@ describe("requestId: adopt a well-formed inbound id, mint otherwise (M1.3)", () 
       // get this far - the Headers layer itself rejects them)
       "../../etc/passwd",
     ]) {
-      const id = requestId(headers(hostile));
-      expect(id).toMatch(/^[a-f0-9]{16}$/);
-      expect(id).not.toBe(hostile);
+      expect(inboundTrace(headers(hostile))).toBeUndefined();
     }
   });
 });

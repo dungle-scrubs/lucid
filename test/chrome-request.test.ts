@@ -10,13 +10,15 @@ import { join } from "node:path";
  * SOURCE, not on behavior.
  */
 
-const CHROME = join(import.meta.dir, "..", "client", "chrome");
+const CLIENT = join(import.meta.dir, "..", "client");
 const OWNER = "request.ts";
 
-/** A bare fetch call - not hubFetch(, not loopbackFetch(. */
-const BARE_FETCH = /(?<![A-Za-z.])fetch\(/;
+/** A bare fetch call - not hubFetch(, not loopbackFetch(, and not the
+ *  window./globalThis. spellings either: those would bypass the seam while
+ *  a dotted lookbehind waved them through. */
+const BARE_FETCH = /(?<![A-Za-z])(?:window\.|globalThis\.|self\.)?fetch\(/;
 
-const chromeSources = (): string[] => {
+const clientSources = (): string[] => {
   const out: string[] = [];
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -25,21 +27,57 @@ const chromeSources = (): string[] => {
       else if (/\.(ts|tsx)$/.test(entry.name)) out.push(p);
     }
   };
-  walk(CHROME);
+  // The whole client tree, not just chrome/: the bundle entries and shared/
+  // modules ship in the same bundles, so a fetch added there bypasses the
+  // seam just as silently.
+  walk(CLIENT);
   return out;
 };
 
-describe("no chrome module calls fetch except the request helper", () => {
+describe("no client module calls fetch except the request helper", () => {
   test("every fetch call site lives in request.ts", () => {
-    const offenders = chromeSources()
+    const offenders = clientSources()
       .filter((p) => !p.endsWith(`/${OWNER}`))
       .filter((p) => BARE_FETCH.test(readFileSync(p, "utf8")));
     expect(offenders).toEqual([]);
   });
+});
 
-  test("the helper exists and stamps the id header", () => {
-    const source = readFileSync(join(CHROME, OWNER), "utf8");
-    expect(source).toContain("x-lucid-request");
-    expect(BARE_FETCH.test(source)).toBe(true);
+describe("hubFetch stamps the trace - behaviourally, not by grep", () => {
+  const stubFetch = async (fn: () => Promise<void>): Promise<Request[]> => {
+    const seen: Request[] = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(new Request(input as string, init));
+      return new Response("ok");
+    }) as typeof fetch;
+    try {
+      await fn();
+    } finally {
+      globalThis.fetch = real;
+    }
+    return seen;
+  };
+
+  test("a well-formed id lands on the wire for every HeadersInit shape, and nothing is lost", async () => {
+    const { hubFetch } = await import("../client/chrome/request.ts");
+    const seen = await stubFetch(async () => {
+      await hubFetch("http://127.0.0.1:9/hub/sessions");
+      await hubFetch("http://127.0.0.1:9/hub/create", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      await hubFetch("http://127.0.0.1:9/x", { headers: new Headers({ "x-lucid-filename": "a" }) });
+      await hubFetch("http://127.0.0.1:9/y", { headers: [["accept", "text/html"]] });
+    });
+
+    for (const req of seen) {
+      expect(req.headers.get("x-lucid-request")).toMatch(/^[a-f0-9]{16}$/);
+    }
+    expect(seen[1]?.method).toBe("POST");
+    expect(seen[1]?.headers.get("content-type")).toBe("application/json");
+    expect(seen[2]?.headers.get("x-lucid-filename")).toBe("a");
+    expect(seen[3]?.headers.get("accept")).toBe("text/html");
   });
 });

@@ -905,7 +905,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       void runSpawn(argv, project, outLog, {
         harness: resolved.name,
         sessionId: childSessionId,
-        requestId: observation.id,
+        requestId: observation.trace,
         ...(selection?.model !== undefined ? { model: selection.model } : {}),
         ...(selection?.effort !== undefined ? { effort: selection.effort } : {}),
       })
@@ -1279,7 +1279,13 @@ export const hubInfo = async (port = HUB_PORT): Promise<HubInfo | undefined> => 
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HUB_PROBE_TIMEOUT_MS);
-    const probe = await loopbackFetch(port, "/hub/identity", { signal: controller.signal });
+    const probe = await loopbackFetch(port, "/hub/identity", {
+      signal: controller.signal,
+      // The probe rides the same trace as the open it fronts - without this,
+      // every `lucid open` emits one un-joined record right before the
+      // joined one.
+      headers: { [REQUEST_ID_HEADER]: cliRequestId() },
+    });
     clearTimeout(timer);
     if (!probe.ok) return undefined;
     const who = (await probe.json()) as { lucid?: unknown; shells?: unknown; attend?: unknown };

@@ -625,6 +625,7 @@ describe("the CLI carries the id to the hub (M1.3)", () => {
       .map((l) => JSON.parse(l) as Record<string, unknown>)
       .find((r) => r.event === "request" && r.path === "/hub/open");
     // The turn's own hub call joins the click that spawned it - one grep.
-    expect(exit?.id).toBe("0123456789abcdef");
+    expect(exit?.trace).toBe("0123456789abcdef");
+    expect(exit?.id).not.toBe("0123456789abcdef");
   });
 });

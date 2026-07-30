@@ -77,6 +77,9 @@ const attendantStamp = (harness?: string): AttendantStamp | undefined => {
     cwd: process.cwd(),
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
+    // The click's trace (plan 07, M1.3): a spawned turn holds it in
+    // LUCID_REQUEST_ID, and the sanitizer drops anything not well-formed.
+    ...(process.env.LUCID_REQUEST_ID ? { trace: process.env.LUCID_REQUEST_ID } : {}),
   });
 };
 

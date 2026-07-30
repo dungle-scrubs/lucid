@@ -1,20 +1,21 @@
 /**
- * The chrome's ONE fetch seam (plan 07, M1.3). Every browser request to the
+ * The chrome's ONE fetch seam (plan 07, M1.3). Every browser fetch to the
  * hub or a session mount goes through here so every one carries an
- * `x-lucid-request` id - the correlation the hub's request log adopts. A
- * DevTools network row and a `hub.log` line then name the same id, which is
- * the whole join. `test/chrome-request.test.ts` asserts on the source that
- * no other chrome module calls fetch; M2.2 adds the deadline here too.
+ * `x-lucid-request` trace - the correlation the hub's request log adopts. A
+ * DevTools network row and a `hub.log` line then name the same value, which
+ * is the whole join. `test/chrome-request.test.ts` asserts on the source
+ * that no other chrome module calls fetch; M2.2 adds the deadline here too.
  *
- * This module owns the header and nothing else - no base-url knowledge, no
- * body shaping, no retry policy.
+ * Fetch only: the two EventSource streams (hub events, session stream)
+ * cannot carry headers, and the hub records their arrival with a minted id
+ * instead. This module owns stamping the header and nothing else - no
+ * base-url knowledge, no body shaping, no retry policy.
  */
 
-/** 16 lowercase hex chars, the well-formed shape the hub adopts (R4). */
-const mintRequestId = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+import { mintRequestId, REQUEST_ID_HEADER } from "../../src/core/request-id.ts";
 
 export const hubFetch = (input: string, init: RequestInit = {}): Promise<Response> => {
   const headers = new Headers(init.headers);
-  headers.set("x-lucid-request", mintRequestId());
+  headers.set(REQUEST_ID_HEADER, mintRequestId());
   return fetch(input, { ...init, headers });
 };

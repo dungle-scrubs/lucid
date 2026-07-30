@@ -2,6 +2,9 @@ import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { isLucidError } from "../errors.ts";
+import { mintRequestId, REQUEST_ID_HEADER, WELL_FORMED_ID } from "../core/request-id.ts";
+
+export { REQUEST_ID_HEADER } from "../core/request-id.ts";
 
 /**
  * The wide-event boundary: one structured record per hub request, built as
@@ -26,11 +29,15 @@ export interface ObserveOptions {
   readonly clock?: () => number;
 }
 
-/** What a request is - the three identifiers no record makes sense without. */
+/** What a request is. `id` is the record's OWN key - fresh per record,
+ *  never adopted - and pairs an entry with its exit. `trace` is the carried
+ *  value that joins a click to every hop it caused (D-011); it defaults to
+ *  the id at the edge where a trace is born. */
 export interface RequestIdentity {
   readonly method: string;
   readonly path: string;
   readonly id: string;
+  readonly trace?: string;
 }
 
 /**
@@ -54,9 +61,12 @@ export interface ErrorIdentity {
 }
 
 export interface RequestObservation {
-  /** The record's id - what a route hands to work that OUTLIVES the request
-   *  (a spawned turn), so the offspring's records join the click's. */
+  /** The record's own key - pairs this entry with this exit, nothing else. */
   readonly id: string;
+  /** The carried join key (D-011) - what a route hands to work that OUTLIVES
+   *  the request (a spawned turn), so the offspring's records join the
+   *  click's. */
+  readonly trace: string;
   /** Merge named identifiers onto the record - attach, don't log. */
   attach(context: RequestContext): void;
   /** Stamp a typed error's identity onto the record: `error.type` is the
@@ -72,6 +82,7 @@ export const startRequest = (
   options: ObserveOptions,
 ): RequestObservation => {
   const { method, path, id } = request;
+  const trace = request.trace ?? id;
   // performance.now, not Date.now: sub-ms resolution means a fast loopback
   // route still records a real, non-zero duration.
   const clock = options.clock ?? ((): number => performance.now());
@@ -79,7 +90,7 @@ export const startRequest = (
   // The entry record. A record written only on completion is evidence only
   // about requests that completed - and the request being chased is the one
   // that hung. Entry with no exit is what a hang LOOKS like in the file.
-  options.sink(JSON.stringify({ event: "request.start", id, method, path }));
+  options.sink(JSON.stringify({ event: "request.start", id, trace, method, path }));
   const context: { -readonly [K in keyof RequestContext]: RequestContext[K] } = {};
   let failure: { readonly type: string; readonly code: string } | undefined;
   let ended = false;
@@ -89,6 +100,7 @@ export const startRequest = (
   const cap = (value: string): string => value.slice(0, 256);
   return {
     id,
+    trace,
     attach(next: RequestContext): void {
       if (next.artifact !== undefined) context.artifact = cap(next.artifact);
       if (next.project !== undefined) context.project = cap(next.project);
@@ -106,6 +118,7 @@ export const startRequest = (
         JSON.stringify({
           event: "request",
           id,
+          trace,
           method,
           path,
           status,
@@ -118,32 +131,20 @@ export const startRequest = (
   };
 };
 
-/** A fresh request id: 16 hex chars, the same width `sessionId` uses. */
-const mintRequestId = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
-
-/** The header the id travels on, every hop: browser -> hub, CLI -> hub. */
-export const REQUEST_ID_HEADER = "x-lucid-request";
-
-/** Exactly 16 lowercase hex chars - anchored, fixed width. Anything else is
- *  REPLACED, never sanitised-and-kept: an arbitrary-length or non-hex value
- *  must not reach a log line (R4, the log-injection guard - and the reason
- *  this is a seam rather than a one-liner). */
-const WELL_FORMED_ID = /^[a-f0-9]{16}$/;
-
-/** The id a CLI process sends: adopt `LUCID_REQUEST_ID` when a spawned turn
- *  holds one (its hub calls then join the click that spawned it), mint
+/** The trace a CLI process sends: adopt `LUCID_REQUEST_ID` when a spawned
+ *  turn holds one (its hub calls then join the click that spawned it), mint
  *  otherwise. Malformed values are replaced, same as the header rule. */
 export const cliRequestId = (env: NodeJS.ProcessEnv = process.env): string => {
   const held = env.LUCID_REQUEST_ID;
   return held !== undefined && WELL_FORMED_ID.test(held) ? held : mintRequestId();
 };
 
-/** Adopt a well-formed inbound id, mint one otherwise (M1.3). Adoption is
- *  what joins the four hops: the caller that already holds an id sees the
- *  hub's records carry the SAME one. */
-export const requestId = (headers: Headers): string => {
+/** Adopt a well-formed inbound trace, refuse anything else (M1.3, R4).
+ *  Adoption is what joins the hops: the caller that already holds a trace
+ *  sees the hub's records carry the SAME one. */
+export const inboundTrace = (headers: Headers): string | undefined => {
   const inbound = headers.get(REQUEST_ID_HEADER);
-  return inbound !== null && WELL_FORMED_ID.test(inbound) ? inbound : mintRequestId();
+  return inbound !== null && WELL_FORMED_ID.test(inbound) ? inbound : undefined;
 };
 
 /**
@@ -160,7 +161,12 @@ export const observeRequests = (
   return async (req: Request): Promise<Response> => {
     const { pathname } = new URL(req.url);
     const observation = startRequest(
-      { method: req.method, path: pathname, id: requestId(req.headers) },
+      {
+        method: req.method,
+        path: pathname,
+        id: mintRequestId(),
+        ...(inboundTrace(req.headers) !== undefined ? { trace: inboundTrace(req.headers) } : {}),
+      },
       options,
     );
     try {
