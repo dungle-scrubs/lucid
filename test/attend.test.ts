@@ -808,14 +808,42 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
         if (line) progress = JSON.parse(line.slice(6)) as Record<string, unknown>;
       }
     }
-    await reader!.cancel().catch(() => {});
-
     expect(progress).toBeDefined();
     expect(progress?.artifact).toBe(join(proj, ".lucid", "slow.html"));
     // The trace joins the progress frame to the click's request record.
     expect(progress?.trace).toMatch(/^[a-f0-9]{16}$/);
     expect(progress?.elapsedMs as number).toBeGreaterThan(0);
-  }, 20_000);
+
+    // And it STOPS when the turn does - a heartbeat nobody clears would beat
+    // at nobody for the rest of the process's life, and asserting only that
+    // one arrived left `clearInterval` deletable with this test green. So:
+    // wait for the turn to finish, then KEEP READING and require silence.
+    // Existence, not readMarker: this stub writes plain text, and the marker
+    // is only being used as "the turn finished".
+    const doneBy = Date.now() + 10_000;
+    while (Date.now() < doneBy && !(await Bun.file(createMarker).exists())) await sleep(50);
+    expect(await Bun.file(createMarker).exists()).toBe(true);
+    let after = "";
+    const quietUntil = Date.now() + 5000;
+    // ONE pending read carried across iterations: racing a fresh read against
+    // a sleep orphans the loser, and the orphan eats the next chunk - which
+    // would make this assertion pass by losing the very frames it looks for.
+    let pending: ReturnType<NonNullable<typeof reader>["read"]> | null = null;
+    while (Date.now() < quietUntil) {
+      if (pending === null) pending = reader!.read();
+      const inflight = pending;
+      const next = await Promise.race([
+        inflight.then((r) => ({ hit: true as const, r })),
+        sleep(400).then(() => ({ hit: false as const })),
+      ]);
+      if (!next.hit) continue;
+      pending = null;
+      if (next.r.done) break;
+      if (next.r.value) after += decoder.decode(next.r.value, { stream: true });
+    }
+    expect(after).not.toContain("event: create-progress");
+    await reader!.cancel().catch(() => {});
+  }, 30_000);
 
   test("the click's request id reaches the spawned turn as LUCID_REQUEST_ID (M1.3)", async () => {
     const hub = await startDaemon(true);

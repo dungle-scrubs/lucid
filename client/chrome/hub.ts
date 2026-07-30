@@ -137,6 +137,54 @@ export const useHub = create<HubState>(() => ({
   attention: {},
 }));
 
+/**
+ * The create-state transition rules (M2.1, adversarial review of #90). The
+ * dialog may only state what the hub told it, so stale claims must be
+ * unreachable rather than merely unlikely: news about an artifact always
+ * invalidates the OTHER kind of news about that same artifact, and every rule
+ * is keyed so one turn's outcome never speaks for another's.
+ *
+ * Pure and exported for the tests: these are the rules, not the plumbing.
+ */
+export interface CreateState {
+  readonly createFailed: HubState["createFailed"];
+  readonly createProgress: HubState["createProgress"];
+}
+
+/** A live turn's heartbeat. Clears a failure recorded for the SAME artifact -
+ *  a retry of a failed name was otherwise reported as still-failed for its
+ *  whole duration, with the previous turn's log tail as the evidence. */
+export const noteCreateProgress = (
+  state: CreateState,
+  artifact: string,
+  frame: { readonly trace: string; readonly elapsedMs: number; readonly at: number },
+): CreateState => ({
+  createFailed: state.createFailed?.artifact === artifact ? null : state.createFailed,
+  createProgress: { ...state.createProgress, [artifact]: frame },
+});
+
+/** A turn died. Drops its heartbeat, so nothing can arm the silence detector
+ *  from a dead turn's last frame. */
+export const noteCreateFailed = (
+  state: CreateState,
+  failed: NonNullable<HubState["createFailed"]>,
+): CreateState => {
+  const { [failed.artifact]: _gone, ...rest } = state.createProgress;
+  return { createFailed: failed, createProgress: rest };
+};
+
+/** A turn BEGINS, or has landed: forget everything about that artifact. A
+ *  leftover entry is strictly worse than no data - the silence window is armed
+ *  from the last heartbeat's AGE, so a stale one arms it at zero and the
+ *  dialog claims silence instantly for a turn the hub is reporting. */
+export const forgetCreate = (state: CreateState, artifact: string): CreateState => {
+  const { [artifact]: _gone, ...rest } = state.createProgress;
+  return {
+    createFailed: state.createFailed?.artifact === artifact ? null : state.createFailed,
+    createProgress: rest,
+  };
+};
+
 export const setPaletteOpen = (open: boolean): void => useHub.setState({ paletteOpen: open });
 
 export const setCreateOpen = (open: boolean): void => useHub.setState({ createOpen: open });
@@ -441,9 +489,9 @@ export const connectHub = (): void => {
         tail: string;
         usageLimit?: string;
       };
-      useHub.setState({
-        createFailed: { artifact, tail, ...(usageLimit ? { usageLimit } : {}) },
-      });
+      useHub.setState((prev) =>
+        noteCreateFailed(prev, { artifact, tail, ...(usageLimit ? { usageLimit } : {}) }),
+      );
     } catch {
       /* malformed frame: the dialog's own timeout still reports */
     }
@@ -459,12 +507,9 @@ export const connectHub = (): void => {
         trace: string;
         elapsedMs: number;
       };
-      useHub.setState((prev) => ({
-        createProgress: {
-          ...prev.createProgress,
-          [artifact]: { trace, elapsedMs, at: Date.now() },
-        },
-      }));
+      useHub.setState((prev) =>
+        noteCreateProgress(prev, artifact, { trace, elapsedMs, at: Date.now() }),
+      );
     } catch {
       /* malformed frame: the next heartbeat is 2s away */
     }

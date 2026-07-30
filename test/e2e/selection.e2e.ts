@@ -286,9 +286,63 @@ test("a slow create turn is reported as running, and never accused of failing (p
   await hub.stop();
   hub = undefined;
   await expect(page.locator(hook("create-silent"))).toBeVisible({ timeout: 25_000 });
-  await expect(page.locator(hook("create-silent"))).toContainText("stopped reporting");
+  // And it names WHICH silence this is: the stream is down, which the page
+  // already knows, rather than the generic "the hub stopped reporting".
+  await expect(page.locator(hook("create-silent"))).toContainText("lost its connection");
   await expect(page.locator(hook("create-silent"))).toContainText("does not mean it failed");
   // And it does not sit UNDER a line still claiming the hub reports this turn:
   // "a heartbeat once arrived" is not "the hub is reporting".
   await expect(on(page).createAuthoring()).not.toContainText("reporting this turn as running");
+});
+
+test("a retry of a failed artifact is not reported as still-failed (plan 07, #90 review)", async ({
+  page,
+}) => {
+  // Fails fast the first time, then runs long the second. The reviewer's
+  // reproduction: createFailed was a slot that was never cleared, so the
+  // retry rendered the PREVIOUS turn's failure - and its log tail as
+  // evidence - for the whole duration of a turn the hub was reporting.
+  fixtures = await mkdtemp(join(tmpdir(), "lucid-harness-e2e-"));
+  const exe = join(fixtures, "flaky-harness");
+  const flag = join(fixtures, "ran-once");
+  await writeFile(
+    exe,
+    `#!/bin/sh\nif [ -f ${flag} ]; then sleep 25; exit 0; fi\ntouch ${flag}\necho "SENTINEL_OLD_TAIL"\nexit 1\n`,
+  );
+  await chmod(exe, 0o755);
+  hub = await startHub({
+    attend: true,
+    harnesses: { default: "flaky", harnesses: { flaky: { spawn: [exe, "{prompt}"] } } },
+  });
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await page.evaluate((root) => localStorage.setItem("lucid.createRoot", root), cli.dir);
+
+  // First attempt: it fails, and says so with its tail.
+  await on(page).tabAdd().click();
+  await on(page).newArtifact().click();
+  await on(page).createName().fill("retry.html");
+  await on(page).createPrompt().fill("first go");
+  await on(page).createSubmit().click();
+  await expect(page.locator(hook("create-failed-tail"))).toBeVisible({ timeout: 20_000 });
+  await expect(on(page).createAuthoring()).toContainText("SENTINEL_OLD_TAIL");
+
+  // The human closes and retries the same name - the natural response.
+  await page.keyboard.press("Escape");
+  await on(page).newArtifact().click();
+  await on(page).createName().fill("retry.html");
+  await on(page).createPrompt().fill("second go");
+  await on(page).createSubmit().click();
+
+  // The live turn is reported as live: no failure, no stale tail, and the
+  // silence detector is NOT armed from the dead turn's last heartbeat.
+  await expect(on(page).createAuthoring()).toContainText("reporting this turn as running", {
+    timeout: 15_000,
+  });
+  await expect(page.locator(hook("create-failed-tail"))).toHaveCount(0);
+  await expect(on(page).createAuthoring()).not.toContainText("SENTINEL_OLD_TAIL");
+  await expect(page.locator(hook("create-silent"))).toHaveCount(0);
 });

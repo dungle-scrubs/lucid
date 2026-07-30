@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { hubFetch, SCAN_TIMEOUT_MS } from "./request.ts";
-import { createRoots, openTab, setCreateOpen, useHub } from "./hub.ts";
+import { createRoots, forgetCreate, openTab, setCreateOpen, useHub } from "./hub.ts";
 import { projectName } from "./naming.ts";
 import { effortLadder, harnessInfoFor } from "./selection.ts";
 import { handleize } from "../../src/core/title.ts";
@@ -90,6 +90,9 @@ const CreateDialogBody = () => {
   const harnessInfo = useHub((s) => s.harnessInfo);
   const createFailed = useHub((s) => s.createFailed);
   const createProgress = useHub((s) => s.createProgress);
+  /** The page already knows whether the hub is reachable - the silence banner
+   *  says which of the two things happened rather than asking. */
+  const hubConnected = useHub((s) => s.connected);
   /** Projects named through the folder chooser this session. The hub only
    *  lists projects that already hold a session, so without these a brand new
    *  folder is unreachable until something else puts an artifact in it. */
@@ -373,7 +376,16 @@ const CreateDialogBody = () => {
     // The hub's own path, not one rebuilt here: it joined project and name,
     // and the listing row will carry exactly that string.
     persistCreateRoot(project); // the accepted root is the next dialog's default (D-005)
-    setAuthoring(typeof body?.artifact === "string" ? body.artifact : `${project}/${name}`);
+    // The hub always names the artifact on a 202; the fallback exists only so
+    // this cannot be undefined, and it must match the hub's own spelling
+    // (project/.lucid/<name>) because it is the key every heartbeat lands on.
+    const started =
+      typeof body?.artifact === "string" ? body.artifact : `${project}/.lucid/${resolvedName}`;
+    // A turn BEGINS: forget this artifact's history before watching it. A
+    // previous attempt's failure would otherwise render over a live turn, and
+    // its last heartbeat would arm the silence detector at zero.
+    useHub.setState((prev) => forgetCreate(prev, started));
+    setAuthoring(started);
   };
 
   return (
@@ -772,7 +784,7 @@ const CreateDialogBody = () => {
                 <span className="text-[11px] text-fg-faint">{authoring}</span>
                 <span className="pt-1 text-[11px] text-fg-faint">
                   {silent
-                    ? "A few minutes is normal; a failure interrupts this on its own."
+                    ? null
                     : progressAt !== null
                       ? "The hub is reporting this turn as running. A few minutes is normal; a failure interrupts this on its own."
                       : "Waiting for the hub's first report. A few minutes is normal; a failure interrupts this on its own."}
@@ -781,13 +793,15 @@ const CreateDialogBody = () => {
             )}
             {silent && createFailed?.artifact !== authoring ? (
               <span data-test="create-silent" className="pt-1 text-[11px] text-fg-muted">
-                The hub has stopped reporting on this turn. That does not mean it failed - it means
-                this window is no longer being told. Check{" "}
+                {hubConnected
+                  ? "The hub has stopped reporting on this turn. That does not mean it failed - it means this window is no longer being told. "
+                  : "This window has lost its connection to the hub, so it is no longer being told anything about this turn. That does not mean it failed. "}
+                Check{" "}
                 <code className="bg-ink-700 px-1">
                   .lucid/{name.replace(/\.html$/, "")}/create.out.log
                 </code>{" "}
-                in the project, or whether the hub is still running. This dialog can be closed; the
-                tab still appears on its own if the artifact lands.
+                in the project. This dialog can be closed; the tab still appears on its own if the
+                artifact lands.
               </span>
             ) : null}
           </div>

@@ -98,7 +98,7 @@ describe("no client module hand-rolls a deadline", () => {
     for (const path of clientSources()) {
       const source = readFileSync(path, "utf8");
       for (const [index, line] of source.split("\n").entries()) {
-        if (!/timeoutMs: null/.test(line)) continue;
+        if (!/timeoutMs\s*:\s*null/.test(line)) continue;
         const context = source
           .split("\n")
           .slice(Math.max(0, index - 6), index)
@@ -147,9 +147,25 @@ describe("hubFetch carries the deadline (plan 07, M2.2)", () => {
   }, 5000);
 
   test("the default deadline applies with no init at all - undefended is not a choice a call site can make", async () => {
-    const { DEFAULT_TIMEOUT_MS } = await import("../client/chrome/request.ts");
+    const { hubFetch, DEFAULT_TIMEOUT_MS } = await import("../client/chrome/request.ts");
     expect(DEFAULT_TIMEOUT_MS).toBeGreaterThan(0);
     expect(DEFAULT_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
+    // And it is really applied: a call with NO init still reaches fetch
+    // carrying a live signal. Asserting the constant alone left the
+    // `timeoutMs === undefined ? DEFAULT` line deletable with the test green.
+    let seen: AbortSignal | null | undefined;
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (_i: RequestInfo | URL, init?: RequestInit) => {
+      seen = init?.signal;
+      return new Response("ok");
+    }) as typeof fetch;
+    try {
+      await hubFetch("/hub/sessions");
+    } finally {
+      globalThis.fetch = real;
+    }
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen?.aborted).toBe(false);
   });
 
   test("timeoutMs: null is the documented exemption - a human browsing folders is slow on purpose", async () => {
