@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { killSurvivors } from "./gate.ts";
+import { killSurvivors, releaseExclusiveRun } from "./gate.ts";
 
 const REPO = join(import.meta.dirname, "..", "..");
 
@@ -16,6 +16,9 @@ const globalTeardown = async (): Promise<void> => {
   await killSurvivors(join(REPO, "src", "cli", "main.ts"), (message) =>
     console.warn(`[e2e teardown] ${message}`),
   );
+  // Last: the sweep above is exactly why only one run may be live, so the
+  // claim is held until after it.
+  releaseExclusiveRun();
 };
 
 export default globalTeardown;

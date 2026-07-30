@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   BINARY_SOURCES,
+  claimExclusiveRun,
   BUNDLE_SOURCES,
   bundleFreshness,
   ensureFreshBundle,
@@ -34,6 +35,13 @@ const RUN_ROOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * says out loud what it did so the run's own log shows which bundle was judged.
  */
 const globalSetup = async (): Promise<void> => {
+  // FIRST, before anything expensive: one run at a time. This suite's
+  // teardown kills every lucid process on the machine, so a second run - even
+  // one filtered spec - reaps the servers this one is mid-test on, and the
+  // victim fails on a timeout indistinguishable from a flake. Two runs were
+  // reported red that way before anyone looked at why.
+  const claim = claimExclusiveRun();
+  if (!claim.ok) throw new Error(`[e2e setup] ${claim.reason}`);
   const log = (message: string): void => console.log(`[e2e setup] ${message}`);
 
   const freshness = await ensureFreshBundle({
