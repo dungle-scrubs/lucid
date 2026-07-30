@@ -519,3 +519,83 @@ describe("hub daemon", () => {
     await reader!.cancel().catch(() => {});
   });
 });
+
+describe("the hub's wide event: every request emits (plan 07, M1.2)", () => {
+  const records = (lines: string[]) =>
+    lines.filter((l) => l.startsWith("{")).map((l) => JSON.parse(l) as Record<string, unknown>);
+
+  test("a listing request emits entry and exit: status 200, a real duration, one id", async () => {
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    const res = await get(daemon.port, "/hub/sessions");
+    expect(res.status).toBe(200);
+
+    const entry = records(lines).find(
+      (r) => r.event === "request.start" && r.path === "/hub/sessions",
+    );
+    const exit = records(lines).find((r) => r.event === "request" && r.path === "/hub/sessions");
+    expect(entry).toBeDefined();
+    expect(exit).toBeDefined();
+    expect(exit?.status).toBe(200);
+    expect(exit?.durationMs as number).toBeGreaterThan(0);
+    expect(exit?.id).toBe(entry?.id);
+  });
+
+  test("an unknown path emits its 404 - the miss is evidence too", async () => {
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    await get(daemon.port, "/no/such/route");
+
+    const exit = records(lines).find((r) => r.event === "request" && r.path === "/no/such/route");
+    expect(exit?.status).toBe(404);
+  });
+
+  test("a refused create still carries its identifiers - and never the prompt", async () => {
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      attend: true,
+      log: (m) => void lines.push(m),
+    });
+    await post(daemon.port, "/hub/create", {
+      project: root,
+      name: "not a valid name!",
+      prompt: "SENTINEL_PROMPT_never_logged",
+      harness: "claude",
+    });
+
+    const exit = records(lines).find((r) => r.event === "request" && r.path === "/hub/create");
+    expect(exit?.project).toBe(root);
+    expect(exit?.artifact).toBe("not a valid name!");
+    expect(exit?.harness).toBe("claude");
+    expect(lines.join("\n")).not.toContain("SENTINEL_PROMPT_never_logged");
+  });
+
+  test("a session route attaches the session id where the route knows it", async () => {
+    const artifact = await seedSession("proj", "notes");
+    const id = sessionId(artifact);
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    await get(daemon.port, `/s/${id}/`);
+
+    const exit = records(lines).find((r) => r.event === "request" && r.session === id);
+    expect(exit).toBeDefined();
+  });
+});

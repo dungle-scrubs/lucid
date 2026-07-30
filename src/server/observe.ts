@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -57,8 +58,14 @@ export const startRequest = (
   options: ObserveOptions,
 ): RequestObservation => {
   const { method, path, id } = request;
-  const clock = options.clock ?? Date.now;
+  // performance.now, not Date.now: sub-ms resolution means a fast loopback
+  // route still records a real, non-zero duration.
+  const clock = options.clock ?? ((): number => performance.now());
   const startedAt = clock();
+  // The entry record. A record written only on completion is evidence only
+  // about requests that completed - and the request being chased is the one
+  // that hung. Entry with no exit is what a hang LOOKS like in the file.
+  options.sink(JSON.stringify({ event: "request.start", id, method, path }));
   const context: { -readonly [K in keyof RequestContext]: RequestContext[K] } = {};
   let failure: { readonly type: string; readonly code: string } | undefined;
   let ended = false;
@@ -89,6 +96,46 @@ export const startRequest = (
         }),
       );
     },
+  };
+};
+
+/** A fresh request id: 16 hex chars, the same width `sessionId` uses.
+ *  M1.3 teaches the boundary to ADOPT a well-formed inbound id instead. */
+const mintRequestId = (): string => randomBytes(8).toString("hex");
+
+/** A typed error, recognised across the throw boundary without importing
+ *  every class: the stable `code` plus Effect's `_tag` are the contract. */
+const isLucidError = (err: unknown): err is LucidError =>
+  err instanceof Error &&
+  typeof (err as { code?: unknown }).code === "string" &&
+  typeof (err as { _tag?: unknown })._tag === "string";
+
+/**
+ * Wrap the hub's one request funnel so EVERY request emits - the wide event
+ * is made here, not in routes. The handler gets the observation to attach
+ * business context where the route knows it; a throw is recorded (typed
+ * errors keep their identity) and rethrown - responding to it stays the
+ * caller's job, so this wrapper decides nothing about routing.
+ */
+export const observeRequests = (
+  options: ObserveOptions,
+  handler: (req: Request, observation: RequestObservation) => Promise<Response>,
+): ((req: Request) => Promise<Response>) => {
+  return async (req: Request): Promise<Response> => {
+    const { pathname } = new URL(req.url);
+    const observation = startRequest(
+      { method: req.method, path: pathname, id: mintRequestId() },
+      options,
+    );
+    try {
+      const response = await handler(req, observation);
+      observation.end(response.status);
+      return response;
+    } catch (err) {
+      if (isLucidError(err)) observation.fail(err);
+      observation.end(500);
+      throw err;
+    }
   };
 };
 

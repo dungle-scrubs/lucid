@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLogSink, hubLogPath, resolveHubSink, startRequest } from "../src/server/observe.ts";
+import {
+  createLogSink,
+  hubLogPath,
+  observeRequests,
+  resolveHubSink,
+  startRequest,
+} from "../src/server/observe.ts";
 import { NotFoundError, ValidationError } from "../src/errors.ts";
 
 /**
@@ -67,6 +73,22 @@ describe("startRequest: the record and its lifecycle", () => {
     expect(record.error).toEqual({ type: "NotFoundError", code: "NOT_FOUND" });
   });
 
+  test("entry and exit are distinguishable: a request that never completes leaves an entry with no exit", () => {
+    const { lines, sink } = capture();
+    startRequest({ method: "POST", path: "/hub/create", id: "hang1" }, { sink, clock: () => 0 });
+    // No end() - the request hung. The entry record is the only evidence.
+
+    const records = lines.map((l) => JSON.parse(l));
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      event: "request.start",
+      id: "hang1",
+      method: "POST",
+      path: "/hub/create",
+    });
+    expect(records.filter((r) => r.event === "request")).toHaveLength(0);
+  });
+
   test("end called twice emits exactly once - a double emit double-counts every request", () => {
     const { lines, sink } = capture();
     const req = startRequest(
@@ -110,6 +132,50 @@ describe("startRequest: the record and its lifecycle", () => {
     expect(serialised).not.toContain("SENTINEL_HTML_artifact_body");
     expect(serialised).toContain("/proj/.lucid/plan.html");
     expect(serialised).toContain("VALIDATION_ERROR");
+  });
+});
+
+describe("observeRequests: the funnel wrapper the daemon's fetch uses (M1.2)", () => {
+  const req = (path: string, method = "GET") =>
+    new Request(`http://127.0.0.1:9/${path.replace(/^\//, "")}`, { method });
+
+  test("a handled request emits entry then exit with the handler's status, one id joining them", async () => {
+    const { lines, sink } = capture();
+    const observed = observeRequests({ sink }, async () => new Response("ok", { status: 201 }));
+    const res = await observed(req("/hub/sessions", "POST"));
+
+    expect(res.status).toBe(201);
+    const records = lines.map((l) => JSON.parse(l));
+    expect(records.map((r) => r.event)).toEqual(["request.start", "request"]);
+    expect(records[1].status).toBe(201);
+    expect(records[1].path).toBe("/hub/sessions");
+    expect(records[1].method).toBe("POST");
+    expect(records[0].id).toBe(records[1].id);
+    expect(records[0].id).toMatch(/^[a-f0-9]{16}$/);
+  });
+
+  test("a handler that throws a typed error still emits - with error.type and error.code", async () => {
+    const { lines, sink } = capture();
+    const observed = observeRequests({ sink }, async () => {
+      throw new ValidationError({ message: "bad artifact" });
+    });
+    await expect(observed(req("/hub/open", "POST"))).rejects.toThrow("bad artifact");
+
+    const exit = lines.map((l) => JSON.parse(l)).find((r) => r.event === "request");
+    expect(exit.status).toBe(500);
+    expect(exit.error).toEqual({ type: "ValidationError", code: "VALIDATION_ERROR" });
+  });
+
+  test("the handler can attach route context, and it rides the exit record", async () => {
+    const { lines, sink } = capture();
+    const observed = observeRequests({ sink }, async (_req, observation) => {
+      observation.attach({ session: "abc123" });
+      return new Response("ok");
+    });
+    await observed(req("/s/abc123/"));
+
+    const exit = lines.map((l) => JSON.parse(l)).find((r) => r.event === "request");
+    expect(exit.session).toBe("abc123");
   });
 });
 
