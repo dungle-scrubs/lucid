@@ -782,13 +782,13 @@ const CreateDialogBody = () => {
                   {String(elapsed % 60).padStart(2, "0")}
                 </span>
                 <span className="text-[11px] text-fg-faint">{authoring}</span>
-                <span className="pt-1 text-[11px] text-fg-faint">
-                  {silent
-                    ? null
-                    : progressAt !== null
+                {silent ? null : (
+                  <span className="pt-1 text-[11px] text-fg-faint">
+                    {progressAt !== null
                       ? "The hub is reporting this turn as running. A few minutes is normal; a failure interrupts this on its own."
                       : "Waiting for the hub's first report. A few minutes is normal; a failure interrupts this on its own."}
-                </span>
+                  </span>
+                )}
               </>
             )}
             {silent && createFailed?.artifact !== authoring ? (

@@ -337,6 +337,15 @@ test("a retry of a failed artifact is not reported as still-failed (plan 07, #90
   await on(page).createPrompt().fill("second go");
   await on(page).createSubmit().click();
 
+  // The moment the authoring pane exists - which is the moment `authoring` is
+  // set, before any heartbeat can arrive - a ONE-SHOT count. An auto-retrying
+  // assertion waits out the ~2s pre-heartbeat window that forgetCreate exists
+  // to close, so it proves the SSE rule instead of the wiring; a count taken
+  // before the pane exists proves nothing at all, because the form is still
+  // on screen. Both of those stayed green with forgetCreate deleted.
+  await expect(on(page).createAuthoring()).toBeVisible();
+  expect(await page.locator(hook("create-failed-tail")).count()).toBe(0);
+
   // The live turn is reported as live: no failure, no stale tail, and the
   // silence detector is NOT armed from the dead turn's last heartbeat.
   await expect(on(page).createAuthoring()).toContainText("reporting this turn as running", {
