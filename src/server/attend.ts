@@ -542,7 +542,13 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     await deliver(paths, {
       t: "agent_ack",
       id: crypto.randomUUID(),
-      intent: "revise",
+      // NO intent. This ack is written before the turn has read a word, so it
+      // cannot know whether the artifact will change - and claiming "revise"
+      // made the viewer announce "Updating the artifact…" for a "hey" that
+      // changed nothing. A delivery claim is not a promise about output;
+      // intent is the agent's to declare (`lucid intent`) once it has read
+      // the feedback and decided. Absent, the viewer says "Agent
+      // responding…", which is true of every running turn.
       covers: target,
       // The artifact's own session (D18): the hub acts on its behalf, and the
       // events the turn writes must not be attributed to the hub.

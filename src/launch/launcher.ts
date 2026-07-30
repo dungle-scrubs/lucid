@@ -447,7 +447,8 @@ export const attendChild = async (
     await deliver(child, {
       t: "agent_ack",
       id: crypto.randomUUID(),
-      intent: "revise",
+      // No intent, same reason as the hub's ack: this is written before the
+      // spawned turn has read the feedback, so it cannot promise an edit.
       ...(covers !== undefined ? { covers } : {}),
       // The CHILD session's identity (D18): the launcher acts on its behalf.
       attendant: { harness: harnessName, sessionId, cwd: child.artifactDir },

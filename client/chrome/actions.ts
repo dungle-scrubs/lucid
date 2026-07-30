@@ -491,6 +491,15 @@ export const createActions = (ctx: ActionsCtx) => {
           return;
         }
         discardOutboxMessage(m.id);
+        // The message really landed, so open the delivered-waiting window
+        // (D-054 / finding #19). A headless turn takes 3-4s to ack - attend's
+        // quiet window plus a poll - and without this the composer showed
+        // NOTHING for that whole gap: the annotation path set this and the
+        // message path did not, so marking up text said "Delivered - starting
+        // a turn…" while typing said nothing at all. Not in the catch: a post
+        // that threw keeps its text and its own warning, and must not claim
+        // the agent has feedback to answer.
+        set({ awaitingAck: true });
       }
     } finally {
       draining = false;

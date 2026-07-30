@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { deliveredWaiting, type AwaitPresence } from "../client/chrome/store.ts";
 
 /**
@@ -69,5 +71,43 @@ describe("delivered, waiting for the agent", () => {
     expect(deliveredWaiting(presence({ listening: 1, spawnable: true })).text).toBe(
       "Delivered — waiting for the agent…",
     );
+  });
+});
+
+/**
+ * Which sends open the delivered-waiting window (finding #19).
+ *
+ * The line exists to fill the gap between a send landing and the agent
+ * speaking - a gap that is 3-4s for a headless turn (attend's 3s debounce plus
+ * a poll). It renders on `awaitingAck`, which the ANNOTATION path set and the
+ * message path did not: marking up text showed "Delivered - starting a turn…",
+ * typing in the composer showed nothing at all.
+ */
+describe("every send that lands opens the window, not just annotations", () => {
+  const SOURCE = readFileSync(join(import.meta.dir, "..", "client/chrome/actions.ts"), "utf8");
+
+  test("the outbox drain sets awaitingAck once a message really landed", () => {
+    // Asserted on the source because the drain is a network loop over module
+    // state; what matters is that the successful-post branch - the one that
+    // discards the message from the outbox - is also the one that opens the
+    // window. A post that threw must NOT (it warns and keeps the text).
+    const drain = /const flushOutbox[\s\S]*?\n {2}};/.exec(SOURCE)?.[0] ?? "";
+    expect(drain, "could not find flushOutbox").not.toBe("");
+    expect(drain).toContain("awaitingAck: true");
+    // ORDER, not proximity: it must come after the discard that marks the
+    // post as landed, so it cannot be hoisted above the try and claim a send
+    // that never happened. (A distance check would have measured how long the
+    // comment beside it is.)
+    const discardAt = drain.indexOf("discardOutboxMessage");
+    const openAt = drain.indexOf("awaitingAck: true");
+    expect(discardAt).toBeGreaterThan(-1);
+    expect(openAt).toBeGreaterThan(discardAt);
+  });
+
+  test("a failed post does not claim the agent has anything to answer", () => {
+    const drain = /const flushOutbox[\s\S]*?\n {2}};/.exec(SOURCE)?.[0] ?? "";
+    const catchBlock = /\} catch \(e\) \{[\s\S]*?\n {8}\}/.exec(drain)?.[0] ?? "";
+    expect(catchBlock, "could not find the drain's catch").not.toBe("");
+    expect(catchBlock).not.toContain("awaitingAck");
   });
 });

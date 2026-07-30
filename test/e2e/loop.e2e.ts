@@ -1127,6 +1127,32 @@ test("declared revise intent puts an update-on-the-way spinner on the surface", 
   await expect(on(page).agentWorking()).toHaveCount(0);
 });
 
+test("a typed message says it landed immediately, and never claims an artifact update (findings #18, #19)", async ({
+  page,
+}) => {
+  await openViewer(page);
+
+  // Type into the composer and send. The gap this covers is real: a headless
+  // turn takes 3-4s to ack (attend's quiet window plus a poll), and the
+  // composer used to show NOTHING for all of it - `awaitingAck` was set on the
+  // annotation path and not the message path.
+  await on(page).messageInput().fill("hey");
+  await on(page).sendMessage().click();
+
+  // Immediately - not after the ack. One-shot, because an auto-retrying
+  // assertion would wait out the very window this is about.
+  await expect(on(page).awaitingAck()).toBeVisible({ timeout: 3000 });
+  await expect(on(page).awaitingAck()).toContainText("Delivered");
+
+  // And nothing claims the document is changing: no spawner may promise an
+  // edit before the turn has read a word. "hey" changes nothing.
+  expect(await on(page).surfaceUpdating().count()).toBe(0);
+  const working = await on(page).agentWorking().count();
+  if (working > 0) {
+    await expect(on(page).agentWorking()).not.toContainText("Updating the artifact");
+  }
+});
+
 test("a dropped live connection shows a self-clearing indicator, not a warning pile", async ({
   page,
 }) => {
