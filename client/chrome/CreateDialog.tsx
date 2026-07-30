@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { hubFetch } from "./request.ts";
-import { createRoots, openTab, setCreateOpen, useHub } from "./hub.ts";
+import { hubFetch, SCAN_TIMEOUT_MS } from "./request.ts";
+import { createRoots, forgetCreate, openTab, setCreateOpen, useHub } from "./hub.ts";
 import { projectName } from "./naming.ts";
 import { effortLadder, harnessInfoFor } from "./selection.ts";
 import { handleize } from "../../src/core/title.ts";
@@ -34,10 +34,12 @@ const CREATE_TIMEOUT_MS = 15_000;
 
 const MAX_PROMPT = 4000;
 
-/** How long to wait for the authored artifact to surface as a session before
- *  saying so. Authoring is a whole agent turn - minutes is normal, silence
- *  past this is not. */
-const AUTHOR_TIMEOUT_MS = 120_000;
+/** How long the hub may go SILENT before the dialog says so (M2.1). Not a
+ *  failure clock: a live turn heartbeats every 2s, so missing several in a row
+ *  means the HUB stopped reporting - which is true and actionable - where the
+ *  old two-minute "the turn may have failed" accused a healthy 8-minute turn
+ *  of dying. A real failure still interrupts instantly via create-failed. */
+const PROGRESS_SILENCE_MS = 15_000;
 
 const ATTEND_HINT =
   "This hub does not spawn agents. Start it with attend mode to author artifacts:";
@@ -87,6 +89,10 @@ const CreateDialogBody = () => {
   const defaultHarness = useHub((s) => s.defaultHarness);
   const harnessInfo = useHub((s) => s.harnessInfo);
   const createFailed = useHub((s) => s.createFailed);
+  const createProgress = useHub((s) => s.createProgress);
+  /** The page already knows whether the hub is reachable - the silence banner
+   *  says which of the two things happened rather than asking. */
+  const hubConnected = useHub((s) => s.connected);
   /** Projects named through the folder chooser this session. The hub only
    *  lists projects that already hold a session, so without these a brand new
    *  folder is unreachable until something else puts an artifact in it. */
@@ -123,6 +129,10 @@ const CreateDialogBody = () => {
     const res = await hubFetch("/hub/project", {
       method: "POST",
       headers: { "content-type": "application/json" },
+      // Exempt only when it opens the native chooser and waits on a human
+      // (M2.2); a typed path resolves and registers, which walks the tree, so
+      // it takes the scan budget rather than the default.
+      ...(path ? { timeoutMs: SCAN_TIMEOUT_MS } : { timeoutMs: null }),
       body: JSON.stringify(path ? { path } : {}),
     }).catch(() => null);
     if (!res) {
@@ -177,7 +187,11 @@ const CreateDialogBody = () => {
   /** The artifact path the hub accepted, once it has: the dialog is now
    *  waiting for that session to appear rather than taking input. */
   const [authoring, setAuthoring] = useState<string | null>(null);
-  const [timedOut, setTimedOut] = useState(false);
+  /** This dialog's own turn's last heartbeat, never another's. */
+  const progress = authoring === null ? undefined : createProgress[authoring];
+  /** The hub stopped reporting - which is a fact about the HUB, not a verdict
+   *  on the turn. */
+  const [silent, setSilent] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -233,22 +247,44 @@ const CreateDialogBody = () => {
     void openTab(row);
   }, [authoring, sessions]);
 
+  // Re-armed by every heartbeat: while the hub reports, this never fires, so
+  // the dialog cannot accuse a turn the hub says is running.
+  const progressAt = progress?.at ?? null;
   useEffect(() => {
     if (authoring === null) return;
-    const timer = setTimeout(() => setTimedOut(true), AUTHOR_TIMEOUT_MS);
+    setSilent(false);
+    // Armed from the AGE of the last heartbeat, not from now: a frame that
+    // arrived while this effect was re-running must not buy the hub a fresh
+    // full window, or a hub reporting once every 14s would look healthy
+    // forever.
+    const since = progressAt ?? Date.now();
+    const timer = setTimeout(
+      () => setSilent(true),
+      Math.max(0, PROGRESS_SILENCE_MS - (Date.now() - since)),
+    );
     return () => clearTimeout(timer);
-  }, [authoring]);
+  }, [authoring, progressAt]);
 
-  // A headless turn prints NOTHING until it finishes, so the log stays empty
-  // and the dialog has no evidence of life to show. The clock is that
-  // evidence: a failure now arrives on its own (create-failed), so a running
-  // clock means the turn is still going, not that anything is wedged.
+  // The clock ticks locally for smoothness but its ORIGIN is the hub's own
+  // elapsed time, re-based by every heartbeat - so what the human reads is
+  // the turn's real age, not this window's guess (a window opened late, or a
+  // reconnected stream, would otherwise show its own shorter clock). The tick
+  // reads the base through a ref so it cannot clobber the correction.
   const [elapsed, setElapsed] = useState(0);
+  const base = useRef<{ at: number; elapsedMs: number }>({ at: Date.now(), elapsedMs: 0 });
+  useEffect(() => {
+    if (progress === undefined) return;
+    base.current = { at: progress.at, elapsedMs: progress.elapsedMs };
+  }, [progress]);
   useEffect(() => {
     if (authoring === null) return;
+    base.current = { at: Date.now(), elapsedMs: 0 };
     setElapsed(0);
-    const started = Date.now();
-    const t = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    const t = setInterval(
+      () =>
+        setElapsed(Math.floor((base.current.elapsedMs + (Date.now() - base.current.at)) / 1000)),
+      1000,
+    );
     return () => clearInterval(t);
   }, [authoring]);
 
@@ -303,7 +339,7 @@ const CreateDialogBody = () => {
     // all (the classic case: the hub was restarted under an open window, and the
     // page is posting down a socket to a process that no longer exists).
     const res = await hubFetch("/hub/create", {
-      signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
+      timeoutMs: CREATE_TIMEOUT_MS,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -340,7 +376,16 @@ const CreateDialogBody = () => {
     // The hub's own path, not one rebuilt here: it joined project and name,
     // and the listing row will carry exactly that string.
     persistCreateRoot(project); // the accepted root is the next dialog's default (D-005)
-    setAuthoring(typeof body?.artifact === "string" ? body.artifact : `${project}/${name}`);
+    // The hub always names the artifact on a 202; the fallback exists only so
+    // this cannot be undefined, and it must match the hub's own spelling
+    // (project/.lucid/<name>) because it is the key every heartbeat lands on.
+    const started =
+      typeof body?.artifact === "string" ? body.artifact : `${project}/.lucid/${resolvedName}`;
+    // A turn BEGINS: forget this artifact's history before watching it. A
+    // previous attempt's failure would otherwise render over a live turn, and
+    // its last heartbeat would arm the silence detector at zero.
+    useHub.setState((prev) => forgetCreate(prev, started));
+    setAuthoring(started);
   };
 
   return (
@@ -737,15 +782,21 @@ const CreateDialogBody = () => {
                   {String(elapsed % 60).padStart(2, "0")}
                 </span>
                 <span className="text-[11px] text-fg-faint">{authoring}</span>
-                <span className="pt-1 text-[11px] text-fg-faint">
-                  A headless turn prints nothing until it finishes, so there is no progress to show.
-                  A few minutes is normal; a failure interrupts this on its own.
-                </span>
+                {silent ? null : (
+                  <span className="pt-1 text-[11px] text-fg-faint">
+                    {progressAt !== null
+                      ? "The hub is reporting this turn as running. A few minutes is normal; a failure interrupts this on its own."
+                      : "Waiting for the hub's first report. A few minutes is normal; a failure interrupts this on its own."}
+                  </span>
+                )}
               </>
             )}
-            {timedOut && createFailed?.artifact !== authoring ? (
-              <span data-test="create-timeout" className="pt-1 text-[11px] text-fg-muted">
-                Still nothing after two minutes. The turn may have failed - check{" "}
+            {silent && createFailed?.artifact !== authoring ? (
+              <span data-test="create-silent" className="pt-1 text-[11px] text-fg-muted">
+                {hubConnected
+                  ? "The hub has stopped reporting on this turn. That does not mean it failed - it means this window is no longer being told. "
+                  : "This window has lost its connection to the hub, so it is no longer being told anything about this turn. That does not mean it failed. "}
+                Check{" "}
                 <code className="bg-ink-700 px-1">
                   .lucid/{name.replace(/\.html$/, "")}/create.out.log
                 </code>{" "}

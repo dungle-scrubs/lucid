@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { hubFetch } from "./request.ts";
+import { hubFetch, SCAN_TIMEOUT_MS } from "./request.ts";
 import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
 import { sessionLabel } from "./naming.ts";
@@ -106,6 +106,19 @@ interface HubState {
      *  turn - the dialog names the wall instead of showing a bare tail. */
     readonly usageLimit?: string;
   } | null;
+  /** The last heartbeat from each LIVE create turn (M2.1), keyed by artifact:
+   *  proof of life, so the dialog reports progress instead of inferring
+   *  failure from a clock. `at` is this window's receipt time - what "has the
+   *  hub gone quiet" is measured against, since the hub's own elapsed cannot
+   *  say whether IT stopped.
+   *
+   *  Keyed, not a single slot: two creates can run at once (the dialog itself
+   *  invites it - "this dialog can be closed"), and one shared slot let the
+   *  OTHER turn's heartbeats keep re-arming this dialog's silence detector,
+   *  so a hub that stopped reporting THIS turn was never noticed. */
+  createProgress: Readonly<
+    Record<string, { readonly trace: string; readonly elapsedMs: number; readonly at: number }>
+  >;
 }
 
 export const useHub = create<HubState>(() => ({
@@ -120,8 +133,57 @@ export const useHub = create<HubState>(() => ({
   defaultHarness: null,
   harnessInfo: [],
   createFailed: null,
+  createProgress: {},
   attention: {},
 }));
+
+/**
+ * The create-state transition rules (M2.1, adversarial review of #90). The
+ * dialog may only state what the hub told it, so stale claims must be
+ * unreachable rather than merely unlikely: news about an artifact always
+ * invalidates the OTHER kind of news about that same artifact, and every rule
+ * is keyed so one turn's outcome never speaks for another's.
+ *
+ * Pure and exported for the tests: these are the rules, not the plumbing.
+ */
+export interface CreateState {
+  readonly createFailed: HubState["createFailed"];
+  readonly createProgress: HubState["createProgress"];
+}
+
+/** A live turn's heartbeat. Clears a failure recorded for the SAME artifact -
+ *  a retry of a failed name was otherwise reported as still-failed for its
+ *  whole duration, with the previous turn's log tail as the evidence. */
+export const noteCreateProgress = (
+  state: CreateState,
+  artifact: string,
+  frame: { readonly trace: string; readonly elapsedMs: number; readonly at: number },
+): CreateState => ({
+  createFailed: state.createFailed?.artifact === artifact ? null : state.createFailed,
+  createProgress: { ...state.createProgress, [artifact]: frame },
+});
+
+/** A turn died. Drops its heartbeat, so nothing can arm the silence detector
+ *  from a dead turn's last frame. */
+export const noteCreateFailed = (
+  state: CreateState,
+  failed: NonNullable<HubState["createFailed"]>,
+): CreateState => {
+  const { [failed.artifact]: _gone, ...rest } = state.createProgress;
+  return { createFailed: failed, createProgress: rest };
+};
+
+/** A turn BEGINS, or has landed: forget everything about that artifact. A
+ *  leftover entry is strictly worse than no data - the silence window is armed
+ *  from the last heartbeat's AGE, so a stale one arms it at zero and the
+ *  dialog claims silence instantly for a turn the hub is reporting. */
+export const forgetCreate = (state: CreateState, artifact: string): CreateState => {
+  const { [artifact]: _gone, ...rest } = state.createProgress;
+  return {
+    createFailed: state.createFailed?.artifact === artifact ? null : state.createFailed,
+    createProgress: rest,
+  };
+};
 
 export const setPaletteOpen = (open: boolean): void => useHub.setState({ paletteOpen: open });
 
@@ -337,13 +399,18 @@ export const addRoot = async (
   | { readonly needsPath: true }
   | { readonly error: string }
 > => {
-  // No deadline: with no path this opens a native folder chooser and waits for
-  // a human to browse, which is unbounded on purpose. The hub's own guard kills
-  // a chooser nobody answers, and that arrives here as a cancel.
+  const opensChooser = path === undefined || path === "";
   const res = await hubFetch("/hub/roots", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(path !== undefined && path !== "" ? { path } : {}),
+    // Two different unbounded things. With no path this opens a native folder
+    // chooser and WAITS ON A HUMAN browsing, which no deadline may cut short -
+    // the hub's own chooser guard bounds it instead, arriving here as a
+    // cancel. With a path there is no human, but the hub still walks the tree
+    // (16s for a home directory, measured), so it gets the scan budget rather
+    // than the default.
+    ...(opensChooser ? { timeoutMs: null } : { timeoutMs: SCAN_TIMEOUT_MS }),
+    body: JSON.stringify(opensChooser ? {} : { path }),
   }).catch(() => null);
   if (!res) return { error: "The hub did not answer - it may have restarted. Reload the page." };
   const body = (await res.json().catch(() => null)) as
@@ -402,7 +469,8 @@ export const connectHub = (): void => {
     void (async () => {
       try {
         const { id } = JSON.parse((e as MessageEvent).data) as { id: string };
-        const listed = (await hubFetch("/hub/sessions").then((r) =>
+        // The listing unions a scan of every root - same walk, same budget.
+        const listed = (await hubFetch("/hub/sessions", { timeoutMs: SCAN_TIMEOUT_MS }).then((r) =>
           r.ok ? (r.json() as Promise<{ sessions: HubSession[] }>) : null,
         )) as { sessions: HubSession[] } | null;
         const row = listed?.sessions.find((s) => s.id === id);
@@ -421,11 +489,29 @@ export const connectHub = (): void => {
         tail: string;
         usageLimit?: string;
       };
-      useHub.setState({
-        createFailed: { artifact, tail, ...(usageLimit ? { usageLimit } : {}) },
-      });
+      useHub.setState((prev) =>
+        noteCreateFailed(prev, { artifact, tail, ...(usageLimit ? { usageLimit } : {}) }),
+      );
     } catch {
       /* malformed frame: the dialog's own timeout still reports */
+    }
+  });
+  // A create turn is STILL RUNNING (M2.1). The dialog reports this rather
+  // than inferring health from a clock; `at` is stamped on receipt because
+  // the question the dialog asks is "did the HUB go quiet", which the hub's
+  // own elapsed number cannot answer.
+  es.addEventListener("create-progress", (e) => {
+    try {
+      const { artifact, trace, elapsedMs } = JSON.parse((e as MessageEvent).data) as {
+        artifact: string;
+        trace: string;
+        elapsedMs: number;
+      };
+      useHub.setState((prev) =>
+        noteCreateProgress(prev, artifact, { trace, elapsedMs, at: Date.now() }),
+      );
+    } catch {
+      /* malformed frame: the next heartbeat is 2s away */
     }
   });
   es.onopen = () => {

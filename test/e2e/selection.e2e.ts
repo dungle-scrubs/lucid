@@ -240,3 +240,118 @@ test("an attendant arriving mid-session is read afresh, not from the open tab's 
   await expect(pickers).toHaveAttribute("data-readonly", "true", { timeout: 20_000 });
   await expect(on(pickers).selectionModel()).toContainText("Sonnet 5");
 });
+
+test("a slow create turn is reported as running, and never accused of failing (plan 07, M2.1)", async ({
+  page,
+}) => {
+  // A harness that takes 20 seconds and then succeeds - longer than the
+  // dialog's silence window, which is the whole point: the two-minute
+  // accusation this replaces fired on turns exactly like this one, and a
+  // real 8-minute create was the case that exposed it.
+  fixtures = await mkdtemp(join(tmpdir(), "lucid-harness-e2e-"));
+  const exe = join(fixtures, "slow-harness");
+  await writeFile(exe, `#!/bin/sh\nsleep 20\nexit 0\n`);
+  await chmod(exe, 0o755);
+  hub = await startHub({
+    attend: true,
+    harnesses: { default: "slow", harnesses: { slow: { spawn: [exe, "{prompt}"] } } },
+  });
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await page.evaluate((root) => localStorage.setItem("lucid.createRoot", root), cli.dir);
+  await on(page).tabAdd().click();
+  await on(page).newArtifact().click();
+  await on(page).createName().fill("slow.html");
+  await on(page).createPrompt().fill("take your time");
+  await on(page).createSubmit().click();
+
+  // The hub SAYS it is running - the positive signal, not a clock.
+  await expect(on(page).createAuthoring()).toBeVisible();
+  await expect(on(page).createAuthoring()).toContainText("reporting this turn as running", {
+    timeout: 15_000,
+  });
+
+  // Past the old two-minute accusation's shape: after 18 seconds of a live
+  // turn - well past the 15s silence window - nothing claims failure.
+  await page.waitForTimeout(18_000);
+  await expect(page.locator(hook("create-silent"))).toHaveCount(0);
+  await expect(on(page).createAuthoring()).toContainText("reporting this turn as running");
+
+  // The OTHER edge, which is what makes the first half mean anything: when
+  // the hub genuinely stops reporting, the dialog says exactly that - and
+  // says it about the HUB, not as a verdict on the turn.
+  await hub.stop();
+  hub = undefined;
+  await expect(page.locator(hook("create-silent"))).toBeVisible({ timeout: 25_000 });
+  // And it names WHICH silence this is: the stream is down, which the page
+  // already knows, rather than the generic "the hub stopped reporting".
+  await expect(page.locator(hook("create-silent"))).toContainText("lost its connection");
+  await expect(page.locator(hook("create-silent"))).toContainText("does not mean it failed");
+  // And it does not sit UNDER a line still claiming the hub reports this turn:
+  // "a heartbeat once arrived" is not "the hub is reporting".
+  await expect(on(page).createAuthoring()).not.toContainText("reporting this turn as running");
+});
+
+test("a retry of a failed artifact is not reported as still-failed (plan 07, #90 review)", async ({
+  page,
+}) => {
+  // Fails fast the first time, then runs long the second. The reviewer's
+  // reproduction: createFailed was a slot that was never cleared, so the
+  // retry rendered the PREVIOUS turn's failure - and its log tail as
+  // evidence - for the whole duration of a turn the hub was reporting.
+  fixtures = await mkdtemp(join(tmpdir(), "lucid-harness-e2e-"));
+  const exe = join(fixtures, "flaky-harness");
+  const flag = join(fixtures, "ran-once");
+  await writeFile(
+    exe,
+    `#!/bin/sh\nif [ -f ${flag} ]; then sleep 25; exit 0; fi\ntouch ${flag}\necho "SENTINEL_OLD_TAIL"\nexit 1\n`,
+  );
+  await chmod(exe, 0o755);
+  hub = await startHub({
+    attend: true,
+    harnesses: { default: "flaky", harnesses: { flaky: { spawn: [exe, "{prompt}"] } } },
+  });
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await page.evaluate((root) => localStorage.setItem("lucid.createRoot", root), cli.dir);
+
+  // First attempt: it fails, and says so with its tail.
+  await on(page).tabAdd().click();
+  await on(page).newArtifact().click();
+  await on(page).createName().fill("retry.html");
+  await on(page).createPrompt().fill("first go");
+  await on(page).createSubmit().click();
+  await expect(page.locator(hook("create-failed-tail"))).toBeVisible({ timeout: 20_000 });
+  await expect(on(page).createAuthoring()).toContainText("SENTINEL_OLD_TAIL");
+
+  // The human closes and retries the same name - the natural response.
+  await page.keyboard.press("Escape");
+  await on(page).newArtifact().click();
+  await on(page).createName().fill("retry.html");
+  await on(page).createPrompt().fill("second go");
+  await on(page).createSubmit().click();
+
+  // The moment the authoring pane exists - which is the moment `authoring` is
+  // set, before any heartbeat can arrive - a ONE-SHOT count. An auto-retrying
+  // assertion waits out the ~2s pre-heartbeat window that forgetCreate exists
+  // to close, so it proves the SSE rule instead of the wiring; a count taken
+  // before the pane exists proves nothing at all, because the form is still
+  // on screen. Both of those stayed green with forgetCreate deleted.
+  await expect(on(page).createAuthoring()).toBeVisible();
+  expect(await page.locator(hook("create-failed-tail")).count()).toBe(0);
+
+  // The live turn is reported as live: no failure, no stale tail, and the
+  // silence detector is NOT armed from the dead turn's last heartbeat.
+  await expect(on(page).createAuthoring()).toContainText("reporting this turn as running", {
+    timeout: 15_000,
+  });
+  await expect(page.locator(hook("create-failed-tail"))).toHaveCount(0);
+  await expect(on(page).createAuthoring()).not.toContainText("SENTINEL_OLD_TAIL");
+  await expect(page.locator(hook("create-silent"))).toHaveCount(0);
+});
