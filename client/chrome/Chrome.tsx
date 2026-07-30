@@ -485,14 +485,22 @@ export const SessionView = ({
                     setChromeWidth(next);
                     persistWidth(next);
                   }}
-                  // The boundary is the 1px RIGHT BORDER (the panel's edge), same
-                  // border-box trick as before the flip: fixed footprint, line
-                  // thickens on hover without shifting the artifact.
+                  // The boundary is the 1px LEFT border, so the artifact meets the
+                  // line with nothing between them. It used to be the right
+                  // border over a filled 5px band, which put four pixels of
+                  // chrome between the document and its own edge - a gap that
+                  // read as a mistake at every window size.
+                  //
+                  // The footprint stays 5px because that is the drag target; it
+                  // now sits on the PANEL's side of the line and carries no
+                  // background of its own, so it disappears into the panel.
+                  // Border-box means a hover thickening the line grows into that
+                  // band rather than shifting the artifact.
                   //
                   // h-full is load-bearing: Tailwind's preflight sets hr{height:0}, so
                   // without it the divider collapses to nothing - invisible and undraggable.
                   style={{ width: DIVIDER_WIDTH }}
-                  className="m-0 h-full shrink-0 cursor-col-resize border-0 border-r-[1px] border-r-ink-600 bg-ink-850 hover:border-r-[2px] hover:border-r-accent-bright focus-visible:border-r-[2px] focus-visible:border-r-accent-bright"
+                  className="m-0 h-full shrink-0 cursor-col-resize border-0 border-l-[1px] border-l-ink-600 bg-transparent hover:border-l-[2px] hover:border-l-accent-bright focus-visible:border-l-[2px] focus-visible:border-l-accent-bright"
                 />
               }
             />

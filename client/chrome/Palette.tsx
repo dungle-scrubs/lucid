@@ -1,4 +1,5 @@
 import { Command } from "cmdk";
+import { matchScore } from "./list.ts";
 import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
 import { addRoot, closeTab, setPaletteOpen, useHub } from "./hub.ts";
@@ -83,6 +84,9 @@ export const Palette = () => {
       <Command
         data-test="palette"
         label="Lucid commands"
+        /* The same scorer the pick screen uses, so the two surfaces cannot
+           disagree about what a query matches (list.ts, matchScore). */
+        filter={matchScore}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
             e.preventDefault();
