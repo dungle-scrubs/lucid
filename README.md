@@ -1,28 +1,30 @@
 # Lucid
 
-Point at the line. Say what you mean. The agent gets it.
+Read your agent's work as a document, not a wall of markdown.
 
-Your coding agent writes its answer as an HTML document - a plan, an audit, a
-schema - and Lucid serves it in a browser where you mark up individual elements
-and text ranges. Your notes go back as *located* feedback: not "change item 3"
-but a mark **on** item 3 with the exact quote attached, so the agent acts on it
-without guessing.
+Your coding agent writes its answer as an HTML document instead of printing
+markdown to your terminal: real headings, tables that look like tables, and
+diagrams and wireframes built from elements you can point at. Lucid serves it
+in a browser, where you mark up any element or phrase and your notes go back
+carrying the thing you pointed at. When the agent revises, that same document
+updates in place.
 
-A migration plan reads better as a document than as monospace prose scrolling
-out of a terminal. Reviewing it should feel like reviewing a document.
+A terminal has one format for everything. A migration plan, a schema, an audit,
+all of it arrives as the same monospace wall, with no hierarchy to skim and
+nothing to select. By the third revision you are re-reading paragraphs you
+already approved to find the two lines that changed, and somewhere in there you
+stop absorbing any of it.
 
-- **Nothing is thrown away.** Annotations, messages, versions, approvals and
-  replies land in one append-only log beside the artifact. Reviews suspend and
-  resume; any agent can pick up one someone else started.
-- **It lives in your repo.** The artifact and its review history sit in your
-  project, so a reboot, a cleared temp directory or a dead agent can't take
-  them with it.
-- **Agent-agnostic.** The whole integration surface is a CLI and a JSON
-  payload - no SDK, no plugin. Anything that can run a subprocess and parse
-  JSON can drive a review.
-- **It answers while you're away.** Send feedback with nobody watching and
-  Lucid can resume the agent's own conversation to apply it (see
-  [Two modes](#two-modes)).
+<!-- Proof slot: replace this block with docs/media/side-by-side.png - the same
+     migration plan as terminal markdown on the left, as a Lucid artifact on
+     the right. Caption: "The same plan, both ways." -->
+
+```sh
+# Ask your agent for a plan. It writes the document and opens it:
+lucid open .lucid/plan.html
+# You mark up step 3 in the browser. Your agent picks the note up here:
+lucid wait .lucid/plan.html --since <cursor>
+```
 
 ## Install
 
@@ -47,7 +49,7 @@ can read [`SKILL.md`](skills/lucid/SKILL.md) as a plain prompt.
 
 ## Use it
 
-Ask your agent for a plan. It writes `<project>/lucid/plan.html` and runs
+Ask your agent for a plan. It writes `<project>/.lucid/plan.html` and runs
 `lucid open`, and the review appears. You never touch the CLI to review - but
 these are yours if you want them:
 
@@ -75,6 +77,19 @@ It finds artifacts by scanning the folders in `~/.lucid/roots.json` (`~/dev`
 plus your agents' scratchpads by default). The projects drawer has a folder
 button to add another; it reports how many reviews were already inside.
 
+## The review record
+
+Annotations, messages, versions, approvals and replies land in one append-only
+log in `.lucid/<name>/`, beside the artifact they belong to. Nothing is
+discarded when a turn ends, so a review suspends and resumes, and any agent can
+pick up one someone else started.
+
+That record lives in your project rather than a temp directory, which is why a
+reboot, a cleared `/tmp` or a dead agent cannot take weeks of review with it.
+It is committable: only the record's `run/` subdirectory is machine-local, and
+its own `.gitignore` already excludes it. Commit the rest when a review should
+travel between machines or people.
+
 ## Two modes
 
 Which one you're in depends on whether that artifact's agent conversation is
@@ -100,8 +115,13 @@ the mode follows you there.
 
 ## Harnesses
 
-A harness is any agent CLI. Lucid needs a recipe for one only to *start* or
-*resume* turns itself - reviews work without any registry at all.
+A harness is any agent CLI. Both modes above run on Claude Code, Codex or pi;
+`docs/LAUNCHER.md` carries the model and effort flag mapping for each. The
+whole integration surface is this CLI and a JSON payload, with no SDK and no
+plugin, so anything that can run a subprocess and read JSON can drive a review.
+
+Lucid needs a recipe for a harness only to *start* or *resume* turns itself.
+Reviews work without any registry at all.
 
 `~/.config/lucid/harnesses.json` (or `$LUCID_HARNESSES`):
 

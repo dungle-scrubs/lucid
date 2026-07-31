@@ -36,12 +36,9 @@ export const chord = (key: string): string => `${mod()}+${key}`;
 export const hook = (name: string): string => `[data-test="${name}"]`;
 
 /** Hooks bound to a page, a frame, or a locator - scoping to a sub-tree
- *  ("the add-folder button INSIDE the drawer") is how several suites
+ *  ("the discard button INSIDE the last unsent message") is how several suites
  *  disambiguate a hook the product renders in more than one place. */
 export const on = (root: Page | FrameLocator | Locator) => ({
-  addFolder: (): Locator => root.locator(hook("add-folder")),
-  addFolderError: (): Locator => root.locator(hook("add-folder-error")),
-  addFolderResult: (): Locator => root.locator(hook("add-folder-result")),
   addToQueue: (): Locator => root.locator(hook("add-to-queue")),
   agentWorking: (): Locator => root.locator(hook("agent-working")),
   awaitingAck: (): Locator => root.locator(hook("awaiting-ack")),
@@ -119,6 +116,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   orphan: (): Locator => root.locator(hook("orphan")),
   palette: (): Locator => root.locator(hook("palette")),
   paletteAddFolder: (): Locator => root.locator(hook("palette-add-folder")),
+  paletteAddFolderStatus: (): Locator => root.locator(hook("palette-add-folder-status")),
   paletteInput: (): Locator => root.locator(hook("palette-input")),
   paletteOverlay: (): Locator => root.locator(hook("palette-overlay")),
   panelToggle: (): Locator => root.locator(hook("panel-toggle")),
