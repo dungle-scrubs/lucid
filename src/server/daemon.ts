@@ -1061,6 +1061,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // surfaces as a tab on its own `lucid open`. The claim is held until the
       // turn ends, so a retry while it runs is refused rather than doubled.
       const outLog = paths.createLog;
+      // Where THIS attempt's output starts. The log is opened in append mode
+      // (launcher.ts), so a second failed create on the same artifact would
+      // otherwise tail both attempts concatenated with no separator - the
+      // previous turn's evidence presented as this one's (07#17). Same fix
+      // shape the attend path already uses for a silent turn's relay.
+      const outputFrom = await stat(outLog).then(
+        (st) => st.size,
+        () => 0,
+      );
       // A dead create turn is knowable the moment the child exits - waiting
       // out the dialog's own patience to report "check the log" turned a
       // seconds-fast failure (a harness over its usage limit) into two
@@ -1130,7 +1139,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       heartbeats.add(heartbeat);
 
       const reportFailure = async (code: number | string): Promise<void> => {
-        const raw = await readFile(outLog, "utf8").catch(() => "");
+        const whole = await readFile(outLog, "utf8").catch(() => "");
+        // THIS attempt only.
+        const raw = whole.slice(outputFrom);
         const tail = raw.trim().split("\n").slice(-3).join("\n").slice(-500);
         // A usage wall is the one failure the human can do nothing about in
         // Lucid - name it as such rather than leaving them to read the tail.
