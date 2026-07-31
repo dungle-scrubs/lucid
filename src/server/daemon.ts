@@ -483,6 +483,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           warn: (code, message) => host.warn(code, message),
           ...(opts.harnessesPath !== undefined ? { harnessesPath: opts.harnessesPath } : {}),
           ...(opts.attendDebounceMs !== undefined ? { debounceMs: opts.attendDebounceMs } : {}),
+          // So a turn this hub spawns opens its artifact back into THIS hub.
+          hubPort: port,
           log,
         })
       : undefined;
@@ -1172,6 +1174,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         harness: resolved.name,
         sessionId: childSessionId,
         requestId: observation.trace,
+        // The create prompt ends with `lucid open <artifact>`; without this the
+        // turn opens it against the default port instead of this hub.
+        hubPort: port,
         ...(selection?.model !== undefined ? { model: selection.model } : {}),
         ...(selection?.effort !== undefined ? { effort: selection.effort } : {}),
       })

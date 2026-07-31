@@ -248,6 +248,10 @@ export interface AttendantOptions {
   readonly warn?: (code: string, message: string) => void;
   /** Internal narration sink (M3.1); tests inject, production reads the flag. */
   readonly trace?: (message: () => string) => void;
+  /** The hub this attendant belongs to (plan 08, finding #21). Passed to every
+   *  turn it spawns so the turn's own `lucid open` calls back HERE, not at
+   *  whatever is listening on the default port. */
+  readonly hubPort?: number;
 }
 
 export interface Attendant {
@@ -622,6 +626,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       harness: record.harness,
       sessionId: record.sessionId,
       turnId,
+      ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
       // Only what the argv actually carries: a dropped stale pick must not
       // stamp the child as running a model it was never given.
       ...(applied.model !== undefined ? { model: applied.model } : {}),
