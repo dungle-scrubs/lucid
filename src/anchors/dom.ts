@@ -81,7 +81,7 @@ const indexAmongSiblings = (el: DomElementLike): number => {
  * so the whole map costs one traversal. The VALUES are identical to
  * `indexAmongSiblings` by construction: 1-based position among ALL siblings.
  */
-const sibIndexMapOf = (elements: readonly DomElementLike[]): Map<DomElementLike, number> => {
+export const sibIndexMapOf = (elements: readonly DomElementLike[]): Map<DomElementLike, number> => {
   const map = new Map<DomElementLike, number>();
   const walked = new Set<DomElementLike>();
   for (const el of elements) {
