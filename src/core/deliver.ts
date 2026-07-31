@@ -1,9 +1,7 @@
 import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
-import { cliRequestId } from "../server/observe.ts";
 import type { EventInput, LogEventType } from "./events.ts";
 import { appendEvent } from "./log.ts";
 import type { SessionPaths } from "./paths.ts";
-import { REQUEST_ID_HEADER } from "./request-id.ts";
 
 /**
  * Deliver a CLI-authored event to the session. The one rule every command must
@@ -39,8 +37,10 @@ export const deliver = async (paths: SessionPaths, input: EventInput): Promise<D
       method: "POST",
       // The turn's WRITE joins the click that spawned it (plan 07 #9): without
       // the trace, the record for a reply is an orphan line no grep can tie to
-      // the request that caused the turn.
-      headers: { "content-type": "application/json", [REQUEST_ID_HEADER]: cliRequestId() },
+      // the request that caused the turn. `loopbackFetch` stamps it - carrying
+      // it here too would say the call site owns it, which is the arrangement
+      // that let an untraced fourth caller exist (plan 08, finding #15).
+      headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
     return { live: true };
