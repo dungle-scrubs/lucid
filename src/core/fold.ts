@@ -418,6 +418,25 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       workingSince = null;
       workingIntent = undefined;
       workingProgress = undefined;
+    } else if (e.t === "session_ended") {
+      // A session that is over has no turn running. Without this the window
+      // opened by an ack survived forever whenever the turn produced no
+      // output - the viewer kept saying the agent was responding beside a
+      // header reading `approved` (plan 08 finding #1).
+      //
+      // `session_ended` ONLY. Suspension is not evidence a turn ended: it
+      // fires on "no subscribers and status active", which is a human closing
+      // the viewer while an agent legitimately works, and `session_resumed`
+      // stays in the same segment - so closing here would erase a live turn
+      // permanently. `review_resolved` is not evidence either; approval
+      // describes the review, not the agent.
+      //
+      // Deliberately NOT lastAgentOutputSeq: ending a session produced no
+      // output, and advancing that cursor would mark undelivered feedback
+      // answered (payload.ts reads it for exactly that).
+      workingSince = null;
+      workingIntent = undefined;
+      workingProgress = undefined;
     }
   }
   const agentWorking = workingSince

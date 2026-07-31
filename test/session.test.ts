@@ -96,6 +96,54 @@ describe("log append", () => {
   });
 });
 
+describe("working window over a recorded log", () => {
+  /**
+   * The replay migration (plan 08, D-020). Making `session_ended` close the
+   * working window CHANGES how existing logs fold: one that ended with a
+   * dangling ack folded OPEN before and folds CLOSED now. That is intended,
+   * and it is pinned here against a log the SYSTEM wrote - openSession and
+   * appendEvents through the real append path, seqs and timestamps assigned by
+   * the code under test - rather than against hand-authored event objects,
+   * which could agree with a fold that had drifted from what the writer
+   * actually emits.
+   *
+   * Recorded fresh each run rather than checked in: a fixture file would rot
+   * silently, and the only real logs available carry someone's review content,
+   * which has no business in this repository (D-005).
+   */
+  test("a real ended log folds with no open window; a real live one keeps it", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+
+    // A turn takes the batch and produces nothing - the shape that left the
+    // viewer saying "agent picked up your feedback Nm ago - no response yet"
+    // for the life of the session (plan 08 finding #1).
+    await appendEvents(paths.logPath, [
+      {
+        t: "annotation",
+        id: "a-1",
+        version: 1,
+        target: { kind: "element", fingerprint: "f", domPath: "li", snippet: "<li>one</li>" },
+        note: "needs a rethink",
+      },
+      { t: "agent_ack", id: "ack-1", covers: 2 },
+    ]);
+
+    // Live: nothing has closed it, and nothing should.
+    const live = foldLog((await readEvents(paths.logPath)).events);
+    expect(live.agentWorking).not.toBeNull();
+
+    // Ended: the session is over, so no turn is running.
+    await appendEvent(paths.logPath, { t: "session_ended" });
+    const ended = foldLog((await readEvents(paths.logPath)).events);
+    expect(ended.agentWorking).toBeNull();
+
+    // The close must not have been bought by advancing output accounting -
+    // ending a session produced nothing, so the annotation is still unanswered.
+    expect(ended.lastAgentOutputSeq).toBe(0);
+  });
+});
+
 describe("openSession lifecycle", () => {
   test("fresh open writes session_opened + snapshot + current.html", async () => {
     const paths = sessionPaths(artifact);

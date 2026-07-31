@@ -464,6 +464,88 @@ describe("foldLog segments", () => {
     expect(foldLog([opened, start, bump, version]).agentWorking).toBeNull();
   });
 
+  test("an ended session closes the working window", () => {
+    // The defect (plan 08 finding #1): the window opened on an ack and closed
+    // only on real output, so a turn that acked and then ended without
+    // producing anything left the viewer saying the agent was still
+    // responding - beside a header reading `approved`, for the life of the
+    // session.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", covers: 1 } as never);
+
+    // Still working: the agent took the batch and has produced nothing yet.
+    expect(foldLog([opened, ack]).agentWorking).not.toBeNull();
+
+    // The session is over, so no turn is running.
+    const ended = ev({ t: "session_ended", seq: 3 } as never);
+    expect(foldLog([opened, ack, ended]).agentWorking).toBeNull();
+  });
+
+  test("suspension and approval are NOT evidence a turn ended", () => {
+    // The guard on the rule above. Suspension fires on "no subscribers and
+    // status active" - a human closing the viewer while an agent legitimately
+    // works - and a resume stays in the SAME segment, so treating either as a
+    // closer would erase a live turn permanently. Approval describes the
+    // review, not the agent: a turn may still be writing when a human
+    // approves.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", covers: 1 } as never);
+
+    const suspended = ev({ t: "session_suspended", seq: 3 } as never);
+    expect(foldLog([opened, ack, suspended]).agentWorking).not.toBeNull();
+
+    const resumed = ev({ t: "session_resumed", seq: 4, segment: 1 } as never);
+    expect(foldLog([opened, ack, suspended, resumed]).agentWorking).not.toBeNull();
+
+    const approved = ev({ t: "review_resolved", seq: 5 } as never);
+    expect(foldLog([opened, ack, approved]).agentWorking).not.toBeNull();
+  });
+
+  test("a reopened session folds from its own segment, with no stale window", () => {
+    // `session_ended` closing the window is belt; segmentation is braces. A
+    // reopen starts a fresh segment, so the previous segment's dangling ack is
+    // not even seen - which is why the rule above is needed for the
+    // ended-and-NOT-reopened log specifically.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", covers: 1 } as never);
+    const ended = ev({ t: "session_ended", seq: 3 } as never);
+    const reopened = ev({
+      t: "session_opened",
+      seq: 4,
+      segment: 2,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s2/v1.html",
+    } as never);
+
+    expect(foldLog([opened, ack, ended, reopened]).agentWorking).toBeNull();
+  });
+
   test("folds fork requests separately from annotations", () => {
     const events: LogEvent[] = [
       ev({
