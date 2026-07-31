@@ -213,6 +213,11 @@ export const runSpawn = async (
      *  spawn no request caused (attend's poll) - and then CLEARED, so a
      *  stale inherited id cannot claim the wrong click. */
     requestId?: string;
+    /** The TURN this spawn IS (plan 08, D-013). Minted by the caller so it
+     *  can name the same turn when it appends the terminator on exit, and
+     *  exported so the child's own acks carry it - a turn nobody can name is
+     *  a turn nobody can end. Cleared when absent, like requestId. */
+    turnId?: string;
   },
 ): Promise<number> => {
   // The child is its OWN harness session: inheriting the launcher's
@@ -228,6 +233,7 @@ export const runSpawn = async (
         LUCID_MODEL: identity.model,
         LUCID_EFFORT: identity.effort,
         LUCID_REQUEST_ID: identity.requestId,
+        LUCID_TURN_ID: identity.turnId,
       }
     : {
         ...process.env,
@@ -236,6 +242,7 @@ export const runSpawn = async (
         LUCID_MODEL: undefined,
         LUCID_EFFORT: undefined,
         LUCID_REQUEST_ID: undefined,
+        LUCID_TURN_ID: undefined,
       };
   // The out-log is machine-local (plan 02); its `run/` parent may not exist
   // yet when a fork's create turn spawns. mkdir defensively - idempotent.

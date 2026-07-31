@@ -535,6 +535,78 @@ describe("foldLog segments", () => {
     expect(foldLog([opened, ackA, ackB, replyA, replyB]).agentWorking).toBeNull();
   });
 
+  test("agent_turn_ended closes only the turn it names", () => {
+    // The terminator (plan 08 M5). A turn that reads feedback and produces
+    // nothing had no way to say it stopped, so its window stayed open - the
+    // viewer claiming the agent was responding, forever.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ackA = ev({
+      t: "agent_ack",
+      seq: 2,
+      id: "a1",
+      turnId: "A",
+      at: "2026-01-01T00:00:00Z",
+    } as never);
+    const ackB = ev({
+      t: "agent_ack",
+      seq: 3,
+      id: "b1",
+      turnId: "B",
+      at: "2026-01-01T00:05:00Z",
+    } as never);
+
+    // A ends having produced nothing. B is untouched.
+    const endA = ev({ t: "agent_turn_ended", seq: 4, turnId: "A", reason: "done" } as never);
+    const afterA = foldLog([opened, ackA, ackB, endA]);
+    expect(afterA.agentWorking).not.toBeNull();
+    expect(afterA.agentWorking?.since).toBe("2026-01-01T00:05:00Z");
+
+    // ...and it moved no delivery cursor: a turn that produced nothing has
+    // answered nothing.
+    expect(afterA.lastAgentOutputSeq).toBe(0);
+    expect(afterA.deliveredThroughSeq).toBe(0);
+
+    // B ends too. Nothing is working.
+    const endB = ev({ t: "agent_turn_ended", seq: 5, turnId: "B", reason: "exited" } as never);
+    expect(foldLog([opened, ackA, ackB, endA, endB]).agentWorking).toBeNull();
+
+    // A terminator naming a turn nobody opened changes nothing.
+    const ghost = ev({ t: "agent_turn_ended", seq: 6, turnId: "NOPE", reason: "done" } as never);
+    expect(foldLog([opened, ackA, ghost]).agentWorking?.since).toBe("2026-01-01T00:00:00Z");
+  });
+
+  test("a terminator wakes no blocked waiter, and a second one is a no-op", () => {
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", turnId: "A" } as never);
+    const end = ev({ t: "agent_turn_ended", seq: 3, turnId: "A", reason: "done" } as never);
+
+    // The whole reason M3 made the wake set explicit: agent B blocked at a
+    // cursor must not return `waiting` because agent A's turn ended.
+    expect(foldLog([opened, ack, end]).lastNonAckSeq).toBe(1);
+
+    // Ending an already-ended turn changes nothing.
+    const again = ev({ t: "agent_turn_ended", seq: 4, turnId: "A", reason: "failed" } as never);
+    const twice = foldLog([opened, ack, end, again]);
+    expect(twice.agentWorking).toBeNull();
+    expect(twice.lastNonAckSeq).toBe(1);
+  });
+
   test("a late ack cannot reopen a turn that already finished", () => {
     // An agent that finished and then flushed a queued progress line would
     // otherwise look alive again - forever, since nothing else closes it.

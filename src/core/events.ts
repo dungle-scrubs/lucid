@@ -248,6 +248,50 @@ export interface AgentAckEvent extends BaseEvent {
   readonly attendant?: AttendantStamp;
 }
 
+/** Why a turn stopped. A CLOSED set - the viewer owns the wording for each,
+ *  so no harness prose rides in on this event (D-005, D-015). */
+export type TurnEndReason = "done" | "exited" | "failed" | "usage_limit";
+
+/**
+ * A turn stopped (plan 08, RFC-01).
+ *
+ * A turn's START was always recorded - an ack - but nothing recorded it
+ * stopping, so the working window closed only on real output. A turn that read
+ * the feedback and correctly decided nothing was needed, or that hit a usage
+ * wall, or that died, left the viewer claiming the agent was still responding.
+ *
+ * Advisory: it changes what the viewer paints and nothing else. It carries no
+ * `covers`, moves no delivery cursor, and does not release `wait` (see
+ * WAKES_WAIT in fold.ts) - an agent asking for feedback must not be woken
+ * because a DIFFERENT agent's turn ended.
+ *
+ * There is deliberately no free-text field. An earlier draft carried a bounded,
+ * control-stripped `detail`; bounding a string is not redaction, and a CLI
+ * cannot tell a pattern name from copied harness output. `code` is a closed
+ * charset the viewer resolves to wording it owns.
+ */
+export interface AgentTurnEndedEvent extends BaseEvent {
+  readonly t: "agent_turn_ended";
+  /** Which turn stopped. Segment-scoped, like every turn id. */
+  readonly turnId: string;
+  readonly reason: TurnEndReason;
+  /** Optional stable identifier the viewer resolves to wording. Never prose. */
+  readonly code?: string;
+  readonly attendant?: AttendantStamp;
+}
+
+/** `code`'s charset. Refused rather than truncated: a value that fails this is
+ *  not a shortened identifier, it is something else entirely. */
+export const TURN_END_CODE = /^[a-z][a-z0-9_]{0,39}$/;
+
+/** The closed reason set, for validating an untrusted writer. */
+export const TURN_END_REASONS: ReadonlySet<string> = new Set<TurnEndReason>([
+  "done",
+  "exited",
+  "failed",
+  "usage_limit",
+]);
+
 /**
  * A human revert decision (RFC §8). Forward-only: it does not rewind the log;
  * it records "restore this target to `targetVersion`, because `why`" as feedback
@@ -361,6 +405,7 @@ export type LogEvent =
   | PromptEvent
   | AgentReplyEvent
   | AgentAckEvent
+  | AgentTurnEndedEvent
   | RevertEvent
   | QuestionEvent
   | QuestionAnsweredEvent

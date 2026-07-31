@@ -471,6 +471,14 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       const turn = e.turnId ?? ANON;
       openTurns.delete(turn);
       closedTurns.add(turn);
+    } else if (e.t === "agent_turn_ended") {
+      // The turn said it stopped. Only the turn it names, and only the window:
+      // a turn that produced nothing has answered nothing, so no cursor moves
+      // (D-018). A terminator naming a turn nobody opened is ignored - with
+      // turn identity that is safe, and without it, it would have closed
+      // somebody else's window.
+      openTurns.delete(e.turnId);
+      closedTurns.add(e.turnId);
     } else if (e.t === "session_ended") {
       // A session that is over has no turn running. Without this the window
       // opened by an ack survived forever whenever the turn produced no
