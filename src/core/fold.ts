@@ -145,6 +145,37 @@ const LIFECYCLE = new Set([
   "session_ended",
 ]);
 
+/**
+ * Which events may return a blocked `wait` (`lastNonAckSeq`, read by
+ * `runWait`). Stated as a SET rather than as "everything that is not an
+ * `agent_ack`, because the negative form silently enrolls every event added
+ * later. Presence traffic in particular must never wake a waiter: an ack is
+ * an agent talking about itself, not feedback for anyone, and a turn-lifecycle
+ * event is the same kind of thing. Under the old form, adding one would have
+ * woken every agent blocked on the log - agent B returning `waiting` because
+ * agent A's turn ended.
+ *
+ * Adding an event type here is a decision about whether it is worth waking a
+ * blocked agent for. That is exactly the decision that should be hard to make
+ * by accident.
+ */
+const WAKES_WAIT: ReadonlySet<LogEvent["t"]> = new Set<LogEvent["t"]>([
+  "session_opened",
+  "session_resumed",
+  "session_suspended",
+  "session_ended",
+  "version",
+  "annotation",
+  "fork",
+  "prompt",
+  "agent_reply",
+  "revert",
+  "question",
+  "question_answered",
+  "review_resolved",
+  "review_reopened",
+]);
+
 const statusFromLifecycle = (t: string): SessionStatus => {
   switch (t) {
     case "session_opened":
@@ -202,7 +233,7 @@ const deriveSessionHistory = (events: readonly LogEvent[]): SessionHistoryRecord
  */
 export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   const highSeq = maxSeq(events);
-  const lastNonAckSeq = maxSeq(events.filter((e) => e.t !== "agent_ack"));
+  const lastNonAckSeq = maxSeq(events.filter((e) => WAKES_WAIT.has(e.t)));
 
   if (events.length === 0) {
     return {
@@ -415,6 +446,25 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       if (e.progress) workingProgress = { ...workingProgress, ...e.progress };
     } else if (e.t === "version" || e.t === "agent_reply" || e.t === "question") {
       lastAgentOutputSeq = e.seq;
+      workingSince = null;
+      workingIntent = undefined;
+      workingProgress = undefined;
+    } else if (e.t === "session_ended") {
+      // A session that is over has no turn running. Without this the window
+      // opened by an ack survived forever whenever the turn produced no
+      // output - the viewer kept saying the agent was responding beside a
+      // header reading `approved` (plan 08 finding #1).
+      //
+      // `session_ended` ONLY. Suspension is not evidence a turn ended: it
+      // fires on "no subscribers and status active", which is a human closing
+      // the viewer while an agent legitimately works, and `session_resumed`
+      // stays in the same segment - so closing here would erase a live turn
+      // permanently. `review_resolved` is not evidence either; approval
+      // describes the review, not the agent.
+      //
+      // Deliberately NOT lastAgentOutputSeq: ending a session produced no
+      // output, and advancing that cursor would mark undelivered feedback
+      // answered (payload.ts reads it for exactly that).
       workingSince = null;
       workingIntent = undefined;
       workingProgress = undefined;

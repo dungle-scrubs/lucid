@@ -10,7 +10,7 @@ import type { DomElementLike, DomRootLike } from "../src/anchors/dom.ts";
 import type { Anchor } from "../src/anchors/anchor.ts";
 import { foldLog } from "../src/core/fold.ts";
 import { appendEvent, appendEvents, readEvents } from "../src/core/log.ts";
-import { buildWaitPayload } from "../src/core/payload.ts";
+import { assemblePayload, buildWaitPayload } from "../src/core/payload.ts";
 import { cursorSidecarPath, sessionPaths, snapshotPath } from "../src/core/paths.ts";
 import { commitWatchedChange, openSession } from "../src/core/session.ts";
 import { listSessions, projectRoot } from "../src/core/sessions.ts";
@@ -93,6 +93,121 @@ describe("log append", () => {
     const { events } = await readEvents(paths.logPath);
     const seqs = events.map((e) => e.seq).sort((a, b) => a - b);
     expect(seqs).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+  });
+});
+
+describe("working window over a recorded log", () => {
+  /**
+   * The replay migration (plan 08, D-020). Making `session_ended` close the
+   * working window CHANGES how existing logs fold: one that ended with a
+   * dangling ack folded OPEN before and folds CLOSED now. That is intended,
+   * and it is pinned here against a log the SYSTEM wrote - openSession and
+   * appendEvents through the real append path, seqs and timestamps assigned by
+   * the code under test - rather than against hand-authored event objects,
+   * which could agree with a fold that had drifted from what the writer
+   * actually emits.
+   *
+   * Recorded fresh each run rather than checked in: a fixture file would rot
+   * silently, and the only real logs available carry someone's review content,
+   * which has no business in this repository (D-005).
+   */
+  test("a real ended log folds with no open window; a real live one keeps it", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+
+    // A turn takes the batch and produces nothing - the shape that left the
+    // viewer saying "agent picked up your feedback Nm ago - no response yet"
+    // for the life of the session (plan 08 finding #1).
+    await appendEvents(paths.logPath, [
+      {
+        t: "annotation",
+        id: "a-1",
+        version: 1,
+        target: { kind: "element", fingerprint: "f", domPath: "li", snippet: "<li>one</li>" },
+        note: "needs a rethink",
+      },
+      { t: "agent_ack", id: "ack-1", covers: 2 },
+    ]);
+
+    // Live: nothing has closed it, and nothing should.
+    const live = foldLog((await readEvents(paths.logPath)).events);
+    expect(live.agentWorking).not.toBeNull();
+
+    // Ended: the session is over, so no turn is running.
+    await appendEvent(paths.logPath, { t: "session_ended" });
+    const ended = foldLog((await readEvents(paths.logPath)).events);
+    expect(ended.agentWorking).toBeNull();
+
+    // The close must not have been bought by advancing output accounting -
+    // ending a session produced nothing, so the annotation is still unanswered.
+    expect(ended.lastAgentOutputSeq).toBe(0);
+  });
+
+  /**
+   * Closing a window is not the same act as producing output, and the fold
+   * must not conflate them (plan 08 M2, D-018). They shared a branch: the
+   * closers also set `lastAgentOutputSeq`, which `payload.ts` reads to mark an
+   * item ANSWERED. Any new closer added to that branch would therefore claim a
+   * turn had answered feedback it never touched - the strongest possible chip
+   * on no evidence at all.
+   */
+  test("closing a window without output leaves delivery accounting alone", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvents(paths.logPath, [
+      {
+        t: "annotation",
+        id: "a-1",
+        version: 1,
+        target: { kind: "element", fingerprint: "f", domPath: "li", snippet: "<li>one</li>" },
+        note: "needs a rethink",
+      },
+      { t: "agent_ack", id: "ack-1", covers: 2 },
+    ]);
+    await appendEvent(paths.logPath, { t: "session_ended" });
+
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const payload = await assemblePayload(paths, state, "ended", {
+      annotations: state.annotations,
+      messages: state.messages,
+    });
+    const item = payload.annotations[0];
+
+    // Delivered, because an agent claimed the batch that held it...
+    expect(item?.delivered).toBe(true);
+    // ...but NOT answered: the turn ended without producing anything.
+    expect(item?.answered).toBeUndefined();
+
+    // Both cursors say so directly.
+    expect(state.deliveredThroughSeq).toBe(2);
+    expect(state.lastAgentOutputSeq).toBe(0);
+  });
+
+  test("real output DOES answer, so the assertion above can fail", async () => {
+    // The discriminator for the test above: same log, one real output added.
+    // Without this, "answered is undefined" would pass against a fold that
+    // never marks anything answered at all.
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvents(paths.logPath, [
+      {
+        t: "annotation",
+        id: "a-1",
+        version: 1,
+        target: { kind: "element", fingerprint: "f", domPath: "li", snippet: "<li>one</li>" },
+        note: "needs a rethink",
+      },
+      { t: "agent_ack", id: "ack-1", covers: 2 },
+      { t: "agent_reply", id: "r-1", text: "rethought it" },
+    ]);
+
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    const payload = await assemblePayload(paths, state, "feedback", {
+      annotations: state.annotations,
+      messages: state.messages,
+    });
+    expect(payload.annotations[0]?.answered).toBe(true);
+    expect(state.lastAgentOutputSeq).toBeGreaterThan(0);
   });
 });
 
