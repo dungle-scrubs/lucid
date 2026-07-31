@@ -8,6 +8,62 @@ Releases from 0.1.0 onward are managed by
 [release-please](https://github.com/googleapis/release-please) from Conventional
 Commit messages.
 
+## [0.3.0](https://github.com/dungle-scrubs/lucid/compare/v0.2.0...v0.3.0) (2026-07-31)
+
+
+### Added
+
+* **core:** a turn can end, and the viewer says what became of it ([#103](https://github.com/dungle-scrubs/lucid/issues/103)) ([6a7e7b9](https://github.com/dungle-scrubs/lucid/commit/6a7e7b973cfb23e37faa8225b7fdd5897c69aa5e))
+* **core:** trace the CLI's write path, and delete a component nothing mounts ([#102](https://github.com/dungle-scrubs/lucid/issues/102)) ([b22cee3](https://github.com/dungle-scrubs/lucid/commit/b22cee3d2361b3c45b9c0690a5ef0a02b272866e))
+* one folder per project, and a theme the artifact cannot fight ([#50](https://github.com/dungle-scrubs/lucid/issues/50)) ([4c3dd6d](https://github.com/dungle-scrubs/lucid/commit/4c3dd6d744d83848851c488b941b4dc54cdfe71b))
+* one light/dark choice, applied to every open artifact ([#49](https://github.com/dungle-scrubs/lucid/issues/49)) ([4985f4e](https://github.com/dungle-scrubs/lucid/commit/4985f4e5e4f030090459ab420e0b6eecfbc72b78))
+* presence-aware modes, an attend loop that actually answers, and a shell that cannot dead-end ([#45](https://github.com/dungle-scrubs/lucid/issues/45)) ([ba4d514](https://github.com/dungle-scrubs/lucid/commit/ba4d5147a103cca556fc794c6841908a7674cbbf))
+* **shell:** tab context menu with rename, eyebrow-fit tab groups, suspend/resume healing ([#97](https://github.com/dungle-scrubs/lucid/issues/97)) ([0482a04](https://github.com/dungle-scrubs/lucid/commit/0482a047b7a577912cf3f953f823d0ba3d4f9efe))
+* **test:** the catalogue stops being prose and starts failing the build ([#59](https://github.com/dungle-scrubs/lucid/issues/59)) ([c21b979](https://github.com/dungle-scrubs/lucid/commit/c21b979438af66619235ab55a4d0b49a1eb629af))
+* **test:** the four capabilities everything else is blocked on ([#57](https://github.com/dungle-scrubs/lucid/issues/57)) ([bb917c6](https://github.com/dungle-scrubs/lucid/commit/bb917c602ce1401ce5dfc6b4c4c9d0740572a613))
+* **viewer:** a sent annotation's mark is quiet until asked for ([#98](https://github.com/dungle-scrubs/lucid/issues/98)) ([d406cb1](https://github.com/dungle-scrubs/lucid/commit/d406cb1de00a8c77c6e112c8d54bfdec791f9744))
+* **viewer:** decision points - Agree / Decline on a marked element ([#93](https://github.com/dungle-scrubs/lucid/issues/93)) ([27e7b98](https://github.com/dungle-scrubs/lucid/commit/27e7b9877943430a5303f1a5bee8fa5517a3acf8))
+
+
+### Fixed
+
+* ⌘R keeps your tabs, and a session never colonises your folder ([#52](https://github.com/dungle-scrubs/lucid/issues/52)) ([3bca9c0](https://github.com/dungle-scrubs/lucid/commit/3bca9c010320dd8654275330ae3db3268a8706bf))
+* a .lucid/ artifact is never gitignored within a project ([#79](https://github.com/dungle-scrubs/lucid/issues/79)) ([94635b9](https://github.com/dungle-scrubs/lucid/commit/94635b9524b1c7d19741474e21772b011cb6c4f3))
+* a human message is never refused because an agent is writing ([#47](https://github.com/dungle-scrubs/lucid/issues/47)) ([80faab5](https://github.com/dungle-scrubs/lucid/commit/80faab5d60d5bb73415a931e1bb3a3655620bbfb))
+* **cli:** stdout is one JSON document, and a refusal exits non-zero ([#63](https://github.com/dungle-scrubs/lucid/issues/63)) ([d6b4a2b](https://github.com/dungle-scrubs/lucid/commit/d6b4a2bb9cc581d60cf9a29fb3972c85da63fb07))
+* **core:** an ended session closes the working window, and two guards for what follows ([#101](https://github.com/dungle-scrubs/lucid/issues/101)) ([25ff3fa](https://github.com/dungle-scrubs/lucid/commit/25ff3fa59ccf6a7b43ebdbf9c71e78ac323af98f))
+* **hooks:** the pre-commit formatter was staging nothing ([#60](https://github.com/dungle-scrubs/lucid/issues/60)) ([90fa511](https://github.com/dungle-scrubs/lucid/commit/90fa5118d6180caa763b1382bb8a45fe4911381c))
+* **review:** one running turn, reported once ([#46](https://github.com/dungle-scrubs/lucid/issues/46)) ([0267c64](https://github.com/dungle-scrubs/lucid/commit/0267c64c2d13201cb35a920e23ab13baa0a39b21))
+* **review:** reserve room for the badge that straddles a card's top edge ([#48](https://github.com/dungle-scrubs/lucid/issues/48)) ([42842f3](https://github.com/dungle-scrubs/lucid/commit/42842f386a4c8a04d77fe95d6210ce4e4725f3e2))
+* **shell:** live channels over WebSockets, not SSE ([#99](https://github.com/dungle-scrubs/lucid/issues/99)) ([e1bf777](https://github.com/dungle-scrubs/lucid/commit/e1bf7773825aecf4bc1ef3a17b938bb5d864b4e6))
+* **shell:** the pick list comes to rest on whole rows ([#51](https://github.com/dungle-scrubs/lucid/issues/51)) ([c9d7f86](https://github.com/dungle-scrubs/lucid/commit/c9d7f86ea47744febde222574507622b1719457f))
+* **test:** stop the suite copying a signed binary, and contain the harness env ([#58](https://github.com/dungle-scrubs/lucid/issues/58)) ([43c8ed7](https://github.com/dungle-scrubs/lucid/commit/43c8ed7da70eb6163a5aedd519936e7631f2f3d3))
+* **theme:** ask the artifact what it looks like, not what Lucid did to it ([#55](https://github.com/dungle-scrubs/lucid/issues/55)) ([617f7db](https://github.com/dungle-scrubs/lucid/commit/617f7db5ece95a19f7e23828b3cfeaf56c155252))
+* **theme:** never force a dark form on an artifact that has none ([#53](https://github.com/dungle-scrubs/lucid/issues/53)) ([569d43c](https://github.com/dungle-scrubs/lucid/commit/569d43c03c6f997db6372aa81cae054f413348d8))
+
+
+### Changed
+
+* a feature wave bumps the minor while under 1.0 ([#44](https://github.com/dungle-scrubs/lucid/issues/44)) ([a89b0fd](https://github.com/dungle-scrubs/lucid/commit/a89b0fd6496c9c9711ff2e516da625d4cbd18aff))
+* **deps-dev:** bump @playwright/test from 1.61.0 to 1.62.0 ([#96](https://github.com/dungle-scrubs/lucid/issues/96)) ([02a5ce2](https://github.com/dungle-scrubs/lucid/commit/02a5ce263da62a841a068d83f7447d596b7970d1))
+* **deps:** bump @assistant-ui/react from 0.14.27 to 0.14.28 ([#94](https://github.com/dungle-scrubs/lucid/issues/94)) ([bb1e044](https://github.com/dungle-scrubs/lucid/commit/bb1e0444cd732836e77020c36e0c13bddf7317fc))
+* **deps:** bump @assistant-ui/react-markdown to 0.14.7 ([#105](https://github.com/dungle-scrubs/lucid/issues/105)) ([2a95480](https://github.com/dungle-scrubs/lucid/commit/2a9548086cd4740d6e3c9e208f386c5b3b6607a3))
+* **deps:** bump googleapis/release-please-action from 4 to 5 ([#30](https://github.com/dungle-scrubs/lucid/issues/30)) ([6848d70](https://github.com/dungle-scrubs/lucid/commit/6848d70a361c5a7e9d035bd82a1785596bd6720d))
+* **e2e:** M4.1 - the 37 high-risk unblocked scenarios, seven of them fixes first ([#68](https://github.com/dungle-scrubs/lucid/issues/68)) ([0dd229b](https://github.com/dungle-scrubs/lucid/commit/0dd229bbe2d1a304465f29380a3a85a82cb9f3f5))
+* **e2e:** M4.2 - suite Q, the hostile artifact corpus: six survivors, six recorded defects ([#69](https://github.com/dungle-scrubs/lucid/issues/69)) ([801d17a](https://github.com/dungle-scrubs/lucid/commit/801d17a6ad916ce800d497792b66d1a5ae58289e))
+* **e2e:** M4.3 - seven cosmetic scenarios declined, one decline overturned in review ([#70](https://github.com/dungle-scrubs/lucid/issues/70)) ([fefd499](https://github.com/dungle-scrubs/lucid/commit/fefd4991af605e3d6a8554d5d8c30dd7bcb3d7f9))
+* **e2e:** Phase 5 - the deferred-capability scenarios, and what they found ([#71](https://github.com/dungle-scrubs/lucid/issues/71)) ([3aee5cc](https://github.com/dungle-scrubs/lucid/commit/3aee5cc3e4747027f2a4dd2ad87b5b77778ca0c4))
+* **e2e:** refuse to run against a bundle that is not this commit's ([#56](https://github.com/dungle-scrubs/lucid/issues/56)) ([867520e](https://github.com/dungle-scrubs/lucid/commit/867520ebf07af8da083fa2c7ba4eea860c0c0604))
+* **e2e:** selectors come from locators.ts, and gates that hold on arrival ([#66](https://github.com/dungle-scrubs/lucid/issues/66)) ([509e7a1](https://github.com/dungle-scrubs/lucid/commit/509e7a13405139b8fba0959893214ba28c800561))
+* name the evidence vocabulary, and hold artifacts to Orwell's rules ([#100](https://github.com/dungle-scrubs/lucid/issues/100)) ([edb4e05](https://github.com/dungle-scrubs/lucid/commit/edb4e05c9cb9247643c41b161711a366d1cf6f27))
+* Phase 6 - re-rank and close the ledger ([#72](https://github.com/dungle-scrubs/lucid/issues/72)) ([87bc8ec](https://github.com/dungle-scrubs/lucid/commit/87bc8ec3e56f5ace327f39d81c92cd4ad476b430))
+* preserve the plan record before plan 08 is deleted ([688432b](https://github.com/dungle-scrubs/lucid/commit/688432bd7ac30c80057fb1d10fb543ee403296c1))
+* **regression:** close the gaps the M1.1 review found in its own tests ([#64](https://github.com/dungle-scrubs/lucid/issues/64)) ([ce77756](https://github.com/dungle-scrubs/lucid/commit/ce777563ad62b266cfe39408436d00663e726200))
+* **regression:** one revert-verified test per shipped fix ([#62](https://github.com/dungle-scrubs/lucid/issues/62)) ([6b7a0cc](https://github.com/dungle-scrubs/lucid/commit/6b7a0cc49c7bdc7515eb02754edd0580570ef2f8))
+* run Playwright where a green result means something ([#54](https://github.com/dungle-scrubs/lucid/issues/54)) ([8006c45](https://github.com/dungle-scrubs/lucid/commit/8006c45b2bcea92d12bfd60cfea3ab4514b07e3d))
+* **test:** freeze the harness surface - modules, locators, fixtures ([#65](https://github.com/dungle-scrubs/lucid/issues/65)) ([df2cf56](https://github.com/dungle-scrubs/lucid/commit/df2cf569b19175f34626467de7aad97d6c63163e))
+* the e2e suite runs on the Mac Lucid ships on, and nowhere else ([#61](https://github.com/dungle-scrubs/lucid/issues/61)) ([576b725](https://github.com/dungle-scrubs/lucid/commit/576b725d12b6087751b3391df6854b5f685b9c82))
+
 ## [0.2.0](https://github.com/dungle-scrubs/lucid/compare/v0.1.0...v0.2.0) (2026-07-26)
 
 
