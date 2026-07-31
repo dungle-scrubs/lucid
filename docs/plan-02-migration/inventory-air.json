@@ -1,0 +1,217 @@
+{
+  "machine": "air",
+  "scannedRoots": [
+    "/Users/kevin/dev",
+    "/private/tmp/claude-501",
+    "/tmp/claude-501",
+    "/Users/kevin/dev/lucid/lucid-recovered",
+    "/Users/kevin/dev/tether/lucid-recovered",
+    "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered",
+    "/Users/kevin/dev/dotfiles/lucid-recovered",
+    "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered",
+    "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered",
+    "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered",
+    "/Users/kevin/dev/tether-private/lucid-recovered",
+    "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered",
+    "/Users/kevin/dev/sdlc/lucid-recovered",
+    "/Users/kevin/dev/hub/lucid",
+    "/Users/kevin/dev/rack-warehouse/lucid"
+  ],
+  "recordCount": 23,
+  "durableCount": 23,
+  "ephemeralCount": 0,
+  "byLayout": {
+    "nested": 5,
+    "sibling": 18
+  },
+  "durableByLayout": {
+    "nested": 5,
+    "sibling": 18
+  },
+  "records": [
+    {
+      "artifact": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/destination.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/destination",
+      "eventCount": 3,
+      "logHash": "4442b5a1cdd062fa571c567037bdec8ed3030ce63e85a2ae009bd3738e7e1cea",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/dotfiles/lucid-recovered/eval-coverage-map.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/dotfiles/lucid-recovered/eval-coverage-map",
+      "eventCount": 4,
+      "logHash": "07f50f337898ffa1252b65f12eab0d07547765294987af6876f898ddb4e3054b",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/dotfiles/lucid-recovered/skill-tiering-audit.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/dotfiles/lucid-recovered/skill-tiering-audit",
+      "eventCount": 4,
+      "logHash": "9ab3d0ea521ed2cfc084545757d39e32e4140bd9bba35dea09467101e32740db",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/hub/lucid/build-out-plan.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/hub/lucid/build-out-plan",
+      "eventCount": 35,
+      "logHash": "ca84696b15520cf7e9a4886a1d653280a467945523d2e69f60b621e8de1ce89e",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/lucid/lucid-recovered/choice-demo.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/lucid/lucid-recovered/choice-demo",
+      "eventCount": 32,
+      "logHash": "49a7325a9de482b2598812901b1c7d27d7b1a43cdb8202531a2578fd66a18965",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/lucid/lucid-recovered/lucid-orientation.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/lucid/lucid-recovered/lucid-orientation",
+      "eventCount": 32,
+      "logHash": "283f02b9c4a6cd94e65eb7a14648fc1f35fb9c5ec16d8cceb2d7b0b0aabbd51c",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/lucid/lucid-recovered/lucid-shell-plan.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/lucid/lucid-recovered/lucid-shell-plan",
+      "eventCount": 34,
+      "logHash": "2976042b5cf93479a7bd2b07459e365a0fb79f3f7b1c0cf42e6a386f29d7b0b3",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/lucid/lucid-recovered/trevor-orientation.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/lucid/lucid-recovered/trevor-orientation",
+      "eventCount": 9,
+      "logHash": "7fb9ec3ab591d4bf97e7095104296ccd7d30780a18370d653ed952643afb0b1d",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/rack-warehouse/lucid/recommended-vehicle-tiles-plan.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/rack-warehouse/lucid/recommended-vehicle-tiles-plan",
+      "eventCount": 33,
+      "logHash": "f6d31982cfdad3d53631237e58ec14e9024c6837d73a5571110eeae7f53c7958",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/embedded-test-app-walkthrough.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/embedded-test-app-walkthrough",
+      "eventCount": 6,
+      "logHash": "c7e63b6a10731df4fa2ca5a8aa81faa19c1d62c308ce0c446a2818f85ad81f60",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/issue-action-map.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/issue-action-map",
+      "eventCount": 3,
+      "logHash": "c5b26eb3e0d2ca47c971a562af6c4e798d03908c6c4606c516ad91036a795a3c",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/readyagent-embedded.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/readyagent-embedded",
+      "eventCount": 3,
+      "logHash": "9cbd5ca4bc3f7909d9fe8d6f04fb4df533d37b54c3c10b7e01497839e7c25823",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/readyagent-orientation.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/readyagent-orientation",
+      "eventCount": 3,
+      "logHash": "fd0973e0c03046c07f89563a4a3af666981a22720bb3b73d095381df699fbbc4",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/content-defects.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/content-defects",
+      "eventCount": 7,
+      "logHash": "3075f9b365db04a0e645e9165ee03b075d5e8648960719df7b16393781d10621",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/support-plan.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/support-plan",
+      "eventCount": 28,
+      "logHash": "db8bfdee2bf1063fe32f2512ab92a89a2185d20d6513fc3ec3556f5d41a225bb",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/sdlc/lucid-recovered/sdlc-flow.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/sdlc/lucid-recovered/sdlc-flow",
+      "eventCount": 43,
+      "logHash": "4c224b01043014b493dff21326ffdcd58c49ff11bbaabce65310ac18b63fc9a2",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/tether-private/lucid-recovered/email-v2-dashboard.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/tether-private/lucid-recovered/email-v2-dashboard",
+      "eventCount": 5,
+      "logHash": "c8f297641b7ceac69d9197462c13953c2c06e4275c321c1ff6686607b0fdb376",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/tether/lucid-recovered/claude-code-adapter.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/tether/lucid-recovered/claude-code-adapter",
+      "eventCount": 7,
+      "logHash": "142cde809df6e9c0f504366ede446493f3e2285d32cd074125b4795a6416a484",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/tether/lucid-recovered/tether-orientation.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/tether/lucid-recovered/tether-orientation",
+      "eventCount": 8,
+      "logHash": "497c43149564750f05284d2990c381675179c98655438b20aedae5afbb8c7bb7",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/loadout-mode.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-mode",
+      "eventCount": 8,
+      "logHash": "d909e9fd35e463d54476c78df8476f6be0be8862f8e276ad3c7b509119dd5de6",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/loadout-pr4.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-pr4",
+      "eventCount": 6,
+      "logHash": "935803d06cc6b9a1ed1695b21c43cb5eef6c6e4fc66e2c285398f1ee7ec54d26",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/planner-modularization.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/planner-modularization",
+      "eventCount": 3,
+      "logHash": "3eff11f8ac82e64bfed738b48df5c549fdad36f9378b71cbda559a832a72ba06",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/skillval-plan.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/skillval-plan",
+      "eventCount": 8,
+      "logHash": "ee0603a15f9febe573b61586eb863cdb684414fff17a1a9ad4c558c24a3e10bd",
+      "ephemeral": false
+    }
+  ]
+}

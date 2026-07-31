@@ -1,0 +1,253 @@
+{
+  "ops": [
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/lucid/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/lucid-artifacts/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough/run/server.out.log",
+      "to": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough/server.out.log"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough/run/cursor.claude-code.json",
+      "to": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough/cursor.claude-code.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough/run/current.html",
+      "to": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough.html",
+      "to": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/walkthrough.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/lucid/.lucid/yo-yo/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/yo-yo/run/selection.json",
+      "to": "/Users/kevin/dev/lucid/.lucid/yo-yo/selection.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/yo-yo/run/create.out.log",
+      "to": "/Users/kevin/dev/lucid/.lucid/yo-yo/create.out.log"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/yo-yo/run/current.html",
+      "to": "/Users/kevin/dev/lucid/.lucid/yo-yo/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/yo-yo/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/lucid/.lucid/yo-yo/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/yo-yo.html",
+      "to": "/Users/kevin/dev/lucid/yo-yo.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/lucid/.lucid/workspace-overview/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/workspace-overview/run/server.out.log",
+      "to": "/Users/kevin/dev/lucid/.lucid/workspace-overview/server.out.log"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/workspace-overview/run/context.json",
+      "to": "/Users/kevin/dev/lucid/.lucid/workspace-overview/context.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/workspace-overview/run/current.html",
+      "to": "/Users/kevin/dev/lucid/.lucid/workspace-overview/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/workspace-overview/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/lucid/.lucid/workspace-overview/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/.lucid/workspace-overview.html",
+      "to": "/Users/kevin/dev/lucid/workspace-overview.html"
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/.gitignore",
+      "content": "*\n",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/run/server.out.log",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/server.out.log"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/run/attend.out.log",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/attend.out.log"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/run/selection.json",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/selection.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/run/cursor.claude-code.json",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/cursor.claude-code.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/run/create.out.log",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/create.out.log"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/run/current.html",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/run/server.json",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf",
+      "to": "/Users/kevin/dev/lucid-artifacts/lkdfddf"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/lkdfddf.html",
+      "to": "/Users/kevin/dev/lucid-artifacts/lkdfddf.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/lucid-artifacts/.lucid/hello/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/hello/run/server.out.log",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/hello/server.out.log"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/hello/run/current.html",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/hello/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/hello/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/hello/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/hello.html",
+      "to": "/Users/kevin/dev/lucid-artifacts/hello.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/run/cursor.claude-code.json",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/cursor.claude-code.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/run/cursor.claude_code.json",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/cursor.claude_code.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/run/current.html",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/run/server.json",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first.html",
+      "to": "/Users/kevin/dev/lucid-artifacts/artifact-first.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/run/cursor.claude-code.json",
+      "to": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/cursor.claude-code.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/run/current.html",
+      "to": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan",
+      "to": "/Users/kevin/dev/hub/lucid/build-out-plan"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan.html",
+      "to": "/Users/kevin/dev/hub/lucid/build-out-plan.html"
+    }
+  ]
+}

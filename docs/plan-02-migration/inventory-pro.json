@@ -1,0 +1,120 @@
+{
+  "machine": "pro",
+  "scannedRoots": [
+    "/Users/kevin/dev",
+    "/private/tmp/claude-501",
+    "/tmp/claude-501",
+    "/Users/kevin/dev/lucid",
+    "/Users/kevin/dev/lucid-artifacts",
+    "/private/tmp/claude-501/-Users-kevin-dev-reviewsion-reviewsion-backend/ae0d6fb7-88e7-4c8d-931c-cce56e8817c9/scratchpad"
+  ],
+  "recordCount": 12,
+  "durableCount": 7,
+  "ephemeralCount": 5,
+  "byLayout": {
+    "nested": 8,
+    "sibling": 4
+  },
+  "durableByLayout": {
+    "sibling": 2,
+    "nested": 5
+  },
+  "records": [
+    {
+      "artifact": "/private/tmp/claude-501/-Users-kevin-dev-lucid/5389a5a6-d23a-4263-9163-aba1953fdfb0/scratchpad/hubdemo/projA/migration-plan.html",
+      "layout": "nested",
+      "recordPath": "/private/tmp/claude-501/-Users-kevin-dev-lucid/5389a5a6-d23a-4263-9163-aba1953fdfb0/scratchpad/hubdemo/projA/.lucid/migration-plan",
+      "eventCount": 1,
+      "logHash": "fcf7da67482665cde2c24a0617410ccf5588310d521cb762b8e7447d24c543e8",
+      "ephemeral": true
+    },
+    {
+      "artifact": "/private/tmp/claude-501/-Users-kevin-dev-lucid/5389a5a6-d23a-4263-9163-aba1953fdfb0/scratchpad/hubdemo/projB/rollout-checklist.html",
+      "layout": "nested",
+      "recordPath": "/private/tmp/claude-501/-Users-kevin-dev-lucid/5389a5a6-d23a-4263-9163-aba1953fdfb0/scratchpad/hubdemo/projB/.lucid/rollout-checklist",
+      "eventCount": 1,
+      "logHash": "a8c49cb02e523f8a2575b7ff78c1c294022fb7a9693a27c58923e2871205dfa2",
+      "ephemeral": true
+    },
+    {
+      "artifact": "/private/tmp/claude-501/-Users-kevin-dev-lucid/757eebc3-75ab-4369-9563-9b42ef421631/scratchpad/flow/plan.html",
+      "layout": "sibling",
+      "recordPath": "/private/tmp/claude-501/-Users-kevin-dev-lucid/757eebc3-75ab-4369-9563-9b42ef421631/scratchpad/flow/plan",
+      "eventCount": 4,
+      "logHash": "3e8bdbd9f6e3610fc14fd4f22d904d264aa469385a28e65f042a6e742fb8a91c",
+      "ephemeral": true
+    },
+    {
+      "artifact": "/private/tmp/claude-501/-Users-kevin-dev-lucid/757eebc3-75ab-4369-9563-9b42ef421631/scratchpad/leak/plan.html",
+      "layout": "sibling",
+      "recordPath": "/private/tmp/claude-501/-Users-kevin-dev-lucid/757eebc3-75ab-4369-9563-9b42ef421631/scratchpad/leak/plan",
+      "eventCount": 3,
+      "logHash": "08d7fc20cb11e122c2b885345ba3fb749e32858156701f56e37982c98288bb90",
+      "ephemeral": true
+    },
+    {
+      "artifact": "/private/tmp/claude-501/-Users-kevin-dev-reviewsion-reviewsion-backend/ae0d6fb7-88e7-4c8d-931c-cce56e8817c9/scratchpad/ngrok-domains.html",
+      "layout": "nested",
+      "recordPath": "/private/tmp/claude-501/-Users-kevin-dev-reviewsion-reviewsion-backend/ae0d6fb7-88e7-4c8d-931c-cce56e8817c9/scratchpad/.lucid/ngrok-domains",
+      "eventCount": 4,
+      "logHash": "20be176b28825c99969c902fa942eab2ecaea186561e6347a3d16c8906d66ecb",
+      "ephemeral": true
+    },
+    {
+      "artifact": "/Users/kevin/dev/hub/lucid/build-out-plan.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/hub/lucid/build-out-plan",
+      "eventCount": 34,
+      "logHash": "7451d9dd540a808d9b25a37e03be1d4526790b6674aa80dc1e3dad27e8b622fc",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/lucid-artifacts/artifact-first.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/dev/lucid-artifacts/.lucid/artifact-first",
+      "eventCount": 54,
+      "logHash": "fc479723088b0a141d4157ddf897e356146725b58cfd0362e7665df4d6f28053",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/lucid-artifacts/hello.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/dev/lucid-artifacts/.lucid/hello",
+      "eventCount": 13,
+      "logHash": "5e79d349e53aecf33977ed116272678af9cf1c844bdf59b8a19e26c6f393e980",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/lucid-artifacts/lkdfddf.html",
+      "layout": "sibling",
+      "recordPath": "/Users/kevin/dev/lucid-artifacts/lkdfddf",
+      "eventCount": 15,
+      "logHash": "7e8014d75cf7dc0b77a1e2bb1c4bf703d643b7c297f3133c44ee7890dcdd97f3",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/lucid/workspace-overview.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/dev/lucid/.lucid/workspace-overview",
+      "eventCount": 26,
+      "logHash": "42f26845dae267c39e320f8a7521020c46a6c733ad7237e898bdddbac89cf59c",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/lucid/yo-yo.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/dev/lucid/.lucid/yo-yo",
+      "eventCount": 2,
+      "logHash": "bae92f395d569660beaf3bbc82095a2aa201ee446e57e65f4111cac7365ba3fb",
+      "ephemeral": false
+    },
+    {
+      "artifact": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/walkthrough.html",
+      "layout": "nested",
+      "recordPath": "/Users/kevin/dev/reviewsion/.plans/05-embedded-ui-paywall-adoption/.lucid/walkthrough",
+      "eventCount": 41,
+      "logHash": "c2fa01c12cafe932d3ac85d3ad2265d8c872d93c23c5cb133107093f651220f9",
+      "ephemeral": false
+    }
+  ]
+}

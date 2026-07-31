@@ -1,0 +1,691 @@
+{
+  "ops": [
+    {
+      "kind": "write",
+      "path": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/tether/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/tether-private/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/hub/lucid/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/.gitignore",
+      "content": "*\n",
+      "priorContent": null
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/skillval-plan/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/skillval-plan/run/current.html",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/skillval-plan/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/skillval-plan/run/server.json",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/skillval-plan/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/skillval-plan/run/log.ndjson.lock",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/skillval-plan/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/skillval-plan.html",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/skillval-plan.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/planner-modularization/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/planner-modularization/run/current.html",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/planner-modularization/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/planner-modularization/run/server.json",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/planner-modularization/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/planner-modularization/run/log.ndjson.lock",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/planner-modularization/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/planner-modularization.html",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/planner-modularization.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-pr4/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-pr4/run/current.html",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-pr4/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-pr4/run/server.json",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-pr4/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-pr4/run/log.ndjson.lock",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-pr4/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-pr4.html",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/loadout-pr4.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-mode/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-mode/run/current.html",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-mode/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-mode/run/server.json",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-mode/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-mode/run/log.ndjson.lock",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-mode/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/.lucid/loadout-mode.html",
+      "to": "/Users/kevin/lucid-recovered/unknown-project/lucid-recovered/loadout-mode.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/tether/lucid-recovered/.lucid/tether-orientation/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether/lucid-recovered/.lucid/tether-orientation/run/current.html",
+      "to": "/Users/kevin/dev/tether/lucid-recovered/.lucid/tether-orientation/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether/lucid-recovered/.lucid/tether-orientation/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/tether/lucid-recovered/.lucid/tether-orientation/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether/lucid-recovered/.lucid/tether-orientation",
+      "to": "/Users/kevin/dev/tether/lucid-recovered/tether-orientation"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether/lucid-recovered/.lucid/tether-orientation.html",
+      "to": "/Users/kevin/dev/tether/lucid-recovered/tether-orientation.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/tether/lucid-recovered/.lucid/claude-code-adapter/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether/lucid-recovered/.lucid/claude-code-adapter/run/current.html",
+      "to": "/Users/kevin/dev/tether/lucid-recovered/.lucid/claude-code-adapter/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether/lucid-recovered/.lucid/claude-code-adapter/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/tether/lucid-recovered/.lucid/claude-code-adapter/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether/lucid-recovered/.lucid/claude-code-adapter",
+      "to": "/Users/kevin/dev/tether/lucid-recovered/claude-code-adapter"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether/lucid-recovered/.lucid/claude-code-adapter.html",
+      "to": "/Users/kevin/dev/tether/lucid-recovered/claude-code-adapter.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/tether-private/lucid-recovered/.lucid/email-v2-dashboard/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether-private/lucid-recovered/.lucid/email-v2-dashboard/run/current.html",
+      "to": "/Users/kevin/dev/tether-private/lucid-recovered/.lucid/email-v2-dashboard/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether-private/lucid-recovered/.lucid/email-v2-dashboard/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/tether-private/lucid-recovered/.lucid/email-v2-dashboard/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether-private/lucid-recovered/.lucid/email-v2-dashboard",
+      "to": "/Users/kevin/dev/tether-private/lucid-recovered/email-v2-dashboard"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/tether-private/lucid-recovered/.lucid/email-v2-dashboard.html",
+      "to": "/Users/kevin/dev/tether-private/lucid-recovered/email-v2-dashboard.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/sdlc-flow/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/sdlc-flow/run/attend.out.log",
+      "to": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/sdlc-flow/attend.out.log"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/sdlc-flow/run/current.html",
+      "to": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/sdlc-flow/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/sdlc-flow/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/sdlc-flow/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/sdlc-flow",
+      "to": "/Users/kevin/dev/sdlc/lucid-recovered/sdlc-flow"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/sdlc/lucid-recovered/.lucid/sdlc-flow.html",
+      "to": "/Users/kevin/dev/sdlc/lucid-recovered/sdlc-flow.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/.lucid/support-plan/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/.lucid/support-plan/run/current.html",
+      "to": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/.lucid/support-plan/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/.lucid/support-plan/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/.lucid/support-plan/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/.lucid/support-plan",
+      "to": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/support-plan"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/.lucid/support-plan.html",
+      "to": "/Users/kevin/dev/reviewsion/reviewsion-support/lucid-recovered/support-plan.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/content-defects/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/content-defects/run/current.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/content-defects/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/content-defects/run/server.json",
+      "to": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/content-defects/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/content-defects/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/content-defects/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/content-defects",
+      "to": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/content-defects"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/.lucid/content-defects.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-intercom-knowledgebase/lucid-recovered/content-defects.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-orientation/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-orientation/run/current.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-orientation/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-orientation/run/server.json",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-orientation/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-orientation/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-orientation/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-orientation",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/readyagent-orientation"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-orientation.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/readyagent-orientation.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-embedded/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-embedded/run/current.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-embedded/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-embedded/run/server.json",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-embedded/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-embedded/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-embedded/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-embedded",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/readyagent-embedded"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/readyagent-embedded.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/readyagent-embedded.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/issue-action-map/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/issue-action-map/run/current.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/issue-action-map/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/issue-action-map/run/server.json",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/issue-action-map/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/issue-action-map/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/issue-action-map/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/issue-action-map",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/issue-action-map"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/issue-action-map.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/issue-action-map.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/embedded-test-app-walkthrough/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/embedded-test-app-walkthrough/run/current.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/embedded-test-app-walkthrough/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/embedded-test-app-walkthrough/run/server.json",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/embedded-test-app-walkthrough/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/embedded-test-app-walkthrough/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/embedded-test-app-walkthrough/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/embedded-test-app-walkthrough",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/embedded-test-app-walkthrough"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/.lucid/embedded-test-app-walkthrough.html",
+      "to": "/Users/kevin/dev/readyagent/readyagent-backend/lucid-recovered/embedded-test-app-walkthrough.html"
+    },
+    {
+      "kind": "write",
+      "path": "/Users/kevin/dev/rack-warehouse/lucid/.lucid/recommended-vehicle-tiles-plan/.gitignore",
+      "content": "*\n",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/rack-warehouse/lucid/.lucid/recommended-vehicle-tiles-plan/run/cursor.claude-code.json",
+      "to": "/Users/kevin/dev/rack-warehouse/lucid/.lucid/recommended-vehicle-tiles-plan/cursor.claude-code.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/rack-warehouse/lucid/.lucid/recommended-vehicle-tiles-plan/run/current.html",
+      "to": "/Users/kevin/dev/rack-warehouse/lucid/.lucid/recommended-vehicle-tiles-plan/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/rack-warehouse/lucid/.lucid/recommended-vehicle-tiles-plan/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/rack-warehouse/lucid/.lucid/recommended-vehicle-tiles-plan/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/rack-warehouse/lucid/.lucid/recommended-vehicle-tiles-plan",
+      "to": "/Users/kevin/dev/rack-warehouse/lucid/recommended-vehicle-tiles-plan"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/rack-warehouse/lucid/.lucid/recommended-vehicle-tiles-plan.html",
+      "to": "/Users/kevin/dev/rack-warehouse/lucid/recommended-vehicle-tiles-plan.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/trevor-orientation/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/trevor-orientation/run/current.html",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/trevor-orientation/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/trevor-orientation/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/trevor-orientation/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/trevor-orientation",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/trevor-orientation"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/trevor-orientation.html",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/trevor-orientation.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-shell-plan/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-shell-plan/run/current.html",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-shell-plan/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-shell-plan/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-shell-plan/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-shell-plan",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/lucid-shell-plan"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-shell-plan.html",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/lucid-shell-plan.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-orientation/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-orientation/run/current.html",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-orientation/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-orientation/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-orientation/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-orientation",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/lucid-orientation"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/lucid-orientation.html",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/lucid-orientation.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/choice-demo/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/choice-demo/run/current.html",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/choice-demo/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/choice-demo/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/choice-demo/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/choice-demo",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/choice-demo"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/lucid/lucid-recovered/.lucid/choice-demo.html",
+      "to": "/Users/kevin/dev/lucid/lucid-recovered/choice-demo.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/run/cursor.claude-code.json",
+      "to": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/cursor.claude-code.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/run/current.html",
+      "to": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan",
+      "to": "/Users/kevin/dev/hub/lucid/build-out-plan"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/hub/lucid/.lucid/build-out-plan.html",
+      "to": "/Users/kevin/dev/hub/lucid/build-out-plan.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/skill-tiering-audit/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/skill-tiering-audit/run/current.html",
+      "to": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/skill-tiering-audit/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/skill-tiering-audit/run/server.json",
+      "to": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/skill-tiering-audit/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/skill-tiering-audit/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/skill-tiering-audit/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/skill-tiering-audit",
+      "to": "/Users/kevin/dev/dotfiles/lucid-recovered/skill-tiering-audit"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/skill-tiering-audit.html",
+      "to": "/Users/kevin/dev/dotfiles/lucid-recovered/skill-tiering-audit.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/eval-coverage-map/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/eval-coverage-map/run/current.html",
+      "to": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/eval-coverage-map/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/eval-coverage-map/run/log.ndjson.lock",
+      "to": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/eval-coverage-map/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/eval-coverage-map",
+      "to": "/Users/kevin/dev/dotfiles/lucid-recovered/eval-coverage-map"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/dev/dotfiles/lucid-recovered/.lucid/eval-coverage-map.html",
+      "to": "/Users/kevin/dev/dotfiles/lucid-recovered/eval-coverage-map.html"
+    },
+    {
+      "kind": "delete",
+      "path": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/destination/.gitignore",
+      "priorContent": "run/\n"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/destination/run/current.html",
+      "to": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/destination/current.html"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/destination/run/server.json",
+      "to": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/destination/server.json"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/destination/run/log.ndjson.lock",
+      "to": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/destination/log.ndjson.lock"
+    },
+    {
+      "kind": "rename",
+      "from": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/.lucid/destination.html",
+      "to": "/Users/kevin/.orca/workspaces/tether-private/chats/lucid-recovered/destination.html"
+    }
+  ]
+}
