@@ -304,6 +304,31 @@ payload, or dedupes by event ID (D-019, D-040). For inspection only, a
 `wait --harness <id>` writes its `nextCursor` to an advisory sidecar
 `cursor.<harness>.json` (D-051).
 
+### Turn
+One agent invocation against an artifact, from the moment feedback reaches the
+agent to the moment it stops. A turn may produce a new **version**, a reply in
+the conversation log, both, or neither. A turn is not a session: one **harness
+session** runs many turns, and a turn may be driven headlessly by the **hub**
+(attend mode) or by a human in a terminal.
+_Avoid_: run, pass, cycle.
+
+### Ack
+An `agent_ack` event - the agent saying it has this feedback. Three kinds, and
+only the first claims a range: `covers: <seq>` claims every item up to that
+cursor, `intent` names what the turn will do, `progress` carries a one-line
+label for the human watching. An ack claiming no range moves no delivery. The
+largest `covers` in a segment is `deliveredThroughSeq`, and that is what makes
+an item **delivered**.
+_Avoid_: acknowledgement, receipt, confirmation.
+
+### Delivered
+An annotation or message is delivered once its `seq` sits at or below
+`deliveredThroughSeq` - some agent claimed a batch holding it. Delivered is not
+answered: the feedback reached someone, nothing came back yet. The viewer marks
+it per item. The gap before it - the send has left the browser, no ack has
+landed - is client-local, because the log has nothing to show during it.
+_Avoid_: sent, received, acknowledged.
+
 ### Response channels
 In a turn the agent may **mutate the artifact** (producing a new version,
 live-reloaded into the surface), **reply in the conversation log** without
@@ -448,6 +473,37 @@ turn that finishes while the human is looking elsewhere stays marked until they
 actually arrive.
 _Avoid_: unread, dirty, stale.
 
+## Glossary - evidence
+
+How Lucid accounts for its own behaviour, as opposed to the review it carries.
+None of this is domain state: it is machine-local, disposable, and safe to
+delete.
+
+### Hub log
+The **hub**'s own append-only operational output (`~/.lucid/hub.log`), rotating
+and machine-local. It holds **records** and never review content. Always
+qualified - a bare "log" means the review's **event log**, which is domain
+state and is committed. The two are never the same file and never the same
+thing.
+_Avoid_: bare "log", debug log, output.
+
+### Record
+One line in the **hub log**: what is known about one request, built as the
+request runs and emitted once when it exits. A record carries identifiers and
+outcomes - which artifact, which project, which harness, what status, how long,
+which typed error - and never a prompt, a note, or artifact HTML. One request,
+one record; an entry with no matching exit is a request still running, or hung.
+_Avoid_: log line, event ("event" means a log event, which is domain state),
+span, metric.
+
+### Trace
+The join key a **record** carries so work that outlives its request can still
+be found with it. A record's own `id` pairs that request's entry with its exit
+and nothing else; the trace is what a route hands to a **turn** it spawns, so
+the turn's records join the click that caused them. One `grep` on a trace
+returns every hop of one human action.
+_Avoid_: request id (that names the record's own id), correlation id, span id.
+
 ## Relationships
 
 - One **hub** serves many **shells** (one per browser window) and publishes one
@@ -474,3 +530,15 @@ _Avoid_: unread, dirty, stale.
   shows.
 - **"Server" names two things** - the per-session loopback server and the hub.
   Resolved: say **hub** for the daemon, **per-session server** for the other.
+- **"Log" names two things** - the review's **event log** (per artifact,
+  committed, the domain state) and the **hub log** (machine-local, rotating,
+  operational). Resolved: a bare "log" is the review's; the other is always
+  "the hub log". The code needed this before the glossary did - `daemon.ts`
+  names its option `hubLogPath` because `logPath` was taken.
+- **A turn has no representable end.** A **turn** starts when feedback reaches
+  the agent, and the log records that (an **ack**). Nothing records it
+  stopping: the working window clears only when the agent produces a
+  **version**, a reply, or a question, so a turn that ends without output
+  leaves the viewer claiming the agent is still responding. The hub knows when
+  a turn it spawned exits and appends nothing; an interactive turn ends
+  silently. Unresolved - plan 08 owns it.

@@ -55,6 +55,24 @@ revolutionary, magical, blazing, supercharged, next-gen, unlock, leverage,
 delight.* Active voice, present tense. A label earns its words: "Backfill must
 run first" beats "It looks like there might be an issue with the ordering here."
 
+**Orwell's six rules govern every word in an artifact.** From "Politics and the
+English Language" - they are the test a sentence has to pass before it earns
+its place on the page:
+
+1. Never use a metaphor, simile, or other figure of speech which you are used
+   to seeing in print.
+2. Never use a long word where a short one will do.
+3. If it is possible to cut a word out, always cut it out.
+4. Never use the passive where you can use the active.
+5. Never use a foreign phrase, a scientific word, or a jargon word if you can
+   think of an everyday English equivalent.
+6. Break any of these rules sooner than say anything outright barbarous.
+
+Rule 3 is the one that bites hardest here. An artifact is read by someone who
+will mark it up - every word they have to read before finding the claim is a
+word charged against their attention. Rule 6 is not a loophole: it exists so
+that avoiding a rule never produces something worse than breaking it.
+
 ## A starting palette
 
 Concrete values so a first draft is reproducible, not a library to adopt. Warm,
