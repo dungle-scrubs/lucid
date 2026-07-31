@@ -58,11 +58,19 @@ import {
 } from "./client-bundle.generated.ts";
 import { readDevAsset } from "./dev-assets.ts";
 import { renderInjected } from "./inject.ts";
+import {
+  LiveSocket,
+  sseSubscriber,
+  UPGRADED,
+  wantsUpgrade,
+  type Subscriber,
+  type Upgrade,
+} from "./live.ts";
 import { resolveAsset, validateHeaders } from "./security.ts";
 import { renderViewer, sseMaxBackoffFromEnv } from "./viewer.ts";
 
 /**
- * One session's complete server behavior - routes, SSE fan-out, artifact
+ * One session's complete server behavior - routes, event fan-out, artifact
  * change detection - detached from any particular socket. The dedicated
  * per-session server (server.ts) binds a port and mounts ONE host at "/";
  * the always-on daemon (daemon.ts) mounts many, each under "/s/<id>". The
@@ -213,6 +221,16 @@ export interface SessionHostOptions {
    *  the mount. The host has already shut its own internals down after this
    *  returns control via stop(). */
   readonly onEnded: () => void;
+  /**
+   * Hand a request to the owning Bun server as a WebSocket, carrying the join
+   * to run when it opens. Only the server that bound the port can upgrade, and
+   * this host may be one of many mounted on it.
+   *
+   * Optional because a test harness drives `handle` with no server behind it;
+   * without it the events route simply answers SSE, which is the same wire the
+   * agent-side subscriber uses.
+   */
+  readonly upgrade?: Upgrade;
 }
 
 export interface SessionHost {
@@ -244,10 +262,11 @@ export const createSessionHost = (
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const base = options.base ?? "";
 
-  const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  /** Everyone watching this session, over either wire (see live.ts). */
+  const subscribers = new Set<Subscriber>();
   /** Which subscribers are agents blocked in `wait` (their waker connects with
    *  ?role=agent). Presence for the viewer: "is anyone listening right now". */
-  const agentClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  const agentSubscribers = new Set<Subscriber>();
   const encoder = new TextEncoder();
   let stopped = false;
   let lastActivity = Date.now();
@@ -256,42 +275,33 @@ export const createSessionHost = (
     lastActivity = Date.now();
   };
 
-  const broadcastRaw = (chunk: Uint8Array): void => {
-    for (const client of sseClients) {
+  /** Fan one frame out. A send that throws is a peer that is gone: drop it,
+   *  which is the only way an abandoned stream leaves the set. */
+  const broadcastFrame = (event: string | null, data: string): void => {
+    for (const sub of subscribers) {
       try {
-        client.enqueue(chunk);
+        sub.send(event, data);
       } catch {
-        sseClients.delete(client);
-        if (agentClients.delete(client)) queueMicrotask(broadcastListeners);
+        subscribers.delete(sub);
+        if (agentSubscribers.delete(sub)) queueMicrotask(broadcastListeners);
       }
     }
   };
 
   const broadcast = (event: LogEvent): void => {
-    broadcastRaw(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+    broadcastFrame(null, JSON.stringify(event));
   };
 
   /** Synthetic frame (like `warning`): the count of agents currently blocked
    *  in wait. Sent whenever it changes, so the composer can say "listening". */
   const broadcastListeners = (): void => {
-    broadcastRaw(
-      encoder.encode(
-        `event: listeners\ndata: ${JSON.stringify({ agents: agentClients.size })}\n\n`,
-      ),
-    );
+    broadcastFrame("listeners", JSON.stringify({ agents: agentSubscribers.size }));
   };
 
   // Surface denied/missing assets to subscribers as a synthetic event so the
   // chrome can show them (D-054). Encoded as an agent-less warning frame.
   const broadcastWarning = (code: string, message: string): void => {
-    const chunk = encoder.encode(`event: warning\ndata: ${JSON.stringify({ code, message })}\n\n`);
-    for (const client of sseClients) {
-      try {
-        client.enqueue(chunk);
-      } catch {
-        sseClients.delete(client);
-      }
-    }
+    broadcastFrame("warning", JSON.stringify({ code, message }));
   };
 
   const serverAppend = async (inputs: readonly EventInput[]): Promise<readonly LogEvent[]> => {
@@ -309,39 +319,66 @@ export const createSessionHost = (
   /** Synthetic frame (like `listeners`): the latest reported context usage, so
    *  the header ring updates live without a full state re-fetch. */
   const broadcastContext = (usage: ContextUsage): void => {
-    broadcastRaw(encoder.encode(`event: context\ndata: ${JSON.stringify(usage)}\n\n`));
+    broadcastFrame("context", JSON.stringify(usage));
   };
 
   /** Synthetic frame: the artifact's sticky model/effort just changed. Two
    *  windows can be open on one session, and the picker is shared state. */
   const broadcastSelection = (response: SelectionResponse): void => {
-    broadcastRaw(encoder.encode(`event: selection\ndata: ${JSON.stringify(response)}\n\n`));
+    broadcastFrame("selection", JSON.stringify(response));
   };
 
   // ---- request handling -----------------------------------------------------
 
+  /**
+   * Take a subscriber onto this session, over either wire; the returned
+   * release takes it back off. Both wires arrive HERE so neither can forget
+   * what arriving implies: the agent-presence count, and healing a suspended
+   * log.
+   */
+  const subscribe = (sub: Subscriber, isAgent: boolean): (() => void) => {
+    // This host may have been torn down since the request was accepted. An
+    // upgrade is decided in `fetch` but handed over on `open`, and the idle
+    // sweep can evict in that gap - it sees no subscribers precisely BECAUSE
+    // this one has not landed yet. Joining a stopped host would leave a socket
+    // that is live to the browser and attached to nothing: no frames, and no
+    // teardown either, since the set it would be closed from is already clear.
+    // So it is turned away and told to come back, which remounts.
+    if (stopped) {
+      try {
+        sub.close();
+      } catch {
+        // the peer left first; nothing to turn away
+      }
+      return () => {};
+    }
+    subscribers.add(sub);
+    if (isAgent) {
+      agentSubscribers.add(sub);
+      broadcastListeners();
+    }
+    // A subscriber arriving at a suspended log is the session coming back to
+    // life: heal the recorded status, or every consumer of the fold (wait, the
+    // watcher's version gate, the panel) keeps acting on "suspended" while a
+    // human is sitting right there watching.
+    void resumeIfSuspended();
+    return () => {
+      subscribers.delete(sub);
+      if (agentSubscribers.delete(sub)) broadcastListeners();
+    };
+  };
+
   const handleEvents = (isAgent: boolean): Response => {
     // Assigned synchronously in `start` before any frame is enqueued; the `!`
     // marks that definite assignment for the `cancel` reader below.
-    let self!: ReadableStreamDefaultController<Uint8Array>;
+    let leave!: () => void;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        self = controller;
-        sseClients.add(controller);
-        if (isAgent) {
-          agentClients.add(controller);
-          broadcastListeners();
-        }
         controller.enqueue(encoder.encode(": connected\n\n"));
-        // A subscriber arriving at a suspended log is the session coming back
-        // to life: heal the recorded status, or every consumer of the fold
-        // (wait, the watcher's version gate, the panel) keeps acting on
-        // "suspended" while a human is sitting right there watching.
-        void resumeIfSuspended();
+        leave = subscribe(sseSubscriber(controller), isAgent);
       },
       cancel() {
-        sseClients.delete(self);
-        if (agentClients.delete(self)) broadcastListeners();
+        leave();
       },
     });
     return new Response(stream, {
@@ -960,7 +997,17 @@ export const createSessionHost = (
       });
     }
     if (pathname === "/__lucid/events") {
-      return handleEvents(url.searchParams.get("role") === "agent");
+      const isAgent = url.searchParams.get("role") === "agent";
+      // The browser upgrades (its six-per-origin HTTP pool is the whole reason
+      // live.ts exists); `lucid wait`'s subscriber keeps the SSE wire. The
+      // Host/Origin gate above has already run, which matters MORE here: a
+      // WebSocket handshake is not subject to CORS at all.
+      if (wantsUpgrade(req)) {
+        return options.upgrade?.(req, new LiveSocket((sub) => subscribe(sub, isAgent))) === true
+          ? UPGRADED
+          : json({ error: "websocket upgrade refused" }, 400);
+      }
+      return handleEvents(isAgent);
     }
     if (pathname === "/__lucid/artifact") {
       const html = await readFile(paths.currentHtml, "utf8").catch(() => "");
@@ -1019,7 +1066,7 @@ export const createSessionHost = (
           : undefined);
       const response: StateResponse = {
         ...payload,
-        agentsListening: agentClients.size,
+        agentsListening: agentSubscribers.size,
         resumable,
         ...(presence
           ? {
@@ -1240,7 +1287,7 @@ export const createSessionHost = (
   let lastPresence = "";
   const presenceTimer = setInterval(() => {
     void (async () => {
-      if (sseClients.size === 0) return; // nobody is looking
+      if (subscribers.size === 0) return; // nobody is looking
       try {
         const state = foldLog((await readEvents(paths.logPath)).events);
         const target = await artifactAttendant(paths, state.sessionHistory);
@@ -1254,7 +1301,7 @@ export const createSessionHost = (
           : "null";
         if (frame === lastPresence) return;
         lastPresence = frame;
-        broadcastRaw(encoder.encode(`event: presence\ndata: ${frame}\n\n`));
+        broadcastFrame("presence", frame);
       } catch {
         /* a presence sweep that fails is not worth tearing the stream down */
       }
@@ -1272,7 +1319,7 @@ export const createSessionHost = (
    * and a mount nobody watches on a closed log has no reason to live.
    */
   const suspend = async (): Promise<boolean> => {
-    if (sseClients.size > 0) return false;
+    if (subscribers.size > 0) return false;
     const appended = await appendEventsIf(
       paths.logPath,
       (existing) => foldLog(existing).status === "active",
@@ -1286,7 +1333,7 @@ export const createSessionHost = (
       touch();
       return true;
     }
-    return sseClients.size === 0;
+    return subscribers.size === 0;
   };
 
   /**
@@ -1337,15 +1384,15 @@ export const createSessionHost = (
     if (watcher) watcher.close();
     if (debounce) clearTimeout(debounce);
     clearInterval(pollTimer);
-    for (const client of sseClients) {
+    for (const sub of subscribers) {
       try {
-        client.close();
+        sub.close();
       } catch {
         // already closed
       }
     }
-    sseClients.clear();
-    agentClients.clear();
+    subscribers.clear();
+    agentSubscribers.clear();
   };
 
   return {
@@ -1357,8 +1404,8 @@ export const createSessionHost = (
     // `wait` idled out at 30 minutes and was suspended mid-watch. The idle
     // timers (daemon and dedicated server) both read this, so neither needs
     // its own notion of "someone is here".
-    lastActivityAt: () => (sseClients.size > 0 ? Date.now() : lastActivity),
-    agentsListening: () => agentClients.size,
+    lastActivityAt: () => (subscribers.size > 0 ? Date.now() : lastActivity),
+    agentsListening: () => agentSubscribers.size,
     warn: broadcastWarning,
   };
 };

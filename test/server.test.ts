@@ -1195,6 +1195,82 @@ describe("server routes + security", () => {
     expect(buf).toContain("data: ");
     reader!.cancel().catch(() => {});
   });
+
+  test("the same route upgrades to a WebSocket and delivers the same frames", async () => {
+    await startServer();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/__lucid/events`);
+    const frames: { event: string | null; data: string }[] = [];
+    ws.onmessage = (e) => frames.push(JSON.parse(String(e.data)));
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("upgrade failed"));
+      setTimeout(() => reject(new Error("upgrade timed out")), 4000);
+    });
+
+    await fetch(`http://127.0.0.1:${port}/__lucid/annotation`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+      body: JSON.stringify({
+        id: "ws-1",
+        version: 1,
+        note: "delivered over a socket",
+        target: {
+          kind: "element",
+          lucidId: "h",
+          fingerprint: "x",
+          domPath: "h1",
+          snippet: "<h1>Hello</h1>",
+        },
+      }),
+    });
+
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline && !frames.some((f) => f.data.includes('"t":"annotation"'))) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const annotation = frames.find((f) => f.data.includes('"t":"annotation"'));
+    expect(annotation).toBeDefined();
+    // A log event rides the DEFAULT frame, exactly as SSE's `data:`-only form
+    // does - the two wires carry one vocabulary.
+    expect(annotation!.event).toBeNull();
+    expect(annotation!.data).toContain("delivered over a socket");
+    ws.close();
+  });
+
+  test("an upgraded subscriber counts as a listener, so the session is not idle-suspended", async () => {
+    await startServer();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/__lucid/events?role=agent`);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("upgrade failed"));
+      setTimeout(() => reject(new Error("upgrade timed out")), 4000);
+    });
+    // The presence count the composer reads comes off the same set the SSE
+    // wire feeds; an upgraded agent must be in it.
+    const deadline = Date.now() + 4000;
+    let listening = 0;
+    while (Date.now() < deadline && listening === 0) {
+      const state = (await get("/__lucid/state").then((r) => r.json())) as {
+        agentsListening: number;
+      };
+      listening = state.agentsListening;
+      if (listening === 0) await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(listening).toBe(1);
+
+    // Closing it takes the listener back off, or a socket that came and went
+    // would pin the session open forever.
+    ws.close();
+    const gone = Date.now() + 4000;
+    while (Date.now() < gone && listening !== 0) {
+      const state = (await get("/__lucid/state").then((r) => r.json())) as {
+        agentsListening: number;
+      };
+      listening = state.agentsListening;
+      if (listening !== 0) await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(listening).toBe(0);
+  });
 });
 
 describe("cross-process resume + liveness", () => {

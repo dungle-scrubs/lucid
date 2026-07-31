@@ -35,6 +35,39 @@ export const delayRoute = async (
   });
 };
 
+/**
+ * Hold the live channel's FRAMES up, without holding its connection up.
+ *
+ * `delayRoute` cannot do this any more and cannot say so: `page.route`
+ * intercepts HTTP, and the shell's streams are WebSockets now
+ * (client/chrome/stream.ts). A pattern aimed at `/hub/events` simply stops
+ * matching - the interception becomes inert while the test still reads as
+ * though it interferes, which is the one failure mode this harness is written
+ * to avoid. So the socket wire gets its own helper rather than a quietly
+ * broken shared one.
+ *
+ * The socket still opens on time; each frame the server sends arrives `ms`
+ * late. That is the state worth standing in - "connected, nothing said yet" -
+ * and it is what a screen must tell the truth about while it waits.
+ */
+export const delaySocketFrames = async (
+  page: Page,
+  pattern: string | RegExp,
+  ms: number,
+): Promise<void> => {
+  await page.routeWebSocket(pattern, (ws) => {
+    // Synchronously, before any await: not calling this inside the handler is
+    // how Playwright is told to MOCK the socket instead of connecting it.
+    const server = ws.connectToServer();
+    // Registering a handler turns automatic forwarding off, so the delayed
+    // `send` below is the only way a frame reaches the page - which is exactly
+    // the hold this helper is for.
+    server.onMessage((message) => {
+      setTimeout(() => ws.send(message), ms);
+    });
+  });
+};
+
 /** Make the request fail as though the connection dropped. */
 export const abortRoute = async (page: Page, pattern: string | RegExp): Promise<void> => {
   await page.route(pattern, (route: Route) => route.abort("connectionfailed"));

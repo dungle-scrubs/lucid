@@ -207,6 +207,139 @@ describe("hub daemon", () => {
     }
   });
 
+  /**
+   * The one place the two wires meet.
+   *
+   * A session owned by a DEDICATED server is proxied, and a WebSocket
+   * handshake cannot be forwarded by fetch. Falling back to SSE for it would
+   * put the browser's socket straight back into the six-per-origin pool this
+   * whole change exists to get out of - the window is on the HUB's origin
+   * either way. So the hub takes the socket itself and relays the inner
+   * server's SSE into it.
+   */
+  test("a PROXIED session's stream is relayed from the dedicated server into the socket", async () => {
+    const scanned = await seedSession("proj", "proxied");
+    const paths = sessionPaths(scanned);
+    await writeFile(paths.currentHtml, "<h1>Proxied</h1>");
+
+    let innerPort = 0;
+    let endStream: (() => void) | undefined;
+    const inner = Bun.serve({
+      port: 0,
+      idleTimeout: 0,
+      fetch: (req): Response => {
+        const { pathname } = new URL(req.url);
+        if (pathname === "/__lucid/identity") {
+          return Response.json({ lucid: true, session: scanned, port: innerPort, version: 1 });
+        }
+        if (pathname === "/__lucid/events") {
+          const encoder = new TextEncoder();
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(encoder.encode(": connected\n\n"));
+                controller.enqueue(encoder.encode('data: {"t":"from-the-inner-server"}\n\n'));
+                controller.enqueue(encoder.encode('event: warning\ndata: {"code":"INNER"}\n\n'));
+                endStream = () => controller.close();
+              },
+            }),
+            { headers: { "content-type": "text/event-stream; charset=utf-8" } },
+          );
+        }
+        return new Response("no", { status: 404 });
+      },
+    });
+    innerPort = inner.port ?? 0;
+    await writeFile(
+      paths.serverJson,
+      JSON.stringify({ port: inner.port, pid: process.pid, startedAt: new Date(0).toISOString() }),
+    );
+
+    try {
+      daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+      const id = sessionId(scanned);
+      const ws = new WebSocket(`ws://127.0.0.1:${daemon.port}/s/${id}/__lucid/events`);
+      const frames: { event: string | null; data: string }[] = [];
+      ws.onmessage = (e) => frames.push(JSON.parse(String(e.data)));
+      await new Promise<void>((resolve, reject) => {
+        ws.onopen = () => resolve();
+        ws.onerror = () => reject(new Error("upgrade failed"));
+        setTimeout(() => reject(new Error("upgrade timed out")), 4000);
+      });
+
+      // Both frame shapes survive the crossing: SSE's default `data:`-only
+      // frame becomes a null event, and a named one keeps its name. The
+      // ": connected" comment is not a frame and must not become one.
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline && frames.length < 2) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(frames.find((f) => f.event === null)?.data).toContain("from-the-inner-server");
+      expect(frames.find((f) => f.event === "warning")?.data).toContain("INNER");
+      expect(frames.some((f) => f.data.includes("connected"))).toBe(false);
+
+      // When the inner stream ENDS, the window is asked to come back rather
+      // than left on a socket nothing will ever write to again - its reconnect
+      // re-runs the proxy-or-mount decision.
+      endStream?.();
+      const closing = Date.now() + 4000;
+      while (Date.now() < closing && !frames.some((f) => f.event === "reconnect")) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(frames.some((f) => f.event === "reconnect")).toBe(true);
+      ws.close();
+    } finally {
+      inner.stop(true);
+    }
+  });
+
+  test("a dedicated server that stalls its stream gets the upgrade REFUSED, not a live socket", async () => {
+    const scanned = await seedSession("proj", "stalled");
+    const paths = sessionPaths(scanned);
+    await writeFile(paths.currentHtml, "<h1>Stalled</h1>");
+
+    let innerPort = 0;
+    const inner = Bun.serve({
+      port: 0,
+      idleTimeout: 0,
+      fetch: (req): Response | Promise<Response> => {
+        const { pathname } = new URL(req.url);
+        if (pathname === "/__lucid/identity") {
+          return Response.json({ lucid: true, session: scanned, port: innerPort, version: 1 });
+        }
+        // Answers the probe, then never answers its stream - the state that
+        // used to leave a window on a socket nothing would ever write to,
+        // reporting live, with the proxy-or-mount decision never re-run.
+        if (pathname === "/__lucid/events") return new Promise<Response>(() => {});
+        return new Response("no", { status: 404 });
+      },
+    });
+    innerPort = inner.port ?? 0;
+    await writeFile(
+      paths.serverJson,
+      JSON.stringify({ port: inner.port, pid: process.pid, startedAt: new Date(0).toISOString() }),
+    );
+
+    try {
+      daemon = await runDaemon({ port: 0, roots: [root], registryPath, relayOpenMs: 250 });
+      const id = sessionId(scanned);
+      const ws = new WebSocket(`ws://127.0.0.1:${daemon.port}/s/${id}/__lucid/events`);
+      // The socket must never open: an open one is the shell's signal that it
+      // is subscribed, and it would not be. Refusing sends it round the
+      // reconnect loop instead, which re-runs the decision.
+      const outcome = await new Promise<string>((resolve) => {
+        ws.onopen = () => resolve("opened");
+        ws.onclose = () => resolve("refused");
+        ws.onerror = () => resolve("refused");
+        setTimeout(() => resolve("hung"), 4000);
+      });
+      expect(outcome).toBe("refused");
+      ws.close();
+    } finally {
+      inner.stop(true);
+    }
+  });
+
   test("mounting writes a descriptor that names the daemon and the base", async () => {
     const scanned = await seedSession("proj", "notes");
     daemon = await runDaemon({ port: 0, roots: [root], registryPath });
@@ -450,6 +583,73 @@ describe("hub daemon", () => {
     expect(buf).toContain(": connected");
     expect(buf).toContain('"sessions"');
     await reader!.cancel().catch(() => {});
+  });
+
+  test("/hub/events upgrades to a WebSocket and primes the same two frames", async () => {
+    await seedSession("proj", "notes");
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${daemon.port}/hub/events`);
+    const frames: { event: string | null; data: string }[] = [];
+    ws.onmessage = (e) => frames.push(JSON.parse(String(e.data)));
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("upgrade failed"));
+      setTimeout(() => reject(new Error("upgrade timed out")), 4000);
+    });
+
+    // Priming is what makes a fresh window paint without waiting for the poll
+    // to find a change - an upgraded window must get it too.
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline && frames.length < 2) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const listing = frames.find((f) => f.event === null);
+    expect(listing?.data).toContain('"sessions"');
+    expect(frames.some((f) => f.event === "attention")).toBe(true);
+    ws.close();
+  });
+
+  test("a shell window's socket counts as a subscriber, so the listing keeps polling", async () => {
+    await seedSession("proj", "notes");
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+
+    // `shells` is what the CLI reads to decide whether a window took an open;
+    // it is the subscriber count, and an upgraded window is a subscriber.
+    const ws = new WebSocket(`ws://127.0.0.1:${daemon.port}/hub/events`);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("upgrade failed"));
+      setTimeout(() => reject(new Error("upgrade timed out")), 4000);
+    });
+    const identity = (await get(daemon.port, "/hub/identity").then((r) => r.json())) as {
+      shells: number;
+    };
+    expect(identity.shells).toBe(1);
+    ws.close();
+  });
+
+  test("a hub with an open shell socket still shuts down", async () => {
+    await seedSession("proj", "notes");
+    const hub = await runDaemon({ port: 0, roots: [root], registryPath });
+    daemon = hub;
+    const ws = new WebSocket(`ws://127.0.0.1:${hub.port}/hub/events`);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("upgrade failed"));
+      setTimeout(() => reject(new Error("upgrade timed out")), 4000);
+    });
+
+    // The guard on RECONNECT_FRAME's reason (live.ts): a hub that closes a
+    // WebSocket itself can never stop again - `server.stop()` simply does not
+    // resolve (Bun 1.3.14). This asserts the shutdown path never does that.
+    // Without the deadline the failure mode is a hung suite, not a red test.
+    await Promise.race([
+      hub.stop(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("stop() hung")), 5000)),
+    ]);
+    daemon = undefined;
+    ws.close();
   });
 
   test("attention rides its own SSE event; the listing stays byte-identical when an agent works (R3, M1.2)", async () => {

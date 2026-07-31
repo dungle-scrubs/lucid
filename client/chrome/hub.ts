@@ -5,6 +5,7 @@ import { visibleEl } from "./dom.ts";
 import { sessionLabel } from "./naming.ts";
 import type { SessionHandle } from "./session.ts";
 import { dropSession, ensureSession, getSession, recordViewed, useShell } from "./shell.ts";
+import { openStream, type LiveStream } from "./stream.ts";
 import type { ShellConfig } from "./types.ts";
 
 /** The shell page's payload, read through its declared shape - `daemon.ts`
@@ -212,9 +213,16 @@ export const setPaletteOpen = (open: boolean): void => useHub.setState({ palette
 export const setCreateOpen = (open: boolean): void => useHub.setState({ createOpen: open });
 
 /**
- * Open sessions hold a live SSE stream each; past this many, the least
- * recently ACTIVATED background stream is disconnected (the log is untouched
- * - reactivating refolds). The tab stays: only its stream sleeps.
+ * Open sessions hold a live stream each; past this many, the least recently
+ * ACTIVATED background stream is disconnected (the log is untouched -
+ * reactivating refolds). The tab stays: only its stream sleeps.
+ *
+ * This is a budget on WORK - a mount held open, a presence sweep, a fold per
+ * frame - and nothing else. It used to sit above a limit nobody had counted:
+ * while the streams were SSE they came out of the browser's six-per-origin
+ * HTTP pool, so the shell broke at FIVE open tabs and this cap of ten never
+ * got the chance to fire. The streams are WebSockets now (see stream.ts),
+ * which that pool does not bound, and this number means what it says again.
  */
 const MAX_CONNECTED = 10;
 
@@ -357,7 +365,7 @@ export const closeTab = (key: string): void => {
   if (wasActive && promoted !== null) activateTab(promoted);
 };
 
-let hubSource: EventSource | null = null;
+let hubStream: LiveStream | null = null;
 /** Last seen dev-bundle stamp (see connectHub's reload handling). */
 let bundleStamp: string | null = null;
 
@@ -451,100 +459,111 @@ export const addRoot = async (
   return { added: { root: body.root, roots: body.roots ?? [], found: body.found ?? 0 } };
 };
 
+/** One frame off the hub's listing channel. "message" is the full snapshot;
+ *  everything else is a named side-channel the shell reacts to. */
+const onHubFrame = (type: string, payload: string): void => {
+  try {
+    switch (type) {
+      case "message": {
+        const data = JSON.parse(payload) as { sessions: HubSession[]; bundle?: string };
+        // Dev mode only: the hub stamps each snapshot with its bundle version.
+        // A moved stamp means the watcher rebuilt the UI - reload to run it.
+        if (data.bundle !== undefined) {
+          if (bundleStamp !== null && bundleStamp !== data.bundle) {
+            window.location.reload();
+            return;
+          }
+          bundleStamp = data.bundle;
+        }
+        useHub.setState({ sessions: data.sessions, loaded: true });
+        break;
+      }
+      // The hub's own per-artifact attention fold (plan 03, M3.1): keyed by
+      // session id, deduped server-side, independent of any tab's stream.
+      case "attention":
+        applyAttentionFrame(JSON.parse(payload) as Record<string, HubAttention>);
+        break;
+      // `lucid open` ran in a terminal: the daemon asks live windows to surface
+      // the session as a tab so the CLI never has to pop a browser next to a
+      // shell that is already up. The listing snapshot may not carry the row
+      // yet (notify is async), so ask the hub directly.
+      case "open-tab": {
+        const { id } = JSON.parse(payload) as { id: string };
+        void (async () => {
+          try {
+            // The listing unions a scan of every root - same walk, same budget.
+            const listed = (await hubFetch("/hub/sessions", { timeoutMs: SCAN_TIMEOUT_MS }).then(
+              (r) => (r.ok ? (r.json() as Promise<{ sessions: HubSession[] }>) : null),
+            )) as { sessions: HubSession[] } | null;
+            const row = listed?.sessions.find((s) => s.id === id);
+            if (row) await openTab(row);
+          } catch {
+            /* the next snapshot still lists it; the human can open it by hand */
+          }
+        })();
+        break;
+      }
+      // A create turn exited without producing its artifact: stop the dialog's
+      // "authoring…" wait NOW and say why (the log tail rides along).
+      case "create-failed": {
+        const { artifact, tail, usageLimit } = JSON.parse(payload) as {
+          artifact: string;
+          tail: string;
+          usageLimit?: string;
+        };
+        useHub.setState((prev) =>
+          noteCreateFailed(prev, { artifact, tail, ...(usageLimit ? { usageLimit } : {}) }),
+        );
+        break;
+      }
+      // A create turn is STILL RUNNING (M2.1). The dialog reports this rather
+      // than inferring health from a clock; `at` is stamped on receipt because
+      // the question the dialog asks is "did the HUB go quiet", which the hub's
+      // own elapsed number cannot answer.
+      case "create-progress": {
+        const { artifact, trace, elapsedMs, label } = JSON.parse(payload) as {
+          artifact: string;
+          trace: string;
+          elapsedMs: number;
+          label?: string;
+        };
+        useHub.setState((prev) =>
+          noteCreateProgress(prev, artifact, {
+            trace,
+            elapsedMs,
+            at: Date.now(),
+            ...(typeof label === "string" && label !== "" ? { label } : {}),
+          }),
+        );
+        break;
+      }
+      default:
+        break;
+    }
+  } catch {
+    /* a frame we cannot parse is not worth tearing the stream down for */
+  }
+};
+
 /** Open the hub listing stream (idempotent). Each frame is a full snapshot. */
 export const connectHub = (): void => {
-  if (hubSource !== null) return;
+  if (hubStream !== null) return;
   refreshIdentity();
-  const es = new EventSource("/hub/events");
-  hubSource = es;
-  es.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data) as { sessions: HubSession[]; bundle?: string };
-      // Dev mode only: the hub stamps each snapshot with its bundle version.
-      // A moved stamp means the watcher rebuilt the UI - reload to run it.
-      if (data.bundle !== undefined) {
-        if (bundleStamp !== null && bundleStamp !== data.bundle) {
-          window.location.reload();
-          return;
-        }
-        bundleStamp = data.bundle;
-      }
-      useHub.setState({ sessions: data.sessions, loaded: true });
-    } catch {
-      /* a frame we cannot parse is not worth tearing the stream down for */
-    }
-  };
-  // The hub's own per-artifact attention fold (plan 03, M3.1): keyed by
-  // session id, deduped server-side, independent of any tab's stream.
-  es.addEventListener("attention", (e) => {
-    try {
-      applyAttentionFrame(JSON.parse((e as MessageEvent).data) as Record<string, HubAttention>);
-    } catch {
-      /* a frame we cannot parse is not worth tearing the stream down for */
-    }
-  });
-  // `lucid open` ran in a terminal: the daemon asks live windows to surface
-  // the session as a tab so the CLI never has to pop a browser next to a
-  // shell that is already up. The listing snapshot may not carry the row yet
-  // (notify is async), so ask the hub directly.
-  es.addEventListener("open-tab", (e) => {
-    void (async () => {
-      try {
-        const { id } = JSON.parse((e as MessageEvent).data) as { id: string };
-        // The listing unions a scan of every root - same walk, same budget.
-        const listed = (await hubFetch("/hub/sessions", { timeoutMs: SCAN_TIMEOUT_MS }).then((r) =>
-          r.ok ? (r.json() as Promise<{ sessions: HubSession[] }>) : null,
-        )) as { sessions: HubSession[] } | null;
-        const row = listed?.sessions.find((s) => s.id === id);
-        if (row) await openTab(row);
-      } catch {
-        /* the next snapshot still lists it; the human can open it by hand */
-      }
-    })();
-  });
-  // A create turn exited without producing its artifact: stop the dialog's
-  // "authoring…" wait NOW and say why (the log tail rides along).
-  es.addEventListener("create-failed", (e) => {
-    try {
-      const { artifact, tail, usageLimit } = JSON.parse((e as MessageEvent).data) as {
-        artifact: string;
-        tail: string;
-        usageLimit?: string;
-      };
-      useHub.setState((prev) =>
-        noteCreateFailed(prev, { artifact, tail, ...(usageLimit ? { usageLimit } : {}) }),
-      );
-    } catch {
-      /* malformed frame: the dialog's own timeout still reports */
-    }
-  });
-  // A create turn is STILL RUNNING (M2.1). The dialog reports this rather
-  // than inferring health from a clock; `at` is stamped on receipt because
-  // the question the dialog asks is "did the HUB go quiet", which the hub's
-  // own elapsed number cannot answer.
-  es.addEventListener("create-progress", (e) => {
-    try {
-      const { artifact, trace, elapsedMs, label } = JSON.parse((e as MessageEvent).data) as {
-        artifact: string;
-        trace: string;
-        elapsedMs: number;
-        label?: string;
-      };
-      useHub.setState((prev) =>
-        noteCreateProgress(prev, artifact, {
-          trace,
-          elapsedMs,
-          at: Date.now(),
-          ...(typeof label === "string" && label !== "" ? { label } : {}),
-        }),
-      );
-    } catch {
-      /* malformed frame: the next heartbeat is 2s away */
-    }
-  });
-  es.onopen = () => {
-    useHub.setState({ connected: true });
-    refreshIdentity();
-  };
-  es.onerror = () => useHub.setState({ connected: false });
+  hubStream = openStream(
+    "/hub/events",
+    {
+      onFrame: onHubFrame,
+      // Identity is re-read per connection: a hub restarted with --attend, or
+      // pointed at a new folder, would otherwise leave the shell repeating the
+      // answer it started with for as long as the window stays open.
+      onOpen: () => {
+        useHub.setState({ connected: true });
+        refreshIdentity();
+      },
+      onDown: () => useHub.setState({ connected: false }),
+    },
+    ...(shellConfig()?.sseMaxBackoffMs === undefined
+      ? []
+      : ([{ maxBackoffMs: shellConfig()?.sseMaxBackoffMs }] as const)),
+  );
 };

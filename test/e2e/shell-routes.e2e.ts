@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { CliFailure } from "./cli-result.ts";
-import { delayRoute } from "./routes.ts";
+import { delaySocketFrames } from "./routes.ts";
 import { makeCli, openIntoHub, PLAN_V1, startHub, type Cli, type Hub } from "./helpers.ts";
 
 /**
@@ -34,9 +34,11 @@ test("before the first listing arrives the screen says it is LOOKING, not empty"
   const opened = await openIntoHub(hub, PLAN_V1);
   cli = opened.cli;
 
-  // The listing stream held back, so the pre-snapshot state is a place the
-  // test can stand rather than a frame it has to catch.
-  await delayRoute(page, "**/hub/events", 3000);
+  // The listing stream's FRAMES held back, so the pre-snapshot state is a
+  // place the test can stand rather than a frame it has to catch. The socket
+  // itself connects normally: "connected, nothing said yet" is precisely the
+  // state the screen has to be honest about.
+  await delaySocketFrames(page, "**/hub/events", 3000);
   await page.goto(hub.url);
 
   // "Looking" is the truth while nothing has answered. "No reviews here yet"

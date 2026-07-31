@@ -1,11 +1,15 @@
+import { on } from "./locators.ts";
 import { expect, test } from "@playwright/test";
 import {
   abortRoute,
   type Cli,
   delayRoute,
+  delaySocketFrames,
   killSessionServer,
   makeCli,
+  openIntoHub,
   PLAN_V1,
+  startHub,
   stubRoute,
   surfaceOf,
 } from "./helpers.ts";
@@ -83,6 +87,41 @@ test("delayRoute really holds the request up", async ({ page }) => {
   // Loosely, because the assertion is "the delay happened", not "the delay was
   // exactly 1500ms" - a timing budget would be a flake generator on CI.
   await expect.poll(() => elapsed, { timeout: 15_000 }).toBeGreaterThan(HELD_MS * 0.8);
+});
+
+test("delaySocketFrames really holds the live channel's frames up", async ({ page }) => {
+  // A hub, because the socket this helper exists for is the shell's listing
+  // stream - `makeCli` alone has no such channel to hold.
+  const hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+
+  try {
+    const HELD_MS = 1500;
+    await delaySocketFrames(page, "**/hub/events", HELD_MS);
+
+    // Measured through the SHELL, not through `page.on("websocket")`: under
+    // `routeWebSocket` that event reports Playwright's own connection to the
+    // server, which sees every frame on time. The held frames are the ones the
+    // page gets, so the page is where the hold is observable at all.
+    const startedAt = Date.now();
+    await page.goto(hub.url);
+
+    // Connected, nothing said yet. Without the hold the listing has already
+    // landed by here - measured: this assertion is what caught the helper being
+    // inert when the wire changed.
+    await expect(page.getByText("Looking for sessions…")).toBeVisible();
+    await expect(on(page).pickerRow()).toHaveCount(0);
+
+    // ...and the frames DO arrive. A helper that held them forever would pass
+    // every assertion above while breaking each test built on it.
+    await expect(on(page).pickerRow()).toHaveCount(1, { timeout: 20_000 });
+    // Loosely, because the assertion is "the delay happened", not "the delay
+    // was exactly 1500ms" - a timing budget would be a flake generator.
+    expect(Date.now() - startedAt).toBeGreaterThan(HELD_MS * 0.8);
+  } finally {
+    await hub.stop();
+  }
 });
 
 test("killSessionServer refuses a session whose server is already gone", async () => {
