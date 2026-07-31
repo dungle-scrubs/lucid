@@ -41,7 +41,7 @@ import {
   openBrowser,
   openChromeApp,
   spawnHub,
-  spawnServer,
+  ensureServer,
   stopServer,
   waitForServer,
 } from "./self.ts";
@@ -182,11 +182,10 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     }
   }
 
-  if (!identity) {
-    await removeServerDescriptor(paths); // clear any stale descriptor
-    spawnServer(paths);
-    identity = await waitForServer(paths, 8000);
-  }
+  // Serialized across processes: two agents opening one artifact at the same
+  // instant used to both spawn, leaving two servers appending to one log and
+  // two callers disagreeing about the URL (plan 08, finding #16).
+  if (!identity) identity = await ensureServer(paths);
   if (!identity) {
     throw new ServerError({
       message: "per-session server failed to start",

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, openSync } from "node:fs";
 import type { SessionPaths } from "../core/paths.ts";
+import { withAppendLock } from "../core/lock.ts";
 import {
   discoverLiveServer,
   type IdentityResponse,
@@ -35,6 +36,49 @@ export const spawnServer = (paths: SessionPaths): void => {
     env: process.env,
   });
   child.unref();
+};
+
+export interface EnsureServerOptions {
+  /** How to start the session's server. Injected so a test can count starts. */
+  readonly spawn?: (paths: SessionPaths) => void;
+  /** How long to wait for the started server's handshake. */
+  readonly waitMs?: number;
+}
+
+/**
+ * Start the session's own server, or adopt the one already running.
+ *
+ * Serialized across processes (plan 08, finding #16). Read-then-spawn is a
+ * race: two agents opening one artifact at the same instant both read an absent
+ * descriptor and both spawn, and two servers for one artifact are two appenders
+ * on one log - the thing the append lock exists to prevent. The loser's
+ * descriptor then overwrites the winner's, so the two callers disagree about
+ * the URL they just opened.
+ *
+ * The lock is on the descriptor, not the log: this serializes who may START a
+ * server, which is a different question from who may append, and holding the
+ * log's lock here would block every writer for the length of a server boot.
+ */
+export const ensureServer = async (
+  paths: SessionPaths,
+  options: EnsureServerOptions = {},
+): Promise<IdentityResponse | undefined> => {
+  const spawn = options.spawn ?? spawnServer;
+  const waitMs = options.waitMs ?? 8000;
+  // Fast path: an already-live server needs no lock at all, which keeps the
+  // common `open` (the session is up) off the contended path entirely.
+  const live = await discoverLiveServer(paths);
+  if (live) return live;
+
+  return await withAppendLock(paths.serverJson, async () => {
+    // Re-read INSIDE the lock. Whoever held it before us has finished starting
+    // the server this call was about to duplicate - which is the whole fix.
+    const existing = await discoverLiveServer(paths);
+    if (existing) return existing;
+    await removeServerDescriptor(paths); // clear any stale descriptor
+    spawn(paths);
+    return await waitForServer(paths, waitMs);
+  });
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
