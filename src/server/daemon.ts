@@ -114,6 +114,11 @@ const DEFAULT_ATTEND_POLL_MS = 1000;
  *  fetch open for the life of the process. */
 const CHOOSER_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** How long `POST /hub/roots` waits for the folder's session count before
+ *  answering without it. The add is already persisted by then; this only
+ *  decides whether the human is told how many sessions came with it. */
+const ROOT_COUNT_BUDGET_MS = 2000;
+
 /** A new artifact's filename, as `POST /hub/create` accepts it: a plain
  *  `.html` basename, never a path - the project root comes from the listing
  *  and the two are joined here, so no traversal is expressible. */
@@ -899,10 +904,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // name only counts as an identifier once it LOOKS like one: a string
     // that fails CREATE_NAME is whatever the caller typed, which could be
     // content, so it stays out and the 400 speaks for it.
+    // Only what has EARNED the name of an identifier. `artifact` is gated on
+    // CREATE_NAME; `project` and `harness` are attached below, each after the
+    // check that makes it real. Attaching them here put ~256 bytes of
+    // arbitrary caller text into a retained record on every refused create -
+    // the same D-005 hole the artifact gate already closed (07#12).
     observation.attach({
-      project,
       ...(CREATE_NAME.test(name) ? { artifact: name } : {}),
-      ...(typeof body?.harness === "string" ? { harness: body.harness } : {}),
     });
     const prompt = typeof body?.prompt === "string" ? body.prompt : "";
     // The document's own name, bounded and control-stripped like every other
@@ -926,12 +934,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       ? sanitizeSelection({ model: body.model, effort: body.effort })
       : undefined;
 
-    if (!CREATE_NAME.test(name)) {
-      return json({ error: "name must be a plain .html filename" }, 400);
-    }
-    if (prompt.trim().length === 0 || prompt.length > MAX_CREATE_PROMPT) {
-      return json({ error: `prompt must be 1..${MAX_CREATE_PROMPT} characters` }, 400);
-    }
+    // The project is validated FIRST, before the name and prompt refusals, so
+    // that a refusal on any ground is still queryable by project - while an
+    // unrooted one still never reaches a record (07#12). Validating in the
+    // other order forced a choice between those two, and both are wanted.
     const listing = await listHub();
     // A worktree is a listed root of its own, grouped under its main repo -
     // both are legitimate create targets; anything else is not a project the
@@ -956,6 +962,29 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const rooted =
       known || (await scanRootSet()).some((root) => canonicalArtifactPath(root) === asked);
     if (!rooted) return json({ error: "unknown project" }, 400);
+    // Rooted, so it names a place this hub actually scans - an identifier now,
+    // not whatever the caller typed.
+    observation.attach({ project });
+
+    // The harness earns its place the same way, and for the same reason: a
+    // caller-supplied string is not an identifier until something recognises
+    // it. Resolved early only to ATTACH - the full resolution below still
+    // owns refusing an unknown one and building its argv.
+    const earlyRegistry = await loadRegistry(opts.harnessesPath);
+    const earlyRecipe = earlyRegistry ? resolveRecipe(earlyRegistry, harness) : undefined;
+    if (
+      earlyRecipe &&
+      (harness === undefined || normalizeHarness(earlyRecipe.name) === normalizeHarness(harness))
+    ) {
+      observation.attach({ harness: earlyRecipe.name });
+    }
+
+    if (!CREATE_NAME.test(name)) {
+      return json({ error: "name must be a plain .html filename" }, 400);
+    }
+    if (prompt.trim().length === 0 || prompt.length > MAX_CREATE_PROMPT) {
+      return json({ error: `prompt must be 1..${MAX_CREATE_PROMPT} characters` }, 400);
+    }
     // Listed is not the same as PRESENT. A project can be deleted while its
     // reviews outlive it, and a scratchpad session's project is recovered from
     // an encoded path whose deepest component may no longer exist - authoring
@@ -1037,6 +1066,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // surfaces as a tab on its own `lucid open`. The claim is held until the
       // turn ends, so a retry while it runs is refused rather than doubled.
       const outLog = paths.createLog;
+      // Where THIS attempt's output starts. The log is opened in append mode
+      // (launcher.ts), so a second failed create on the same artifact would
+      // otherwise tail both attempts concatenated with no separator - the
+      // previous turn's evidence presented as this one's (07#17). Same fix
+      // shape the attend path already uses for a silent turn's relay.
+      const outputFrom = await stat(outLog).then(
+        (st) => st.size,
+        () => 0,
+      );
       // A dead create turn is knowable the moment the child exits - waiting
       // out the dialog's own patience to report "check the log" turned a
       // seconds-fast failure (a harness over its usage limit) into two
@@ -1106,7 +1144,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       heartbeats.add(heartbeat);
 
       const reportFailure = async (code: number | string): Promise<void> => {
-        const raw = await readFile(outLog, "utf8").catch(() => "");
+        const whole = await readFile(outLog, "utf8").catch(() => "");
+        // THIS attempt only.
+        const raw = whole.slice(outputFrom);
         const tail = raw.trim().split("\n").slice(-3).join("\n").slice(-500);
         // A usage wall is the one failure the human can do nothing about in
         // Lucid - name it as such rather than leaving them to read the tail.
@@ -1241,17 +1281,40 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const chosen = await chooseFolder(body, "Choose a folder to scan for Lucid sessions");
     if ("res" in chosen) return chosen.res;
     await addRoot(chosen.dir, rootsPath);
+    // ANSWER on the persist, do not wait on the scan (07#14). Scanning a home
+    // directory was measured at ~16s, and the root is already saved before it
+    // starts - so any client-side abort reported failure for an add that had
+    // in fact succeeded, and the human re-added a folder the hub already had.
+    // The count is not what makes the add real; the persist is.
+    //
+    // The sessions themselves arrive on the listing stream, which the notify
+    // below triggers and which every window reads anyway - so nothing is lost
+    // by not counting them here, and the scan no longer sits between a human
+    // and their answer.
     // Counted from a scan of JUST this folder - `listAll` would union the
     // registry and report sessions that have nothing to do with the pick.
-    const found = await scanRoots([chosen.dir]);
-    // Connected shells are told by the listing stream, not by this response:
-    // adding a root changes what EVERY window sees, not just this one's.
-    void notify();
+    // The count is what tells the human they picked the right folder, so it is
+    // worth waiting a moment for - but only a moment. Scanning a home
+    // directory was measured at ~16s, and the root is already persisted before
+    // it starts, so a client that gave up reported failure for an add that had
+    // in fact succeeded (07#14).
+    const scan = scanRoots([chosen.dir]).catch(() => []);
+    const counted = await Promise.race([
+      scan.then((found) => found.length),
+      new Promise<undefined>((r) => setTimeout(() => r(undefined), ROOT_COUNT_BUDGET_MS)),
+    ]);
+    // Either way the sessions arrive on the listing stream, which every window
+    // reads - so a slow scan costs the count, never the add.
+    void scan.then(() => notify());
     // The EFFECTIVE set, not just the persisted additions: this is what the
     // shell displays as "looking in", and answering with the additions alone
     // made it forget the defaults (`~/dev`, the scratchpads) it still scans.
     return json(
-      { root: chosen.dir, roots: await scanRootSet(), found: found.length },
+      {
+        root: chosen.dir,
+        roots: await scanRootSet(),
+        ...(counted !== undefined ? { found: counted } : {}),
+      },
       200,
       noStore,
     );

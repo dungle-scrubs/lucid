@@ -118,6 +118,12 @@ export interface PayloadMessage {
   readonly role: "human" | "agent";
   readonly text: string;
   readonly at: string;
+  /** The client-minted id a human message was sent under, when the log has one.
+   *  The composer holds the ids of a send it is waiting on and clears them as
+   *  the payload reports them delivered; without this the message path could
+   *  not tell WHICH send a payload confirmed and would wait forever. Additive
+   *  and human-only: agent messages have no client id. */
+  readonly id?: string;
   /** The message's own event seq - unique per append, where `at` is not: one
    *  ISO timestamp is stamped per APPEND at millisecond precision, so two
    *  messages written in the same millisecond share it. A viewer keying a
@@ -214,6 +220,11 @@ export interface WaitPayload {
   readonly warnings?: readonly Warning[];
   /** Open "agent is working" window (ack received, no output yet). */
   readonly agentWorking?: AgentWorking;
+  /** The last turn to end producing nothing, when that is the newest thing to
+   *  say. Closing a window silently loses the outcome: feedback marked
+   *  delivered with no idea what came of it. Absent once real output follows,
+   *  because the output IS the answer. */
+  readonly lastTurnEnd?: { readonly reason: string; readonly code?: string; readonly at: string };
   /** Every harness session that ever touched this artifact (D18); omitted
    *  when no event carries a stamp (old logs, stampless writers). */
   readonly sessionHistory?: readonly SessionHistoryRecord[];

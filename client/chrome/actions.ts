@@ -397,7 +397,7 @@ export const createActions = (ctx: ActionsCtx) => {
     set((s) => ({
       sending: false,
       queue: s.queue.filter((q) => !sent.has(q.id)),
-      ...(sent.size > 0 ? { awaitingAck: true } : {}),
+      ...(sent.size > 0 ? { awaitingAck: new Set(sent) } : {}),
     }));
     applyDeferredSwapIfReady();
     pushHighlights();
@@ -547,7 +547,7 @@ export const createActions = (ctx: ActionsCtx) => {
         // a turn…" while typing said nothing at all. Not in the catch: a post
         // that threw keeps its text and its own warning, and must not claim
         // the agent has feedback to answer.
-        set({ awaitingAck: true });
+        set((s2) => ({ awaitingAck: new Set([...(s2.awaitingAck ?? []), m.id]) }));
       }
     } finally {
       draining = false;

@@ -36,6 +36,28 @@ export interface Surface {
   readonly hasUnsentDraft: () => boolean;
 }
 
+/**
+ * Drop the ids the payload now reports delivered, and return null once none
+ * remain. The server already derives an item's `delivered` state from
+ * `deliveredThroughSeq`, so this reads that rather than keeping a second,
+ * cruder copy of the same fact - which is what the boolean was.
+ *
+ * An id the payload does not mention at all is KEPT: a send whose item has
+ * not appeared in the fold yet is still outstanding, and dropping it would
+ * clear the line before the agent had seen anything.
+ */
+const clearDelivered = (
+  waiting: ReadonlySet<string> | null,
+  payload: StateResponse,
+): ReadonlySet<string> | null => {
+  if (!waiting || waiting.size === 0) return null;
+  const delivered = new Set<string>();
+  for (const a of payload.annotations) if (a.delivered) delivered.add(a.id);
+  for (const m of payload.messages) if (m.id && m.delivered) delivered.add(m.id);
+  const left = [...waiting].filter((id) => !delivered.has(id));
+  return left.length > 0 ? new Set(left) : null;
+};
+
 export const createSurface = (store: SessionStore, transport: Transport): Surface => {
   const get = store.getState;
   const set = store.setState;
@@ -157,12 +179,17 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
         messages: [...payload.messages],
         questions: [...(payload.questions ?? [])],
         agentWorking: payload.agentWorking ?? null,
+        lastTurnEnd: payload.lastTurnEnd ?? null,
         // The agent has spoken once a working window opens or a new version
         // lands - either closes the delivered-waiting gap. Cleared here rather
         // than on a timer, so an unattended send (nothing ever acks) keeps
         // saying "nothing is watching yet" truthfully instead of lapsing to
         // silence.
-        awaitingAck: s.awaitingAck && payload.agentWorking == null && payload.version <= s.version,
+        // Clear the ids the payload now reports DELIVERED, not on "is anything
+        // working". An unrelated turn's window said nothing about this send
+        // (07#21), and a deduped send whose item is already delivered resolves
+        // at once instead of waiting for an ack that will never come (07#22).
+        awaitingAck: clearDelivered(s.awaitingAck, payload),
         agentsListening: payload.agentsListening ?? 0,
         lastAttendant: payload.lastAttendant ?? null,
         attendantPresence: payload.attendantPresence ?? null,

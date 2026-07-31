@@ -1301,3 +1301,39 @@ describe("cross-process resume + liveness", () => {
     expect(payload.status).toBe("suspended");
   });
 });
+
+describe("turn termination", () => {
+  const post = (path: string, body: unknown): Promise<Response> =>
+    fetch(`http://127.0.0.1:${port}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+      body: JSON.stringify(body),
+    });
+
+  test("a turn-ended POST closes the turn and refuses anything outside the closed sets", async () => {
+    await startServer();
+
+    // A turn takes the batch, then ends having produced nothing.
+    await post("/__lucid/ack", { id: "ack-1", turnId: "T1", covers: 1 });
+    const working = (await get("/__lucid/state").then((r) => r.json())) as {
+      agentWorking?: unknown;
+    };
+    expect(working.agentWorking).toBeTruthy();
+
+    expect((await post("/__lucid/turn-ended", { turnId: "T1", reason: "done" })).status).toBe(200);
+    const after = (await get("/__lucid/state").then((r) => r.json())) as { agentWorking?: unknown };
+    expect(after.agentWorking).toBeFalsy();
+
+    // Closed sets: refused, never coerced into something acceptable.
+    expect((await post("/__lucid/turn-ended", { turnId: "T2", reason: "nope" })).status).toBe(400);
+    expect((await post("/__lucid/turn-ended", { reason: "done" })).status).toBe(400);
+    expect(
+      (await post("/__lucid/turn-ended", { turnId: "T2", reason: "done", code: "Bad Code!" }))
+        .status,
+    ).toBe(400);
+    expect(
+      (await post("/__lucid/turn-ended", { turnId: "T2", reason: "done", code: "usage_wall" }))
+        .status,
+    ).toBe(200);
+  });
+});

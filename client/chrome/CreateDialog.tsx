@@ -796,6 +796,22 @@ const CreateDialogBody = () => {
                       : "Waiting for the hub's first report. A few minutes is normal; a failure interrupts this on its own."}
                   </span>
                 )}
+                {/* The log pointer belongs in the RUNNING state too, not only
+                    after a failure or a silence (07#16). runSpawn awaits the
+                    child with no timeout, so a wedged-but-alive harness
+                    heartbeats forever and this state is truthful and permanent
+                    - and the one actionable thing, the log, used to appear
+                    only in the branches this turn never reaches. A pointer,
+                    not a clock: nothing here infers failure from elapsed
+                    time. */}
+                {silent ? null : (
+                  <span data-test="create-running-log" className="text-[11px] text-fg-faint">
+                    Watch it work:{" "}
+                    <code className="bg-ink-700 px-1">
+                      .lucid/{name.replace(/\.html$/, "")}/create.out.log
+                    </code>
+                  </span>
+                )}
               </>
             )}
             {silent && createFailed?.artifact !== authoring ? (

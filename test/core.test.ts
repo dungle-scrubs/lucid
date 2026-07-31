@@ -489,6 +489,200 @@ describe("foldLog segments", () => {
     expect(foldLog([opened, ack, ended]).agentWorking).toBeNull();
   });
 
+  test("two overlapping turns keep their own windows", () => {
+    // Lucid permits two agents on one artifact - sessionHistory records every
+    // harness that touched it, and attend guards against resuming a
+    // conversation a human already has open. With ONE scalar working state,
+    // turn A's output closed turn B's window and A's late ack reopened a
+    // window after A had finished (plan 08, D-013).
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ackA = ev({
+      t: "agent_ack",
+      seq: 2,
+      id: "a1",
+      turnId: "A",
+      at: "2026-01-01T00:00:00Z",
+    } as never);
+    const ackB = ev({
+      t: "agent_ack",
+      seq: 3,
+      id: "b1",
+      turnId: "B",
+      at: "2026-01-01T00:05:00Z",
+    } as never);
+
+    // Both turns are working; the viewer paints the OLDEST open one.
+    const both = foldLog([opened, ackA, ackB]);
+    expect(both.agentWorking?.since).toBe("2026-01-01T00:00:00Z");
+
+    // A finishes. B is still working, so the window must stay open - and it
+    // must now be B's, not A's.
+    const replyA = ev({ t: "agent_reply", seq: 4, id: "rA", text: "done", turnId: "A" } as never);
+    const afterA = foldLog([opened, ackA, ackB, replyA]);
+    expect(afterA.agentWorking).not.toBeNull();
+    expect(afterA.agentWorking?.since).toBe("2026-01-01T00:05:00Z");
+
+    // B finishes too. Now nothing is working.
+    const replyB = ev({ t: "agent_reply", seq: 5, id: "rB", text: "done", turnId: "B" } as never);
+    expect(foldLog([opened, ackA, ackB, replyA, replyB]).agentWorking).toBeNull();
+  });
+
+  test("agent_turn_ended closes only the turn it names", () => {
+    // The terminator (plan 08 M5). A turn that reads feedback and produces
+    // nothing had no way to say it stopped, so its window stayed open - the
+    // viewer claiming the agent was responding, forever.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ackA = ev({
+      t: "agent_ack",
+      seq: 2,
+      id: "a1",
+      turnId: "A",
+      at: "2026-01-01T00:00:00Z",
+    } as never);
+    const ackB = ev({
+      t: "agent_ack",
+      seq: 3,
+      id: "b1",
+      turnId: "B",
+      at: "2026-01-01T00:05:00Z",
+    } as never);
+
+    // A ends having produced nothing. B is untouched.
+    const endA = ev({ t: "agent_turn_ended", seq: 4, turnId: "A", reason: "done" } as never);
+    const afterA = foldLog([opened, ackA, ackB, endA]);
+    expect(afterA.agentWorking).not.toBeNull();
+    expect(afterA.agentWorking?.since).toBe("2026-01-01T00:05:00Z");
+
+    // ...and it moved no delivery cursor: a turn that produced nothing has
+    // answered nothing.
+    expect(afterA.lastAgentOutputSeq).toBe(0);
+    expect(afterA.deliveredThroughSeq).toBe(0);
+
+    // B ends too. Nothing is working.
+    const endB = ev({ t: "agent_turn_ended", seq: 5, turnId: "B", reason: "exited" } as never);
+    expect(foldLog([opened, ackA, ackB, endA, endB]).agentWorking).toBeNull();
+
+    // A terminator naming a turn nobody opened changes nothing.
+    const ghost = ev({ t: "agent_turn_ended", seq: 6, turnId: "NOPE", reason: "done" } as never);
+    expect(foldLog([opened, ackA, ghost]).agentWorking?.since).toBe("2026-01-01T00:00:00Z");
+  });
+
+  test("a terminator wakes no blocked waiter, and a second one is a no-op", () => {
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", turnId: "A" } as never);
+    const end = ev({ t: "agent_turn_ended", seq: 3, turnId: "A", reason: "done" } as never);
+
+    // The whole reason M3 made the wake set explicit: agent B blocked at a
+    // cursor must not return `waiting` because agent A's turn ended.
+    expect(foldLog([opened, ack, end]).lastNonAckSeq).toBe(1);
+
+    // Ending an already-ended turn changes nothing.
+    const again = ev({ t: "agent_turn_ended", seq: 4, turnId: "A", reason: "failed" } as never);
+    const twice = foldLog([opened, ack, end, again]);
+    expect(twice.agentWorking).toBeNull();
+    expect(twice.lastNonAckSeq).toBe(1);
+  });
+
+  test("a late ack cannot reopen a turn that already finished", () => {
+    // An agent that finished and then flushed a queued progress line would
+    // otherwise look alive again - forever, since nothing else closes it.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", turnId: "A" } as never);
+    const reply = ev({ t: "agent_reply", seq: 3, id: "r1", text: "done", turnId: "A" } as never);
+    const lateAck = ev({
+      t: "agent_ack",
+      seq: 4,
+      id: "a2",
+      turnId: "A",
+      progress: { label: "still auditing" },
+    } as never);
+
+    expect(foldLog([opened, ack, reply, lateAck]).agentWorking).toBeNull();
+  });
+
+  test("an ack with no turnId is the anonymous turn, exactly as before", () => {
+    // The additive claim: every log written before turn identity folds the way
+    // it always did. Untagged output closes the untagged turn.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1" } as never);
+    expect(foldLog([opened, ack]).agentWorking).not.toBeNull();
+
+    const reply = ev({ t: "agent_reply", seq: 3, id: "r1", text: "done" } as never);
+    expect(foldLog([opened, ack, reply]).agentWorking).toBeNull();
+  });
+
+  test("a turn id from a previous segment means nothing in this one", () => {
+    // Turn ids are segment-scoped. A reopen folds from its own
+    // session_opened, so an id reused across the boundary cannot close - or
+    // resurrect - anything in the new segment.
+    const s1 = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ackS1 = ev({ t: "agent_ack", seq: 2, id: "a1", turnId: "A" } as never);
+    const ended = ev({ t: "session_ended", seq: 3 } as never);
+    const s2 = ev({
+      t: "session_opened",
+      seq: 4,
+      segment: 2,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s2/v1.html",
+    } as never);
+    // Same id, new segment: it opens a NEW turn rather than reopening the old.
+    const ackS2 = ev({ t: "agent_ack", seq: 5, id: "a2", turnId: "A" } as never);
+
+    const state = foldLog([s1, ackS1, ended, s2, ackS2]);
+    expect(state.agentWorking).not.toBeNull();
+    expect(state.segment).toBe(2);
+  });
+
   test("only wake-relevant events advance the seq `wait` blocks on", () => {
     // `wait` blocks past ack-only deltas by comparing its cursor to
     // lastNonAckSeq. That used to mean "every event that is not an agent_ack",
@@ -695,5 +889,97 @@ describe("validateStructure honors the parser's hiding rules (plan 04, #44)", ()
 describe("close tags with internal whitespace (plan 04, F9)", () => {
   test("a legal `</body\\n>` close satisfies the structural guard", () => {
     expect(validateStructure("<html><body><p>a</p></body\n></html>").ok).toBe(true);
+  });
+});
+
+describe("an unowned turn", () => {
+  const ev = (e: Partial<LogEvent> & { t: LogEvent["t"]; seq: number }): LogEvent =>
+    ({ at: "2026-01-01T00:00:00Z", ...e }) as LogEvent;
+
+  test("an interactive turn is anonymous, and nothing terminates it", () => {
+    // The documented gap (CONTEXT.md, D-024). A turn a human drives in their
+    // own terminal has no LUCID_TURN_ID, so its acks are anonymous and the hub
+    // - which never spawned it - appends no terminator. The viewer's
+    // ten-minute stale state is the answer, exactly as it is for an agent that
+    // was killed. Asserted so the gap is a decision with a test behind it
+    // rather than something a reader has to infer.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const anonAck = ev({ t: "agent_ack", seq: 2, id: "a1" } as never);
+
+    // Open, and it stays open: no output, no terminator naming it.
+    expect(foldLog([opened, anonAck]).agentWorking).not.toBeNull();
+
+    // A terminator for a NAMED turn does not close the anonymous one.
+    const other = ev({ t: "agent_turn_ended", seq: 3, turnId: "T1", reason: "done" } as never);
+    expect(foldLog([opened, anonAck, other]).agentWorking).not.toBeNull();
+
+    // Its own output does close it - the ordinary path an interactive turn takes.
+    const reply = ev({ t: "agent_reply", seq: 4, id: "r1", text: "done" } as never);
+    expect(foldLog([opened, anonAck, other, reply]).agentWorking).toBeNull();
+  });
+});
+
+describe("a turn that ended with nothing to show", () => {
+  const ev = (e: Partial<LogEvent> & { t: LogEvent["t"]; seq: number }): LogEvent =>
+    ({ at: "2026-01-01T00:00:00Z", ...e }) as LogEvent;
+  const opened = ev({
+    t: "session_opened",
+    seq: 1,
+    segment: 1,
+    artifact: "a.html",
+    version: 1,
+    hash: "h",
+    path: "versions/s1/v1.html",
+  } as never);
+
+  test("the outcome survives the window closing", () => {
+    // Closing the window is right - the agent is not working. But closing it
+    // SILENTLY loses the outcome: a turn that read the feedback and correctly
+    // decided nothing was needed looked identical to one that never happened,
+    // leaving the human with feedback marked delivered and no idea what came
+    // of it (OQ-3).
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", turnId: "T1", covers: 1 } as never);
+    const end = ev({
+      t: "agent_turn_ended",
+      seq: 3,
+      turnId: "T1",
+      reason: "done",
+      at: "2026-01-01T00:09:00Z",
+    } as never);
+
+    const state = foldLog([opened, ack, end]);
+    expect(state.agentWorking).toBeNull();
+    expect(state.lastTurnEnd).toEqual({ reason: "done", at: "2026-01-01T00:09:00Z" });
+  });
+
+  test("real output clears it - the output IS the answer", () => {
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", turnId: "T1" } as never);
+    const end = ev({ t: "agent_turn_ended", seq: 3, turnId: "T1", reason: "done" } as never);
+    const reply = ev({ t: "agent_reply", seq: 4, id: "r1", text: "here you go" } as never);
+
+    expect(foldLog([opened, ack, end, reply]).lastTurnEnd).toBeNull();
+  });
+
+  test("a failed turn is distinguishable from one that simply had nothing to add", () => {
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", turnId: "T1" } as never);
+    const failed = ev({
+      t: "agent_turn_ended",
+      seq: 3,
+      turnId: "T1",
+      reason: "usage_limit",
+      code: "session_wall",
+    } as never);
+
+    const state = foldLog([opened, ack, failed]);
+    expect(state.lastTurnEnd?.reason).toBe("usage_limit");
+    expect(state.lastTurnEnd?.code).toBe("session_wall");
   });
 });

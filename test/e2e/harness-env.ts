@@ -98,6 +98,12 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   // stamp every request this suite makes with THAT session's stale id -
   // false correlation, same failure shape as LUCID_SESSION_ID.
   LUCID_REQUEST_ID: "clear",
+  // The turn a spawned process IS (plan 08, D-013): the hub mints it, exports
+  // it, and names it again when it appends the terminator on exit. Inherited
+  // from a developer's own agent session, every ack this suite writes would
+  // join THAT turn - so a terminator would close a window the suite never
+  // opened. Same false-correlation shape as LUCID_REQUEST_ID.
+  LUCID_TURN_ID: "clear",
 
   // `devAssetsDir()` (src/server/dev-assets.ts:17) reads this on EVERY asset
   // request in every server, with no dev-mode gate of any kind. Left inherited,

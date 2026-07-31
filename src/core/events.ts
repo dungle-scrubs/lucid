@@ -104,6 +104,10 @@ export interface SessionOpenedEvent extends BaseEvent {
 /** A new artifact version (watcher-driven). */
 export interface VersionEvent extends BaseEvent {
   readonly t: "version";
+  /** Which TURN produced this, when the writer knows (D-013). Output closes
+   *  the turn that produced it, not whatever window happened to be open.
+   *  Absent means the anonymous turn - every pre-turnId log. */
+  readonly turnId?: string;
   readonly version: number;
   readonly hash: string;
   readonly path: string;
@@ -186,6 +190,10 @@ export interface PromptEvent extends BaseEvent {
 /** An agent reply posted via `lucid wait --reply`. */
 export interface AgentReplyEvent extends BaseEvent {
   readonly t: "agent_reply";
+  /** Which TURN produced this, when the writer knows (D-013). Output closes
+   *  the turn that produced it, not whatever window happened to be open.
+   *  Absent means the anonymous turn - every pre-turnId log. */
+  readonly turnId?: string;
   readonly id: string;
   readonly text: string;
   /** Which harness session spoke (D18). */
@@ -225,9 +233,64 @@ export interface AgentAckEvent extends BaseEvent {
    * Absent on those and on pre-D20 logs, which therefore claim no delivery.
    */
   readonly covers?: number;
+  /**
+   * Which TURN this ack belongs to. Lucid permits two agents on one artifact,
+   * and the fold keys working state by this so one turn's output cannot close
+   * another's window (D-013). Segment-scoped: an id from an earlier segment
+   * means nothing in this one.
+   *
+   * Optional, and absent is not a gap: an ack without it belongs to the
+   * ANONYMOUS turn, which is how every log written before this folds. That is
+   * what keeps the change additive rather than a migration.
+   */
+  readonly turnId?: string;
   /** Which harness session took delivery (D18). */
   readonly attendant?: AttendantStamp;
 }
+
+/** Why a turn stopped. A CLOSED set - the viewer owns the wording for each,
+ *  so no harness prose rides in on this event (D-005, D-015). */
+export type TurnEndReason = "done" | "exited" | "failed" | "usage_limit";
+
+/**
+ * A turn stopped (plan 08, RFC-01).
+ *
+ * A turn's START was always recorded - an ack - but nothing recorded it
+ * stopping, so the working window closed only on real output. A turn that read
+ * the feedback and correctly decided nothing was needed, or that hit a usage
+ * wall, or that died, left the viewer claiming the agent was still responding.
+ *
+ * Advisory: it changes what the viewer paints and nothing else. It carries no
+ * `covers`, moves no delivery cursor, and does not release `wait` (see
+ * WAKES_WAIT in fold.ts) - an agent asking for feedback must not be woken
+ * because a DIFFERENT agent's turn ended.
+ *
+ * There is deliberately no free-text field. An earlier draft carried a bounded,
+ * control-stripped `detail`; bounding a string is not redaction, and a CLI
+ * cannot tell a pattern name from copied harness output. `code` is a closed
+ * charset the viewer resolves to wording it owns.
+ */
+export interface AgentTurnEndedEvent extends BaseEvent {
+  readonly t: "agent_turn_ended";
+  /** Which turn stopped. Segment-scoped, like every turn id. */
+  readonly turnId: string;
+  readonly reason: TurnEndReason;
+  /** Optional stable identifier the viewer resolves to wording. Never prose. */
+  readonly code?: string;
+  readonly attendant?: AttendantStamp;
+}
+
+/** `code`'s charset. Refused rather than truncated: a value that fails this is
+ *  not a shortened identifier, it is something else entirely. */
+export const TURN_END_CODE = /^[a-z][a-z0-9_]{0,39}$/;
+
+/** The closed reason set, for validating an untrusted writer. */
+export const TURN_END_REASONS: ReadonlySet<string> = new Set<TurnEndReason>([
+  "done",
+  "exited",
+  "failed",
+  "usage_limit",
+]);
 
 /**
  * A human revert decision (RFC §8). Forward-only: it does not rewind the log;
@@ -249,6 +312,10 @@ export interface RevertEvent extends BaseEvent {
 /** A question the agent poses to the human, optionally anchored to an element. */
 export interface QuestionEvent extends BaseEvent {
   readonly t: "question";
+  /** Which TURN produced this, when the writer knows (D-013). Output closes
+   *  the turn that produced it, not whatever window happened to be open.
+   *  Absent means the anonymous turn - every pre-turnId log. */
+  readonly turnId?: string;
   readonly id: string;
   readonly text: string;
   /** Optional `data-lucid-id` of the element the question is about. */
@@ -338,6 +405,7 @@ export type LogEvent =
   | PromptEvent
   | AgentReplyEvent
   | AgentAckEvent
+  | AgentTurnEndedEvent
   | RevertEvent
   | QuestionEvent
   | QuestionAnsweredEvent

@@ -9,7 +9,12 @@ import { artifactAttendant, readLastAttendant } from "../core/attendant.ts";
 import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
 import { foldLog, versionRef } from "../core/fold.ts";
-import { sanitizeAttendant } from "../core/events.ts";
+import {
+  sanitizeAttendant,
+  TURN_END_CODE,
+  TURN_END_REASONS,
+  type TurnEndReason,
+} from "../core/events.ts";
 import {
   legacyProjection,
   normalizeItemAnswers,
@@ -809,6 +814,13 @@ export const createSessionHost = (
       typeof body.covers === "number" && Number.isInteger(body.covers) && body.covers >= 0
         ? body.covers
         : undefined;
+    // Which turn this ack belongs to (D-013). Bounded like every other
+    // caller-supplied identifier; absent is the anonymous turn, which is how
+    // every pre-turnId writer folds.
+    const turnId =
+      typeof body.turnId === "string" && body.turnId.length > 0
+        ? body.turnId.slice(0, 128)
+        : undefined;
     await serverAppend([
       {
         t: "agent_ack",
@@ -816,6 +828,43 @@ export const createSessionHost = (
         ...(intent ? { intent } : {}),
         ...(progress ? { progress } : {}),
         ...(covers !== undefined ? { covers } : {}),
+        ...(turnId ? { turnId } : {}),
+        ...(attendant ? { attendant } : {}),
+      },
+    ]);
+    return json({ ok: true });
+  };
+
+  /**
+   * `POST /__lucid/turn-ended` - a turn saying it stopped (plan 08, RFC-01).
+   *
+   * Every field is a CLOSED set, refused rather than coerced. A `reason` this
+   * build does not know is not a shortened one and a `code` outside the
+   * charset is not a truncated identifier - both are something else, and
+   * accepting a cleaned-up version of them is how prose gets into a record.
+   * There is deliberately no free-text field to validate.
+   */
+  const handleTurnEnded = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body.turnId !== "string" || body.turnId.length === 0) {
+      return json({ error: "invalid turnId" }, 400);
+    }
+    if (typeof body.reason !== "string" || !TURN_END_REASONS.has(body.reason)) {
+      return json({ error: "invalid reason" }, 400);
+    }
+    if (
+      body.code !== undefined &&
+      (typeof body.code !== "string" || !TURN_END_CODE.test(body.code))
+    ) {
+      return json({ error: "invalid code" }, 400);
+    }
+    const attendant = parseAttendant(body.attendant);
+    await serverAppend([
+      {
+        t: "agent_turn_ended",
+        turnId: body.turnId.slice(0, 128),
+        reason: body.reason as TurnEndReason,
+        ...(typeof body.code === "string" ? { code: body.code } : {}),
         ...(attendant ? { attendant } : {}),
       },
     ]);
@@ -1139,6 +1188,7 @@ export const createSessionHost = (
     }
     if (pathname === "/__lucid/reply" && req.method === "POST") return handleReply(req);
     if (pathname === "/__lucid/ack" && req.method === "POST") return handleAck(req);
+    if (pathname === "/__lucid/turn-ended" && req.method === "POST") return handleTurnEnded(req);
     if (pathname === "/__lucid/context" && req.method === "POST") return handleContext(req);
     if (pathname === "/__lucid/resolve" && req.method === "POST") {
       await serverAppend([{ t: "review_resolved" }]);

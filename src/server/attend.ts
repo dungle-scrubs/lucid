@@ -581,6 +581,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // for the whole headless turn instead of "recorded", and a second watcher
     // reading the log sees the batch is taken.
     ownClaimSeq = target;
+    // The turn this delivery IS (plan 08, D-013). Minted before the ack that
+    // OPENS its window, so the terminator appended after the process exits
+    // closes the same turn. The child inherits it via LUCID_TURN_ID, so the
+    // turn's own acks join it too - a turn nobody can name is one nobody can
+    // end.
+    const turnId = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     await deliver(paths, {
       t: "agent_ack",
       id: crypto.randomUUID(),
@@ -594,6 +600,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       // and until it does the viewer says "Agent responding…", which is true
       // of every running turn.
       covers: target,
+      turnId,
       // The artifact's own session (D18): the hub acts on its behalf, and the
       // events the turn writes must not be attributed to the hub.
       attendant: {
@@ -614,11 +621,26 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const code = await runSpawn(argv, cwd, paths.attendLog, {
       harness: record.harness,
       sessionId: record.sessionId,
+      turnId,
       // Only what the argv actually carries: a dropped stale pick must not
       // stamp the child as running a model it was never given.
       ...(applied.model !== undefined ? { model: applied.model } : {}),
       ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
     });
+    // The turn stopped, whatever it produced. The hub holds the child, so it
+    // is the authoritative witness - and without this a turn that read the
+    // feedback and produced nothing left its window open forever (finding #1).
+    // Advisory: it moves no cursor and wakes no waiter.
+    await deliver(paths, {
+      t: "agent_turn_ended",
+      turnId,
+      reason: code === 0 ? "done" : "failed",
+      attendant: { harness: record.harness, sessionId: record.sessionId, cwd },
+    }).catch(() => {
+      // The turn is over regardless; a failed append is not worth retrying
+      // into a loop. The stale state still covers the viewer.
+    });
+
     if (code === 0) {
       // Advance only on a clean turn, so a failed one retries the batch
       // instead of silently swallowing the human's feedback.

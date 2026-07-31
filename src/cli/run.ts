@@ -62,6 +62,16 @@ const randomId = (): string => crypto.randomUUID();
  * harness identity when the env is absent. cwd rides along because resuming
  * a harness session is cwd-scoped.
  */
+/** The turn this process IS, when the hub spawned it (plan 08, D-013).
+ *  Exported as LUCID_TURN_ID exactly as LUCID_REQUEST_ID is, so the acks this
+ *  turn writes carry the id the hub will name when it appends the terminator.
+ *  Absent for an interactive turn nobody spawned - then the acks belong to the
+ *  anonymous turn, which is how every pre-turnId log folds. */
+const turnStamp = (): { turnId?: string } => {
+  const t = process.env.LUCID_TURN_ID;
+  return t && t.length > 0 ? { turnId: t.slice(0, 128) } : {};
+};
+
 const attendantStamp = (harness?: string): AttendantStamp | undefined => {
   const h = harness || process.env.LUCID_HARNESS;
   const sessionId = process.env.LUCID_SESSION_ID;
@@ -275,6 +285,7 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
       await deliver(paths, {
         t: "agent_ack",
         id: randomId(),
+        ...turnStamp(),
         ...(covers !== undefined ? { covers } : {}),
         ...(attendant ? { attendant } : {}),
       });
@@ -317,6 +328,7 @@ export const runIntent = async (file: string, intent: "revise" | "reply"): Promi
   await deliver(paths, {
     t: "agent_ack",
     id: randomId(),
+    ...turnStamp(),
     intent,
     ...(attendant ? { attendant } : {}),
   });
@@ -351,6 +363,7 @@ export const runProgress = async (
   await deliver(paths, {
     t: "agent_ack",
     id: randomId(),
+    ...turnStamp(),
     progress: cleaned,
     ...(attendant ? { attendant } : {}),
   });

@@ -359,9 +359,17 @@ export interface SessionState {
   /** A feedback batch has been delivered and no agent has acked it yet - the
    *  window between the annotation landing in the log and the first `agent_ack`
    *  that opens `agentWorking`. Client-local, because the log has nothing new
-   *  to show during it: set when a send lands at least one item, cleared the
-   *  moment the agent speaks (a working window opens, or a version arrives). */
-  awaitingAck: boolean;
+   *  to show during it.
+   *
+   *  Holds the CLIENT IDS this send is waiting on, not a bare flag. As a
+   *  boolean it could not say WHICH send it covered, so any open working
+   *  window cleared it - typing while the agent was mid-turn on an earlier
+   *  batch reopened the exact silence it exists to close (07#21) - and a send
+   *  that was deduped server-side never got an ack at all, leaving it true
+   *  forever (07#22). The payload already carries each item's id and its
+   *  server-derived `delivered` state, so clearing against THAT keeps one
+   *  source of truth for "covered" and needs no new wire field. */
+  awaitingAck: ReadonlySet<string> | null;
   /** A fork POST is in flight. Freezes the composer and disables Fork so a
    *  double-click cannot mint a second fork id the shared dedupe can't catch. */
   forking: boolean;
@@ -387,6 +395,11 @@ export interface SessionState {
   /** Open "agent is working" window from the fold: set by the agent's ack on
    *  taking delivery, closed by its next output (version, reply, question). */
   agentWorking: AgentWorking | null;
+  /** The last turn that ended producing nothing, when that is the newest thing
+   *  to say. The window closing is correct - the agent is not working - but on
+   *  its own it leaves feedback marked delivered with no outcome, which reads
+   *  as if the turn never happened. */
+  lastTurnEnd: { reason: string; code?: string; at: string } | null;
   /** Agents currently blocked in `wait` on this session - someone is
    *  listening. Distinct from agentWorking: listening is presence before
    *  delivery, working is the window after it. */
@@ -510,7 +523,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     editDraft: "",
     sending: false,
     pendingDecision: null,
-    awaitingAck: false,
+    awaitingAck: null,
     forking: false,
     forkId: null,
     pastedImages: [],
@@ -522,6 +535,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     notices: [],
     status: "active",
     agentWorking: null,
+    lastTurnEnd: null,
     agentsListening: 0,
     lastAttendant: null,
     attendantPresence: null,
