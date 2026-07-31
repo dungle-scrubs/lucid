@@ -38,6 +38,8 @@ export interface ForkRecord {
 
 export interface MessageRecord {
   readonly role: "human" | "agent";
+  /** Client-minted id, human turns only (prompt events carry one). */
+  readonly id?: string;
   readonly seq: number;
   readonly text: string;
   readonly at: string;
@@ -354,6 +356,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       case "prompt":
         messages.push({
           role: "human",
+          id: e.id,
           seq: e.seq,
           text: e.text,
           at: e.at,

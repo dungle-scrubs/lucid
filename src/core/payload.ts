@@ -66,6 +66,7 @@ const toMessage = (
   state: FoldedState,
 ): PayloadMessage => ({
   role: m.role,
+  ...(m.id ? { id: m.id } : {}),
   text: m.text,
   at: m.at,
   seq: m.seq,

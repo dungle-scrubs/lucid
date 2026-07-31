@@ -118,6 +118,12 @@ export interface PayloadMessage {
   readonly role: "human" | "agent";
   readonly text: string;
   readonly at: string;
+  /** The client-minted id a human message was sent under, when the log has one.
+   *  The composer holds the ids of a send it is waiting on and clears them as
+   *  the payload reports them delivered; without this the message path could
+   *  not tell WHICH send a payload confirmed and would wait forever. Additive
+   *  and human-only: agent messages have no client id. */
+  readonly id?: string;
   /** The message's own event seq - unique per append, where `at` is not: one
    *  ISO timestamp is stamped per APPEND at millisecond precision, so two
    *  messages written in the same millisecond share it. A viewer keying a
