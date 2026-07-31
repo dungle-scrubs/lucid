@@ -166,3 +166,51 @@ parent for new forks either way.
 A harness with no recipe (and no `default`) has no headless spawn. The launcher
 writes a `COMMAND.txt` next to the seed with the manual steps and moves on - the
 fork is never silently dropped, it just waits for you.
+
+## Auth for headless turns
+
+A hub started with `--attend` spawns authoring and revise turns itself. Those
+children run **detached from any login session**, and that has one consequence
+worth stating plainly, because the error it produces points the wrong way:
+
+> A detached process cannot read the macOS Keychain, which is where an
+> interactive `claude login` stores its credentials.
+
+So a turn can die with `Failed to authenticate`, `OAuth session expired`, or
+`Not logged in. Please run /login` while you are, correctly, logged in in your
+terminal. Logging in again will not help. The child falls back to
+`~/.claude/.credentials.json` or the environment, and when neither carries a
+usable token, it stops.
+
+### The remedy: give the hub an env token
+
+An environment token takes precedence over every credential store and works in
+any process context, which is exactly what a daemon needs.
+
+**Claude Code**
+
+```sh
+claude setup-token                     # once, interactively
+CLAUDE_CODE_OAUTH_TOKEN=<token> lucid hub --attend
+```
+
+**Codex**
+
+Codex reads `OPENAI_API_KEY` from the environment the same way; `codex login`
+writes to a store a detached process may not reach.
+
+Whatever starts your hub - a shell profile, a LaunchAgent, `lucid app` - is
+where the variable belongs. A token exported only in an interactive shell is
+not visible to a daemon that outlives it.
+
+### What Lucid does about it
+
+The create dialog classifies this failure rather than showing you the raw log
+tail, because the tail is what sends people to re-check their login. It names
+the cause (a detached hub cannot reach the Keychain) and the remedy (the env
+token above), and still shows the harness's own words beneath and the path to
+the full log.
+
+The classification is pattern-matching on the harness's output, so it is
+best-effort: a harness that words its auth error differently falls back to the
+generic failure branch, which still carries the tail and the log path.

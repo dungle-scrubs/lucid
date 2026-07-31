@@ -29,7 +29,7 @@ import { renderViewer, sseMaxBackoffFromEnv } from "./viewer.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
 import { projectRoot } from "../core/sessions.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
-import { detectUsageLimit } from "../launch/limits.ts";
+import { detectAuthFailure, detectUsageLimit } from "../launch/limits.ts";
 import { readEvents } from "../core/log.ts";
 import { runSpawn } from "../launch/launcher.ts";
 import { buildArgv, loadRegistry, normalizeHarness, resolveRecipe } from "../launch/recipes.ts";
@@ -1151,6 +1151,12 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         // A usage wall is the one failure the human can do nothing about in
         // Lucid - name it as such rather than leaving them to read the tail.
         const usageLimit = detectUsageLimit(raw);
+        // A detached hub cannot read the macOS Keychain, so a turn can die on
+        // auth while the human is correctly logged in interactively. Showing
+        // the raw tail alone sends them to re-check a login that was never the
+        // problem (plan 08 M22). The KIND rides the event; the dialog owns the
+        // wording, and the harness's own line still arrives in `tail`.
+        const authFailure = detectAuthFailure(raw);
         broadcast(
           "create-failed",
           JSON.stringify({
@@ -1158,6 +1164,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
             code,
             tail,
             ...(usageLimit !== null ? { usageLimit } : {}),
+            ...(authFailure !== null ? { authFailure } : {}),
           }),
         );
       };

@@ -57,3 +57,51 @@ export const detectUsageLimit = (output: string): UsageLimitKind | null => {
   }
   return null;
 };
+
+/**
+ * Which auth wall was hit. Separate from a usage limit because the remedy is
+ * completely different, and the difference is the whole point of detecting it.
+ *
+ * A `lucid hub --attend` daemon runs DETACHED from any login session, so it
+ * cannot read credentials stored in the macOS Keychain - which is where an
+ * interactive `claude login` puts them. The turn dies with the harness's raw
+ * stderr while the human is, correctly, logged in. Showing that tail verbatim
+ * sends them to re-check a login that was never the problem, and no amount of
+ * logging in again will fix it: the hub needs env-based auth
+ * (`claude setup-token`, then `CLAUDE_CODE_OAUTH_TOKEN` in its environment),
+ * which takes precedence over every credential store and works in any process
+ * context.
+ */
+export type AuthFailureKind = "not-logged-in" | "expired" | "invalid-key";
+
+const AUTH_PATTERNS: ReadonlyArray<readonly [RegExp, AuthFailureKind]> = [
+  // Claude Code.
+  [/oauth session expired|could not be refreshed/i, "expired"],
+  [/failed to authenticate/i, "expired"],
+  [/not logged in|please run \/login/i, "not-logged-in"],
+  [/invalid api key/i, "invalid-key"],
+  // Codex.
+  [/run codex login/i, "not-logged-in"],
+  [/401 unauthorized/i, "expired"],
+];
+
+/**
+ * Which auth wall the harness's output reports, or null when nothing in it
+ * looks like one. Scanned bottom-up like the usage detector: the error is
+ * virtually always the last thing a dying turn printed.
+ *
+ * Returns the KIND, never the line - same reason, same discipline (D-005).
+ * The dialog shows the harness's own words through the `tail` it already
+ * carries; a record gets the identifier.
+ */
+export const detectAuthFailure = (output: string): AuthFailureKind | null => {
+  const lines = output.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (!line) continue;
+    for (const [pattern, kind] of AUTH_PATTERNS) {
+      if (pattern.test(line)) return kind;
+    }
+  }
+  return null;
+};

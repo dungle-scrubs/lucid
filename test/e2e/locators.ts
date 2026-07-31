@@ -44,6 +44,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   awaitingAck: (): Locator => root.locator(hook("awaiting-ack")),
   turnEnded: (): Locator => root.locator(hook("turn-ended")),
   createRunningLog: (): Locator => root.locator(hook("create-running-log")),
+  createAuthFailure: (): Locator => root.locator(hook("create-auth-failure")),
   allOpen: (): Locator => root.locator(hook("all-open")),
   annotation: (): Locator => root.locator(hook("annotation")),
   annotationChip: (): Locator => root.locator(hook("annotation-chip")),
