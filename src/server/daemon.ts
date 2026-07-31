@@ -114,6 +114,11 @@ const DEFAULT_ATTEND_POLL_MS = 1000;
  *  fetch open for the life of the process. */
 const CHOOSER_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** How long `POST /hub/roots` waits for the folder's session count before
+ *  answering without it. The add is already persisted by then; this only
+ *  decides whether the human is told how many sessions came with it. */
+const ROOT_COUNT_BUDGET_MS = 2000;
+
 /** A new artifact's filename, as `POST /hub/create` accepts it: a plain
  *  `.html` basename, never a path - the project root comes from the listing
  *  and the two are joined here, so no traversal is expressible. */
@@ -1276,17 +1281,40 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const chosen = await chooseFolder(body, "Choose a folder to scan for Lucid sessions");
     if ("res" in chosen) return chosen.res;
     await addRoot(chosen.dir, rootsPath);
+    // ANSWER on the persist, do not wait on the scan (07#14). Scanning a home
+    // directory was measured at ~16s, and the root is already saved before it
+    // starts - so any client-side abort reported failure for an add that had
+    // in fact succeeded, and the human re-added a folder the hub already had.
+    // The count is not what makes the add real; the persist is.
+    //
+    // The sessions themselves arrive on the listing stream, which the notify
+    // below triggers and which every window reads anyway - so nothing is lost
+    // by not counting them here, and the scan no longer sits between a human
+    // and their answer.
     // Counted from a scan of JUST this folder - `listAll` would union the
     // registry and report sessions that have nothing to do with the pick.
-    const found = await scanRoots([chosen.dir]);
-    // Connected shells are told by the listing stream, not by this response:
-    // adding a root changes what EVERY window sees, not just this one's.
-    void notify();
+    // The count is what tells the human they picked the right folder, so it is
+    // worth waiting a moment for - but only a moment. Scanning a home
+    // directory was measured at ~16s, and the root is already persisted before
+    // it starts, so a client that gave up reported failure for an add that had
+    // in fact succeeded (07#14).
+    const scan = scanRoots([chosen.dir]).catch(() => []);
+    const counted = await Promise.race([
+      scan.then((found) => found.length),
+      new Promise<undefined>((r) => setTimeout(() => r(undefined), ROOT_COUNT_BUDGET_MS)),
+    ]);
+    // Either way the sessions arrive on the listing stream, which every window
+    // reads - so a slow scan costs the count, never the add.
+    void scan.then(() => notify());
     // The EFFECTIVE set, not just the persisted additions: this is what the
     // shell displays as "looking in", and answering with the additions alone
     // made it forget the defaults (`~/dev`, the scratchpads) it still scans.
     return json(
-      { root: chosen.dir, roots: await scanRootSet(), found: found.length },
+      {
+        root: chosen.dir,
+        roots: await scanRootSet(),
+        ...(counted !== undefined ? { found: counted } : {}),
+      },
       200,
       noStore,
     );
