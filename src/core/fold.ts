@@ -145,6 +145,37 @@ const LIFECYCLE = new Set([
   "session_ended",
 ]);
 
+/**
+ * Which events may return a blocked `wait` (`lastNonAckSeq`, read by
+ * `runWait`). Stated as a SET rather than as "everything that is not an
+ * `agent_ack`, because the negative form silently enrolls every event added
+ * later. Presence traffic in particular must never wake a waiter: an ack is
+ * an agent talking about itself, not feedback for anyone, and a turn-lifecycle
+ * event is the same kind of thing. Under the old form, adding one would have
+ * woken every agent blocked on the log - agent B returning `waiting` because
+ * agent A's turn ended.
+ *
+ * Adding an event type here is a decision about whether it is worth waking a
+ * blocked agent for. That is exactly the decision that should be hard to make
+ * by accident.
+ */
+const WAKES_WAIT: ReadonlySet<LogEvent["t"]> = new Set<LogEvent["t"]>([
+  "session_opened",
+  "session_resumed",
+  "session_suspended",
+  "session_ended",
+  "version",
+  "annotation",
+  "fork",
+  "prompt",
+  "agent_reply",
+  "revert",
+  "question",
+  "question_answered",
+  "review_resolved",
+  "review_reopened",
+]);
+
 const statusFromLifecycle = (t: string): SessionStatus => {
   switch (t) {
     case "session_opened":
@@ -202,7 +233,7 @@ const deriveSessionHistory = (events: readonly LogEvent[]): SessionHistoryRecord
  */
 export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   const highSeq = maxSeq(events);
-  const lastNonAckSeq = maxSeq(events.filter((e) => e.t !== "agent_ack"));
+  const lastNonAckSeq = maxSeq(events.filter((e) => WAKES_WAIT.has(e.t)));
 
   if (events.length === 0) {
     return {

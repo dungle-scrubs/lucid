@@ -489,6 +489,45 @@ describe("foldLog segments", () => {
     expect(foldLog([opened, ack, ended]).agentWorking).toBeNull();
   });
 
+  test("only wake-relevant events advance the seq `wait` blocks on", () => {
+    // `wait` blocks past ack-only deltas by comparing its cursor to
+    // lastNonAckSeq. That used to mean "every event that is not an agent_ack",
+    // which silently enrolls every event type added afterwards - so presence
+    // traffic would wake every blocked agent the day it shipped. The set is
+    // explicit now; this pins both directions (plan 08 M3, D-019).
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+
+    // An ack is an agent talking about itself, not feedback for anyone.
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", covers: 1 } as never);
+    expect(foldLog([opened, ack]).lastNonAckSeq).toBe(1);
+
+    // Real feedback and real output both wake a waiter, as they always have.
+    const annotation = ev({
+      t: "annotation",
+      seq: 3,
+      id: "n1",
+      version: 1,
+      target: { kind: "element", fingerprint: "f", domPath: "li", snippet: "<li>x</li>" },
+      note: "look here",
+    } as never);
+    expect(foldLog([opened, ack, annotation]).lastNonAckSeq).toBe(3);
+
+    const reply = ev({ t: "agent_reply", seq: 4, id: "r1", text: "done" } as never);
+    expect(foldLog([opened, ack, annotation, reply]).lastNonAckSeq).toBe(4);
+
+    // ...and a second ack after them still moves nothing.
+    const ack2 = ev({ t: "agent_ack", seq: 5, id: "a2", covers: 3 } as never);
+    expect(foldLog([opened, ack, annotation, reply, ack2]).lastNonAckSeq).toBe(4);
+  });
+
   test("suspension and approval are NOT evidence a turn ended", () => {
     // The guard on the rule above. Suspension fires on "no subscribers and
     // status active" - a human closing the viewer while an agent legitimately
