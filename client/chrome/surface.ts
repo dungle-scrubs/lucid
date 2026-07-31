@@ -157,6 +157,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
         messages: [...payload.messages],
         questions: [...(payload.questions ?? [])],
         agentWorking: payload.agentWorking ?? null,
+        lastTurnEnd: payload.lastTurnEnd ?? null,
         // The agent has spoken once a working window opens or a new version
         // lands - either closes the delivered-waiting gap. Cleared here rather
         // than on a timer, so an unattended send (nothing ever acks) keeps

@@ -535,10 +535,13 @@ _Avoid_: request id (that names the record's own id), correlation id, span id.
   operational). Resolved: a bare "log" is the review's; the other is always
   "the hub log". The code needed this before the glossary did - `daemon.ts`
   names its option `hubLogPath` because `logPath` was taken.
-- **A turn has no representable end.** A **turn** starts when feedback reaches
-  the agent, and the log records that (an **ack**). Nothing records it
-  stopping: the working window clears only when the agent produces a
-  **version**, a reply, or a question, so a turn that ends without output
-  leaves the viewer claiming the agent is still responding. The hub knows when
-  a turn it spawned exits and appends nothing; an interactive turn ends
-  silently. Unresolved - plan 08 owns it.
+- **A turn's end is recorded only when Lucid owns the turn.** Resolved for the
+  spawned case (plan 08): the hub mints a **turn id**, exports it as
+  `LUCID_TURN_ID` so the turn's own **acks** carry it, and appends
+  `agent_turn_ended` when the process exits - so a turn that produces nothing
+  still closes its window. An INTERACTIVE turn, one a human drives in their own
+  terminal, has no turn id: its acks are anonymous and nothing appends a
+  terminator when it stops. That gap is deliberate, not an oversight - Lucid
+  observes such a turn and does not own it, and an agent that is killed could
+  not append anything either way. The viewer's ten-minute stale state is the
+  answer for both.

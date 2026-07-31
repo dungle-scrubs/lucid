@@ -387,6 +387,11 @@ export interface SessionState {
   /** Open "agent is working" window from the fold: set by the agent's ack on
    *  taking delivery, closed by its next output (version, reply, question). */
   agentWorking: AgentWorking | null;
+  /** The last turn that ended producing nothing, when that is the newest thing
+   *  to say. The window closing is correct - the agent is not working - but on
+   *  its own it leaves feedback marked delivered with no outcome, which reads
+   *  as if the turn never happened. */
+  lastTurnEnd: { reason: string; code?: string; at: string } | null;
   /** Agents currently blocked in `wait` on this session - someone is
    *  listening. Distinct from agentWorking: listening is presence before
    *  delivery, working is the window after it. */
@@ -522,6 +527,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     notices: [],
     status: "active",
     agentWorking: null,
+    lastTurnEnd: null,
     agentsListening: 0,
     lastAttendant: null,
     attendantPresence: null,

@@ -214,6 +214,11 @@ export interface WaitPayload {
   readonly warnings?: readonly Warning[];
   /** Open "agent is working" window (ack received, no output yet). */
   readonly agentWorking?: AgentWorking;
+  /** The last turn to end producing nothing, when that is the newest thing to
+   *  say. Closing a window silently loses the outcome: feedback marked
+   *  delivered with no idea what came of it. Absent once real output follows,
+   *  because the output IS the answer. */
+  readonly lastTurnEnd?: { readonly reason: string; readonly code?: string; readonly at: string };
   /** Every harness session that ever touched this artifact (D18); omitted
    *  when no event carries a stamp (old logs, stampless writers). */
   readonly sessionHistory?: readonly SessionHistoryRecord[];

@@ -195,6 +195,7 @@ const WORKING_STALE_MS = 10 * 60 * 1000;
  */
 const WorkingIndicator = () => {
   const working = useSession((s) => s.agentWorking);
+  const lastTurnEnd = useSession((s) => s.lastTurnEnd);
   const status = useSession((s) => s.status);
   const awaitingAck = useSession((s) => s.awaitingAck);
   const listening = useSession((s) => s.agentsListening);
@@ -224,6 +225,25 @@ const WorkingIndicator = () => {
     return (
       <div data-test="awaiting-ack" data-transient={transient} className="text-[12px]">
         <span className={transient ? "shimmer text-fg/40" : "text-fg-muted"}>{text}</span>
+      </div>
+    );
+  }
+
+  // A turn ended and produced nothing. The window is correctly closed - the
+  // agent is not working - but saying nothing at all leaves the human with
+  // feedback marked delivered and no idea what came of it, which reads as if
+  // the turn never happened. Distinct from the stale line below: this is a
+  // turn we KNOW ended, not one that went quiet (OQ-3).
+  if (!working && lastTurnEnd && status === "active") {
+    const ended =
+      lastTurnEnd.reason === "usage_limit"
+        ? "The agent stopped: it is over its usage limit."
+        : lastTurnEnd.reason === "failed"
+          ? "The agent's turn failed without producing anything."
+          : "The agent read your feedback and finished without changing anything.";
+    return (
+      <div data-test="turn-ended" data-reason={lastTurnEnd.reason} className="text-[12px]">
+        <span className="text-fg-muted">{ended}</span>
       </div>
     );
   }

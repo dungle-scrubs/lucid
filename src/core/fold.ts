@@ -134,6 +134,23 @@ export interface FoldedState {
    *  output (version, reply, question) within the segment. A re-ack may add
    *  declared intent; the window's `since` stays the first ack's time. */
   readonly agentWorking: AgentWorking | null;
+  /**
+   * The last turn to END without any agent output following it, if any.
+   *
+   * A terminator CLOSES the working window, which is right - the agent is not
+   * working. But closing it silently loses the outcome: a turn that read the
+   * feedback and correctly decided nothing was needed looks identical to one
+   * that never happened, and the human is left with feedback marked delivered
+   * and no idea what came of it. This is what lets the viewer say so (OQ-3).
+   *
+   * Null once any output follows: a version or reply IS the answer, and needs
+   * no separate line saying a turn ended.
+   */
+  readonly lastTurnEnd: {
+    readonly reason: string;
+    readonly code?: string;
+    readonly at: string;
+  } | null;
   /** seq of the session_opened that begins the current segment. */
   readonly segmentStartSeq: number;
 }
@@ -255,6 +272,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       deliveredThroughSeq: 0,
       lastAgentOutputSeq: 0,
       agentWorking: null,
+      lastTurnEnd: null,
       segmentStartSeq: 0,
     };
   }
@@ -439,6 +457,8 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   // reopen one: an agent that finished and then flushed a queued progress
   // line would otherwise look alive again, forever.
   const closedTurns = new Set<string>();
+  // The last turn to end with nothing after it (see FoldedState.lastTurnEnd).
+  let lastTurnEnd: { reason: string; code?: string; at: string } | null = null;
   // Delivery cursors (D20). They are NOT the working window: that opens and
   // closes, while these only ever advance within the segment.
   let deliveredThroughSeq = 0;
@@ -471,6 +491,9 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       const turn = e.turnId ?? ANON;
       openTurns.delete(turn);
       closedTurns.add(turn);
+      // Real output answers the feedback, so a "the turn ended" line would be
+      // noise beside it.
+      lastTurnEnd = null;
     } else if (e.t === "agent_turn_ended") {
       // The turn said it stopped. Only the turn it names, and only the window:
       // a turn that produced nothing has answered nothing, so no cursor moves
@@ -479,6 +502,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       // somebody else's window.
       openTurns.delete(e.turnId);
       closedTurns.add(e.turnId);
+      lastTurnEnd = { reason: e.reason, ...(e.code ? { code: e.code } : {}), at: e.at };
     } else if (e.t === "session_ended") {
       // A session that is over has no turn running. Without this the window
       // opened by an ack survived forever whenever the turn produced no
@@ -536,6 +560,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     deliveredThroughSeq,
     lastAgentOutputSeq,
     agentWorking,
+    lastTurnEnd,
     segmentStartSeq,
   };
 };
