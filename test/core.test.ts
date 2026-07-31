@@ -489,6 +489,128 @@ describe("foldLog segments", () => {
     expect(foldLog([opened, ack, ended]).agentWorking).toBeNull();
   });
 
+  test("two overlapping turns keep their own windows", () => {
+    // Lucid permits two agents on one artifact - sessionHistory records every
+    // harness that touched it, and attend guards against resuming a
+    // conversation a human already has open. With ONE scalar working state,
+    // turn A's output closed turn B's window and A's late ack reopened a
+    // window after A had finished (plan 08, D-013).
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ackA = ev({
+      t: "agent_ack",
+      seq: 2,
+      id: "a1",
+      turnId: "A",
+      at: "2026-01-01T00:00:00Z",
+    } as never);
+    const ackB = ev({
+      t: "agent_ack",
+      seq: 3,
+      id: "b1",
+      turnId: "B",
+      at: "2026-01-01T00:05:00Z",
+    } as never);
+
+    // Both turns are working; the viewer paints the OLDEST open one.
+    const both = foldLog([opened, ackA, ackB]);
+    expect(both.agentWorking?.since).toBe("2026-01-01T00:00:00Z");
+
+    // A finishes. B is still working, so the window must stay open - and it
+    // must now be B's, not A's.
+    const replyA = ev({ t: "agent_reply", seq: 4, id: "rA", text: "done", turnId: "A" } as never);
+    const afterA = foldLog([opened, ackA, ackB, replyA]);
+    expect(afterA.agentWorking).not.toBeNull();
+    expect(afterA.agentWorking?.since).toBe("2026-01-01T00:05:00Z");
+
+    // B finishes too. Now nothing is working.
+    const replyB = ev({ t: "agent_reply", seq: 5, id: "rB", text: "done", turnId: "B" } as never);
+    expect(foldLog([opened, ackA, ackB, replyA, replyB]).agentWorking).toBeNull();
+  });
+
+  test("a late ack cannot reopen a turn that already finished", () => {
+    // An agent that finished and then flushed a queued progress line would
+    // otherwise look alive again - forever, since nothing else closes it.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1", turnId: "A" } as never);
+    const reply = ev({ t: "agent_reply", seq: 3, id: "r1", text: "done", turnId: "A" } as never);
+    const lateAck = ev({
+      t: "agent_ack",
+      seq: 4,
+      id: "a2",
+      turnId: "A",
+      progress: { label: "still auditing" },
+    } as never);
+
+    expect(foldLog([opened, ack, reply, lateAck]).agentWorking).toBeNull();
+  });
+
+  test("an ack with no turnId is the anonymous turn, exactly as before", () => {
+    // The additive claim: every log written before turn identity folds the way
+    // it always did. Untagged output closes the untagged turn.
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ack = ev({ t: "agent_ack", seq: 2, id: "a1" } as never);
+    expect(foldLog([opened, ack]).agentWorking).not.toBeNull();
+
+    const reply = ev({ t: "agent_reply", seq: 3, id: "r1", text: "done" } as never);
+    expect(foldLog([opened, ack, reply]).agentWorking).toBeNull();
+  });
+
+  test("a turn id from a previous segment means nothing in this one", () => {
+    // Turn ids are segment-scoped. A reopen folds from its own
+    // session_opened, so an id reused across the boundary cannot close - or
+    // resurrect - anything in the new segment.
+    const s1 = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const ackS1 = ev({ t: "agent_ack", seq: 2, id: "a1", turnId: "A" } as never);
+    const ended = ev({ t: "session_ended", seq: 3 } as never);
+    const s2 = ev({
+      t: "session_opened",
+      seq: 4,
+      segment: 2,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s2/v1.html",
+    } as never);
+    // Same id, new segment: it opens a NEW turn rather than reopening the old.
+    const ackS2 = ev({ t: "agent_ack", seq: 5, id: "a2", turnId: "A" } as never);
+
+    const state = foldLog([s1, ackS1, ended, s2, ackS2]);
+    expect(state.agentWorking).not.toBeNull();
+    expect(state.segment).toBe(2);
+  });
+
   test("only wake-relevant events advance the seq `wait` blocks on", () => {
     // `wait` blocks past ack-only deltas by comparing its cursor to
     // lastNonAckSeq. That used to mean "every event that is not an agent_ack",

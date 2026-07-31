@@ -1,30 +1,49 @@
 # Lucid
 
-Read your agent's work as a document, not a wall of markdown.
+Correct a plan everywhere it is wrong, in one pass.
 
-Your coding agent writes its answer as an HTML document instead of printing
-markdown to your terminal: real headings, tables that look like tables, and
-diagrams and wireframes built from elements you can point at. Lucid serves it
-in a browser, where you mark up any element or phrase and your notes go back
-carrying the thing you pointed at. When the agent revises, that same document
-updates in place.
+Mark every place that needs to change, a single word here, an entire section
+there, as many of them as the plan actually needs, and send them together. One
+pass later the plan reflects all of it, in place, with what changed sitting
+where you left your notes. Planning stops being a negotiation you conduct one
+message at a time.
 
-A terminal has one format for everything. A migration plan, a schema, an audit,
-all of it arrives as the same monospace wall, with no hierarchy to skim and
-nothing to select. By the third revision you are re-reading paragraphs you
-already approved to find the two lines that changed, and somewhere in there you
-stop absorbing any of it.
+A plan is never right the first time, and a conversation makes you fix it one
+message at a time: a quote each to say which part you meant, and a re-read each
+of everything the agent regenerated around the part you cared about. That
+serialization is most of what planning costs you. You can walk away mid-review
+and pick it up next week, or on another machine, because the document and every
+revision of it live in your repo.
 
-<!-- Proof slot: replace this block with docs/media/side-by-side.png - the same
-     migration plan as terminal markdown on the left, as a Lucid artifact on
-     the right. Caption: "The same plan, both ways." -->
+How it works, briefly: your agent writes the plan as an HTML document rather
+than a chat message, Lucid serves it in a browser, and your marks travel back
+attached to exactly what you pointed at. Claude Code, Codex and pi all drive
+the same artifact, so changing agents costs you none of it.
 
-```sh
-# Ask your agent for a plan. It writes the document and opens it:
-lucid open .lucid/plan.html
-# You mark up step 3 in the browser. Your agent picks the note up here:
-lucid wait .lucid/plan.html --since <cursor>
-```
+<!-- Proof slot: replace this comment with docs/media/side-by-side.png - the
+     same plan as terminal markdown on the left, as a Lucid artifact on the
+     right. Caption: "The same plan, both ways." -->
+
+## What you use it for
+
+- **Planning and specs.** The main case. Annotate until it is ready, however
+  many passes that takes, then hand the agent a plan you actually believe.
+- **UI wireframing.** Wireframes are real elements, so you correct a control
+  by pointing at that control.
+- **Understanding.** Visual organization that prose cannot carry, and you can
+  mark the one word you did not follow and ask about it in place.
+
+## What it is not
+
+- **Not a docs site.** It reviews one artifact at a time. It does not host,
+  search or organize a body of documentation.
+- **Not diff or version control.** It keeps every revision of the artifact,
+  but git still owns your source and this is not a merge tool.
+- **Not an agent or a model.** It drives harnesses you already have and writes
+  nothing itself.
+- **Not for reviewing code.** The artifact is a document your agent authored,
+  not your repository's source. Line comments on a pull request are a
+  different job.
 
 ## Install
 
@@ -116,9 +135,10 @@ the mode follows you there.
 ## Harnesses
 
 A harness is any agent CLI. Both modes above run on Claude Code, Codex or pi;
-`docs/LAUNCHER.md` carries the model and effort flag mapping for each. The
-whole integration surface is this CLI and a JSON payload, with no SDK and no
-plugin, so anything that can run a subprocess and read JSON can drive a review.
+[docs/LAUNCHER.md](docs/LAUNCHER.md) carries the model and effort flag mapping
+for each. The whole integration surface is this CLI and a JSON payload, with no
+SDK and no plugin, so anything that can run a subprocess and read JSON can
+drive a review.
 
 Lucid needs a recipe for a harness only to *start* or *resume* turns itself.
 Reviews work without any registry at all.
@@ -142,7 +162,7 @@ Reviews work without any registry at all.
 
 `spawn` authors a new artifact; `resume` drives a turn on an existing one.
 `models` and `efforts` become the pickers in the panel - without them, the
-harness simply gets none. Absent file means the launcher is off.
+harness gets none. Absent file means the launcher is off.
 
 `~/.lucid/settings.json` holds Lucid's own preferences:
 

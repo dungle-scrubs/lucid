@@ -104,6 +104,10 @@ export interface SessionOpenedEvent extends BaseEvent {
 /** A new artifact version (watcher-driven). */
 export interface VersionEvent extends BaseEvent {
   readonly t: "version";
+  /** Which TURN produced this, when the writer knows (D-013). Output closes
+   *  the turn that produced it, not whatever window happened to be open.
+   *  Absent means the anonymous turn - every pre-turnId log. */
+  readonly turnId?: string;
   readonly version: number;
   readonly hash: string;
   readonly path: string;
@@ -186,6 +190,10 @@ export interface PromptEvent extends BaseEvent {
 /** An agent reply posted via `lucid wait --reply`. */
 export interface AgentReplyEvent extends BaseEvent {
   readonly t: "agent_reply";
+  /** Which TURN produced this, when the writer knows (D-013). Output closes
+   *  the turn that produced it, not whatever window happened to be open.
+   *  Absent means the anonymous turn - every pre-turnId log. */
+  readonly turnId?: string;
   readonly id: string;
   readonly text: string;
   /** Which harness session spoke (D18). */
@@ -225,6 +233,17 @@ export interface AgentAckEvent extends BaseEvent {
    * Absent on those and on pre-D20 logs, which therefore claim no delivery.
    */
   readonly covers?: number;
+  /**
+   * Which TURN this ack belongs to. Lucid permits two agents on one artifact,
+   * and the fold keys working state by this so one turn's output cannot close
+   * another's window (D-013). Segment-scoped: an id from an earlier segment
+   * means nothing in this one.
+   *
+   * Optional, and absent is not a gap: an ack without it belongs to the
+   * ANONYMOUS turn, which is how every log written before this folds. That is
+   * what keeps the change additive rather than a migration.
+   */
+  readonly turnId?: string;
   /** Which harness session took delivery (D18). */
   readonly attendant?: AttendantStamp;
 }
@@ -249,6 +268,10 @@ export interface RevertEvent extends BaseEvent {
 /** A question the agent poses to the human, optionally anchored to an element. */
 export interface QuestionEvent extends BaseEvent {
   readonly t: "question";
+  /** Which TURN produced this, when the writer knows (D-013). Output closes
+   *  the turn that produced it, not whatever window happened to be open.
+   *  Absent means the anonymous turn - every pre-turnId log. */
+  readonly turnId?: string;
   readonly id: string;
   readonly text: string;
   /** Optional `data-lucid-id` of the element the question is about. */

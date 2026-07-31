@@ -419,11 +419,26 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     }
   }
 
-  // Presence: an ack opens the working window; any agent output closes it.
-  // Separate pass so the content fold above stays untouched by metadata.
-  let workingSince: string | null = null;
-  let workingIntent: "revise" | "reply" | undefined;
-  let workingProgress: AgentProgress | undefined;
+  // Presence: an ack opens a turn's working window; that turn's own output
+  // closes it. Separate pass so the content fold above stays untouched by
+  // metadata.
+  //
+  // Keyed by TURN, not one scalar. Lucid permits two agents on one artifact,
+  // and with a single window turn A's output closed turn B's, while A's late
+  // ack reopened a window after A had finished (D-013). An ack with no
+  // `turnId` belongs to the ANONYMOUS turn, which is how every log written
+  // before this folds - so nothing historical changes shape.
+  const ANON = "";
+  interface OpenTurn {
+    since: string;
+    intent?: "revise" | "reply";
+    progress?: AgentProgress;
+  }
+  const openTurns = new Map<string, OpenTurn>();
+  // Turns that have already closed in this segment. A late ack MUST NOT
+  // reopen one: an agent that finished and then flushed a queued progress
+  // line would otherwise look alive again, forever.
+  const closedTurns = new Set<string>();
   // Delivery cursors (D20). They are NOT the working window: that opens and
   // closes, while these only ever advance within the segment.
   let deliveredThroughSeq = 0;
@@ -435,20 +450,27 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       if (typeof e.covers === "number" && Number.isInteger(e.covers)) {
         deliveredThroughSeq = Math.max(deliveredThroughSeq, e.covers);
       }
+      const turn = e.turnId ?? ANON;
+      // A turn that already ended stays ended for the segment.
+      if (closedTurns.has(turn)) continue;
       // A re-ack refines the open window (declared intent + fan-out progress)
       // without restarting its clock; the first ack's time is when delivery
       // happened. Progress is last-writer-wins so `done` can climb across acks.
-      workingSince = workingSince ?? e.at;
-      if (e.intent) workingIntent = e.intent;
+      const open = openTurns.get(turn) ?? { since: e.at };
+      if (e.intent) open.intent = e.intent;
       // Merge, don't replace: fields arrive on separate acks (start with
       // --total, later bump --done), so each refines the report rather than
       // wiping the ones it omits.
-      if (e.progress) workingProgress = { ...workingProgress, ...e.progress };
+      if (e.progress) open.progress = { ...open.progress, ...e.progress };
+      openTurns.set(turn, open);
     } else if (e.t === "version" || e.t === "agent_reply" || e.t === "question") {
       lastAgentOutputSeq = e.seq;
-      workingSince = null;
-      workingIntent = undefined;
-      workingProgress = undefined;
+      // Output closes the turn that PRODUCED it, not whatever happened to be
+      // open. Untagged output closes the anonymous turn, which is the only
+      // one a pre-turnId writer can have opened.
+      const turn = e.turnId ?? ANON;
+      openTurns.delete(turn);
+      closedTurns.add(turn);
     } else if (e.t === "session_ended") {
       // A session that is over has no turn running. Without this the window
       // opened by an ack survived forever whenever the turn produced no
@@ -465,16 +487,25 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       // Deliberately NOT lastAgentOutputSeq: ending a session produced no
       // output, and advancing that cursor would mark undelivered feedback
       // answered (payload.ts reads it for exactly that).
-      workingSince = null;
-      workingIntent = undefined;
-      workingProgress = undefined;
+      //
+      // EVERY turn, not one: the session is over, so none of them is running.
+      for (const id of openTurns.keys()) closedTurns.add(id);
+      openTurns.clear();
     }
   }
-  const agentWorking = workingSince
+  // The OLDEST open turn is the one the viewer paints. With one turn - which
+  // is every artifact today - this is exactly what a single scalar produced,
+  // so nothing renders differently. With two, the oldest is the one the human
+  // has been waiting on longest, which is the one worth a clock.
+  const oldestOpen = [...openTurns.values()].reduce<OpenTurn | null>(
+    (oldest, t) => (oldest === null || t.since < oldest.since ? t : oldest),
+    null,
+  );
+  const agentWorking = oldestOpen
     ? {
-        since: workingSince,
-        ...(workingIntent ? { intent: workingIntent } : {}),
-        ...(workingProgress ? { progress: workingProgress } : {}),
+        since: oldestOpen.since,
+        ...(oldestOpen.intent ? { intent: oldestOpen.intent } : {}),
+        ...(oldestOpen.progress ? { progress: oldestOpen.progress } : {}),
       }
     : null;
 
