@@ -9,7 +9,13 @@ import {
   legacyAnswerFields,
 } from "./question-draft.ts";
 import type { Notify, SessionStorage, SessionStore } from "./store.ts";
-import { approveBlockedReason, hasComposerDraft, toWireImages, uuid } from "./store.ts";
+import {
+  approveBlockedReason,
+  hasComposerDraft,
+  sentMarkShown,
+  toWireImages,
+  uuid,
+} from "./store.ts";
 import type { DecisionReply } from "../shared/decision.ts";
 import type { Surface } from "./surface.ts";
 import type { Transport, UploadedAsset } from "./transport.ts";
@@ -587,6 +593,27 @@ export const createActions = (ctx: ActionsCtx) => {
     pushHighlights();
   };
 
+  /** Flip the session default for SENT marks (the header's highlighter
+   *  toggle). Clears the per-card exceptions: the toggle reads as "show all" /
+   *  "hide all", and exceptions surviving it would make it neither. */
+  const toggleSentMarks = (): void => {
+    const next = !get().showSentMarks;
+    set({ showSentMarks: next, sentMarkOverrides: {} });
+    storage.persistShowSentMarks(next);
+    pushHighlights();
+  };
+
+  /** One card's show/hide link. Showing also reveals: the human just asked
+   *  "where is this?" and the mark may be far off-screen, so painting it
+   *  without going there answers only half the question. */
+  const toggleSentMark = (id: string): void => {
+    const s = get();
+    const shown = sentMarkShown(s, id);
+    set({ sentMarkOverrides: { ...s.sentMarkOverrides, [id]: !shown } });
+    pushHighlights();
+    if (!shown) toOverlay({ source: "lucid-chrome", type: "reveal-annotation", id });
+  };
+
   const REOPEN_ENDED_MSG =
     "This session has ended - reopening needs the agent to run `lucid open` again.";
 
@@ -967,14 +994,9 @@ export const createActions = (ctx: ActionsCtx) => {
     set({ viewingVersion: v });
     // Clear marks and drop out of targeting first: the current annotations do
     // not belong on a historical snapshot, and read mode is what a snapshot is.
-    toOverlay({
-      source: "lucid-chrome",
-      type: "highlight",
-      annotations: [],
-      queued: [],
-      pending: null,
-      showTargets: false,
-    });
+    // pushHighlights owns that rule (it reads viewingVersion), so the toggles
+    // that stay clickable during history view cannot undo this clear.
+    pushHighlights();
     toOverlay({ source: "lucid-chrome", type: "swap", html });
   };
 
@@ -1053,6 +1075,8 @@ export const createActions = (ctx: ActionsCtx) => {
     approveReview,
     queueDecision,
     toggleTargets,
+    toggleSentMarks,
+    toggleSentMark,
     reopenReview,
     loadSessions,
     switchToSession,

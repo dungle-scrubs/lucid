@@ -130,7 +130,7 @@ test("a queued card takes the NEXT number, on its card and on its mark alike", a
 }) => {
   await openViewer(page, cli);
 
-  // One annotation SENT: card 1, mark 1.
+  // One annotation SENT: card 1 - its mark quiet by default, its number kept.
   await queueNote(page, 'li[data-lucid-id="step-backfill"]', "Nightly is fine for the backfill.");
   await on(page).sendQueue().click();
   await expect(on(page).annotation()).toHaveCount(1);
@@ -146,8 +146,14 @@ test("a queued card takes the NEXT number, on its card and on its mark alike", a
   await expect(queued).toHaveAttribute("aria-label", "Queued annotation 2");
 
   // The overlay repaints on the queue push; settled() is what makes reading
-  // both badges a statement about the final frame.
+  // the badges a statement about the final frame. The sent mark is quiet by
+  // default, but its number is not up for grabs: unsent work always paints,
+  // and the queued badge must wear "2" even while "1" is invisible.
   await overlaySettled(page);
+  await expect(surfaceOf(page).locator(".badge")).toHaveText(["2"]);
+
+  // The header default brings the sent mark back, and both surfaces agree.
+  await on(page).toggleSentMarks().click();
   await expect(surfaceOf(page).locator(".badge")).toHaveText(["1", "2"]);
 });
 

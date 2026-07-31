@@ -54,6 +54,10 @@ test("an annotation on the third identical cell marks the third, not the first",
   await on(page).addToQueue().click();
   await on(page).sendQueue().click();
   await expect(on(page).annotation()).toHaveCount(1);
+  // Sent marks are quiet by default; this test measures where the mark LANDS,
+  // so the card's link paints it first.
+  await on(page).toggleMark().click();
+  await expect(surface.locator("[data-annotation-id]")).toHaveCount(1);
 
   const cell = await third.boundingBox();
   const mark = await surface.locator("[data-annotation-id]").first().boundingBox();

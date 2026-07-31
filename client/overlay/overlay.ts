@@ -142,9 +142,19 @@ export class LucidOverlay extends LitElement {
   private committed: PayloadAnnotationLike[] = [];
   private queuedAnchors: QueuedAnchorLike[] = [];
   private pendingAnchors: readonly Anchor[] = [];
+  /** Ids of committed annotations whose marks paint. Null = the chrome sent no
+   *  list (an older chrome), which means all of them - the pre-quiet contract. */
+  private shownCommitted: ReadonlySet<string> | null = null;
   /** Read mode when false: no marks painted, no targeting. The chrome owns this
    *  and restates it on every highlight, so the two can never drift. */
   private showTargets = true;
+  /** Focus minted by `reveal-annotation` (the palette jump, a card's keyboard
+   *  open). A card HOVER is cleared by the card's own mouseleave, but a reveal
+   *  has no counterpart on the chrome side - and focus now paints a quiet sent
+   *  mark, so an uncleared reveal would pin that mark on forever while its
+   *  card still offers "Show in artifact". Transient by design: the first real
+   *  pointer move that is not over the revealed mark ends it. */
+  private revealFocusId: string | null = null;
   private hoverAnnotationId: string | null = null;
   private lastMouse: { x: number; y: number } | null = null;
   private rafPending = false;
@@ -319,11 +329,17 @@ export class LucidOverlay extends LitElement {
 
   private readonly onMouseMove = (e: MouseEvent): void => {
     this.lastMouse = { x: e.clientX, y: e.clientY };
-    this.updateHover(e.target as Element | null, e.clientX, e.clientY);
+    this.updateHover(e.target as Element | null, e.clientX, e.clientY, true);
   };
 
-  /** Recompute the hover outline + reverse-highlight for a cursor position. */
-  private updateHover(target: Element | null, x: number, y: number): void {
+  /**
+   * Recompute the hover outline + reverse-highlight for a cursor position.
+   * `fromPointer` marks a REAL mouse move: only that may end a reveal focus.
+   * The synthetic refresh (scroll/resize re-derivation) runs during the
+   * reveal's own smooth scroll, and letting it clear the focus would unpaint
+   * the mark in the middle of scrolling to it.
+   */
+  private updateHover(target: Element | null, x: number, y: number, fromPointer = false): void {
     if (!this.showTargets) return; // read mode: no hover outline, no reverse-highlight
     if (!target || this.isOwn(target) || this.isStructural(target)) {
       this.hoverRect = null;
@@ -331,10 +347,22 @@ export class LucidOverlay extends LitElement {
       this.hoverRect = target.getBoundingClientRect();
     }
     const hit = this.annotationAt(x, y);
+    if (fromPointer && this.revealFocusId !== null && hit !== this.revealFocusId) {
+      // The human has moved on from the revealed mark: the reveal's focus ends
+      // (a quiet mark unpaints), whatever the pointer found instead.
+      if (this.focusedId === this.revealFocusId) this.focusedId = null;
+      this.revealFocusId = null;
+      this.scheduleReposition();
+    }
     if (hit !== this.hoverAnnotationId) {
       this.hoverAnnotationId = hit;
       this.focusedId = hit;
       post({ source: "lucid-overlay", type: "annotation-hover", id: hit });
+      // Focus is part of the paint set now (a quiet sent mark paints while
+      // focused), so a focus change here must rebuild the markers - they are
+      // only rebuilt in reposition, and a mark painted for a focus that has
+      // ended would otherwise linger until the next scroll.
+      this.scheduleReposition();
     }
   }
 
@@ -352,10 +380,12 @@ export class LucidOverlay extends LitElement {
   private readonly onMouseLeaveDoc = (): void => {
     this.lastMouse = null;
     this.hoverRect = null;
+    this.revealFocusId = null;
     if (this.hoverAnnotationId !== null) {
       this.hoverAnnotationId = null;
       this.focusedId = null;
       post({ source: "lucid-overlay", type: "annotation-hover", id: null });
+      this.scheduleReposition(); // a focus-only sent mark must unpaint with the focus
     }
   };
 
@@ -681,12 +711,18 @@ export class LucidOverlay extends LitElement {
    *  rect (viewport-relative), so it lands wherever the anchor currently paints. */
   private revealAnnotation(id: string): void {
     this.focusedId = id;
+    this.revealFocusId = id;
     this.reposition();
     const m = this.markers.find((mk) => mk.id === id);
     const r = m?.rects[0];
     if (!r) return; // orphaned or unresolved: the focus glow is all there is to give
     const y = window.scrollY + r.top - window.innerHeight / 2 + r.height / 2;
     window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
+  }
+
+  /** Does this sent annotation's mark paint right now? */
+  private paintsCommitted(id: string): boolean {
+    return this.shownCommitted === null || this.shownCommitted.has(id) || this.focusedId === id;
   }
 
   /** Topmost committed annotation whose outline contains the point, if any. */
@@ -789,6 +825,7 @@ export class LucidOverlay extends LitElement {
       this.queuedAnchors = [...msg.queued];
       this.pendingAnchors = msg.pendingList ?? (msg.pending ? [msg.pending] : []);
       this.showTargets = msg.showTargets;
+      this.shownCommitted = msg.shownCommitted === undefined ? null : new Set(msg.shownCommitted);
       this.reposition();
     } else if (msg.type === "swap") {
       this.swapArtifact(msg.html);
@@ -798,8 +835,10 @@ export class LucidOverlay extends LitElement {
     } else if (msg.type === "diff-goto") {
       this.gotoHunk(msg.hunkId);
     } else if (msg.type === "focus-annotation") {
-      // An empty id clears the focus (chrome card mouse-out).
+      // An empty id clears the focus (chrome card mouse-out). Chrome-driven
+      // focus has its own lifecycle, so it takes over from any reveal.
       this.focusedId = msg.id || null;
+      this.revealFocusId = null;
       this.reposition();
     } else if (msg.type === "reveal-annotation") {
       this.revealAnnotation(msg.id);
@@ -881,6 +920,11 @@ export class LucidOverlay extends LitElement {
     for (const a of this.committed) {
       if (!a.resolved) continue; // orphaned annotations have no live anchor to paint
       n += 1; // per annotation, never per target: the badge matches the card's number
+      // Quiet sent marks skip the paint but NEVER the count - the number
+      // belongs to the record, and hiding #1 must not renumber #2's badge off
+      // its own card. A focused mark paints while hidden: hovering the card
+      // (or revealing from it) is the human asking to see this one, briefly.
+      if (!this.paintsCommitted(a.id)) continue;
       pushAll(a.id, "committed", n, a.targets ?? [a.target]);
     }
     this.queuedAnchors.forEach((q, i) => {

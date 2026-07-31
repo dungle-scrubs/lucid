@@ -189,6 +189,8 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   themeToggle: (): Locator => root.locator(hook("theme-toggle")),
   threadViewport: (): Locator => root.locator(hook("thread-viewport")),
   thumb: (): Locator => root.locator(hook("thumb")),
+  toggleMark: (): Locator => root.locator(hook("toggle-mark")),
+  toggleSentMarks: (): Locator => root.locator(hook("toggle-sent-marks")),
   toggleTargets: (): Locator => root.locator(hook("toggle-targets")),
   unsentMessage: (): Locator => root.locator(hook("unsent-message")),
   unsentMessages: (): Locator => root.locator(hook("unsent-messages")),
