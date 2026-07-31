@@ -156,7 +156,7 @@ describe("the unit suite's own containment", () => {
   });
 
   test("the files that reach hub discovery are known", async () => {
-    // Not a rule, a record. Three unit files reach discovery and only one ever
+    // Not a rule, a record. Four unit files reach discovery and only one ever
     // pinned a port; if that set grows, the preload is what is protecting the
     // newcomer, and whoever removes it should see what they are removing.
     const reaching: string[] = [];
@@ -169,7 +169,12 @@ describe("the unit suite's own containment", () => {
       const text = await readFile(join(REPO, "test", name), "utf8");
       if (/runDaemon|hubInfo|hubAlive|discoverLiveServer/.test(text)) reaching.push(name);
     }
-    expect(reaching.sort()).toEqual(["attend.test.ts", "daemon.test.ts", "launch.test.ts"]);
+    expect(reaching.sort()).toEqual([
+      "attend.test.ts",
+      "cli-trace.test.ts",
+      "daemon.test.ts",
+      "launch.test.ts",
+    ]);
   });
 });
 

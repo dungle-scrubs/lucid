@@ -1,7 +1,9 @@
 import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
+import { cliRequestId } from "../server/observe.ts";
 import type { EventInput, LogEventType } from "./events.ts";
 import { appendEvent } from "./log.ts";
 import type { SessionPaths } from "./paths.ts";
+import { REQUEST_ID_HEADER } from "./request-id.ts";
 
 /**
  * Deliver a CLI-authored event to the session. The one rule every command must
@@ -35,7 +37,10 @@ export const deliver = async (paths: SessionPaths, input: EventInput): Promise<D
     const { t: _t, ...body } = input;
     await loopbackFetch(live.port, `${live.base ?? ""}${route}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      // The turn's WRITE joins the click that spawned it (plan 07 #9): without
+      // the trace, the record for a reply is an orphan line no grep can tie to
+      // the request that caused the turn.
+      headers: { "content-type": "application/json", [REQUEST_ID_HEADER]: cliRequestId() },
       body: JSON.stringify(body),
     });
     return { live: true };

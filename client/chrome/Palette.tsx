@@ -1,8 +1,9 @@
 import { Command } from "cmdk";
 import { matchScore } from "./list.ts";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { addRoot, closeTab, setPaletteOpen, useHub } from "./hub.ts";
+import { projectName } from "./naming.ts";
 import { groupCls, itemCls, SessionListGroups } from "./SessionList.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, useShell } from "./shell.ts";
@@ -47,15 +48,46 @@ const AnnotationItems = ({ handle }: { readonly handle: SessionHandle }) => {
   );
 };
 
+/**
+ * What the "Add a project folder…" row reports, or null when there is nothing
+ * to say (the human cancelled the chooser).
+ *
+ * The row states its own outcome because there is nowhere else left to state
+ * it: the pick screen's add-folder control - which this copy comes from - was
+ * deleted, and the row's old answer to a chooser-less platform was to blank the
+ * active tab and land there anyway. A success is worth saying too, since the
+ * question a human has after picking is "was that the right folder", which
+ * "added" does not answer.
+ */
+export const addFolderStatus = (outcome: Awaited<ReturnType<typeof addRoot>>): string | null => {
+  if ("needsPath" in outcome) return "This build has no folder chooser on this platform.";
+  if ("error" in outcome) return outcome.error;
+  if ("cancelled" in outcome) return null;
+  const { root, found } = outcome.added;
+  // 0 found is the confusing case, and silence about WHY was the whole problem:
+  // a project folder holds no reviews because agents write artifacts into their
+  // own scratchpad, which Lucid already scans. Say that, rather than leaving the
+  // human to conclude their work is lost.
+  return found === 0
+    ? `Watching ${projectName(root)}, but no reviews are stored in it. Agents usually write artifacts to their session scratchpad - those are already listed here, under the project they were about.`
+    : `Found ${found} ${found === 1 ? "review" : "reviews"} in ${projectName(root)}.`;
+};
+
 export const Palette = () => {
   const open = useHub((s) => s.paletteOpen);
   const activeKey = useShell((s) => s.activeKey);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** The last thing the add-folder row has to say. Cleared on each open: a
+   *  count from the previous pick would read as this one's. */
+  const [added, setAdded] = useState<string | null>(null);
 
   const active = activeKey !== null ? getSession(activeKey) : undefined;
 
   useEffect(() => {
-    if (open) inputRef.current?.focus();
+    if (open) {
+      inputRef.current?.focus();
+      setAdded(null);
+    }
   }, [open]);
 
   if (!open) return null;
@@ -148,22 +180,30 @@ export const Palette = () => {
           <SessionListGroups includeOpen onDone={close} />
 
           {/* Pointing Lucid at a new folder is a command, not only a pick-screen
-              affordance (D-007): the chooser opens directly; if this platform
-              has no chooser, land on the pick screen, whose AddFolder carries
-              the typed-path fallback. */}
+              affordance (D-007) - and now the ONLY place the control exists, so
+              the palette stays open across the pick and reports what came back
+              (addFolderStatus). Whatever the folder held has already joined the
+              session groups above by then: the hub broadcasts the new listing. */}
           <Command.Group heading="Shell" className={groupCls}>
             <Command.Item
               data-test="palette-add-folder"
               value="add a project folder watch scan"
               className={itemCls}
-              onSelect={run(() => {
-                void addRoot().then((outcome) => {
-                  if ("needsPath" in outcome) useShell.setState({ activeKey: null });
-                });
-              })}
+              onSelect={() => {
+                setAdded(null);
+                void addRoot().then((outcome) => setAdded(addFolderStatus(outcome)));
+              }}
             >
               Add a project folder…
             </Command.Item>
+            {added !== null ? (
+              <div
+                data-test="palette-add-folder-status"
+                className="px-3 pb-2 text-[10px] leading-relaxed text-fg-faint"
+              >
+                {added}
+              </div>
+            ) : null}
           </Command.Group>
         </Command.List>
       </Command>

@@ -1,6 +1,8 @@
 import { NotFoundError, ValidationError } from "../errors.ts";
 import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
+import { cliRequestId } from "../server/observe.ts";
 import { parseCursor, sliceAfterCursor } from "./cursor.ts";
+import { REQUEST_ID_HEADER } from "./request-id.ts";
 import {
   foldLog,
   type AnnotationRecord,
@@ -47,6 +49,10 @@ const RECONNECT_BASE_MS = 200;
 const RECONNECT_MAX_MS = 3000;
 
 const createWaker = (port: number, base = ""): Waker => {
+  // Resolved once, not per attempt: a dropped stream reconnects, and minting a
+  // fresh id each time would scatter one wait's subscriptions across unrelated
+  // traces. A spawned turn holds the click's id, so its wake stream joins it.
+  const trace = cliRequestId();
   let pending = false;
   let resolveWake: (() => void) | null = null;
   let closed = false;
@@ -70,6 +76,7 @@ const createWaker = (port: number, base = ""): Waker => {
         // closes immediately - read as an endless wake/reconnect loop.
         const res = await loopbackFetch(port, `${base}/__lucid/events?role=agent`, {
           signal: controller.signal,
+          headers: { [REQUEST_ID_HEADER]: trace },
         });
         if (!res.ok || !res.body) throw new Error(`no stream (HTTP ${res.status})`);
         const reader = res.body.getReader();
