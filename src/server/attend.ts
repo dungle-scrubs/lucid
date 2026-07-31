@@ -862,6 +862,13 @@ export const createArtifactPrompt = (artifact: string, request: string, title?: 
     "reviewer can annotate one part of it. A mockup of a screen is a WIREFRAME",
     "(labelled regions, hatched placeholders carrying their spec), not finished",
     "visual design, unless the request asks for a specific design.",
+    // Prose is half of what gets marked up, so the writing bar is stated here
+    // beside the visual one rather than left to the skill. Orwell's rules,
+    // compressed: a reviewer pays attention for every word before the claim.
+    "Write to Orwell's six rules: no figure of speech you are used to seeing in",
+    "print; no long word where a short one will do; cut every word that can go;",
+    "active voice over passive; an everyday English word over a jargon or",
+    "foreign one; and break any of these sooner than write something barbarous.",
     // The same narration channel a revise turn uses (revisePrompt): only the
     // turn knows its phase, and the create dialog is otherwise a bare clock
     // for however many minutes authoring takes. Works before `lucid open` -
