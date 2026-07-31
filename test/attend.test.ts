@@ -4,6 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/events.ts";
+import { foldLog } from "../src/core/fold.ts";
 import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
@@ -283,6 +284,84 @@ describe("session host presence", () => {
       expect(host.agentsListening()).toBe(1);
       await res.body?.cancel();
       expect(host.agentsListening()).toBe(0);
+    } finally {
+      host.stop();
+    }
+  });
+
+  test("a live subscriber counts as activity, so idle timers cannot suspend a watched session", async () => {
+    const host = createSessionHost(paths, { getPort: () => 0, onEnded: () => {} });
+    try {
+      const res = await host.handle(
+        new Request("http://127.0.0.1/__lucid/events", { headers: { host: "127.0.0.1" } }),
+      );
+      const connected = host.lastActivityAt();
+      await sleep(25);
+      // Advances with no request in between: the open stream IS the activity.
+      expect(host.lastActivityAt()).toBeGreaterThan(connected);
+      await res.body?.cancel();
+      const idle = host.lastActivityAt();
+      await sleep(25);
+      expect(host.lastActivityAt()).toBe(idle); // static again once nobody watches
+    } finally {
+      host.stop();
+    }
+  });
+
+  test("suspend refuses while a subscriber is connected, and reports eviction rightness", async () => {
+    const host = createSessionHost(paths, { getPort: () => 0, onEnded: () => {} });
+    try {
+      const res = await host.handle(
+        new Request("http://127.0.0.1/__lucid/events", { headers: { host: "127.0.0.1" } }),
+      );
+      // The idle owner's check-to-append gap: with a subscriber connected the
+      // suspend must refuse, or it closes the stream somebody just opened.
+      expect(await host.suspend()).toBe(false);
+      let state = foldLog((await readEvents(paths.logPath)).events);
+      expect(state.status).toBe("active");
+      await res.body?.cancel();
+      expect(await host.suspend()).toBe(true);
+      state = foldLog((await readEvents(paths.logPath)).events);
+      expect(state.status).toBe("suspended");
+      // Already suspended: nothing to append, but evicting an unwatched mount
+      // on a closed log is still right.
+      expect(await host.suspend()).toBe(true);
+    } finally {
+      host.stop();
+    }
+  });
+
+  test("a subscriber connecting to a suspended log resumes it and reconciles the artifact", async () => {
+    // The overnight loop this heals: idle-suspend evicted the mount, the tab's
+    // stream reconnected and remounted, and nothing ever appended
+    // session_resumed - so wait reported "paused" and the watcher refused
+    // versions at a session a human was actively watching.
+    await appendEvent(paths.logPath, { t: "session_suspended" });
+    // A revision that landed while the log wrongly said suspended.
+    const revised =
+      '<!doctype html><html><head><title>t</title></head><body><h1 data-lucid-id="h">Hello again</h1></body></html>';
+    await writeFile(join(dir, "plan.html"), revised);
+    // AND the damage the old refuse-after-clobber bug left behind: the serve
+    // cache already equals the revised artifact while the log still says v1.
+    // A cache comparison reads that as "no change"; the reconcile must judge
+    // against committed history to mint the missing version.
+    await writeFile(paths.currentHtml, revised);
+    const host = createSessionHost(paths, { getPort: () => 0, onEnded: () => {} });
+    try {
+      await host.handle(
+        new Request("http://127.0.0.1/__lucid/events", { headers: { host: "127.0.0.1" } }),
+      );
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const { events } = await readEvents(paths.logPath);
+        const resumed = events.some((e) => e.t === "session_resumed");
+        const version = events.some((e) => e.t === "version" && e.version === 2);
+        if (resumed && version) break;
+        if (Date.now() > deadline) {
+          throw new Error(`no resume/reconcile: ${events.map((e) => e.t).join(",")}`);
+        }
+        await sleep(25);
+      }
     } finally {
       host.stop();
     }
@@ -789,7 +868,9 @@ describe("hub attend mode", () => {
         },
       }),
     );
-    const { relayableTail } = await import("../src/server/attend.ts");
+    const { relayableTail, relayableReply, codexFinalMessage } = await import(
+      "../src/server/attend.ts"
+    );
     const onlyNarration = [
       "[anchors] fingerprint p#ab12 -> 1 match, exact",
       "   [attend] plan: spawn - spawning",
@@ -797,7 +878,43 @@ describe("hub attend mode", () => {
     expect(relayableTail(onlyNarration)).toBe("");
     // And the call site really uses it - a revert to the raw tail reds here.
     const src = await readFile(join(import.meta.dir, "..", "src/server/attend.ts"), "utf8");
-    expect(src).toContain("const tail = relayableTail(output);");
+    expect(src).toContain("const tail = relayableReply(output);");
+
+    // codex framing: the final message is what follows the LAST
+    // `tokens used` / `<count>` footer - never the diff echo before it, which
+    // is what a byte-slice tail delivered as "the agent's reply".
+    const codexRun = [
+      "OpenAI Codex v0.145.0",
+      "user",
+      "Review feedback arrived on plan.html.",
+      "codex",
+      "Applying the renumbering now.",
+      "@@ -1288,7 +1607,7 @@",
+      '-        <div class="section-index">10</div>',
+      '+        <div class="section-index">11</div>',
+      '         <div class="section-title">',
+      "",
+      "tokens used",
+      "319,662",
+      "Updated plan.html with the renumbered sections.",
+      "",
+      "The review stays open.",
+    ].join("\n");
+    expect(codexFinalMessage(codexRun)).toBe(
+      "Updated plan.html with the renumbered sections.\n\nThe review stays open.",
+    );
+    expect(relayableReply(codexRun)).toBe(
+      "Updated plan.html with the renumbered sections.\n\nThe review stays open.",
+    );
+    // Two appended runs: the LAST footer wins.
+    const twoRuns = `${codexRun}\nOpenAI Codex v0.145.0\ncodex\nSecond turn.\ntokens used\n12,004\nReplied in Lucid. No artifact change was needed.`;
+    expect(codexFinalMessage(twoRuns)).toBe("Replied in Lucid. No artifact change was needed.");
+    // A run with no recognizable footer falls back to the bounded tail.
+    expect(relayableReply("just some words from a quieter harness")).toBe(
+      "just some words from a quieter harness",
+    );
+    // A spoken "tokens used" with no count line is not a footer.
+    expect(codexFinalMessage("we discussed\ntokens used\nby the model earlier")).toBeUndefined();
   });
 
   test("a live create turn broadcasts create-progress - the POSITIVE signal (M2.1)", async () => {
@@ -805,9 +922,33 @@ describe("hub attend mode", () => {
     // observed in. The dialog's old two-minute accusation existed precisely
     // because nothing said this.
     const slowStub = join(dir, "stub-slow.ts");
+    // The stub narrates a phase the way `lucid progress` does before `lucid
+    // open` exists: a direct append to the child session's log, stamped with
+    // the child identity runSpawn exported - the heartbeat only relays labels
+    // OWNED by the session it spawned, so a leftover process from a deleted
+    // artifact of the same name can never narrate this creation. A second,
+    // unowned ack proves the filter.
     await writeFile(
       slowStub,
-      `await new Promise((r) => setTimeout(r, 2500));
+      `const artifact = process.argv[3];
+const mine = JSON.stringify({
+  t: "agent_ack",
+  id: "phase-1",
+  progress: { label: "writing the sections" },
+  attendant: { harness: "slow", sessionId: process.env.LUCID_SESSION_ID },
+  seq: 1,
+  at: new Date().toISOString(),
+});
+const stale = JSON.stringify({
+  t: "agent_ack",
+  id: "phase-stale",
+  progress: { label: "A STALE TURN'S PHASE" },
+  attendant: { harness: "slow", sessionId: "00000000-dead-4000-8000-000000000000" },
+  seq: 2,
+  at: new Date().toISOString(),
+});
+await Bun.write(artifact.replace(/\\.html$/, "") + "/log.ndjson", mine + "\\n" + stale + "\\n");
+await new Promise((r) => setTimeout(r, 4000));
 await Bun.write(${JSON.stringify(createMarker)}, "done");
 `,
     );
@@ -835,11 +976,14 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
       prompt: "take your time",
     });
 
-    // Read frames until a progress frame for this artifact arrives.
+    // Read frames until a progress frame CARRYING THE STUB'S PHASE LABEL
+    // arrives (the first beat can race the stub's cold start, so an unlabeled
+    // frame is kept as evidence but the loop reads on).
     let buf = "";
     const deadline = Date.now() + 8000;
     let progress: Record<string, unknown> | undefined;
-    while (Date.now() < deadline && progress === undefined) {
+    let labeled: Record<string, unknown> | undefined;
+    while (Date.now() < deadline && labeled === undefined) {
       const { value, done } = await reader!.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
@@ -849,7 +993,10 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
       for (const frame of frames.slice(0, -1)) {
         if (!frame.startsWith("event: create-progress")) continue;
         const line = frame.split("\n").find((l) => l.startsWith("data: "));
-        if (line) progress = JSON.parse(line.slice(6)) as Record<string, unknown>;
+        if (line) {
+          progress = JSON.parse(line.slice(6)) as Record<string, unknown>;
+          if (typeof progress.label === "string") labeled = progress;
+        }
       }
     }
     expect(progress).toBeDefined();
@@ -857,6 +1004,8 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
     // The trace joins the progress frame to the click's request record.
     expect(progress?.trace).toMatch(/^[a-f0-9]{16}$/);
     expect(progress?.elapsedMs as number).toBeGreaterThan(0);
+    // The turn's own narration rode the heartbeat to the dialog.
+    expect(labeled?.label).toBe("writing the sections");
 
     // And it STOPS when the turn does - a heartbeat nobody clears would beat
     // at nobody for the rest of the process's life, and asserting only that
@@ -868,7 +1017,12 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
     while (Date.now() < doneBy && !(await Bun.file(createMarker).exists())) await sleep(50);
     expect(await Bun.file(createMarker).exists()).toBe(true);
     let after = "";
-    const quietUntil = Date.now() + 5000;
+    // A beat that FIRED before the turn's cleanup can still be in flight (or
+    // sitting in the stream buffer) when the marker appears - drop everything
+    // in a short grace window so the silence assertion judges behavior, not
+    // socket timing.
+    const graceUntil = Date.now() + 1200;
+    const quietUntil = graceUntil + 5000;
     // ONE pending read carried across iterations: racing a fresh read against
     // a sleep orphans the loser, and the orphan eats the next chunk - which
     // would make this assertion pass by losing the very frames it looks for.
@@ -883,7 +1037,9 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
       if (!next.hit) continue;
       pending = null;
       if (next.r.done) break;
-      if (next.r.value) after += decoder.decode(next.r.value, { stream: true });
+      if (next.r.value && Date.now() >= graceUntil) {
+        after += decoder.decode(next.r.value, { stream: true });
+      }
     }
     expect(after).not.toContain("event: create-progress");
     await reader!.cancel().catch(() => {});

@@ -30,6 +30,7 @@ import { scratchpadProject } from "../core/scratchpad.ts";
 import { projectRoot } from "../core/sessions.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
 import { detectUsageLimit } from "../launch/limits.ts";
+import { readEvents } from "../core/log.ts";
 import { runSpawn } from "../launch/launcher.ts";
 import { buildArgv, loadRegistry, normalizeHarness, resolveRecipe } from "../launch/recipes.ts";
 import {
@@ -430,9 +431,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           void (async () => {
             // Same semantics as a dedicated server's idle-suspend: subscribers
             // learn of it, the log records it, memory is released. The log is
-            // untouched otherwise - reopening refolds.
-            await host.suspend();
-            await evict(id);
+            // untouched otherwise - reopening refolds. A refused suspend means
+            // a subscriber connected inside the check-to-append gap - the
+            // session is live again, so it stays mounted.
+            if (await host.suspend()) await evict(id);
           })();
         }
       },
@@ -915,14 +917,54 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // standing in for - and it carries the trace, so a progress frame and
       // the click's request record join with one grep.
       const startedAt = Date.now();
+      // The turn's own phase one-liner (`lucid progress --label`, the same
+      // channel a revise turn narrates through). Pre-open, `deliver` falls
+      // back to a direct append, so the labels are already sitting in the
+      // child's log - the heartbeat reads the newest one and carries it, and
+      // the dialog stops being a bare clock. Owned by SESSION ID, not by
+      // timestamp: the spawned child runs under childSessionId (runSpawn
+      // exports it) and `lucid progress` stamps its acks with it, so a
+      // leftover process from a deleted artifact of the same name can never
+      // narrate this creation, however its clock reads.
+      const lastPhaseLabel = async (): Promise<string | undefined> => {
+        const { events } = await readEvents(paths.logPath).catch(() => ({ events: [] as const }));
+        for (let i = events.length - 1; i >= 0; i -= 1) {
+          const e = events[i];
+          if (e === undefined) return undefined;
+          if (e.t !== "agent_ack") continue;
+          if (e.attendant?.sessionId !== childSessionId) continue;
+          const label = e.progress?.label;
+          if (label !== undefined) return label;
+        }
+        return undefined;
+      };
+      // `ended` gates the ASYNC gap: clearInterval cannot cancel a callback
+      // whose log read is already in flight, and a late frame after
+      // `create-failed` would put the dead turn back into "authoring" in the
+      // dialog forever (noteCreateProgress clears a failure by design).
+      // `reading` keeps the 2s beats from stacking reads on a slow disk -
+      // an older read finishing last must not regress the displayed label.
+      let ended = false;
+      let reading = false;
       const heartbeat = setInterval(() => {
-        broadcast(
-          `event: create-progress\ndata: ${JSON.stringify({
-            artifact,
-            trace: observation.trace,
-            elapsedMs: Date.now() - startedAt,
-          })}\n\n`,
-        );
+        if (reading) return;
+        reading = true;
+        void (async () => {
+          try {
+            const label = await lastPhaseLabel();
+            if (ended) return;
+            broadcast(
+              `event: create-progress\ndata: ${JSON.stringify({
+                artifact,
+                trace: observation.trace,
+                elapsedMs: Date.now() - startedAt,
+                ...(label !== undefined ? { label } : {}),
+              })}\n\n`,
+            );
+          } finally {
+            reading = false;
+          }
+        })();
       }, CREATE_PROGRESS_MS);
       // A heartbeat must never hold the process open: the hub outlives any one
       // turn, but an interval nobody unrefs would keep a bare `node`-style
@@ -963,6 +1005,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           void reportFailure("spawn-error");
         })
         .finally(() => {
+          // `ended` before anything else: it closes the async gap
+          // clearInterval cannot (a heartbeat mid-read resumes after this and
+          // must drop its frame). It is set before reportFailure's broadcast
+          // can land, so no progress frame ever follows a create-failed one.
+          ended = true;
           clearInterval(heartbeat);
           heartbeats.delete(heartbeat);
           creating.delete(artifact);

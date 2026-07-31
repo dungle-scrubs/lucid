@@ -133,22 +133,64 @@ export interface AttendVerdict {
 /** How much of a quiet turn's own output is relayed as its reply. */
 const SILENT_TURN_TAIL = 600;
 
-/**
- * What of a quiet turn's output may be relayed to the human as the agent's
- * words. Lucid's OWN narration is not the agent's words: `LUCID_VERBOSE`
- * propagates into the spawned turn (it inherits the environment) and that
- * turn's stderr is the attend log this reads, so without the filter the tail
- * can be `[anchors] …` lines - delivered as an `agent_reply`, shown in the
- * viewer as something the agent said, and recorded permanently in log.ndjson.
- */
-export const relayableTail = (output: string): string =>
+/** Upper bound on an EXTRACTED final message (a real message, not a slice -
+ *  but log.ndjson holds it forever, so a pathological one is still bounded). */
+const FINAL_MESSAGE_MAX = 4000;
+
+/** Lucid's OWN narration is not the agent's words: `LUCID_VERBOSE` propagates
+ *  into the spawned turn (it inherits the environment) and that turn's stderr
+ *  is the attend log this reads, so without the filter a relay can carry
+ *  `[anchors] …` lines - delivered as an `agent_reply`, shown in the viewer as
+ *  something the agent said, and recorded permanently in log.ndjson. */
+const stripNarration = (output: string): string =>
   output
     .split("\n")
     .filter((line) => !/^\[(anchors|attend|verbose)\]/.test(line.trimStart()))
     .join("\n")
-    .trim()
-    .slice(-SILENT_TURN_TAIL)
     .trim();
+
+/**
+ * What of a quiet turn's output may be relayed to the human as the agent's
+ * words, when the harness's framing is unknown: the filtered tail, bounded.
+ */
+export const relayableTail = (output: string): string =>
+  stripNarration(output).slice(-SILENT_TURN_TAIL).trim();
+
+/**
+ * The final agent message of a codex-exec run, or undefined when the output
+ * does not carry codex's framing. codex ends every run with a footer of
+ * exactly `tokens used` / `<count>` on their own lines, and everything AFTER
+ * the count is the agent's closing message, verbatim.
+ *
+ * Scanned from the end: the attend log accumulates runs, so the last valid
+ * footer belongs to the run that just finished. A "tokens used" the agent
+ * happened to SAY fails the count-line check and the scan keeps walking back.
+ */
+export const codexFinalMessage = (output: string): string | undefined => {
+  const marker = "\ntokens used\n";
+  for (let at = output.lastIndexOf(marker); at !== -1; at = output.lastIndexOf(marker, at - 1)) {
+    const after = output.slice(at + marker.length);
+    const newline = after.indexOf("\n");
+    if (newline === -1) continue;
+    if (!/^[\d,]+$/.test(after.slice(0, newline).trim())) continue;
+    const message = after.slice(newline + 1).trim();
+    return message === "" ? undefined : message;
+  }
+  return undefined;
+};
+
+/**
+ * The words a quiet turn gets relayed under: the harness's own final message
+ * when the output carries a framing this engine knows how to read, else the
+ * bounded tail. The tail was the whole story once, and a 600-byte slice of a
+ * codex run cut mid-diff - raw HTML delivered as the agent's reply, rendered
+ * as markdown code blocks in the viewer.
+ */
+export const relayableReply = (output: string): string => {
+  const final = codexFinalMessage(output);
+  if (final === undefined) return relayableTail(output);
+  return stripNarration(final).slice(0, FINAL_MESSAGE_MAX).trim();
+};
 
 export const attendReason = (input: AttendDecisionInput): AttendVerdict => {
   if (input.pendingFeedbackSeqs.length === 0) {
@@ -409,7 +451,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
    * forever on a turn that finished and answered: the agent's own words go in
    * as its reply, so the loop closes where the human is looking.
    */
-  const reportSilentTurn = async (through: number): Promise<void> => {
+  const reportSilentTurn = async (through: number, outputFrom: number): Promise<void> => {
     // Anything the turn itself recorded is a better answer than its stdout.
     // OUTPUT events only: the delivery ack is ours, written before the turn
     // even started, and counting it made every turn look like it had spoken.
@@ -418,14 +460,14 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       (e) => e.seq > through && (e.t === "version" || e.t === "agent_reply" || e.t === "question"),
     );
     if (spoke) return;
-    const output = await readFile(paths.attendLog, "utf8").catch(() => "");
-    // Lucid's OWN narration is not the agent's words. LUCID_VERBOSE propagates
-    // into the spawned turn (it inherits the environment), and that turn's
-    // stderr is this very file - so without this filter the last 600
-    // characters of a quiet turn can be `[anchors] …` lines, delivered into
-    // the artifact's log as an agent_reply and shown to the human in the
-    // viewer as something the agent said. Permanently, in log.ndjson.
-    const tail = relayableTail(output);
+    // THIS run's bytes only: the attend log accumulates runs, and scanning the
+    // whole file let a run with no recognizable footer relay an EARLIER run's
+    // final message - plus everything after it - as this turn's words.
+    const output = (await readFile(paths.attendLog, "utf8").catch(() => "")).slice(outputFrom);
+    // The harness's final message when the output framing is known (codex),
+    // else the narration-filtered tail - see relayableReply for why a raw
+    // byte slice of the log is not something to put in the human's transcript.
+    const tail = relayableReply(output);
     if (tail === "") return;
     await deliver(paths, {
       t: "agent_reply",
@@ -563,6 +605,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       /* presence is advisory; a failed ack must not cancel the delivery */
     });
     log(`attend ${paths.name}: delivering feedback via "${resolved.name}" resume`);
+    // Where this run's output will start in the shared attend log, so a
+    // silent-turn relay reads THIS turn's words and never an earlier run's.
+    const outputFrom = await stat(paths.attendLog).then(
+      (s) => s.size,
+      () => 0,
+    );
     const code = await runSpawn(argv, cwd, paths.attendLog, {
       harness: record.harness,
       sessionId: record.sessionId,
@@ -577,7 +625,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       deliveredUpTo = target;
       firstPendingAt = undefined;
       fails = 0;
-      await reportSilentTurn(target);
+      await reportSilentTurn(target, outputFrom);
       return;
     }
     fails += 1;
@@ -814,6 +862,12 @@ export const createArtifactPrompt = (artifact: string, request: string, title?: 
     "reviewer can annotate one part of it. A mockup of a screen is a WIREFRAME",
     "(labelled regions, hatched placeholders carrying their spec), not finished",
     "visual design, unless the request asks for a specific design.",
+    // The same narration channel a revise turn uses (revisePrompt): only the
+    // turn knows its phase, and the create dialog is otherwise a bare clock
+    // for however many minutes authoring takes. Works before `lucid open` -
+    // the CLI appends straight to the log when no server answers, and the
+    // hub's heartbeat reads the newest label from there.
+    `As you work, report each phase as you enter it: \`lucid progress ${shellArg(artifact)} --label "<what you are doing, in a few words>"\` - for example "planning the sections", "writing the comparison table", "final read-through". The human watches these one-liners while they wait.`,
     "Then open it for review by running:",
     `  lucid open ${shellArg(artifact)}`,
     `Write only ${artifact}; do not modify other files.`,

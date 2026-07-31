@@ -234,10 +234,37 @@ const WorkingIndicator = () => {
   const mm = Math.floor(elapsed / 60000);
   const ss = String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0");
 
+  const progress = working.progress;
+  // A lone turn narrating its phases (`lucid progress --label`, no counts):
+  // the ordinary working line with the turn's own one-liner beneath it. NOT
+  // the fan-out rendering - dots and "agents in progress" would claim
+  // parallelism a single codex/claude turn does not have.
+  if (progress && !stale && progress.total === undefined) {
+    return (
+      <div
+        data-test="agent-working"
+        data-stale="false"
+        className="flex flex-col gap-0.5 text-[12px]"
+      >
+        <div className="flex items-baseline gap-1.5">
+          <span className="shimmer text-fg/40">
+            {working.intent === "revise" ? "Updating the artifact…" : "Agent responding…"}
+          </span>
+          <span className="text-[11px] text-fg-faint tabular-nums">
+            ({mm}:{ss})
+          </span>
+        </div>
+        {progress.label ? (
+          <span data-test="working-phase" className="text-[11px] text-fg-muted">
+            {progress.label}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
   // Fan-out: the agent self-reported parallel subagents working the revision.
   // A distinct rendering (agent-colored dots + counts) so the human reads "many
   // agents in flight, this will take a bit" rather than a lone spinner.
-  const progress = working.progress;
   if (progress && !stale) {
     const { label, total, done } = progress;
     return (
@@ -278,8 +305,9 @@ const WorkingIndicator = () => {
     >
       {stale ? (
         <span className="text-fg-muted">
-          {progress ? "agents picked up" : "agent picked up"} your feedback {mm}m ago · no response
-          yet
+          {/* Plural only on a declared fan-out; a label-only narration is one turn. */}
+          {progress?.total ? "agents picked up" : "agent picked up"} your feedback {mm}m ago · no
+          response yet
         </span>
       ) : (
         <>

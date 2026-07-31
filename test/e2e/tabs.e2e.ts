@@ -1,7 +1,7 @@
 import { chord, hook, on } from "./locators.ts";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   makeCli,
@@ -100,6 +100,69 @@ test("?s= for a session the listing does not name yet is retried, not dropped", 
   // that finally names it is honored - no second navigation, no click on a row.
   await expect(on(page).shellTab()).toHaveCount(1);
   await expect(on(page).shellTab()).toContainText("Migration plan");
+});
+
+test("the tab context menu renames the document and closes the tab", async ({ page }) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  clis.push(opened.cli);
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await expect(on(page).shellTab()).toContainText("Migration plan");
+
+  // Right-click opens the app's own menu - never the browser's.
+  await on(page).shellTab().click({ button: "right" });
+  await expect(on(page).tabMenu()).toBeVisible();
+  await on(page).tabMenuRename().click();
+  const input = on(page).tabRename();
+  await expect(input).toBeVisible();
+  await input.fill("Rollout plan");
+  await input.press("Enter");
+
+  // The tab retitles in place (no reopen)...
+  await expect(on(page).shellTab()).toContainText("Rollout plan");
+  // ...because the DOCUMENT was renamed: the artifact's own <title> is the one
+  // name every surface reads, so the rename is an edit in version history.
+  await expect
+    .poll(async () =>
+      (await readFile(opened.cli.artifact, "utf8")).includes("<title>Rollout plan</title>"),
+    )
+    .toBe(true);
+  // And COMMITTED, not merely written: a 200 whose commit was silently
+  // swallowed leaves history and the served page a version behind.
+  await expect(on(page).version()).toContainText("v2");
+
+  // Close through the same menu; the session behind it keeps running.
+  await on(page).shellTab().click({ button: "right" });
+  await expect(on(page).tabMenu()).toBeVisible();
+  await on(page).tabMenuClose().click();
+  await expect(on(page).shellTab()).toHaveCount(0);
+});
+
+test("a tab group is never narrower than its project eyebrow", async ({ page }) => {
+  hub = await startHub();
+  // A deliberately tiny tab label, so the eyebrow (the temp project's
+  // basename, ~16 characters) is the wider of the two and the frame's
+  // minimum-width rule is what is actually under test.
+  const opened = await openIntoHub(hub, planNamed("A"));
+  clis.push(opened.cli);
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  const label = on(page).groupLabel();
+  await expect(label).toBeVisible();
+  const out = await label.evaluate((el) => {
+    const frame = el.closest('[data-test="tab-group"]');
+    if (!frame) return { truncated: true, fits: false };
+    const f = frame.getBoundingClientRect();
+    const l = el.getBoundingClientRect();
+    return { truncated: el.scrollWidth > el.clientWidth, fits: l.right <= f.right + 1 };
+  });
+  // Untruncated AND inside its own frame: the invisible in-flow twin is what
+  // guarantees both, since the straddling heading cannot size the frame.
+  expect(out.truncated).toBe(false);
+  expect(out.fits).toBe(true);
 });
 
 test("a closed boot tab does not resurrect on the next listing snapshot", async ({ page }) => {

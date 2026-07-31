@@ -781,6 +781,13 @@ const CreateDialogBody = () => {
                   authoring {name}… {Math.floor(elapsed / 60)}:
                   {String(elapsed % 60).padStart(2, "0")}
                 </span>
+                {/* The turn's own phase one-liner, when it narrates - the same
+                    `lucid progress --label` channel the revise indicator reads. */}
+                {progress?.label ? (
+                  <span data-test="create-phase" className="text-[11px] text-fg-muted">
+                    {progress.label}
+                  </span>
+                ) : null}
                 <span className="text-[11px] text-fg-faint">{authoring}</span>
                 {silent ? null : (
                   <span className="pt-1 text-[11px] text-fg-faint">

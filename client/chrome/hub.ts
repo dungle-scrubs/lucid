@@ -117,7 +117,17 @@ interface HubState {
    *  OTHER turn's heartbeats keep re-arming this dialog's silence detector,
    *  so a hub that stopped reporting THIS turn was never noticed. */
   createProgress: Readonly<
-    Record<string, { readonly trace: string; readonly elapsedMs: number; readonly at: number }>
+    Record<
+      string,
+      {
+        readonly trace: string;
+        readonly elapsedMs: number;
+        readonly at: number;
+        /** The turn's own phase one-liner (`lucid progress --label`), when the
+         *  agent narrated one; the dialog shows it under the clock. */
+        readonly label?: string;
+      }
+    >
   >;
 }
 
@@ -157,7 +167,12 @@ export interface CreateState {
 export const noteCreateProgress = (
   state: CreateState,
   artifact: string,
-  frame: { readonly trace: string; readonly elapsedMs: number; readonly at: number },
+  frame: {
+    readonly trace: string;
+    readonly elapsedMs: number;
+    readonly at: number;
+    readonly label?: string;
+  },
 ): CreateState => ({
   createFailed: state.createFailed?.artifact === artifact ? null : state.createFailed,
   createProgress: { ...state.createProgress, [artifact]: frame },
@@ -184,6 +199,13 @@ export const forgetCreate = (state: CreateState, artifact: string): CreateState 
     createProgress: rest,
   };
 };
+
+/** Optimistic title update after a rename POST lands: the hub's next sessions
+ *  push confirms it, but the tab must not read stale for the seconds between. */
+export const renameSession = (artifact: string, title: string): void =>
+  useHub.setState((s) => ({
+    sessions: s.sessions.map((row) => (row.artifact === artifact ? { ...row, title } : row)),
+  }));
 
 export const setPaletteOpen = (open: boolean): void => useHub.setState({ paletteOpen: open });
 
@@ -502,13 +524,19 @@ export const connectHub = (): void => {
   // own elapsed number cannot answer.
   es.addEventListener("create-progress", (e) => {
     try {
-      const { artifact, trace, elapsedMs } = JSON.parse((e as MessageEvent).data) as {
+      const { artifact, trace, elapsedMs, label } = JSON.parse((e as MessageEvent).data) as {
         artifact: string;
         trace: string;
         elapsedMs: number;
+        label?: string;
       };
       useHub.setState((prev) =>
-        noteCreateProgress(prev, artifact, { trace, elapsedMs, at: Date.now() }),
+        noteCreateProgress(prev, artifact, {
+          trace,
+          elapsedMs,
+          at: Date.now(),
+          ...(typeof label === "string" && label !== "" ? { label } : {}),
+        }),
       );
     } catch {
       /* malformed frame: the next heartbeat is 2s away */

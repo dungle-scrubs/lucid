@@ -8,7 +8,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { ArtifactError, ValidationError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
 import { appendEvent, appendEventsIf, readEvents } from "./log.ts";
@@ -479,6 +479,57 @@ export const openSession = async (
 };
 
 /**
+ * Commit the artifact as a new version when it differs from the last COMMITTED
+ * snapshot - the resume-reconcile rule (D-061), detached from `openSession` so
+ * a server healing a suspended log can run it too.
+ *
+ * Not `commitWatchedChange`: that compares against `current.html`, which is a
+ * serve cache a refused commit may already have clobbered - exactly the state
+ * the old suspend bug left behind (cache == artifact, log still one version
+ * back). The snapshot is committed history and cannot lie that way.
+ */
+export const commitAgainstSnapshot = async (
+  paths: SessionPaths,
+): Promise<{ committed?: LogEvent; warning?: Warning }> => {
+  const html = await readArtifact(paths);
+  const structure = validateStructure(html);
+  if (!structure.ok) {
+    return {
+      warning: {
+        code: "STRUCTURE_INVALID",
+        message: `artifact change not committed: ${structure.reason}`,
+        detail: { path: paths.artifactPath },
+      },
+    };
+  }
+  const before = foldLog((await readEvents(paths.logPath)).events);
+  if (before.status !== "active") {
+    return {
+      warning: {
+        code: "SESSION_NOT_ACTIVE",
+        message: `artifact change not committed: session is ${before.status}`,
+        detail: { path: paths.artifactPath },
+      },
+    };
+  }
+  const baseline = await readSnapshotBytes(paths, before.segment, before.version);
+  if (baseline !== undefined && hashContent(html) === hashContent(baseline)) {
+    // In sync with committed history; make sure the serve cache exists (a
+    // fresh pull drops run/) without minting a version.
+    if ((await readCurrent(paths)) === undefined) atomicWrite(paths.currentHtml, html);
+    return {};
+  }
+  const nextVersion = before.version + 1;
+  const commit = commitVersionBytes(paths, html, before.segment, nextVersion);
+  const events = await appendEventsIf(
+    paths.logPath,
+    (existing) => foldLog(existing).status === "active",
+    [{ t: "version", version: nextVersion, hash: commit.hash, path: commit.path }],
+  );
+  return events.length > 0 ? { committed: events[0] } : {};
+};
+
+/**
  * Commit a watcher-detected artifact change as a new version, if the settled
  * file is structurally valid and actually differs from current.html. Returns
  * the appended `version` event (so callers can broadcast the real persisted
@@ -511,6 +562,23 @@ export const commitWatchedChange = async (
   // status gate is re-checked atomically inside the lock by appendEventsIf so a
   // concurrent suspend/end cannot let this version land in a closed segment.
   const before = foldLog((await readEvents(paths.logPath)).events);
+  // Refuse BEFORE writing bytes on a session that is already not active.
+  // commitVersionBytes overwrites current.html, and doing that ahead of a
+  // refused append made the change permanently uncommittable: every later
+  // comparison saw artifact == current.html and said "no real change", so a
+  // save that landed while the log said suspended silently lost its version
+  // (the orphan snapshot stayed behind as the only evidence). The append's own
+  // guard below still closes the concurrent-suspend race; this is the
+  // deliberate-state case, checked while current.html is still the baseline.
+  if (before.status !== "active") {
+    return {
+      warning: {
+        code: "SESSION_NOT_ACTIVE",
+        message: `artifact change not committed: session is ${before.status}`,
+        detail: { path: paths.artifactPath },
+      },
+    };
+  }
   const nextVersion = before.version + 1;
   const commit = commitVersionBytes(paths, html, before.segment, nextVersion);
   const events = await appendEventsIf(
@@ -518,5 +586,24 @@ export const commitWatchedChange = async (
     (existing) => foldLog(existing).status === "active",
     [{ t: "version", version: nextVersion, hash: commit.hash, path: commit.path }],
   );
-  return events.length > 0 ? { committed: events[0] } : {};
+  if (events.length === 0) {
+    // The race the guard exists for: a suspend/end landed between the bytes
+    // and the append. Put current.html back to the pre-change baseline so the
+    // change is still visible as a change - the resume reconcile (or the next
+    // watcher pass) re-commits it instead of losing it to the clobbered cache.
+    //
+    // ONLY if the cache still holds OUR bytes: a concurrent writer (a resume
+    // reconcile committing newer content) may have replaced current.html
+    // between our write and this rollback, and restoring the old baseline
+    // over ITS commit would desync the served cache from the log. Not a full
+    // transaction - that needs every writer under one lock - but it narrows
+    // the stomp to a read-write gap on a path that is already a lost race.
+    const now = await readCurrent(paths);
+    if (now !== undefined && hashContent(now) === hashContent(html)) {
+      if (current !== undefined) atomicWrite(paths.currentHtml, current);
+      else await rm(paths.currentHtml, { force: true });
+    }
+    return {};
+  }
+  return { committed: events[0] };
 };

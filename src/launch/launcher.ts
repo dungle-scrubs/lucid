@@ -183,7 +183,15 @@ export const revisePrompt = (payload: WaitPayload, artifact: string): string | n
     // the skill's version of this line cannot reach it: without this the
     // viewer can never say "Updating the artifact…" truthfully, and says only
     // "Agent responding…" for every turn.
-    `First, declare which is coming: \`lucid intent ${artifact} revise\` if you are going to change the file, or \`lucid intent ${artifact} reply\` if you are only answering. Then do the work.`,
+    // shellArg on every command line the agent will paste into a shell: a
+    // path with a space otherwise splits into two arguments and the command
+    // targets a file that does not exist.
+    `First, declare which is coming: \`lucid intent ${shellArg(artifact)} revise\` if you are going to change the file, or \`lucid intent ${shellArg(artifact)} reply\` if you are only answering. Then do the work.`,
+    // Same reasoning one level down: only the turn knows WHICH phase it is in,
+    // and a long headless revise is otherwise a several-minute spinner with
+    // nothing to read. Each report also refreshes the working window, so a
+    // long narrated turn cannot go stale mid-edit.
+    `As you work, report each phase as you enter it: \`lucid progress ${shellArg(artifact)} --label "<what you are doing, in a few words>"\` - for example "reading the feedback", "rewriting the capabilities table", "verifying the result". The human watches these one-liners while they wait.`,
   ].join("\n");
 };
 

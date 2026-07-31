@@ -11,15 +11,23 @@ import {
   closeTab,
   connectHub,
   openTab,
+  renameSession,
   setCreateOpen,
   setPaletteOpen,
   useHub,
 } from "./hub.ts";
 import { resolveShortcut } from "./keymap.ts";
-import { groupTabs, projectName, tabLabel } from "./naming.ts";
+import { groupTabs, projectName, sessionLabel, tabLabel } from "./naming.ts";
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, persistTabs, readStoredTabs, useShell } from "./shell.ts";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "./ui/context-menu.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
@@ -128,6 +136,12 @@ const TabAttention = ({ handle }: { readonly handle: SessionHandle }) => {
 const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly active: boolean }) => {
   const handle = getSession(sessionKey);
   const ref = useRef<HTMLDivElement>(null);
+  const [renaming, setRenaming] = useState(false);
+  // The LIVE listing row, so a rename (ours or another window's) retitles the
+  // tab without a reopen; the handle's config.name is the boot-time fallback.
+  // Selecting the whole `sessions` slice keeps the selector stable (React
+  // #185 - see AGENTS.md); the find is a per-render derivation.
+  const sessions = useHub((s) => s.sessions);
   // Reachability, centralised (plan 03, M2.3 / R1): EVERY activation path -
   // click, palette, picker, ⌘digit/bracket, ?s= boot, CLI open, close
   // promotion - funnels through `activate` flipping exactly one tab to
@@ -141,62 +155,127 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
   if (!handle) return null;
   // Title only (D-012): the project a colliding name used to carry as a
   // qualifier is the GROUP heading's job now; the tooltip carries the path.
-  const label = tabLabel({ key: sessionKey, name: handle.config.name });
+  const row = sessions.find((r) => r.artifact === sessionKey);
+  const label = row ? sessionLabel(row) : tabLabel({ key: sessionKey, name: handle.config.name });
+
+  const commitRename = async (value: string): Promise<void> => {
+    setRenaming(false);
+    const title = value.replace(/\s+/g, " ").trim();
+    if (title === "" || title === label) return;
+    try {
+      // `replaces` is compare-and-set: the transport retries lost-response
+      // POSTs, and a stale retry landing after a newer rename must lose, not
+      // roll it back. Only sent when the current DOCUMENT title is known -
+      // a filename fallback label is not the title and would always mismatch.
+      const res = await handle.transport.api("/__lucid/rename", {
+        title,
+        ...(row?.title !== undefined ? { replaces: row.title } : {}),
+      });
+      // The SERVER's spelling (trimmed, bounded), so the optimistic label is
+      // exactly what the next sessions push will confirm - no settle flicker.
+      const out = (await res.json()) as { title?: string };
+      renameSession(sessionKey, out.title ?? title);
+    } catch {
+      handle.notify.warn("Couldn't rename - see the session's server.");
+    }
+  };
+
   return (
-    <div
-      ref={ref}
-      data-test="shell-tab"
-      data-active={active ? "true" : "false"}
-      // ONE hairline per boundary, and it belongs to the tab on its right:
-      // `border-x` on every tab drew two lines at every seam (the group's own
-      // frame supplies the outer edges), which read as a double rule and left
-      // each tab an open-topped box. `first:border-l-0` keeps the frame's left
-      // edge single.
-      className={`group flex min-w-0 max-w-[220px] flex-none items-center border-l border-ink-600 pl-2 text-[12px] first:border-l-0 ${
-        active
-          ? "bg-ink-800 text-fg-strong shadow-[inset_0_2px_0_var(--color-accent)]"
-          : "text-fg-muted hover:bg-ink-850 hover:text-fg"
-      }`}
-    >
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              onClick={() => activateTab(sessionKey)}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-[7px]"
-            >
-              <TabAttention handle={handle} />
-              <span className="truncate">{label}</span>
-            </button>
-          }
-        />
-        <TooltipContent>{handle.key}</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              data-test="tab-close"
-              aria-label={`Close ${handle.config.name}`}
-              onClick={() => closeTab(sessionKey)}
-              /* No hover plate and no side padding, unlike every other × in the
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div
+            ref={ref}
+            data-test="shell-tab"
+            data-active={active ? "true" : "false"}
+            // ONE hairline per boundary, and it belongs to the tab on its right:
+            // `border-x` on every tab drew two lines at every seam (the group's own
+            // frame supplies the outer edges), which read as a double rule and left
+            // each tab an open-topped box. `first:border-l-0` keeps the frame's left
+            // edge single. flex-auto (not flex-none): tabs share any width the
+            // frame holds beyond their natural size - which exists exactly when
+            // the project eyebrow is wider than the tabs under it.
+            className={`group flex min-w-0 max-w-[220px] flex-auto items-center border-l border-ink-600 pl-2 text-[12px] first:border-l-0 ${
+              active
+                ? "bg-ink-800 text-fg-strong shadow-[inset_0_2px_0_var(--color-accent)]"
+                : "text-fg-muted hover:bg-ink-850 hover:text-fg"
+            }`}
+          />
+        }
+      >
+        {renaming ? (
+          <input
+            data-test="tab-rename"
+            defaultValue={label}
+            // The listing's own extraction cap (title.ts): a longer rename
+            // would land on disk and then settle back shorter in the tab.
+            maxLength={120}
+            // biome-ignore lint/a11y/noAutofocus: the human just asked to rename this tab; moving focus to the field IS the response
+            autoFocus
+            onFocus={(e) => e.currentTarget.select()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void commitRename(e.currentTarget.value);
+              else if (e.key === "Escape") setRenaming(false);
+            }}
+            // Blur cancels: committing on a stray click-away turns an
+            // accidental focus loss into a silent rename.
+            onBlur={() => setRenaming(false)}
+            className="min-w-0 flex-1 border border-accent-bright bg-ink-700 px-1 py-[4px] text-[12px] text-fg-strong outline-none"
+          />
+        ) : (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={() => activateTab(sessionKey)}
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-[7px]"
+                >
+                  <TabAttention handle={handle} />
+                  <span className="truncate">{label}</span>
+                </button>
+              }
+            />
+            {/* font-mono like the resume-command tooltip: a path is data, and
+                the mono face is also what stops this reading as the OS's own
+                native tooltip box. */}
+            <TooltipContent className="font-mono">{handle.key}</TooltipContent>
+          </Tooltip>
+        )}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-test="tab-close"
+                aria-label={`Close ${handle.config.name}`}
+                onClick={() => closeTab(sessionKey)}
+                /* No hover plate and no side padding, unlike every other × in the
                  chrome: a filled square inside a tab read as a second, nested
                  control, and the gap around it left the tab's right edge
                  looking padded on one side only. Brightening the glyph is the
                  whole affordance here. */
-              className={`flex size-5 shrink-0 cursor-pointer items-center justify-center text-[14px] leading-none text-fg-faint hover:text-fg-strong focus-visible:annot-outline group-hover:opacity-100 focus-visible:opacity-100 ${
-                active ? "opacity-100" : "opacity-0"
-              }`}
-            >
-              ×
-            </button>
-          }
-        />
-        <TooltipContent>Close tab (the session keeps running)</TooltipContent>
-      </Tooltip>
-    </div>
+                className={`flex size-5 shrink-0 cursor-pointer items-center justify-center text-[14px] leading-none text-fg-faint hover:text-fg-strong focus-visible:annot-outline group-hover:opacity-100 focus-visible:opacity-100 ${
+                  active ? "opacity-100" : "opacity-0"
+                }`}
+              >
+                ×
+              </button>
+            }
+          />
+          <TooltipContent>Close tab (the session keeps running)</TooltipContent>
+        </Tooltip>
+      </ContextMenuTrigger>
+      <ContextMenuContent data-test="tab-menu">
+        <ContextMenuItem data-test="tab-menu-rename" onClick={() => setRenaming(true)}>
+          Rename
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem data-test="tab-menu-close" onClick={() => closeTab(sessionKey)}>
+          Close
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 };
 
@@ -513,30 +592,55 @@ const TabStrip = () => {
                  straddles the frame's top edge - so a project reads as the
                  parent of its tabs rather than as another tab beside them,
                  which is what a heading sitting inline at the same level read
-                 as. `mt-2` reserves the room the heading overhangs into. */
-              className="relative mt-2 flex h-[30px] flex-none items-stretch border border-ink-600"
+                 as. `mt-2` reserves the room the heading overhangs into.
+                 GRID, not flex: the invisible heading twin and the tab row
+                 stack in one cell, so the frame's width is max(heading, tabs)
+                 - the heading sets a floor without adding to the row. */
+              className="relative mt-2 grid h-[30px] flex-none border border-ink-600"
             >
               {placed ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span
-                        data-test="group-label"
-                        /* Centred ON the top border, with the bar's own
-                           background behind it, so the frame appears to break
-                           for the name instead of the name floating over it. */
-                        className="pointer-events-auto absolute -top-px left-2 z-1 max-w-[140px] -translate-y-1/2 cursor-default truncate bg-ink-900 px-1 text-[9px] font-semibold uppercase leading-none tracking-[1.1px] text-fg-faint"
-                      >
-                        {projectName(group.project)}
-                      </span>
-                    }
-                  />
-                  <TooltipContent>{group.project}</TooltipContent>
-                </Tooltip>
+                <>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span
+                          data-test="group-label"
+                          /* Centred ON the top border, with the bar's own
+                             background behind it, so the frame appears to break
+                             for the name instead of the name floating over it.
+                             Untruncated: the sizer below guarantees the frame
+                             is at least this wide, so the name always fits. */
+                          /* max-w matches the sizer twin below: past it the
+                             name truncates again rather than growing a frame
+                             wider than its capped tabs can ever fill. */
+                          className="pointer-events-auto absolute -top-px left-2 z-1 max-w-[280px] -translate-y-1/2 cursor-default truncate bg-ink-900 px-1 text-[9px] font-semibold uppercase leading-none tracking-[1.1px] text-fg-faint"
+                        >
+                          {projectName(group.project)}
+                        </span>
+                      }
+                    />
+                    <TooltipContent>{group.project}</TooltipContent>
+                  </Tooltip>
+                  {/* In-flow twin of the absolute heading above: the heading
+                      straddles the border so it cannot size the frame itself,
+                      and without this a short tab left the project name
+                      truncated mid-word. It shares the tab row's grid cell,
+                      so it sets the frame's minimum width and nothing else;
+                      ml-2/px-1 mirror the heading's own offset, mr-2 keeps
+                      the name off the frame's right edge. */}
+                  <span
+                    aria-hidden
+                    className="invisible col-start-1 row-start-1 ml-2 mr-2 h-0 max-w-[280px] justify-self-start overflow-hidden whitespace-nowrap px-1 text-[9px] font-semibold uppercase leading-none tracking-[1.1px]"
+                  >
+                    {projectName(group.project)}
+                  </span>
+                </>
               ) : null}
-              {group.keys.map((k) => (
-                <Tab key={k} sessionKey={k} active={k === activeKey} />
-              ))}
+              <div className="col-start-1 row-start-1 flex min-w-0 items-stretch">
+                {group.keys.map((k) => (
+                  <Tab key={k} sessionKey={k} active={k === activeKey} />
+                ))}
+              </div>
             </div>
           );
         })}

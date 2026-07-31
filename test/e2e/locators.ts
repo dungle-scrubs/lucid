@@ -74,6 +74,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   createName: (): Locator => root.locator(hook("create-name")),
   createNameError: (): Locator => root.locator(hook("create-name-error")),
   createOverlay: (): Locator => root.locator(hook("create-overlay")),
+  createPhase: (): Locator => root.locator(hook("create-phase")),
   createProject: (): Locator => root.locator(hook("create-project")),
   createProjectError: (): Locator => root.locator(hook("create-project-error")),
   createProjectPath: (): Locator => root.locator(hook("create-project-path")),
@@ -177,6 +178,10 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   tabChat: (): Locator => root.locator(hook("tab-chat")),
   tabClose: (): Locator => root.locator(hook("tab-close")),
   tabGroup: (): Locator => root.locator(hook("tab-group")),
+  tabMenu: (): Locator => root.locator(hook("tab-menu")),
+  tabMenuClose: (): Locator => root.locator(hook("tab-menu-close")),
+  tabMenuRename: (): Locator => root.locator(hook("tab-menu-rename")),
+  tabRename: (): Locator => root.locator(hook("tab-rename")),
   tabSessions: (): Locator => root.locator(hook("tab-sessions")),
   tabbarFadeLeft: (): Locator => root.locator(hook("tabbar-fade-left")),
   tabbarFadeRight: (): Locator => root.locator(hook("tabbar-fade-right")),
@@ -191,6 +196,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   versionView: (): Locator => root.locator(hook("version-view")),
   versionViewExit: (): Locator => root.locator(hook("version-view-exit")),
   warning: (): Locator => root.locator(hook("warning")),
+  workingPhase: (): Locator => root.locator(hook("working-phase")),
 });
 
 /**
