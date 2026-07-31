@@ -760,12 +760,24 @@ describe("the hub's wide event: every request emits (plan 07, M1.2)", () => {
     expect(exit?.status).toBe(404);
   });
 
-  test("a refused create still carries its identifiers - and never the prompt", async () => {
+  test("a refused create carries only what EARNED the name of an identifier", async () => {
+    // Tightened by plan 08 M11 (07#12). Every field on this record is now
+    // attached after the check that makes it real, so a refused create cannot
+    // be a channel for arbitrary caller text.
     const lines: string[] = [];
+    const harnesses = join(dir, "harnesses.json");
+    await writeFile(
+      harnesses,
+      JSON.stringify({
+        default: "claude",
+        harnesses: { claude: { spawn: ["true"], resume: ["true"] } },
+      }),
+    );
     daemon = await runDaemon({
       port: 0,
       roots: [root],
       registryPath,
+      harnessesPath: harnesses,
       attend: true,
       log: (m) => void lines.push(m),
     });
@@ -777,15 +789,43 @@ describe("the hub's wide event: every request emits (plan 07, M1.2)", () => {
     });
 
     const exit = records(lines).find((r) => r.event === "request" && r.path === "/hub/create");
+    // Rooted, so it names a place this hub actually scans.
     expect(exit?.project).toBe(root);
-    // A name that fails CREATE_NAME is not an identifier - it is whatever
-    // the caller typed, which could be content. It never reaches the record
-    // (adversarial review of #89); the 400 plus project/harness still make
-    // the refusal queryable.
-    expect(exit?.artifact).toBeUndefined();
+    // The registry recognises it, so it is a harness and not caller text.
     expect(exit?.harness).toBe("claude");
+    // A name that fails CREATE_NAME is whatever the caller typed, which could
+    // be content. It never reaches the record.
+    expect(exit?.artifact).toBeUndefined();
     expect(lines.join("\n")).not.toContain("not a valid name!");
     expect(lines.join("\n")).not.toContain("SENTINEL_PROMPT_never_logged");
+  });
+
+  test("an unvouched project or harness never reaches the record (07#12)", async () => {
+    // The half that was open: with no registry nothing can vouch for the
+    // harness string, and an unrooted project is just a path the caller typed.
+    // Both used to be attached before any check ran, putting ~256 bytes of
+    // arbitrary text into a retained record on every refused create.
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      attend: true,
+      log: (m) => void lines.push(m),
+    });
+    await post(daemon.port, "/hub/create", {
+      project: "/nowhere/SENTINEL_PROJECT_never_logged",
+      name: "ok.html",
+      prompt: "hello",
+      harness: "SENTINEL_HARNESS_never_logged",
+    });
+
+    const exit = records(lines).find((r) => r.event === "request" && r.path === "/hub/create");
+    expect(exit?.status).toBe(400);
+    expect(exit?.project).toBeUndefined();
+    expect(exit?.harness).toBeUndefined();
+    expect(lines.join("\n")).not.toContain("SENTINEL_PROJECT_never_logged");
+    expect(lines.join("\n")).not.toContain("SENTINEL_HARNESS_never_logged");
   });
 
   test("a session route attaches the session id where the route knows it", async () => {

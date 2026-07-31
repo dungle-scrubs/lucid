@@ -899,10 +899,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // name only counts as an identifier once it LOOKS like one: a string
     // that fails CREATE_NAME is whatever the caller typed, which could be
     // content, so it stays out and the 400 speaks for it.
+    // Only what has EARNED the name of an identifier. `artifact` is gated on
+    // CREATE_NAME; `project` and `harness` are attached below, each after the
+    // check that makes it real. Attaching them here put ~256 bytes of
+    // arbitrary caller text into a retained record on every refused create -
+    // the same D-005 hole the artifact gate already closed (07#12).
     observation.attach({
-      project,
       ...(CREATE_NAME.test(name) ? { artifact: name } : {}),
-      ...(typeof body?.harness === "string" ? { harness: body.harness } : {}),
     });
     const prompt = typeof body?.prompt === "string" ? body.prompt : "";
     // The document's own name, bounded and control-stripped like every other
@@ -926,12 +929,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       ? sanitizeSelection({ model: body.model, effort: body.effort })
       : undefined;
 
-    if (!CREATE_NAME.test(name)) {
-      return json({ error: "name must be a plain .html filename" }, 400);
-    }
-    if (prompt.trim().length === 0 || prompt.length > MAX_CREATE_PROMPT) {
-      return json({ error: `prompt must be 1..${MAX_CREATE_PROMPT} characters` }, 400);
-    }
+    // The project is validated FIRST, before the name and prompt refusals, so
+    // that a refusal on any ground is still queryable by project - while an
+    // unrooted one still never reaches a record (07#12). Validating in the
+    // other order forced a choice between those two, and both are wanted.
     const listing = await listHub();
     // A worktree is a listed root of its own, grouped under its main repo -
     // both are legitimate create targets; anything else is not a project the
@@ -956,6 +957,29 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const rooted =
       known || (await scanRootSet()).some((root) => canonicalArtifactPath(root) === asked);
     if (!rooted) return json({ error: "unknown project" }, 400);
+    // Rooted, so it names a place this hub actually scans - an identifier now,
+    // not whatever the caller typed.
+    observation.attach({ project });
+
+    // The harness earns its place the same way, and for the same reason: a
+    // caller-supplied string is not an identifier until something recognises
+    // it. Resolved early only to ATTACH - the full resolution below still
+    // owns refusing an unknown one and building its argv.
+    const earlyRegistry = await loadRegistry(opts.harnessesPath);
+    const earlyRecipe = earlyRegistry ? resolveRecipe(earlyRegistry, harness) : undefined;
+    if (
+      earlyRecipe &&
+      (harness === undefined || normalizeHarness(earlyRecipe.name) === normalizeHarness(harness))
+    ) {
+      observation.attach({ harness: earlyRecipe.name });
+    }
+
+    if (!CREATE_NAME.test(name)) {
+      return json({ error: "name must be a plain .html filename" }, 400);
+    }
+    if (prompt.trim().length === 0 || prompt.length > MAX_CREATE_PROMPT) {
+      return json({ error: `prompt must be 1..${MAX_CREATE_PROMPT} characters` }, 400);
+    }
     // Listed is not the same as PRESENT. A project can be deleted while its
     // reviews outlive it, and a scratchpad session's project is recovered from
     // an encoded path whose deepest component may no longer exist - authoring
