@@ -1,6 +1,7 @@
 import type { SessionPaths } from "../core/paths.ts";
 import { ServerError } from "../errors.ts";
 import { removeServerDescriptor, writeServerDescriptor } from "./discovery.ts";
+import { createLogSink, observeRequests } from "./observe.ts";
 import { liveWebSocket, wasUpgraded } from "./live.ts";
 import { portBase, sessionPortPool } from "./ports.ts";
 import { createSessionHost } from "./session-host.ts";
@@ -69,6 +70,29 @@ export const runServer = async (
     upgrade: (req, socket) => bound?.upgrade(req, { data: socket }) === true,
   });
 
+  // This server's OWN boundary record (plan 08 M10). Two things the first
+  // attempt got wrong, both caught in review:
+  //
+  // The SINK is per-session, not the shared hub log. N dedicated servers
+  // writing to one file interleave records of identical shape, into a file
+  // whose rotation this repo already documents as lossy - and the default sink
+  // also mirrors to stdout, which spawnServer redirects to a file the codebase
+  // itself calls uncapped, so every request would grow it forever.
+  //
+  // And every record carries the session, attached here rather than per route:
+  // a dedicated server serves exactly ONE artifact, so its identity is a
+  // property of the server, not of the request. Without it the records were
+  // anonymous - a record is defined as carrying which artifact it is about.
+  const observed = observeRequests(
+    { sink: createLogSink({ path: paths.requestLog, mirror: () => {} }) },
+    async (req, observation) => {
+      // Attached here, not per route: a dedicated server serves exactly ONE
+      // artifact, so its identity is a property of the server.
+      observation.attach({ artifact: paths.artifactPath });
+      return host.handle(req);
+    },
+  );
+
   let server: ReturnType<typeof Bun.serve> | undefined;
   let lastErr: unknown;
   for (const candidate of requestedPorts) {
@@ -80,7 +104,7 @@ export const runServer = async (
         websocket: liveWebSocket,
         async fetch(req) {
           try {
-            const res = await host.handle(req);
+            const res = await observed(req);
             // The connection is already a WebSocket; Bun wants no Response.
             return wasUpgraded(res) ? undefined : res;
           } catch (err) {

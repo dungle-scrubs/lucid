@@ -44,6 +44,10 @@ export interface SessionPaths {
   readonly currentHtml: string;
   /** This session's runtime descriptor (port + pid) for discovery. `run/`. */
   readonly serverJson: string;
+  /** This session's OWN request records, when it runs on a dedicated server.
+   *  Not the hub log: N session servers sharing one file interleave records
+   *  whose shape is identical, into a file whose rotation is already lossy. */
+  readonly requestLog: string;
   /** The detached per-session server's stdout/stderr log. `run/`. */
   readonly serverLog: string;
   /** The attend engine's per-turn output log. `run/`. */
@@ -178,6 +182,7 @@ export const sessionPaths = (input: string): SessionPaths => {
     // Machine-local - everything derived or per-machine lives under run/.
     currentHtml: resolve(runDir, "current.html"),
     serverJson: resolve(runDir, "server.json"),
+    requestLog: resolve(runDir, "requests.log"),
     serverLog: resolve(runDir, "server.out.log"),
     attendLog: resolve(runDir, "attend.out.log"),
     createLog: resolve(runDir, "create.out.log"),
