@@ -82,7 +82,8 @@ export interface Warning {
     | "LUCID_ID_DUPLICATE"
     | "VERSION_STAMP_INVALID"
     | "ASSET_DENIED"
-    | "ASSET_NOT_FOUND";
+    | "ASSET_NOT_FOUND"
+    | "SESSION_NOT_ACTIVE";
   readonly message: string;
   readonly detail?: Readonly<Record<string, unknown>>;
 }

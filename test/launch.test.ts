@@ -43,6 +43,23 @@ describe("revisePrompt tells the turn to declare its intent (finding #18)", () =
     expect(prompt).toContain("lucid intent");
     expect(prompt).toContain("/tmp/plan.html");
   });
+
+  test("the prompt names `lucid progress --label`, the turn's only channel for subphases", () => {
+    // Same delivery constraint as the intent line: a headless turn reads
+    // nothing but this prompt, so the phase one-liners the viewer renders
+    // under "Updating the artifact…" exist only if the instruction is here.
+    const prompt = revisePrompt(payload, "/tmp/plan.html");
+    expect(prompt).toContain("lucid progress /tmp/plan.html --label");
+  });
+
+  test("command lines in the prompt survive a path with spaces", () => {
+    // The agent pastes these into a shell; an unquoted space splits the path
+    // into two arguments and every narration/intent call targets a file that
+    // does not exist.
+    const prompt = revisePrompt(payload, "/tmp/My Plan.html");
+    expect(prompt).toContain("lucid intent '/tmp/My Plan.html' revise");
+    expect(prompt).toContain("lucid progress '/tmp/My Plan.html' --label");
+  });
 });
 
 describe("revisePrompt locations", () => {

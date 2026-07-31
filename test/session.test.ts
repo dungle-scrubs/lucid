@@ -178,6 +178,25 @@ describe("commitWatchedChange", () => {
     const state = foldLog((await readEvents(paths.logPath)).events);
     expect(state.version).toBe(1); // unchanged
   });
+
+  test("refuses a change on a suspended session WITHOUT clobbering the baseline", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await appendEvent(paths.logPath, { t: "session_suspended" });
+    await writeFile(artifact, V2);
+    const r = await commitWatchedChange(paths);
+    expect(r.committed).toBeUndefined();
+    expect(r.warning?.code).toBe("SESSION_NOT_ACTIVE");
+    // The refusal must leave the change COMMITTABLE: current.html still holds
+    // the pre-change baseline (clobbering it here is what silently lost the
+    // version forever), and no orphan snapshot was written.
+    expect(await readFile(paths.currentHtml, "utf8")).toBe(V1);
+    expect(existsSync(snapshotPath(paths, 1, 2))).toBe(false);
+    // Once the session resumes, the same change commits as v2.
+    await appendEvent(paths.logPath, { t: "session_resumed", segment: 1 });
+    const again = await commitWatchedChange(paths);
+    expect(again.committed && "version" in again.committed ? again.committed.version : 0).toBe(2);
+  });
 });
 
 /** A genuinely exact anchor for `<li>two</li>` in V1: captured, not spelled. */

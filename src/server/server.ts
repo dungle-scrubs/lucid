@@ -123,9 +123,9 @@ export const runServer = async (
         if (Date.now() - host.lastActivityAt() > idleMs && !stopped) {
           void (async () => {
             // Suspend appends + broadcasts BEFORE stop() closes the streams,
-            // so subscribers learn of it.
-            await host.suspend();
-            await stop();
+            // so subscribers learn of it. Refused = a subscriber connected in
+            // the gap; the server stays up for them.
+            if (await host.suspend()) await stop();
           })();
         }
       },

@@ -1,5 +1,8 @@
 import type { AgentProgress } from "../protocol/wire.ts";
 
+/** Upper bound on a self-reported phase label (see sanitizeProgress). */
+const LABEL_MAX = 200;
+
 /**
  * Canonical validation for a self-reported fan-out `progress` payload, applied
  * at BOTH delivery boundaries: the CLI (`lucid progress`, whose no-daemon path
@@ -18,7 +21,12 @@ export const sanitizeProgress = (input: unknown): AgentProgress | undefined => {
   const p = input as Record<string, unknown>;
   const count = (v: unknown): number | undefined =>
     typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined;
-  const label = typeof p.label === "string" && p.label.length > 0 ? p.label : undefined;
+  // Bounded: the label is a one-liner under a working indicator, rides every
+  // ack and every heartbeat frame, and lives in log.ndjson forever. An agent
+  // that pastes a paragraph gets its first line's worth, not a refusal - a
+  // stalled narration is worse than a clipped one.
+  const label =
+    typeof p.label === "string" && p.label.length > 0 ? p.label.slice(0, LABEL_MAX) : undefined;
   const total = count(p.total);
   const done = count(p.done);
   if (label === undefined && total === undefined && done === undefined) return undefined;

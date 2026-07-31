@@ -230,9 +230,10 @@ describe("the turn's declared intent is instructed, not assumed (finding #18)", 
     // text a hub-driven turn ever reads.
     expect(skill).toContain("lucid intent <file> revise");
     const launcher = readFileSync(join(REPO, "src/launch/launcher.ts"), "utf8");
-    // A regex, not a string: `${artifact}` inside a plain string reads as a
-    // botched template literal and the linter says so, correctly.
-    expect(launcher).toMatch(/lucid intent \$\{artifact\} revise/);
+    // A regex, not a string: `${shellArg(artifact)}` inside a plain string
+    // reads as a botched template literal and the linter says so, correctly.
+    // shellArg, not bare artifact - a path with spaces must survive the shell.
+    expect(launcher).toMatch(/lucid intent \$\{shellArg\(artifact\)\} revise/);
   });
 });
 

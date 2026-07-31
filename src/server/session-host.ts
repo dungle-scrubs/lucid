@@ -1,5 +1,6 @@
 import { statSync, mkdirSync, watch } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { parseHTML } from "linkedom";
 import { basename, join } from "node:path";
 import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
 import { harnessSessionId, interactiveResumeCommand, presenceFor } from "../core/presence.ts";
@@ -19,11 +20,17 @@ import {
   validateGroup,
 } from "../core/question-contract.ts";
 import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/events.ts";
-import { appendEvents, readEvents } from "../core/log.ts";
+import { appendEvents, appendEventsIf, readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
 import { assemblePayload } from "../core/payload.ts";
-import { commitWatchedChange } from "../core/session.ts";
+import {
+  atomicWrite,
+  commitAgainstSnapshot,
+  commitWatchedChange,
+  readArtifact,
+} from "../core/session.ts";
+import { escapeHtml } from "../core/escape.ts";
 import {
   loadRegistry,
   normalizeHarness,
@@ -212,8 +219,10 @@ export interface SessionHost {
   /** Serve one session-relative request. `pathname` overrides the URL's own
    *  path so a mounting owner can strip its prefix. */
   readonly handle: (req: Request, pathname?: string) => Promise<Response>;
-  /** Append + broadcast session_suspended - the owner then stops/evicts. */
-  readonly suspend: () => Promise<void>;
+  /** Append + broadcast session_suspended, unless a subscriber arrived since
+   *  the owner's idle check or the log already moved on. True = go ahead and
+   *  stop/evict; false = the session is live again, leave it mounted. */
+  readonly suspend: () => Promise<boolean>;
   /** Close streams, watchers and timers. Appends nothing. Idempotent. */
   readonly stop: () => void;
   /** Epoch ms of the last request or append - the owner's idle policy input. */
@@ -324,6 +333,11 @@ export const createSessionHost = (
           broadcastListeners();
         }
         controller.enqueue(encoder.encode(": connected\n\n"));
+        // A subscriber arriving at a suspended log is the session coming back
+        // to life: heal the recorded status, or every consumer of the fold
+        // (wait, the watcher's version gate, the panel) keeps acting on
+        // "suspended" while a human is sitting right there watching.
+        void resumeIfSuspended();
       },
       cancel() {
         sseClients.delete(self);
@@ -650,6 +664,65 @@ export const createSessionHost = (
       },
     ]);
     return json({ ok: true });
+  };
+
+  /**
+   * Rename the artifact: rewrite its `<title>` text. The document's own title
+   * is the ONE name every surface reads - the tab label, the hub listing, the
+   * shell window - so renaming edits the document rather than growing a second
+   * name store that would drift from it. The watcher commits the edit as a
+   * version like any other change, so a rename is in history and revertable.
+   */
+  const handleRename = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (typeof body?.title !== "string") return json({ error: "invalid title" }, 400);
+    // One line, bounded: this lands inside a <title> element and on a tab.
+    const title = body.title.replace(/\s+/g, " ").trim().slice(0, 200);
+    if (title === "") return json({ error: "a title cannot be empty" }, 400);
+    const html = await readArtifact(paths);
+    // The DOCUMENT's title, by parsing - a bare regex over source finds the
+    // first title-SHAPED substring, which can live inside a <script> string or
+    // a comment, and editing that leaves document.title untouched.
+    const current = parseHTML(html).document.querySelector("title")?.textContent ?? null;
+    if (current === null) return json({ error: "the artifact has no <title> to rename" }, 400);
+    // Compare-and-set: the transport retries POSTs, and a lost-response retry
+    // of an OLD rename landing after a newer one must not roll it back.
+    // Advisory - a caller that does not know the current title omits it.
+    if (typeof body.replaces === "string" && body.replaces !== current) {
+      return json({ error: "the title changed underneath this rename" }, 409);
+    }
+    // Serializing the parsed DOM back out would reformat the agent's whole
+    // document, so the edit stays a string replace - scoped to the source run
+    // of the REAL title: the tag whose inner text is the parsed title, in the
+    // pre-<body> region. Entities make the source spelling ambiguous, so both
+    // the decoded and the escaped spellings are tried.
+    const headEnd = /<body[\s>]/i.exec(html)?.index ?? html.length;
+    const head = html.slice(0, headEnd);
+    const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let span: { start: number; end: number } | null = null;
+    for (const text of [current, escapeHtml(current)]) {
+      const m = new RegExp(`<title[^>]*>\\s*${escapeRegExp(text)}\\s*</title>`, "i").exec(head);
+      if (m) {
+        span = { start: m.index, end: m.index + m[0].length };
+        break;
+      }
+    }
+    if (span === null) {
+      return json({ error: "could not locate the <title> in the document source" }, 409);
+    }
+    const next = `${html.slice(0, span.start)}<title>${escapeHtml(title)}</title>${html.slice(span.end)}`;
+    // Last look before writing: an agent save that landed while this handler
+    // ran must not be overwritten with a stale document. Not a lock - the
+    // artifact file is a shared medium by design - but it shrinks the window
+    // from the whole handler to one syscall's worth.
+    if ((await readArtifact(paths)) !== html) {
+      return json({ error: "the artifact changed while renaming - try again" }, 409);
+    }
+    atomicWrite(paths.artifactPath, next);
+    // Commit deterministically rather than waiting out the watcher debounce:
+    // the caller's optimistic label is confirmed by the version broadcast.
+    await commitNow();
+    return json({ ok: true, title });
   };
 
   /** Diff the current artifact against a base version (RFC §8). */
@@ -1003,6 +1076,7 @@ export const createSessionHost = (
     if (pathname === "/__lucid/fork" && req.method === "POST") return handleFork(req);
     if (pathname === "/__lucid/message" && req.method === "POST") return handleMessage(req);
     if (pathname === "/__lucid/revert" && req.method === "POST") return handleRevert(req);
+    if (pathname === "/__lucid/rename" && req.method === "POST") return handleRename(req);
     if (pathname === "/__lucid/question" && req.method === "POST") return handleQuestion(req);
     if (pathname === "/__lucid/answer" && req.method === "POST") return handleAnswer(req);
     if (pathname === "/__lucid/asset" && req.method === "POST") return handleAssetUpload(req);
@@ -1090,20 +1164,34 @@ export const createSessionHost = (
   // 1s hash poll guarantees a settled change is committed regardless.
   const artifactBase = basename(paths.artifactPath);
   let committing = false;
+  /** A change arrived while a commit was mid-flight. Silently RETURNING there
+   *  lost the newer bytes until the next unrelated event: the in-flight commit
+   *  records what it already read, the poll has advanced its stat baseline,
+   *  and a caller who awaited commitNow (the rename route) got a resolved
+   *  promise for a commit that never ran. Queue one rerun instead. */
+  let commitQueued = false;
   const commitNow = async (): Promise<void> => {
-    if (committing) return;
+    if (committing) {
+      commitQueued = true;
+      return;
+    }
     committing = true;
     try {
-      const result = await commitWatchedChange(paths);
-      if (result.committed) {
-        // Broadcast the actually-appended event (real seq/timestamp), not a
-        // synthetic stand-in, so the SSE stream stays consistent with the log.
-        broadcast(result.committed);
-      } else if (result.warning) {
-        broadcastWarning(result.warning.code, result.warning.message);
-      }
-    } catch {
-      // transient; the poll will retry
+      do {
+        commitQueued = false;
+        try {
+          const result = await commitWatchedChange(paths);
+          if (result.committed) {
+            // Broadcast the actually-appended event (real seq/timestamp), not a
+            // synthetic stand-in, so the SSE stream stays consistent with the log.
+            broadcast(result.committed);
+          } else if (result.warning) {
+            broadcastWarning(result.warning.code, result.warning.message);
+          }
+        } catch {
+          // transient; the poll (or the queued rerun) retries
+        }
+      } while (commitQueued);
     } finally {
       committing = false;
     }
@@ -1173,10 +1261,73 @@ export const createSessionHost = (
     })();
   }, 3000);
 
-  const suspend = async (): Promise<void> => {
-    // Route through serverAppend so subscribers learn of the suspend before
-    // the owner closes the streams.
-    await serverAppend([{ t: "session_suspended" }]);
+  /**
+   * Idle-suspend, CONDITIONALLY: false means "do not evict me". The idle
+   * owner's check and its suspend are separated by an await, so a subscriber
+   * can connect in the gap - suspending then would append over their fresh
+   * `session_resumed` and close the stream they just opened. The subscriber
+   * check is re-run here, and the append is guarded on the log still being
+   * active so stacked idle ticks cannot append a second suspend. An
+   * already-suspended/ended log still answers true: eviction is about memory,
+   * and a mount nobody watches on a closed log has no reason to live.
+   */
+  const suspend = async (): Promise<boolean> => {
+    if (sseClients.size > 0) return false;
+    const appended = await appendEventsIf(
+      paths.logPath,
+      (existing) => foldLog(existing).status === "active",
+      [{ t: "session_suspended" }],
+    );
+    if (appended.length > 0) {
+      // Broadcast like serverAppend would: a subscriber that squeezed in
+      // after the size check above still learns of the suspend before the
+      // owner closes the streams (and its reconnect heals the log).
+      for (const e of appended) broadcast(e);
+      touch();
+      return true;
+    }
+    return sseClients.size === 0;
+  };
+
+  /**
+   * Heal a suspended log when someone connects (the idle-suspend loop's other
+   * half). Suspend evicts the mount but the viewer's stream retries and
+   * remounts - and nothing appended `session_resumed`, so the folded status
+   * stayed "suspended" for as long as the tab lived. Every consumer of that
+   * fold then acted on it: `lucid wait` told the agent the review was paused,
+   * the watcher refused to commit the agent's saved revision as a version, and
+   * the attend relay misread the finished turn as silent.
+   *
+   * Guarded inside the log lock, so two tabs connecting at once append one
+   * resume, not two; no attendant stamp - a watching human resumed it, not an
+   * agent turn. The reconcile after it picks up an artifact change that landed
+   * while the status wrongly said suspended.
+   */
+  const resumeIfSuspended = async (): Promise<void> => {
+    try {
+      const state = foldLog((await readEvents(paths.logPath)).events);
+      if (state.status !== "suspended") return;
+      const appended = await appendEventsIf(
+        paths.logPath,
+        (existing) => foldLog(existing).status === "suspended",
+        [{ t: "session_resumed", segment: state.segment }],
+      );
+      if (appended.length === 0) return;
+      for (const e of appended) broadcast(e);
+      touch();
+      // Against the SNAPSHOT, not current.html: the suspend bug's damage is a
+      // serve cache that already matches the artifact while the log is a
+      // version behind - a cache comparison reads that as "no change" and
+      // leaves the revision out of the log forever. Committed history can't
+      // be clobbered that way. (Best-effort like the resume itself: if this
+      // throws, the log is healed and the next save reconciles.)
+      const result = await commitAgainstSnapshot(paths);
+      if (result.committed) broadcast(result.committed);
+      else if (result.warning) broadcastWarning(result.warning.code, result.warning.message);
+    } catch {
+      // Best-effort: a failed heal leaves exactly the state we arrived in,
+      // and the next subscriber retries it.
+    }
   };
 
   const stop = (): void => {
@@ -1201,7 +1352,12 @@ export const createSessionHost = (
     handle,
     suspend,
     stop,
-    lastActivityAt: () => lastActivity,
+    // A live subscriber IS activity: requests only touch the clock when they
+    // arrive, so an open tab (one long SSE request) or an agent blocked in
+    // `wait` idled out at 30 minutes and was suspended mid-watch. The idle
+    // timers (daemon and dedicated server) both read this, so neither needs
+    // its own notion of "someone is here".
+    lastActivityAt: () => (sseClients.size > 0 ? Date.now() : lastActivity),
     agentsListening: () => agentClients.size,
     warn: broadcastWarning,
   };
