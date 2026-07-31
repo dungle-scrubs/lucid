@@ -8,17 +8,26 @@ describe("detectUsageLimit", () => {
       "Write a document.",
       "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Jul 29th, 2026 12:02 AM.",
     ].join("\n");
-    expect(detectUsageLimit(out)).toContain("hit your usage limit");
+    expect(detectUsageLimit(out)).toBe("usage-limit");
+  });
+
+  test("returns the matched pattern's identifier, never the harness's own words", () => {
+    // The line that matched is harness output: whatever else it shares a line
+    // with travels with it, and both consumers put it in a retained record.
+    const out = [
+      "user",
+      "Write a document.",
+      "ERROR: You've hit your usage limit. Working on ACQUISITION-OF-NORTHWIND, try again at Jul 29th.",
+    ].join("\n");
+    expect(detectUsageLimit(out)).toBe("usage-limit");
   });
 
   test("names claude code's session limit", () => {
-    expect(detectUsageLimit("You've hit your session limit · resets 6:30pm")).toContain(
-      "session limit",
-    );
+    expect(detectUsageLimit("You've hit your session limit · resets 6:30pm")).toBe("session-limit");
   });
 
   test("names a google-family quota error (pi's default provider)", () => {
-    expect(detectUsageLimit("Error: RESOURCE_EXHAUSTED: Quota exceeded for model")).not.toBeNull();
+    expect(detectUsageLimit("Error: RESOURCE_EXHAUSTED: Quota exceeded for model")).toBe("quota");
   });
 
   test("a clean exit or an unrelated error is NOT a usage wall", () => {
