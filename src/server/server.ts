@@ -1,6 +1,7 @@
 import type { SessionPaths } from "../core/paths.ts";
 import { ServerError } from "../errors.ts";
 import { removeServerDescriptor, writeServerDescriptor } from "./discovery.ts";
+import { liveWebSocket, wasUpgraded } from "./live.ts";
 import { portBase, sessionPortPool } from "./ports.ts";
 import { createSessionHost } from "./session-host.ts";
 
@@ -56,10 +57,16 @@ export const runServer = async (
     resolveDone();
   };
 
+  // Only the process that BOUND the port can upgrade a request, and that is
+  // this owner, not the host. Read through a binding assigned below, because
+  // the host is constructed before the server exists.
+  let bound: ReturnType<typeof Bun.serve> | undefined;
+
   const host = createSessionHost(paths, {
     ...(options.debounceMs !== undefined ? { debounceMs: options.debounceMs } : {}),
     getPort: () => port,
     onEnded: () => void stop(),
+    upgrade: (req, socket) => bound?.upgrade(req, { data: socket }) === true,
   });
 
   let server: ReturnType<typeof Bun.serve> | undefined;
@@ -70,9 +77,12 @@ export const runServer = async (
         port: candidate,
         hostname: "127.0.0.1",
         idleTimeout: 0,
+        websocket: liveWebSocket,
         async fetch(req) {
           try {
-            return await host.handle(req);
+            const res = await host.handle(req);
+            // The connection is already a WebSocket; Bun wants no Response.
+            return wasUpgraded(res) ? undefined : res;
           } catch (err) {
             return new Response(
               JSON.stringify({ error: `server error: ${(err as Error).message}` }),
@@ -81,6 +91,7 @@ export const runServer = async (
           }
         },
       });
+      bound = server;
       break;
     } catch (err) {
       lastErr = err;

@@ -60,6 +60,16 @@ import {
 } from "./client-bundle.generated.ts";
 import { devBundleStamp, readDevAsset } from "./dev-assets.ts";
 import { renderInjected } from "./inject.ts";
+import {
+  liveWebSocket,
+  LiveSocket,
+  pumpSse,
+  sseSubscriber,
+  UPGRADED,
+  wantsUpgrade,
+  wasUpgraded,
+  type Subscriber,
+} from "./live.ts";
 import { hubPort, portBase } from "./ports.ts";
 import { validateHeaders } from "./security.ts";
 import { createSessionHost, type SessionHost } from "./session-host.ts";
@@ -117,6 +127,11 @@ const CREATE_PROGRESS_MS = 2000;
 /** Upper bound on a create request's prompt (chars). */
 const MAX_CREATE_PROMPT = 4000;
 
+/** How long a proxied session's dedicated server has to ANSWER its event
+ *  stream before the hub gives up and refuses the upgrade. Generous: the same
+ *  server already answered an identity probe on a much tighter budget. */
+const RELAY_OPEN_TIMEOUT_MS = 5000;
+
 /** Opaque, stable session id: a canonical artifact path, hashed. Opaque
  *  because raw absolute paths do not belong in URLs (decision 5). */
 export const sessionId = (artifactPath: string): string =>
@@ -146,6 +161,10 @@ export interface DaemonOptions {
   readonly harnessesPath?: string;
   /** Quiet window before an undelivered batch is driven (ms; tests). */
   readonly attendDebounceMs?: number;
+  /** How long a PROXIED session's dedicated server has to answer its event
+   *  stream before the upgrade is refused (ms; tests). Injected so the stall
+   *  case costs a test a moment rather than the production budget. */
+  readonly relayOpenMs?: number;
   /** How often each mount's delivery watcher evaluates (ms; tests). */
   readonly attendPollMs?: number;
   /** Activity sink for attend-mode lines. Defaults to the rotating hub log
@@ -239,6 +258,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const sessionIdleMs = opts.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
   const attend = opts.attend === true;
   const attendPollMs = opts.attendPollMs ?? DEFAULT_ATTEND_POLL_MS;
+  const relayOpenMs = opts.relayOpenMs ?? RELAY_OPEN_TIMEOUT_MS;
   const log = resolveHubSink(opts);
   // Every subsystem's narration goes where the hub's own evidence goes. A
   // stderr default is /dev/null here (the hub is normally started detached),
@@ -247,12 +267,17 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const restoreNarration = setNarrationSink(log);
   warnUnknownSubsystems();
 
-  const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  /** Every shell window watching the listing, over either wire (live.ts). */
+  const subscribers = new Set<Subscriber>();
   /** Live create-turn heartbeats (M2.1), owned so `stop()` can end them: a
    *  detached child outlives the hub, and its interval would otherwise keep
    *  firing at nobody for the rest of that turn. */
   const heartbeats = new Set<ReturnType<typeof setInterval>>();
   const encoder = new TextEncoder();
+  /** The bound server, once it exists. Only the process that bound the port can
+   *  upgrade a request to a WebSocket, and the routes that need to do so are
+   *  defined before `Bun.serve` returns - so they read it through here. */
+  let bound: ReturnType<typeof Bun.serve> | undefined;
   let port = 0; // assigned once bound (below)
   let stopped = false;
   let notifying = false;
@@ -424,6 +449,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // hub's create and attend paths use (tests inject their own).
       ...(opts.harnessesPath !== undefined ? { harnessesPath: opts.harnessesPath } : {}),
       onEnded: () => void evict(id),
+      // Only the process that bound the port can upgrade, and every mount
+      // shares this one. The socket's join closes over THIS host, so the
+      // channel-agnostic handler needs to know nothing about mounts.
+      upgrade: (req, socket) => bound?.upgrade(req, { data: socket }) === true,
     });
     const idleTimer = setInterval(
       () => {
@@ -588,6 +617,48 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         );
       }
       const url = new URL(req.url);
+      // A WebSocket handshake cannot be forwarded by fetch, and the window
+      // asking for one is on the HUB's origin - which is where the
+      // six-connection pool bites, so falling back to SSE would put the socket
+      // right back. The hub takes the socket itself and relays the inner
+      // server's SSE into it: browser side upgraded, loopback side unchanged.
+      if (subPath === "/__lucid/events" && wantsUpgrade(req)) {
+        // Subscribed BEFORE upgraded (see relayDedicated). The deadline covers
+        // the HANDSHAKE only and is cleared once headers land - an SSE body is
+        // meant to stay open, and a session with nothing happening is silent
+        // for minutes at a time. Without it a dedicated server that answered
+        // the identity probe and then stalled would hold this request forever,
+        // and `loopbackFetch` imposes no deadline of its own.
+        const ctl = new AbortController();
+        const deadline = setTimeout(() => ctl.abort(), relayOpenMs);
+        let stream: ReadableStream<Uint8Array> | null = null;
+        try {
+          const res = await loopbackFetch(live.port, `${subPath}${url.search}`, {
+            signal: ctl.signal,
+          });
+          if (res.ok) stream = res.body;
+        } catch {
+          // refused, or took longer than the deadline
+        } finally {
+          clearTimeout(deadline);
+        }
+        // Refusing is the useful answer: the socket never opens, so the client
+        // backs off and reconnects, and THAT reconnect re-runs the decision
+        // above - by which time the dead server is usually gone and the hub
+        // hosts the session itself.
+        if (stream === null) {
+          ctl.abort();
+          return json({ error: "the session's server did not answer its stream" }, 502);
+        }
+        const body = stream;
+        if (
+          bound?.upgrade(req, { data: new LiveSocket((sub) => relayDedicated(body, ctl, sub)) })
+        ) {
+          return UPGRADED;
+        }
+        ctl.abort(); // nothing will ever read it now
+        return json({ error: "websocket upgrade refused" }, 400);
+      }
       const init: RequestInit = {
         method: req.method,
         headers: sanitizedProxyHeaders(req),
@@ -612,13 +683,14 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     return JSON.stringify({ sessions: await listHub(), bundle: stamp });
   };
 
-  const broadcast = (frame: string): void => {
-    const chunk = encoder.encode(frame);
-    for (const client of sseClients) {
+  /** Fan one frame out to every shell window. A send that throws is a window
+   *  that is gone: drop it, which is how a closed stream leaves the set. */
+  const broadcast = (event: string | null, data: string): void => {
+    for (const sub of subscribers) {
       try {
-        client.enqueue(chunk);
+        sub.send(event, data);
       } catch {
-        sseClients.delete(client);
+        subscribers.delete(sub);
       }
     }
   };
@@ -647,7 +719,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   // subscribers so a quiet daemon does not re-scan the disk, and never tighter
   // than POLL_MS so there is no busy loop.
   const notify = async (): Promise<void> => {
-    if (sseClients.size === 0 || notifying) return;
+    if (subscribers.size === 0 || notifying) return;
     notifying = true;
     try {
       // Listing and attention are deduped SEPARATELY: a `working` flip changes
@@ -655,42 +727,62 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       const snap = await snapshot();
       if (snap !== lastSnapshot) {
         lastSnapshot = snap;
-        broadcast(`data: ${snap}\n\n`);
+        broadcast(null, snap);
       }
       const att = attentionSnapshot();
       if (att !== lastAttentionSnapshot) {
         lastAttentionSnapshot = att;
-        broadcast(`event: attention\ndata: ${att}\n\n`);
+        broadcast("attention", att);
       }
     } finally {
       notifying = false;
     }
   };
 
+  /**
+   * Take a shell window onto the listing, over either wire; the returned
+   * release takes it back off. Priming happens HERE so a window that upgraded
+   * gets the same first two frames a window that did not would get - a fresh
+   * shell paints the listing and its working badges without waiting for the
+   * next poll to find a change.
+   */
+  const subscribe = (sub: Subscriber): (() => void) => {
+    // Same gap the session host guards: the upgrade is decided in `fetch` and
+    // handed over on `open`, and the hub can be stopping in between.
+    if (stopped) {
+      try {
+        sub.close();
+      } catch {
+        // the window left first; nothing to turn away
+      }
+      return () => {};
+    }
+    subscribers.add(sub);
+    void (async () => {
+      try {
+        const snap = await snapshot();
+        sub.send(null, snap);
+        sub.send("attention", attentionSnapshot());
+      } catch {
+        // best-effort priming; the poll will catch up
+      }
+    })();
+    return () => {
+      subscribers.delete(sub);
+    };
+  };
+
   const handleEvents = (): Response => {
-    let self!: ReadableStreamDefaultController<Uint8Array>;
+    // Assigned synchronously in `start` before any frame is enqueued; the `!`
+    // marks that definite assignment for the `cancel` reader below.
+    let leave!: () => void;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        self = controller;
-        sseClients.add(controller);
         controller.enqueue(encoder.encode(": connected\n\n"));
-        // Prime the new subscriber with the current snapshot immediately.
-        void (async () => {
-          try {
-            const snap = await snapshot();
-            controller.enqueue(encoder.encode(`data: ${snap}\n\n`));
-            // Prime attention too, so a fresh shell paints working state without
-            // waiting for the next flip.
-            controller.enqueue(
-              encoder.encode(`event: attention\ndata: ${attentionSnapshot()}\n\n`),
-            );
-          } catch {
-            // best-effort priming; the poll will catch up
-          }
-        })();
+        leave = subscribe(sseSubscriber(controller));
       },
       cancel() {
-        sseClients.delete(self);
+        leave();
       },
     });
     return new Response(stream, {
@@ -700,6 +792,46 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         connection: "keep-alive",
       },
     });
+  };
+
+  /**
+   * Pump an ALREADY-OPEN inner event stream into one upgraded shell window,
+   * for a session the hub proxies rather than hosts.
+   *
+   * The stream is opened before the upgrade, not here, and that ordering is
+   * load-bearing. A window treats its socket opening as "I am subscribed": it
+   * bootstraps and flushes its outbox on that signal. Subscribing to the inner
+   * server afterwards leaves a window in which a POST can land, be appended,
+   * and be broadcast to nobody - the sender's own item vanishes from the queue
+   * and does not reappear until some later event happens to trigger a refold.
+   * Proxying the SSE stream directly never had that gap, because the response
+   * headers only arrived once the inner subscription existed; opening first is
+   * what restores it.
+   *
+   * When the inner stream ends the window is asked to come back rather than
+   * retried here: its reconnect re-runs the proxy-or-mount decision. Retrying
+   * in place would pin the window to a port whose server may have exited -
+   * which is exactly when the hub should be hosting the session itself.
+   */
+  const relayDedicated = (
+    body: ReadableStream<Uint8Array>,
+    ctl: AbortController,
+    sub: Subscriber,
+  ): (() => void) => {
+    void (async () => {
+      try {
+        await pumpSse(body, (event, data) => sub.send(event, data), ctl.signal);
+      } catch {
+        // dropped or aborted - being asked back is the answer to both
+      }
+      if (ctl.signal.aborted) return;
+      try {
+        sub.close();
+      } catch {
+        // the window went away first; nothing to ask
+      }
+    })();
+    return () => ctl.abort();
   };
 
   /** `POST /hub/open {artifact}`: register + surface a session as a tab. The
@@ -731,13 +863,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // reads `shells` to decide whether a window took it - if one did, it
     // skips the default browser entirely (opening in Arc next to a live
     // shell window was the bug).
-    broadcast(`event: open-tab\ndata: ${JSON.stringify({ id })}\n\n`);
+    broadcast("open-tab", JSON.stringify({ id }));
     return json({
       ok: true,
       id,
       base: `/s/${id}`,
       shell: `http://127.0.0.1:${port}/?s=${id}`,
-      shells: sseClients.size,
+      shells: subscribers.size,
     });
   };
 
@@ -954,12 +1086,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
             const label = await lastPhaseLabel();
             if (ended) return;
             broadcast(
-              `event: create-progress\ndata: ${JSON.stringify({
+              "create-progress",
+              JSON.stringify({
                 artifact,
                 trace: observation.trace,
                 elapsedMs: Date.now() - startedAt,
                 ...(label !== undefined ? { label } : {}),
-              })}\n\n`,
+              }),
             );
           } finally {
             reading = false;
@@ -979,12 +1112,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         // Lucid - name it as such rather than leaving them to read the tail.
         const usageLimit = detectUsageLimit(raw);
         broadcast(
-          `event: create-failed\ndata: ${JSON.stringify({
+          "create-failed",
+          JSON.stringify({
             artifact,
             code,
             tail,
             ...(usageLimit !== null ? { usageLimit } : {}),
-          })}\n\n`,
+          }),
         );
       };
       void runSpawn(argv, project, outLog, {
@@ -1245,7 +1379,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         {
           lucid: "hub",
           port,
-          shells: sseClients.size,
+          shells: subscribers.size,
           attend,
           roots: await scanRootSet(),
           harnesses,
@@ -1281,6 +1415,14 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       return handleHubRoots(req);
     }
     if (pathname === "/hub/events" && req.method === "GET") {
+      // A shell window upgrades; anything else still gets SSE. The Host/Origin
+      // gate above has already run, which matters MORE here: a WebSocket
+      // handshake is not subject to CORS at all.
+      if (wantsUpgrade(req)) {
+        return bound?.upgrade(req, { data: new LiveSocket(subscribe) }) === true
+          ? UPGRADED
+          : json({ error: "websocket upgrade refused" }, 400);
+      }
       return handleEvents();
     }
     // The shell's own bundle + stylesheet, same generated artifacts every
@@ -1316,14 +1458,18 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     port: requestedPort,
     hostname: "127.0.0.1",
     idleTimeout: 0,
+    websocket: liveWebSocket,
     async fetch(req) {
       try {
-        return await observed(req);
+        const res = await observed(req);
+        // The connection is already a WebSocket; Bun wants no Response.
+        return wasUpgraded(res) ? undefined : res;
       } catch (err) {
         return json({ error: `daemon error: ${(err as Error).message}` }, 500);
       }
     },
   });
+  bound = server;
   port = server.port ?? 0;
 
   // The one line that matters most to a detached hub - which port it actually
@@ -1343,14 +1489,14 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     for (const beat of heartbeats) clearInterval(beat);
     heartbeats.clear();
     for (const id of [...mounts.keys()]) await evict(id);
-    for (const client of sseClients) {
+    for (const sub of subscribers) {
       try {
-        client.close();
+        sub.close();
       } catch {
         // already closed
       }
     }
-    sseClients.clear();
+    subscribers.clear();
     await server.stop(true);
   };
 

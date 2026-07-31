@@ -11,6 +11,7 @@ import {
   type SessionConfig,
   type SessionStore,
 } from "./store.ts";
+import { openStream, type LiveStream } from "./stream.ts";
 import { createSurface, type Surface } from "./surface.ts";
 import { createTransport, type Transport } from "./transport.ts";
 
@@ -30,7 +31,7 @@ export interface SessionHandle {
   readonly actions: SessionActions;
   readonly pastes: Pastes;
   readonly notify: Notify;
-  /** Open this session's SSE stream (idempotent). Called when the handle
+  /** Open this session's live stream (idempotent). Called when the handle
    *  enters the shell roster - the stream belongs to the handle's lifetime,
    *  NOT to whether its view is on screen, so a background tab keeps folding
    *  events and draining its outbox. */
@@ -38,7 +39,7 @@ export interface SessionHandle {
   /** Close the stream (eviction/teardown). State stays; reconnecting
    *  re-bootstraps. */
   readonly disconnect: () => void;
-  /** Whether the SSE stream is currently open (the cap counts these). */
+  /** Whether the live stream is currently open (the cap counts these). */
   readonly connected: () => boolean;
 }
 
@@ -111,120 +112,91 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     if (body) applySelection(body);
   };
 
-  let source: EventSource | null = null;
-  /** Pending manual reopen after a FATAL stream error, and how many in a row -
-   *  the backoff resets the moment a stream opens. */
-  let retry: ReturnType<typeof setTimeout> | null = null;
-  let retries = 0;
+  /** How a frame off the live channel reaches this session's state. Keyed by
+   *  the event name the server broadcasts (see live.ts); "message" is the
+   *  default frame, which carries a log event. */
+  const onFrame = (type: string, data: string): void => {
+    try {
+      switch (type) {
+        case "message":
+          onLogEvent(JSON.parse(data) as LogEvent);
+          break;
+        case "listeners": {
+          const d = JSON.parse(data) as { agents: number };
+          // An agent arriving flips the selection pickers to a readout of what
+          // THAT session runs, and its stamp only rides the folded state.
+          // Without this re-read the row would report the PREVIOUS attendant's
+          // model until some unrelated content event happened to land.
+          const arriving = d.agents > 0 && store.getState().agentsListening === 0;
+          set({ agentsListening: d.agents });
+          if (arriving) void surface.bootstrap();
+          break;
+        }
+        // Presence: the harness conversation opened or closed in a terminal. No
+        // log event accompanies that, so it arrives as its own frame - and it
+        // changes the panel's whole mode, so it must not wait for one.
+        case "presence":
+          set({
+            attendantPresence: JSON.parse(data) as {
+              interactive: boolean;
+              status?: string;
+              cwd?: string;
+            } | null,
+          });
+          break;
+        case "warning": {
+          const w = JSON.parse(data) as { code: string; message: string };
+          notify.pushWarning(w.code, w.message);
+          break;
+        }
+        case "context":
+          set({ contextUsage: JSON.parse(data) as ContextUsage });
+          break;
+        // Another window (or another tab on this session) changed the pick:
+        // every viewer of the artifact shows the same sticky selection.
+        case "selection":
+          applySelection(JSON.parse(data) as SelectionResponse);
+          break;
+        default:
+          break;
+      }
+    } catch {
+      /* a frame we cannot parse is not worth tearing the stream down for */
+    }
+  };
+
+  let stream: LiveStream | null = null;
 
   const connect = (): void => {
-    if (source !== null) return;
-    const es = new EventSource(`${config.base}/__lucid/events`);
-    source = es;
-    es.onmessage = (e) => {
-      try {
-        onLogEvent(JSON.parse(e.data) as LogEvent);
-      } catch {
-        /* a frame we cannot parse is not worth tearing the stream down for */
-      }
-    };
-    es.addEventListener("listeners", (e) => {
-      try {
-        const d = JSON.parse((e as MessageEvent).data) as { agents: number };
-        // An agent arriving flips the selection pickers to a readout of what
-        // THAT session runs, and its stamp only rides the folded state. Without
-        // this re-read the row would report the PREVIOUS attendant's model
-        // until some unrelated content event happened to land.
-        const arriving = d.agents > 0 && store.getState().agentsListening === 0;
-        set({ agentsListening: d.agents });
-        if (arriving) void surface.bootstrap();
-      } catch {
-        /* ignore */
-      }
-    });
-    // Presence: the harness conversation opened or closed in a terminal. No
-    // log event accompanies that, so it arrives as its own frame - and it
-    // changes the panel's whole mode, so it must not wait for one.
-    es.addEventListener("presence", (e) => {
-      try {
-        const d = JSON.parse((e as MessageEvent).data) as {
-          interactive: boolean;
-          status?: string;
-          cwd?: string;
-        } | null;
-        set({ attendantPresence: d });
-      } catch {
-        /* ignore */
-      }
-    });
-    es.addEventListener("warning", (e) => {
-      try {
-        const w = JSON.parse((e as MessageEvent).data) as { code: string; message: string };
-        notify.pushWarning(w.code, w.message);
-      } catch {
-        /* ignore */
-      }
-    });
-    es.addEventListener("context", (e) => {
-      try {
-        set({ contextUsage: JSON.parse((e as MessageEvent).data) as ContextUsage });
-      } catch {
-        /* ignore */
-      }
-    });
-    // Another window (or another tab on this session) changed the pick: every
-    // viewer of the artifact shows the same sticky selection.
-    es.addEventListener("selection", (e) => {
-      try {
-        applySelection(JSON.parse((e as MessageEvent).data) as SelectionResponse);
-      } catch {
-        /* ignore */
-      }
-    });
-    // EventSource retries on its own, so a drop is a state to show, not a
-    // warning to accumulate: warning per failed attempt spammed the panel and
-    // told the human to reload, which was never true.
-    // Re-fetch on every (re)open: synthetic presence frames (listeners,
-    // context) are broadcast only to connected clients and never replayed, so
-    // anything reported while the stream was down would otherwise stay stale
-    // until the next report. bootstrap() is seq-guarded, so the extra fetch at
-    // first open is harmless.
-    es.onopen = () => {
-      set({ live: true, streamRetries: 0 });
-      void surface.bootstrap();
-      void loadSelection();
-      retries = 0;
-      // A live stream means the server is answering again, which is the only
-      // thing an undelivered message was waiting on. Fires on the first open
-      // too, so a message stranded by a closed tab leaves on the next load
-      // without the human having to notice it.
-      void actions.flushOutbox();
-    };
-    es.onerror = () => {
-      set({ live: false });
-      // EventSource retries a DROPPED connection by itself. It does not retry a
-      // rejected one: a non-2xx response is fatal by spec, readyState goes
-      // CLOSED, and nothing ever tries again. That is exactly what a hub
-      // restart produces - the first reconnect can land before the new process
-      // has derived this session's mount and gets a 404 - so the tab sat on
-      // "reconnecting…" forever while the server was healthy and answering.
-      // Reopen it ourselves, backing off, so the pill is telling the truth.
-      if (es.readyState !== EventSource.CLOSED || retry !== null) return;
-      // The production ceiling is 15s; the server can hand down a lower cap
-      // (LUCID_SSE_MAX_BACKOFF_MS) so a harness that kills streams on
-      // purpose is not billed real-world patience. Never a higher one.
-      const delay = Math.min(1000 * 2 ** retries, config.sseMaxBackoffMs ?? 15_000, 15_000);
-      retries += 1;
-      set({ streamRetries: retries });
-      retry = setTimeout(() => {
-        retry = null;
-        // Only if nothing else has taken over the slot in the meantime.
-        if (source === es) {
-          source = null;
-          connect();
-        }
-      }, delay);
-    };
+    if (stream !== null) return;
+    stream = openStream(
+      `${config.base}/__lucid/events`,
+      {
+        onFrame,
+        // Re-fetch on every (re)open: synthetic frames (listeners, context) go
+        // only to connected clients and are never replayed, so anything
+        // reported while the stream was down would otherwise stay stale until
+        // the next report. bootstrap() is seq-guarded, so the extra fetch at
+        // first open is harmless.
+        onOpen: () => {
+          set({ live: true, streamRetries: 0 });
+          void surface.bootstrap();
+          void loadSelection();
+          // A live stream means the server is answering again, which is the
+          // only thing an undelivered message was waiting on. Fires on the
+          // first open too, so a message stranded by a closed tab leaves on the
+          // next load without the human having to notice it.
+          void actions.flushOutbox();
+        },
+        // A drop is a state to show, not a warning to accumulate: one warning
+        // per failed attempt spammed the panel and told the human to reload,
+        // which was never true.
+        onDown: (retries) => set({ live: false, streamRetries: retries }),
+      },
+      ...(config.sseMaxBackoffMs === undefined
+        ? []
+        : ([{ maxBackoffMs: config.sseMaxBackoffMs }] as const)),
+    );
     // First paint should not wait for the stream to open: fetch the folded
     // state immediately (seq-guarded, so the onopen re-fetch is harmless).
     void surface.bootstrap();
@@ -232,12 +204,8 @@ export const createSession = (config: SessionConfig): SessionHandle => {
   };
 
   const disconnect = (): void => {
-    if (retry !== null) {
-      clearTimeout(retry);
-      retry = null;
-    }
-    source?.close();
-    source = null;
+    stream?.close();
+    stream = null;
     // Not an outage, but the truth: nothing live is flowing to this session
     // until it reconnects, and its indicator should say so if rendered.
     set({ live: false });
@@ -254,6 +222,6 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     notify,
     connect,
     disconnect,
-    connected: () => source !== null,
+    connected: () => stream !== null,
   };
 };
