@@ -752,11 +752,27 @@ const CreateDialogBody = () => {
                 <span className="text-[13px] text-rust-300">
                   {createFailed.usageLimit
                     ? `The ${harness.trim() || defaultHarness || "default"} harness is over its usage limit - it cannot author anything right now.`
-                    : `The authoring turn failed before it produced ${name}.`}
+                    : createFailed.authFailure
+                      ? `The ${harness.trim() || defaultHarness || "default"} harness could not authenticate.`
+                      : `The authoring turn failed before it produced ${name}.`}
                 </span>
                 {createFailed.usageLimit ? (
                   <span data-test="create-usage-limit" className="text-[11px] text-amber-300">
-                    {createFailed.usageLimit} Pick a different harness and try again.
+                    Pick a different harness and try again.
+                  </span>
+                ) : null}
+                {/* The non-obvious half, and the whole reason this branch
+                    exists: the human IS logged in, so the raw error sends them
+                    to re-check a login that was never the problem. The hub runs
+                    detached from any login session and cannot read the macOS
+                    Keychain, and no amount of logging in again changes that. */}
+                {createFailed.authFailure ? (
+                  <span data-test="create-auth-failure" className="text-[11px] text-amber-300">
+                    Being logged in here is not enough: the hub runs detached and cannot read
+                    Keychain credentials. Give it an env token instead - run{" "}
+                    <code className="bg-ink-700 px-1">claude setup-token</code> once, then start the
+                    hub with <code className="bg-ink-700 px-1">CLAUDE_CODE_OAUTH_TOKEN</code> set.
+                    See <code className="bg-ink-700 px-1">docs/LAUNCHER.md</code>.
                   </span>
                 ) : null}
                 <span className="text-[11px] text-fg-faint">{authoring}</span>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeAttendantSidecar } from "../src/core/attendant.ts";
@@ -1335,5 +1335,57 @@ describe("turn termination", () => {
       (await post("/__lucid/turn-ended", { turnId: "T2", reason: "done", code: "usage_wall" }))
         .status,
     ).toBe(200);
+  });
+});
+
+describe("the dedicated server's own boundary record", () => {
+  test("every request emits one identified record, into this session's own log", async () => {
+    // Plan 08 M10, reworked after adversarial verification refused the first
+    // attempt on two grounds - both asserted here.
+    await startServer();
+    await get("/__lucid/state");
+
+    const lines = (await readFile(paths.requestLog, "utf8").catch(() => ""))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+    const exit = lines.find((r) => r.event === "request" && r.path === "/__lucid/state");
+    const entry = lines.find((r) => r.event === "request.start" && r.path === "/__lucid/state");
+    expect(exit).toBeDefined();
+    expect(entry).toBeDefined();
+    // One record per request; entry and exit pair by the record's own id.
+    expect(exit?.id).toBe(entry?.id);
+    expect(exit?.status).toBe(200);
+
+    // NOT anonymous. The first attempt dropped the observation, so records
+    // carried no artifact at all - and a record is defined as saying which
+    // artifact it is about.
+    expect(exit?.artifact).toBe(paths.artifactPath);
+
+    // Its OWN log, not the shared hub log. N dedicated servers writing to one
+    // file interleave records of identical shape into a rotation this repo
+    // already documents as lossy.
+    expect(paths.requestLog).toContain("/run/requests.log");
+    expect(paths.requestLog).not.toContain(".lucid/hub.log");
+  });
+
+  test("the record carries no review content", async () => {
+    await startServer();
+    const sentinel = "SENTINEL_NOTE_never_recorded";
+    await fetch(`http://127.0.0.1:${port}/__lucid/annotation`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+      body: JSON.stringify({
+        id: "rec-1",
+        version: 1,
+        note: sentinel,
+        target: { kind: "element", fingerprint: "x", domPath: "h1", snippet: "<h1>Hello</h1>" },
+      }),
+    });
+    const raw = await readFile(paths.requestLog, "utf8").catch(() => "");
+    expect(raw).toContain("/__lucid/annotation");
+    expect(raw).not.toContain(sentinel);
   });
 });

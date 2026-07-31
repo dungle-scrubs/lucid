@@ -68,6 +68,12 @@ export const createSession = (config: SessionConfig): SessionHandle => {
       case "prompt":
       case "agent_reply":
       case "agent_ack":
+      // A turn ending changes what the panel says (the window closes, the
+      // outcome appears), and the fold is where that is derived - so this must
+      // re-read like any other content event. Without it the frame arrives,
+      // falls through to `default`, and the viewer keeps painting a turn that
+      // has stopped.
+      case "agent_turn_ended":
         void surface.bootstrap();
         break;
       case "version":

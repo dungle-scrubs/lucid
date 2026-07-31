@@ -1,6 +1,8 @@
 import { dirname } from "node:path";
 import { readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import type { SessionPaths } from "../core/paths.ts";
+import { REQUEST_ID_HEADER, WELL_FORMED_ID } from "../core/request-id.ts";
+import { cliRequestId } from "./observe.ts";
 
 /**
  * Per-session server discovery (D-036) and handshake liveness (D-049). There is
@@ -24,7 +26,16 @@ export interface ServerDescriptor {
 /**
  * Fetch a per-session server route over loopback. Owns the one request shape
  * every out-of-process caller must use: the explicit Host header is what lets
- * the request through the server's DNS-rebind gate (`validateHeaders`).
+ * the request through the server's DNS-rebind gate (`validateHeaders`), and
+ * the trace header is what lets a record be joined back to the click that
+ * caused it.
+ *
+ * The trace is stamped HERE rather than at each call site (plan 08, finding
+ * #15). Three callers used to remember it by hand, which made an untraced
+ * fourth caller a thing you could add without anything noticing - the browser
+ * side has a structural guard against exactly that (test/chrome-request.test.ts
+ * forbids a bare `fetch` outside its one seam) and the CLI side had none. A
+ * property of the seam needs no guard.
  */
 export const loopbackFetch = (
   port: number,
@@ -35,6 +46,13 @@ export const loopbackFetch = (
   // instance or an entries array is not silently dropped by an object spread.
   const headers = new Headers(init.headers);
   headers.set("host", `127.0.0.1:${port}`);
+  // Adopt what the caller carries, mint otherwise - the same rule the server
+  // applies to an inbound trace, so a forwarded hop keeps the id that joins it
+  // to the hop before, and a malformed value is replaced rather than passed on.
+  const carried = headers.get(REQUEST_ID_HEADER);
+  if (carried === null || !WELL_FORMED_ID.test(carried)) {
+    headers.set(REQUEST_ID_HEADER, cliRequestId());
+  }
   return fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers });
 };
 

@@ -1,3 +1,4 @@
+import { warningText } from "./warnings.ts";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { parseAnchor, type Anchor } from "../../src/anchors/anchor.ts";
 import type {
@@ -588,7 +589,12 @@ export interface Notify {
 export const createNotify = (store: SessionStore): Notify => {
   const pushWarning = (code: string, message: string): void =>
     store.setState((s) => ({
-      warnings: [...s.warnings.slice(-4), { id: crypto.randomUUID(), code, message }],
+      warnings: [
+        ...s.warnings.slice(-4),
+        // The viewer owns the wording for any warning the server names by CODE
+        // (07#13). Everything else still arrives as prose and passes through.
+        { id: crypto.randomUUID(), code, message: warningText(code, message) },
+      ],
     }));
   return {
     pushWarning,

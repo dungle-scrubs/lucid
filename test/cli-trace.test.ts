@@ -9,7 +9,7 @@ import { REQUEST_ID_HEADER } from "../src/core/request-id.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import { runWait } from "../src/core/wait.ts";
 import { hubOpen, runDaemon } from "../src/server/daemon.ts";
-import { writeServerDescriptor } from "../src/server/discovery.ts";
+import { loopbackFetch, writeServerDescriptor } from "../src/server/discovery.ts";
 
 /**
  * The CLI's WRITE path carries a trace (plan 07 finding #9). `hubOpen` already
@@ -71,6 +71,14 @@ const startStub = async (): Promise<void> => {
 const traceFor = (path: string): string | null | undefined =>
   seen.find((r) => r.path === path)?.trace;
 
+/** The port the stub bound, for calls made directly rather than through a
+ *  CLI entry point that discovers it. */
+const stubPort = (): number => {
+  const port = stub?.port;
+  if (port === undefined) throw new Error("stub server is not running");
+  return port;
+};
+
 beforeEach(async () => {
   dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-trace-")));
   paths = sessionPaths(join(dir, "plan.html"));
@@ -115,6 +123,52 @@ describe("the CLI's write path carries a trace (M9)", () => {
     await runContext(paths.artifactPath, { pct: 42 });
 
     expect(traceFor("/__lucid/context")).toBe(CLICK);
+  });
+});
+
+describe("the trace is a property of the seam, not of the call site (M9, finding #15)", () => {
+  test("a caller that stamps nothing still sends the turn's trace", async () => {
+    await startStub();
+
+    // Deliberately NOT one of the three known call sites, and deliberately
+    // passing no headers at all: this stands in for the fourth call site
+    // somebody adds next year. Before the stamp moved into `loopbackFetch`,
+    // three sites each remembered to do it by hand and a new one was untraced
+    // with nothing to catch it - the browser side has a structural guard
+    // (test/chrome-request.test.ts), the CLI side had none.
+    await loopbackFetch(stubPort(), "/__lucid/state");
+
+    expect(traceFor("/__lucid/state")).toBe(CLICK);
+  });
+
+  test("a caller that carries its own trace keeps it", async () => {
+    await startStub();
+
+    // The proxy hop forwards the inbound request's headers. Adoption is what
+    // joins the hops, so a trace already on the request must survive rather
+    // than be overwritten by a freshly minted one.
+    const carried = "abcdef0123456789";
+    await loopbackFetch(stubPort(), "/__lucid/state", {
+      headers: { [REQUEST_ID_HEADER]: carried },
+    });
+
+    expect(traceFor("/__lucid/state")).toBe(carried);
+  });
+
+  test("a malformed inbound trace is replaced, not forwarded", async () => {
+    await startStub();
+
+    // Same rule the header gate applies (R4): an arbitrary-length or non-hex
+    // value must not reach a log line, and refusing it at the seam means a
+    // caller cannot smuggle one past the boundary by setting it directly.
+    // A newline would be refused by `Headers` itself; this is the case that
+    // gets through the platform and still must not be adopted - a legal
+    // header value, twice the width a trace is allowed to be.
+    await loopbackFetch(stubPort(), "/__lucid/state", {
+      headers: { [REQUEST_ID_HEADER]: "0123456789abcdef0123456789abcdef" },
+    });
+
+    expect(traceFor("/__lucid/state")).toBe(CLICK);
   });
 });
 

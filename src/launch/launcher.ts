@@ -218,6 +218,13 @@ export const runSpawn = async (
      *  exported so the child's own acks carry it - a turn nobody can name is
      *  a turn nobody can end. Cleared when absent, like requestId. */
     turnId?: string;
+    /** The hub doing the spawning (plan 08, finding #21). The create prompt
+     *  ends by telling the turn to run `lucid open`, and `open` finds a hub
+     *  through LUCID_HUB_PORT - so a hub anywhere but the default port spawned
+     *  turns that opened their artifact into whatever else was listening
+     *  there. Left ALONE when absent: not every spawner is a hub, and
+     *  inventing a port would route a turn at one that does not exist. */
+    hubPort?: number;
   },
 ): Promise<number> => {
   // The child is its OWN harness session: inheriting the launcher's
@@ -234,6 +241,11 @@ export const runSpawn = async (
         LUCID_EFFORT: identity.effort,
         LUCID_REQUEST_ID: identity.requestId,
         LUCID_TURN_ID: identity.turnId,
+        // Set, not defaulted: an inherited value is another hub's address, and
+        // a turn that opens its artifact into somebody else's hub is the
+        // failure this closes. Absent means "no hub spawned me", so whatever
+        // the environment says stands.
+        ...(identity.hubPort !== undefined ? { LUCID_HUB_PORT: String(identity.hubPort) } : {}),
       }
     : {
         ...process.env,

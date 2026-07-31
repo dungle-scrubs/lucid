@@ -89,3 +89,36 @@ describe("diffHtml", () => {
     expect(added?.anchor.snippet).toContain("new item");
   });
 });
+
+describe("diff cost scales with the document, not with its square", () => {
+  test("a wide document diffs in linear time (plan 08 M17)", () => {
+    // `blockKey` called `computeFingerprint` without a precomputed sibling
+    // index, and `indexAmongSiblings` re-walks the sibling list per element -
+    // so a WIDE document was quadratic: measured at 39.6ms for 2000 sibling
+    // blocks and 630ms for 8000, on a diff that runs per saved version.
+    //
+    // Plan 04 deferred this as "deep-DOM O(n^2) via textContent". The
+    // measurement said otherwise: depth is cheap (6.5ms at depth 2000), and
+    // the cost was breadth - which is the shape a real artifact has.
+    const build = (n: number, changed: boolean): string =>
+      `<body>${Array.from(
+        { length: n },
+        (_, i) => `<p>paragraph number ${changed && i === 5 ? "FIVE" : i}</p>`,
+      ).join("")}</body>`;
+
+    const time = (n: number): number => {
+      const t0 = performance.now();
+      diffHtml(build(n, false), build(n, true), 1, 2);
+      return performance.now() - t0;
+    };
+
+    time(1000); // warm
+    const small = time(2000);
+    const large = time(8000);
+
+    // 4x the blocks. Linear would be ~4x the time; quadratic would be ~16x.
+    // The bound is deliberately loose - this guards the COMPLEXITY, not a
+    // timing budget, and a loaded machine must not red it.
+    expect(large).toBeLessThan(small * 8);
+  });
+});

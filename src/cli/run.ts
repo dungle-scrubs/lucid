@@ -11,7 +11,6 @@ import { themeReadiness, themeWarning } from "../core/theme.ts";
 import { registerSession } from "../core/registry.ts";
 import { sanitizeProgress } from "../core/progress.ts";
 import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
-import { REQUEST_ID_HEADER } from "../core/request-id.ts";
 import {
   assertCanonicalLocation,
   assertNoStrandedRecord,
@@ -33,7 +32,7 @@ import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload, parseWaitPayloadInput } from "../plan/ingest.ts";
 import { planArtifactPath, renderPlanDoc, renderedSourceOf } from "../plan/render.ts";
 import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
-import { cliRequestId, sinkStatus } from "../server/observe.ts";
+import { sinkStatus } from "../server/observe.ts";
 import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { decodeGroupText } from "./ask-input.ts";
@@ -42,7 +41,7 @@ import {
   openBrowser,
   openChromeApp,
   spawnHub,
-  spawnServer,
+  ensureServer,
   stopServer,
   waitForServer,
 } from "./self.ts";
@@ -183,11 +182,10 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
     }
   }
 
-  if (!identity) {
-    await removeServerDescriptor(paths); // clear any stale descriptor
-    spawnServer(paths);
-    identity = await waitForServer(paths, 8000);
-  }
+  // Serialized across processes: two agents opening one artifact at the same
+  // instant used to both spawn, leaving two servers appending to one log and
+  // two callers disagreeing about the URL (plan 08, finding #16).
+  if (!identity) identity = await ensureServer(paths);
   if (!identity) {
     throw new ServerError({
       message: "per-session server failed to start",
@@ -395,7 +393,8 @@ export const runContext = async (
     try {
       const res = await loopbackFetch(live.port, `${live.base ?? ""}/__lucid/context`, {
         method: "POST",
-        headers: { "content-type": "application/json", [REQUEST_ID_HEADER]: cliRequestId() },
+        // The trace is stamped by `loopbackFetch` (plan 08, finding #15).
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(usage),
       });
       // A stale daemon (older build, no /__lucid/context) 404s, and one that

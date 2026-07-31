@@ -355,3 +355,55 @@ test("a retry of a failed artifact is not reported as still-failed (plan 07, #90
   await expect(on(page).createAuthoring()).not.toContainText("SENTINEL_OLD_TAIL");
   await expect(page.locator(hook("create-silent"))).toHaveCount(0);
 });
+
+test("a running create turn shows where to watch it, and an auth failure says what actually fixes it", async ({
+  page,
+}) => {
+  // Two plan 08 milestones on one turn, because they are the same moment seen
+  // twice: M14 (the log pointer belongs in the RUNNING state, not only after a
+  // failure) and M22 (an auth failure is named rather than shown raw).
+  fixtures = await mkdtemp(join(tmpdir(), "lucid-harness-e2e-"));
+  const exe = join(fixtures, "auth-harness");
+  // Runs long enough to be observed running, then dies the way a harness dies
+  // when a detached daemon cannot reach the Keychain.
+  await writeFile(
+    exe,
+    `#!/bin/sh\nsleep 6\necho "Failed to authenticate: OAuth session expired and could not be refreshed" >&2\nexit 1\n`,
+  );
+  await chmod(exe, 0o755);
+  hub = await startHub({
+    attend: true,
+    harnesses: { default: "auth", harnesses: { auth: { spawn: [exe, "{prompt}"] } } },
+  });
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+
+  await page.goto(opened.shellUrl);
+  await expect(on(page).shellTab()).toHaveCount(1);
+  await page.evaluate((root) => localStorage.setItem("lucid.createRoot", root), cli.dir);
+  await on(page).tabAdd().click();
+  await on(page).newArtifact().click();
+  await on(page).createName().fill("auth.html");
+  await on(page).createPrompt().fill("author something");
+  await on(page).createSubmit().click();
+
+  // M14: while it runs, the one actionable thing is on screen. runSpawn awaits
+  // the child with no timeout, so a wedged-but-alive harness sits in this state
+  // permanently - and the log pointer used to appear only in the branches this
+  // turn never reaches.
+  await expect(on(page).createRunningLog()).toBeVisible({ timeout: 15_000 });
+  await expect(on(page).createRunningLog()).toContainText("create.out.log");
+
+  // M22: it dies on auth. The dialog must not leave the human reading a raw
+  // tail that sends them to re-check a login that was never the problem.
+  await expect(on(page).createAuthFailure()).toBeVisible({ timeout: 20_000 });
+  await expect(on(page).createAuthFailure()).toContainText("cannot read Keychain credentials");
+  // Naming the cause is half of it; the remedy is the other half, and it is
+  // two steps - mint the token, then put it in the hub's environment.
+  await expect(on(page).createAuthFailure()).toContainText("claude setup-token");
+  await expect(on(page).createAuthFailure()).toContainText("CLAUDE_CODE_OAUTH_TOKEN");
+
+  // The harness's own words are still there - through the tail the event
+  // already carried, which is why no D-005 rule had to bend for this.
+  await expect(on(page).createFailedTail()).toContainText("Failed to authenticate");
+});

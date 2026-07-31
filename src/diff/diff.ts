@@ -1,6 +1,11 @@
 import { parseHTML } from "linkedom";
 import type { Anchor } from "../anchors/anchor.ts";
-import { computeDomPath, computeFingerprint, type DomElementLike } from "../anchors/dom.ts";
+import {
+  computeDomPath,
+  computeFingerprint,
+  sibIndexMapOf,
+  type DomElementLike,
+} from "../anchors/dom.ts";
 import { escapeHtml } from "../core/escape.ts";
 import type { DiffHunk, DiffResult } from "../protocol/wire.ts";
 
@@ -29,19 +34,36 @@ interface Block {
   readonly text: string;
 }
 
-const blockKey = (el: Element): string => {
+const blockKey = (el: Element, sibIndex: number): string => {
   const lucidId = el.getAttribute("data-lucid-id");
   if (lucidId) return `id:${lucidId}`;
-  return `fp:${computeFingerprint(el as unknown as DomElementLike)}`;
+  return `fp:${computeFingerprint(el as unknown as DomElementLike, sibIndex)}`;
 };
 
 const collectBlocks = (doc: Document): Block[] => {
   const out: Block[] = [];
+  // One-pass sibling indices, then fingerprints over the map - the same
+  // treatment #46 gave anchor resolution, for the same reason. Without it
+  // `indexAmongSiblings` re-walks the sibling list per element, which is
+  // quadratic in BREADTH: measured at 39.6ms for 2000 sibling blocks and
+  // 630ms for 8000, on a diff that runs per saved version.
+  //
+  // (Plan 04 deferred this as "deep-DOM O(n^2) via textContent". The
+  // measurement says otherwise - depth is cheap, 6.5ms at depth 2000 - and the
+  // cost is the sibling walk on WIDE documents, which is the shape a real
+  // artifact actually has.)
+  const sibIndex = sibIndexMapOf(
+    Array.from(doc.querySelectorAll("*")) as unknown as DomElementLike[],
+  );
   for (const el of Array.from(doc.querySelectorAll(BLOCK_SELECTOR))) {
     // Skip blocks that merely contain other collected blocks (e.g. a <ul> is not
     // collected, but its <li>s are; a <td> is, its container <tr> is via th/td).
     if (el.querySelector(BLOCK_SELECTOR)) continue;
-    out.push({ el, key: blockKey(el), text: normalize(el.textContent) });
+    out.push({
+      el,
+      key: blockKey(el, sibIndex.get(el as unknown as DomElementLike) ?? 1),
+      text: normalize(el.textContent),
+    });
   }
   return out;
 };
@@ -240,9 +262,15 @@ export const diffHtml = (
 };
 
 const findCurrentByKeyOrText = (doc: Document, b: Block): Element | null => {
+  // Same one-pass map as collectBlocks: this scans every block too, so the
+  // per-element sibling re-walk would be quadratic here for the same reason.
+  const sibIndex = sibIndexMapOf(
+    Array.from(doc.querySelectorAll("*")) as unknown as DomElementLike[],
+  );
   for (const el of Array.from(doc.querySelectorAll(BLOCK_SELECTOR))) {
     if (el.querySelector(BLOCK_SELECTOR)) continue;
-    if (blockKey(el) === b.key || normalize(el.textContent) === b.text) return el;
+    const key = blockKey(el, sibIndex.get(el as unknown as DomElementLike) ?? 1);
+    if (key === b.key || normalize(el.textContent) === b.text) return el;
   }
   return null;
 };

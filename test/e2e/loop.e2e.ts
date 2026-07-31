@@ -1770,3 +1770,53 @@ test("the paper toggle re-themes the artifact itself, and the choice survives a 
     .evaluate((el) => getComputedStyle(el).getPropertyValue("--paper").trim());
   expect(light).toBe("#faf6ec");
 });
+
+test("a turn that ends with nothing to show says so, instead of going quiet", async ({ page }) => {
+  await openViewer(page);
+
+  // A turn takes the batch. This is the state the viewer has always had.
+  await page.evaluate(() =>
+    fetch("/__lucid/ack", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "te-ack", turnId: "T1" }),
+    }),
+  );
+  await expect(on(page).agentWorking()).toContainText("Agent responding");
+
+  // ...and ends having produced nothing. Closing the window is right - the
+  // agent is not working. Closing it SILENTLY was not: the human was left
+  // with feedback marked delivered and no idea what came of it, which reads
+  // as if the turn never happened (plan 08 M7, OQ-3).
+  await page.evaluate(() =>
+    fetch("/__lucid/turn-ended", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ turnId: "T1", reason: "done" }),
+    }),
+  );
+  await expect(on(page).agentWorking()).toHaveCount(0);
+  await expect(on(page).turnEnded()).toContainText("finished without changing anything");
+
+  // A different reason is a different fact about what happened.
+  await page.evaluate(() =>
+    fetch("/__lucid/ack", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "te-ack2", turnId: "T2" }),
+    }),
+  );
+  await page.evaluate(() =>
+    fetch("/__lucid/turn-ended", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ turnId: "T2", reason: "usage_limit" }),
+    }),
+  );
+  await expect(on(page).turnEnded()).toContainText("over its usage limit");
+
+  // Real output answers the feedback, so the line gives way to it rather than
+  // sitting beside it.
+  await cli.run(["wait", cli.artifact, "--reply", "done", "--timeout", waitTimeoutSeconds(1)]);
+  await expect(on(page).turnEnded()).toHaveCount(0);
+});

@@ -606,6 +606,74 @@ describe("hub attend mode", () => {
     // per-test budget is not enough on a cold bun.
   }, 20_000);
 
+  test("a usage-limited turn stands down naming the pattern, not the harness's line", async () => {
+    // A harness prints its wall on the same line as whatever it was working
+    // on. Both consumers of a detection are RETAINED records - the hub log and
+    // the viewer's warning - so the line itself can reach neither (D-005).
+    const sentinel = "ACQUISITION-OF-NORTHWIND";
+    const walledStub = join(dir, "stub-walled.ts");
+    await writeFile(
+      walledStub,
+      `console.log(${JSON.stringify(`You've hit your session limit · resets 6:30pm ${sentinel}`)});\nprocess.exit(1);\n`,
+    );
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "stub",
+        harnesses: {
+          stub: {
+            spawn: [process.execPath, "run", walledStub],
+            resume: [process.execPath, "run", walledStub],
+          },
+        },
+      }),
+    );
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-walled",
+      version: 1,
+      target: elementTarget,
+      note: "this must not be swallowed by a wall",
+    });
+
+    const warnings: Array<{ code: string; message: string }> = [];
+    const attendant = createAttendant({
+      paths,
+      agentsListening: () => 0,
+      harnessesPath,
+      debounceMs: 10,
+      log: (m) => logs.push(m),
+      warn: (code, message) => warnings.push({ code, message }),
+    });
+    const deliveries = (): number => logs.filter((l) => l.includes("delivering feedback")).length;
+    try {
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline && warnings.length === 0) {
+        await attendant.tick();
+        await sleep(120);
+      }
+      // The CODE, not a sentence. The viewer owns the wording
+      // (client/chrome/warnings.ts), which is what makes this a warning the
+      // client renders in its own voice - and what keeps the harness's own
+      // line out of a retained log (07#13).
+      expect(warnings).toEqual([{ code: "HARNESS_USAGE_LIMIT", message: "session-limit" }]);
+      // The identifier is what the hub log holds, and the harness's own words
+      // are still on disk - so this cannot pass by never having read them.
+      expect(logs.some((l) => l.includes("session-limit"))).toBe(true);
+      expect(logs.some((l) => l.includes(sentinel))).toBe(false);
+      expect(await readFile(paths.attendLog, "utf8")).toContain(sentinel);
+      // A wall is not a flake: one turn, then the cool-off holds the mount off.
+      expect(deliveries()).toBe(1);
+      for (let i = 0; i < 3; i += 1) {
+        await attendant.tick();
+        await sleep(60);
+      }
+      expect(deliveries()).toBe(1);
+    } finally {
+      attendant.stop();
+    }
+  }, 20_000);
+
   test("delivers an undelivered batch by resuming the artifact's own session", async () => {
     const hub = await startDaemon(true);
     await mount(hub);

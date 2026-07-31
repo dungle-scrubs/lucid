@@ -106,6 +106,9 @@ interface HubState {
     /** The harness's own usage-limit line, when that is what killed the
      *  turn - the dialog names the wall instead of showing a bare tail. */
     readonly usageLimit?: string;
+    /** Which auth wall the turn died on, when it died on one. Additive: an
+     *  older shell ignores it and still renders the tail. */
+    readonly authFailure?: string;
   } | null;
   /** The last heartbeat from each LIVE create turn (M2.1), keyed by artifact:
    *  proof of life, so the dialog reports progress instead of inferring
@@ -506,13 +509,19 @@ const onHubFrame = (type: string, payload: string): void => {
       // A create turn exited without producing its artifact: stop the dialog's
       // "authoring…" wait NOW and say why (the log tail rides along).
       case "create-failed": {
-        const { artifact, tail, usageLimit } = JSON.parse(payload) as {
+        const { artifact, tail, usageLimit, authFailure } = JSON.parse(payload) as {
           artifact: string;
           tail: string;
           usageLimit?: string;
+          authFailure?: string;
         };
         useHub.setState((prev) =>
-          noteCreateFailed(prev, { artifact, tail, ...(usageLimit ? { usageLimit } : {}) }),
+          noteCreateFailed(prev, {
+            artifact,
+            tail,
+            ...(usageLimit ? { usageLimit } : {}),
+            ...(authFailure ? { authFailure } : {}),
+          }),
         );
         break;
       }

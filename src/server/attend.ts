@@ -248,6 +248,10 @@ export interface AttendantOptions {
   readonly warn?: (code: string, message: string) => void;
   /** Internal narration sink (M3.1); tests inject, production reads the flag. */
   readonly trace?: (message: () => string) => void;
+  /** The hub this attendant belongs to (plan 08, finding #21). Passed to every
+   *  turn it spawns so the turn's own `lucid open` calls back HERE, not at
+   *  whatever is listening on the default port. */
+  readonly hubPort?: number;
 }
 
 export interface Attendant {
@@ -622,6 +626,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       harness: record.harness,
       sessionId: record.sessionId,
       turnId,
+      ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
       // Only what the argv actually carries: a dropped stale pick must not
       // stamp the child as running a model it was never given.
       ...(applied.model !== undefined ? { model: applied.model } : {}),
@@ -659,9 +664,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     if (limit !== null) {
       fails = 0;
       pauseFor(ATTEND_COOLOFF_MS);
-      const message = `Delivery is paused: the attending harness is over its usage limit. ${limit}`;
-      log(`attend ${paths.name}: ${message}`);
-      options.warn?.("HARNESS_USAGE_LIMIT", message);
+      // The CODE, not a sentence. The viewer owns the wording for each kind
+      // (client/chrome/warnings.ts) - which is what makes this a warning the
+      // client can render in its own voice, and what stops the harness's own
+      // line riding along into a retained log the way it used to (07#13).
+      log(`attend ${paths.name}: delivery paused - harness limit (${limit})`);
+      options.warn?.("HARNESS_USAGE_LIMIT", limit);
       return;
     }
     if (fails >= MAX_ATTEND_FAILS) {
