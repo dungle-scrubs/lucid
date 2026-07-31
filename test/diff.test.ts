@@ -108,7 +108,7 @@ describe("diff cost scales with the document, not with its square", () => {
 
     const time = (n: number): number => {
       const t0 = performance.now();
-      diffHtml(build(n, false), build(n, true));
+      diffHtml(build(n, false), build(n, true), 1, 2);
       return performance.now() - t0;
     };
 
