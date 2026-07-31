@@ -3,6 +3,7 @@ import type { Anchor } from "../../src/anchors/anchor.ts";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { DeliveryLabel } from "./Delivery.tsx";
 import { FoldedText } from "./FoldedText.tsx";
+import { sentMarkShown } from "./store.ts";
 import type { MessageImage } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
@@ -83,9 +84,10 @@ const reveal = (id: string): void => {
  * pointed at is still what the note is about.
  */
 export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data }) => {
-  const { setHovered, openLightbox } = useActions();
+  const { setHovered, openLightbox, toggleSentMark } = useActions();
   const { transport } = useSessionHandle();
   const hovered = useSession((s) => s.hoveredId === data.id);
+  const markShown = useSession((s) => sentMarkShown(s, data.id));
   const images: readonly MessageImage[] = data.images ?? [];
   const orphaned = data.index === null;
   // Located, but only because something still occupies that slot. Saying
@@ -214,9 +216,28 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
           ))}
         </div>
       ) : null}
-      {/* Bottom-right, under the note: the last thing read on the card is
-          where it got to. */}
-      <DeliveryLabel className="self-end" />
+      {/* Bottom row: the mark link on the left, delivery on the right - the
+          last thing read on the card is where it got to. Sent marks are quiet
+          by default (delivered feedback's markup is noise on the artifact),
+          so this link is how one mark comes back: showing also scrolls the
+          surface to it. Hovering the card lights it briefly either way. An
+          orphan has no mark to show, so it keeps the delivery label alone. */}
+      {orphaned ? (
+        <DeliveryLabel className="self-end" />
+      ) : (
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            data-test="toggle-mark"
+            aria-pressed={markShown}
+            onClick={() => toggleSentMark(data.id)}
+            className="cursor-pointer text-[11px] text-steel-300 underline decoration-steel-500/60 underline-offset-2 hover:text-accent-bright"
+          >
+            {markShown ? "Hide in artifact" : "Show in artifact"}
+          </button>
+          <DeliveryLabel />
+        </div>
+      )}
     </section>
   );
 };

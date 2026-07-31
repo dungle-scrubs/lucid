@@ -154,6 +154,10 @@ export interface SessionStorage {
   readonly forgetQueuedItem: (id: string) => void;
   readonly readShowTargets: () => boolean;
   readonly persistShowTargets: (on: boolean) => void;
+  /** Whether SENT annotations paint their marks by default (off unless the
+   *  human opted in). Per session, like the targets toggle. */
+  readonly readShowSentMarks: () => boolean;
+  readonly persistShowSentMarks: (on: boolean) => void;
 }
 
 export const createSessionStorage = (
@@ -175,6 +179,7 @@ export const createSessionStorage = (
   const outboxPrefix = `lucid:outbox:${sessionKey}:`;
   const queuePrefix = `lucid:queue:${sessionKey}:`;
   const showTargetsKey = `lucid:showTargets:${sessionKey}`;
+  const showSentMarksKey = `lucid:showSentMarks:${sessionKey}`;
 
   /**
    * One persistence bucket: per-item keys under one prefix.
@@ -294,6 +299,25 @@ export const createSessionStorage = (
     }
   };
 
+  /** OFF by default - the opposite pole from showTargets. A sent annotation's
+   *  feedback has been delivered, so its markup on the artifact is noise
+   *  unless the human asks for it (per card, or with this default). */
+  const readShowSentMarks = (): boolean => {
+    try {
+      return localStorage.getItem(showSentMarksKey) === "1";
+    } catch {
+      return false;
+    }
+  };
+
+  const persistShowSentMarks = (on: boolean): void => {
+    try {
+      localStorage.setItem(showSentMarksKey, on ? "1" : "0");
+    } catch {
+      /* storage unavailable; the toggle simply resets next load */
+    }
+  };
+
   return {
     readOutbox,
     persistOutboxMessage,
@@ -303,6 +327,8 @@ export const createSessionStorage = (
     forgetQueuedItem,
     readShowTargets,
     persistShowTargets,
+    readShowSentMarks,
+    persistShowSentMarks,
   };
 };
 
@@ -401,6 +427,12 @@ export interface SessionState {
   sessionsLoading: boolean;
   /** Show the annotation marks on the surface. Remembered per session. */
   showTargets: boolean;
+  /** Whether SENT annotations paint their marks by default. Off until the
+   *  human flips it: delivered feedback's markup is noise on the artifact. */
+  showSentMarks: boolean;
+  /** Per-annotation exceptions to that default (id → shown), from each card's
+   *  show/hide link. In memory only: a reload returns to the default, quiet. */
+  sentMarkOverrides: Record<string, boolean>;
   /** Every `data-lucid-id` in the current artifact, published by the overlay.
    *  Null until the first report: a section permalink renders as a live chip
    *  while null (optimistic) or present, and degrades to plain text once the
@@ -455,6 +487,14 @@ export const hasComposerDraft = (
   s: Pick<SessionState, "pendingTarget" | "composerNote">,
 ): boolean => s.pendingTarget !== null && s.composerNote.trim().length > 0;
 
+/** Does this sent annotation paint its mark right now? The card's own link is
+ *  an exception to the session default, so the rule reads override-then-default
+ *  in exactly one place - the card's label and the highlight push must agree. */
+export const sentMarkShown = (
+  s: Pick<SessionState, "showSentMarks" | "sentMarkOverrides">,
+  id: string,
+): boolean => s.sentMarkOverrides[id] ?? s.showSentMarks;
+
 export const createSessionStore = (config: SessionConfig, storage: SessionStorage): SessionStore =>
   createStore<SessionState>(() => ({
     annotations: [],
@@ -494,6 +534,8 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     sessions: null,
     sessionsLoading: false,
     showTargets: storage.readShowTargets(),
+    showSentMarks: storage.readShowSentMarks(),
+    sentMarkOverrides: {},
     sectionIds: null,
     hoveredId: null,
     diffMode: false,

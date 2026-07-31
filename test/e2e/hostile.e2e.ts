@@ -262,6 +262,9 @@ test("picking the third of four identically-stamped rows marks the THIRD", async
   // this test's title while both stay green.
   const third = surface.locator(fixture.pick);
   await pickQueueSend(page, surface, fixture.pick, fixture.note);
+  // Sent marks are quiet by default; the card's link paints the one this
+  // test measures.
+  await on(page).toggleMark().click();
 
   // The committed mark's badge sits inside the THIRD row's box - not the
   // first's, which is where every ambiguous resolution used to land.

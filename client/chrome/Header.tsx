@@ -131,6 +131,30 @@ const Crosshair = ({ on }: { readonly on: boolean }) => (
   </svg>
 );
 
+/**
+ * Lucide `highlighter` - the session default for SENT annotation marks. Off by
+ * default: delivered feedback's markup is noise on the artifact, and each card
+ * can pin its own mark back on one by one. The struck-through glyph carries the
+ * off state without relying on hue, like the crosshair beside it.
+ */
+const Highlighter = ({ on }: { readonly on: boolean }) => (
+  <svg
+    viewBox="0 0 24 24"
+    width="14"
+    height="14"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="m9 11-6 6v3h9l3-3" />
+    <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" />
+    {on ? null : <line x1="4.2" x2="19.8" y1="4.2" y2="19.8" />}
+  </svg>
+);
+
 const fmtTokens = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
 /**
@@ -350,10 +374,11 @@ const VersionPicker = () => {
 };
 
 export const Header = () => {
-  const { enterDiff, toggleTargets } = useActions();
+  const { enterDiff, toggleTargets, toggleSentMarks } = useActions();
   const name = useSessionHandle().config.name;
   const version = useSession((s) => s.version);
   const showTargets = useSession((s) => s.showTargets);
+  const showSentMarks = useSession((s) => s.showSentMarks);
   const diffMode = useSession((s) => s.diffMode);
 
   return (
@@ -382,6 +407,33 @@ export const Header = () => {
             <TooltipContent>Show what changed</TooltipContent>
           </Tooltip>
         ) : null}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-test="toggle-sent-marks"
+                aria-pressed={showSentMarks}
+                aria-label={
+                  showSentMarks ? "Hide sent annotation marks" : "Show sent annotation marks"
+                }
+                onClick={toggleSentMarks}
+                className={`inline-flex cursor-pointer items-center border p-[3px] ${
+                  showSentMarks
+                    ? "border-ink-400 text-accent-bright hover:border-accent-bright"
+                    : "border-steel-600/60 text-steel-400 hover:border-steel-600 hover:text-steel-300"
+                }`}
+              >
+                <Highlighter on={showSentMarks} />
+              </button>
+            }
+          />
+          <TooltipContent>
+            {showSentMarks
+              ? "Hide sent annotation marks - each card can show its own"
+              : "Show every sent annotation's mark on the artifact"}
+          </TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger
             render={

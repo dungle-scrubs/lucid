@@ -1,6 +1,13 @@
 import { hook, on } from "./locators.ts";
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
-import { PLAN_V1, PLAN_V2, makeCli, type Cli, waitTimeoutSeconds } from "./helpers.ts";
+import {
+  PLAN_V1,
+  PLAN_V2,
+  makeCli,
+  overlaySettled,
+  type Cli,
+  waitTimeoutSeconds,
+} from "./helpers.ts";
 
 let cli: Cli;
 
@@ -825,6 +832,10 @@ test("annotations on one element cascade instead of hiding each other", async ({
   await on(page).sendQueue().click();
   await expect(on(page).annotation()).toHaveCount(2);
 
+  // Sent marks are quiet by default; the header default brings them all back.
+  await on(page).toggleSentMarks().click();
+  await expect(surface.locator(".badge")).toHaveCount(2);
+
   // Same anchor -> same rect. Without a cascade both badges land on the same
   // pixel and only the last is reachable.
   const lefts = await surface
@@ -1381,13 +1392,15 @@ test("the target toggle quiets the surface for reading and restores it", async (
   const marker = surface.locator(".marker");
   const toggle = on(page).toggleTargets();
 
-  // Targets are on by default, so a sent annotation paints a mark.
+  // Targets are on by default, but a SENT annotation's mark is quiet until
+  // asked for - the card's link pins it on, giving read mode a mark to hide.
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await surface.locator('li[data-lucid-id="step-backfill"]').click();
   await on(page).annotationNote().fill("A note");
   await on(page).addToQueue().click();
   await on(page).sendQueue().click();
   await expect(on(page).annotation()).toHaveCount(1);
+  await on(page).toggleMark().click();
   await expect(marker).toHaveCount(1);
 
   // Read mode: marks gone, and clicking the artifact no longer picks a target -
@@ -1405,6 +1418,103 @@ test("the target toggle quiets the surface for reading and restores it", async (
   await toggle.click();
   await expect(marker).toHaveCount(1);
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
+});
+
+test("a sent annotation's mark is quiet by default and comes back per card or all at once", async ({
+  page,
+}) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+  const marker = surface.locator(".marker.committed");
+  const badge = surface.locator(".badge");
+
+  for (const [sel, note] of [
+    ['li[data-lucid-id="step-backfill"]', "First note"],
+    ["#note", "Second note"],
+  ] as const) {
+    await surface.locator(sel).click();
+    await on(page).annotationNote().fill(note);
+    await on(page).addToQueue().click();
+  }
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(2);
+
+  // Delivered feedback stops shouting: no marks paint on send.
+  await expect(marker).toHaveCount(0);
+
+  // Hovering a card lights its mark for exactly as long as the question
+  // "where is this?" is being asked, then puts the paper back.
+  await on(page).annotation().nth(1).hover();
+  await expect(marker).toHaveCount(1);
+  await on(page).messageInput().hover();
+  await expect(marker).toHaveCount(0);
+
+  // The second card's link pins only its own mark - which keeps its own
+  // number: hiding #1 must not renumber #2's badge off its card.
+  const link = on(page).toggleMark().nth(1);
+  await expect(link).toHaveText("Show in artifact");
+  await link.click();
+  await on(page).messageInput().hover(); // off the card, so focus is not what paints it
+  await expect(badge).toHaveText(["2"]);
+  await expect(link).toHaveText("Hide in artifact");
+
+  // The header default shows every sent mark at once...
+  await on(page).toggleSentMarks().click();
+  await expect(badge).toHaveText(["1", "2"]);
+
+  // ...and flipping it back also clears the per-card exception: the toggle
+  // means "hide all", not "hide all except what was once shown".
+  await on(page).toggleSentMarks().click();
+  await expect(marker).toHaveCount(0);
+  await expect(link).toHaveText("Show in artifact");
+
+  // The default is the session's remembered preference: still on after reload.
+  await on(page).toggleSentMarks().click();
+  await expect(marker).toHaveCount(2);
+  await page.reload();
+  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
+  await expect(on(page).toggleSentMarks()).toHaveAttribute("aria-pressed", "true");
+  await expect(surfaceOf(page).locator(".marker.committed")).toHaveCount(2);
+});
+
+test("the mark toggles cannot paint today's annotations onto a historical snapshot", async ({
+  page,
+}) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await on(page).annotationNote().fill("A note");
+  await on(page).addToQueue().click();
+  await on(page).sendQueue().click();
+  await expect(on(page).annotation()).toHaveCount(1);
+
+  await cli.write(PLAN_V2);
+  await expect(surface.locator("h1")).toContainText("revised");
+  await expect(on(page).version()).toContainText("v2");
+
+  // Open v1 read-only. The snapshot is not the DOM the record was written
+  // against, so it must stay bare.
+  await on(page).version().click();
+  await page.getByRole("option", { name: "v1", exact: true }).click();
+  await expect(on(page).versionView()).toBeVisible();
+
+  // Both toggles stay clickable in history view, and each one pushes
+  // highlights - neither push may land marks on the snapshot.
+  await on(page).toggleSentMarks().click();
+  await on(page).toggleMark().click();
+  await overlaySettled(page);
+  await expect(surface.locator(".marker.committed")).toHaveCount(0);
+
+  // Back to the live artifact, the same state paints: default on, and the
+  // card's link was flipped to hide while the snapshot was up.
+  await on(page).versionViewExit().click();
+  await expect(surface.locator("h1")).toContainText("revised");
+  await expect(on(page).toggleSentMarks()).toHaveAttribute("aria-pressed", "true");
+  await expect(surface.locator(".marker.committed")).toHaveCount(0); // the card override says hide
+  await on(page).toggleMark().click();
+  await on(page).messageInput().hover();
+  await expect(surface.locator(".marker.committed")).toHaveCount(1);
 });
 
 test("change-view hunk navigation does not steal keys from a text field", async ({ page }) => {

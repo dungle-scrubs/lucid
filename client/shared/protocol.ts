@@ -86,6 +86,15 @@ export type ChromeMessage =
        * receives the anchors above and repaints instantly when this flips back.
        */
       readonly showTargets: boolean;
+      /**
+       * Which SENT annotations paint their mark (additive; an overlay that
+       * predates it paints them all). Sent marks are quiet by default - the
+       * feedback has been delivered, so its markup is noise on the artifact -
+       * and each card can pin its own mark back on. The full list still rides
+       * in `annotations` above: numbering and card↔mark focus follow the
+       * record, not the subset that happens to be visible.
+       */
+      readonly shownCommitted?: readonly string[];
     }
   | { readonly source: "lucid-chrome"; readonly type: "swap"; readonly html: string }
   | { readonly source: "lucid-chrome"; readonly type: "focus-annotation"; readonly id: string }

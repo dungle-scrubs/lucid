@@ -1,6 +1,6 @@
 import type { StateResponse } from "../../src/protocol/wire.ts";
 import type { ChromeMessage } from "../shared/protocol.ts";
-import type { SessionStore } from "./store.ts";
+import { sentMarkShown, type SessionStore } from "./store.ts";
 import { currentTheme } from "./theme.ts";
 import type { Transport } from "./transport.ts";
 
@@ -67,6 +67,22 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   const pushHighlights = (): void => {
     if (!overlayReady()) return;
     const s = get();
+    // A historical snapshot is read mode by definition (viewVersion): the
+    // current record was not written against that DOM. The guard lives HERE
+    // because the mark toggles (crosshair, sent-marks default, a card's link)
+    // stay clickable while a snapshot is up, and each of them pushes - one
+    // unguarded push would paint today's annotations onto yesterday's paper.
+    if (s.viewingVersion !== null) {
+      toOverlay({
+        source: "lucid-chrome",
+        type: "highlight",
+        annotations: [],
+        queued: [],
+        pending: null,
+        showTargets: false,
+      });
+      return;
+    }
     toOverlay({
       source: "lucid-chrome",
       type: "highlight",
@@ -82,6 +98,9 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
       pending: s.pendingTarget,
       pendingList: s.pendingTargets,
       showTargets: s.showTargets,
+      // Sent marks are opt-in (default quiet); queued and pending marks are
+      // unsent work and always paint. The full record still rides above.
+      shownCommitted: s.annotations.filter((a) => sentMarkShown(s, a.id)).map((a) => a.id),
     });
   };
 
