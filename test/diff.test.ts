@@ -112,9 +112,15 @@ describe("diff cost scales with the document, not with its square", () => {
       return performance.now() - t0;
     };
 
-    time(1000); // warm
-    const small = time(2000);
-    const large = time(8000);
+    // Warm both shapes, then compare medians. A single sample can put a GC
+    // pause on only one side of the ratio and turn machine load into a false
+    // complexity regression.
+    time(1000);
+    time(8000);
+    const median = (samples: number[]): number =>
+      samples.toSorted((a, b) => a - b)[Math.floor(samples.length / 2)] ?? Number.POSITIVE_INFINITY;
+    const small = median(Array.from({ length: 3 }, () => time(2000)));
+    const large = median(Array.from({ length: 3 }, () => time(8000)));
 
     // 4x the blocks. Linear would be ~4x the time; quadratic would be ~16x.
     // The bound is deliberately loose - this guards the COMPLEXITY, not a
