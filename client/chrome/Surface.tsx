@@ -292,7 +292,7 @@ export const SurfaceUpdating = () => {
     <div
       data-test="surface-updating"
       data-stale={stale ? "true" : "false"}
-      className={`absolute top-3 right-3 z-5 flex items-center gap-2 border py-1 pr-3 pl-2 text-[12px] shadow-[0_4px_14px_rgba(0,0,0,0.45)] ${
+      className={`flex items-center gap-2 border py-1 pr-3 pl-2 text-[12px] shadow-[0_4px_14px_rgba(0,0,0,0.45)] ${
         stale
           ? "border-ink-500 bg-ink-900/95 text-fg-muted"
           : "border-ink-400 bg-ink-900/95 text-fg"

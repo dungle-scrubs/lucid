@@ -177,6 +177,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   skip: (): Locator => root.locator(hook("skip")),
   agentBlocked: (): Locator => root.locator(hook("agent-blocked")),
   surfaceUpdating: (): Locator => root.locator(hook("surface-updating")),
+  surfaceControlStack: (): Locator => root.locator(hook("surface-control-stack")),
   tabAdd: (): Locator => root.locator(hook("tab-add")),
   tabAttention: (): Locator => root.locator(hook("tab-attention")),
   tabChat: (): Locator => root.locator(hook("tab-chat")),
