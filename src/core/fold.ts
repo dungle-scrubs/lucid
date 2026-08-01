@@ -134,7 +134,8 @@ export interface FoldedState {
   readonly lastAgentOutputSeq: number;
   /** Open "agent is working" window: set by agent_ack, closed by any agent
    *  output (version, reply, question) within the segment. A re-ack may add
-   *  declared intent; the window's `since` stays the first ack's time. */
+   *  declared intent and moves `heardAt`; the window's `since` stays the first
+   *  ack's time. */
   readonly agentWorking: AgentWorking | null;
   /**
    * The last turn to END without any agent output following it, if any.
@@ -452,6 +453,9 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   const ANON = "";
   interface OpenTurn {
     since: string;
+    /** The most recent ack on this turn - the only evidence in the log that it
+     *  is still alive. */
+    heardAt: string;
     intent?: "revise" | "reply";
     progress?: AgentProgress;
   }
@@ -479,7 +483,9 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       // A re-ack refines the open window (declared intent + fan-out progress)
       // without restarting its clock; the first ack's time is when delivery
       // happened. Progress is last-writer-wins so `done` can climb across acks.
-      const open = openTurns.get(turn) ?? { since: e.at };
+      const open = openTurns.get(turn) ?? { since: e.at, heardAt: e.at };
+      // Every ack is a heartbeat, whatever else it carries.
+      open.heardAt = e.at;
       if (e.intent) open.intent = e.intent;
       // Merge, don't replace: fields arrive on separate acks (start with
       // --total, later bump --done), so each refines the report rather than
@@ -539,6 +545,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   const agentWorking = oldestOpen
     ? {
         since: oldestOpen.since,
+        heardAt: oldestOpen.heardAt,
         ...(oldestOpen.intent ? { intent: oldestOpen.intent } : {}),
         ...(oldestOpen.progress ? { progress: oldestOpen.progress } : {}),
       }

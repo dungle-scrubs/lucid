@@ -19,6 +19,13 @@ export type PayloadStatus = "feedback" | "ended" | "suspended" | "waiting";
 /** Open "agent is working" window (ack received, no output yet). */
 export interface AgentWorking {
   readonly since: string;
+  /** The last time this turn said ANYTHING - its most recent ack. `since` is
+   *  when delivery happened and never moves, so it cannot answer "is this
+   *  still alive?": a turn narrating its phases for half an hour and a turn
+   *  that died two minutes in look identical by that clock. Optional: a server
+   *  older than this field simply reports nothing, and readers fall back to
+   *  `since`. */
+  readonly heardAt?: string;
   readonly intent?: "revise" | "reply";
   /** Self-reported fan-out progress; present iff the agent called `lucid progress`. */
   readonly progress?: AgentProgress;
