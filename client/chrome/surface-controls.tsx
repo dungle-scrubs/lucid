@@ -1,12 +1,14 @@
-import { useActions, useSession } from "./context.tsx";
+import type { CSSProperties } from "react";
+import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { SurfaceUpdating } from "./Surface.tsx";
 import { Button } from "./ui/button.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
  * Owns the chrome controls that occupy the artifact surface's top-right edge.
- * It deliberately excludes artifact-frame layout and bottom overlays so every
- * top-right notice shares one flow layout instead of independent coordinates.
+ * It deliberately excludes artifact-frame layout and bottom-overlay behavior.
+ * The common surface owner supplies the bottom overlay's measured footprint so
+ * every top-right notice shares one flow layout without duplicating geometry.
  */
 
 /** Cancel every staged composer pick and unanswered-question pin at once. */
@@ -66,12 +68,45 @@ const CancelPicksButton = () => {
   );
 };
 
-export const SurfaceControls = () => (
-  <div
-    data-test="surface-control-stack"
-    className="pointer-events-none absolute top-3 right-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-end gap-2 [&>*]:pointer-events-auto"
-  >
-    <SurfaceUpdating />
-    <CancelPicksButton />
-  </div>
-);
+interface SurfaceControlsProps {
+  readonly bottomOverlayHeight: number;
+}
+
+type SurfaceControlLayerStyle = CSSProperties & {
+  readonly "--surface-scrollbar-safe-inset": string;
+};
+
+export const SurfaceControls = (props: SurfaceControlsProps) => {
+  const { bottomOverlayHeight } = props;
+  const { surface } = useSessionHandle();
+  const layerStyle: SurfaceControlLayerStyle = {
+    "--surface-scrollbar-safe-inset": "18px",
+    bottom: `calc(${bottomOverlayHeight}px + 0.75rem)`,
+  };
+  const slotStyle = {
+    marginRight: "var(--surface-scrollbar-safe-inset)",
+    maxWidth: "calc(100% - var(--surface-scrollbar-safe-inset))",
+  };
+
+  return (
+    <div
+      data-test="surface-control-layer"
+      style={layerStyle}
+      className="pointer-events-none absolute top-3 right-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-end"
+    >
+      <div
+        data-test="surface-control-stack"
+        className="flex max-w-full shrink-0 flex-col items-end gap-2 [&>*]:pointer-events-auto"
+      >
+        <SurfaceUpdating />
+        <CancelPicksButton />
+      </div>
+      <div
+        ref={surface.attachOutlineSlot}
+        data-test="surface-outline-slot"
+        style={slotStyle}
+        className="pointer-events-none mt-2 min-h-0 w-[240px] flex-1 overflow-y-auto"
+      />
+    </div>
+  );
+};

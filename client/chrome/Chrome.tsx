@@ -291,20 +291,43 @@ const SurfaceRegion = ({
   readonly session: SessionHandle;
   readonly attachSurface: (el: HTMLIFrameElement | null) => void;
 }) => {
-  const { raised } = useQuestionDrawer();
+  const drawer = useQuestionDrawer();
+  const bottomOverlayObserver = useRef<ResizeObserver | null>(null);
+  const [bottomOverlayHeight, setBottomOverlayHeight] = useState(0);
+  const attachBottomOverlay = useCallback((element: HTMLElement | null): void => {
+    bottomOverlayObserver.current?.disconnect();
+    bottomOverlayObserver.current = null;
+    if (element === null) {
+      setBottomOverlayHeight((height) => (height === 0 ? height : 0));
+      return;
+    }
+    const measure = (): void => {
+      const height = element.getBoundingClientRect().height;
+      setBottomOverlayHeight((current) => (current === height ? current : height));
+    };
+    measure();
+    bottomOverlayObserver.current = new ResizeObserver(measure);
+    bottomOverlayObserver.current.observe(element);
+  }, []);
+  useEffect(() => () => bottomOverlayObserver.current?.disconnect(), []);
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden">
+    <section
+      data-test="surface-region"
+      aria-label="Artifact review surface"
+      tabIndex={-1}
+      className="relative min-h-0 flex-1 overflow-hidden outline-none focus-visible:annot-outline"
+    >
       <NewerVersionBanner />
       <DiffBar />
       <VersionViewBanner />
       <SessionGoneBanner />
-      <SurfaceControls />
+      <SurfaceControls bottomOverlayHeight={bottomOverlayHeight} />
       {/* The surface parallaxes UP while the question drawer is raised - the
           projects drawer's motion language, rotated. The artifact stays live
           and targetable the whole time; the drawer covers only its own band. */}
       <div
         className={`h-full w-full transition-transform duration-200 ease-out ${
-          raised ? "-translate-y-3" : "translate-y-0"
+          drawer.raised ? "-translate-y-3" : "translate-y-0"
         }`}
       >
         <iframe
@@ -333,8 +356,8 @@ const SurfaceRegion = ({
       {/* Over the SURFACE, never the review panel: a pending question is about
           the artifact, and the artifact must stay visible while it is
           answered (D11). */}
-      <QuestionDrawer />
-    </div>
+      <QuestionDrawer state={drawer} attach={attachBottomOverlay} />
+    </section>
   );
 };
 

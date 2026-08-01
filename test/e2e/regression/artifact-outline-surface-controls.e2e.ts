@@ -95,3 +95,94 @@ test("stale revision status stays separated from a multiple-pick action", async 
   await expect(on(page).surfaceUpdating()).toHaveAttribute("data-stale", "true");
   await expectSeparatedInsideStack(page);
 });
+
+test("the outline slot stays between top controls, bottom overlays, and the scrollbar", async ({
+  page,
+}) => {
+  await page.setViewportSize({ height: 760, width: 1_100 });
+  cli = await makeCli(PLAN_V1);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  const surface = surfaceOf(page);
+  await expect(surface.locator("h1")).toContainText("Database migration plan");
+
+  const region = on(page).surfaceRegion();
+  await expect(region).toHaveAccessibleName("Artifact review surface");
+  await expect(region).toHaveAttribute("tabindex", "-1");
+  await region.evaluate((element: HTMLElement) => element.focus());
+  await expect(region).toBeFocused();
+
+  await cli.run([
+    "ask",
+    cli.artifact,
+    "--text",
+    "Which part should change?",
+    "--option",
+    "Backfill|Update the first step",
+  ]);
+  await expect(on(page).questionDrawer()).toBeVisible();
+
+  const slot = on(page).surfaceOutlineSlot();
+  const stack = on(page).surfaceControlStack();
+  const drawer = on(page).questionDrawer();
+  await expect(slot).toHaveCSS("pointer-events", "none");
+  expect(await overlaps(slot, stack)).toBe(false);
+  expect(await overlaps(slot, drawer)).toBe(false);
+  expect(await fullyVisibleIn(slot, region)).toBe(true);
+
+  const slotBox = await slot.boundingBox();
+  const stackBox = await stack.boundingBox();
+  const frameBox = await page.locator('iframe[title="artifact surface"]').boundingBox();
+  expect(slotBox).not.toBeNull();
+  expect(stackBox).not.toBeNull();
+  expect(frameBox).not.toBeNull();
+  if (slotBox === null || stackBox === null || frameBox === null) return;
+  expect(stackBox.y + stackBox.height).toBeLessThanOrEqual(slotBox.y);
+  const scrollbarSafeInset = await on(page)
+    .surfaceControlLayer()
+    .evaluate((element) =>
+      Number.parseFloat(
+        getComputedStyle(element).getPropertyValue("--surface-scrollbar-safe-inset"),
+      ),
+    );
+  expect(frameBox.x + frameBox.width - (slotBox.x + slotBox.width)).toBeGreaterThanOrEqual(
+    scrollbarSafeInset,
+  );
+
+  await slot.evaluate((element) => {
+    const probe = document.createElement("div");
+    probe.dataset.test = "surface-outline-probe";
+    probe.style.height = "2000px";
+    probe.style.pointerEvents = "auto";
+    probe.style.width = "100%";
+    element.append(probe);
+  });
+  const scrollMetrics = await slot.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
+  expect(await overlaps(slot, drawer)).toBe(false);
+
+  await slot.locator('[data-test="surface-outline-probe"]').evaluate((element) => element.remove());
+  await on(page).skip().click();
+  await expect(drawer).toHaveCount(0);
+
+  await cli.cleanup();
+  cli = await makeCli(PLAN_V1);
+  const fresh = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(fresh.url);
+  await expect(surface.locator("h1")).toContainText("Database migration plan");
+  await cli.run(["intent", cli.artifact, "revise"]);
+  await expect(on(page).surfaceUpdating()).toBeVisible();
+  await surface.locator('li[data-lucid-id="step-backfill"]').click();
+  await expect(on(page).cancelPicks()).toBeVisible();
+  const freshSlot = on(page).surfaceOutlineSlot();
+  expect(await overlaps(freshSlot, stack)).toBe(false);
+
+  const receivesPointer = await freshSlot.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.tagName;
+  });
+  expect(receivesPointer).toBe("IFRAME");
+});
