@@ -26,6 +26,12 @@ describe("detectUsageLimit", () => {
     expect(detectUsageLimit("You've hit your session limit · resets 6:30pm")).toBe("session-limit");
   });
 
+  test("names claude code's weekly limit", () => {
+    expect(detectUsageLimit("You've hit your weekly limit · resets 2am (Asia/Bangkok)")).toBe(
+      "weekly-limit",
+    );
+  });
+
   test("names a google-family quota error (pi's default provider)", () => {
     expect(detectUsageLimit("Error: RESOURCE_EXHAUSTED: Quota exceeded for model")).toBe("quota");
   });

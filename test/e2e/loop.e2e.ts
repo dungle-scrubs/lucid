@@ -1825,10 +1825,11 @@ test("a turn that ends with nothing to show says so, instead of going quiet", as
     fetch("/__lucid/turn-ended", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ turnId: "T2", reason: "usage_limit" }),
+      body: JSON.stringify({ turnId: "T2", reason: "usage_limit", code: "weekly_limit" }),
     }),
   );
-  await expect(on(page).turnEnded()).toContainText("over its usage limit");
+  await expect(on(page).turnEnded()).toContainText("weekly usage limit");
+  await expect(on(page).warning()).toHaveCount(0);
 
   // Real output answers the feedback, so the line gives way to it rather than
   // sitting beside it.
@@ -1867,6 +1868,67 @@ test("a section permalink in a reply lands the reader on that section", async ({
   await expect(surface.locator("h1")).toContainText("revised");
   await expect(on(page).sectionLink()).toHaveCount(0);
   await expect(page.locator('[data-role="agent"]')).toContainText("the backfill step");
+});
+
+test("a newly added section already in view pulses instead of offering a jump", async ({
+  page,
+}) => {
+  const before = PLAN_V1.replace(
+    '    <ol id="steps">',
+    '    <section id="update-slot"></section>\n    <ol id="steps">',
+  );
+  const after = before.replace(
+    '    <section id="update-slot"></section>',
+    '    <section id="update-slot" data-lucid-id="new-summary"><h2>New summary</h2><p>The added answer is here.</p></section>',
+  );
+  await openViewer(page, before);
+  const surface = surfaceOf(page);
+
+  await cli.write(after);
+  const target = surface.locator('[data-lucid-id="new-summary"]');
+  await expect(target).toBeInViewport();
+  await cli.run([
+    "wait",
+    cli.artifact,
+    "--reply",
+    "Added [the new summary](lucid:section/new-summary).",
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ]);
+
+  await expect(target).toHaveClass(/__lucid_section_target/);
+  await expect(on(page).sectionLink()).toHaveCount(0);
+  await expect(page.locator('[data-role="agent"]')).toContainText("the new summary");
+});
+
+test("a newly added section off screen remains a jump target in chat", async ({ page }) => {
+  const spacer = '<div style="height: 2200px">Keep reading</div>';
+  const before = PLAN_V1.replace("  </article>", `    ${spacer}\n  </article>`);
+  const after = before.replace(
+    "  </article>",
+    '    <section data-lucid-id="new-appendix"><h2>New appendix</h2><p>The added answer is down here.</p></section>\n  </article>',
+  );
+  await openViewer(page, before);
+  const surface = surfaceOf(page);
+
+  await cli.write(after);
+  const target = surface.locator('[data-lucid-id="new-appendix"]');
+  await expect(target).not.toBeInViewport();
+  await cli.run([
+    "wait",
+    cli.artifact,
+    "--reply",
+    "Added [the new appendix](lucid:section/new-appendix).",
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ]);
+
+  const chip = on(page).sectionLink();
+  await expect(chip).toHaveText("the new appendix");
+  await expect(target).not.toHaveClass(/__lucid_section_target/);
+  await chip.click();
+  await expect(target).toBeInViewport();
+  await expect(target).toHaveClass(/__lucid_section_target/);
 });
 
 test("a blocked agent says so where the human is looking", async ({ page }) => {

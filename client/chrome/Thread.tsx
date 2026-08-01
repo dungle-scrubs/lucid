@@ -199,6 +199,7 @@ const WorkingIndicator = () => {
   const presence = useSession((s) => s.attendantPresence);
   const attendant = useSession((s) => s.lastAttendant);
   const resumable = useSession((s) => s.resumable);
+  const harnessCount = useSession((s) => s.selectionHarnesses.length);
   // Was anything ever handed to this agent? A create/authoring turn is working
   // on an empty session - nothing was picked up, so the stale line must not
   // say it was. Selected as two counts rather than a derived slice: a selector
@@ -238,9 +239,19 @@ const WorkingIndicator = () => {
   // the turn never happened. Distinct from the stale line below: this is a
   // turn we KNOW ended, not one that went quiet (OQ-3).
   if (!working && lastTurnEnd && status === "active") {
+    const limit =
+      lastTurnEnd.code === "weekly_limit"
+        ? "weekly usage limit"
+        : lastTurnEnd.code === "session_limit"
+          ? "session limit"
+          : lastTurnEnd.code === "credits"
+            ? "available credits"
+            : lastTurnEnd.code === "quota"
+              ? "provider quota"
+              : "usage limit";
     const ended =
       lastTurnEnd.reason === "usage_limit"
-        ? "The agent stopped: it is over its usage limit."
+        ? `The agent stopped because it reached its ${limit}. Your feedback is still here and can be continued after the limit resets${harnessCount > 1 ? " or by selecting another harness below" : ""}.`
         : lastTurnEnd.reason === "failed"
           ? "The agent's turn failed without producing anything."
           : "The agent read your feedback and finished without changing anything.";

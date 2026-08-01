@@ -310,6 +310,11 @@ agent to the moment it stops. A turn may produce a new **version**, a reply in
 the conversation log, both, or neither. A turn is not a session: one **harness
 session** runs many turns, and a turn may be driven headlessly by the **hub**
 (attend mode) or by a human in a terminal.
+
+A **harness handoff** starts a new harness session for the same artifact. The
+target reads the artifact's complete Lucid review record and current HTML, then
+takes the pending feedback. The review record transfers across harnesses;
+private harness context and tool traces do not.
 _Avoid_: run, pass, cycle.
 
 ### Ack

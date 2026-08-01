@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useActions, useSession } from "../context.tsx";
@@ -53,15 +53,25 @@ const MarkdownLink = ({
   readonly href?: string;
   readonly children?: ReactNode;
 }) => {
-  const { revealSection } = useActions();
+  const { pulseSection, revealSection } = useActions();
   const sectionIds = useSession((s) => s.sectionIds);
   const sectionId = href?.startsWith(SECTION_SCHEME) ? href.slice(SECTION_SCHEME.length) : null;
+  const addedInViewport = useSession((s) =>
+    sectionId === null ? false : s.addedSectionVisibility[sectionId] === true,
+  );
+
+  useEffect(() => {
+    if (sectionId !== null && addedInViewport) pulseSection(sectionId);
+  }, [addedInViewport, pulseSection, sectionId]);
 
   if (sectionId !== null) {
     // Live while the id set is unknown (optimistic, pre-first-report) or holds
     // it; a dead permalink becomes plain text, not a chip that goes nowhere.
     const live = sectionIds === null || sectionIds.includes(sectionId);
     if (!live) return <span>{children}</span>;
+    // The update is already under the reader's eyes. Plain prose plus the
+    // surface pulse communicates it without offering a jump that goes nowhere.
+    if (addedInViewport) return <span>{children}</span>;
     return (
       <Tooltip>
         <TooltipTrigger

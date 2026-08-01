@@ -74,7 +74,8 @@ pickers.
       "efforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "codex": {
-      "spawn": ["codex", "exec", "--sandbox", "workspace-write", "-C", "{cwd}", "{prompt}"],
+      "spawn": ["codex", "exec", "--json", "--sandbox", "workspace-write", "-C", "{cwd}", "{prompt}"],
+      "resume": ["codex", "exec", "resume", "{id}", "{prompt}"],
       "models": [
         // codex's ladder is per model GENERATION - the API enforces the subset,
         // so each model carries its own.
@@ -129,6 +130,18 @@ dialog and by `POST {base}/__lucid/selection`, and every later unattended
 resume reads it back. If the registry later stops offering that model or
 level, the turn still runs - on the CLI's own defaults - and the viewer says
 why (`SELECTION_INVALID`). A stalled delivery would be the worse failure.
+
+Changing the harness in the chat is a continuation handoff. The hub starts the
+target's `spawn` recipe with a fresh session id and tells it to read the current
+artifact plus the complete Lucid review log before applying pending feedback.
+Later turns use the target's `resume` recipe. This transfers Lucid's shared
+record, not private prompt context or tool traces that exist only inside the
+source harness.
+
+For Codex, keep `--json` on `spawn` and `{id}` on `resume`. Lucid reads the
+`thread.started` event from the spawn output and records Codex's own thread id.
+Using `resume --last` is unsafe because another Codex invocation can become the
+most recent thread between Lucid turns.
 
 ### The allowlist is a security decision, not plumbing
 

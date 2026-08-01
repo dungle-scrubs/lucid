@@ -67,6 +67,10 @@ export type OverlayMessage =
       readonly source: "lucid-overlay";
       readonly type: "section-ids";
       readonly ids: readonly string[];
+      /** Sections whose stable ids appeared in the just-applied version, plus
+       *  whether any part of each section was already in the artifact
+       *  viewport at that moment. Absent on initial boot and older overlays. */
+      readonly added?: readonly { readonly id: string; readonly inViewport: boolean }[];
     };
 
 /** chrome -> overlay */
@@ -103,6 +107,7 @@ export type ChromeMessage =
    *  the reader is not looking at the surface, so it must scroll there. */
   | { readonly source: "lucid-chrome"; readonly type: "reveal-annotation"; readonly id: string }
   | { readonly source: "lucid-chrome"; readonly type: "reveal-section"; readonly lucidId: string }
+  | { readonly source: "lucid-chrome"; readonly type: "pulse-section"; readonly lucidId: string }
   | { readonly source: "lucid-chrome"; readonly type: "request-section-ids" }
   | { readonly source: "lucid-chrome"; readonly type: "diff-show"; readonly html: string }
   | { readonly source: "lucid-chrome"; readonly type: "diff-goto"; readonly hunkId: string }

@@ -3,7 +3,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionPaths } from "../src/core/paths.ts";
-import { buildArgv, loadRegistry, resolveRecipe, type SpawnRecipe } from "../src/launch/recipes.ts";
+import {
+  buildArgv,
+  loadRegistry,
+  resolveRecipe,
+  spawnedSessionId,
+  type SpawnRecipe,
+} from "../src/launch/recipes.ts";
 import {
   applySelection,
   insertSelectionArgs,
@@ -41,8 +47,8 @@ const CLAUDE: SpawnRecipe = {
 };
 
 const CODEX: SpawnRecipe = {
-  spawn: ["codex", "exec", "--sandbox", "workspace-write", "-C", "{cwd}", "{prompt}"],
-  resume: ["codex", "exec", "resume", "--last", "{prompt}"],
+  spawn: ["codex", "exec", "--json", "--sandbox", "workspace-write", "-C", "{cwd}", "{prompt}"],
+  resume: ["codex", "exec", "resume", "{id}", "{prompt}"],
   models: [
     { id: "gpt-5.6-sol", efforts: ["medium", "high", "xhigh", "max", "ultra"] },
     { id: "gpt-5.5", efforts: ["minimal", "low", "medium", "high"] },
@@ -55,6 +61,23 @@ const PI: SpawnRecipe = {
   resume: ["pi", "-p", "--session-id", "{id}", "{prompt}"],
   efforts: ["off", "minimal", "low", "medium", "high", "xhigh"],
 };
+
+describe("spawnedSessionId", () => {
+  test("reads codex's structured thread identity through unrelated output", () => {
+    const output = [
+      "starting",
+      "{not json}",
+      JSON.stringify({ type: "thread.started", thread_id: "019c-thread" }),
+      JSON.stringify({ type: "turn.completed" }),
+    ].join("\n");
+    expect(spawnedSessionId("codex", output)).toBe("019c-thread");
+  });
+
+  test("does not infer another harness's session identity from its prose", () => {
+    const output = JSON.stringify({ type: "thread.started", thread_id: "not-pi's-id" });
+    expect(spawnedSessionId("pi", output)).toBeUndefined();
+  });
+});
 
 describe("registry v2 parsing", () => {
   let dir: string;
@@ -337,6 +360,7 @@ describe("insertSelectionArgs: placement in a real argv", () => {
       "exec",
       "-c",
       'model="gpt-5.6-sol"',
+      "--json",
       "--sandbox",
       "workspace-write",
       "-C",
@@ -356,7 +380,7 @@ describe("insertSelectionArgs: placement in a real argv", () => {
       "resume",
       "-c",
       'model_reasoning_effort="high"',
-      "--last",
+      "sess-1",
       "revise it",
     ]);
   });

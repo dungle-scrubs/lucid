@@ -177,7 +177,17 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
           .querySelector(`[data-annotation-id="${msg.id}"]`)
           ?.scrollIntoView({ behavior: "smooth", block: "center" });
       } else if (msg.type === "section-ids") {
-        set({ sectionIds: msg.ids });
+        set({
+          sectionIds: msg.ids,
+          ...(msg.added !== undefined
+            ? {
+                addedSectionVisibility: Object.fromEntries(
+                  msg.added.map((section) => [section.id, section.inViewport]),
+                ),
+                emphasizedSectionIds: new Set<string>(),
+              }
+            : {}),
+        });
       }
     };
     window.addEventListener("message", onMessage);

@@ -701,28 +701,66 @@ export class LucidOverlay extends LitElement {
    *  chat permalink's landing; a no-op if the id is gone (the chip that sent it
    *  should already have degraded to plain text from the published id set). */
   private revealSection(lucidId: string): void {
+    this.pulseSection(lucidId);
+    const target = this.sectionById(lucidId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  /** Flash a section where it already sits. This is the no-scroll half of the
+   *  update-location rule: if the new material is already under the reader's
+   *  eyes, moving the page would destroy rather than improve orientation. */
+  private pulseSection(lucidId: string): void {
     this.injectSectionStyle();
     for (const el of document.querySelectorAll(".__lucid_section_target")) {
       el.classList.remove("__lucid_section_target");
     }
-    // Match by attribute value rather than building a selector: an id with a
-    // quote or control char could make querySelector throw instead of missing.
-    const target = Array.from(document.querySelectorAll("[data-lucid-id]")).find(
-      (el) => el.getAttribute("data-lucid-id") === lucidId,
-    );
+    const target = this.sectionById(lucidId);
     if (!target) return;
     target.classList.add("__lucid_section_target");
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  /** Match by attribute value rather than building a selector: an id with a
+   *  quote or control char could make querySelector throw instead of missing. */
+  private sectionById(lucidId: string): Element | undefined {
+    return Array.from(document.querySelectorAll("[data-lucid-id]")).find(
+      (el) => el.getAttribute("data-lucid-id") === lucidId,
+    );
+  }
+
+  private sectionIsInViewport(el: Element): boolean {
+    const rect = el.getBoundingClientRect();
+    return (
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < window.innerHeight &&
+      rect.left < window.innerWidth
+    );
   }
 
   /** Report every `data-lucid-id` in the artifact so the chrome can tell a live
    *  section permalink from a dead one without reaching into this opaque-origin
    *  DOM. Published on load and after every swap. */
-  private publishSectionIds(): void {
-    const ids = Array.from(document.querySelectorAll("[data-lucid-id]"))
+  private publishSectionIds(addedIds?: ReadonlySet<string>): void {
+    const elements = Array.from(document.querySelectorAll("[data-lucid-id]"));
+    const ids = elements
       .map((el) => el.getAttribute("data-lucid-id"))
       .filter((id): id is string => id !== null && id !== "");
-    post({ source: "lucid-overlay", type: "section-ids", ids: Array.from(new Set(ids)) });
+    const uniqueIds = Array.from(new Set(ids));
+    const added =
+      addedIds === undefined
+        ? undefined
+        : uniqueIds.flatMap((id) => {
+            if (!addedIds.has(id)) return [];
+            const el = elements.find((candidate) => candidate.getAttribute("data-lucid-id") === id);
+            return el ? [{ id, inViewport: this.sectionIsInViewport(el) }] : [];
+          });
+    post({
+      source: "lucid-overlay",
+      type: "section-ids",
+      ids: uniqueIds,
+      ...(added !== undefined ? { added } : {}),
+    });
   }
 
   /** Scroll to a hunk and emphasize it with the brass active outline. */
@@ -874,6 +912,8 @@ export class LucidOverlay extends LitElement {
       this.revealAnnotation(msg.id);
     } else if (msg.type === "reveal-section") {
       this.revealSection(msg.lucidId);
+    } else if (msg.type === "pulse-section") {
+      this.pulseSection(msg.lucidId);
     } else if (msg.type === "request-section-ids") {
       this.publishSectionIds();
     } else if (msg.type === "measure-content") {
@@ -1016,6 +1056,11 @@ export class LucidOverlay extends LitElement {
   private swapArtifact(htmlText: string): void {
     this.removeDiffStyles();
     const parsed = new DOMParser().parseFromString(htmlText, "text/html");
+    const previousIds = new Set(
+      Array.from(document.querySelectorAll("[data-lucid-id]"))
+        .map((el) => el.getAttribute("data-lucid-id"))
+        .filter((id): id is string => id !== null && id !== ""),
+    );
     const host = document.getElementById(OVERLAY_ROOT_ID);
     // Remove current artifact body nodes (everything except our host + scripts).
     const keep = new Set<Node>();
@@ -1051,7 +1096,12 @@ export class LucidOverlay extends LitElement {
       document.head.appendChild(clone);
     });
     this.scheduleReposition();
-    this.publishSectionIds();
+    const currentIds = new Set(
+      Array.from(document.querySelectorAll("[data-lucid-id]"))
+        .map((el) => el.getAttribute("data-lucid-id"))
+        .filter((id): id is string => id !== null && id !== ""),
+    );
+    this.publishSectionIds(new Set([...currentIds].filter((id) => !previousIds.has(id))));
   }
 
   protected updated(_changed: PropertyValues): void {

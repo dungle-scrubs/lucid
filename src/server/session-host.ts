@@ -956,43 +956,50 @@ export const createSessionHost = (
   > => {
     const registry = await loadRegistry(options.harnessesPath).catch(() => null);
     if (!registry) return undefined;
+    const selection = await readSelection(paths);
     const state = foldLog((await readEvents(paths.logPath)).events);
     const recorded = [...state.sessionHistory].reverse().find((r) => r.harness)?.harness;
-    const found = resolveRecipe(registry, recorded);
+    const wanted = selection?.harness ?? recorded;
+    const found = resolveRecipe(registry, wanted);
     // Normalized: a registry keyed `claude_code` IS the `claude-code` an
     // artifact records. Comparing raw meant a fresh artifact stamped by an
     // agent had no vocabulary at all - no model picker, no effort picker -
     // purely because of a separator.
     return found &&
-      (recorded === undefined || normalizeHarness(found.name) === normalizeHarness(recorded))
+      (wanted === undefined || normalizeHarness(found.name) === normalizeHarness(wanted))
       ? found
       : undefined;
   };
+
+  const harnessInfo = (name: string, recipe: SpawnRecipe) => ({
+    name,
+    ...(recipe.models ? { models: recipe.models } : {}),
+    ...(recipe.defaultModel !== undefined ? { defaultModel: recipe.defaultModel } : {}),
+    ...(recipe.efforts ? { efforts: recipe.efforts } : {}),
+    ...(recipe.defaultEffort !== undefined ? { defaultEffort: recipe.defaultEffort } : {}),
+  });
 
   /** The selection route's answer: the sticky pick plus the vocabulary it was
    *  made in, so a picker can render without the hub's identity call (a
    *  dedicated `lucid open` server has no hub). */
   const selectionResponse = async (
     resolved: { readonly name: string; readonly recipe: SpawnRecipe } | undefined,
-  ): Promise<SelectionResponse> => ({
-    selection: (await readSelection(paths)) ?? {},
-    ...(resolved
-      ? {
-          harness: resolved.name,
-          info: {
-            name: resolved.name,
-            ...(resolved.recipe.models ? { models: resolved.recipe.models } : {}),
-            ...(resolved.recipe.defaultModel !== undefined
-              ? { defaultModel: resolved.recipe.defaultModel }
-              : {}),
-            ...(resolved.recipe.efforts ? { efforts: resolved.recipe.efforts } : {}),
-            ...(resolved.recipe.defaultEffort !== undefined
-              ? { defaultEffort: resolved.recipe.defaultEffort }
-              : {}),
-          },
-        }
-      : {}),
-  });
+  ): Promise<SelectionResponse> => {
+    const registry = await loadRegistry(options.harnessesPath).catch(() => null);
+    return {
+      selection: (await readSelection(paths)) ?? {},
+      ...(resolved
+        ? { harness: resolved.name, info: harnessInfo(resolved.name, resolved.recipe) }
+        : {}),
+      ...(registry
+        ? {
+            harnesses: Object.entries(registry.harnesses).map(([name, recipe]) =>
+              harnessInfo(name, recipe),
+            ),
+          }
+        : {}),
+    };
+  };
 
   /**
    * `{base}/__lucid/selection`: the artifact's sticky model/effort, which
@@ -1003,8 +1010,8 @@ export const createSessionHost = (
    * "default" means the CLI decides.
    */
   const handleSelection = async (req: Request): Promise<Response> => {
-    const resolved = await selectionHarness();
-    if (req.method === "GET") return json(await selectionResponse(resolved), 200, noStore);
+    const current = await selectionHarness();
+    if (req.method === "GET") return json(await selectionResponse(current), 200, noStore);
     // Clearing the pick is destructive and must be ASKED for: a body that did
     // not parse as an object is a malformed request, not an empty selection,
     // so a truncated or bodyless POST is refused instead of silently wiping
@@ -1013,19 +1020,35 @@ export const createSessionHost = (
     if (!body || typeof body !== "object") {
       return json({ error: "selection body must be a JSON object" }, 400);
     }
-    const selection = sanitizeSelection({ model: body.model, effort: body.effort });
+    const selection = sanitizeSelection({
+      harness: body.harness,
+      model: body.model,
+      effort: body.effort,
+    });
+    let resolved = current;
+    if (selection?.harness) {
+      const registry = await loadRegistry(options.harnessesPath).catch(() => null);
+      const candidate = registry ? resolveRecipe(registry, selection.harness) : undefined;
+      resolved =
+        candidate && normalizeHarness(candidate.name) === normalizeHarness(selection.harness)
+          ? candidate
+          : undefined;
+    }
     if (selection) {
       if (!resolved) {
-        return json({ error: "this artifact has no harness recipe to validate a selection" }, 400);
+        return json(
+          { error: `harness "${selection.harness ?? "unknown"}" is not configured` },
+          400,
+        );
       }
       const args = selectionArgs(resolved.name, resolved.recipe, selection);
       if ("error" in args) return json({ error: args.error }, 400);
     }
     await writeSelection(paths, {
-      ...(selection && resolved ? { harness: resolved.name } : {}),
       ...(selection ?? {}),
+      ...(selection && resolved ? { harness: resolved.name } : {}),
     });
-    const response = await selectionResponse(resolved);
+    const response = await selectionResponse(await selectionHarness());
     broadcastSelection(response);
     touch();
     return json(response);

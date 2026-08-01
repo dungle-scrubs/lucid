@@ -46,6 +46,13 @@ const registry = (exe: string) => ({
       efforts: ["low", "medium", "high", "xhigh", "max"],
       defaultEffort: "medium",
     },
+    codex: {
+      spawn: [exe, "exec", "{prompt}"],
+      models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+      defaultModel: "gpt-5.6-sol",
+      efforts: ["medium", "high", "xhigh"],
+      defaultEffort: "high",
+    },
   },
 });
 
@@ -151,6 +158,24 @@ test("the chat pickers write the artifact's sticky selection", async ({ page }) 
   await expect.poll(async () => await readFile(file, "utf8").catch(() => "")).toContain("opus-4.8");
   const stuck = JSON.parse(await readFile(file, "utf8")) as Record<string, string>;
   expect(stuck).toMatchObject({ harness: "claude-code", model: "opus-4.8", effort: "high" });
+});
+
+test("the chat can hand the next turn to another configured harness", async ({ page }) => {
+  hub = await startHub({ harnesses: registry("/bin/true") });
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+
+  await page.goto(opened.shellUrl);
+  const pickers = page.locator(`${hook("selection-pickers")}:visible`);
+  await expect(on(pickers).selectionHarness()).toContainText("claude-code");
+
+  await on(pickers).selectionHarness().click();
+  await page.getByRole("option", { name: "codex", exact: true }).click();
+
+  await expect(on(pickers).selectionHarness()).toContainText("codex");
+  await expect(on(pickers).selectionModel()).toContainText("default (gpt-5.6-sol)");
+  const stuck = JSON.parse(await readFile(selectionFile(cli), "utf8")) as Record<string, string>;
+  expect(stuck).toEqual({ harness: "codex" });
 });
 
 test("an attending session's own model is shown, not offered", async ({ page }) => {

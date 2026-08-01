@@ -17,6 +17,7 @@ import {
   loadRegistry,
   normalizeHarness,
   resolveRecipe,
+  spawnedSessionId,
   type SpawnRecipe,
 } from "../launch/recipes.ts";
 import { insertSelectionArgs, readSelection, selectionArgs } from "../launch/selection.ts";
@@ -300,6 +301,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   let stopped = false;
   /** Epoch ms before which this watcher does nothing (structural back-off). */
   let pausedUntil = 0;
+  /** Harness that caused a usage-wall pause. A deliberate switch bypasses it. */
+  let pausedHarness: string | undefined;
   /** The seq of our own outstanding delivery claim. Read back from the log it
    *  would look like somebody else took the batch, and the turn it belongs to
    *  is still being judged by its exit code. */
@@ -318,8 +321,9 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
    *  pick warns once instead of on every turn - but a NEW reason still does. */
   let saidSelectionInvalid = "";
 
-  const pauseFor = (ms: number): void => {
+  const pauseFor = (ms: number, harness?: string): void => {
     pausedUntil = Date.now() + ms;
+    pausedHarness = harness;
   };
 
   const unattendable = (reason: string): void => {
@@ -361,7 +365,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       return { args: [] };
     }
     const composed =
-      selection.harness !== undefined && selection.harness !== harnessName
+      selection.harness !== undefined &&
+      normalizeHarness(selection.harness) !== normalizeHarness(harnessName)
         ? {
             error: `the saved pick was made for harness "${selection.harness}", but this artifact resumes under "${harnessName}"`,
           }
@@ -516,9 +521,14 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       return;
     }
     const registry = await loadRegistry(options.harnessesPath);
-    const resolved = registry ? resolveRecipe(registry, record.harness) : undefined;
+    const selection = await readSelection(paths);
+    const switchesHarness =
+      selection?.harness !== undefined &&
+      normalizeHarness(selection.harness) !== normalizeHarness(record.harness);
+    const wantedHarness = switchesHarness ? selection.harness : record.harness;
+    const resolved = registry ? resolveRecipe(registry, wantedHarness) : undefined;
     if (!resolved) {
-      unattendable(`no spawn recipe for harness "${record.harness}"`);
+      unattendable(`no spawn recipe for harness "${wantedHarness}"`);
       return;
     }
     // Exact match only, unlike a fork: resuming session id X means re-entering
@@ -527,12 +537,13 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // Normalized: `claude_code` in the registry IS `claude-code` on the
     // artifact. Still exact in every other sense - resuming session id X means
     // re-entering ONE harness's conversation, never the registry default.
-    if (normalizeHarness(resolved.name) !== normalizeHarness(record.harness)) {
-      unattendable(`harness "${record.harness}" is not in the registry`);
+    if (normalizeHarness(resolved.name) !== normalizeHarness(wantedHarness)) {
+      unattendable(`harness "${wantedHarness}" is not in the registry`);
       return;
     }
-    if (!resolved.recipe.resume) {
-      unattendable(`recipe "${resolved.name}" has no resume argv`);
+    const recipeTemplate = switchesHarness ? resolved.recipe.spawn : resolved.recipe.resume;
+    if (!recipeTemplate) {
+      unattendable(`recipe "${resolved.name}" has no ${switchesHarness ? "spawn" : "resume"} argv`);
       return;
     }
 
@@ -548,8 +559,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       // revise turn on this one.
       forks: [],
     });
-    const prompt = revisePrompt(payload, paths.artifactPath);
-    if (prompt === null) {
+    const revision = revisePrompt(payload, paths.artifactPath);
+    if (revision === null) {
       // Pending, but nothing an agent can act on (a skipped question). Consume
       // it rather than re-deciding on it every poll.
       deliveredUpTo = target;
@@ -560,6 +571,17 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // Resume is cwd-scoped (D10): the session's own directory, else the
     // artifact's. The child is that harness session, never the hub's.
     const cwd = await usableCwd(record.cwd, paths.artifactDir);
+    const sessionId = switchesHarness ? crypto.randomUUID() : record.sessionId;
+    const prompt = switchesHarness
+      ? [
+          "You are continuing an existing Lucid review in a new harness session.",
+          `Read the full Lucid review record at ${paths.logPath}.`,
+          `Read the current artifact at ${paths.artifactPath}.`,
+          "The record is the complete shared transcript: human feedback, agent replies, questions, answers, and artifact versions.",
+          "Continue from that shared context, then handle the pending feedback below.",
+          revision,
+        ].join("\n")
+      : revision;
     // The artifact's sticky model/effort: read before EVERY resume, so a
     // change takes effect on the next turn without remounting the session.
     // Re-validated every time too - the registry is a file a human edits, and
@@ -568,9 +590,9 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const argv = insertSelectionArgs(
       resolved.name,
       buildArgv(
-        resolved.recipe.resume,
+        recipeTemplate,
         {
-          id: record.sessionId,
+          id: sessionId,
           artifact: paths.artifactPath,
           cwd,
           prompt,
@@ -578,7 +600,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
         resolved.recipe.tools,
       ),
       applied.args,
-      resolved.recipe.resume,
+      recipeTemplate,
     );
     await mkdir(paths.sessionDir, { recursive: true });
     // Last look before the process exists: everything above awaited, and an
@@ -611,15 +633,17 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       turnId,
       // The artifact's own session (D18): the hub acts on its behalf, and the
       // events the turn writes must not be attributed to the hub.
-      attendant: {
-        harness: record.harness,
-        sessionId: record.sessionId,
-        cwd,
-      },
+      // A handoff is not a session until its spawn succeeds or the child writes
+      // its own provenance. Stamping the target here made a pre-session failure
+      // look resumable on retry, so handoff delivery remains unattributed until
+      // the process establishes that session.
+      ...(!switchesHarness ? { attendant: { harness: resolved.name, sessionId, cwd } } : {}),
     }).catch(() => {
       /* presence is advisory; a failed ack must not cancel the delivery */
     });
-    log(`attend ${paths.name}: delivering feedback via "${resolved.name}" resume`);
+    log(
+      `attend ${paths.name}: delivering feedback via "${resolved.name}" ${switchesHarness ? "handoff" : "resume"}`,
+    );
     // Where this run's output will start in the shared attend log, so a
     // silent-turn relay reads THIS turn's words and never an earlier run's.
     const outputFrom = await stat(paths.attendLog).then(
@@ -627,8 +651,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       () => 0,
     );
     const code = await runSpawn(argv, cwd, paths.attendLog, {
-      harness: record.harness,
-      sessionId: record.sessionId,
+      harness: resolved.name,
+      sessionId,
       turnId,
       ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
       // Only what the argv actually carries: a dropped stale pick must not
@@ -636,6 +660,14 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       ...(applied.model !== undefined ? { model: applied.model } : {}),
       ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
     });
+    // Inspect THIS run before recording how it ended. The attend log appends
+    // every attempt, so scanning the whole file could make an unrelated later
+    // crash inherit an earlier turn's usage wall.
+    const runOutput = (await readFile(paths.attendLog, "utf8").catch(() => "")).slice(outputFrom);
+    const limit = code === 0 ? null : detectUsageLimit(runOutput);
+    const establishedSessionId = switchesHarness
+      ? (spawnedSessionId(resolved.name, runOutput) ?? (code === 0 ? sessionId : undefined))
+      : sessionId;
     // The turn stopped, whatever it produced. The hub holds the child, so it
     // is the authoritative witness - and without this a turn that read the
     // feedback and produced nothing left its window open forever (finding #1).
@@ -643,8 +675,13 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     await deliver(paths, {
       t: "agent_turn_ended",
       turnId,
-      reason: code === 0 ? "done" : "failed",
-      attendant: { harness: record.harness, sessionId: record.sessionId, cwd },
+      reason: code === 0 ? "done" : limit !== null ? "usage_limit" : "failed",
+      // Event codes use the log's identifier charset; limit kinds use hyphens
+      // on the warning wire. Both remain identifiers, never harness prose.
+      ...(limit !== null ? { code: limit.replaceAll("-", "_") } : {}),
+      ...(establishedSessionId
+        ? { attendant: { harness: resolved.name, sessionId: establishedSessionId, cwd } }
+        : {}),
     }).catch(() => {
       // The turn is over regardless; a failed append is not worth retrying
       // into a loop. The stale state still covers the viewer.
@@ -663,17 +700,13 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // A usage-limited harness is a WALL, not a flake: retrying burns nothing
     // but time, and the human sees feedback stuck at "recorded" with no clue
     // why. Name it in the viewer and stand down for the cool-off at once.
-    const output = await readFile(paths.attendLog, "utf8").catch(() => "");
-    const limit = detectUsageLimit(output);
     if (limit !== null) {
       fails = 0;
-      pauseFor(ATTEND_COOLOFF_MS);
-      // The CODE, not a sentence. The viewer owns the wording for each kind
-      // (client/chrome/warnings.ts) - which is what makes this a warning the
-      // client can render in its own voice, and what stops the harness's own
-      // line riding along into a retained log the way it used to (07#13).
+      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
+      // The turn-ended event above is durable chat state. Do not also broadcast
+      // a transient warning below the conversation: two treatments of the same
+      // wall made the one useful explanation look like two failures.
       log(`attend ${paths.name}: delivery paused - harness limit (${limit})`);
-      options.warn?.("HARNESS_USAGE_LIMIT", limit);
       return;
     }
     if (fails >= MAX_ATTEND_FAILS) {
@@ -848,7 +881,18 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   const tick = async (): Promise<void> => {
     if (stopped) return;
     const now = Date.now();
-    if (now < pausedUntil) return;
+    if (now < pausedUntil) {
+      const selection = await readSelection(paths);
+      if (
+        !pausedHarness ||
+        !selection?.harness ||
+        normalizeHarness(selection.harness) === normalizeHarness(pausedHarness)
+      ) {
+        return;
+      }
+      pausedUntil = 0;
+      pausedHarness = undefined;
+    }
     try {
       await evaluate(now);
     } catch (err) {
