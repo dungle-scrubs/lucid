@@ -5,9 +5,12 @@ import {
   isValidOutlineGeneration,
   isValidOutlineKey,
   type OutlineActivation,
+  type OutlineHealthCode,
   type OutlineLayoutRequest,
   type OutlineRuntimePublication,
+  type OutlineSnapshot,
   type OutlineSnapshotPublication,
+  validateOutlineSnapshot,
 } from "./artifact-outline.ts";
 
 /**
@@ -43,8 +46,15 @@ export interface OutlineChannelBootstrap {
   readonly version: 1;
 }
 
+export const isOutlineChannelBootstrap = (value: unknown): value is OutlineChannelBootstrap =>
+  isRecord(value) &&
+  value.source === "lucid-overlay-bootstrap" &&
+  value.type === "private-channel" &&
+  value.version === 1;
+
 export type OutlinePrivateInbound =
   | (OutlineLayoutRequest & { readonly type: "outline-layout-request" })
+  | { readonly type: "outline-suspend" }
   | (OutlineActivation & {
       readonly type: "outline-activate";
       readonly motion: "normal" | "reduced";
@@ -57,7 +67,39 @@ export type OutlinePrivateOutbound =
     })
   | (Omit<Extract<OutlineRuntimePublication, { readonly type: "invalidated" }>, "type"> & {
       readonly type: "outline-invalidated";
-    });
+    })
+  | { readonly type: "outline-frame-detaching" }
+  | { readonly type: "outline-revision-complete"; readonly revision: number };
+
+export interface OutlineDiagnosticHealth {
+  readonly code: OutlineHealthCode;
+  readonly count: number;
+  readonly generation: number;
+}
+
+export type ValidatedOutlinePrivateOutbound =
+  | {
+      readonly type: "outline-snapshot";
+      readonly requestGeneration: number;
+      readonly generation: number;
+      readonly snapshot: OutlineSnapshot | null;
+      readonly health: OutlineDiagnosticHealth | null;
+    }
+  | {
+      readonly type: "outline-active";
+      readonly generation: number;
+      readonly key: string | null;
+    }
+  | {
+      readonly type: "outline-invalidated";
+      readonly generation: number;
+      readonly health: OutlineDiagnosticHealth;
+    }
+  | {
+      readonly type: "outline-revision-complete";
+      readonly revision: number;
+    }
+  | { readonly type: "outline-frame-detaching" };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -66,7 +108,9 @@ const finiteNonNegative = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;
 
 export const validateOutlinePrivateInbound = (data: unknown): OutlinePrivateInbound | null => {
-  if (!isRecord(data) || !isValidOutlineGeneration(data.generation)) return null;
+  if (!isRecord(data)) return null;
+  if (data.type === "outline-suspend") return { type: "outline-suspend" };
+  if (!isValidOutlineGeneration(data.generation)) return null;
   if (data.type === "outline-layout-request") {
     if (
       !finiteNonNegative(data.preferredWidth) ||
@@ -101,6 +145,92 @@ export const validateOutlinePrivateInbound = (data: unknown): OutlinePrivateInbo
     key: data.key,
     motion: data.motion,
     type: "outline-activate",
+  };
+};
+
+const OUTLINE_HEALTH_CODES = new Set<OutlineHealthCode>([
+  "AO-001",
+  "AO-002",
+  "AO-003",
+  "AO-004",
+  "AO-005",
+]);
+
+const validateOutlineHealth = (value: unknown): OutlineDiagnosticHealth | null => {
+  if (!isRecord(value) || !OUTLINE_HEALTH_CODES.has(value.code as OutlineHealthCode)) return null;
+  if (
+    !isValidOutlineGeneration(value.generation) ||
+    !Number.isSafeInteger(value.occurrenceCount) ||
+    (value.occurrenceCount as number) < 1 ||
+    (value.occurrenceCount as number) > 1_000_000 ||
+    (value.reason !== undefined && (typeof value.reason !== "string" || value.reason.length > 128))
+  ) {
+    return null;
+  }
+  return {
+    code: value.code as OutlineHealthCode,
+    count: value.occurrenceCount as number,
+    generation: value.generation,
+  };
+};
+
+export const validateOutlinePrivateOutbound = (
+  data: unknown,
+): ValidatedOutlinePrivateOutbound | null => {
+  if (!isRecord(data)) return null;
+  if (data.type === "outline-frame-detaching") return { type: "outline-frame-detaching" };
+  if (data.type === "outline-revision-complete") {
+    return isValidOutlineGeneration(data.revision)
+      ? { revision: data.revision, type: "outline-revision-complete" }
+      : null;
+  }
+  if (!isValidOutlineGeneration(data.generation)) return null;
+  if (data.type === "outline-active") {
+    if (data.key !== null && !isValidOutlineKey(data.key)) return null;
+    return { generation: data.generation, key: data.key, type: "outline-active" };
+  }
+  if (data.type === "outline-invalidated") {
+    const health = validateOutlineHealth(data.health);
+    if (health === null || health.generation !== data.generation) return null;
+    return { generation: data.generation, health, type: "outline-invalidated" };
+  }
+  if (data.type !== "outline-snapshot" || !isValidOutlineGeneration(data.requestGeneration)) {
+    return null;
+  }
+  const health = data.health === undefined ? null : validateOutlineHealth(data.health);
+  if (data.health !== undefined && health === null) return null;
+  if (health !== null && health.generation !== data.generation) return null;
+  if (data.availability === "complete") {
+    const snapshot = validateOutlineSnapshot(data, { trustedGeometry: true });
+    return snapshot === null
+      ? null
+      : {
+          generation: data.generation,
+          health,
+          requestGeneration: data.requestGeneration,
+          snapshot,
+          type: "outline-snapshot",
+        };
+  }
+  if (
+    data.availability !== "absent" ||
+    !Array.isArray(data.headings) ||
+    data.headings.length !== 0 ||
+    data.activeKey !== null ||
+    !isRecord(data.proof) ||
+    data.proof.complete !== false ||
+    !finiteNonNegative(data.proof.clearancePx) ||
+    typeof data.proof.reason !== "string" ||
+    data.proof.reason.length > 128
+  ) {
+    return null;
+  }
+  return {
+    generation: data.generation,
+    health,
+    requestGeneration: data.requestGeneration,
+    snapshot: null,
+    type: "outline-snapshot",
   };
 };
 
@@ -179,7 +309,12 @@ export type ChromeMessage =
        */
       readonly shownCommitted?: readonly string[];
     }
-  | { readonly source: "lucid-chrome"; readonly type: "swap"; readonly html: string }
+  | {
+      readonly source: "lucid-chrome";
+      readonly type: "swap";
+      readonly html: string;
+      readonly revision?: number;
+    }
   | { readonly source: "lucid-chrome"; readonly type: "focus-annotation"; readonly id: string }
   /** Focus a mark AND bring it into view. `focus-annotation` only lights the
    *  mark where it already is (pointer hover); this is the keyboard "open" -

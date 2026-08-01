@@ -42,12 +42,25 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  */
 const readMarker = async (path: string, timeoutMs = 30_000): Promise<Record<string, unknown>> => {
   const deadline = Date.now() + timeoutMs;
+  let lastReadError: unknown;
   while (Date.now() < deadline) {
     const file = Bun.file(path);
-    if (await file.exists()) return (await file.json()) as Record<string, unknown>;
+    if (await file.exists()) {
+      try {
+        return (await file.json()) as Record<string, unknown>;
+      } catch (error) {
+        // Bun.write exposes the path before every byte is necessarily visible.
+        // Treat a partial JSON marker like an absent marker and keep polling.
+        lastReadError = error;
+      }
+    }
     await sleep(50);
   }
-  throw new Error(`stub harness never wrote ${path}`);
+  throw new Error(
+    `stub harness never wrote a complete marker at ${path}${
+      lastReadError instanceof Error ? `: ${lastReadError.message}` : ""
+    }`,
+  );
 };
 
 /** A stand-in harness: records the argv, identity env and cwd it was given. */

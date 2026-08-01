@@ -232,9 +232,23 @@ export type OutlinePresentationMode =
   | "TRANSIENT_HOVER"
   | "TRANSIENT_LATCHED";
 
-export interface OutlinePresentationState {
-  readonly mode: OutlinePresentationMode;
-}
+export type OutlinePresentationState =
+  | {
+      readonly mode: "ABSENT";
+      /** Last settled mode only - no snapshot or geometry survives invalidation. */
+      readonly priorMode?: "PINNED" | "TRANSIENT";
+      readonly latchOrigin?: never;
+    }
+  | {
+      readonly mode: Exclude<OutlinePresentationMode, "ABSENT" | "TRANSIENT_LATCHED">;
+      readonly latchOrigin?: never;
+      readonly priorMode?: never;
+    }
+  | {
+      readonly mode: "TRANSIENT_LATCHED";
+      readonly latchOrigin: "gutter" | "user";
+      readonly priorMode?: never;
+    };
 
 export interface OutlineProof {
   readonly complete: boolean;
@@ -254,7 +268,12 @@ export type OutlinePresentationEvent =
       readonly proof: OutlineProof;
       readonly focusInside?: boolean;
     }
-  | { readonly type: "invalidate"; readonly focusInside?: boolean }
+  | {
+      readonly type: "invalidate";
+      readonly focusInside?: boolean;
+      /** Preserve only the last mode bit across a soft geometry reproof. */
+      readonly preserveHysteresis?: boolean;
+    }
   | { readonly type: "hover-intent" }
   | { readonly type: "pointer-leave" }
   | { readonly type: "latch" }
@@ -262,56 +281,73 @@ export type OutlinePresentationEvent =
   | { readonly type: "dismiss" };
 
 export interface OutlinePresentationResult {
-  readonly mode: OutlinePresentationMode;
+  readonly state: OutlinePresentationState;
   readonly effects?: readonly ["focus-surface"];
 }
 
-const leaveForAbsent = (focusInside: boolean): OutlinePresentationResult =>
-  focusInside ? { effects: ["focus-surface"], mode: "ABSENT" } : { mode: "ABSENT" };
+const leaveForAbsent = (
+  focusInside: boolean,
+  priorMode?: "PINNED" | "TRANSIENT",
+): OutlinePresentationResult => {
+  const state: OutlinePresentationState =
+    priorMode === undefined ? { mode: "ABSENT" } : { mode: "ABSENT", priorMode };
+  return focusInside ? { effects: ["focus-surface"], state } : { state };
+};
 
 export const reduceOutlinePresentation = (
   state: OutlinePresentationState,
   event: OutlinePresentationEvent,
 ): OutlinePresentationResult => {
-  if (event.type === "invalidate") return leaveForAbsent(event.focusInside === true);
+  if (event.type === "invalidate") {
+    const priorMode = event.preserveHysteresis
+      ? state.mode === "PINNED" || (state.mode === "ABSENT" && state.priorMode === "PINNED")
+        ? "PINNED"
+        : "TRANSIENT"
+      : undefined;
+    return leaveForAbsent(event.focusInside === true, priorMode);
+  }
 
   if (event.type === "projection" || event.type === "interaction-finished") {
     if (event.headingCount < 2) return leaveForAbsent(event.focusInside === true);
 
     if (state.mode === "TRANSIENT_LATCHED" && event.type !== "interaction-finished") {
-      return { mode: "TRANSIENT_LATCHED" };
+      return { state };
     }
 
     const threshold =
-      state.mode === "PINNED"
+      state.mode === "PINNED" || (state.mode === "ABSENT" && state.priorMode === "PINNED")
         ? ARTIFACT_OUTLINE_POLICY.pinnedRetainClearancePx
         : ARTIFACT_OUTLINE_POLICY.pinnedEnterClearancePx;
     if (event.proof.complete && event.proof.clearancePx >= threshold) {
-      return { mode: "PINNED" };
+      return { state: { mode: "PINNED" } };
     }
     if (state.mode === "PINNED" && event.focusInside === true) {
-      return { mode: "TRANSIENT_LATCHED" };
+      return { state: { latchOrigin: "gutter", mode: "TRANSIENT_LATCHED" } };
     }
-    return { mode: "TRANSIENT_CLOSED" };
+    return { state: { mode: "TRANSIENT_CLOSED" } };
   }
 
   if (state.mode === "TRANSIENT_CLOSED") {
-    if (event.type === "hover-intent") return { mode: "TRANSIENT_HOVER" };
-    if (event.type === "latch") return { mode: "TRANSIENT_LATCHED" };
+    if (event.type === "hover-intent") return { state: { mode: "TRANSIENT_HOVER" } };
+    if (event.type === "latch") {
+      return { state: { latchOrigin: "user", mode: "TRANSIENT_LATCHED" } };
+    }
   }
   if (state.mode === "TRANSIENT_HOVER") {
-    if (event.type === "latch") return { mode: "TRANSIENT_LATCHED" };
+    if (event.type === "latch") {
+      return { state: { latchOrigin: "user", mode: "TRANSIENT_LATCHED" } };
+    }
     if (event.type === "pointer-leave" || event.type === "activate") {
-      return { mode: "TRANSIENT_CLOSED" };
+      return { state: { mode: "TRANSIENT_CLOSED" } };
     }
   }
   if (
     state.mode === "TRANSIENT_LATCHED" &&
     (event.type === "activate" || event.type === "dismiss")
   ) {
-    return { mode: "TRANSIENT_CLOSED" };
+    return { state: { mode: "TRANSIENT_CLOSED" } };
   }
-  return { mode: state.mode };
+  return { state };
 };
 
 export type OutlineRateChannel = "snapshot" | "active-key";

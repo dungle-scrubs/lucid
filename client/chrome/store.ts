@@ -10,6 +10,8 @@ import type {
   SelectionState,
 } from "../../src/protocol/wire.ts";
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
+import type { OutlineHealthRecord } from "./artifact-outline-session.ts";
+import type { OutlineSnapshot } from "../shared/artifact-outline.ts";
 import type { GroupDraft } from "./question-draft.ts";
 import type {
   AgentQuestion,
@@ -470,6 +472,14 @@ export interface SessionState {
   /** Visible additions already pulsed for the current version. The action
    *  guards this synchronously so React effect replay cannot restart it. */
   emphasizedSectionIds: ReadonlySet<string>;
+  /** The active frame's bounded, private-channel outline projection. It is
+   * cleared as soon as this session leaves the foreground or loses its frame. */
+  outlineSnapshot: OutlineSnapshot | null;
+  /** Text-free AO diagnostics for the active projection boundary. */
+  outlineHealth: OutlineHealthRecord | null;
+  /** A safe-slot refresh is in flight. The canonical snapshot is already
+   * cleared; focused presentation may wait briefly for its replacement. */
+  outlinePending: boolean;
   hoveredId: string | null;
   diffMode: boolean;
   diffData: DiffData | null;
@@ -510,6 +520,16 @@ export interface SessionState {
 }
 
 export type SessionStore = StoreApi<SessionState>;
+
+/** Stable source-slice selectors. Derived outline collections belong in
+ * `useMemo` at the rendering boundary, never in a Zustand selector. */
+export const selectOutlineSnapshot = (state: SessionState) => state.outlineSnapshot;
+export const selectOutlineHealth = (state: SessionState) => state.outlineHealth;
+export const selectOutlinePending = (state: SessionState) => state.outlinePending;
+export const selectOutlineGeneration = (state: SessionState): number =>
+  state.outlineSnapshot?.generation ?? state.outlineHealth?.generation ?? 0;
+export const selectOutlineHealthCode = (state: SessionState): string =>
+  state.outlineHealth?.code ?? "";
 
 /** The one spelling of "the composer holds queueable work": a pick, and a
  *  note that is more than whitespace. This pair was being re-derived inline
@@ -574,6 +594,9 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     sectionIds: null,
     addedSectionVisibility: {},
     emphasizedSectionIds: new Set(),
+    outlineSnapshot: null,
+    outlineHealth: null,
+    outlinePending: false,
     hoveredId: null,
     diffMode: false,
     diffData: null,

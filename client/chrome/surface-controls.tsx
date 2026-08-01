@@ -1,4 +1,6 @@
 import type { CSSProperties } from "react";
+import { ARTIFACT_OUTLINE_POLICY } from "../shared/artifact-outline.ts";
+import { ArtifactOutline } from "./artifact-outline.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { SurfaceUpdating } from "./Surface.tsx";
 import { Button } from "./ui/button.tsx";
@@ -76,23 +78,30 @@ type SurfaceControlLayerStyle = CSSProperties & {
   readonly "--surface-scrollbar-safe-inset": string;
 };
 
+const SURFACE_CONTROL_EDGE_INSET_PX = 12.5;
+
 export const SurfaceControls = (props: SurfaceControlsProps) => {
   const { bottomOverlayHeight } = props;
   const { surface } = useSessionHandle();
   const layerStyle: SurfaceControlLayerStyle = {
-    "--surface-scrollbar-safe-inset": "18px",
-    bottom: `calc(${bottomOverlayHeight}px + 0.75rem)`,
+    "--surface-scrollbar-safe-inset": `${ARTIFACT_OUTLINE_POLICY.railInsetPx}px`,
+    bottom: `calc(${bottomOverlayHeight}px + ${SURFACE_CONTROL_EDGE_INSET_PX}px)`,
+    top: `${SURFACE_CONTROL_EDGE_INSET_PX}px`,
   };
   const slotStyle = {
     marginRight: "var(--surface-scrollbar-safe-inset)",
     maxWidth: "calc(100% - var(--surface-scrollbar-safe-inset))",
+    width: `${ARTIFACT_OUTLINE_POLICY.outlineWidthPx}px`,
   };
 
   return (
     <div
       data-test="surface-control-layer"
       style={layerStyle}
-      className="pointer-events-none absolute top-3 right-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-end"
+      // The header's text metrics place the surface on a half CSS pixel. Move
+      // both safe-slot edges inward by the matching half pixel so borders land
+      // on whole device pixels at 1x and 2x without weakening proof clearance.
+      className="pointer-events-none absolute right-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-end"
     >
       <div
         data-test="surface-control-stack"
@@ -105,8 +114,10 @@ export const SurfaceControls = (props: SurfaceControlsProps) => {
         ref={surface.attachOutlineSlot}
         data-test="surface-outline-slot"
         style={slotStyle}
-        className="pointer-events-none mt-2 min-h-0 w-[240px] flex-1 overflow-y-auto"
-      />
+        className="pointer-events-none mt-2 flex min-h-0 flex-1 flex-col items-end overflow-y-auto"
+      >
+        <ArtifactOutline />
+      </div>
     </div>
   );
 };

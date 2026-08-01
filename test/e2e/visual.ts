@@ -6,6 +6,7 @@
 // visible rather than a merge conflict nobody reads.
 
 import type { FrameLocator, Locator, Page } from "@playwright/test";
+import type { ArtifactOutlineDebugInfo } from "../../client/overlay/artifact-outline-runtime.ts";
 
 /** The active session's artifact frame. `:visible` because every open tab's
  *  view stays mounted, so N iframes exist and only one is showing. */
@@ -61,6 +62,17 @@ export const overlaySettled = async (page: Page): Promise<void> => {
     });
   });
 };
+
+/** Bounded diagnostics exposed by the active artifact's outline controller. */
+export const outlineDebugInfo = async (page: Page): Promise<ArtifactOutlineDebugInfo | null> =>
+  surfaceOf(page)
+    .locator("#__lucid_overlay_root")
+    .evaluate((root) => {
+      const overlay = root.firstElementChild as Element & {
+        outlineDebugInfo?: () => ArtifactOutlineDebugInfo;
+      };
+      return overlay.outlineDebugInfo?.() ?? null;
+    });
 
 /**
  * Wait until nothing on the page is moving.

@@ -1,5 +1,11 @@
 import type { StateResponse } from "../../src/protocol/wire.ts";
 import type { ChromeMessage } from "../shared/protocol.ts";
+import { createChromeArtifactOutline, type OutlinePort } from "./artifact-outline-session.ts";
+import {
+  claimPendingOutlineChannel,
+  discardPendingOutlineChannel,
+  subscribeOutlineChannels,
+} from "./outline-channel.ts";
 import { annotationFocused, type SessionStore } from "./store.ts";
 import { currentTheme } from "./theme.ts";
 import type { Transport } from "./transport.ts";
@@ -22,6 +28,13 @@ export interface Surface {
    * Callers measure this slot, never the independent notices above it. */
   readonly attachOutlineSlot: (el: HTMLDivElement | null) => void;
   readonly outlineSlotRect: () => DOMRect | null;
+  /** Request a fresh bounded projection using the current frame and safe slot. */
+  readonly requestOutlineLayout: () => boolean;
+  /** Only the foreground session may retain or accept outline state. */
+  readonly setOutlineActive: (active: boolean) => void;
+  /** Suspend proof while parent chrome is moving the artifact frame. */
+  readonly setOutlineGeometryMoving: (source: "divider" | "drawer", moving: boolean) => void;
+  readonly activateOutline: (key: string, motion: "normal" | "reduced") => boolean;
   /** The overlay signalled `ready` (or the iframe finished loading, which
    *  implies the overlay module ran - a missed one-shot `ready` must not leave
    *  the surface unpainted). */
@@ -38,6 +51,8 @@ export interface Surface {
   /** Live reload, deferred until the human's draft is committed (D-055). */
   readonly onNewVersion: (version: number) => Promise<void>;
   readonly hasUnsentDraft: () => boolean;
+  /** Release the private outline channel and its module-level subscription. */
+  readonly dispose: () => void;
 }
 
 /**
@@ -67,7 +82,10 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   const set = store.setState;
 
   let iframeEl: HTMLIFrameElement | null = null;
+  let detachedIframeEl: HTMLIFrameElement | null = null;
   let outlineSlotEl: HTMLDivElement | null = null;
+  let outlineSlotObserver: ResizeObserver | null = null;
+  const outlineGeometryMotions = new Set<"divider" | "drawer">();
   /**
    * The element whose overlay has announced itself. Readiness is a fact about
    * an ELEMENT, not this controller: a boolean here got wiped by a
@@ -84,6 +102,38 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
    * alone rather than half-applying.
    */
   let bootstrapSeq = 0;
+
+  const finiteInset = (value: number): number => (Number.isFinite(value) ? Math.max(0, value) : 0);
+  const outlineSlotRect = (): DOMRect | null => outlineSlotEl?.getBoundingClientRect() ?? null;
+  const ownsSource = (source: MessageEventSource | null): boolean =>
+    iframeEl !== null && source === iframeEl.contentWindow;
+  const outlineLayoutAvailable = (): boolean => iframeEl !== null && outlineSlotEl !== null;
+  const effectiveOutlineLayoutAvailable = (): boolean =>
+    outlineLayoutAvailable() && outlineGeometryMotions.size === 0;
+  const outline = createChromeArtifactOutline({
+    getState: () => get(),
+    measureLayout: () => {
+      if (iframeEl === null) return null;
+      const slotRect = outlineSlotRect();
+      if (slotRect === null) return null;
+      const frameRect = iframeEl.getBoundingClientRect();
+      return {
+        preferredWidth: finiteInset(slotRect.width),
+        safeInsets: {
+          bottom: finiteInset(frameRect.bottom - slotRect.bottom),
+          right: finiteInset(frameRect.right - slotRect.right),
+          top: finiteInset(slotRect.top - frameRect.top),
+        },
+      };
+    },
+    setState: (patch) => set(patch),
+  });
+  const acceptOutlinePort = (source: MessageEventSource, port: OutlinePort) => {
+    if (!ownsSource(source)) return "unowned" as const;
+    outline.acceptPort(port);
+    return "handled" as const;
+  };
+  const unsubscribeOutlineChannels = subscribeOutlineChannels(acceptOutlinePort);
 
   const toOverlay = (message: ChromeMessage): void => {
     iframeEl?.contentWindow?.postMessage(message, "*");
@@ -146,6 +196,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     // listener, so we ask again from this reliable point (fires on `ready` and
     // on the iframe onLoad fallback) rather than trusting the push alone.
     toOverlay({ source: "lucid-chrome", type: "request-section-ids" });
+    outline.requestLayout(true);
   };
 
   const hasUnsentDraft = (): boolean => {
@@ -213,7 +264,8 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   };
 
   const applySwap = (html: string, version: number): void => {
-    toOverlay({ source: "lucid-chrome", type: "swap", html });
+    const outlineRevision = outline.prepareRevision();
+    toOverlay({ source: "lucid-chrome", type: "swap", html, revision: outlineRevision });
     // A live update supersedes a historical view: the surface is now the new
     // current, so history mode ends rather than showing a stale snapshot label.
     set((s) => ({ diffBase: s.version, version, newerVersion: null, viewingVersion: null }));
@@ -247,21 +299,70 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   };
 
   const attach = (el: HTMLIFrameElement | null): void => {
+    if (el === iframeEl) return;
+    if (el === null) {
+      detachedIframeEl = iframeEl;
+      iframeEl = null;
+      outline.setLayoutAvailable(false);
+      return;
+    }
+    if (detachedIframeEl !== null && el !== detachedIframeEl) {
+      discardPendingOutlineChannel(detachedIframeEl.contentWindow);
+      outline.resetChannel();
+    } else if (iframeEl !== null && el !== iframeEl) {
+      discardPendingOutlineChannel(iframeEl.contentWindow);
+      outline.resetChannel();
+    }
     iframeEl = el;
+    detachedIframeEl = null;
+    outline.setLayoutAvailable(effectiveOutlineLayoutAvailable());
+    if (el.contentWindow) claimPendingOutlineChannel(el.contentWindow, acceptOutlinePort);
   };
 
   const attachOutlineSlot = (el: HTMLDivElement | null): void => {
+    outlineSlotObserver?.disconnect();
+    outlineSlotObserver = null;
     outlineSlotEl = el;
+    outline.setLayoutAvailable(effectiveOutlineLayoutAvailable());
+    if (el !== null) {
+      outlineSlotObserver = new ResizeObserver(() => {
+        // requestLayout revokes the previous proof synchronously. The iframe
+        // runtime owns quieting and projection throttling; while a parent drag
+        // or transition is active this is a deliberate no-op, followed by one
+        // forced request when movement ends.
+        outline.requestLayout();
+      });
+      outlineSlotObserver.observe(el);
+    }
   };
 
-  const outlineSlotRect = (): DOMRect | null => outlineSlotEl?.getBoundingClientRect() ?? null;
+  const setOutlineGeometryMoving = (source: "divider" | "drawer", moving: boolean): void => {
+    const wasMoving = outlineGeometryMotions.size > 0;
+    if (moving) outlineGeometryMotions.add(source);
+    else outlineGeometryMotions.delete(source);
+    if (wasMoving === outlineGeometryMotions.size > 0) return;
+    outline.setLayoutAvailable(effectiveOutlineLayoutAvailable());
+  };
 
-  const ownsSource = (source: MessageEventSource | null): boolean =>
-    iframeEl !== null && source === iframeEl.contentWindow;
+  const dispose = (): void => {
+    outlineSlotObserver?.disconnect();
+    outlineSlotObserver = null;
+    unsubscribeOutlineChannels();
+    discardPendingOutlineChannel(iframeEl?.contentWindow ?? null);
+    discardPendingOutlineChannel(detachedIframeEl?.contentWindow ?? null);
+    outline.dispose();
+    iframeEl = null;
+    detachedIframeEl = null;
+    outlineSlotEl = null;
+  };
 
   return {
     attach,
     attachOutlineSlot,
+    requestOutlineLayout: outline.requestLayout,
+    setOutlineActive: outline.setActive,
+    setOutlineGeometryMoving,
+    activateOutline: outline.activate,
     markOverlayReady,
     ownsSource,
     outlineSlotRect,
@@ -271,5 +372,6 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     bootstrap,
     onNewVersion,
     hasUnsentDraft,
+    dispose,
   };
 };

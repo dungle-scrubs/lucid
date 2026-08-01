@@ -14,6 +14,7 @@ import {
   type OutlineLayoutRequest,
   type OutlineProjection,
   type OutlineRuntimePublication,
+  type OutlineSnapshotProof,
   type OutlineSnapshotPublication,
   projectOutlineHeadings,
 } from "../shared/artifact-outline.ts";
@@ -97,6 +98,7 @@ export interface ArtifactOutlineDebugInfo {
   readonly lastDurationMs: number;
   readonly pendingFrame: boolean;
   readonly pendingQuietTask: boolean;
+  readonly proofClearancePx: number;
   readonly proofComplete: boolean;
   readonly proofReason: string;
   readonly healthCode: OutlineHealth["code"] | null;
@@ -117,6 +119,8 @@ interface WorkState {
   inspected: number;
   readonly startedAt: number;
 }
+
+const SNAPSHOT_MINIMUM_INTERVAL_MS = 1_000 / ARTIFACT_OUTLINE_POLICY.maxSnapshotsPerSecond;
 
 const visible = (style: OutlineRuntimeStyle): boolean =>
   style.display !== "none" &&
@@ -167,21 +171,28 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #cancelQuiet: (() => void) | null = null;
   #connected = true;
   #elementsByKey = new Map<string, ElementType>();
+  #elementKeys = new WeakMap<object, string>();
   #generation = 0;
   #health: OutlineHealth | null = null;
   #examinedTextCodeUnits = 0;
   #examinedTextNodes = 0;
   #inspected = 0;
   #lastDurationMs = 0;
+  #lastProjectionStartedAt = Number.NEGATIVE_INFINITY;
   #lastSnapshotAt = Number.NEGATIVE_INFINITY;
   #lastActiveSampleAt = Number.NEGATIVE_INFINITY;
   #cancelSnapshot: (() => void) | null = null;
   #pendingSnapshot: OutlineSnapshotPublication | null = null;
   #projection: OutlineProjection = { generation: 0, kind: "absent" };
-  #proofComplete = false;
-  #proofReason = "not-requested";
+  #proofDiagnostic: OutlineSnapshotProof = {
+    clearancePx: 0,
+    complete: false,
+    reason: "not-requested",
+  };
   #request: OutlineLayoutRequest | null = null;
   readonly #rateGate = createOutlineRateGate();
+  #keyEpoch = 0;
+  #nextElementKey = 0;
   #scheduleVersion = 0;
   #taskCount = 0;
 
@@ -191,10 +202,11 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
 
   requestLayout(request: OutlineLayoutRequest): void {
     if (!this.#connected) return;
+    const initialRequest = this.#request === null;
     this.#withdrawProjection("layout-request");
     this.#clearPendingSnapshot();
     this.#request = request;
-    this.invalidate("layout-request", false);
+    this.invalidate(initialRequest ? "initial-layout-request" : "layout-request", false);
   }
 
   invalidate(reason: string, publishInvalidation = true): void {
@@ -204,14 +216,24 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#cancelQuiet?.();
     this.#cancelQuiet = null;
     if (publishInvalidation) this.#withdrawProjection(reason);
-    this.#cancelQuiet = this.#dependencies.scheduleQuiet(
-      ARTIFACT_OUTLINE_POLICY.quietLayoutMs,
-      () => {
+    const throttleCompute = reason !== "initial-layout-request" && reason !== "revision";
+    const schedule = (delayMs: number): void => {
+      this.#cancelQuiet = this.#dependencies.scheduleQuiet(delayMs, () => {
         this.#cancelQuiet = null;
         if (!this.#connected || version !== this.#scheduleVersion) return;
+        if (throttleCompute) {
+          const remaining =
+            SNAPSHOT_MINIMUM_INTERVAL_MS -
+            (this.#dependencies.now() - this.#lastProjectionStartedAt);
+          if (remaining > 0) {
+            schedule(Math.ceil(remaining));
+            return;
+          }
+        }
         this.#runProjection();
-      },
-    );
+      });
+    };
+    schedule(ARTIFACT_OUTLINE_POLICY.quietLayoutMs);
   }
 
   revise(): void {
@@ -219,9 +241,29 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#withdrawProjection("revision");
     this.#clearPendingSnapshot();
     this.#generation += 1;
+    this.#keyEpoch += 1;
+    this.#nextElementKey = 0;
+    this.#elementKeys = new WeakMap<object, string>();
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#elementsByKey.clear();
     this.invalidate("revision");
+  }
+
+  suspend(): void {
+    if (!this.#connected) return;
+    this.#scheduleVersion += 1;
+    this.#cancelQuiet?.();
+    this.#cancelQuiet = null;
+    this.#cancelFrame?.();
+    this.#cancelFrame = null;
+    this.#cancelActiveSample?.();
+    this.#cancelActiveSample = null;
+    this.#clearPendingSnapshot();
+    this.#request = null;
+    this.#elementsByKey.clear();
+    this.#projection = { generation: this.#generation, kind: "absent" };
+    this.#activeKey = null;
+    this.#proofDiagnostic = { clearancePx: 0, complete: false, reason: "suspended" };
   }
 
   #withdrawProjection(reason: string): void {
@@ -238,8 +280,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#elementsByKey.clear();
     this.#activeKey = null;
-    this.#proofComplete = false;
-    this.#proofReason = reason;
+    this.#proofDiagnostic = { clearancePx: 0, complete: false, reason };
   }
 
   activate(
@@ -305,8 +346,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#elementsByKey.clear();
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#activeKey = null;
-    this.#proofComplete = false;
-    this.#proofReason = "disconnected";
+    this.#proofDiagnostic = { clearancePx: 0, complete: false, reason: "disconnected" };
   }
 
   debugInfo(): ArtifactOutlineDebugInfo {
@@ -323,8 +363,9 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       lastDurationMs: this.#lastDurationMs,
       pendingFrame: this.#cancelFrame !== null,
       pendingQuietTask: this.#cancelQuiet !== null,
-      proofComplete: this.#proofComplete,
-      proofReason: this.#proofReason,
+      proofClearancePx: this.#proofDiagnostic.clearancePx,
+      proofComplete: this.#proofDiagnostic.complete,
+      proofReason: this.#proofDiagnostic.reason,
       taskCount: this.#taskCount,
     };
   }
@@ -338,6 +379,16 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     return this.#dependencies.now() - work.startedAt <= ARTIFACT_OUTLINE_POLICY.proofTimeBudgetMs;
   }
 
+  #keyFor(element: ElementType): string {
+    const identity = element.nativeElement ?? element;
+    const existing = this.#elementKeys.get(identity);
+    if (existing !== undefined) return existing;
+    this.#nextElementKey += 1;
+    const key = `ao-${this.#keyEpoch}-${this.#nextElementKey}`;
+    this.#elementKeys.set(identity, key);
+    return key;
+  }
+
   #clearPendingSnapshot(): void {
     this.#cancelSnapshot?.();
     this.#cancelSnapshot = null;
@@ -347,12 +398,11 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #publishSnapshot(publication: OutlineSnapshotPublication): void {
     this.#pendingSnapshot = publication;
     const now = this.#dependencies.now();
-    const minimumIntervalMs = 1_000 / ARTIFACT_OUTLINE_POLICY.maxSnapshotsPerSecond;
     const elapsed = now - this.#lastSnapshotAt;
-    if (Number.isFinite(elapsed) && elapsed < minimumIntervalMs) {
+    if (Number.isFinite(elapsed) && elapsed < SNAPSHOT_MINIMUM_INTERVAL_MS) {
       if (this.#cancelSnapshot === null) {
         this.#cancelSnapshot = this.#dependencies.scheduleQuiet(
-          Math.ceil(minimumIntervalMs - elapsed),
+          Math.ceil(SNAPSHOT_MINIMUM_INTERVAL_MS - elapsed),
           () => {
             this.#cancelSnapshot = null;
             const pending = this.#pendingSnapshot;
@@ -364,11 +414,14 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     }
     if (!this.#rateGate.accept("snapshot", now)) {
       if (this.#cancelSnapshot === null) {
-        this.#cancelSnapshot = this.#dependencies.scheduleQuiet(minimumIntervalMs, () => {
-          this.#cancelSnapshot = null;
-          const pending = this.#pendingSnapshot;
-          if (pending !== null && this.#connected) this.#publishSnapshot(pending);
-        });
+        this.#cancelSnapshot = this.#dependencies.scheduleQuiet(
+          SNAPSHOT_MINIMUM_INTERVAL_MS,
+          () => {
+            this.#cancelSnapshot = null;
+            const pending = this.#pendingSnapshot;
+            if (pending !== null && this.#connected) this.#publishSnapshot(pending);
+          },
+        );
       }
       return;
     }
@@ -514,6 +567,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #runProjection(): void {
     const request = this.#request;
     if (request === null) return;
+    this.#lastProjectionStartedAt = this.#dependencies.now();
     this.#taskCount += 1;
     this.#generation += 1;
     const work: WorkState = {
@@ -556,9 +610,9 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       }
     }
 
-    const keyed = eligible.map((element, index) => ({
+    const keyed = eligible.map((element) => ({
       element,
-      input: { key: `ao-${this.#generation}-${index + 1}`, text: element.text },
+      input: { key: this.#keyFor(element), text: element.text },
     }));
     const projection = projectOutlineHeadings(
       this.#generation,
@@ -607,8 +661,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#examinedTextCodeUnits = work.examinedTextCodeUnits;
     this.#examinedTextNodes = work.examinedTextNodes;
     this.#lastDurationMs = this.#dependencies.now() - work.startedAt;
-    this.#proofComplete = proof.complete;
-    this.#proofReason = proof.reason;
+    this.#proofDiagnostic = proof;
     this.#publishSnapshot({
       activeKey: this.#activeKey,
       availability: projection.kind === "complete" ? "complete" : "absent",
@@ -635,8 +688,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#examinedTextCodeUnits = work.examinedTextCodeUnits;
     this.#examinedTextNodes = work.examinedTextNodes;
     this.#lastDurationMs = this.#dependencies.now() - work.startedAt;
-    this.#proofComplete = false;
-    this.#proofReason = reason;
+    this.#proofDiagnostic = { clearancePx: 0, complete: false, reason };
     this.#publishSnapshot({
       activeKey: null,
       availability: "absent",

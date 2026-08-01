@@ -58,6 +58,14 @@ const planNamed = (title: string, heading?: string): string => {
   return heading ? titled.replace("Database migration plan", heading) : titled;
 };
 
+const outlinePlanNamed = (title: string, sectionPrefix: string): string => `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>${title}</title>
+<style>body{font-family:system-ui;max-width:640px;margin:40px auto}</style></head>
+<body><h1>${title}</h1><h2>${sectionPrefix} context</h2><p>A</p>
+<h2>${sectionPrefix} execution</h2><p style="height:480px">B</p>
+<h2>${sectionPrefix} risks</h2><p>C</p></body></html>`;
+
 const tabNamed = (page: Page, name: string): Locator =>
   page.locator(hook("shell-tab"), { hasText: name });
 
@@ -299,6 +307,91 @@ test("closing the active tab promotes a neighbour that is still live", async ({ 
   await expect(page.locator('[data-role="agent"]:visible')).toContainText(
     "promoted neighbour check",
   );
+});
+
+test("switching and closing tabs never leaves another session's outline projected", async ({
+  page,
+}) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, outlinePlanNamed("Alpha outline", "Alpha"));
+  const cli = opened.cli;
+  clis.push(cli);
+  const beta = join(cli.dir, "beta.html");
+  await writeFile(beta, outlinePlanNamed("Beta outline", "Beta"), "utf8");
+
+  await page.setViewportSize({ width: 1_600, height: 820 });
+  await page.goto(opened.shellUrl);
+  const outlines = on(page).artifactOutline();
+  const visibleItems = on(page).artifactOutlineItem().filter({ visible: true });
+  const revealOutline = async (): Promise<void> => {
+    const rail = on(page).artifactOutlineRail().filter({ visible: true });
+    if ((await rail.count()) > 0) await rail.focus();
+  };
+  await expect(outlines).toHaveCount(1);
+  await revealOutline();
+  await expect(visibleItems).toContainText(["Alpha context", "Alpha execution", "Alpha risks"]);
+
+  await cli.run(["open", beta]);
+  await expect(on(page).shellTab()).toHaveCount(2);
+  await expect(activeTab(page)).toContainText("Beta outline");
+  await expect(surfaceOf(page).locator("h1")).toContainText("Beta outline");
+  await expect(outlines).toHaveCount(1);
+  await revealOutline();
+  await expect(visibleItems).toContainText(["Beta context", "Beta execution", "Beta risks"]);
+  await expect(visibleItems.filter({ hasText: "Alpha context" })).toHaveCount(0);
+
+  // A hidden tab is suspended, but frame detach remains a document-lifetime
+  // signal. Reloading it must replace the private channel before activation.
+  await page
+    .locator('iframe[title="artifact surface"]')
+    .first()
+    .contentFrame()
+    .locator("body")
+    .evaluate(() => window.location.reload());
+  await expect(
+    page.locator('iframe[title="artifact surface"]').first().contentFrame().locator("h1"),
+  ).toHaveText("Alpha outline");
+
+  await tabNamed(page, "Alpha outline").click();
+  await expect(activeTab(page)).toContainText("Alpha outline");
+  await expect(surfaceOf(page).locator("h1")).toContainText("Alpha outline");
+  await expect(outlines).toHaveCount(1);
+  await revealOutline();
+  await expect(visibleItems).toContainText(["Alpha context", "Alpha execution", "Alpha risks"]);
+  await expect(visibleItems.filter({ hasText: "Beta context" })).toHaveCount(0);
+
+  // A drawer state change under display:none has no CSS transition events.
+  // It must not leave geometry suspended when that tab becomes visible.
+  await tabNamed(page, "Beta outline").click();
+  await cli.run([
+    "ask",
+    cli.artifact,
+    "--text",
+    "Which Alpha checkpoint should remain visible?",
+    "--option",
+    "Alpha execution|Keep the execution checkpoint",
+  ]);
+  await expect(on(page).questionDrawer()).toHaveCount(1);
+  await expect(on(page).questionDrawer()).not.toBeVisible();
+  await tabNamed(page, "Alpha outline").click();
+  await expect(on(page).questionDrawer()).toBeVisible();
+  await expect(outlines).toHaveCount(1);
+  await revealOutline();
+  await expect(visibleItems).toContainText(["Alpha context", "Alpha execution", "Alpha risks"]);
+  await on(page).answer().click();
+  await expect(on(page).questionDrawer()).toHaveCount(0);
+  await expect(outlines).toHaveCount(1);
+
+  await activeTab(page).locator(hook("tab-close")).click();
+  await expect(activeTab(page)).toContainText("Beta outline");
+  await expect(surfaceOf(page).locator("h1")).toContainText("Beta outline");
+  await expect(outlines).toHaveCount(1);
+  await revealOutline();
+  await expect(visibleItems).toContainText(["Beta context", "Beta execution", "Beta risks"]);
+
+  await activeTab(page).locator(hook("tab-close")).click();
+  await expect(on(page).shellTab()).toHaveCount(0);
+  await expect(outlines).toHaveCount(0);
 });
 
 test("⌘W over an unsent queue: reopening the artifact restores the queued note", async ({

@@ -218,6 +218,7 @@ export class BrowserArtifactOutlineController {
   #connected = true;
   #started = false;
   #stops: (() => void)[] = [];
+  #stopFrameDetach: (() => void) | null;
   #transportPublications = 0;
 
   constructor(
@@ -229,6 +230,7 @@ export class BrowserArtifactOutlineController {
     this.#capabilities = capabilities;
     this.#emphasis = emphasis;
     this.#runtime = this.#createRuntime();
+    this.#stopFrameDetach = this.#capabilities.onFrameDetach(() => this.#detachFrame());
     this.#port.addEventListener("message", this.#onMessage);
     this.#port.addEventListener("close", this.#onClose);
     this.#port.start();
@@ -238,14 +240,37 @@ export class BrowserArtifactOutlineController {
     this.#runtime.revise();
   }
 
-  disconnect(): void {
+  revisionComplete(revision: number): void {
     if (!this.#connected) return;
+    this.#post({ revision, type: "outline-revision-complete" });
+  }
+
+  disconnect(): void {
+    this.#shutdown({ closePort: true, notifyDetach: false });
+  }
+
+  #detachFrame(): void {
+    this.#shutdown({ closePort: false, notifyDetach: true });
+  }
+
+  #shutdown(policy: { readonly closePort: boolean; readonly notifyDetach: boolean }): void {
+    if (!this.#connected) return;
+    if (policy.notifyDetach) {
+      // Authenticate the document boundary over the private port before this
+      // realm disappears. The parent can then release its old endpoint before
+      // the replacement document offers its own pre-artifact channel.
+      this.#post({ type: "outline-frame-detaching" });
+    }
     this.#connected = false;
     this.#runtime.disconnect();
-    for (const stop of this.#stops.splice(0)) stop();
+    this.#stopObservers();
+    this.#stopFrameDetach?.();
+    this.#stopFrameDetach = null;
     this.#port.removeEventListener("message", this.#onMessage);
     this.#port.removeEventListener("close", this.#onClose);
-    this.#port.close();
+    if (policy.closePort) this.#port.close();
+    // A detaching realm leaves its local endpoint open so the queued notice
+    // remains deliverable. The parent closes its endpoint after receiving it.
   }
 
   debugInfo(): ArtifactOutlineDebugInfo & { readonly transportPublications: number } {
@@ -290,18 +315,27 @@ export class BrowserArtifactOutlineController {
       this.#capabilities.observeStyleActivity(invalidate),
       this.#capabilities.onDocumentLoad(invalidate),
       this.#capabilities.onFontsSettled(invalidate),
-      this.#capabilities.onFrameDetach(() => this.disconnect()),
       this.#capabilities.onWindowResize(invalidate),
       this.#capabilities.onWindowScroll(() => {
         this.#runtime.trackActive();
-        this.#runtime.invalidate("root-scroll", false);
+        this.#runtime.invalidate("root-scroll");
       }),
     );
+  }
+
+  #stopObservers(): void {
+    for (const stop of this.#stops.splice(0)) stop();
+    this.#started = false;
   }
 
   readonly #onMessage = (event: MessageEvent<unknown>): void => {
     const message = validateOutlinePrivateInbound(event.data);
     if (message === null) return;
+    if (message.type === "outline-suspend") {
+      this.#runtime.suspend();
+      this.#stopObservers();
+      return;
+    }
     if (message.type === "outline-layout-request") {
       this.#startObservers();
       this.#runtime.requestLayout(message);

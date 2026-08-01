@@ -1,10 +1,15 @@
-import { hook, on } from "./locators.ts";
+import { hook, mod, on } from "./locators.ts";
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { ARTIFACT_OUTLINE_POLICY } from "../../client/shared/artifact-outline.ts";
 import {
   PLAN_V1,
   PLAN_V2,
   makeCli,
+  outlineDebugInfo,
   overlaySettled,
+  overlaps,
   type Cli,
   waitTimeoutSeconds,
 } from "./helpers.ts";
@@ -18,11 +23,15 @@ test.afterEach(async () => {
 const surfaceOf = (page: Page): FrameLocator =>
   page.frameLocator('iframe[title="artifact surface"]');
 
-const openViewer = async (page: Page, html: string = PLAN_V1): Promise<{ nextCursor: string }> => {
+const openViewer = async (
+  page: Page,
+  html: string = PLAN_V1,
+  expectedTitle = "Database migration plan",
+): Promise<{ nextCursor: string }> => {
   cli = await makeCli(html);
   const session = (await cli.run(["open", cli.artifact])) as { url: string; nextCursor: string };
   await page.goto(session.url);
-  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
+  await expect(surfaceOf(page).locator("h1")).toContainText(expectedTitle);
   return { nextCursor: session.nextCursor };
 };
 
@@ -1909,7 +1918,7 @@ test("a reduced-motion section reveal rests without focusing the artifact headin
   await expect(target).not.toBeFocused();
 });
 
-test("the dormant outline runtime publishes complete geometry only over its pre-artifact port", async ({
+test("the active outline runtime publishes complete geometry only over its pre-artifact port", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 2_400, height: 900 });
@@ -1928,7 +1937,10 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
         state.port === null
       ) {
         state.port = event.ports[0] ?? null;
-        if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+        if (state.port) {
+          state.port.addEventListener("message", (message) => state.messages.push(message.data));
+          state.port.start();
+        }
       } else if (event.data?.type === "outline-snapshot") {
         state.windowOutlineMessages += 1;
       }
@@ -1958,13 +1970,15 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
       ),
     )
     .toBe(true);
-  expect(
-    await page.evaluate(
-      () =>
-        (window as unknown as { __outlineTest: { messages: unknown[] } }).__outlineTest.messages
-          .length,
-    ),
-  ).toBe(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __outlineTest: { messages: unknown[] } }).__outlineTest.messages
+            .length,
+      ),
+    )
+    .toBeGreaterThan(0);
   expect(
     await page.evaluate(
       () =>
@@ -1972,19 +1986,13 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
           .windowOutlineMessages,
     ),
   ).toBe(1);
-  const dormantDebug = await surface.locator("#__lucid_overlay_root").evaluate((root) => {
-    const overlay = root.firstElementChild as Element & {
-      outlineDebugInfo?: () => Record<string, unknown>;
-    };
-    return overlay.outlineDebugInfo?.() ?? null;
-  });
-  expect(dormantDebug).toMatchObject({ dormant: true, connected: true });
+  expect(await outlineDebugInfo(page)).toMatchObject({ dormant: false, connected: true });
 
   await page.evaluate(() => {
     const port = (window as unknown as { __outlineTest: { port: MessagePort } }).__outlineTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 17,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -2021,17 +2029,19 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
         () => (window as unknown as { __outlineTest: { errors: string[] } }).__outlineTest.errors,
       ),
   ).toEqual([]);
-  const afterTaskDebug = await surface.locator("#__lucid_overlay_root").evaluate((root) => {
-    const overlay = root.firstElementChild as Element & {
-      outlineDebugInfo?: () => Record<string, unknown>;
-    };
-    return overlay.outlineDebugInfo?.() ?? null;
-  });
+  await expect
+    .poll(async () => {
+      const debug = await outlineDebugInfo(page);
+      return debug === null
+        ? null
+        : { headingCount: debug.headingCount, pendingQuietTask: debug.pendingQuietTask };
+    })
+    .toEqual({ headingCount: 3, pendingQuietTask: false });
+  const afterTaskDebug = await outlineDebugInfo(page);
   expect(afterTaskDebug).toMatchObject({
-    taskCount: 1,
+    taskCount: expect.any(Number),
     pendingQuietTask: false,
     headingCount: 3,
-    transportPublications: 1,
   });
   expect(JSON.stringify(afterTaskDebug)).not.toContain("Context");
   await expect
@@ -2060,45 +2070,39 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
         window as unknown as {
           __outlineTest: { messages: Array<Record<string, unknown>> };
         }
-      ).__outlineTest.messages.find(({ type }) => type === "outline-snapshot") ?? null,
+      ).__outlineTest.messages
+        .filter(({ type }) => type === "outline-snapshot")
+        .at(-1) ?? null,
   );
   expect(snapshot).not.toBeNull();
   if (!snapshot) throw new Error("outline snapshot missing");
   expect(snapshot).toMatchObject({
     type: "outline-snapshot",
-    requestGeneration: 17,
     availability: "complete",
     headings: [{ label: "Context" }, { label: "Milestones" }, { label: "Risks" }],
     proof: { complete: true, reason: "complete-unused-rectangle" },
   });
+  const taskCount = async (): Promise<number> => (await outlineDebugInfo(page))?.taskCount ?? 0;
+  const snapshotCount = async (): Promise<number> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineTest.messages.filter(({ type }) => type === "outline-snapshot").length,
+    );
+  const initialTaskCount = await taskCount();
+  const initialSnapshotCount = await snapshotCount();
 
   await surface.locator("body").evaluate((body) => {
     for (let index = 0; index < 200; index += 1) {
       body.setAttribute("data-outline-burst", String(index));
     }
   });
-  await expect
-    .poll(() =>
-      surface.locator("#__lucid_overlay_root").evaluate((root) => {
-        const overlay = root.firstElementChild as Element & {
-          outlineDebugInfo?: () => Record<string, unknown>;
-        };
-        return overlay.outlineDebugInfo?.().taskCount ?? null;
-      }),
-    )
-    .toBe(2);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              __outlineTest: { messages: Array<Record<string, unknown>> };
-            }
-          ).__outlineTest.messages.filter(({ type }) => type === "outline-snapshot").length,
-      ),
-    )
-    .toBe(2);
+  await expect.poll(taskCount).toBeGreaterThan(initialTaskCount);
+  await expect.poll(snapshotCount).toBeGreaterThan(initialSnapshotCount);
+  const burstSnapshotCount = await snapshotCount();
 
   await surface.locator("body").evaluate((body) => {
     const timer = window.setInterval(() => {
@@ -2116,41 +2120,15 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
       }),
     )
     .toBe(0);
+  const continuousTaskCount = await taskCount();
   await page.waitForTimeout(150);
-  expect(
-    await surface.locator("#__lucid_overlay_root").evaluate((root) => {
-      const overlay = root.firstElementChild as Element & {
-        outlineDebugInfo?: () => Record<string, unknown>;
-      };
-      return overlay.outlineDebugInfo?.().taskCount ?? null;
-    }),
-  ).toBe(2);
+  expect(await taskCount()).toBe(continuousTaskCount);
   await surface.locator("body").evaluate(() => {
     const ownedWindow = window as unknown as { __outlineMutationTimer: number };
     window.clearInterval(ownedWindow.__outlineMutationTimer);
   });
-  await expect
-    .poll(() =>
-      surface.locator("#__lucid_overlay_root").evaluate((root) => {
-        const overlay = root.firstElementChild as Element & {
-          outlineDebugInfo?: () => Record<string, unknown>;
-        };
-        return overlay.outlineDebugInfo?.().taskCount ?? null;
-      }),
-    )
-    .toBe(3);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              __outlineTest: { messages: Array<Record<string, unknown>> };
-            }
-          ).__outlineTest.messages.filter(({ type }) => type === "outline-snapshot").length,
-      ),
-    )
-    .toBe(3);
+  await expect.poll(taskCount).toBeGreaterThan(continuousTaskCount);
+  await expect.poll(snapshotCount).toBeGreaterThan(burstSnapshotCount);
 
   await surface.locator("body").evaluate((body) => {
     const hazard = document.createElement("aside");
@@ -2588,6 +2566,980 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
     .toBe(false);
 });
 
+test("the active chrome accepts outline state only from its captured private port", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>Context</h2><p>A</p><h2>Milestones</h2><p>B</p><h2>Risks</h2><p>C</p></main></body></html>`;
+  await openViewer(page, artifact);
+  const region = on(page).surfaceRegion();
+
+  await expect
+    .poll(async () => Number(await region.getAttribute("data-outline-generation")))
+    .toBeGreaterThan(0);
+  const generation = await region.getAttribute("data-outline-generation");
+  const health = await region.getAttribute("data-outline-health");
+  expect(health).toMatch(/^(?:|AO-00[1-5])$/);
+  expect(`${generation}:${health}`).not.toContain("Context");
+
+  await surfaceOf(page)
+    .locator("body")
+    .evaluate(() => {
+      window.parent.postMessage(
+        {
+          type: "outline-snapshot",
+          requestGeneration: 999,
+          generation: 999,
+          availability: "complete",
+          headings: [
+            { key: "forged-1", label: "Forged one" },
+            { key: "forged-2", label: "Forged two" },
+          ],
+          activeKey: "forged-1",
+          proof: { complete: true, clearancePx: 999, reason: "forged" },
+        },
+        "*",
+      );
+      window.parent.postMessage(
+        { source: "lucid-overlay", type: "swap-complete", revision: 1 },
+        "*",
+      );
+      window.postMessage(
+        {
+          source: "lucid-chrome",
+          type: "swap",
+          html: "<!doctype html><html><body><h1>Forged swap</h1></body></html>",
+          revision: 1,
+        },
+        "*",
+      );
+    });
+  await page.waitForTimeout(100);
+  await expect(
+    surfaceOf(page).getByRole("heading", { name: "Database migration plan" }),
+  ).toBeVisible();
+  await expect(region).toHaveAttribute("data-outline-generation", generation ?? "");
+  await expect(region).toHaveAttribute("data-outline-health", health ?? "");
+
+  await cli.write(artifact.replace("<h2>Risks</h2>", "<h2>Execution</h2><h2>Risks</h2>"));
+  await expect
+    .poll(async () => Number(await region.getAttribute("data-outline-generation")))
+    .toBeGreaterThan(Number(generation));
+});
+
+test("a proven gutter renders a pinned, accessible outline without changing the artifact frame", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto;font-family:system-ui}</style></head><body><main><h1>Release plan</h1><h2>Context</h2><p>A</p><h2>Milestones</h2><p style="height:700px">B</p><h2>Risks</h2><p>C</p><h2>Post-release monitoring and operational follow-through</h2><p>D</p></main></body></html>`,
+    "Release plan",
+  );
+
+  const outline = on(page).artifactOutline();
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await expect(on(page).artifactOutlinePanel()).toHaveCSS("box-shadow", "none");
+  const items = on(page).artifactOutlineItem();
+  await expect(items).toHaveCount(4);
+  await expect(items.nth(0)).toHaveAccessibleName("Context");
+  await expect(items.nth(1)).toHaveAccessibleName("Milestones");
+  await expect(items.nth(3)).toHaveAccessibleName(
+    "Post-release monitoring and operational follow-through",
+  );
+  expect(
+    await items
+      .nth(3)
+      .locator("span")
+      .evaluate((label) => label.scrollWidth > label.clientWidth),
+  ).toBe(true);
+  await expect(items.nth(0)).toHaveAttribute("aria-current", "location");
+
+  const frameWidth = await page
+    .locator('iframe[title="artifact surface"]')
+    .evaluate((frame) => frame.getBoundingClientRect().width);
+  await items.nth(1).click();
+  await expect(items.nth(1)).toBeFocused();
+  expect(
+    await page
+      .locator('iframe[title="artifact surface"]')
+      .evaluate((frame) => frame.getBoundingClientRect().width),
+  ).toBe(frameWidth);
+});
+
+test("the transient outline supports hover, latch, tab, Escape, and keyboard activation", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1_180, height: 760 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>html,body,main{margin:0;width:100%;font-family:system-ui}h1,h2,p{padding:0 24px}</style></head><body><main><h1>Wide plan</h1><h2>Context</h2><p>A</p><h2>Execution</h2><p style="height:500px">B</p><h2>Risks</h2><p>C</p></main></body></html>`,
+    "Wide plan",
+  );
+
+  const outline = on(page).artifactOutline();
+  const rail = on(page).artifactOutlineRail();
+  const panel = on(page).artifactOutlinePanel();
+  const items = on(page).artifactOutlineItem();
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  await expect(rail).toHaveAccessibleName("Open artifact outline");
+  await expect(panel).toBeHidden();
+  const railBox = await rail.boundingBox();
+  const slotBox = await on(page).surfaceOutlineSlot().boundingBox();
+  expect(railBox?.width).toBe(ARTIFACT_OUTLINE_POLICY.railInsetPx);
+  expect(
+    Math.abs(
+      (railBox?.x ?? 0) + (railBox?.width ?? 0) - ((slotBox?.x ?? 0) + (slotBox?.width ?? 0)),
+    ),
+  ).toBeLessThanOrEqual(1);
+  expect(await outline.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("none");
+  expect(await rail.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("auto");
+  const expectedRailBackground = await page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.className = "bg-ink-850/95";
+    document.body.append(probe);
+    const background = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return background;
+  });
+  expect(await rail.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
+    expectedRailBackground,
+  );
+
+  await rail.hover();
+  await expect(outline).toHaveAttribute("data-mode", "transient_hover");
+  await expect(panel).toBeVisible();
+  await panel.hover();
+  await page.waitForTimeout(220);
+  await expect(panel).toBeVisible();
+  await rail.click();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await expect(rail).toBeFocused();
+  const surface = on(page).surfaceRegion();
+  const generation = Number(await surface.getAttribute("data-outline-generation"));
+  await page.setViewportSize({ width: 1_181, height: 760 });
+  await expect
+    .poll(async () => Number(await surface.getAttribute("data-outline-generation")))
+    .toBeGreaterThan(generation);
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await expect(rail).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(items.nth(0)).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  await expect(rail).toBeFocused();
+
+  await page.mouse.move(20, 20);
+  await rail.hover();
+  await expect(outline).toHaveAttribute("data-mode", "transient_hover");
+  await page.mouse.move(20, 20);
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+
+  await rail.click();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await on(page).messageInput().filter({ visible: true }).click();
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+
+  await rail.focus();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await items.nth(2).focus();
+  await page.keyboard.press("Tab");
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+
+  await rail.focus();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await page.keyboard.press("Tab");
+  await items.nth(1).press("Enter");
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  await expect(rail).toBeFocused();
+});
+
+test("activation applies a pin-capable proof that arrived during a transient latch", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1_180, height: 760 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto;font-family:system-ui}</style></head><body><main><h1>Adaptive plan</h1><h2>Context</h2><p>A</p><h2>Execution</h2><p style="height:500px">B</p><h2>Risks</h2><p>C</p></main></body></html>`,
+    "Adaptive plan",
+  );
+
+  const outline = on(page).artifactOutline();
+  const rail = on(page).artifactOutlineRail();
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  await rail.click();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+
+  const originalGeneration = Number(
+    await on(page).surfaceRegion().getAttribute("data-outline-generation"),
+  );
+  await page.setViewportSize({ width: 2_400, height: 760 });
+  await expect
+    .poll(async () =>
+      Number(await on(page).surfaceRegion().getAttribute("data-outline-generation")),
+    )
+    .toBeGreaterThan(originalGeneration);
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+
+  await on(page).artifactOutlineItem().nth(0).click();
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+});
+
+test("keyboard-closing a rail that becomes pinned hands focus to the surface", async ({ page }) => {
+  await page.setViewportSize({ width: 1_180, height: 760 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto;font-family:system-ui}</style></head><body><main><h1>Keyboard plan</h1><h2>Context</h2><p>A</p><h2>Execution</h2><p style="height:500px">B</p><h2>Risks</h2><p>C</p></main></body></html>`,
+    "Keyboard plan",
+  );
+
+  const outline = on(page).artifactOutline();
+  const rail = on(page).artifactOutlineRail();
+  await rail.focus();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  const originalGeneration = Number(
+    await on(page).surfaceRegion().getAttribute("data-outline-generation"),
+  );
+  await page.setViewportSize({ width: 2_400, height: 760 });
+  await expect
+    .poll(async () =>
+      Number(await on(page).surfaceRegion().getAttribute("data-outline-generation")),
+    )
+    .toBeGreaterThan(originalGeneration);
+  await expect(rail).toBeFocused();
+
+  await rail.press("Enter");
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await expect(on(page).surfaceRegion()).toBeFocused();
+});
+
+test("touch opens and activates the transient outline", async ({ browser }) => {
+  const context = await browser.newContext({
+    hasTouch: true,
+    viewport: { width: 1_180, height: 760 },
+  });
+  const touchPage = await context.newPage();
+  try {
+    await openViewer(
+      touchPage,
+      `<!doctype html><html><head><style>html,body{margin:0;width:100%;font-family:system-ui}h1,h2,p{padding:0 24px}</style></head><body><main><h1>Touch plan</h1><h2>Context</h2><p>A</p><h2>Execution</h2><p style="height:600px">B</p><h2>Risks</h2><p>C</p></main></body></html>`,
+      "Touch plan",
+    );
+    const outline = on(touchPage).artifactOutline();
+    const rail = on(touchPage).artifactOutlineRail();
+    await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+    const railBox = await rail.boundingBox();
+    expect(railBox).not.toBeNull();
+    if (railBox === null) return;
+    await rail.tap();
+    await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+    await rail.tap();
+    await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+    await rail.tap();
+    await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+
+    const item = on(touchPage).artifactOutlineItem().nth(1);
+    const itemBox = await item.boundingBox();
+    expect(itemBox).not.toBeNull();
+    if (itemBox === null) return;
+    await item.tap();
+    await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+    await expect(
+      surfaceOf(touchPage).getByRole("heading", { exact: true, level: 2, name: "Execution" }),
+    ).toBeInViewport();
+  } finally {
+    await context.close();
+  }
+});
+
+test("a tall pinned outline scrolls internally while the artifact scrollbar remains operable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 520 });
+  const sections = Array.from(
+    { length: 24 },
+    (_, index) => `<h2>Section ${index + 1}</h2><p style="height:80px">Body ${index + 1}</p>`,
+  ).join("");
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:32px auto;font-family:system-ui}</style></head><body><h1>Long plan</h1>${sections}</body></html>`,
+    "Long plan",
+  );
+  const outline = on(page).artifactOutline();
+  const list = page.locator('nav[aria-label="Artifact sections"]');
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await list.evaluate((element) => {
+    element.scrollTop = 80;
+  });
+  expect(await list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+
+  await surfaceOf(page)
+    .locator("html")
+    .evaluate((element) => {
+      element.scrollTop = 120;
+    });
+  expect(
+    await surfaceOf(page)
+      .locator("html")
+      .evaluate((element) => element.scrollTop),
+  ).toBe(120);
+
+  await surfaceOf(page)
+    .locator("html")
+    .evaluate((element) => {
+      const view = element.ownerDocument.defaultView as Window & { __outlineScrollTimer?: number };
+      view.__outlineScrollTimer = view.setInterval(() => {
+        element.scrollTop += 1;
+      }, 20);
+    });
+  await expect(outline).toHaveCount(0);
+  await surfaceOf(page)
+    .locator("html")
+    .evaluate((element) => {
+      const view = element.ownerDocument.defaultView as Window & { __outlineScrollTimer?: number };
+      if (view.__outlineScrollTimer !== undefined) view.clearInterval(view.__outlineScrollTimer);
+    });
+  await expect(outline).toHaveCount(1);
+});
+
+test("gutter loss preserves focused navigation as a latched transient interaction", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 820 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Responsive plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p><h2>Three</h2><p>C</p></body></html>`,
+    "Responsive plan",
+  );
+  const outline = on(page).artifactOutline();
+  const focusedItem = on(page).artifactOutlineItem().nth(1);
+  const shell = page.locator('[data-slot="sidebar-wrapper"]');
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await focusedItem.focus();
+  await expect(focusedItem).toBeFocused();
+
+  await shell.evaluate((element) => element.style.setProperty("--sidebar-width", "1860px"));
+  await expect(focusedItem).toBeFocused({ timeout: 200 });
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await expect(focusedItem).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  const rail = on(page).artifactOutlineRail();
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  await expect(rail).toBeFocused();
+  await shell.evaluate((element) => element.style.setProperty("--sidebar-width", "640px"));
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await expect(on(page).surfaceRegion()).toBeFocused();
+});
+
+test("browser layout retains mode inside the pinned and transient hysteresis band", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 820 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Hysteresis plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p><h2>Three</h2><p>C</p></body></html>`,
+    "Hysteresis plan",
+  );
+  const outline = on(page).artifactOutline();
+  const region = on(page).surfaceRegion();
+  const shell = page.locator('[data-slot="sidebar-wrapper"]');
+  const setSidebarWidth = async (
+    width: number,
+  ): Promise<{
+    debug: Awaited<ReturnType<typeof outlineDebugInfo>>;
+    mode: string;
+  }> => {
+    const generation = Number(await region.getAttribute("data-outline-generation"));
+    await shell.evaluate((element, nextWidth) => {
+      element.style.setProperty("--sidebar-width", `${nextWidth}px`);
+    }, width);
+    await expect
+      .poll(async () => Number(await region.getAttribute("data-outline-generation")))
+      .toBeGreaterThan(generation);
+    await expect(outline).toHaveAttribute("data-mode", /^(?:pinned|transient_closed)$/);
+    return {
+      debug: await outlineDebugInfo(page),
+      mode: (await outline.getAttribute("data-mode")) ?? "absent",
+    };
+  };
+  const hasClearance = (
+    state: Awaited<ReturnType<typeof setSidebarWidth>>,
+    threshold: number,
+  ): boolean => state.debug?.proofComplete === true && state.debug.proofClearancePx >= threshold;
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  let lowerWidth = 640;
+  let upperWidth = 1_856;
+  let bandProbe:
+    | { clearance: number; state: Awaited<ReturnType<typeof setSidebarWidth>>; width: number }
+    | undefined;
+  while (upperWidth - lowerWidth > 1) {
+    const width = Math.floor((lowerWidth + upperWidth) / 2);
+    const state = await setSidebarWidth(width);
+    const clearance = state.debug?.proofClearancePx ?? 0;
+    if (hasClearance(state, 12)) lowerWidth = width;
+    else if (!hasClearance(state, 8)) upperWidth = width;
+    else {
+      bandProbe = { clearance, state, width };
+      break;
+    }
+  }
+  if (bandProbe === undefined) throw new Error("no browser hysteresis band found");
+  const neighbourWidth = bandProbe.width + 2;
+  const neighbour = await setSidebarWidth(neighbourWidth);
+  const neighbourClearance = neighbour.debug?.proofClearancePx ?? 0;
+  const clearanceSlope = (neighbourClearance - bandProbe.clearance) / 2;
+  expect(clearanceSlope).toBeLessThan(0);
+  const regainWidth = Math.floor(
+    bandProbe.width + (12 - bandProbe.clearance) / clearanceSlope + 1e-6,
+  );
+  const lossWidth =
+    Math.floor(bandProbe.width + (8 - bandProbe.clearance) / clearanceSlope + 1e-6) + 1;
+  expect(lossWidth - regainWidth).toBeGreaterThanOrEqual(4);
+
+  const bandWidth = Math.floor((lossWidth + regainWidth) / 2);
+  await setSidebarWidth(640);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  const lost = await setSidebarWidth(lossWidth);
+  expect(hasClearance(lost, 8)).toBe(false);
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  const enteredBand = await setSidebarWidth(bandWidth);
+  expect(hasClearance(enteredBand, 8)).toBe(true);
+  expect(hasClearance(enteredBand, 12)).toBe(false);
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  const regained = await setSidebarWidth(regainWidth);
+  expect(hasClearance(regained, 12)).toBe(true);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await setSidebarWidth(bandWidth);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+});
+
+test("outline removal transfers focused navigation back to the stable surface", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  const artifact = `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></body></html>`;
+  await openViewer(page, artifact, "Plan");
+  const item = on(page).artifactOutlineItem().nth(0);
+  await expect(item).toBeVisible();
+  await item.focus();
+
+  await cli.write(artifact.replace("<h2>Two</h2><p>B</p>", ""));
+  await expect(on(page).artifactOutline()).toHaveCount(0);
+  await expect(on(page).surfaceRegion()).toBeFocused();
+});
+
+test("projection replacement never redirects focus to a different section", async ({ page }) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  const artifact = `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p><h2>Three</h2><p>C</p></body></html>`;
+  await openViewer(page, artifact, "Plan");
+  const item = page.getByRole("button", { name: "Two", exact: true });
+  await item.focus();
+
+  const reordered = artifact.replace(
+    "<h2>One</h2><p>A</p><h2>Two</h2><p>B</p>",
+    "<h2>Two</h2><p>B</p><h2>One</h2><p>A</p>",
+  );
+  await cli.write(reordered);
+  await expect(on(page).surfaceRegion()).toBeFocused();
+
+  await page.getByRole("button", { name: "Two", exact: true }).focus();
+  await cli.write(reordered.replace("<h2>Two</h2><p>B</p>", ""));
+  await expect(on(page).surfaceRegion()).toBeFocused();
+});
+
+test("reloading the same artifact frame replaces its private outline channel", async ({ page }) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  const artifact = `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Reload plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></body></html>`;
+  await openViewer(page, artifact, "Reload plan");
+  const surface = surfaceOf(page);
+  await expect(on(page).artifactOutlineItem().nth(0)).toHaveAccessibleName("One");
+
+  await surface.getByRole("heading", { exact: true, level: 2, name: "One" }).evaluate((heading) => {
+    heading.textContent = "Stale one";
+  });
+  await expect(on(page).artifactOutlineItem().nth(0)).toHaveAccessibleName("Stale one");
+
+  await surface.locator("body").evaluate(() => {
+    window.setTimeout(() => window.location.reload(), 0);
+  });
+  await expect(surface.getByRole("heading", { exact: true, level: 2, name: "One" })).toBeVisible();
+  await expect(on(page).artifactOutlineItem().nth(0)).toHaveAccessibleName("One");
+});
+
+test("leaving a pending projection keeps focus on the chosen chrome control", async ({ page }) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  const artifact = `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p><h2>Three</h2><p>C</p></body></html>`;
+  await openViewer(page, artifact, "Plan");
+  const item = page.getByRole("button", { name: "Two", exact: true });
+  await item.focus();
+
+  await surfaceOf(page)
+    .locator("body")
+    .evaluate((body) => {
+      const view = body.ownerDocument.defaultView as Window & { __outlineMutation?: number };
+      let sequence = 0;
+      view.__outlineMutation = view.setInterval(() => {
+        sequence += 1;
+        body.dataset.outlineMutation = String(sequence);
+      }, 20);
+    });
+  await expect(on(page).surfaceRegion()).toHaveAttribute("data-outline-health", "AO-005");
+  await expect(item).toBeFocused();
+
+  const input = on(page).messageInput().filter({ visible: true });
+  await input.click();
+  await page.waitForTimeout(650);
+  await expect(input).toBeFocused();
+  await surfaceOf(page)
+    .locator("body")
+    .evaluate((body) => {
+      const view = body.ownerDocument.defaultView as Window & { __outlineMutation?: number };
+      if (view.__outlineMutation !== undefined) view.clearInterval(view.__outlineMutation);
+    });
+});
+
+test("panel drag, collapse, and reopen re-evaluate outline mode without shrinking the frame", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 820 });
+  const artifact = `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Responsive outline</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p><h2>Three</h2><p>C</p></body></html>`;
+  const withoutOutline = artifact
+    .replace("<h2>Two</h2>", "<p>Two</p>")
+    .replace("<h2>Three</h2>", "<p>Three</p>");
+  const withScrollbar = artifact.replace("<p>C</p>", '<p style="height:1400px">C</p>');
+  await openViewer(page, artifact, "Responsive outline");
+  const outline = on(page).artifactOutline();
+  const frame = page.locator('iframe[title="artifact surface"]');
+  const surface = surfaceOf(page);
+  const region = on(page).surfaceRegion();
+  const geometry = async (): Promise<{
+    contentWidth: number;
+    frameHeight: number;
+    frameWidth: number;
+    parentHeight: number;
+    parentWidth: number;
+    viewportWidth: number;
+  }> => {
+    const frameGeometry = await frame.evaluate((element) => {
+      const frameRect = element.getBoundingClientRect();
+      const parentRect = element.parentElement?.getBoundingClientRect();
+      return {
+        frameHeight: frameRect.height,
+        frameWidth: frameRect.width,
+        parentHeight: parentRect?.height ?? 0,
+        parentWidth: parentRect?.width ?? 0,
+      };
+    });
+    const artifactGeometry = await surface.locator("body").evaluate((body) => ({
+      contentWidth: Math.round(
+        Math.max(
+          0,
+          ...Array.from(body.children)
+            .filter((child) => child.id !== "__lucid_overlay_root" && child.tagName !== "SCRIPT")
+            .map((child) => child.getBoundingClientRect().width),
+        ),
+      ),
+      viewportWidth: body.ownerDocument.documentElement.clientWidth,
+    }));
+    return { ...frameGeometry, ...artifactGeometry };
+  };
+  const assertFrameFillsSurface = async () => {
+    const measured = await geometry();
+    expect(Math.abs(measured.frameWidth - measured.parentWidth)).toBeLessThanOrEqual(1);
+    expect(Math.abs(measured.frameHeight - measured.parentHeight)).toBeLessThanOrEqual(1);
+    return measured;
+  };
+  const waitForFreshProjection = async (previousGeneration: number): Promise<void> => {
+    await expect
+      .poll(async () => Number(await region.getAttribute("data-outline-generation")))
+      .toBeGreaterThan(previousGeneration);
+  };
+  const dragDivider = async (deltaX: number): Promise<void> => {
+    const divider = page.locator('[aria-label="Resize the review panel"]');
+    const box = await divider.boundingBox();
+    expect(box).not.toBeNull();
+    if (box === null) return;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + deltaX, y, { steps: 12 });
+    await expect(outline).toHaveCount(0);
+    await page.waitForTimeout(350);
+    await expect(outline).toHaveCount(0);
+    await page.mouse.up();
+  };
+
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  const initialPinned = await assertFrameFillsSurface();
+
+  let generation = Number(await region.getAttribute("data-outline-generation"));
+  await cli.write(withScrollbar);
+  await waitForFreshProjection(generation);
+  await expect
+    .poll(() =>
+      surface.locator("html").evaluate((element) => element.scrollHeight > element.clientHeight),
+    )
+    .toBe(true);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  const scrolledPinned = await assertFrameFillsSurface();
+  expect(scrolledPinned.frameWidth).toBe(initialPinned.frameWidth);
+  expect(scrolledPinned.contentWidth).toBe(initialPinned.contentWidth);
+
+  generation = Number(await region.getAttribute("data-outline-generation"));
+  await cli.write(artifact);
+  await waitForFreshProjection(generation);
+  await expect
+    .poll(() =>
+      surface.locator("html").evaluate((element) => element.scrollHeight <= element.clientHeight),
+    )
+    .toBe(true);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+
+  await cli.write(withoutOutline);
+  await expect(outline).toHaveCount(0);
+  const wideAbsent = await assertFrameFillsSurface();
+  expect(wideAbsent.frameWidth).toBe(initialPinned.frameWidth);
+  expect(wideAbsent.viewportWidth).toBe(initialPinned.viewportWidth);
+  expect(wideAbsent.contentWidth).toBe(initialPinned.contentWidth);
+  await cli.write(artifact);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+
+  await dragDivider(-850);
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  const transient = await assertFrameFillsSurface();
+
+  await cli.write(withoutOutline);
+  await expect(outline).toHaveCount(0);
+  const narrowAbsent = await assertFrameFillsSurface();
+  expect(narrowAbsent.frameWidth).toBe(transient.frameWidth);
+  expect(narrowAbsent.viewportWidth).toBe(transient.viewportWidth);
+  expect(narrowAbsent.contentWidth).toBe(transient.contentWidth);
+  await cli.write(artifact);
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+
+  await on(page).panelToggle().click();
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await assertFrameFillsSurface();
+
+  await on(page).panelToggle().click();
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  await assertFrameFillsSurface();
+
+  await dragDivider(850);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await assertFrameFillsSurface();
+});
+
+test("wheel, scrollbar, keyboard, and outline scrolling keep the active section current", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1_180, height: 760 });
+  const sections = Array.from(
+    { length: 20 },
+    (_, index) => `<h2>Section ${index + 1}</h2><p style="height:160px">Body ${index + 1}</p>`,
+  ).join("");
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>html{overflow-y:scroll}html::-webkit-scrollbar{width:16px}html::-webkit-scrollbar-track{background:#eee}html::-webkit-scrollbar-thumb{background:#777;border:2px solid #eee}html,body{margin:0;width:100%;font-family:system-ui}h1,h2,p{padding:0 24px}</style></head><body><h1>Scrollable outline</h1>${sections}</body></html>`,
+    "Scrollable outline",
+  );
+  const frame = page.locator('iframe[title="artifact surface"]');
+  const surface = surfaceOf(page);
+  const root = surface.locator("html");
+  const outline = on(page).artifactOutline();
+  const rail = on(page).artifactOutlineRail();
+  const items = on(page).artifactOutlineItem();
+  const currentLabel = async (): Promise<string | null> =>
+    items.evaluateAll(
+      (elements) =>
+        elements.find((element) => element.getAttribute("aria-current") === "location")
+          ?.textContent ?? null,
+    );
+
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  await rail.focus();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await expect(items.nth(0)).toHaveAttribute("aria-current", "location");
+  const frameBox = await frame.boundingBox();
+  const railBox = await rail.boundingBox();
+  expect(frameBox).not.toBeNull();
+  expect(railBox).not.toBeNull();
+  if (frameBox === null || railBox === null) return;
+  expect(frameBox.x + frameBox.width - (railBox.x + railBox.width)).toBeGreaterThanOrEqual(18);
+
+  await frame.hover({ position: { x: frameBox.width / 2, y: frameBox.height / 2 } });
+  await page.mouse.wheel(0, 900);
+  await expect.poll(() => root.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(currentLabel).not.toBe("Section 1");
+
+  await surface.locator("body").evaluate((body) => {
+    body.tabIndex = -1;
+    body.focus();
+  });
+  let projectionGeneration = Number(
+    await on(page).surfaceRegion().getAttribute("data-outline-generation"),
+  );
+  await page.keyboard.press("Home");
+  await expect.poll(() => root.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+  await expect
+    .poll(async () =>
+      Number(await on(page).surfaceRegion().getAttribute("data-outline-generation")),
+    )
+    .toBeGreaterThan(projectionGeneration);
+  await rail.focus();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await expect.poll(currentLabel).toBe("Section 1");
+  await surface.locator("body").evaluate((body) => body.focus());
+  projectionGeneration = Number(
+    await on(page).surfaceRegion().getAttribute("data-outline-generation"),
+  );
+  await page.keyboard.press("End");
+  await expect.poll(() => root.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+  await expect
+    .poll(async () =>
+      Number(await on(page).surfaceRegion().getAttribute("data-outline-generation")),
+    )
+    .toBeGreaterThan(projectionGeneration);
+  await rail.focus();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await expect.poll(currentLabel).not.toBe("Section 1");
+  // macOS Chromium keeps its root scrollbar as an overlay even when the
+  // artifact requests a deterministic CSS width. Prove the native strip still
+  // belongs to the iframe; the programmatic move exercises the same root
+  // scroll event and active-section path without pretending a hidden thumb was
+  // dragged.
+  expect(
+    await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute("title"), {
+      x: frameBox.x + frameBox.width - 4,
+      y: frameBox.y + frameBox.height / 2,
+    }),
+  ).toBe("artifact surface");
+  const beforeScrollbarLabel = await currentLabel();
+  const beforeScrollbarScroll = await root.evaluate((element) => element.scrollTop);
+  await root.evaluate((element) => {
+    element.scrollTo({ behavior: "instant", top: 1_200 });
+  });
+  await expect
+    .poll(() => root.evaluate((element) => element.scrollTop))
+    .not.toBe(beforeScrollbarScroll);
+  await expect.poll(currentLabel).not.toBe(beforeScrollbarLabel);
+  const surfaceRegion = on(page).surfaceRegion();
+  await expect
+    .poll(async () => {
+      const chromeGeneration = Number(await surfaceRegion.getAttribute("data-outline-generation"));
+      const debug = await outlineDebugInfo(page);
+      return (
+        debug?.pendingFrame === false &&
+        debug.pendingQuietTask === false &&
+        debug.generation === chromeGeneration
+      );
+    })
+    .toBe(true);
+
+  const beforeActivation = await currentLabel();
+  await items.nth(1).click();
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  const target = surface.getByRole("heading", { exact: true, level: 2, name: "Section 2" });
+  await expect
+    .poll(() =>
+      target.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.top >= 0 && rect.bottom <= window.innerHeight;
+      }),
+    )
+    .toBe(true);
+  await expect(surface.locator(".section-emphasis")).toHaveCSS("animation-name", "none");
+  await rail.focus();
+  await expect.poll(currentLabel).not.toBe(beforeActivation);
+});
+
+test("a tall outline stays clear of stale controls, a question, and the root scrollbar", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.addInitScript(() => {
+    const browserNow = Date.now.bind(Date);
+    Date.now = () => browserNow() + 11 * 60 * 1_000;
+  });
+  await page.setViewportSize({ width: 2_400, height: 650 });
+  const sections = Array.from(
+    { length: 24 },
+    (_, index) =>
+      `<h2>Section ${index + 1}</h2><p data-lucid-id="section-${index + 1}" style="height:90px">Body ${index + 1}</p>`,
+  ).join("");
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:32px auto;font-family:system-ui}</style></head><body><h1>Busy outline</h1>${sections}</body></html>`,
+    "Busy outline",
+  );
+  const surface = surfaceOf(page);
+  const outline = on(page).artifactOutline();
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+
+  await cli.run(["intent", cli.artifact, "revise"]);
+  await expect(on(page).surfaceUpdating()).toHaveAttribute("data-stale", "true");
+  await surface.locator("p").nth(0).click();
+  await surface
+    .locator("p")
+    .nth(1)
+    .click({ modifiers: [mod()] });
+  await expect(on(page).cancelPicks()).toBeVisible();
+  const parallax = on(page).artifactParallax();
+  await parallax.evaluate((element) => {
+    element.setAttribute("style", "transition-duration: 2000ms");
+  });
+  const beforeDrawerGeneration = Number(
+    await on(page).surfaceRegion().getAttribute("data-outline-generation"),
+  );
+  await cli.run([
+    "ask",
+    cli.artifact,
+    "--text",
+    "Which section should remain the operational checkpoint?",
+    "--option",
+    "Section 12|Keep the middle checkpoint",
+  ]);
+  await expect(on(page).questionDrawer()).toBeVisible();
+  await expect(outline).toHaveCount(0);
+  const divider = page.locator('[aria-label="Resize the review panel"]');
+  const dividerBox = await divider.boundingBox();
+  expect(dividerBox).not.toBeNull();
+  if (dividerBox !== null) {
+    const x = dividerBox.x + dividerBox.width / 2;
+    const y = dividerBox.y + dividerBox.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - 20, y, { steps: 4 });
+    await page.mouse.up();
+  }
+  // Releasing the divider must not release the drawer's independent motion
+  // lease and briefly re-admit stale proof.
+  await expect(outline).toHaveCount(0);
+  await expect
+    .poll(() => parallax.evaluate((element) => getComputedStyle(element).translate))
+    .toContain("-12px");
+  await expect
+    .poll(async () =>
+      Number(await on(page).surfaceRegion().getAttribute("data-outline-generation")),
+    )
+    .toBeGreaterThan(beforeDrawerGeneration);
+  await expect(outline).toHaveCount(1);
+
+  const panel = on(page).artifactOutlinePanel();
+  if ((await outline.getAttribute("data-mode")) !== "pinned") {
+    await on(page).artifactOutlineRail().focus();
+  }
+  await expect(panel).toBeVisible();
+  const list = page.locator('nav[aria-label="Artifact sections"]');
+  const stack = on(page).surfaceControlStack();
+  const drawer = on(page).questionDrawer();
+  const frame = page.locator('iframe[title="artifact surface"]');
+  const boxes = await Promise.all([panel.boundingBox(), frame.boundingBox()]);
+  for (const box of boxes) expect(box).not.toBeNull();
+  const [panelBox, frameBox] = boxes;
+  if (panelBox === null || frameBox === null) return;
+  expect(await overlaps(panel, stack)).toBe(false);
+  expect(await overlaps(panel, drawer)).toBe(false);
+  expect(frameBox.x + frameBox.width - (panelBox.x + panelBox.width)).toBeGreaterThanOrEqual(18);
+  expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  expect(
+    await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute("title"), {
+      x: frameBox.x + frameBox.width - 4,
+      y: frameBox.y + frameBox.height / 2,
+    }),
+  ).toBe("artifact surface");
+
+  if (process.env.LUCID_OUTLINE_EVIDENCE === "1") {
+    const evidenceDir = join(process.cwd(), ".plans/02-artifact-outline/evidence");
+    await mkdir(evidenceDir, { recursive: true });
+    await page.screenshot({
+      fullPage: false,
+      path: join(evidenceDir, "m3.3-busy-outline.png"),
+    });
+  }
+});
+
+test("outline geometry remains crisp at representative one-x and two-x scales", async ({
+  browser,
+}) => {
+  cli = await makeCli(
+    `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto;font-family:system-ui}</style></head><body><h1>Scale outline</h1><h2>Context</h2><p>A</p><h2>Execution</h2><p style="height:500px">B</p><h2>Risks</h2><p>C</p></body></html>`,
+  );
+  const session = (await cli.run(["open", cli.artifact])) as { url: string };
+  for (const deviceScaleFactor of [1, 2]) {
+    const context = await browser.newContext({
+      deviceScaleFactor,
+      reducedMotion: "reduce",
+      viewport: { width: 1_180, height: 760 },
+    });
+    try {
+      const scaledPage = await context.newPage();
+      await scaledPage.goto(session.url);
+      await expect(surfaceOf(scaledPage).locator("h1")).toContainText("Scale outline");
+      expect(await scaledPage.evaluate(() => window.devicePixelRatio)).toBe(deviceScaleFactor);
+      const outline = on(scaledPage).artifactOutline();
+      await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+      const rail = on(scaledPage).artifactOutlineRail();
+      const railBox = await rail.boundingBox();
+      expect(railBox?.width).toBe(18);
+      if (railBox === null) throw new Error("outline rail has no rendered box");
+      const railCoordinates = [
+        ["left", railBox.x],
+        ["top", railBox.y],
+        ["right", railBox.x + railBox.width],
+        ["bottom", railBox.y + railBox.height],
+        ["width", railBox.width],
+        ["height", railBox.height],
+      ] as const;
+      expect(
+        railCoordinates.filter(
+          ([, coordinate]) => !Number.isInteger(coordinate * deviceScaleFactor),
+        ),
+        JSON.stringify({ deviceScaleFactor, railCoordinates }),
+      ).toEqual([]);
+      const borderWidth = Number.parseFloat(
+        await rail.evaluate((element) => getComputedStyle(element).borderLeftWidth),
+      );
+      expect(Number.isInteger(borderWidth * deviceScaleFactor)).toBe(true);
+
+      if (process.env.LUCID_OUTLINE_EVIDENCE === "1") {
+        const evidenceDir = join(process.cwd(), ".plans/02-artifact-outline/evidence");
+        await mkdir(evidenceDir, { recursive: true });
+        await scaledPage.screenshot({
+          fullPage: false,
+          path: join(evidenceDir, `m3.3-scale-${deviceScaleFactor}x-closed.png`),
+        });
+      }
+
+      await rail.focus();
+      await expect(rail).toBeFocused();
+      await expect(rail).toHaveCSS("outline-style", "solid");
+      await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+      const items = on(scaledPage).artifactOutlineItem();
+      await expect(items.nth(0)).toHaveAttribute("aria-current", "location");
+      expect(await items.nth(0).evaluate((item) => getComputedStyle(item).color)).not.toBe(
+        await items.nth(1).evaluate((item) => getComputedStyle(item).color),
+      );
+
+      if (process.env.LUCID_OUTLINE_EVIDENCE === "1") {
+        const evidenceDir = join(process.cwd(), ".plans/02-artifact-outline/evidence");
+        await scaledPage.screenshot({
+          fullPage: false,
+          path: join(evidenceDir, `m3.3-scale-${deviceScaleFactor}x-open.png`),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
+
 test("an attempted CSSOM child realm permanently disables pinned proof", async ({ page }) => {
   await page.setViewportSize({ width: 2_400, height: 900 });
   await page.addInitScript(() => {
@@ -2602,7 +3554,10 @@ test("an attempted CSSOM child realm permanently disables pinned proof", async (
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -2634,7 +3589,7 @@ test("an attempted CSSOM child realm permanently disables pinned proof", async (
       .__outlineRealmTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -2679,7 +3634,10 @@ test("shadow-root paint permanently disables pinned proof", async ({ page }) => 
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -2708,7 +3666,7 @@ test("shadow-root paint permanently disables pinned proof", async ({ page }) => 
       .__outlineShadowTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -2743,7 +3701,10 @@ test("runtime declarative shadow DOM permanently disables pinned proof", async (
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -2770,7 +3731,7 @@ test("runtime declarative shadow DOM permanently disables pinned proof", async (
     ).__outlineDeclarativeShadowTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -2827,7 +3788,10 @@ const openOwnedOverlayMutationProbe = async (
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -2848,7 +3812,7 @@ const openOwnedOverlayMutationProbe = async (
       .__outlineOwnedMutationTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -2887,7 +3851,10 @@ test("artifact children cannot enter the exact owned overlay root", async ({ pag
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -2908,7 +3875,7 @@ test("artifact children cannot enter the exact owned overlay root", async ({ pag
       .__outlineOwnedRootTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -2962,7 +3929,10 @@ test("artifact mutations inside the owned overlay shadow tree disable pinned pro
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -2983,7 +3953,7 @@ test("artifact mutations inside the owned overlay shadow tree disable pinned pro
       .__outlineOwnedShadowTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });

@@ -301,6 +301,81 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
     expect(second.generation).toBeGreaterThan(first.generation);
     expect(second.headings.map(({ key }) => key)).not.toEqual(first.headings.map(({ key }) => key));
   });
+
+  test("layout-only reprojection preserves native heading identity across fresh wrappers", () => {
+    const one = {} as Element;
+    const two = {} as Element;
+    const three = {} as Element;
+    let headingOrder = [
+      { id: "One", nativeElement: one },
+      { id: "Two", nativeElement: two },
+    ];
+    let current: FakeElement[] = [];
+    const dynamicGeometry: ArtifactOutlineGeometry<FakeElement> = {
+      allElements: () => current,
+      completeTraversal: () => {
+        const main = node("main", { tagName: "MAIN" });
+        current = [
+          main,
+          ...headingOrder.map(({ id, nativeElement }) => append(main, node(id, { nativeElement }))),
+        ];
+        return true;
+      },
+      headingCandidates: () => current.filter(({ tagName }) => tagName === "H2"),
+      isSettled: () => true,
+      parentElement: (element) => element.parent,
+      pseudoContent: () => ({ after: "none", before: "none" }),
+      styleRealmTrusted: () => true,
+      viewport: () => ({ clientWidth: 1_600, height: 900, width: 1_600 }),
+    };
+    let now = 0;
+    const { publications, runtime, scheduler } = harness([], {
+      geometry: dynamicGeometry,
+      now: () => now,
+    });
+    runtime.requestLayout(request);
+    scheduler.flushQuiet();
+    const first = publications.at(-1);
+    expect(first?.type).toBe("snapshot");
+    if (first?.type !== "snapshot") throw new Error("snapshot missing");
+    const firstKeys = Object.fromEntries(first.headings.map(({ key, label }) => [label, key]));
+
+    headingOrder = [
+      { id: "Three", nativeElement: three },
+      { id: "Two", nativeElement: two },
+      { id: "One", nativeElement: one },
+    ];
+    runtime.requestLayout({ ...request, generation: 2 });
+    now = 250;
+    scheduler.flushQuiet();
+    const second = publications.at(-1);
+    expect(second?.type).toBe("snapshot");
+    if (second?.type !== "snapshot") throw new Error("replacement snapshot missing");
+    expect(second.generation).toBeGreaterThan(first.generation);
+    const secondKeys = Object.fromEntries(second.headings.map(({ key, label }) => [label, key]));
+    expect(secondKeys.One).toBe(firstKeys.One);
+    expect(secondKeys.Two).toBe(firstKeys.Two);
+    expect(secondKeys.Three).not.toBe(firstKeys.One);
+    expect(secondKeys.Three).not.toBe(firstKeys.Two);
+    const twoKey = firstKeys.Two;
+    const threeKey = secondKeys.Three;
+    if (twoKey === undefined || threeKey === undefined) throw new Error("stable keys missing");
+
+    headingOrder = [
+      { id: "Two", nativeElement: two },
+      { id: "Three", nativeElement: three },
+    ];
+    runtime.requestLayout({ ...request, generation: 3 });
+    now = 500;
+    scheduler.flushQuiet();
+    const third = publications.at(-1);
+    expect(third?.type).toBe("snapshot");
+    if (third?.type !== "snapshot") throw new Error("second replacement snapshot missing");
+    expect(Object.fromEntries(third.headings.map(({ key, label }) => [label, key]))).toEqual({
+      Three: threeKey,
+      Two: twoKey,
+    });
+  });
 });
 
 describe("ArtifactOutlineRuntime conservative proof", () => {
@@ -559,6 +634,59 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     scheduler.flushQuiet();
     expect(publications).toEqual([]);
     expect(runtime.debugInfo()).toMatchObject({ connected: false, pendingQuietTask: false });
+  });
+
+  test("sustained just-quiet mutations bound projection work and retain one trailing rebuild", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    let now = 0;
+    const { publications, runtime, scheduler } = harness([main], { now: () => now });
+    runtime.requestLayout(request);
+    scheduler.flushQuiet();
+
+    for (let index = 0; index < 20; index += 1) {
+      now += 41;
+      runtime.invalidate(`sustained-${index}`);
+      scheduler.flushQuiet();
+    }
+
+    expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(4);
+    expect(runtime.debugInfo()).toMatchObject({ headingCount: 0, pendingQuietTask: true });
+    now += 250;
+    scheduler.flushQuiet();
+    expect(runtime.debugInfo()).toMatchObject({ headingCount: 2, pendingQuietTask: false });
+    expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(5);
+    expect(publications.at(-1)).toMatchObject({ availability: "complete", type: "snapshot" });
+  });
+
+  test("sustained layout requests bound projection work and retain one trailing rebuild", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    let now = 0;
+    const { publications, runtime, scheduler } = harness([main], { now: () => now });
+    runtime.requestLayout(request);
+    scheduler.flushQuiet();
+
+    for (let index = 0; index < 20; index += 1) {
+      now += 41;
+      runtime.requestLayout({
+        ...request,
+        generation: index + 2,
+        safeInsets: { ...request.safeInsets, right: index + 17 },
+      });
+      scheduler.flushQuiet();
+    }
+
+    expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(4);
+    expect(runtime.debugInfo()).toMatchObject({ headingCount: 0, pendingQuietTask: true });
+    expect(publications.filter(({ type }) => type === "invalidated").length).toBeLessThanOrEqual(4);
+    now += 250;
+    scheduler.flushQuiet();
+    expect(runtime.debugInfo()).toMatchObject({ headingCount: 2, pendingQuietTask: false });
+    expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(5);
+    expect(publications.at(-1)).toMatchObject({ availability: "complete", type: "snapshot" });
   });
 
   test("active tracking is animation-frame bounded and debugInfo contains no labels", () => {

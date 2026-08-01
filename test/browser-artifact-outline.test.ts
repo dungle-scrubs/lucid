@@ -86,7 +86,7 @@ const capabilitiesHarness = () => {
 };
 
 describe("BrowserArtifactOutlineController lifecycle", () => {
-  test("stays observer-free until a valid request and cancels every observer on pagehide", () => {
+  test("keeps frame detach observed while dormant and cancels every observer on pagehide", () => {
     const port = new FakePort();
     const harness = capabilitiesHarness();
     const controller = new BrowserArtifactOutlineController(
@@ -99,14 +99,14 @@ describe("BrowserArtifactOutlineController lifecycle", () => {
     );
 
     expect(controller.debugInfo()).toMatchObject({ dormant: true, connected: true });
-    expect(harness.active.size).toBe(0);
+    expect(harness.active).toEqual(new Set(["frame-detach"]));
     port.receive({
       type: "outline-layout-request",
       generation: -1,
       preferredWidth: Number.POSITIVE_INFINITY,
       safeInsets: { bottom: 0, right: 0, top: 0 },
     });
-    expect(harness.active.size).toBe(0);
+    expect(harness.active).toEqual(new Set(["frame-detach"]));
 
     port.receive({
       type: "outline-layout-request",
@@ -122,15 +122,37 @@ describe("BrowserArtifactOutlineController lifecycle", () => {
         "style-activity",
         "document-load",
         "fonts",
-        "frame-detach",
         "window-resize",
         "window-scroll",
+        "frame-detach",
       ]),
     );
+
+    port.receive({ type: "outline-suspend" });
+    expect(controller.debugInfo()).toMatchObject({
+      connected: true,
+      dormant: true,
+      pendingQuietTask: false,
+    });
+    expect(harness.stopped).not.toContain("frame-detach");
+    expect(port.closed).toBe(false);
+
+    controller.revisionComplete(7);
+    expect(port.messages.at(-1)).toEqual({ revision: 7, type: "outline-revision-complete" });
+
+    harness.stopped.clear();
+    port.receive({
+      type: "outline-layout-request",
+      generation: 2,
+      preferredWidth: 240,
+      safeInsets: { bottom: 24, right: 16, top: 80 },
+    });
+    expect(controller.debugInfo()).toMatchObject({ dormant: false, pendingQuietTask: true });
 
     harness.callbacks.get("frame-detach")?.();
     expect(controller.debugInfo()).toMatchObject({ connected: false, pendingQuietTask: false });
     expect(harness.stopped).toEqual(harness.active);
-    expect(port.closed).toBe(true);
+    expect(port.messages.at(-1)).toEqual({ type: "outline-frame-detaching" });
+    expect(port.closed).toBe(false);
   });
 });
