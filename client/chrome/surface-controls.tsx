@@ -77,12 +77,15 @@ type SurfaceControlLayerStyle = CSSProperties & {
   readonly "--surface-scrollbar-safe-inset": string;
 };
 
+const SURFACE_CONTROL_EDGE_INSET_PX = 12.5;
+
 export const SurfaceControls = (props: SurfaceControlsProps) => {
   const { bottomOverlayHeight } = props;
   const { surface } = useSessionHandle();
   const layerStyle: SurfaceControlLayerStyle = {
     "--surface-scrollbar-safe-inset": "18px",
-    bottom: `calc(${bottomOverlayHeight}px + 0.75rem)`,
+    bottom: `calc(${bottomOverlayHeight}px + ${SURFACE_CONTROL_EDGE_INSET_PX}px)`,
+    top: `${SURFACE_CONTROL_EDGE_INSET_PX}px`,
   };
   const slotStyle = {
     marginRight: "var(--surface-scrollbar-safe-inset)",
@@ -93,7 +96,10 @@ export const SurfaceControls = (props: SurfaceControlsProps) => {
     <div
       data-test="surface-control-layer"
       style={layerStyle}
-      className="pointer-events-none absolute top-3 right-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-end"
+      // The header's text metrics place the surface on a half CSS pixel. Move
+      // both safe-slot edges inward by the matching half pixel so borders land
+      // on whole device pixels at 1x and 2x without weakening proof clearance.
+      className="pointer-events-none absolute right-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-end"
     >
       <div
         data-test="surface-control-stack"

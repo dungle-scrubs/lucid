@@ -14,6 +14,7 @@ import {
   type OutlineLayoutRequest,
   type OutlineProjection,
   type OutlineRuntimePublication,
+  type OutlineSnapshotProof,
   type OutlineSnapshotPublication,
   projectOutlineHeadings,
 } from "../shared/artifact-outline.ts";
@@ -97,6 +98,7 @@ export interface ArtifactOutlineDebugInfo {
   readonly lastDurationMs: number;
   readonly pendingFrame: boolean;
   readonly pendingQuietTask: boolean;
+  readonly proofClearancePx: number;
   readonly proofComplete: boolean;
   readonly proofReason: string;
   readonly healthCode: OutlineHealth["code"] | null;
@@ -179,8 +181,11 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #cancelSnapshot: (() => void) | null = null;
   #pendingSnapshot: OutlineSnapshotPublication | null = null;
   #projection: OutlineProjection = { generation: 0, kind: "absent" };
-  #proofComplete = false;
-  #proofReason = "not-requested";
+  #proofDiagnostic: OutlineSnapshotProof = {
+    clearancePx: 0,
+    complete: false,
+    reason: "not-requested",
+  };
   #request: OutlineLayoutRequest | null = null;
   readonly #rateGate = createOutlineRateGate();
   #keyEpoch = 0;
@@ -244,8 +249,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#elementsByKey.clear();
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#activeKey = null;
-    this.#proofComplete = false;
-    this.#proofReason = "suspended";
+    this.#proofDiagnostic = { clearancePx: 0, complete: false, reason: "suspended" };
   }
 
   #withdrawProjection(reason: string): void {
@@ -262,8 +266,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#elementsByKey.clear();
     this.#activeKey = null;
-    this.#proofComplete = false;
-    this.#proofReason = reason;
+    this.#proofDiagnostic = { clearancePx: 0, complete: false, reason };
   }
 
   activate(
@@ -329,8 +332,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#elementsByKey.clear();
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#activeKey = null;
-    this.#proofComplete = false;
-    this.#proofReason = "disconnected";
+    this.#proofDiagnostic = { clearancePx: 0, complete: false, reason: "disconnected" };
   }
 
   debugInfo(): ArtifactOutlineDebugInfo {
@@ -347,8 +349,9 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       lastDurationMs: this.#lastDurationMs,
       pendingFrame: this.#cancelFrame !== null,
       pendingQuietTask: this.#cancelQuiet !== null,
-      proofComplete: this.#proofComplete,
-      proofReason: this.#proofReason,
+      proofClearancePx: this.#proofDiagnostic.clearancePx,
+      proofComplete: this.#proofDiagnostic.complete,
+      proofReason: this.#proofDiagnostic.reason,
       taskCount: this.#taskCount,
     };
   }
@@ -641,8 +644,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#examinedTextCodeUnits = work.examinedTextCodeUnits;
     this.#examinedTextNodes = work.examinedTextNodes;
     this.#lastDurationMs = this.#dependencies.now() - work.startedAt;
-    this.#proofComplete = proof.complete;
-    this.#proofReason = proof.reason;
+    this.#proofDiagnostic = proof;
     this.#publishSnapshot({
       activeKey: this.#activeKey,
       availability: projection.kind === "complete" ? "complete" : "absent",
@@ -669,8 +671,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#examinedTextCodeUnits = work.examinedTextCodeUnits;
     this.#examinedTextNodes = work.examinedTextNodes;
     this.#lastDurationMs = this.#dependencies.now() - work.startedAt;
-    this.#proofComplete = false;
-    this.#proofReason = reason;
+    this.#proofDiagnostic = { clearancePx: 0, complete: false, reason };
     this.#publishSnapshot({
       activeKey: null,
       availability: "absent",

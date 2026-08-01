@@ -114,6 +114,7 @@ export const ArtifactOutline = () => {
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPresentationHold = useRef(false);
   const pointerFocusingRail = useRef(false);
   const suppressRailFocusOpen = useRef(false);
 
@@ -148,23 +149,35 @@ export const ArtifactOutline = () => {
     const focusedElement = document.activeElement;
     const focusInside = rootRef.current?.contains(focusedElement) === true;
     if (sourceSnapshot === null) {
-      if (projectionPending && snapshotRef.current !== null && focusInside) {
-        if (pendingTimer.current === null) {
-          pendingTimer.current = setTimeout(() => {
-            pendingTimer.current = null;
-            const stillFocused = rootRef.current?.contains(document.activeElement) === true;
-            transition({ focusInside: stillFocused, type: "invalidate" });
-            setRenderedSnapshot(null);
-          }, PENDING_FOCUS_HOLD_MS);
+      if (projectionPending && (snapshotRef.current !== null || pendingPresentationHold.current)) {
+        pendingPresentationHold.current = true;
+        // The overlay withdraws stale geometry while it re-proves the same
+        // document. Hide that geometry immediately when it does not own focus,
+        // but preserve the presentation state so the replacement proof can
+        // apply the pinned/transient hysteresis thresholds to its predecessor.
+        if (focusInside) {
+          if (pendingTimer.current === null) {
+            pendingTimer.current = setTimeout(() => {
+              pendingTimer.current = null;
+              pendingPresentationHold.current = false;
+              const stillFocused = rootRef.current?.contains(document.activeElement) === true;
+              transition({ focusInside: stillFocused, type: "invalidate" });
+              setRenderedSnapshot(null);
+            }, PENDING_FOCUS_HOLD_MS);
+          }
+        } else {
+          setRenderedSnapshot(null);
         }
         return;
       }
+      pendingPresentationHold.current = false;
       if (pendingTimer.current !== null) clearTimeout(pendingTimer.current);
       pendingTimer.current = null;
       transition({ focusInside, type: "invalidate" });
       setRenderedSnapshot(null);
       return;
     }
+    pendingPresentationHold.current = false;
     if (sourceSnapshot.generation === renderedSnapshot?.generation) return;
     if (pendingTimer.current !== null) clearTimeout(pendingTimer.current);
     pendingTimer.current = null;

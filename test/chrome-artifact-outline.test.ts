@@ -252,6 +252,9 @@ describe("active-session artifact outline bridge", () => {
     controller.acceptPort(port);
     port.receive(completeSnapshot(1));
     controller.requestLayout(true);
+    expect(patches.at(-1)).toEqual({ outlineHealth: null, outlinePending: true });
+    expect(controller.activate("h-1", "normal")).toBe(false);
+    expect(port.sent.at(-1)).toMatchObject({ type: "outline-layout-request" });
     port.receive({
       generation: 8,
       health: { code: "AO-005", generation: 8, occurrenceCount: 1, reason: "layout-request" },
@@ -261,6 +264,8 @@ describe("active-session artifact outline bridge", () => {
 
     port.receive(completeSnapshot(2, 9));
     expect(patches.at(-1)?.outlinePending).toBe(false);
+    expect(controller.activate("h-1", "normal")).toBe(true);
+    expect(port.sent.at(-1)).toMatchObject({ generation: 9, key: "h-1", type: "outline-activate" });
   });
 
   test("a first private port supersedes a revision orphaned by the missing-artifact frame", () => {

@@ -1,10 +1,14 @@
-import { hook, on } from "./locators.ts";
+import { hook, mod, on } from "./locators.ts";
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import {
   PLAN_V1,
   PLAN_V2,
   makeCli,
+  outlineDebugInfo,
   overlaySettled,
+  overlaps,
   type Cli,
   waitTimeoutSeconds,
 } from "./helpers.ts";
@@ -2600,7 +2604,7 @@ test("the active chrome accepts outline state only from its captured private por
     body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
     </style></head><body><main><h1>Database migration plan</h1><h2>Context</h2><p>A</p><h2>Milestones</h2><p>B</p><h2>Risks</h2><p>C</p></main></body></html>`;
   await openViewer(page, artifact);
-  const region = page.locator('[data-test="surface-region"]');
+  const region = on(page).surfaceRegion();
 
   await expect
     .poll(async () => Number(await region.getAttribute("data-outline-generation")))
@@ -2665,9 +2669,9 @@ test("a proven gutter renders a pinned, accessible outline without changing the 
     "Release plan",
   );
 
-  const outline = page.locator('[data-test="artifact-outline"]');
+  const outline = on(page).artifactOutline();
   await expect(outline).toHaveAttribute("data-mode", "pinned");
-  const items = page.locator('[data-test="artifact-outline-item"]');
+  const items = on(page).artifactOutlineItem();
   await expect(items).toHaveCount(4);
   await expect(items.nth(0)).toHaveAccessibleName("Context");
   await expect(items.nth(1)).toHaveAccessibleName("Milestones");
@@ -2704,15 +2708,15 @@ test("the transient outline supports hover, latch, tab, Escape, and keyboard act
     "Wide plan",
   );
 
-  const outline = page.locator('[data-test="artifact-outline"]');
-  const rail = page.locator('[data-test="artifact-outline-rail"]');
-  const panel = page.locator('[data-test="artifact-outline-panel"]');
-  const items = page.locator('[data-test="artifact-outline-item"]');
+  const outline = on(page).artifactOutline();
+  const rail = on(page).artifactOutlineRail();
+  const panel = on(page).artifactOutlinePanel();
+  const items = on(page).artifactOutlineItem();
   await expect(outline).toHaveAttribute("data-mode", "transient_closed");
   await expect(rail).toHaveAccessibleName("Open artifact outline");
   await expect(panel).toBeHidden();
   const railBox = await rail.boundingBox();
-  const slotBox = await page.locator('[data-test="surface-outline-slot"]').boundingBox();
+  const slotBox = await on(page).surfaceOutlineSlot().boundingBox();
   expect(railBox?.width).toBe(18);
   expect(
     Math.abs(
@@ -2742,7 +2746,7 @@ test("the transient outline supports hover, latch, tab, Escape, and keyboard act
   await rail.click();
   await expect(outline).toHaveAttribute("data-mode", "transient_latched");
   await expect(rail).toBeFocused();
-  const surface = page.locator('[data-test="surface-region"]');
+  const surface = on(page).surfaceRegion();
   const generation = Number(await surface.getAttribute("data-outline-generation"));
   await page.setViewportSize({ width: 1_181, height: 760 });
   await expect
@@ -2764,7 +2768,7 @@ test("the transient outline supports hover, latch, tab, Escape, and keyboard act
 
   await rail.click();
   await expect(outline).toHaveAttribute("data-mode", "transient_latched");
-  await page.locator('[data-test="message-input"]:visible').click();
+  await on(page).messageInput().filter({ visible: true }).click();
   await expect(outline).toHaveAttribute("data-mode", "transient_closed");
 
   await rail.focus();
@@ -2794,7 +2798,7 @@ test("a tall pinned outline scrolls internally while the artifact scrollbar rema
     `<!doctype html><html><head><style>body{max-width:700px;margin:32px auto;font-family:system-ui}</style></head><body><h1>Long plan</h1>${sections}</body></html>`,
     "Long plan",
   );
-  const outline = page.locator('[data-test="artifact-outline"]');
+  const outline = on(page).artifactOutline();
   const list = page.locator('nav[aria-label="Artifact sections"]');
   await expect(outline).toHaveAttribute("data-mode", "pinned");
   expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
@@ -2824,8 +2828,8 @@ test("gutter loss preserves focused navigation as a latched transient interactio
     `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Responsive plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p><h2>Three</h2><p>C</p></body></html>`,
     "Responsive plan",
   );
-  const outline = page.locator('[data-test="artifact-outline"]');
-  const focusedItem = page.locator('[data-test="artifact-outline-item"]').nth(1);
+  const outline = on(page).artifactOutline();
+  const focusedItem = on(page).artifactOutlineItem().nth(1);
   const shell = page.locator('[data-slot="sidebar-wrapper"]');
   await expect(outline).toHaveAttribute("data-mode", "pinned");
   await focusedItem.focus();
@@ -2837,12 +2841,94 @@ test("gutter loss preserves focused navigation as a latched transient interactio
   await expect(focusedItem).toBeFocused();
 
   await page.keyboard.press("Escape");
-  const rail = page.locator('[data-test="artifact-outline-rail"]');
+  const rail = on(page).artifactOutlineRail();
   await expect(outline).toHaveAttribute("data-mode", "transient_closed");
   await expect(rail).toBeFocused();
   await shell.evaluate((element) => element.style.setProperty("--sidebar-width", "640px"));
   await expect(outline).toHaveAttribute("data-mode", "pinned");
-  await expect(page.locator('[data-test="surface-region"]')).toBeFocused();
+  await expect(on(page).surfaceRegion()).toBeFocused();
+});
+
+test("browser layout retains mode inside the pinned and transient hysteresis band", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 820 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Hysteresis plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p><h2>Three</h2><p>C</p></body></html>`,
+    "Hysteresis plan",
+  );
+  const outline = on(page).artifactOutline();
+  const region = on(page).surfaceRegion();
+  const shell = page.locator('[data-slot="sidebar-wrapper"]');
+  const setSidebarWidth = async (
+    width: number,
+  ): Promise<{
+    debug: Awaited<ReturnType<typeof outlineDebugInfo>>;
+    mode: string;
+  }> => {
+    const generation = Number(await region.getAttribute("data-outline-generation"));
+    await shell.evaluate((element, nextWidth) => {
+      element.style.setProperty("--sidebar-width", `${nextWidth}px`);
+    }, width);
+    await expect
+      .poll(async () => Number(await region.getAttribute("data-outline-generation")))
+      .toBeGreaterThan(generation);
+    await expect(outline).toHaveAttribute("data-mode", /^(?:pinned|transient_closed)$/);
+    return {
+      debug: await outlineDebugInfo(page),
+      mode: (await outline.getAttribute("data-mode")) ?? "absent",
+    };
+  };
+  const hasClearance = (
+    state: Awaited<ReturnType<typeof setSidebarWidth>>,
+    threshold: number,
+  ): boolean => state.debug?.proofComplete === true && state.debug.proofClearancePx >= threshold;
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  let lowerWidth = 640;
+  let upperWidth = 1_856;
+  let bandProbe:
+    | { clearance: number; state: Awaited<ReturnType<typeof setSidebarWidth>>; width: number }
+    | undefined;
+  while (upperWidth - lowerWidth > 1) {
+    const width = Math.floor((lowerWidth + upperWidth) / 2);
+    const state = await setSidebarWidth(width);
+    const clearance = state.debug?.proofClearancePx ?? 0;
+    if (hasClearance(state, 12)) lowerWidth = width;
+    else if (!hasClearance(state, 8)) upperWidth = width;
+    else {
+      bandProbe = { clearance, state, width };
+      break;
+    }
+  }
+  if (bandProbe === undefined) throw new Error("no browser hysteresis band found");
+  const neighbourWidth = bandProbe.width + 2;
+  const neighbour = await setSidebarWidth(neighbourWidth);
+  const neighbourClearance = neighbour.debug?.proofClearancePx ?? 0;
+  const clearanceSlope = (neighbourClearance - bandProbe.clearance) / 2;
+  expect(clearanceSlope).toBeLessThan(0);
+  const regainWidth = Math.floor(
+    bandProbe.width + (12 - bandProbe.clearance) / clearanceSlope + 1e-6,
+  );
+  const lossWidth =
+    Math.floor(bandProbe.width + (8 - bandProbe.clearance) / clearanceSlope + 1e-6) + 1;
+  expect(lossWidth - regainWidth).toBeGreaterThanOrEqual(4);
+
+  const bandWidth = Math.floor((lossWidth + regainWidth) / 2);
+  await setSidebarWidth(640);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  const lost = await setSidebarWidth(lossWidth);
+  expect(hasClearance(lost, 8)).toBe(false);
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  const enteredBand = await setSidebarWidth(bandWidth);
+  expect(hasClearance(enteredBand, 8)).toBe(true);
+  expect(hasClearance(enteredBand, 12)).toBe(false);
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  const regained = await setSidebarWidth(regainWidth);
+  expect(hasClearance(regained, 12)).toBe(true);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await setSidebarWidth(bandWidth);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
 });
 
 test("outline removal transfers focused navigation back to the stable surface", async ({
@@ -2851,13 +2937,13 @@ test("outline removal transfers focused navigation back to the stable surface", 
   await page.setViewportSize({ width: 2_400, height: 900 });
   const artifact = `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></body></html>`;
   await openViewer(page, artifact, "Plan");
-  const item = page.locator('[data-test="artifact-outline-item"]').nth(0);
+  const item = on(page).artifactOutlineItem().nth(0);
   await expect(item).toBeVisible();
   await item.focus();
 
   await cli.write(artifact.replace("<h2>Two</h2><p>B</p>", ""));
-  await expect(page.locator('[data-test="artifact-outline"]')).toHaveCount(0);
-  await expect(page.locator('[data-test="surface-region"]')).toBeFocused();
+  await expect(on(page).artifactOutline()).toHaveCount(0);
+  await expect(on(page).surfaceRegion()).toBeFocused();
 });
 
 test("projection replacement never redirects focus to a different section", async ({ page }) => {
@@ -2872,11 +2958,11 @@ test("projection replacement never redirects focus to a different section", asyn
     "<h2>Two</h2><p>B</p><h2>One</h2><p>A</p>",
   );
   await cli.write(reordered);
-  await expect(page.locator('[data-test="surface-region"]')).toBeFocused();
+  await expect(on(page).surfaceRegion()).toBeFocused();
 
   await page.getByRole("button", { name: "Two", exact: true }).focus();
   await cli.write(reordered.replace("<h2>Two</h2><p>B</p>", ""));
-  await expect(page.locator('[data-test="surface-region"]')).toBeFocused();
+  await expect(on(page).surfaceRegion()).toBeFocused();
 });
 
 test("leaving a pending projection keeps focus on the chosen chrome control", async ({ page }) => {
@@ -2896,13 +2982,10 @@ test("leaving a pending projection keeps focus on the chosen chrome control", as
         body.dataset.outlineMutation = String(sequence);
       }, 20);
     });
-  await expect(page.locator('[data-test="surface-region"]')).toHaveAttribute(
-    "data-outline-health",
-    "AO-005",
-  );
+  await expect(on(page).surfaceRegion()).toHaveAttribute("data-outline-health", "AO-005");
   await expect(item).toBeFocused();
 
-  const input = page.locator('[data-test="message-input"]:visible');
+  const input = on(page).messageInput().filter({ visible: true });
   await input.click();
   await page.waitForTimeout(650);
   await expect(input).toBeFocused();
@@ -2912,6 +2995,408 @@ test("leaving a pending projection keeps focus on the chosen chrome control", as
       const view = body.ownerDocument.defaultView as Window & { __outlineMutation?: number };
       if (view.__outlineMutation !== undefined) view.clearInterval(view.__outlineMutation);
     });
+});
+
+test("panel drag, collapse, and reopen re-evaluate outline mode without shrinking the frame", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 820 });
+  const artifact = `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Responsive outline</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p><h2>Three</h2><p>C</p></body></html>`;
+  const withoutOutline = artifact
+    .replace("<h2>Two</h2>", "<p>Two</p>")
+    .replace("<h2>Three</h2>", "<p>Three</p>");
+  const withScrollbar = artifact.replace("<p>C</p>", '<p style="height:1400px">C</p>');
+  await openViewer(page, artifact, "Responsive outline");
+  const outline = on(page).artifactOutline();
+  const frame = page.locator('iframe[title="artifact surface"]');
+  const surface = surfaceOf(page);
+  const region = on(page).surfaceRegion();
+  const geometry = async (): Promise<{
+    contentWidth: number;
+    frameHeight: number;
+    frameWidth: number;
+    parentHeight: number;
+    parentWidth: number;
+    viewportWidth: number;
+  }> => {
+    const frameGeometry = await frame.evaluate((element) => {
+      const frameRect = element.getBoundingClientRect();
+      const parentRect = element.parentElement?.getBoundingClientRect();
+      return {
+        frameHeight: frameRect.height,
+        frameWidth: frameRect.width,
+        parentHeight: parentRect?.height ?? 0,
+        parentWidth: parentRect?.width ?? 0,
+      };
+    });
+    const artifactGeometry = await surface.locator("body").evaluate((body) => ({
+      contentWidth: Math.round(
+        Math.max(
+          0,
+          ...Array.from(body.children)
+            .filter((child) => child.id !== "__lucid_overlay_root" && child.tagName !== "SCRIPT")
+            .map((child) => child.getBoundingClientRect().width),
+        ),
+      ),
+      viewportWidth: body.ownerDocument.documentElement.clientWidth,
+    }));
+    return { ...frameGeometry, ...artifactGeometry };
+  };
+  const assertFrameFillsSurface = async () => {
+    const measured = await geometry();
+    expect(Math.abs(measured.frameWidth - measured.parentWidth)).toBeLessThanOrEqual(1);
+    expect(Math.abs(measured.frameHeight - measured.parentHeight)).toBeLessThanOrEqual(1);
+    return measured;
+  };
+  const waitForFreshProjection = async (previousGeneration: number): Promise<void> => {
+    await expect
+      .poll(async () => Number(await region.getAttribute("data-outline-generation")))
+      .toBeGreaterThan(previousGeneration);
+  };
+  const dragDivider = async (deltaX: number): Promise<void> => {
+    const divider = page.locator('[aria-label="Resize the review panel"]');
+    const box = await divider.boundingBox();
+    expect(box).not.toBeNull();
+    if (box === null) return;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + deltaX, y, { steps: 12 });
+    await page.mouse.up();
+  };
+
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  const initialPinned = await assertFrameFillsSurface();
+
+  let generation = Number(await region.getAttribute("data-outline-generation"));
+  await cli.write(withScrollbar);
+  await waitForFreshProjection(generation);
+  await expect
+    .poll(() =>
+      surface.locator("html").evaluate((element) => element.scrollHeight > element.clientHeight),
+    )
+    .toBe(true);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  const scrolledPinned = await assertFrameFillsSurface();
+  expect(scrolledPinned.frameWidth).toBe(initialPinned.frameWidth);
+  expect(scrolledPinned.contentWidth).toBe(initialPinned.contentWidth);
+
+  generation = Number(await region.getAttribute("data-outline-generation"));
+  await cli.write(artifact);
+  await waitForFreshProjection(generation);
+  await expect
+    .poll(() =>
+      surface.locator("html").evaluate((element) => element.scrollHeight <= element.clientHeight),
+    )
+    .toBe(true);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+
+  await cli.write(withoutOutline);
+  await expect(outline).toHaveCount(0);
+  const wideAbsent = await assertFrameFillsSurface();
+  expect(wideAbsent.frameWidth).toBe(initialPinned.frameWidth);
+  expect(wideAbsent.viewportWidth).toBe(initialPinned.viewportWidth);
+  expect(wideAbsent.contentWidth).toBe(initialPinned.contentWidth);
+  await cli.write(artifact);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+
+  await dragDivider(-850);
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  const transient = await assertFrameFillsSurface();
+
+  await cli.write(withoutOutline);
+  await expect(outline).toHaveCount(0);
+  const narrowAbsent = await assertFrameFillsSurface();
+  expect(narrowAbsent.frameWidth).toBe(transient.frameWidth);
+  expect(narrowAbsent.viewportWidth).toBe(transient.viewportWidth);
+  expect(narrowAbsent.contentWidth).toBe(transient.contentWidth);
+  await cli.write(artifact);
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+
+  await on(page).panelToggle().click();
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await assertFrameFillsSurface();
+
+  await on(page).panelToggle().click();
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  await assertFrameFillsSurface();
+
+  await dragDivider(850);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+  await assertFrameFillsSurface();
+});
+
+test("wheel, scrollbar, keyboard, and outline scrolling keep the active section current", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1_180, height: 760 });
+  const sections = Array.from(
+    { length: 20 },
+    (_, index) => `<h2>Section ${index + 1}</h2><p style="height:160px">Body ${index + 1}</p>`,
+  ).join("");
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>html{overflow-y:scroll}html,body{margin:0;width:100%;font-family:system-ui}h1,h2,p{padding:0 24px}</style></head><body><h1>Scrollable outline</h1>${sections}</body></html>`,
+    "Scrollable outline",
+  );
+  const frame = page.locator('iframe[title="artifact surface"]');
+  const surface = surfaceOf(page);
+  const root = surface.locator("html");
+  const outline = on(page).artifactOutline();
+  const rail = on(page).artifactOutlineRail();
+  const items = on(page).artifactOutlineItem();
+  const currentLabel = async (): Promise<string | null> =>
+    items.evaluateAll(
+      (elements) =>
+        elements.find((element) => element.getAttribute("aria-current") === "location")
+          ?.textContent ?? null,
+    );
+
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  await rail.focus();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await expect(items.nth(0)).toHaveAttribute("aria-current", "location");
+  const frameBox = await frame.boundingBox();
+  const railBox = await rail.boundingBox();
+  expect(frameBox).not.toBeNull();
+  expect(railBox).not.toBeNull();
+  if (frameBox === null || railBox === null) return;
+  expect(frameBox.x + frameBox.width - (railBox.x + railBox.width)).toBeGreaterThanOrEqual(18);
+
+  await frame.hover({ position: { x: frameBox.width / 2, y: frameBox.height / 2 } });
+  await page.mouse.wheel(0, 900);
+  await expect.poll(() => root.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(currentLabel).not.toBe("Section 1");
+
+  await surface.locator("body").evaluate((body) => {
+    body.tabIndex = -1;
+    body.focus();
+  });
+  let projectionGeneration = Number(
+    await on(page).surfaceRegion().getAttribute("data-outline-generation"),
+  );
+  await page.keyboard.press("Home");
+  await expect.poll(() => root.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+  await expect
+    .poll(async () =>
+      Number(await on(page).surfaceRegion().getAttribute("data-outline-generation")),
+    )
+    .toBeGreaterThan(projectionGeneration);
+  await rail.focus();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await expect.poll(currentLabel).toBe("Section 1");
+  await surface.locator("body").evaluate((body) => body.focus());
+  projectionGeneration = Number(
+    await on(page).surfaceRegion().getAttribute("data-outline-generation"),
+  );
+  await page.keyboard.press("End");
+  await expect.poll(() => root.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_000);
+  await expect
+    .poll(async () =>
+      Number(await on(page).surfaceRegion().getAttribute("data-outline-generation")),
+    )
+    .toBeGreaterThan(projectionGeneration);
+  await rail.focus();
+  await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+  await expect.poll(currentLabel).not.toBe("Section 1");
+  // macOS overlay scrollbars expose no layout-width thumb to headless
+  // Chromium. Prove the native strip belongs to the iframe here; the attended
+  // M3.3 evidence drives the actual click and drag. Programmatic movement below
+  // still exercises the same root scroll events and active-key projection.
+  expect(
+    await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute("title"), {
+      x: frameBox.x + frameBox.width - 4,
+      y: frameBox.y + frameBox.height / 2,
+    }),
+  ).toBe("artifact surface");
+  const beforeScrollbarLabel = await currentLabel();
+  const beforeScrollbarScroll = await root.evaluate((element) => element.scrollTop);
+  await root.evaluate((element) => {
+    element.scrollTo({ behavior: "instant", top: 1_200 });
+  });
+  await expect
+    .poll(() => root.evaluate((element) => element.scrollTop))
+    .not.toBe(beforeScrollbarScroll);
+  await expect.poll(currentLabel).not.toBe(beforeScrollbarLabel);
+  const surfaceRegion = on(page).surfaceRegion();
+  await expect
+    .poll(async () => {
+      const chromeGeneration = Number(await surfaceRegion.getAttribute("data-outline-generation"));
+      const debug = await outlineDebugInfo(page);
+      return (
+        debug?.pendingFrame === false &&
+        debug.pendingQuietTask === false &&
+        debug.generation === chromeGeneration
+      );
+    })
+    .toBe(true);
+
+  const beforeActivation = await currentLabel();
+  await items.nth(1).click();
+  await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+  const target = surface.getByRole("heading", { exact: true, level: 2, name: "Section 2" });
+  await expect
+    .poll(() =>
+      target.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.top >= 0 && rect.bottom <= window.innerHeight;
+      }),
+    )
+    .toBe(true);
+  await expect(surface.locator(".section-emphasis")).toHaveCSS("animation-name", "none");
+  await rail.focus();
+  await expect.poll(currentLabel).not.toBe(beforeActivation);
+});
+
+test("a tall outline stays clear of stale controls, a question, and the root scrollbar", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const browserNow = Date.now.bind(Date);
+    Date.now = () => browserNow() + 11 * 60 * 1_000;
+  });
+  await page.setViewportSize({ width: 2_400, height: 650 });
+  const sections = Array.from(
+    { length: 24 },
+    (_, index) =>
+      `<h2>Section ${index + 1}</h2><p data-lucid-id="section-${index + 1}" style="height:90px">Body ${index + 1}</p>`,
+  ).join("");
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:32px auto;font-family:system-ui}</style></head><body><h1>Busy outline</h1>${sections}</body></html>`,
+    "Busy outline",
+  );
+  const surface = surfaceOf(page);
+  const outline = on(page).artifactOutline();
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
+
+  await cli.run(["intent", cli.artifact, "revise"]);
+  await expect(on(page).surfaceUpdating()).toHaveAttribute("data-stale", "true");
+  await surface.locator("p").nth(0).click();
+  await surface
+    .locator("p")
+    .nth(1)
+    .click({ modifiers: [mod()] });
+  await expect(on(page).cancelPicks()).toBeVisible();
+  await cli.run([
+    "ask",
+    cli.artifact,
+    "--text",
+    "Which section should remain the operational checkpoint?",
+    "--option",
+    "Section 12|Keep the middle checkpoint",
+  ]);
+  await expect(on(page).questionDrawer()).toBeVisible();
+
+  const panel = on(page).artifactOutlinePanel();
+  if ((await outline.getAttribute("data-mode")) !== "pinned") {
+    await on(page).artifactOutlineRail().focus();
+  }
+  await expect(panel).toBeVisible();
+  const list = page.locator('nav[aria-label="Artifact sections"]');
+  const stack = on(page).surfaceControlStack();
+  const drawer = on(page).questionDrawer();
+  const frame = page.locator('iframe[title="artifact surface"]');
+  const boxes = await Promise.all([panel.boundingBox(), frame.boundingBox()]);
+  for (const box of boxes) expect(box).not.toBeNull();
+  const [panelBox, frameBox] = boxes;
+  if (panelBox === null || frameBox === null) return;
+  expect(await overlaps(panel, stack)).toBe(false);
+  expect(await overlaps(panel, drawer)).toBe(false);
+  expect(frameBox.x + frameBox.width - (panelBox.x + panelBox.width)).toBeGreaterThanOrEqual(18);
+  expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  expect(
+    await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute("title"), {
+      x: frameBox.x + frameBox.width - 4,
+      y: frameBox.y + frameBox.height / 2,
+    }),
+  ).toBe("artifact surface");
+
+  if (process.env.LUCID_OUTLINE_EVIDENCE === "1") {
+    const evidenceDir = join(process.cwd(), ".plans/02-artifact-outline/evidence");
+    await mkdir(evidenceDir, { recursive: true });
+    await page.screenshot({
+      fullPage: false,
+      path: join(evidenceDir, "m3.3-busy-outline.png"),
+    });
+  }
+});
+
+test("outline geometry remains crisp at representative one-x and two-x scales", async ({
+  browser,
+}) => {
+  cli = await makeCli(
+    `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto;font-family:system-ui}</style></head><body><h1>Scale outline</h1><h2>Context</h2><p>A</p><h2>Execution</h2><p style="height:500px">B</p><h2>Risks</h2><p>C</p></body></html>`,
+  );
+  const session = (await cli.run(["open", cli.artifact])) as { url: string };
+  for (const deviceScaleFactor of [1, 2]) {
+    const context = await browser.newContext({
+      deviceScaleFactor,
+      reducedMotion: "reduce",
+      viewport: { width: 1_180, height: 760 },
+    });
+    try {
+      const scaledPage = await context.newPage();
+      await scaledPage.goto(session.url);
+      await expect(surfaceOf(scaledPage).locator("h1")).toContainText("Scale outline");
+      expect(await scaledPage.evaluate(() => window.devicePixelRatio)).toBe(deviceScaleFactor);
+      const outline = on(scaledPage).artifactOutline();
+      await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+      const rail = on(scaledPage).artifactOutlineRail();
+      const railBox = await rail.boundingBox();
+      expect(railBox?.width).toBe(18);
+      if (railBox === null) throw new Error("outline rail has no rendered box");
+      const railCoordinates = [
+        ["left", railBox.x],
+        ["top", railBox.y],
+        ["right", railBox.x + railBox.width],
+        ["bottom", railBox.y + railBox.height],
+        ["width", railBox.width],
+        ["height", railBox.height],
+      ] as const;
+      expect(
+        railCoordinates.filter(
+          ([, coordinate]) => !Number.isInteger(coordinate * deviceScaleFactor),
+        ),
+        JSON.stringify({ deviceScaleFactor, railCoordinates }),
+      ).toEqual([]);
+      const borderWidth = Number.parseFloat(
+        await rail.evaluate((element) => getComputedStyle(element).borderLeftWidth),
+      );
+      expect(Number.isInteger(borderWidth * deviceScaleFactor)).toBe(true);
+
+      if (process.env.LUCID_OUTLINE_EVIDENCE === "1") {
+        const evidenceDir = join(process.cwd(), ".plans/02-artifact-outline/evidence");
+        await mkdir(evidenceDir, { recursive: true });
+        await scaledPage.screenshot({
+          fullPage: false,
+          path: join(evidenceDir, `m3.3-scale-${deviceScaleFactor}x-closed.png`),
+        });
+      }
+
+      await rail.focus();
+      await expect(rail).toBeFocused();
+      await expect(rail).toHaveCSS("outline-style", "solid");
+      await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+      const items = on(scaledPage).artifactOutlineItem();
+      await expect(items.nth(0)).toHaveAttribute("aria-current", "location");
+      expect(await items.nth(0).evaluate((item) => getComputedStyle(item).color)).not.toBe(
+        await items.nth(1).evaluate((item) => getComputedStyle(item).color),
+      );
+
+      if (process.env.LUCID_OUTLINE_EVIDENCE === "1") {
+        const evidenceDir = join(process.cwd(), ".plans/02-artifact-outline/evidence");
+        await scaledPage.screenshot({
+          fullPage: false,
+          path: join(evidenceDir, `m3.3-scale-${deviceScaleFactor}x-open.png`),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  }
 });
 
 test("an attempted CSSOM child realm permanently disables pinned proof", async ({ page }) => {

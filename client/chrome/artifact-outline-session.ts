@@ -95,6 +95,17 @@ export const createChromeArtifactOutline = (
     options.setState({ outlineHealth: null, outlinePending: pending, outlineSnapshot: null });
   };
 
+  const markProjectionPending = (): void => {
+    const state = options.getState();
+    if (state.outlineHealth === null && state.outlinePending) return;
+    // A parent-only safe-slot remeasurement does not replace the iframe DOM,
+    // so its current heading identities remain valid while fresh proof is in
+    // flight. Retaining them also preserves presentation hysteresis. Revision,
+    // frame, session, and overlay invalidation paths still call
+    // clearProjection and fail closed immediately.
+    options.setState({ outlineHealth: null, outlinePending: true });
+  };
+
   const closePort = (): void => {
     if (port === null) return;
     port.onmessage = null;
@@ -116,7 +127,7 @@ export const createChromeArtifactOutline = (
     lastLayoutKey = nextLayoutKey;
     requestGeneration += 1;
     rateGate = createOutlineRateGate();
-    clearProjection(true);
+    markProjectionPending();
     port.postMessage({
       ...layout,
       generation: requestGeneration,
@@ -237,10 +248,12 @@ export const createChromeArtifactOutline = (
   };
 
   const activate = (key: string, motion: "normal" | "reduced"): boolean => {
-    const snapshot = options.getState().outlineSnapshot;
+    const state = options.getState();
+    const snapshot = state.outlineSnapshot;
     if (
       !active ||
       !layoutAvailable ||
+      state.outlinePending ||
       pendingRevision !== null ||
       port === null ||
       snapshot === null ||
