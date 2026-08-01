@@ -164,7 +164,7 @@ test("the outline slot stays between top controls, bottom overlays, and the scro
   expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
   expect(await overlaps(slot, drawer)).toBe(false);
 
-  await slot.locator('[data-test="surface-outline-probe"]').evaluate((element) => element.remove());
+  await slot.evaluate((element) => element.firstElementChild?.remove());
   await on(page).skip().click();
   await expect(drawer).toHaveCount(0);
 
