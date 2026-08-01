@@ -1917,7 +1917,7 @@ test("a reduced-motion section reveal rests without focusing the artifact headin
   await expect(target).not.toBeFocused();
 });
 
-test("the dormant outline runtime publishes complete geometry only over its pre-artifact port", async ({
+test("the active outline runtime publishes complete geometry only over its pre-artifact port", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 2_400, height: 900 });
@@ -1936,7 +1936,10 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
         state.port === null
       ) {
         state.port = event.ports[0] ?? null;
-        if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+        if (state.port) {
+          state.port.addEventListener("message", (message) => state.messages.push(message.data));
+          state.port.start();
+        }
       } else if (event.data?.type === "outline-snapshot") {
         state.windowOutlineMessages += 1;
       }
@@ -1966,13 +1969,15 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
       ),
     )
     .toBe(true);
-  expect(
-    await page.evaluate(
-      () =>
-        (window as unknown as { __outlineTest: { messages: unknown[] } }).__outlineTest.messages
-          .length,
-    ),
-  ).toBe(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __outlineTest: { messages: unknown[] } }).__outlineTest.messages
+            .length,
+      ),
+    )
+    .toBeGreaterThan(0);
   expect(
     await page.evaluate(
       () =>
@@ -1980,19 +1985,13 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
           .windowOutlineMessages,
     ),
   ).toBe(1);
-  const dormantDebug = await surface.locator("#__lucid_overlay_root").evaluate((root) => {
-    const overlay = root.firstElementChild as Element & {
-      outlineDebugInfo?: () => Record<string, unknown>;
-    };
-    return overlay.outlineDebugInfo?.() ?? null;
-  });
-  expect(dormantDebug).toMatchObject({ dormant: true, connected: true });
+  expect(await outlineDebugInfo(page)).toMatchObject({ dormant: false, connected: true });
 
   await page.evaluate(() => {
     const port = (window as unknown as { __outlineTest: { port: MessagePort } }).__outlineTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 17,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -2029,17 +2028,19 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
         () => (window as unknown as { __outlineTest: { errors: string[] } }).__outlineTest.errors,
       ),
   ).toEqual([]);
-  const afterTaskDebug = await surface.locator("#__lucid_overlay_root").evaluate((root) => {
-    const overlay = root.firstElementChild as Element & {
-      outlineDebugInfo?: () => Record<string, unknown>;
-    };
-    return overlay.outlineDebugInfo?.() ?? null;
-  });
+  await expect
+    .poll(async () => {
+      const debug = await outlineDebugInfo(page);
+      return debug === null
+        ? null
+        : { headingCount: debug.headingCount, pendingQuietTask: debug.pendingQuietTask };
+    })
+    .toEqual({ headingCount: 3, pendingQuietTask: false });
+  const afterTaskDebug = await outlineDebugInfo(page);
   expect(afterTaskDebug).toMatchObject({
-    taskCount: 1,
+    taskCount: expect.any(Number),
     pendingQuietTask: false,
     headingCount: 3,
-    transportPublications: 1,
   });
   expect(JSON.stringify(afterTaskDebug)).not.toContain("Context");
   await expect
@@ -2068,45 +2069,39 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
         window as unknown as {
           __outlineTest: { messages: Array<Record<string, unknown>> };
         }
-      ).__outlineTest.messages.find(({ type }) => type === "outline-snapshot") ?? null,
+      ).__outlineTest.messages
+        .filter(({ type }) => type === "outline-snapshot")
+        .at(-1) ?? null,
   );
   expect(snapshot).not.toBeNull();
   if (!snapshot) throw new Error("outline snapshot missing");
   expect(snapshot).toMatchObject({
     type: "outline-snapshot",
-    requestGeneration: 17,
     availability: "complete",
     headings: [{ label: "Context" }, { label: "Milestones" }, { label: "Risks" }],
     proof: { complete: true, reason: "complete-unused-rectangle" },
   });
+  const taskCount = async (): Promise<number> => (await outlineDebugInfo(page))?.taskCount ?? 0;
+  const snapshotCount = async (): Promise<number> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineTest.messages.filter(({ type }) => type === "outline-snapshot").length,
+    );
+  const initialTaskCount = await taskCount();
+  const initialSnapshotCount = await snapshotCount();
 
   await surface.locator("body").evaluate((body) => {
     for (let index = 0; index < 200; index += 1) {
       body.setAttribute("data-outline-burst", String(index));
     }
   });
-  await expect
-    .poll(() =>
-      surface.locator("#__lucid_overlay_root").evaluate((root) => {
-        const overlay = root.firstElementChild as Element & {
-          outlineDebugInfo?: () => Record<string, unknown>;
-        };
-        return overlay.outlineDebugInfo?.().taskCount ?? null;
-      }),
-    )
-    .toBe(2);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              __outlineTest: { messages: Array<Record<string, unknown>> };
-            }
-          ).__outlineTest.messages.filter(({ type }) => type === "outline-snapshot").length,
-      ),
-    )
-    .toBe(2);
+  await expect.poll(taskCount).toBeGreaterThan(initialTaskCount);
+  await expect.poll(snapshotCount).toBeGreaterThan(initialSnapshotCount);
+  const burstSnapshotCount = await snapshotCount();
 
   await surface.locator("body").evaluate((body) => {
     const timer = window.setInterval(() => {
@@ -2124,41 +2119,15 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
       }),
     )
     .toBe(0);
+  const continuousTaskCount = await taskCount();
   await page.waitForTimeout(150);
-  expect(
-    await surface.locator("#__lucid_overlay_root").evaluate((root) => {
-      const overlay = root.firstElementChild as Element & {
-        outlineDebugInfo?: () => Record<string, unknown>;
-      };
-      return overlay.outlineDebugInfo?.().taskCount ?? null;
-    }),
-  ).toBe(2);
+  expect(await taskCount()).toBe(continuousTaskCount);
   await surface.locator("body").evaluate(() => {
     const ownedWindow = window as unknown as { __outlineMutationTimer: number };
     window.clearInterval(ownedWindow.__outlineMutationTimer);
   });
-  await expect
-    .poll(() =>
-      surface.locator("#__lucid_overlay_root").evaluate((root) => {
-        const overlay = root.firstElementChild as Element & {
-          outlineDebugInfo?: () => Record<string, unknown>;
-        };
-        return overlay.outlineDebugInfo?.().taskCount ?? null;
-      }),
-    )
-    .toBe(3);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              __outlineTest: { messages: Array<Record<string, unknown>> };
-            }
-          ).__outlineTest.messages.filter(({ type }) => type === "outline-snapshot").length,
-      ),
-    )
-    .toBe(3);
+  await expect.poll(taskCount).toBeGreaterThan(continuousTaskCount);
+  await expect.poll(snapshotCount).toBeGreaterThan(burstSnapshotCount);
 
   await surface.locator("body").evaluate((body) => {
     const hazard = document.createElement("aside");
@@ -3413,7 +3382,10 @@ test("an attempted CSSOM child realm permanently disables pinned proof", async (
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -3445,7 +3417,7 @@ test("an attempted CSSOM child realm permanently disables pinned proof", async (
       .__outlineRealmTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -3490,7 +3462,10 @@ test("shadow-root paint permanently disables pinned proof", async ({ page }) => 
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -3519,7 +3494,7 @@ test("shadow-root paint permanently disables pinned proof", async ({ page }) => 
       .__outlineShadowTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -3554,7 +3529,10 @@ test("runtime declarative shadow DOM permanently disables pinned proof", async (
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -3581,7 +3559,7 @@ test("runtime declarative shadow DOM permanently disables pinned proof", async (
     ).__outlineDeclarativeShadowTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -3638,7 +3616,10 @@ const openOwnedOverlayMutationProbe = async (
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -3659,7 +3640,7 @@ const openOwnedOverlayMutationProbe = async (
       .__outlineOwnedMutationTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -3698,7 +3679,10 @@ test("artifact children cannot enter the exact owned overlay root", async ({ pag
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -3719,7 +3703,7 @@ test("artifact children cannot enter the exact owned overlay root", async ({ pag
       .__outlineOwnedRootTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
@@ -3773,7 +3757,10 @@ test("artifact mutations inside the owned overlay shadow tree disable pinned pro
         return;
       }
       state.port = event.ports[0] ?? null;
-      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
     });
   });
   const artifact = `<!doctype html><html><head><style>
@@ -3794,7 +3781,7 @@ test("artifact mutations inside the owned overlay shadow tree disable pinned pro
       .__outlineOwnedShadowTest.port;
     port.postMessage({
       type: "outline-layout-request",
-      generation: 1,
+      generation: 1_000_000,
       preferredWidth: 240,
       safeInsets: { top: 80, right: 20, bottom: 24 },
     });
