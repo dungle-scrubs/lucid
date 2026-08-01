@@ -636,6 +636,59 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     expect(runtime.debugInfo()).toMatchObject({ connected: false, pendingQuietTask: false });
   });
 
+  test("sustained just-quiet mutations bound projection work and retain one trailing rebuild", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    let now = 0;
+    const { publications, runtime, scheduler } = harness([main], { now: () => now });
+    runtime.requestLayout(request);
+    scheduler.flushQuiet();
+
+    for (let index = 0; index < 20; index += 1) {
+      now += 41;
+      runtime.invalidate(`sustained-${index}`);
+      scheduler.flushQuiet();
+    }
+
+    expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(4);
+    expect(runtime.debugInfo()).toMatchObject({ headingCount: 0, pendingQuietTask: true });
+    now += 250;
+    scheduler.flushQuiet();
+    expect(runtime.debugInfo()).toMatchObject({ headingCount: 2, pendingQuietTask: false });
+    expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(5);
+    expect(publications.at(-1)).toMatchObject({ availability: "complete", type: "snapshot" });
+  });
+
+  test("sustained layout requests bound projection work and retain one trailing rebuild", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    let now = 0;
+    const { publications, runtime, scheduler } = harness([main], { now: () => now });
+    runtime.requestLayout(request);
+    scheduler.flushQuiet();
+
+    for (let index = 0; index < 20; index += 1) {
+      now += 41;
+      runtime.requestLayout({
+        ...request,
+        generation: index + 2,
+        safeInsets: { ...request.safeInsets, right: index + 17 },
+      });
+      scheduler.flushQuiet();
+    }
+
+    expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(4);
+    expect(runtime.debugInfo()).toMatchObject({ headingCount: 0, pendingQuietTask: true });
+    expect(publications.filter(({ type }) => type === "invalidated").length).toBeLessThanOrEqual(4);
+    now += 250;
+    scheduler.flushQuiet();
+    expect(runtime.debugInfo()).toMatchObject({ headingCount: 2, pendingQuietTask: false });
+    expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(5);
+    expect(publications.at(-1)).toMatchObject({ availability: "complete", type: "snapshot" });
+  });
+
   test("active tracking is animation-frame bounded and debugInfo contains no labels", () => {
     const main = node("main", { tagName: "MAIN" });
     const one = append(

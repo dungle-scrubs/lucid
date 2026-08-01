@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { ARTIFACT_OUTLINE_POLICY } from "../../../client/shared/artifact-outline.ts";
 import { PLAN_V1, fullyVisibleIn, makeCli, overlaps, surfaceOf } from "../helpers.ts";
 import type { Cli } from "../helpers.ts";
 import { mod, on } from "../locators.ts";
@@ -148,10 +149,13 @@ test("the outline slot stays between top controls, bottom overlays, and the scro
   expect(frameBox.x + frameBox.width - (slotBox.x + slotBox.width)).toBeGreaterThanOrEqual(
     scrollbarSafeInset,
   );
+  expect(scrollbarSafeInset).toBe(ARTIFACT_OUTLINE_POLICY.railInsetPx);
+  expect(slotBox.width).toBe(ARTIFACT_OUTLINE_POLICY.outlineWidthPx);
 
   await slot.evaluate((element) => {
     const probe = document.createElement("div");
     probe.dataset.test = "surface-outline-probe";
+    probe.style.flexShrink = "0";
     probe.style.height = "2000px";
     probe.style.pointerEvents = "auto";
     probe.style.width = "100%";

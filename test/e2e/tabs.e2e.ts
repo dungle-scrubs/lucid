@@ -340,6 +340,18 @@ test("switching and closing tabs never leaves another session's outline projecte
   await expect(visibleItems).toContainText(["Beta context", "Beta execution", "Beta risks"]);
   await expect(visibleItems.filter({ hasText: "Alpha context" })).toHaveCount(0);
 
+  // A hidden tab is suspended, but frame detach remains a document-lifetime
+  // signal. Reloading it must replace the private channel before activation.
+  await page
+    .locator('iframe[title="artifact surface"]')
+    .first()
+    .contentFrame()
+    .locator("body")
+    .evaluate(() => window.location.reload());
+  await expect(
+    page.locator('iframe[title="artifact surface"]').first().contentFrame().locator("h1"),
+  ).toHaveText("Alpha outline");
+
   await tabNamed(page, "Alpha outline").click();
   await expect(activeTab(page)).toContainText("Alpha outline");
   await expect(surfaceOf(page).locator("h1")).toContainText("Alpha outline");
@@ -347,6 +359,28 @@ test("switching and closing tabs never leaves another session's outline projecte
   await revealOutline();
   await expect(visibleItems).toContainText(["Alpha context", "Alpha execution", "Alpha risks"]);
   await expect(visibleItems.filter({ hasText: "Beta context" })).toHaveCount(0);
+
+  // A drawer state change under display:none has no CSS transition events.
+  // It must not leave geometry suspended when that tab becomes visible.
+  await tabNamed(page, "Beta outline").click();
+  await cli.run([
+    "ask",
+    cli.artifact,
+    "--text",
+    "Which Alpha checkpoint should remain visible?",
+    "--option",
+    "Alpha execution|Keep the execution checkpoint",
+  ]);
+  await expect(on(page).questionDrawer()).toHaveCount(1);
+  await expect(on(page).questionDrawer()).not.toBeVisible();
+  await tabNamed(page, "Alpha outline").click();
+  await expect(on(page).questionDrawer()).toBeVisible();
+  await expect(outlines).toHaveCount(1);
+  await revealOutline();
+  await expect(visibleItems).toContainText(["Alpha context", "Alpha execution", "Alpha risks"]);
+  await on(page).answer().click();
+  await expect(on(page).questionDrawer()).toHaveCount(0);
+  await expect(outlines).toHaveCount(1);
 
   await activeTab(page).locator(hook("tab-close")).click();
   await expect(activeTab(page)).toContainText("Beta outline");

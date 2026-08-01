@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import {
+  ARTIFACT_OUTLINE_POLICY,
   reduceOutlinePresentation,
   type OutlinePresentationEvent,
   type OutlinePresentationMode,
@@ -69,7 +70,9 @@ const OutlinePanel = ({ mode, onActivate, snapshot }: OutlinePanelProps) => (
   <div
     data-test="artifact-outline-panel"
     data-mode={mode.toLowerCase()}
-    className="pointer-events-auto flex max-h-full min-h-0 w-full flex-col border border-ink-500 bg-ink-850/95 text-fg shadow-[0_8px_24px_rgba(0,0,0,0.42)]"
+    className={`pointer-events-auto flex max-h-full min-h-0 w-full flex-col border border-ink-500 bg-ink-850/95 text-fg ${
+      mode === "PINNED" ? "" : "shadow-[0_8px_24px_rgba(0,0,0,0.42)]"
+    }`}
   >
     <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-ink-600 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-fg-muted">
       <span className="size-3.5" aria-hidden="true">
@@ -114,9 +117,10 @@ export const ArtifactOutline = () => {
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingPresentationHold = useRef(false);
   const pointerFocusingRail = useRef(false);
   const suppressRailFocusOpen = useRef(false);
+  const touchOpeningRail = useRef(false);
+  const touchOpeningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const snapshot =
     sourceSnapshot?.generation === renderedSnapshot?.generation ? sourceSnapshot : renderedSnapshot;
@@ -128,9 +132,12 @@ export const ArtifactOutline = () => {
   }, []);
 
   const transition = useCallback(
-    (event: OutlinePresentationEvent): OutlinePresentationMode => {
+    (
+      event: OutlinePresentationEvent,
+      basis: OutlinePresentationState = presentationRef.current,
+    ): OutlinePresentationMode => {
       const previous = presentationRef.current;
-      const result = reduceOutlinePresentation(previous, event);
+      const result = reduceOutlinePresentation(basis, event);
       if (result.effects?.includes("focus-surface")) focusSurface();
       const next = result.state;
       const previousOrigin =
@@ -149,35 +156,46 @@ export const ArtifactOutline = () => {
     const focusedElement = document.activeElement;
     const focusInside = rootRef.current?.contains(focusedElement) === true;
     if (sourceSnapshot === null) {
-      if (projectionPending && (snapshotRef.current !== null || pendingPresentationHold.current)) {
-        pendingPresentationHold.current = true;
-        // The overlay withdraws stale geometry while it re-proves the same
-        // document. Hide that geometry immediately when it does not own focus,
-        // but preserve the presentation state so the replacement proof can
-        // apply the pinned/transient hysteresis thresholds to its predecessor.
-        if (focusInside) {
+      if (projectionPending) {
+        // Geometry is no longer proved. A focused pinned control becomes a
+        // transient latch immediately so focus and section identity survive
+        // the short reproof, but stale geometry never remains painted as
+        // pinned. Without focus, fail closed and remove the projection now.
+        if (focusInside && renderedSnapshot !== null && snapshotRef.current !== null) {
+          transition({
+            focusInside: true,
+            headingCount: renderedSnapshot.headings.length,
+            proof: { clearancePx: 0, complete: false },
+            type: "projection",
+          });
           if (pendingTimer.current === null) {
             pendingTimer.current = setTimeout(() => {
               pendingTimer.current = null;
-              pendingPresentationHold.current = false;
               const stillFocused = rootRef.current?.contains(document.activeElement) === true;
-              transition({ focusInside: stillFocused, type: "invalidate" });
+              transition({
+                focusInside: stillFocused,
+                preserveHysteresis: true,
+                type: "invalidate",
+              });
               setRenderedSnapshot(null);
             }, PENDING_FOCUS_HOLD_MS);
           }
         } else {
+          transition({
+            focusInside: false,
+            preserveHysteresis: true,
+            type: "invalidate",
+          });
           setRenderedSnapshot(null);
         }
         return;
       }
-      pendingPresentationHold.current = false;
       if (pendingTimer.current !== null) clearTimeout(pendingTimer.current);
       pendingTimer.current = null;
       transition({ focusInside, type: "invalidate" });
       setRenderedSnapshot(null);
       return;
     }
-    pendingPresentationHold.current = false;
     if (sourceSnapshot.generation === renderedSnapshot?.generation) return;
     if (pendingTimer.current !== null) clearTimeout(pendingTimer.current);
     pendingTimer.current = null;
@@ -186,23 +204,23 @@ export const ArtifactOutline = () => {
     const stableFocusedItem =
       focusedOutlineKey !== undefined &&
       sourceSnapshot.headings.some(({ key }) => key === focusedOutlineKey);
-    const projectedPresentation = reduceOutlinePresentation(presentationRef.current, {
+    const projectionBasis = presentationRef.current;
+    const projectionEvent: OutlinePresentationEvent = {
       focusInside,
       headingCount: sourceSnapshot.headings.length,
       proof: sourceSnapshot.proof,
       type: "projection",
-    }).state;
+    };
+    const projectedPresentation = reduceOutlinePresentation(projectionBasis, projectionEvent).state;
     const stableFocusedRail =
       focusedElement === railRef.current && projectedPresentation.mode !== "PINNED";
     const generationHandoff = focusInside && !stableFocusedItem && !stableFocusedRail;
     if (generationHandoff) focusSurface();
     setRenderedSnapshot(sourceSnapshot);
-    transition({
-      focusInside: generationHandoff ? false : focusInside,
-      headingCount: sourceSnapshot.headings.length,
-      proof: sourceSnapshot.proof,
-      type: "projection",
-    });
+    transition(
+      { ...projectionEvent, focusInside: generationHandoff ? false : focusInside },
+      projectionBasis,
+    );
   }, [focusSurface, projectionPending, renderedSnapshot, sourceSnapshot, transition]);
 
   const clearHoverTimer = useCallback((): void => {
@@ -213,12 +231,22 @@ export const ArtifactOutline = () => {
     if (leaveTimer.current !== null) clearTimeout(leaveTimer.current);
     leaveTimer.current = null;
   }, []);
+  const finishInteraction = useCallback((): OutlinePresentationMode => {
+    const current = snapshotRef.current;
+    if (current === null || projectionPending) return transition({ type: "dismiss" });
+    return transition({
+      headingCount: current.headings.length,
+      proof: current.proof,
+      type: "interaction-finished",
+    });
+  }, [projectionPending, transition]);
 
   useEffect(
     () => () => {
       clearHoverTimer();
       clearLeaveTimer();
       if (pendingTimer.current !== null) clearTimeout(pendingTimer.current);
+      if (touchOpeningTimer.current !== null) clearTimeout(touchOpeningTimer.current);
     },
     [clearHoverTimer, clearLeaveTimer],
   );
@@ -227,11 +255,11 @@ export const ArtifactOutline = () => {
     if (presentation.mode !== "TRANSIENT_LATCHED") return;
     const onPointerDown = (event: PointerEvent): void => {
       if (rootRef.current?.contains(event.target as Node)) return;
-      transition({ type: "dismiss" });
+      finishInteraction();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [presentation.mode, transition]);
+  }, [finishInteraction, presentation.mode]);
 
   if (snapshot === null || presentation.mode === "ABSENT") return null;
 
@@ -242,7 +270,7 @@ export const ArtifactOutline = () => {
     const motion = prefersReducedMotion() ? "reduced" : "normal";
     if (!surface.activateOutline(key, motion)) return;
     if (!transient) return;
-    transition({ type: "activate" });
+    finishInteraction();
     if (event.detail === 0) {
       suppressRailFocusOpen.current = true;
       queueMicrotask(() => railRef.current?.focus());
@@ -277,27 +305,12 @@ export const ArtifactOutline = () => {
       clearTimeout(pendingTimer.current);
       pendingTimer.current = null;
       if (sourceSnapshot === null) {
-        transition({ focusInside: false, type: "invalidate" });
+        transition({ focusInside: false, preserveHysteresis: true, type: "invalidate" });
         setRenderedSnapshot(null);
         return;
       }
     }
-    if (
-      presentationRef.current.mode === "TRANSIENT_LATCHED" &&
-      presentationRef.current.latchOrigin === "gutter"
-    ) {
-      const current = snapshotRef.current;
-      if (current !== null) {
-        transition({
-          focusInside: false,
-          headingCount: current.headings.length,
-          proof: current.proof,
-          type: "interaction-finished",
-        });
-      }
-      return;
-    }
-    if (presentationRef.current.mode === "TRANSIENT_LATCHED") transition({ type: "dismiss" });
+    if (presentationRef.current.mode === "TRANSIENT_LATCHED") finishInteraction();
   };
 
   return (
@@ -306,10 +319,14 @@ export const ArtifactOutline = () => {
       open={open}
       onOpenChange={(nextOpen) => {
         if (!transient) return;
-        transition({
-          type:
-            nextOpen || presentationRef.current.mode === "TRANSIENT_HOVER" ? "latch" : "dismiss",
-        });
+        if (!nextOpen && touchOpeningRail.current) return;
+        if (nextOpen || presentationRef.current.mode === "TRANSIENT_HOVER") {
+          transition({ type: "latch" });
+        } else {
+          const railFocused = document.activeElement === railRef.current;
+          const nextMode = finishInteraction();
+          if (railFocused && nextMode === "PINNED") queueMicrotask(focusSurface);
+        }
       }}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
@@ -317,9 +334,13 @@ export const ArtifactOutline = () => {
       onKeyDown={(event) => {
         if (event.key !== "Escape" || !transient || !open) return;
         event.preventDefault();
-        transition({ type: "dismiss" });
-        suppressRailFocusOpen.current = true;
-        queueMicrotask(() => railRef.current?.focus());
+        const nextMode = finishInteraction();
+        if (nextMode === "PINNED") {
+          focusSurface();
+        } else {
+          suppressRailFocusOpen.current = true;
+          queueMicrotask(() => railRef.current?.focus());
+        }
       }}
       data-test="artifact-outline"
       data-mode={presentation.mode.toLowerCase()}
@@ -330,6 +351,21 @@ export const ArtifactOutline = () => {
       {transient ? (
         <CollapsibleTrigger
           ref={railRef}
+          onTouchEnd={() => {
+            if (
+              presentationRef.current.mode !== "TRANSIENT_CLOSED" &&
+              presentationRef.current.mode !== "TRANSIENT_HOVER"
+            ) {
+              return;
+            }
+            touchOpeningRail.current = true;
+            transition({ type: "latch" });
+            if (touchOpeningTimer.current !== null) clearTimeout(touchOpeningTimer.current);
+            touchOpeningTimer.current = setTimeout(() => {
+              touchOpeningTimer.current = null;
+              touchOpeningRail.current = false;
+            }, 0);
+          }}
           render={
             <Button
               type="button"
@@ -357,7 +393,8 @@ export const ArtifactOutline = () => {
                 }
                 transition({ type: "latch" });
               }}
-              className="pointer-events-auto h-16 w-[18px] cursor-pointer rounded-none border border-ink-500 bg-ink-850/95 px-0 text-fg-muted shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline"
+              style={{ width: `${ARTIFACT_OUTLINE_POLICY.railInsetPx}px` }}
+              className="pointer-events-auto h-16 cursor-pointer rounded-none border border-ink-500 bg-ink-850/95 px-0 text-fg-muted shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline"
             >
               <span className="size-3.5">
                 <ListIcon />

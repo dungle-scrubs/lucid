@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { ARTIFACT_OUTLINE_POLICY } from "../shared/artifact-outline.ts";
 import { ArtifactOutline } from "./artifact-outline.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { SurfaceUpdating } from "./Surface.tsx";
@@ -83,13 +84,14 @@ export const SurfaceControls = (props: SurfaceControlsProps) => {
   const { bottomOverlayHeight } = props;
   const { surface } = useSessionHandle();
   const layerStyle: SurfaceControlLayerStyle = {
-    "--surface-scrollbar-safe-inset": "18px",
+    "--surface-scrollbar-safe-inset": `${ARTIFACT_OUTLINE_POLICY.railInsetPx}px`,
     bottom: `calc(${bottomOverlayHeight}px + ${SURFACE_CONTROL_EDGE_INSET_PX}px)`,
     top: `${SURFACE_CONTROL_EDGE_INSET_PX}px`,
   };
   const slotStyle = {
     marginRight: "var(--surface-scrollbar-safe-inset)",
     maxWidth: "calc(100% - var(--surface-scrollbar-safe-inset))",
+    width: `${ARTIFACT_OUTLINE_POLICY.outlineWidthPx}px`,
   };
 
   return (
@@ -112,7 +114,7 @@ export const SurfaceControls = (props: SurfaceControlsProps) => {
         ref={surface.attachOutlineSlot}
         data-test="surface-outline-slot"
         style={slotStyle}
-        className="pointer-events-none mt-2 flex min-h-0 w-[240px] flex-1 flex-col items-end overflow-y-auto"
+        className="pointer-events-none mt-2 flex min-h-0 flex-1 flex-col items-end overflow-y-auto"
       >
         <ArtifactOutline />
       </div>

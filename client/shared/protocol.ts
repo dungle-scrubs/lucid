@@ -68,6 +68,7 @@ export type OutlinePrivateOutbound =
   | (Omit<Extract<OutlineRuntimePublication, { readonly type: "invalidated" }>, "type"> & {
       readonly type: "outline-invalidated";
     })
+  | { readonly type: "outline-frame-detaching" }
   | { readonly type: "outline-revision-complete"; readonly revision: number };
 
 export interface OutlineDiagnosticHealth {
@@ -97,7 +98,8 @@ export type ValidatedOutlinePrivateOutbound =
   | {
       readonly type: "outline-revision-complete";
       readonly revision: number;
-    };
+    }
+  | { readonly type: "outline-frame-detaching" };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -176,6 +178,7 @@ export const validateOutlinePrivateOutbound = (
   data: unknown,
 ): ValidatedOutlinePrivateOutbound | null => {
   if (!isRecord(data)) return null;
+  if (data.type === "outline-frame-detaching") return { type: "outline-frame-detaching" };
   if (data.type === "outline-revision-complete") {
     return isValidOutlineGeneration(data.revision)
       ? { revision: data.revision, type: "outline-revision-complete" }

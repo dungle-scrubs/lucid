@@ -96,14 +96,11 @@ export const createChromeArtifactOutline = (
   };
 
   const markProjectionPending = (): void => {
-    const state = options.getState();
-    if (state.outlineHealth === null && state.outlinePending) return;
-    // A parent-only safe-slot remeasurement does not replace the iframe DOM,
-    // so its current heading identities remain valid while fresh proof is in
-    // flight. Retaining them also preserves presentation hysteresis. Revision,
-    // frame, session, and overlay invalidation paths still call
-    // clearProjection and fail closed immediately.
-    options.setState({ outlineHealth: null, outlinePending: true });
+    // Geometry changes revoke the old proof before the replacement request
+    // crosses the frame. The React control may preserve a focused interaction
+    // as transient, but Zustand must never retain a snapshot that still claims
+    // pinned geometry while its measured slot is changing.
+    clearProjection(true);
   };
 
   const closePort = (): void => {
@@ -139,6 +136,10 @@ export const createChromeArtifactOutline = (
   const receive = (data: unknown): void => {
     const message = validateOutlinePrivateOutbound(data);
     if (message === null) return;
+    if (message.type === "outline-frame-detaching") {
+      resetChannel();
+      return;
+    }
     if (message.type === "outline-revision-complete") {
       if (message.revision !== pendingRevision) return;
       pendingRevision = null;

@@ -120,6 +120,8 @@ interface WorkState {
   readonly startedAt: number;
 }
 
+const SNAPSHOT_MINIMUM_INTERVAL_MS = 1_000 / ARTIFACT_OUTLINE_POLICY.maxSnapshotsPerSecond;
+
 const visible = (style: OutlineRuntimeStyle): boolean =>
   style.display !== "none" &&
   style.visibility !== "hidden" &&
@@ -176,6 +178,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #examinedTextNodes = 0;
   #inspected = 0;
   #lastDurationMs = 0;
+  #lastProjectionStartedAt = Number.NEGATIVE_INFINITY;
   #lastSnapshotAt = Number.NEGATIVE_INFINITY;
   #lastActiveSampleAt = Number.NEGATIVE_INFINITY;
   #cancelSnapshot: (() => void) | null = null;
@@ -199,10 +202,11 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
 
   requestLayout(request: OutlineLayoutRequest): void {
     if (!this.#connected) return;
+    const initialRequest = this.#request === null;
     this.#withdrawProjection("layout-request");
     this.#clearPendingSnapshot();
     this.#request = request;
-    this.invalidate("layout-request", false);
+    this.invalidate(initialRequest ? "initial-layout-request" : "layout-request", false);
   }
 
   invalidate(reason: string, publishInvalidation = true): void {
@@ -212,14 +216,24 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#cancelQuiet?.();
     this.#cancelQuiet = null;
     if (publishInvalidation) this.#withdrawProjection(reason);
-    this.#cancelQuiet = this.#dependencies.scheduleQuiet(
-      ARTIFACT_OUTLINE_POLICY.quietLayoutMs,
-      () => {
+    const throttleCompute = reason !== "initial-layout-request" && reason !== "revision";
+    const schedule = (delayMs: number): void => {
+      this.#cancelQuiet = this.#dependencies.scheduleQuiet(delayMs, () => {
         this.#cancelQuiet = null;
         if (!this.#connected || version !== this.#scheduleVersion) return;
+        if (throttleCompute) {
+          const remaining =
+            SNAPSHOT_MINIMUM_INTERVAL_MS -
+            (this.#dependencies.now() - this.#lastProjectionStartedAt);
+          if (remaining > 0) {
+            schedule(Math.ceil(remaining));
+            return;
+          }
+        }
         this.#runProjection();
-      },
-    );
+      });
+    };
+    schedule(ARTIFACT_OUTLINE_POLICY.quietLayoutMs);
   }
 
   revise(): void {
@@ -384,12 +398,11 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #publishSnapshot(publication: OutlineSnapshotPublication): void {
     this.#pendingSnapshot = publication;
     const now = this.#dependencies.now();
-    const minimumIntervalMs = 1_000 / ARTIFACT_OUTLINE_POLICY.maxSnapshotsPerSecond;
     const elapsed = now - this.#lastSnapshotAt;
-    if (Number.isFinite(elapsed) && elapsed < minimumIntervalMs) {
+    if (Number.isFinite(elapsed) && elapsed < SNAPSHOT_MINIMUM_INTERVAL_MS) {
       if (this.#cancelSnapshot === null) {
         this.#cancelSnapshot = this.#dependencies.scheduleQuiet(
-          Math.ceil(minimumIntervalMs - elapsed),
+          Math.ceil(SNAPSHOT_MINIMUM_INTERVAL_MS - elapsed),
           () => {
             this.#cancelSnapshot = null;
             const pending = this.#pendingSnapshot;
@@ -401,11 +414,14 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     }
     if (!this.#rateGate.accept("snapshot", now)) {
       if (this.#cancelSnapshot === null) {
-        this.#cancelSnapshot = this.#dependencies.scheduleQuiet(minimumIntervalMs, () => {
-          this.#cancelSnapshot = null;
-          const pending = this.#pendingSnapshot;
-          if (pending !== null && this.#connected) this.#publishSnapshot(pending);
-        });
+        this.#cancelSnapshot = this.#dependencies.scheduleQuiet(
+          SNAPSHOT_MINIMUM_INTERVAL_MS,
+          () => {
+            this.#cancelSnapshot = null;
+            const pending = this.#pendingSnapshot;
+            if (pending !== null && this.#connected) this.#publishSnapshot(pending);
+          },
+        );
       }
       return;
     }
@@ -551,6 +567,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #runProjection(): void {
     const request = this.#request;
     if (request === null) return;
+    this.#lastProjectionStartedAt = this.#dependencies.now();
     this.#taskCount += 1;
     this.#generation += 1;
     const work: WorkState = {

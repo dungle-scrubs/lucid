@@ -252,7 +252,11 @@ describe("active-session artifact outline bridge", () => {
     controller.acceptPort(port);
     port.receive(completeSnapshot(1));
     controller.requestLayout(true);
-    expect(patches.at(-1)).toEqual({ outlineHealth: null, outlinePending: true });
+    expect(patches.at(-1)).toEqual({
+      outlineHealth: null,
+      outlinePending: true,
+      outlineSnapshot: null,
+    });
     expect(controller.activate("h-1", "normal")).toBe(false);
     expect(port.sent.at(-1)).toMatchObject({ type: "outline-layout-request" });
     port.receive({

@@ -1,5 +1,4 @@
 import type { StateResponse } from "../../src/protocol/wire.ts";
-import { ARTIFACT_OUTLINE_POLICY } from "../shared/artifact-outline.ts";
 import type { ChromeMessage } from "../shared/protocol.ts";
 import { createChromeArtifactOutline, type OutlinePort } from "./artifact-outline-session.ts";
 import {
@@ -33,6 +32,8 @@ export interface Surface {
   readonly requestOutlineLayout: () => boolean;
   /** Only the foreground session may retain or accept outline state. */
   readonly setOutlineActive: (active: boolean) => void;
+  /** Suspend proof while parent chrome is moving the artifact frame. */
+  readonly setOutlineGeometryMoving: (source: "divider" | "drawer", moving: boolean) => void;
   readonly activateOutline: (key: string, motion: "normal" | "reduced") => boolean;
   /** The overlay signalled `ready` (or the iframe finished loading, which
    *  implies the overlay module ran - a missed one-shot `ready` must not leave
@@ -84,7 +85,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   let detachedIframeEl: HTMLIFrameElement | null = null;
   let outlineSlotEl: HTMLDivElement | null = null;
   let outlineSlotObserver: ResizeObserver | null = null;
-  let outlineLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+  const outlineGeometryMotions = new Set<"divider" | "drawer">();
   /**
    * The element whose overlay has announced itself. Readiness is a fact about
    * an ELEMENT, not this controller: a boolean here got wiped by a
@@ -107,6 +108,8 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   const ownsSource = (source: MessageEventSource | null): boolean =>
     iframeEl !== null && source === iframeEl.contentWindow;
   const outlineLayoutAvailable = (): boolean => iframeEl !== null && outlineSlotEl !== null;
+  const effectiveOutlineLayoutAvailable = (): boolean =>
+    outlineLayoutAvailable() && outlineGeometryMotions.size === 0;
   const outline = createChromeArtifactOutline({
     getState: () => get(),
     measureLayout: () => {
@@ -300,8 +303,6 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     if (el === null) {
       detachedIframeEl = iframeEl;
       iframeEl = null;
-      if (outlineLayoutTimer !== null) clearTimeout(outlineLayoutTimer);
-      outlineLayoutTimer = null;
       outline.setLayoutAvailable(false);
       return;
     }
@@ -314,36 +315,38 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     }
     iframeEl = el;
     detachedIframeEl = null;
-    outline.setLayoutAvailable(outlineLayoutAvailable());
+    outline.setLayoutAvailable(effectiveOutlineLayoutAvailable());
     if (el.contentWindow) claimPendingOutlineChannel(el.contentWindow, acceptOutlinePort);
   };
 
   const attachOutlineSlot = (el: HTMLDivElement | null): void => {
     outlineSlotObserver?.disconnect();
     outlineSlotObserver = null;
-    if (outlineLayoutTimer !== null) {
-      clearTimeout(outlineLayoutTimer);
-      outlineLayoutTimer = null;
-    }
     outlineSlotEl = el;
-    outline.setLayoutAvailable(outlineLayoutAvailable());
+    outline.setLayoutAvailable(effectiveOutlineLayoutAvailable());
     if (el !== null) {
       outlineSlotObserver = new ResizeObserver(() => {
-        if (outlineLayoutTimer !== null) clearTimeout(outlineLayoutTimer);
-        outlineLayoutTimer = setTimeout(() => {
-          outlineLayoutTimer = null;
-          outline.requestLayout();
-        }, ARTIFACT_OUTLINE_POLICY.quietLayoutMs);
+        // requestLayout revokes the previous proof synchronously. The iframe
+        // runtime owns quieting and projection throttling; while a parent drag
+        // or transition is active this is a deliberate no-op, followed by one
+        // forced request when movement ends.
+        outline.requestLayout();
       });
       outlineSlotObserver.observe(el);
     }
   };
 
+  const setOutlineGeometryMoving = (source: "divider" | "drawer", moving: boolean): void => {
+    const wasMoving = outlineGeometryMotions.size > 0;
+    if (moving) outlineGeometryMotions.add(source);
+    else outlineGeometryMotions.delete(source);
+    if (wasMoving === outlineGeometryMotions.size > 0) return;
+    outline.setLayoutAvailable(effectiveOutlineLayoutAvailable());
+  };
+
   const dispose = (): void => {
     outlineSlotObserver?.disconnect();
     outlineSlotObserver = null;
-    if (outlineLayoutTimer !== null) clearTimeout(outlineLayoutTimer);
-    outlineLayoutTimer = null;
     unsubscribeOutlineChannels();
     discardPendingOutlineChannel(iframeEl?.contentWindow ?? null);
     discardPendingOutlineChannel(detachedIframeEl?.contentWindow ?? null);
@@ -358,6 +361,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     attachOutlineSlot,
     requestOutlineLayout: outline.requestLayout,
     setOutlineActive: outline.setActive,
+    setOutlineGeometryMoving,
     activateOutline: outline.activate,
     markOverlayReady,
     ownsSource,

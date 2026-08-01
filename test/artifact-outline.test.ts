@@ -305,6 +305,21 @@ describe("artifact outline presentation state machine", () => {
     expect(
       reduceOutlinePresentation({ mode: "TRANSIENT_CLOSED" }, projection(2, 12)).state.mode,
     ).toBe("PINNED");
+    const invalidatedPinned = reduceOutlinePresentation(
+      { mode: "PINNED" },
+      { preserveHysteresis: true, type: "invalidate" },
+    ).state;
+    expect(reduceOutlinePresentation(invalidatedPinned, projection(2, 9)).state.mode).toBe(
+      "PINNED",
+    );
+    const failedProof = reduceOutlinePresentation(invalidatedPinned, projection(2, 0, false)).state;
+    expect(reduceOutlinePresentation(failedProof, projection(2, 9)).state.mode).toBe(
+      "TRANSIENT_CLOSED",
+    );
+    const resetPinned = reduceOutlinePresentation({ mode: "PINNED" }, { type: "invalidate" }).state;
+    expect(reduceOutlinePresentation(resetPinned, projection(2, 9)).state.mode).toBe(
+      "TRANSIENT_CLOSED",
+    );
   });
 });
 

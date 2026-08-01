@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
 import { SessionProvider, useSession } from "./context.tsx";
@@ -292,9 +292,11 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
  * and SessionView is the thing that PROVIDES that store.
  */
 const SurfaceRegion = ({
+  active,
   session,
   attachSurface,
 }: {
+  readonly active: boolean;
   readonly session: SessionHandle;
   readonly attachSurface: (el: HTMLIFrameElement | null) => void;
 }) => {
@@ -302,6 +304,7 @@ const SurfaceRegion = ({
   const outlineCode = useSession(selectOutlineHealthCode);
   const outlineGeneration = useSession(selectOutlineGeneration);
   const bottomOverlayObserver = useRef<ResizeObserver | null>(null);
+  const previousDrawerRaised = useRef(drawer.raised);
   const [bottomOverlayHeight, setBottomOverlayHeight] = useState(0);
   const attachBottomOverlay = useCallback((element: HTMLElement | null): void => {
     bottomOverlayObserver.current?.disconnect();
@@ -318,7 +321,18 @@ const SurfaceRegion = ({
     bottomOverlayObserver.current = new ResizeObserver(measure);
     bottomOverlayObserver.current.observe(element);
   }, []);
+  useLayoutEffect(() => {
+    if (!active) {
+      previousDrawerRaised.current = drawer.raised;
+      session.surface.setOutlineGeometryMoving("drawer", false);
+      return;
+    }
+    if (previousDrawerRaised.current === drawer.raised) return;
+    previousDrawerRaised.current = drawer.raised;
+    session.surface.setOutlineGeometryMoving("drawer", true);
+  }, [active, drawer.raised, session]);
   useEffect(() => () => bottomOverlayObserver.current?.disconnect(), []);
+  useEffect(() => () => session.surface.setOutlineGeometryMoving("drawer", false), [session]);
   return (
     <section
       data-test="surface-region"
@@ -337,6 +351,31 @@ const SurfaceRegion = ({
           projects drawer's motion language, rotated. The artifact stays live
           and targetable the whole time; the drawer covers only its own band. */}
       <div
+        data-test="artifact-parallax"
+        onTransitionRun={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            (event.propertyName === "transform" || event.propertyName === "translate")
+          ) {
+            session.surface.setOutlineGeometryMoving("drawer", true);
+          }
+        }}
+        onTransitionEnd={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            (event.propertyName === "transform" || event.propertyName === "translate")
+          ) {
+            session.surface.setOutlineGeometryMoving("drawer", false);
+          }
+        }}
+        onTransitionCancel={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            (event.propertyName === "transform" || event.propertyName === "translate")
+          ) {
+            session.surface.setOutlineGeometryMoving("drawer", false);
+          }
+        }}
         className={`h-full w-full transition-transform duration-200 ease-out ${
           drawer.raised ? "-translate-y-3" : "translate-y-0"
         }`}
@@ -393,11 +432,18 @@ export const SessionView = ({
   const chromeWidth = useShell((s) => s.chromeWidth);
   const sidebarOpen = useShell((s) => s.sidebarOpen);
   const sidebarTab = useShell((s) => s.sidebarTab);
-  const dragging = useRef(false);
+  const dragging = useRef<number | null>(null);
+  const stopDrag = useRef<(() => void) | null>(null);
   // Render state (not a ref): the slide duration is a style the panel reads.
   const [resizing, setResizing] = useState(false);
 
   useSessionWiring(session, !shell, active);
+  useEffect(
+    () => () => {
+      stopDrag.current?.();
+    },
+    [],
+  );
 
   // A callback ref, not an effect: attach must be synchronous with the
   // element entering the DOM, so a fast iframe `load` can never fire into a
@@ -412,13 +458,15 @@ export const SessionView = ({
   // Divider drag. Pointer capture routes move/up to the divider even over the
   // iframe, which would otherwise swallow them.
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (dragging.current !== null) return;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    dragging.current = true;
+    dragging.current = e.pointerId;
     setResizing(true);
+    session.surface.setOutlineGeometryMoving("divider", true);
     const startX = e.clientX;
     const startW = useShell.getState().chromeWidth;
     const onMove = (ev: PointerEvent): void => {
-      if (!dragging.current) return;
+      if (dragging.current !== ev.pointerId) return;
       // Right-side panel: pointer moving LEFT grows the panel.
       const w = Math.max(
         CHROME_MIN_WIDTH,
@@ -426,15 +474,26 @@ export const SessionView = ({
       );
       setChromeWidth(w);
     };
-    const onUp = (): void => {
-      dragging.current = false;
-      setResizing(false);
-      persistWidth(useShell.getState().chromeWidth);
+    const removeListeners = (): void => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    const onUp = (event: PointerEvent): void => {
+      if (dragging.current !== event.pointerId) return;
+      stopDrag.current?.();
+      setResizing(false);
+      persistWidth(useShell.getState().chromeWidth);
+    };
+    stopDrag.current = () => {
+      removeListeners();
+      dragging.current = null;
+      stopDrag.current = null;
+      session.surface.setOutlineGeometryMoving("divider", false);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   return (
@@ -458,7 +517,7 @@ export const SessionView = ({
       >
         <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
           <Header />
-          <SurfaceRegion session={session} attachSurface={attachSurface} />
+          <SurfaceRegion active={active} session={session} attachSurface={attachSurface} />
         </SidebarInset>
         {/* The window-splitter pattern: a separator carries the role, and arrow
             keys resize it for anything that cannot drag. Double-click asks the

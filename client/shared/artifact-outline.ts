@@ -234,12 +234,20 @@ export type OutlinePresentationMode =
 
 export type OutlinePresentationState =
   | {
-      readonly mode: Exclude<OutlinePresentationMode, "TRANSIENT_LATCHED">;
+      readonly mode: "ABSENT";
+      /** Last settled mode only - no snapshot or geometry survives invalidation. */
+      readonly priorMode?: "PINNED" | "TRANSIENT";
       readonly latchOrigin?: never;
+    }
+  | {
+      readonly mode: Exclude<OutlinePresentationMode, "ABSENT" | "TRANSIENT_LATCHED">;
+      readonly latchOrigin?: never;
+      readonly priorMode?: never;
     }
   | {
       readonly mode: "TRANSIENT_LATCHED";
       readonly latchOrigin: "gutter" | "user";
+      readonly priorMode?: never;
     };
 
 export interface OutlineProof {
@@ -260,7 +268,12 @@ export type OutlinePresentationEvent =
       readonly proof: OutlineProof;
       readonly focusInside?: boolean;
     }
-  | { readonly type: "invalidate"; readonly focusInside?: boolean }
+  | {
+      readonly type: "invalidate";
+      readonly focusInside?: boolean;
+      /** Preserve only the last mode bit across a soft geometry reproof. */
+      readonly preserveHysteresis?: boolean;
+    }
   | { readonly type: "hover-intent" }
   | { readonly type: "pointer-leave" }
   | { readonly type: "latch" }
@@ -272,16 +285,27 @@ export interface OutlinePresentationResult {
   readonly effects?: readonly ["focus-surface"];
 }
 
-const leaveForAbsent = (focusInside: boolean): OutlinePresentationResult =>
-  focusInside
-    ? { effects: ["focus-surface"], state: { mode: "ABSENT" } }
-    : { state: { mode: "ABSENT" } };
+const leaveForAbsent = (
+  focusInside: boolean,
+  priorMode?: "PINNED" | "TRANSIENT",
+): OutlinePresentationResult => {
+  const state: OutlinePresentationState =
+    priorMode === undefined ? { mode: "ABSENT" } : { mode: "ABSENT", priorMode };
+  return focusInside ? { effects: ["focus-surface"], state } : { state };
+};
 
 export const reduceOutlinePresentation = (
   state: OutlinePresentationState,
   event: OutlinePresentationEvent,
 ): OutlinePresentationResult => {
-  if (event.type === "invalidate") return leaveForAbsent(event.focusInside === true);
+  if (event.type === "invalidate") {
+    const priorMode = event.preserveHysteresis
+      ? state.mode === "PINNED" || (state.mode === "ABSENT" && state.priorMode === "PINNED")
+        ? "PINNED"
+        : "TRANSIENT"
+      : undefined;
+    return leaveForAbsent(event.focusInside === true, priorMode);
+  }
 
   if (event.type === "projection" || event.type === "interaction-finished") {
     if (event.headingCount < 2) return leaveForAbsent(event.focusInside === true);
@@ -291,7 +315,7 @@ export const reduceOutlinePresentation = (
     }
 
     const threshold =
-      state.mode === "PINNED"
+      state.mode === "PINNED" || (state.mode === "ABSENT" && state.priorMode === "PINNED")
         ? ARTIFACT_OUTLINE_POLICY.pinnedRetainClearancePx
         : ARTIFACT_OUTLINE_POLICY.pinnedEnterClearancePx;
     if (event.proof.complete && event.proof.clearancePx >= threshold) {

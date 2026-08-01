@@ -55,6 +55,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   answerBlocked: (): Locator => root.locator(hook("answer-blocked")),
   approve: (): Locator => root.locator(hook("approve")),
   approveWrap: (): Locator => root.locator(hook("approve-wrap")),
+  artifactParallax: (): Locator => root.locator(hook("artifact-parallax")),
   artifactOutline: (): Locator => root.locator(hook("artifact-outline")),
   artifactOutlineContent: (): Locator => root.locator(hook("artifact-outline-content")),
   artifactOutlineItem: (): Locator => root.locator(hook("artifact-outline-item")),
