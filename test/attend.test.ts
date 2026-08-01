@@ -1239,6 +1239,18 @@ if (process.env.LUCID_HARNESS === "codex") {
 
   const selectionUrl = (): string => `/s/${sessionId(paths.artifactPath)}/__lucid/selection`;
 
+  const waitForLatestSession = async (
+    predicate: (session: ReturnType<typeof foldLog>["sessionHistory"][number]) => boolean,
+  ): Promise<ReturnType<typeof foldLog>["sessionHistory"][number]> => {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const latest = foldLog((await readEvents(paths.logPath)).events).sessionHistory.at(-1);
+      if (latest && predicate(latest)) return latest;
+      await Bun.sleep(10);
+    }
+    throw new Error("timed out waiting for the replacement harness session stamp");
+  };
+
   beforeEach(async () => {
     logs.length = 0;
     dir = await mkdtemp(join(tmpdir(), "lucid-sel-"));
@@ -1563,8 +1575,10 @@ if (process.env.LUCID_HARNESS === "codex") {
     const argv = marker.argv as string[];
     expect(argv.join("\n")).toContain(paths.logPath);
     expect(argv.join("\n")).toContain("full Lucid review record");
-    const state = foldLog((await readEvents(paths.logPath)).events);
-    expect(state.sessionHistory.at(-1)).toMatchObject({
+    const latestSession = await waitForLatestSession(
+      (session) => session.harness === "codex" && session.sessionId === "codex-thread-from-output",
+    );
+    expect(latestSession).toMatchObject({
       harness: "codex",
       sessionId: "codex-thread-from-output",
     });

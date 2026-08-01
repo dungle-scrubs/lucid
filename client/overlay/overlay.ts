@@ -17,6 +17,12 @@ import {
   type PayloadAnnotationLike,
   type QueuedAnchorLike,
 } from "../shared/protocol.ts";
+import { emphasizeElement, revealElement as revealOutlineElement } from "./reveal.ts";
+import {
+  BrowserArtifactOutlineController,
+  type TrustedOutlineCapabilities,
+} from "./browser-artifact-outline.ts";
+import type { TrustedOverlayCapabilities, TrustedOverlayHostHandle } from "./trusted-overlay.ts";
 
 /**
  * A stylesheet the overlay adds to the ARTIFACT's document, as a constructed
@@ -50,7 +56,6 @@ const dropStyle = (id: string): void => {
   document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
 };
 
-const OVERLAY_ROOT_ID = "__lucid_overlay_root";
 const INTERACTIVE =
   "a, button, input, select, textarea, label, [contenteditable], [role=button], summary";
 
@@ -79,6 +84,14 @@ interface Marker {
    *  twice would otherwise stack badges exactly and hide all but the last, so
    *  each is stepped right into a cascade. */
   readonly stackIndex: number;
+}
+
+interface OverlayRenderSnapshot {
+  readonly focusedId: string | null;
+  readonly hoverRect: Rect | null;
+  readonly markers: readonly Marker[];
+  readonly sectionPulse: number;
+  readonly sectionRect: Rect | null;
 }
 
 /** Horizontal step per cascaded badge - less than the badge width, so they
@@ -133,11 +146,15 @@ export class LucidOverlay extends LitElement {
     markers: { state: true },
     hoverRect: { state: true },
     focusedId: { state: true },
+    sectionPulse: { state: true },
+    sectionRect: { state: true },
   };
 
   declare markers: Marker[];
   declare hoverRect: DOMRect | null;
   declare focusedId: string | null;
+  declare sectionPulse: number;
+  declare sectionRect: Rect | null;
 
   private committed: PayloadAnnotationLike[] = [];
   private queuedAnchors: QueuedAnchorLike[] = [];
@@ -148,6 +165,19 @@ export class LucidOverlay extends LitElement {
   /** Read mode when false: no marks painted, no targeting. The chrome owns this
    *  and restates it on every highlight, so the two can never drift. */
   private showTargets = true;
+  /** The reveal seam maintains at most one emphasized section. Keeping its
+   * element avoids rescanning an arbitrarily large artifact on every pulse. */
+  private sectionEmphasis: Element | null = null;
+  #outlineController: BrowserArtifactOutlineController | null = null;
+  #hostHandle: TrustedOverlayHostHandle | null = null;
+  #ownedRoot: HTMLElement | null = null;
+  #renderSnapshot: OverlayRenderSnapshot = {
+    focusedId: null,
+    hoverRect: null,
+    markers: [],
+    sectionPulse: 0,
+    sectionRect: null,
+  };
   /** Focus minted by `reveal-annotation` (the palette jump, a card's keyboard
    *  open). A card HOVER is cleared by the card's own mouseleave, but a reveal
    *  has no counterpart on the chrome side - and this glow also paints a quiet
@@ -166,6 +196,86 @@ export class LucidOverlay extends LitElement {
     this.markers = [];
     this.hoverRect = null;
     this.focusedId = null;
+    this.sectionPulse = 0;
+    this.sectionRect = null;
+  }
+
+  protected override performUpdate(): void {
+    const capabilities = this.#hostHandle;
+    if (!this.isUpdatePending) {
+      super.performUpdate();
+      return;
+    }
+    this.#renderSnapshot = this.#captureRenderSnapshot();
+    if (capabilities === null) {
+      super.performUpdate();
+      return;
+    }
+    capabilities.performOverlayUpdate(this);
+  }
+
+  #captureRenderSnapshot(): OverlayRenderSnapshot {
+    const number = (value: unknown): number =>
+      typeof value === "number" && Number.isFinite(value) ? value : 0;
+    const rect = (value: unknown): Rect | null => {
+      if (typeof value !== "object" || value === null) return null;
+      const candidate = value as Partial<Rect>;
+      return {
+        height: number(candidate.height),
+        left: number(candidate.left),
+        top: number(candidate.top),
+        width: number(candidate.width),
+      };
+    };
+    try {
+      const rawMarkers = Array.isArray(this.markers) ? this.markers : [];
+      const markers: Marker[] = [];
+      for (
+        let markerIndex = 0;
+        markerIndex < Math.min(rawMarkers.length, 2_000);
+        markerIndex += 1
+      ) {
+        const candidate = rawMarkers[markerIndex] as Partial<Marker> | undefined;
+        if (typeof candidate !== "object" || candidate === null) continue;
+        const state = candidate.state;
+        if (
+          state !== "committed" &&
+          state !== "queued" &&
+          state !== "pending" &&
+          state !== "decision"
+        ) {
+          continue;
+        }
+        const rawRects = Array.isArray(candidate.rects) ? candidate.rects : [];
+        const rects: Rect[] = [];
+        for (let rectIndex = 0; rectIndex < Math.min(rawRects.length, 64); rectIndex += 1) {
+          const captured = rect(rawRects[rectIndex]);
+          if (captured !== null) rects.push(captured);
+        }
+        markers.push({
+          id: typeof candidate.id === "string" ? candidate.id.slice(0, 256) : "",
+          index: Math.trunc(number(candidate.index)),
+          rects,
+          stackIndex: Math.trunc(number(candidate.stackIndex)),
+          state,
+        });
+      }
+      return {
+        focusedId: typeof this.focusedId === "string" ? this.focusedId.slice(0, 256) : null,
+        hoverRect: rect(this.hoverRect),
+        markers,
+        sectionPulse: Math.trunc(number(this.sectionPulse)),
+        sectionRect: rect(this.sectionRect),
+      };
+    } catch {
+      return {
+        focusedId: null,
+        hoverRect: null,
+        markers: [],
+        sectionPulse: 0,
+        sectionRect: null,
+      };
+    }
   }
 
   static styles = css`
@@ -196,6 +306,33 @@ export class LucidOverlay extends LitElement {
       background: rgba(94, 129, 172, 0.08);
       pointer-events: none;
       transition: all 0.04s linear;
+    }
+    @keyframes section-pulse-even {
+      0% { background: rgba(94, 129, 172, 0); }
+      20% { background: rgba(94, 129, 172, 0.22); }
+      100% { background: rgba(94, 129, 172, 0); }
+    }
+    @keyframes section-pulse-odd {
+      0% { background: rgba(94, 129, 172, 0); }
+      20% { background: rgba(94, 129, 172, 0.22); }
+      100% { background: rgba(94, 129, 172, 0); }
+    }
+    .section-emphasis {
+      position: fixed;
+      pointer-events: none;
+      box-sizing: border-box;
+      animation: section-pulse-even 2.6s ease-in-out;
+    }
+    .section-emphasis.odd {
+      animation-name: section-pulse-odd;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .section-emphasis,
+      .section-emphasis.odd {
+        animation: none;
+        outline: 2px solid rgba(94, 129, 172, 0.9);
+        outline-offset: 3px;
+      }
     }
     .marker {
       position: fixed;
@@ -303,6 +440,7 @@ export class LucidOverlay extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.clearSectionEmphasis();
     window.removeEventListener("mousemove", this.onMouseMove, true);
     window.removeEventListener("mousedown", this.onMouseDown, true);
     window.removeEventListener("click", this.onClick, true);
@@ -313,13 +451,31 @@ export class LucidOverlay extends LitElement {
     window.removeEventListener("message", this.onMessage);
   }
 
+  /** Bound exactly once by the pre-artifact bootstrap. Later artifact code can
+   * call this public custom-element method, but cannot replace or inspect the
+   * private controller or the MessagePort it already owns. */
+  configureOutlineChannel(
+    port: MessagePort,
+    outlineCapabilities: TrustedOutlineCapabilities,
+    hostHandle: TrustedOverlayHostHandle,
+  ): void {
+    if (this.#outlineController !== null) return;
+    this.#hostHandle = hostHandle;
+    this.#ownedRoot = hostHandle.overlayRoot();
+    this.#outlineController = new BrowserArtifactOutlineController(port, outlineCapabilities, {
+      clearEmphasis: this.clearSectionEmphasis,
+      ensureStyles: () => undefined,
+      markEmphasis: this.markSectionEmphasis,
+    });
+  }
+
+  outlineDebugInfo(): ReturnType<BrowserArtifactOutlineController["debugInfo"]> | null {
+    return this.#outlineController?.debugInfo() ?? null;
+  }
+
   private isOwn(el: EventTarget | null): boolean {
     if (!(el instanceof Element)) return true;
-    return (
-      el.id === OVERLAY_ROOT_ID ||
-      el.closest(`#${OVERLAY_ROOT_ID}`) !== null ||
-      el.hasAttribute("data-lucid-ignore")
-    );
+    return this.#hostHandle?.isOwned(el) === true || el.hasAttribute("data-lucid-ignore");
   }
 
   /**
@@ -673,59 +829,54 @@ export class LucidOverlay extends LitElement {
     dropStyle("__lucid_diff_style");
   }
 
-  /** Injected once, survives artifact swaps (it lives in <head>, not the body
-   *  the swap rebuilds). The outline fades to nothing so the emphasis is a
-   *  glance, not a permanent mark on the artifact. */
-  private injectSectionStyle(): void {
-    adoptStyle(
-      "__lucid_section_style",
-      `
-      /* A wash that rises and falls once, slowly - the eye is arriving from
-         another pane and needs to be told where it landed, not alarmed. An
-         INSET shadow rather than a background: it paints over the section's own
-         background and under its text, so a section that carries a colour of
-         its own is tinted rather than blanked, and nothing of ours survives the
-         animation to overwrite the document's styling afterwards. */
-      @keyframes __lucid_section_pulse {
-        0% { box-shadow: inset 0 0 0 9999px rgba(94,129,172,0); }
-        20% { box-shadow: inset 0 0 0 9999px rgba(94,129,172,0.22); }
-        100% { box-shadow: inset 0 0 0 9999px rgba(94,129,172,0); }
-      }
-      .__lucid_section_target { scroll-margin: 80px; animation: __lucid_section_pulse 2.6s ease-in-out; }
-      /* A pulse that is not allowed to animate says nothing at all, so this
-         reader gets the same information as a resting outline instead. */
-      @media (prefers-reduced-motion: reduce) {
-        .__lucid_section_target {
-          animation: none;
-          outline: 2px solid rgba(94,129,172,0.9);
-          outline-offset: 3px;
-        }
-      }
-    `,
-    );
-  }
-
   /** Scroll the artifact to a section by its `data-lucid-id` and flash it. The
    *  chat permalink's landing; a no-op if the id is gone (the chip that sent it
    *  should already have degraded to plain text from the published id set). */
   private revealSection(lucidId: string): void {
-    this.pulseSection(lucidId);
     const target = this.sectionById(lucidId);
     if (!target) return;
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    this.revealElement(target);
   }
+
+  private revealElement(target: Element): boolean {
+    const revealed = revealOutlineElement(
+      target,
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "normal",
+      {
+        clearEmphasis: this.clearSectionEmphasis,
+        ensureStyles: () => undefined,
+        markEmphasis: this.markSectionEmphasis,
+        // Permalink resolution queries the live document immediately above.
+        // Outline activation supplies the generation-correlated invalidation
+        // callback when its runtime is wired in M2.3.
+        invalidate: () => {},
+      },
+    );
+    return revealed;
+  }
+
+  private readonly clearSectionEmphasis = (): void => {
+    this.sectionEmphasis = null;
+    this.sectionRect = null;
+  };
+
+  private readonly markSectionEmphasis = (element: Element | null): void => {
+    this.sectionEmphasis = element;
+    this.sectionRect = element ? element.getBoundingClientRect() : null;
+    this.sectionPulse += 1;
+  };
 
   /** Flash a section where it already sits. This is the no-scroll half of the
    *  update-location rule: if the new material is already under the reader's
    *  eyes, moving the page would destroy rather than improve orientation. */
   private pulseSection(lucidId: string): void {
-    this.injectSectionStyle();
-    for (const el of document.querySelectorAll(".__lucid_section_target")) {
-      el.classList.remove("__lucid_section_target");
-    }
     const target = this.sectionById(lucidId);
     if (!target) return;
-    target.classList.add("__lucid_section_target");
+    emphasizeElement(target, {
+      clearEmphasis: this.clearSectionEmphasis,
+      ensureStyles: () => undefined,
+      markEmphasis: this.markSectionEmphasis,
+    });
   }
 
   /** Match by attribute value rather than building a selector: an id with a
@@ -851,7 +1002,7 @@ export class LucidOverlay extends LitElement {
   };
 
   /** The ✎ badge is the existing annotation's handle: click it to jump to its card. */
-  private readonly onBadgeClick = (id: string, e: Event): void => {
+  readonly #onBadgeClick = (id: string, e: Event): void => {
     e.stopPropagation();
     post({ source: "lucid-overlay", type: "annotation-activate", id });
   };
@@ -955,6 +1106,11 @@ export class LucidOverlay extends LitElement {
    * rest, not only on hover.
    */
   private reposition(): void {
+    if (this.sectionEmphasis?.isConnected) {
+      this.sectionRect = this.sectionEmphasis.getBoundingClientRect();
+    } else if (this.sectionEmphasis !== null) {
+      this.clearSectionEmphasis();
+    }
     if (!this.showTargets) {
       this.markers = [];
       this.hoverRect = null;
@@ -1063,16 +1219,19 @@ export class LucidOverlay extends LitElement {
    */
   private swapArtifact(htmlText: string): void {
     this.removeDiffStyles();
+    this.clearSectionEmphasis();
+    this.#outlineController?.revise();
     const parsed = new DOMParser().parseFromString(htmlText, "text/html");
     const previousIds = new Set(
       Array.from(document.querySelectorAll("[data-lucid-id]"))
         .map((el) => el.getAttribute("data-lucid-id"))
         .filter((id): id is string => id !== null && id !== ""),
     );
-    const host = document.getElementById(OVERLAY_ROOT_ID);
+    const host = this.#ownedRoot;
     // Remove current artifact body nodes (everything except our host + scripts).
     const keep = new Set<Node>();
     if (host) keep.add(host);
+    keep.add(this);
     for (const s of document.body.querySelectorAll("script[src='/__lucid/client.js']")) keep.add(s);
     Array.from(document.body.childNodes).forEach((n) => {
       if (!keep.has(n)) document.body.removeChild(n);
@@ -1080,11 +1239,7 @@ export class LucidOverlay extends LitElement {
     // Insert new artifact body nodes before the host.
     const ref = host ?? null;
     Array.from(parsed.body.childNodes).forEach((n) => {
-      if (
-        n instanceof Element &&
-        (n.id === OVERLAY_ROOT_ID || n.getAttribute("data-lucid-ignore") === "true")
-      )
-        return;
+      if (n instanceof Element && n.getAttribute("data-lucid-ignore") === "true") return;
       if (n instanceof HTMLScriptElement && n.src.includes("/__lucid/client.js")) return;
       document.body.insertBefore(document.importNode(n, true), ref);
     });
@@ -1121,71 +1276,76 @@ export class LucidOverlay extends LitElement {
   }
 
   render() {
+    const { focusedId, hoverRect, markers, sectionPulse, sectionRect } = this.#renderSnapshot;
+    const renderedMarkers = [];
+    for (let markerIndex = 0; markerIndex < markers.length; markerIndex += 1) {
+      const marker = markers[markerIndex];
+      if (!marker) continue;
+      for (let rectIndex = 0; rectIndex < marker.rects.length; rectIndex += 1) {
+        const rect = marker.rects[rectIndex];
+        if (!rect) continue;
+        renderedMarkers[renderedMarkers.length] = html`
+          <div
+            class=${`marker ${marker.state} ${focusedId === marker.id ? "focused" : ""}`}
+            data-annotation-id=${marker.id}
+            style=${`left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;`}
+          ></div>
+          ${
+            /* index 0 = no badge: the pending draft, and the secondary spots
+               of a multi-target item (only its first spot names it). */
+            rectIndex === 0 && marker.index > 0
+              ? html`<div
+                  class=${`badge ${marker.state} ${focusedId === marker.id ? "focused" : ""}`}
+                  title="Jump to this annotation in the panel"
+                  @click=${(event: Event) => this.#onBadgeClick(marker.id, event)}
+                  style=${`left:${rect.left + marker.stackIndex * BADGE_STEP_PX}px;top:${rect.top}px;z-index:${focusedId === marker.id ? 60 : 20 + marker.stackIndex};`}
+                >${marker.index}</div>`
+              : null
+          }
+        `;
+      }
+    }
     return html`
       ${
-        this.hoverRect
+        sectionRect
           ? html`<div
-            class="hover"
-            style=${`left:${this.hoverRect.left}px;top:${this.hoverRect.top}px;width:${this.hoverRect.width}px;height:${this.hoverRect.height}px;`}
+            class=${`section-emphasis ${sectionPulse % 2 === 0 ? "even" : "odd"}`}
+            data-lucid-section-emphasis="true"
+            style=${`left:${sectionRect.left}px;top:${sectionRect.top}px;width:${sectionRect.width}px;height:${sectionRect.height}px;`}
           ></div>`
           : null
       }
-      ${this.markers.flatMap((m) =>
-        m.rects.map(
-          (r, i) => html`
-            <div
-              class=${`marker ${m.state} ${this.focusedId === m.id ? "focused" : ""}`}
-              data-annotation-id=${m.id}
-              style=${`left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;`}
-            ></div>
-            ${
-              /* index 0 = no badge: the pending draft, and the secondary spots
-                 of a multi-target item (only its first spot names it). */
-              i === 0 && m.index > 0
-                ? html`<div
-                    class=${`badge ${m.state} ${this.focusedId === m.id ? "focused" : ""}`}
-                    title="Jump to this annotation in the panel"
-                    @click=${(e: Event) => this.onBadgeClick(m.id, e)}
-                    style=${`left:${r.left + m.stackIndex * BADGE_STEP_PX}px;top:${r.top}px;z-index:${this.focusedId === m.id ? 60 : 20 + m.stackIndex};`}
-                  >${m.index}</div>`
-                : null
-            }
-          `,
-        ),
-      )}
+      ${
+        hoverRect
+          ? html`<div
+            class="hover"
+            style=${`left:${hoverRect.left}px;top:${hoverRect.top}px;width:${hoverRect.width}px;height:${hoverRect.height}px;`}
+          ></div>`
+          : null
+      }
+      ${renderedMarkers}
     `;
   }
 }
 
-export const mountOverlay = (): void => {
+export const mountOverlay = (
+  outlinePort: MessagePort,
+  tagName: string,
+  capabilities: TrustedOverlayCapabilities,
+): void => {
   // The artifact is here, so whatever the stand-in document was counting is
   // over. It parks its retry backoff in the frame's name (the only thing that
   // survives a reload on an opaque origin); clearing it here means a LATER gap
   // starts asking again promptly instead of inheriting a maxed-out wait, and
   // an artifact never sees a window name Lucid left behind.
   if (window.name.startsWith("lucid-retry:")) window.name = "";
-  if (!customElements.get("lucid-overlay")) {
-    customElements.define("lucid-overlay", LucidOverlay);
-  }
-  const root = document.getElementById(OVERLAY_ROOT_ID);
-  if (!root) return;
-  const mount = (): void => {
-    if (root.querySelector("lucid-overlay")) return;
-    root.appendChild(document.createElement("lucid-overlay"));
+  capabilities.defineCustomElement(tagName, LucidOverlay);
+  const overlay = capabilities.constructCustomElement(LucidOverlay);
+  const hostHandle: TrustedOverlayHostHandle = {
+    isOwned: capabilities.isOwned,
+    overlayRoot: capabilities.overlayRoot,
+    performOverlayUpdate: capabilities.performOverlayUpdate,
   };
-  mount();
-  // Scoped, debounced defensive re-mount: only when our own host loses the
-  // overlay element (D-041). Does not react to arbitrary artifact mutation.
-  let debounce: ReturnType<typeof setTimeout> | undefined;
-  const observer = new MutationObserver(() => {
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => {
-      if (document.body.contains(root) && !root.querySelector("lucid-overlay")) mount();
-      else if (!document.body.contains(root)) {
-        document.body.appendChild(root);
-        mount();
-      }
-    }, 100);
-  });
-  observer.observe(document.body, { childList: true, subtree: false });
+  overlay.configureOutlineChannel(outlinePort, capabilities, hostHandle);
+  capabilities.installOverlay(overlay);
 };
