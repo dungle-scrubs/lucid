@@ -1,6 +1,6 @@
 import type { StateResponse } from "../../src/protocol/wire.ts";
 import type { ChromeMessage } from "../shared/protocol.ts";
-import { sentMarkShown, type SessionStore } from "./store.ts";
+import { annotationFocused, type SessionStore } from "./store.ts";
 import { currentTheme } from "./theme.ts";
 import type { Transport } from "./transport.ts";
 
@@ -120,9 +120,10 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
       pending: s.pendingTarget,
       pendingList: s.pendingTargets,
       showTargets: s.showTargets,
-      // Sent marks are opt-in (default quiet); queued and pending marks are
-      // unsent work and always paint. The full record still rides above.
-      shownCommitted: s.annotations.filter((a) => sentMarkShown(s, a.id)).map((a) => a.id),
+      // Sent marks paint only where focus is (default quiet); queued and
+      // pending marks are unsent work and always paint. The full record still
+      // rides above.
+      shownCommitted: s.annotations.filter((a) => annotationFocused(s, a.id)).map((a) => a.id),
     });
   };
 

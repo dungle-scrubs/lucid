@@ -153,7 +153,7 @@ test("a queued card takes the NEXT number, on its card and on its mark alike", a
   await expect(surfaceOf(page).locator(".badge")).toHaveText(["2"]);
 
   // The header default brings the sent mark back, and both surfaces agree.
-  await on(page).toggleSentMarks().click();
+  await on(page).toggleFocusAll().click();
   await expect(surfaceOf(page).locator(".badge")).toHaveText(["1", "2"]);
 });
 

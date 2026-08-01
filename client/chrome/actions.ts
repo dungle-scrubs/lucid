@@ -9,13 +9,7 @@ import {
   legacyAnswerFields,
 } from "./question-draft.ts";
 import type { Notify, SessionStorage, SessionStore } from "./store.ts";
-import {
-  approveBlockedReason,
-  hasComposerDraft,
-  sentMarkShown,
-  toWireImages,
-  uuid,
-} from "./store.ts";
+import { approveBlockedReason, hasComposerDraft, toWireImages, uuid } from "./store.ts";
 import type { DecisionReply } from "../shared/decision.ts";
 import type { Surface } from "./surface.ts";
 import type { Transport, UploadedAsset } from "./transport.ts";
@@ -593,25 +587,28 @@ export const createActions = (ctx: ActionsCtx) => {
     pushHighlights();
   };
 
-  /** Flip the session default for SENT marks (the header's highlighter
-   *  toggle). Clears the per-card exceptions: the toggle reads as "show all" /
-   *  "hide all", and exceptions surviving it would make it neither. */
-  const toggleSentMarks = (): void => {
-    const next = !get().showSentMarks;
-    set({ showSentMarks: next, sentMarkOverrides: {} });
-    storage.persistShowSentMarks(next);
+  /** Focus every sent annotation at once, or none (the header's highlighter
+   *  toggle). It drops the single focus either way: "all" and "one" are the
+   *  same setting at different scopes, and nothing scrolls - with many marks
+   *  lit there is no one place to go. */
+  const toggleFocusAll = (): void => {
+    const next = !get().focusAll;
+    set({ focusAll: next, focusedId: null });
+    storage.persistFocusAll(next);
     pushHighlights();
   };
 
-  /** One card's show/hide link. Showing also reveals: the human just asked
-   *  "where is this?" and the mark may be far off-screen, so painting it
-   *  without going there answers only half the question. */
-  const toggleSentMark = (id: string): void => {
-    const s = get();
-    const shown = sentMarkShown(s, id);
-    set({ sentMarkOverrides: { ...s.sentMarkOverrides, [id]: !shown } });
+  /** One card's focus/unfocus link. Focus is exclusive: taking it releases
+   *  whatever held it, including the header's all-at-once. Focusing also
+   *  reveals - the human just asked "where is this?" and the mark may be far
+   *  off-screen, so painting it without going there answers only half the
+   *  question. Unfocusing leaves the artifact where it is. */
+  const toggleFocus = (id: string): void => {
+    const unfocus = get().focusedId === id;
+    set({ focusedId: unfocus ? null : id, focusAll: false });
+    storage.persistFocusAll(false);
     pushHighlights();
-    if (!shown) toOverlay({ source: "lucid-chrome", type: "reveal-annotation", id });
+    if (!unfocus) toOverlay({ source: "lucid-chrome", type: "reveal-annotation", id });
   };
 
   const REOPEN_ENDED_MSG =
@@ -1075,8 +1072,8 @@ export const createActions = (ctx: ActionsCtx) => {
     approveReview,
     queueDecision,
     toggleTargets,
-    toggleSentMarks,
-    toggleSentMark,
+    toggleFocusAll,
+    toggleFocus,
     reopenReview,
     loadSessions,
     switchToSession,

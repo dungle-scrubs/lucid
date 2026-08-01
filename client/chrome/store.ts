@@ -155,10 +155,10 @@ export interface SessionStorage {
   readonly forgetQueuedItem: (id: string) => void;
   readonly readShowTargets: () => boolean;
   readonly persistShowTargets: (on: boolean) => void;
-  /** Whether SENT annotations paint their marks by default (off unless the
-   *  human opted in). Per session, like the targets toggle. */
-  readonly readShowSentMarks: () => boolean;
-  readonly persistShowSentMarks: (on: boolean) => void;
+  /** Whether every SENT annotation is focused by default (off unless the human
+   *  opted in). Per session, like the targets toggle. */
+  readonly readFocusAll: () => boolean;
+  readonly persistFocusAll: (on: boolean) => void;
 }
 
 export const createSessionStorage = (
@@ -180,7 +180,7 @@ export const createSessionStorage = (
   const outboxPrefix = `lucid:outbox:${sessionKey}:`;
   const queuePrefix = `lucid:queue:${sessionKey}:`;
   const showTargetsKey = `lucid:showTargets:${sessionKey}`;
-  const showSentMarksKey = `lucid:showSentMarks:${sessionKey}`;
+  const focusAllKey = `lucid:focusAll:${sessionKey}`;
 
   /**
    * One persistence bucket: per-item keys under one prefix.
@@ -302,18 +302,18 @@ export const createSessionStorage = (
 
   /** OFF by default - the opposite pole from showTargets. A sent annotation's
    *  feedback has been delivered, so its markup on the artifact is noise
-   *  unless the human asks for it (per card, or with this default). */
-  const readShowSentMarks = (): boolean => {
+   *  unless the human asks for it (one card at a time, or all at once here). */
+  const readFocusAll = (): boolean => {
     try {
-      return localStorage.getItem(showSentMarksKey) === "1";
+      return localStorage.getItem(focusAllKey) === "1";
     } catch {
       return false;
     }
   };
 
-  const persistShowSentMarks = (on: boolean): void => {
+  const persistFocusAll = (on: boolean): void => {
     try {
-      localStorage.setItem(showSentMarksKey, on ? "1" : "0");
+      localStorage.setItem(focusAllKey, on ? "1" : "0");
     } catch {
       /* storage unavailable; the toggle simply resets next load */
     }
@@ -328,8 +328,8 @@ export const createSessionStorage = (
     forgetQueuedItem,
     readShowTargets,
     persistShowTargets,
-    readShowSentMarks,
-    persistShowSentMarks,
+    readFocusAll,
+    persistFocusAll,
   };
 };
 
@@ -441,12 +441,15 @@ export interface SessionState {
   sessionsLoading: boolean;
   /** Show the annotation marks on the surface. Remembered per session. */
   showTargets: boolean;
-  /** Whether SENT annotations paint their marks by default. Off until the
-   *  human flips it: delivered feedback's markup is noise on the artifact. */
-  showSentMarks: boolean;
-  /** Per-annotation exceptions to that default (id → shown), from each card's
-   *  show/hide link. In memory only: a reload returns to the default, quiet. */
-  sentMarkOverrides: Record<string, boolean>;
+  /** Focus every SENT annotation at once (the header's highlighter). Off until
+   *  the human flips it: delivered feedback's markup is noise on the artifact. */
+  focusAll: boolean;
+  /** The one sent annotation focused right now, or null. Focus is exclusive -
+   *  focusing a card unfocuses whatever held it, so the artifact can only ever
+   *  be pointing at one thing. INVARIANT: never set while `focusAll` is on;
+   *  the two are the same question asked at different scopes. In memory only:
+   *  a reload returns to the default, quiet. */
+  focusedId: string | null;
   /** Every `data-lucid-id` in the current artifact, published by the overlay.
    *  Null until the first report: a section permalink renders as a live chip
    *  while null (optimistic) or present, and degrades to plain text once the
@@ -501,13 +504,13 @@ export const hasComposerDraft = (
   s: Pick<SessionState, "pendingTarget" | "composerNote">,
 ): boolean => s.pendingTarget !== null && s.composerNote.trim().length > 0;
 
-/** Does this sent annotation paint its mark right now? The card's own link is
- *  an exception to the session default, so the rule reads override-then-default
- *  in exactly one place - the card's label and the highlight push must agree. */
-export const sentMarkShown = (
-  s: Pick<SessionState, "showSentMarks" | "sentMarkOverrides">,
+/** Is this sent annotation focused - i.e. does its mark paint right now? Either
+ *  the header focused all of them or this is the one exclusive focus, spelled
+ *  in exactly one place: the card's label and the highlight push must agree. */
+export const annotationFocused = (
+  s: Pick<SessionState, "focusAll" | "focusedId">,
   id: string,
-): boolean => s.sentMarkOverrides[id] ?? s.showSentMarks;
+): boolean => s.focusAll || s.focusedId === id;
 
 export const createSessionStore = (config: SessionConfig, storage: SessionStorage): SessionStore =>
   createStore<SessionState>(() => ({
@@ -549,8 +552,8 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     sessions: null,
     sessionsLoading: false,
     showTargets: storage.readShowTargets(),
-    showSentMarks: storage.readShowSentMarks(),
-    sentMarkOverrides: {},
+    focusAll: storage.readFocusAll(),
+    focusedId: null,
     sectionIds: null,
     hoveredId: null,
     diffMode: false,

@@ -132,10 +132,10 @@ const Crosshair = ({ on }: { readonly on: boolean }) => (
 );
 
 /**
- * Lucide `highlighter` - the session default for SENT annotation marks. Off by
- * default: delivered feedback's markup is noise on the artifact, and each card
- * can pin its own mark back on one by one. The struck-through glyph carries the
- * off state without relying on hue, like the crosshair beside it.
+ * Lucide `highlighter` - focus every SENT annotation at once. Off by default:
+ * delivered feedback's markup is noise on the artifact, and a card can focus
+ * its own mark one at a time. The struck-through glyph carries the off state
+ * without relying on hue, like the crosshair beside it.
  */
 const Highlighter = ({ on }: { readonly on: boolean }) => (
   <svg
@@ -374,11 +374,11 @@ const VersionPicker = () => {
 };
 
 export const Header = () => {
-  const { enterDiff, toggleTargets, toggleSentMarks } = useActions();
+  const { enterDiff, toggleTargets, toggleFocusAll } = useActions();
   const name = useSessionHandle().config.name;
   const version = useSession((s) => s.version);
   const showTargets = useSession((s) => s.showTargets);
-  const showSentMarks = useSession((s) => s.showSentMarks);
+  const focusAll = useSession((s) => s.focusAll);
   const diffMode = useSession((s) => s.diffMode);
 
   return (
@@ -412,26 +412,24 @@ export const Header = () => {
             render={
               <button
                 type="button"
-                data-test="toggle-sent-marks"
-                aria-pressed={showSentMarks}
-                aria-label={
-                  showSentMarks ? "Hide sent annotation marks" : "Show sent annotation marks"
-                }
-                onClick={toggleSentMarks}
+                data-test="toggle-focus-all"
+                aria-pressed={focusAll}
+                aria-label={focusAll ? "Unfocus all annotations" : "Focus every sent annotation"}
+                onClick={toggleFocusAll}
                 className={`inline-flex cursor-pointer items-center border p-[3px] ${
-                  showSentMarks
+                  focusAll
                     ? "border-ink-400 text-accent-bright hover:border-accent-bright"
                     : "border-steel-600/60 text-steel-400 hover:border-steel-600 hover:text-steel-300"
                 }`}
               >
-                <Highlighter on={showSentMarks} />
+                <Highlighter on={focusAll} />
               </button>
             }
           />
           <TooltipContent>
-            {showSentMarks
-              ? "Hide sent annotation marks - each card can show its own"
-              : "Show every sent annotation's mark on the artifact"}
+            {focusAll
+              ? "Unfocus every annotation - each card can focus its own"
+              : "Focus every sent annotation's mark at once"}
           </TooltipContent>
         </Tooltip>
         <Tooltip>

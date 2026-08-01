@@ -150,9 +150,9 @@ export class LucidOverlay extends LitElement {
   private showTargets = true;
   /** Focus minted by `reveal-annotation` (the palette jump, a card's keyboard
    *  open). A card HOVER is cleared by the card's own mouseleave, but a reveal
-   *  has no counterpart on the chrome side - and focus now paints a quiet sent
-   *  mark, so an uncleared reveal would pin that mark on forever while its
-   *  card still offers "Show in artifact". Transient by design: the first real
+   *  has no counterpart on the chrome side - and this glow also paints a quiet
+   *  sent mark, so an uncleared reveal would pin that mark on forever while its
+   *  card still offers "Focus". Transient by design: the first real
    *  pointer move that is not over the revealed mark ends it. */
   private revealFocusId: string | null = null;
   private hoverAnnotationId: string | null = null;
