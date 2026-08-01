@@ -1,17 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import {
-  revealElement,
-  revealOutlineActivation,
-  SECTION_TARGET_CLASS,
-} from "../client/overlay/reveal.ts";
+import { revealElement, revealOutlineActivation } from "../client/overlay/reveal.ts";
 import { projectOutlineHeadings } from "../client/shared/artifact-outline.ts";
 
 const fakeElement = (connected = true) => {
-  const classes: string[] = [];
   const scrolls: ScrollIntoViewOptions[] = [];
   let focusCalls = 0;
   const element = {
-    classList: { add: (name: string) => classes.push(name) },
     focus: () => {
       focusCalls += 1;
     },
@@ -20,7 +14,7 @@ const fakeElement = (connected = true) => {
     },
     scrollIntoView: (options: ScrollIntoViewOptions) => scrolls.push(options),
   } as unknown as Element;
-  return { classes, element, focusCalls: () => focusCalls, scrolls };
+  return { element, focusCalls: () => focusCalls, scrolls };
 };
 
 describe("outline element reveal", () => {
@@ -32,22 +26,26 @@ describe("outline element reveal", () => {
         clearEmphasis: () => effects.push("clear"),
         ensureStyles: () => effects.push("styles"),
         invalidate: () => effects.push("invalid"),
+        markEmphasis: () => effects.push("mark"),
       }),
     ).toBe(true);
-    expect(effects).toEqual(["styles", "clear"]);
-    expect(target.classes).toEqual([SECTION_TARGET_CLASS]);
+    expect(effects).toEqual(["styles", "clear", "mark"]);
     expect(target.scrolls).toEqual([{ behavior: "smooth", block: "center" }]);
     expect(target.focusCalls()).toBe(0);
   });
 
   test("reduced motion scrolls immediately while retaining resting emphasis", () => {
     const target = fakeElement();
+    const emphasized: Element[] = [];
     revealElement(target.element, "reduced", {
       clearEmphasis: () => {},
       ensureStyles: () => {},
       invalidate: () => {},
+      markEmphasis: (element) => {
+        if (element) emphasized.push(element);
+      },
     });
-    expect(target.classes).toEqual([SECTION_TARGET_CLASS]);
+    expect(emphasized).toEqual([target.element]);
     expect(target.scrolls).toEqual([{ behavior: "instant", block: "center" }]);
     expect(target.focusCalls()).toBe(0);
   });
@@ -62,7 +60,6 @@ describe("outline element reveal", () => {
         invalidate: (record) => health.push(record),
       }),
     ).toBe(false);
-    expect(target.classes).toEqual([]);
     expect(target.scrolls).toEqual([]);
     expect(health).toEqual([
       { code: "AO-002", generation: 0, occurrenceCount: 1, reason: "disconnected-heading" },

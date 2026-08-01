@@ -23,6 +23,8 @@ export const ARTIFACT_OUTLINE_POLICY = Object.freeze({
   maxAggregateLabelCodeUnits: 8_192,
   maxSnapshotsPerSecond: 4,
   maxActiveKeysPerSecond: 10,
+  maxPreferredWidthPx: 1_024,
+  maxTextNodesPerHeading: 4_096,
   activeReadingThresholdPx: 80,
 });
 
@@ -46,7 +48,7 @@ export const normalizeOutlineLabel = (text: string): string | null => {
   return parsed.ok ? parsed.label : null;
 };
 
-const validOutlineKey = (value: unknown): value is string =>
+export const isValidOutlineKey = (value: unknown): value is string =>
   typeof value === "string" &&
   value.length > 0 &&
   value.length <= ARTIFACT_OUTLINE_POLICY.maxKeyCodeUnits &&
@@ -87,6 +89,46 @@ export interface OutlineHealth {
   readonly reason?: string;
 }
 
+export interface OutlineSafeInsets {
+  readonly bottom: number;
+  readonly right: number;
+  readonly top: number;
+}
+
+export interface OutlineLayoutRequest {
+  readonly generation: number;
+  readonly preferredWidth: number;
+  readonly safeInsets: OutlineSafeInsets;
+}
+
+export interface OutlineSnapshotProof extends OutlineProof {
+  readonly reason: string;
+}
+
+export interface OutlineSnapshotPublication {
+  readonly type: "snapshot";
+  readonly requestGeneration: number;
+  readonly generation: number;
+  readonly availability: "absent" | "complete";
+  readonly headings: readonly OutlineHeading[];
+  readonly activeKey: string | null;
+  readonly proof: OutlineSnapshotProof;
+  readonly health?: OutlineHealth;
+}
+
+export type OutlineRuntimePublication =
+  | OutlineSnapshotPublication
+  | {
+      readonly type: "active";
+      readonly generation: number;
+      readonly key: string | null;
+    }
+  | {
+      readonly type: "invalidated";
+      readonly generation: number;
+      readonly health: OutlineHealth;
+    };
+
 const invalidProjection = (generation: number, reason: string): OutlineProjection => ({
   generation,
   health: { code: "AO-001", generation, occurrenceCount: 1, reason },
@@ -107,7 +149,7 @@ export const projectOutlineHeadings = (
   let aggregateRawLabelLength = 0;
   let aggregateLabelLength = 0;
   for (const { key, text } of inputs) {
-    if (!validOutlineKey(key)) return invalidProjection(generation, "invalid-key");
+    if (!isValidOutlineKey(key)) return invalidProjection(generation, "invalid-key");
     if (keys.has(key)) return invalidProjection(generation, "duplicate-key");
     keys.add(key);
     aggregateRawLabelLength += text.length;
@@ -313,7 +355,7 @@ export interface OutlineSnapshot {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-const validGeneration = (value: unknown): value is number =>
+export const isValidOutlineGeneration = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
 export interface OutlineSnapshotValidationOptions {
@@ -331,8 +373,9 @@ export const validateOutlineSnapshot = (
 ): OutlineSnapshot | null => {
   if (
     !isRecord(value) ||
-    value.available !== true ||
-    !validGeneration(value.generation) ||
+    value.availability !== "complete" ||
+    !isValidOutlineGeneration(value.requestGeneration) ||
+    !isValidOutlineGeneration(value.generation) ||
     !Array.isArray(value.headings) ||
     value.headings.length < 2 ||
     value.headings.length > ARTIFACT_OUTLINE_POLICY.maxHeadings ||
@@ -342,10 +385,8 @@ export const validateOutlineSnapshot = (
     !Number.isFinite(value.proof.clearancePx) ||
     value.proof.clearancePx < 0 ||
     (value.proof.complete && options.trustedGeometry !== true) ||
-    typeof value.railInsetPx !== "number" ||
-    !Number.isFinite(value.railInsetPx) ||
-    value.railInsetPx < 0 ||
-    value.railInsetPx > ARTIFACT_OUTLINE_POLICY.outlineWidthPx
+    typeof value.proof.reason !== "string" ||
+    value.proof.reason.length > 128
   ) {
     return null;
   }
@@ -354,7 +395,7 @@ export const validateOutlineSnapshot = (
   const keys = new Set<string>();
   let aggregateLabelLength = 0;
   for (const candidate of value.headings) {
-    if (!isRecord(candidate) || !validOutlineKey(candidate.key) || keys.has(candidate.key)) {
+    if (!isRecord(candidate) || !isValidOutlineKey(candidate.key) || keys.has(candidate.key)) {
       return null;
     }
     if (typeof candidate.label !== "string") return null;
@@ -366,7 +407,7 @@ export const validateOutlineSnapshot = (
     headings.push({ key: candidate.key, label: parsed.label });
   }
 
-  if (value.activeKey !== null && !validOutlineKey(value.activeKey)) return null;
+  if (value.activeKey !== null && !isValidOutlineKey(value.activeKey)) return null;
   if (value.activeKey !== null && !keys.has(value.activeKey)) return null;
   return {
     activeKey: value.activeKey,
@@ -374,6 +415,6 @@ export const validateOutlineSnapshot = (
     generation: value.generation,
     headings,
     proof: { clearancePx: value.proof.clearancePx, complete: value.proof.complete },
-    railInsetPx: value.railInsetPx,
+    railInsetPx: ARTIFACT_OUTLINE_POLICY.railInsetPx,
   };
 };

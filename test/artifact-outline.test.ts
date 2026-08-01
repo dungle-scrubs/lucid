@@ -9,6 +9,7 @@ import {
   resolveOutlineActivation,
   validateOutlineSnapshot,
 } from "../client/shared/artifact-outline.ts";
+import { validateOutlinePrivateInbound } from "../client/shared/protocol.ts";
 
 describe("artifact outline labels", () => {
   test("normalizes whitespace and refuses an empty result", () => {
@@ -27,7 +28,9 @@ describe("artifact outline labels", () => {
       maxExaminedLabelCodeUnits: 4_096,
       maxHeadings: 64,
       maxLabelCodeUnits: 240,
+      maxPreferredWidthPx: 1_024,
       maxSnapshotsPerSecond: 4,
+      maxTextNodesPerHeading: 4_096,
       outlineWidthPx: 240,
       paintClearancePx: 12,
       pinnedEnterClearancePx: 12,
@@ -41,6 +44,33 @@ describe("artifact outline labels", () => {
 });
 
 describe("artifact outline protocol bounds", () => {
+  test("one private inbound parser enforces layout and activation identity bounds", () => {
+    expect(
+      validateOutlinePrivateInbound({
+        type: "outline-layout-request",
+        generation: 1,
+        preferredWidth: 240,
+        safeInsets: { bottom: 24, right: 16, top: 80 },
+      }),
+    ).toMatchObject({ type: "outline-layout-request", generation: 1 });
+    expect(
+      validateOutlinePrivateInbound({
+        type: "outline-activate",
+        generation: 1,
+        key: "heading\nforged",
+        motion: "normal",
+      }),
+    ).toBeNull();
+    expect(
+      validateOutlinePrivateInbound({
+        type: "outline-layout-request",
+        generation: 1,
+        preferredWidth: 1_025,
+        safeInsets: { bottom: 0, right: 0, top: 0 },
+      }),
+    ).toBeNull();
+  });
+
   test("limits snapshots to four and active keys to ten per rolling second", () => {
     const gate = createOutlineRateGate();
     expect(Array.from({ length: 4 }, () => gate.accept("snapshot", 100))).toEqual([
@@ -63,6 +93,19 @@ describe("artifact outline protocol bounds", () => {
   test("malformed or excessive snapshots are rejected before state mutation", () => {
     const valid = {
       activeKey: "a",
+      availability: "complete",
+      generation: 2,
+      headings: [
+        { key: "a", label: "Alpha" },
+        { key: "b", label: "Beta" },
+      ],
+      proof: { clearancePx: 9, complete: true, reason: "complete-unused-rectangle" },
+      requestGeneration: 1,
+    } as const;
+    const validate = (value: unknown) => validateOutlineSnapshot(value, { trustedGeometry: true });
+    expect(validateOutlineSnapshot(valid)).toBeNull();
+    expect(validate(valid)).toEqual({
+      activeKey: "a",
       available: true,
       generation: 2,
       headings: [
@@ -71,10 +114,7 @@ describe("artifact outline protocol bounds", () => {
       ],
       proof: { clearancePx: 9, complete: true },
       railInsetPx: 18,
-    } as const;
-    const validate = (value: unknown) => validateOutlineSnapshot(value, { trustedGeometry: true });
-    expect(validateOutlineSnapshot(valid)).toBeNull();
-    expect(validate(valid)).toEqual(valid);
+    });
     expect(validate({ ...valid, generation: Number.NaN })).toBeNull();
     expect(validate({ ...valid, headings: "not-an-array" })).toBeNull();
     expect(

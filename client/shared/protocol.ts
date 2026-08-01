@@ -1,5 +1,14 @@
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import type { PayloadAnnotation } from "../../src/protocol/wire.ts";
+import {
+  ARTIFACT_OUTLINE_POLICY,
+  isValidOutlineGeneration,
+  isValidOutlineKey,
+  type OutlineActivation,
+  type OutlineLayoutRequest,
+  type OutlineRuntimePublication,
+  type OutlineSnapshotPublication,
+} from "./artifact-outline.ts";
 
 /**
  * postMessage protocol between the chrome (parent document) and the overlay
@@ -24,6 +33,76 @@ export interface QueuedAnchorLike {
    *  Absent on a single-target item (and from older chromes). */
   readonly targets?: readonly Anchor[];
 }
+
+/** The first message an injected document sends, synchronously before any
+ * artifact-authored script. The transferred port is the authority; this
+ * forgeable envelope carries no geometry or outline state of its own. */
+export interface OutlineChannelBootstrap {
+  readonly source: "lucid-overlay-bootstrap";
+  readonly type: "private-channel";
+  readonly version: 1;
+}
+
+export type OutlinePrivateInbound =
+  | (OutlineLayoutRequest & { readonly type: "outline-layout-request" })
+  | (OutlineActivation & {
+      readonly type: "outline-activate";
+      readonly motion: "normal" | "reduced";
+    });
+
+export type OutlinePrivateOutbound =
+  | (Omit<OutlineSnapshotPublication, "type"> & { readonly type: "outline-snapshot" })
+  | (Omit<Extract<OutlineRuntimePublication, { readonly type: "active" }>, "type"> & {
+      readonly type: "outline-active";
+    })
+  | (Omit<Extract<OutlineRuntimePublication, { readonly type: "invalidated" }>, "type"> & {
+      readonly type: "outline-invalidated";
+    });
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const finiteNonNegative = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+export const validateOutlinePrivateInbound = (data: unknown): OutlinePrivateInbound | null => {
+  if (!isRecord(data) || !isValidOutlineGeneration(data.generation)) return null;
+  if (data.type === "outline-layout-request") {
+    if (
+      !finiteNonNegative(data.preferredWidth) ||
+      data.preferredWidth > ARTIFACT_OUTLINE_POLICY.maxPreferredWidthPx ||
+      !isRecord(data.safeInsets) ||
+      !finiteNonNegative(data.safeInsets.top) ||
+      !finiteNonNegative(data.safeInsets.right) ||
+      !finiteNonNegative(data.safeInsets.bottom)
+    ) {
+      return null;
+    }
+    return {
+      generation: data.generation,
+      preferredWidth: data.preferredWidth,
+      safeInsets: {
+        bottom: data.safeInsets.bottom,
+        right: data.safeInsets.right,
+        top: data.safeInsets.top,
+      },
+      type: "outline-layout-request",
+    };
+  }
+  if (
+    data.type !== "outline-activate" ||
+    !isValidOutlineKey(data.key) ||
+    (data.motion !== "normal" && data.motion !== "reduced")
+  ) {
+    return null;
+  }
+  return {
+    generation: data.generation,
+    key: data.key,
+    motion: data.motion,
+    type: "outline-activate",
+  };
+};
 
 /** overlay -> chrome */
 export type OverlayMessage =

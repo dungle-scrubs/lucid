@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CLIENT_BUNDLE } from "../src/server/client-bundle.generated.ts";
 import { bodyCloseIndex, injectOverlay } from "../src/server/inject.ts";
 
 /**
@@ -40,25 +41,67 @@ describe("bodyCloseIndex: the close the parser would honor", () => {
 });
 
 describe("injectOverlay: splices outside the hostile containers", () => {
-  test("the textarea keeps its text; the bootstrap lands after it", () => {
+  test("establishes the private channel before artifact-authored scripts execute", () => {
+    const html = doc(`<script>window.artifactRan = true;</script><p>artifact</p>`);
+    const out = injectOverlay(html, "/s/example", undefined, "http://127.0.0.1:17428");
+    const bootstrap = out.indexOf("new MessageChannel");
+    const artifact = out.indexOf("window.artifactRan");
+    expect(bootstrap).toBeGreaterThan(out.indexOf("<!doctype html>"));
+    expect(bootstrap).toBeLessThan(artifact);
+    expect(out).toContain('type:"private-channel"');
+    expect(out).toContain("[channel.port2]");
+    expect(out).toContain('import("http://127.0.0.1:17428/s/example/__lucid/client.js")');
+    expect(out).toContain("current?.remove()");
+    expect(out).toContain("Document.prototype.createTreeWalker");
+    expect(out).toContain("allElements:(limit,deadline)");
+    expect(out).toContain("text:boundedText");
+    expect(out).toContain("let styleRealmTrusted=true");
+    expect(out).not.toContain('["body *"]');
+    expect(out).not.toContain('<script type="module"');
+  });
+
+  test("the bootstrap pins the private fields used by the production Lit bundle", () => {
+    const out = injectOverlay(doc("<p>artifact</p>"));
+    const productionFields = ["_$AL", "_$Do", "_$ES", "_$Em", "_$Ep", "_$Eq", "_$EO"];
+    for (const field of productionFields) {
+      expect(CLIENT_BUNDLE).toContain(`this.${field}`);
+      expect(out).toContain(`pin("${field}"`);
+    }
+    expect(out).not.toContain('pin("_$changedProperties"');
+    expect(out).not.toContain('pin("__childPart"');
+  });
+
+  test("preserves standards mode when comments precede the doctype", () => {
+    const html =
+      "<!-- exported by tool -->\n<!doctype html><html><body><p>artifact</p></body></html>";
+    const out = injectOverlay(html);
+    expect(out.indexOf("<script")).toBeGreaterThan(out.indexOf("<!doctype html>"));
+    expect(out.slice(0, out.indexOf("<script"))).toBe("<!-- exported by tool -->\n<!doctype html>");
+  });
+
+  test("declarative shadow DOM disables pinned geometry before parsing begins", () => {
+    const html = doc(
+      '<main><h2>One</h2><h2>Two</h2><section><template shadowrootmode="closed"><aside>paint</aside></template></section></main>',
+    );
+    expect(injectOverlay(html)).toContain("let styleRealmTrusted=false");
+  });
+
+  test("the textarea keeps its text while the owned root stays out of artifact markup", () => {
     const html = doc(`<textarea>draft with </body> inside</textarea>`);
     const out = injectOverlay(html);
-    // The textarea's content is untouched...
     expect(out).toContain(`<textarea>draft with </body> inside</textarea>`);
-    // ...and the bootstrap sits between the textarea and the REAL close.
-    const boot = out.indexOf("__lucid_overlay_root");
-    expect(boot).toBeGreaterThan(out.indexOf("</textarea>"));
-    expect(boot).toBeLessThan(out.lastIndexOf("</body>"));
+    expect(out).toContain('ownedRoot=apply(documentCreate,document,["div"])');
+    expect(out).not.toContain('<div id="__lucid_overlay_root"');
   });
 
   test("a normal document is unchanged byte-for-byte outside the splice", () => {
     const html = doc(`<p>plain</p>`);
     const out = injectOverlay(html);
-    const at = out.indexOf('\n<div id="__lucid_overlay_root"');
-    expect(at).toBeGreaterThan(-1);
-    const injectedLen = out.length - html.length;
-    expect(out.slice(0, at)).toBe(html.slice(0, at));
-    expect(out.slice(at + injectedLen)).toBe(html.slice(at));
+    const boot = out.indexOf("<script");
+    const bootEnd = out.indexOf("</script>\n", boot) + "</script>\n".length;
+    const withoutBoot = out.slice(0, boot) + out.slice(bootEnd);
+    expect(boot).toBeGreaterThan(-1);
+    expect(withoutBoot).toBe(html);
   });
 
   test("no </body> at all still appends the bootstrap", () => {
@@ -171,6 +214,7 @@ describe("renderInjected: the CSP lift changes as little as possible (#42)", () 
     const nonce = /nonce="([a-f0-9]+)"/.exec(out.body)?.[1] ?? "";
     expect(nonce.length).toBeGreaterThan(10);
     expect(csp(out)).toContain(`script-src 'nonce-${nonce}'`);
+    expect(csp(out)).toContain("http://127.0.0.1:17429");
     expect(csp(out)).toContain("default-src 'none'");
   });
 

@@ -1,4 +1,5 @@
 import { mountOverlay } from "./overlay/overlay.ts";
+import type { TrustedOverlayCapabilities } from "./overlay/trusted-overlay.ts";
 
 /**
  * The overlay bundle, injected into the artifact's sandboxed iframe (D-042,
@@ -7,4 +8,8 @@ import { mountOverlay } from "./overlay/overlay.ts";
  * CSS must not reach it, and its CSS must not reach the artifact) and carries
  * none of the chrome's React/Tailwind weight into the sandbox.
  */
-mountOverlay();
+export const bootOverlay = (
+  outlinePort: MessagePort,
+  tagName: string,
+  capabilities: TrustedOverlayCapabilities,
+): void => mountOverlay(outlinePort, tagName, capabilities);

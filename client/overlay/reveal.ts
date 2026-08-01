@@ -22,18 +22,17 @@ export interface RevealInvalidation extends Omit<OutlineActivationHealth, "reaso
 export interface EmphasisEnvironment {
   readonly clearEmphasis: () => void;
   readonly ensureStyles: () => void;
+  readonly markEmphasis?: (element: Element | null) => void;
 }
 
 export interface RevealEnvironment extends EmphasisEnvironment {
   readonly invalidate: (record: RevealInvalidation) => void;
 }
 
-export const SECTION_TARGET_CLASS = "__lucid_section_target";
-
 export const emphasizeElement = (element: Element, environment: EmphasisEnvironment): void => {
   environment.ensureStyles();
   environment.clearEmphasis();
-  element.classList.add(SECTION_TARGET_CLASS);
+  environment.markEmphasis?.(element);
 };
 
 export const revealElement = (

@@ -1855,11 +1855,12 @@ test("a section permalink in a reply lands the reader on that section", async ({
   await expect(chip).toHaveText("the backfill step");
 
   // The artifact starts at the top; the click is what puts the section on
-  // screen, and the pulse class is what says the eye was told where it landed.
+  // screen, and the owned overlay pulse says where the eye landed.
   const target = surface.locator('[data-lucid-id="step-backfill"]');
-  await expect(target).not.toHaveClass(/__lucid_section_target/);
+  const emphasis = surface.locator(".section-emphasis");
+  await expect(emphasis).toHaveCount(0);
   await chip.click();
-  await expect(target).toHaveClass(/__lucid_section_target/);
+  await expect(emphasis).toHaveCount(1);
   await expect(target).toBeInViewport();
   await expect(target).not.toBeFocused();
   const previousTarget = await target.elementHandle();
@@ -1869,11 +1870,7 @@ test("a section permalink in a reply lands the reader on that section", async ({
   // a dead link that still looks clickable is worse than plain prose.
   await cli.write(PLAN_V2.replace('data-lucid-id="step-backfill"', 'data-lucid-id="renamed"'));
   await expect(surface.locator("h1")).toContainText("revised");
-  expect(
-    await previousTarget?.evaluate(
-      (element) => !element.isConnected && !element.classList.contains("__lucid_section_target"),
-    ),
-  ).toBe(true);
+  expect(await previousTarget?.evaluate((element) => !element.isConnected)).toBe(true);
   await expect(on(page).sectionLink()).toHaveCount(0);
   await expect(page.locator('[data-role="agent"]')).toContainText("the backfill step");
 });
@@ -1904,11 +1901,1365 @@ test("a reduced-motion section reveal rests without focusing the artifact headin
       return rect.top >= 0 && rect.bottom <= window.innerHeight;
     }),
   ).toBe(true);
-  await expect(target).toHaveClass(/__lucid_section_target/);
-  await expect(target).toHaveCSS("animation-name", "none");
-  await expect(target).toHaveCSS("outline-style", "solid");
+  const emphasis = surface.locator(".section-emphasis");
+  await expect(emphasis).toHaveCount(1);
+  await expect(emphasis).toHaveCSS("animation-name", "none");
+  await expect(emphasis).toHaveCSS("outline-style", "solid");
   await expect(target).toBeInViewport();
   await expect(target).not.toBeFocused();
+});
+
+test("the dormant outline runtime publishes complete geometry only over its pre-artifact port", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await page.addInitScript(() => {
+    const state: {
+      errors: string[];
+      messages: unknown[];
+      port: MessagePort | null;
+      windowOutlineMessages: number;
+    } = { errors: [], messages: [], port: null, windowOutlineMessages: 0 };
+    Object.defineProperty(window, "__outlineTest", { value: state });
+    window.addEventListener("message", (event) => {
+      if (
+        event.data?.source === "lucid-overlay-bootstrap" &&
+        event.data.type === "private-channel" &&
+        state.port === null
+      ) {
+        state.port = event.ports[0] ?? null;
+        if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+      } else if (event.data?.type === "outline-snapshot") {
+        state.windowOutlineMessages += 1;
+      }
+    });
+    window.addEventListener("error", (event) =>
+      state.errors.push(event.error?.stack ?? event.message),
+    );
+  });
+  const artifact = `<!doctype html><html><head><meta charset="utf-8"><title>Outline runtime</title>
+    <style>body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}.__lucid_section_target{position:fixed!important;right:20px;top:120px;width:180px;height:120px;box-shadow:0 0 80px red!important}</style></head><body>
+    <main><h1>Database migration plan outline runtime</h1><h2>Context</h2><p>One</p><h2>Milestones</h2><p>Two</p><h2>Risks</h2><p>Three</p></main>
+    <script>
+      window.MessageChannel = class { constructor() { throw new Error("artifact channel"); } };
+      window.MutationObserver = class { constructor() { throw new Error("artifact mutation observer"); } };
+      window.ResizeObserver = class { constructor() { throw new Error("artifact resize observer"); } };
+      window.parent.postMessage({type:"outline-snapshot",proof:{complete:true},headings:[{label:"forged"}]}, "*");
+    </script></body></html>`;
+  await openViewer(page, artifact);
+  const surface = surfaceOf(page);
+
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Boolean(
+          (window as unknown as { __outlineTest: { port: MessagePort | null } }).__outlineTest.port,
+        ),
+      ),
+    )
+    .toBe(true);
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { __outlineTest: { messages: unknown[] } }).__outlineTest.messages
+          .length,
+    ),
+  ).toBe(0);
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { __outlineTest: { windowOutlineMessages: number } }).__outlineTest
+          .windowOutlineMessages,
+    ),
+  ).toBe(1);
+  const dormantDebug = await surface.locator("#__lucid_overlay_root").evaluate((root) => {
+    const overlay = root.firstElementChild as Element & {
+      outlineDebugInfo?: () => Record<string, unknown>;
+    };
+    return overlay.outlineDebugInfo?.() ?? null;
+  });
+  expect(dormantDebug).toMatchObject({ dormant: true, connected: true });
+
+  await page.evaluate(() => {
+    const port = (window as unknown as { __outlineTest: { port: MessagePort } }).__outlineTest.port;
+    port.postMessage({
+      type: "outline-layout-request",
+      generation: 17,
+      preferredWidth: 240,
+      safeInsets: { top: 80, right: 20, bottom: 24 },
+    });
+  });
+  await expect
+    .poll(() =>
+      surface.locator("#__lucid_overlay_root").evaluate((root) => {
+        const overlay = root.firstElementChild as Element & {
+          outlineDebugInfo?: () => Record<string, unknown>;
+        };
+        return overlay.outlineDebugInfo?.().dormant ?? null;
+      }),
+    )
+    .toBe(false);
+  await expect
+    .poll(() =>
+      surface.locator("#__lucid_overlay_root").evaluate((root) => {
+        const overlay = root.firstElementChild as Element & {
+          outlineDebugInfo?: () => Record<string, unknown>;
+        };
+        return overlay.outlineDebugInfo?.().taskCount ?? null;
+      }),
+    )
+    .toBeGreaterThanOrEqual(1);
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { __outlineTest: { errors: string[] } }).__outlineTest.errors,
+    ),
+  ).toEqual([]);
+  expect(
+    await surface
+      .locator("html")
+      .evaluate(
+        () => (window as unknown as { __outlineTest: { errors: string[] } }).__outlineTest.errors,
+      ),
+  ).toEqual([]);
+  const afterTaskDebug = await surface.locator("#__lucid_overlay_root").evaluate((root) => {
+    const overlay = root.firstElementChild as Element & {
+      outlineDebugInfo?: () => Record<string, unknown>;
+    };
+    return overlay.outlineDebugInfo?.() ?? null;
+  });
+  expect(afterTaskDebug).toMatchObject({
+    taskCount: 1,
+    pendingQuietTask: false,
+    headingCount: 3,
+    transportPublications: 1,
+  });
+  expect(JSON.stringify(afterTaskDebug)).not.toContain("Context");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __outlineTest: { messages: unknown[] } }).__outlineTest.messages
+            .length,
+      ),
+    )
+    .toBeGreaterThan(0);
+  const latestSnapshot = async (): Promise<Record<string, unknown> | null> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineTest.messages
+          .filter(({ type }) => type === "outline-snapshot")
+          .at(-1) ?? null,
+    );
+  const snapshot = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __outlineTest: { messages: Array<Record<string, unknown>> };
+        }
+      ).__outlineTest.messages.find(({ type }) => type === "outline-snapshot") ?? null,
+  );
+  expect(snapshot).not.toBeNull();
+  if (!snapshot) throw new Error("outline snapshot missing");
+  expect(snapshot).toMatchObject({
+    type: "outline-snapshot",
+    requestGeneration: 17,
+    availability: "complete",
+    headings: [{ label: "Context" }, { label: "Milestones" }, { label: "Risks" }],
+    proof: { complete: true, reason: "complete-unused-rectangle" },
+  });
+
+  await surface.locator("body").evaluate((body) => {
+    for (let index = 0; index < 200; index += 1) {
+      body.setAttribute("data-outline-burst", String(index));
+    }
+  });
+  await expect
+    .poll(() =>
+      surface.locator("#__lucid_overlay_root").evaluate((root) => {
+        const overlay = root.firstElementChild as Element & {
+          outlineDebugInfo?: () => Record<string, unknown>;
+        };
+        return overlay.outlineDebugInfo?.().taskCount ?? null;
+      }),
+    )
+    .toBe(2);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __outlineTest: { messages: Array<Record<string, unknown>> };
+            }
+          ).__outlineTest.messages.filter(({ type }) => type === "outline-snapshot").length,
+      ),
+    )
+    .toBe(2);
+
+  await surface.locator("body").evaluate((body) => {
+    const timer = window.setInterval(() => {
+      body.toggleAttribute("data-outline-continuous");
+    }, 10);
+    Object.defineProperty(window, "__outlineMutationTimer", { configurable: true, value: timer });
+  });
+  await expect
+    .poll(() =>
+      surface.locator("#__lucid_overlay_root").evaluate((root) => {
+        const overlay = root.firstElementChild as Element & {
+          outlineDebugInfo?: () => Record<string, unknown>;
+        };
+        return overlay.outlineDebugInfo?.().headingCount ?? null;
+      }),
+    )
+    .toBe(0);
+  await page.waitForTimeout(150);
+  expect(
+    await surface.locator("#__lucid_overlay_root").evaluate((root) => {
+      const overlay = root.firstElementChild as Element & {
+        outlineDebugInfo?: () => Record<string, unknown>;
+      };
+      return overlay.outlineDebugInfo?.().taskCount ?? null;
+    }),
+  ).toBe(2);
+  await surface.locator("body").evaluate(() => {
+    const ownedWindow = window as unknown as { __outlineMutationTimer: number };
+    window.clearInterval(ownedWindow.__outlineMutationTimer);
+  });
+  await expect
+    .poll(() =>
+      surface.locator("#__lucid_overlay_root").evaluate((root) => {
+        const overlay = root.firstElementChild as Element & {
+          outlineDebugInfo?: () => Record<string, unknown>;
+        };
+        return overlay.outlineDebugInfo?.().taskCount ?? null;
+      }),
+    )
+    .toBe(3);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __outlineTest: { messages: Array<Record<string, unknown>> };
+            }
+          ).__outlineTest.messages.filter(({ type }) => type === "outline-snapshot").length,
+      ),
+    )
+    .toBe(3);
+
+  await surface.locator("body").evaluate((body) => {
+    const hazard = document.createElement("aside");
+    hazard.id = "captured-observer-hazard";
+    hazard.setAttribute(
+      "style",
+      "position:fixed;right:20px;top:120px;width:180px;height:120px;background:red",
+    );
+    body.append(hazard);
+  });
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("box-intersection");
+  await surface.locator("#captured-observer-hazard").evaluate((hazard) => hazard.remove());
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  const revisedArtifact = artifact
+    .replace("<h2>Context</h2>", "<h2>Updated context</h2>")
+    .replace("<h2>Risks</h2>", "<h2>Updated risks</h2>");
+  await cli.write(revisedArtifact);
+  await expect(surface.locator("h2").first()).toContainText("Updated context");
+  await expect
+    .poll(async () => {
+      const current = await latestSnapshot();
+      return (current?.headings as Array<Record<string, unknown>> | undefined)?.[0]?.label;
+    })
+    .toBe("Updated context");
+  const revisedSnapshot = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __outlineTest: { messages: Array<Record<string, unknown>> };
+        }
+      ).__outlineTest.messages
+        .filter(({ type }) => type === "outline-snapshot")
+        .at(-1) ?? null,
+  );
+  if (!revisedSnapshot) throw new Error("revised outline snapshot missing");
+  expect(revisedSnapshot).toMatchObject({
+    availability: "complete",
+    headings: [{ label: "Updated context" }, { label: "Milestones" }, { label: "Updated risks" }],
+  });
+  expect(revisedSnapshot.generation).toBeGreaterThan(snapshot.generation as number);
+  expect(revisedSnapshot.headings).not.toEqual(snapshot.headings);
+
+  await surface
+    .locator("h2")
+    .first()
+    .evaluate((heading) => {
+      const text = heading.firstChild;
+      if (!text) throw new Error("heading text node missing");
+      text.nodeValue = "Updated contact";
+    });
+  await expect
+    .poll(async () => {
+      const current = await latestSnapshot();
+      return (current?.headings as Array<Record<string, unknown>> | undefined)?.[0]?.label;
+    })
+    .toBe("Updated contact");
+  const textSnapshot = await latestSnapshot();
+  expect((textSnapshot?.headings as Array<Record<string, unknown>> | undefined)?.[0]).toMatchObject(
+    {
+      label: "Updated contact",
+    },
+  );
+
+  const cssomMutation = await surface.locator("body").evaluate(() => {
+    const rule = Array.from(document.styleSheets)
+      .flatMap((sheet) => Array.from(sheet.cssRules))
+      .findLast(
+        (candidate): candidate is CSSStyleRule =>
+          candidate instanceof CSSStyleRule && candidate.selectorText === "main",
+      );
+    if (!rule) throw new Error("artifact main rule missing");
+    rule.style.setProperty("position", "fixed");
+    rule.style.setProperty("right", "20px");
+    rule.style.setProperty("top", "120px");
+    rule.style.setProperty("width", "180px");
+    rule.style.setProperty("height", "120px");
+    return {
+      cssText: rule.cssText,
+      selector: rule.selectorText,
+      value: rule.style.getPropertyValue("position"),
+    };
+  });
+  expect(cssomMutation).toMatchObject({ selector: "main", value: "fixed" });
+  await expect
+    .poll(() => surface.locator("main").evaluate((main) => getComputedStyle(main).position))
+    .toBe("fixed");
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("box-intersection");
+
+  await surface.locator("body").evaluate(() => {
+    const rule = Array.from(document.styleSheets)
+      .flatMap((sheet) => Array.from(sheet.cssRules))
+      .findLast(
+        (candidate): candidate is CSSStyleRule =>
+          candidate instanceof CSSStyleRule && candidate.selectorText === "main",
+      );
+    if (!rule) throw new Error("artifact main rule missing");
+    for (const property of ["position", "right", "top", "width", "height"]) {
+      rule.style.removeProperty(property);
+    }
+  });
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  await surface.locator("body").evaluate(() => {
+    const rule = Array.from(document.styleSheets)
+      .flatMap((sheet) => Array.from(sheet.cssRules))
+      .findLast(
+        (candidate): candidate is CSSStyleRule =>
+          candidate instanceof CSSStyleRule && candidate.selectorText === "main",
+      );
+    if (!rule) throw new Error("artifact main rule missing");
+    rule.styleMap.set("position", new CSSKeywordValue("fixed"));
+    rule.styleMap.set("right", CSS.px(20));
+    rule.styleMap.set("top", CSS.px(120));
+    rule.styleMap.set("width", CSS.px(180));
+    rule.styleMap.set("height", CSS.px(120));
+  });
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("box-intersection");
+  await surface.locator("body").evaluate(() => {
+    const rule = Array.from(document.styleSheets)
+      .flatMap((sheet) => Array.from(sheet.cssRules))
+      .findLast(
+        (candidate): candidate is CSSStyleRule =>
+          candidate instanceof CSSStyleRule && candidate.selectorText === "main",
+      );
+    if (!rule) throw new Error("artifact main rule missing");
+    for (const property of ["position", "right", "top", "width", "height"]) {
+      rule.styleMap.delete(property);
+    }
+  });
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  await surface.locator("body").evaluate(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(
+      "main{position:fixed;right:20px;top:120px;width:180px;height:120px;background:red}",
+    );
+    sheet.disabled = true;
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    Object.defineProperty(window, "__outlineDisabledSheet", {
+      configurable: true,
+      value: sheet,
+    });
+  });
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+  await surface.locator("body").evaluate(() => {
+    (
+      window as unknown as { __outlineDisabledSheet: CSSStyleSheet }
+    ).__outlineDisabledSheet.disabled = false;
+  });
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("box-intersection");
+  await surface.locator("body").evaluate(() => {
+    const ownedWindow = window as unknown as { __outlineDisabledSheet: CSSStyleSheet };
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+      (sheet) => sheet !== ownedWindow.__outlineDisabledSheet,
+    );
+  });
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  await surface.locator("body").evaluate((body) => {
+    const style = document.createElement("style");
+    style.id = "disabled-element-sheet";
+    style.textContent =
+      "main{position:fixed;right:20px;top:120px;width:180px;height:120px;background:red}";
+    style.disabled = true;
+    body.append(style);
+  });
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+  await surface.locator("#disabled-element-sheet").evaluate((style: HTMLStyleElement) => {
+    style.disabled = false;
+  });
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("box-intersection");
+  await surface.locator("#disabled-element-sheet").evaluate((style) => style.remove());
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  await surface.locator("main").evaluate((main) => {
+    const effect = new KeyframeEffect(
+      main,
+      [{ transform: "translateX(0)" }, { transform: "translateX(900px)" }],
+      { duration: 2_000, iterations: Number.POSITIVE_INFINITY },
+    );
+    const animation = new Animation(effect, document.timeline);
+    Object.defineProperty(window, "__outlineDirectAnimation", {
+      configurable: true,
+      value: animation,
+    });
+    animation.play();
+  });
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("dynamic-paint");
+  await surface.locator("body").evaluate(() => {
+    (
+      window as unknown as { __outlineDirectAnimation: Animation }
+    ).__outlineDirectAnimation.cancel();
+  });
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  await surface.locator("main").evaluate((main) => {
+    const animation = main.animate(
+      [{ transform: "translateX(0)" }, { transform: "translateX(900px)" }],
+      { duration: 2_000, iterations: Number.POSITIVE_INFINITY },
+    );
+    Object.defineProperty(window, "__outlineAnimation", { configurable: true, value: animation });
+  });
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("dynamic-paint");
+  await surface.locator("body").evaluate(() => {
+    (window as unknown as { __outlineAnimation: Animation }).__outlineAnimation.cancel();
+  });
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  await surface.locator("body").evaluate(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(
+      "main{position:fixed;right:20px;top:120px;width:180px;height:120px;background:red}",
+    );
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    Object.defineProperty(window, "__outlineAdoptedSheet", {
+      configurable: true,
+      value: sheet,
+    });
+  });
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("box-intersection");
+  await surface.locator("body").evaluate(() => {
+    const ownedWindow = window as unknown as { __outlineAdoptedSheet: CSSStyleSheet };
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+      (sheet) => sheet !== ownedWindow.__outlineAdoptedSheet,
+    );
+  });
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  await surface.locator("body").evaluate((body) => {
+    const hazard = document.createElement("aside");
+    hazard.id = "semantic-paint-hazard";
+    hazard.setAttribute("inert", "");
+    hazard.setAttribute("aria-hidden", "true");
+    hazard.setAttribute(
+      "style",
+      "position:fixed;right:20px;top:120px;width:180px;height:120px;background:red",
+    );
+    body.append(hazard);
+  });
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("box-intersection");
+
+  await surface.locator("#semantic-paint-hazard").evaluate((hazard) => hazard.remove());
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  await surface.locator("body").evaluate((body) => {
+    const hazard = document.createElement("aside");
+    hazard.id = "forged-owned-hazard";
+    hazard.setAttribute("data-lucid-owned", "true");
+    hazard.setAttribute(
+      "style",
+      "position:fixed;right:20px;top:120px;width:180px;height:120px;background:red",
+    );
+    body.append(hazard);
+  });
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("box-intersection");
+  await surface.locator("#forged-owned-hazard").evaluate((hazard) => hazard.remove());
+  await expect
+    .poll(
+      async () =>
+        ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.complete,
+    )
+    .toBe(true);
+
+  const activationSnapshot = await latestSnapshot();
+  if (!activationSnapshot) throw new Error("activation outline snapshot missing");
+  expect(activationSnapshot).toMatchObject({ proof: { complete: true } });
+
+  const first = (activationSnapshot.headings as { key: string }[])[0];
+  if (!first) throw new Error("outline heading missing");
+  await page.evaluate(
+    ({ generation, key }) => {
+      const port = (window as unknown as { __outlineTest: { port: MessagePort } }).__outlineTest
+        .port;
+      port.postMessage({ type: "outline-activate", generation, key, motion: "reduced" });
+    },
+    { generation: activationSnapshot.generation as number, key: first.key },
+  );
+  const target = surface.locator("h2").first();
+  await expect
+    .poll(() =>
+      surface.locator("#__lucid_overlay_root").evaluate((root) => {
+        const overlay = root.firstElementChild as Element & {
+          outlineDebugInfo?: () => Record<string, unknown>;
+        };
+        return overlay.outlineDebugInfo?.().proofComplete ?? null;
+      }),
+    )
+    .toBe(true);
+  const debug = await surface.locator("#__lucid_overlay_root").evaluate((root) => {
+    const overlay = root.firstElementChild as Element & {
+      outlineDebugInfo?: () => Record<string, unknown>;
+    };
+    return overlay.outlineDebugInfo?.() ?? null;
+  });
+  expect(debug).toMatchObject({ dormant: false, headingCount: 3, proofComplete: true });
+  expect(JSON.stringify(debug)).not.toContain("Context");
+  await expect(target).not.toHaveClass(/__lucid_section_target/);
+  await expect(target).not.toBeFocused();
+
+  await surface
+    .locator("h2")
+    .first()
+    .evaluate((heading) => {
+      const fragment = document.createDocumentFragment();
+      for (let index = 0; index < 5_000; index += 1) {
+        fragment.append(document.createTextNode(""));
+      }
+      heading.append(fragment);
+    });
+  await expect.poll(async () => (await latestSnapshot())?.availability).toBe("absent");
+  expect(await latestSnapshot()).toMatchObject({
+    headings: [],
+    health: { code: "AO-004", reason: "work-budget-exhausted" },
+    proof: { complete: false, reason: "work-budget-exhausted" },
+  });
+  await surface
+    .locator("h2")
+    .first()
+    .evaluate((heading) => heading.normalize());
+  await expect
+    .poll(
+      async () => ((await latestSnapshot())?.proof as Record<string, unknown> | undefined)?.reason,
+    )
+    .toBe("untrusted-style-realm");
+  await expect(surface.locator(".section-emphasis")).toHaveCount(1);
+
+  await surface.locator("body").evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent("pagehide"));
+  });
+  await expect
+    .poll(() =>
+      surface.locator("#__lucid_overlay_root").evaluate((root) => {
+        const overlay = root.firstElementChild as Element & {
+          outlineDebugInfo?: () => Record<string, unknown>;
+        };
+        return overlay.outlineDebugInfo?.().connected ?? null;
+      }),
+    )
+    .toBe(false);
+});
+
+test("an attempted CSSOM child realm permanently disables pinned proof", async ({ page }) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await page.addInitScript(() => {
+    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
+    Object.defineProperty(window, "__outlineRealmTest", { value: state });
+    window.addEventListener("message", (event) => {
+      if (
+        event.data?.source !== "lucid-overlay-bootstrap" ||
+        event.data.type !== "private-channel" ||
+        state.port !== null
+      ) {
+        return;
+      }
+      state.port = event.ports[0] ?? null;
+      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+    });
+  });
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main>
+    <script>
+      const realm = document.createElement("iframe");
+      realm.hidden = true;
+      document.body.append(realm);
+      try {
+        window.__cleanStyleSetter = realm.contentWindow.CSSStyleDeclaration.prototype.setProperty;
+      } catch (error) {
+        window.__cleanStyleSetterError = error instanceof Error ? error.name : "unknown";
+      }
+      realm.remove();
+    </script></body></html>`;
+  await openViewer(page, artifact);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __outlineRealmTest: { port: MessagePort | null } })
+            .__outlineRealmTest.port !== null,
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(() => {
+    const port = (window as unknown as { __outlineRealmTest: { port: MessagePort } })
+      .__outlineRealmTest.port;
+    port.postMessage({
+      type: "outline-layout-request",
+      generation: 1,
+      preferredWidth: 240,
+      safeInsets: { top: 80, right: 20, bottom: 24 },
+    });
+  });
+  const latest = async (): Promise<Record<string, unknown> | null> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineRealmTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineRealmTest.messages
+          .filter(({ type }) => type === "outline-snapshot")
+          .at(-1) ?? null,
+    );
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+
+  expect(
+    await surfaceOf(page)
+      .locator("body")
+      .evaluate(
+        () =>
+          (window as unknown as { __cleanStyleSetterError?: string }).__cleanStyleSetterError ??
+          null,
+      ),
+  ).toBe("SecurityError");
+});
+
+test("shadow-root paint permanently disables pinned proof", async ({ page }) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await page.addInitScript(() => {
+    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
+    Object.defineProperty(window, "__outlineShadowTest", { value: state });
+    window.addEventListener("message", (event) => {
+      if (
+        event.data?.source !== "lucid-overlay-bootstrap" ||
+        event.data.type !== "private-channel" ||
+        state.port !== null
+      ) {
+        return;
+      }
+      state.port = event.ports[0] ?? null;
+      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+    });
+  });
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p>
+    <span id="shadow-host"></span></main><script>
+      const host = document.querySelector("#shadow-host");
+      const root = host.attachShadow({ mode: "closed" });
+      const hazard = document.createElement("aside");
+      hazard.id = "shadow-paint-hazard";
+      hazard.setAttribute("style", "position:fixed;right:20px;top:120px;width:180px;height:120px;background:red");
+      root.append(hazard);
+    </script></body></html>`;
+  await openViewer(page, artifact);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __outlineShadowTest: { port: MessagePort | null } })
+            .__outlineShadowTest.port !== null,
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(() => {
+    const port = (window as unknown as { __outlineShadowTest: { port: MessagePort } })
+      .__outlineShadowTest.port;
+    port.postMessage({
+      type: "outline-layout-request",
+      generation: 1,
+      preferredWidth: 240,
+      safeInsets: { top: 80, right: 20, bottom: 24 },
+    });
+  });
+  const latest = async (): Promise<Record<string, unknown> | null> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineShadowTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineShadowTest.messages
+          .filter(({ type }) => type === "outline-snapshot")
+          .at(-1) ?? null,
+    );
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+});
+
+test("runtime declarative shadow DOM permanently disables pinned proof", async ({ page }) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await page.addInitScript(() => {
+    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
+    Object.defineProperty(window, "__outlineDeclarativeShadowTest", { value: state });
+    window.addEventListener("message", (event) => {
+      if (
+        event.data?.source !== "lucid-overlay-bootstrap" ||
+        event.data.type !== "private-channel" ||
+        state.port !== null
+      ) {
+        return;
+      }
+      state.port = event.ports[0] ?? null;
+      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+    });
+  });
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main></body></html>`;
+  await openViewer(page, artifact);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __outlineDeclarativeShadowTest: { port: MessagePort | null };
+            }
+          ).__outlineDeclarativeShadowTest.port !== null,
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(() => {
+    const port = (
+      window as unknown as {
+        __outlineDeclarativeShadowTest: { port: MessagePort };
+      }
+    ).__outlineDeclarativeShadowTest.port;
+    port.postMessage({
+      type: "outline-layout-request",
+      generation: 1,
+      preferredWidth: 240,
+      safeInsets: { top: 80, right: 20, bottom: 24 },
+    });
+  });
+  const latest = async (): Promise<Record<string, unknown> | null> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineDeclarativeShadowTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineDeclarativeShadowTest.messages
+          .filter(({ type }) => type === "outline-snapshot")
+          .at(-1) ?? null,
+    );
+  await expect
+    .poll(
+      async () =>
+        ((await latest())?.proof as Record<string, unknown> | undefined)?.complete ?? false,
+    )
+    .toBe(true);
+
+  await surfaceOf(page)
+    .locator("body")
+    .evaluate((body) => {
+      const unsafeDocument = Document as typeof Document & {
+        parseHTMLUnsafe(markup: string): Document;
+      };
+      const parsed = unsafeDocument.parseHTMLUnsafe(
+        '<span id="runtime-shadow-host"><template shadowrootmode="closed"><aside style="position:fixed;right:20px;top:120px;width:180px;height:120px;background:red"></aside></template></span>',
+      );
+      const host = parsed.querySelector("#runtime-shadow-host");
+      if (!host) throw new Error("runtime shadow host missing");
+      body.append(document.adoptNode(host));
+    });
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+});
+
+const openOwnedOverlayMutationProbe = async (
+  page: Page,
+): Promise<() => Promise<Record<string, unknown> | null>> => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await page.addInitScript(() => {
+    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
+    Object.defineProperty(window, "__outlineOwnedMutationTest", { value: state });
+    window.addEventListener("message", (event) => {
+      if (
+        event.data?.source !== "lucid-overlay-bootstrap" ||
+        event.data.type !== "private-channel" ||
+        state.port !== null
+      ) {
+        return;
+      }
+      state.port = event.ports[0] ?? null;
+      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+    });
+  });
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main></body></html>`;
+  await openViewer(page, artifact);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __outlineOwnedMutationTest: { port: MessagePort | null } })
+            .__outlineOwnedMutationTest.port !== null,
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(() => {
+    const port = (window as unknown as { __outlineOwnedMutationTest: { port: MessagePort } })
+      .__outlineOwnedMutationTest.port;
+    port.postMessage({
+      type: "outline-layout-request",
+      generation: 1,
+      preferredWidth: 240,
+      safeInsets: { top: 80, right: 20, bottom: 24 },
+    });
+  });
+  const latest = async (): Promise<Record<string, unknown> | null> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineOwnedMutationTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineOwnedMutationTest.messages
+          .filter(({ type }) => type === "outline-snapshot")
+          .at(-1) ?? null,
+    );
+  await expect
+    .poll(
+      async () =>
+        ((await latest())?.proof as Record<string, unknown> | undefined)?.complete ?? false,
+    )
+    .toBe(true);
+  return latest;
+};
+
+test("artifact children cannot enter the exact owned overlay root", async ({ page }) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await page.addInitScript(() => {
+    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
+    Object.defineProperty(window, "__outlineOwnedRootTest", { value: state });
+    window.addEventListener("message", (event) => {
+      if (
+        event.data?.source !== "lucid-overlay-bootstrap" ||
+        event.data.type !== "private-channel" ||
+        state.port !== null
+      ) {
+        return;
+      }
+      state.port = event.ports[0] ?? null;
+      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+    });
+  });
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main></body></html>`;
+  await openViewer(page, artifact);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __outlineOwnedRootTest: { port: MessagePort | null } })
+            .__outlineOwnedRootTest.port !== null,
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(() => {
+    const port = (window as unknown as { __outlineOwnedRootTest: { port: MessagePort } })
+      .__outlineOwnedRootTest.port;
+    port.postMessage({
+      type: "outline-layout-request",
+      generation: 1,
+      preferredWidth: 240,
+      safeInsets: { top: 80, right: 20, bottom: 24 },
+    });
+  });
+  const latest = async (): Promise<Record<string, unknown> | null> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineOwnedRootTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineOwnedRootTest.messages
+          .filter(({ type }) => type === "outline-snapshot")
+          .at(-1) ?? null,
+    );
+  await expect
+    .poll(
+      async () =>
+        ((await latest())?.proof as Record<string, unknown> | undefined)?.complete ?? false,
+    )
+    .toBe(true);
+
+  await surfaceOf(page)
+    .locator("#__lucid_overlay_root")
+    .evaluate((root) => {
+      const hazard = document.createElement("aside");
+      hazard.setAttribute(
+        "style",
+        "position:fixed;right:20px;top:120px;width:180px;height:120px;background:red",
+      );
+      root.append(hazard);
+    });
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+});
+
+test("artifact mutations inside the owned overlay shadow tree disable pinned proof", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await page.addInitScript(() => {
+    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
+    Object.defineProperty(window, "__outlineOwnedShadowTest", { value: state });
+    window.addEventListener("message", (event) => {
+      if (
+        event.data?.source !== "lucid-overlay-bootstrap" ||
+        event.data.type !== "private-channel" ||
+        state.port !== null
+      ) {
+        return;
+      }
+      state.port = event.ports[0] ?? null;
+      if (state.port) state.port.onmessage = (message) => state.messages.push(message.data);
+    });
+  });
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main></body></html>`;
+  await openViewer(page, artifact);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __outlineOwnedShadowTest: { port: MessagePort | null } })
+            .__outlineOwnedShadowTest.port !== null,
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(() => {
+    const port = (window as unknown as { __outlineOwnedShadowTest: { port: MessagePort } })
+      .__outlineOwnedShadowTest.port;
+    port.postMessage({
+      type: "outline-layout-request",
+      generation: 1,
+      preferredWidth: 240,
+      safeInsets: { top: 80, right: 20, bottom: 24 },
+    });
+  });
+  const latest = async (): Promise<Record<string, unknown> | null> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineOwnedShadowTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineOwnedShadowTest.messages
+          .filter(({ type }) => type === "outline-snapshot")
+          .at(-1) ?? null,
+    );
+  await expect
+    .poll(
+      async () =>
+        ((await latest())?.proof as Record<string, unknown> | undefined)?.complete ?? false,
+    )
+    .toBe(true);
+
+  await surfaceOf(page)
+    .locator("#__lucid_overlay_root")
+    .evaluate((root) => {
+      const overlay = root.firstElementChild as (Element & { performUpdate?: () => void }) | null;
+      const shadowRoot = overlay?.shadowRoot;
+      if (!shadowRoot) throw new Error("owned overlay shadow root missing");
+      const hazard = document.createElement("aside");
+      hazard.setAttribute(
+        "style",
+        "position:fixed;right:20px;top:120px;width:180px;height:120px;background:red",
+      );
+      shadowRoot.append(hazard);
+      overlay.performUpdate?.();
+    });
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+});
+
+test("artifact declaration mutations inside the owned overlay stylesheet disable proof", async ({
+  page,
+}) => {
+  const latest = await openOwnedOverlayMutationProbe(page);
+  await surfaceOf(page)
+    .locator("#__lucid_overlay_root")
+    .evaluate((root) => {
+      const sheet = root.firstElementChild?.shadowRoot?.adoptedStyleSheets[0];
+      const rule = Array.from(sheet?.cssRules ?? []).find(
+        (candidate): candidate is CSSStyleRule =>
+          candidate instanceof CSSStyleRule && candidate.selectorText === ".section-emphasis",
+      );
+      if (!rule) throw new Error("owned section-emphasis rule missing");
+      rule.style.setProperty("inset", "0", "important");
+    });
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+});
+
+test("artifact style-map mutations inside the owned overlay stylesheet disable proof", async ({
+  page,
+}) => {
+  const latest = await openOwnedOverlayMutationProbe(page);
+  await surfaceOf(page)
+    .locator("#__lucid_overlay_root")
+    .evaluate((root) => {
+      const sheet = root.firstElementChild?.shadowRoot?.adoptedStyleSheets[0];
+      const rule = Array.from(sheet?.cssRules ?? []).find(
+        (candidate): candidate is CSSStyleRule =>
+          candidate instanceof CSSStyleRule && candidate.selectorText === ".section-emphasis",
+      );
+      if (!rule) throw new Error("owned section-emphasis rule missing");
+      rule.styleMap.set("background-color", "red");
+    });
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+});
+
+test("artifact lifecycle hooks cannot mutate the owned shadow tree during update", async ({
+  page,
+}) => {
+  const latest = await openOwnedOverlayMutationProbe(page);
+  await surfaceOf(page)
+    .locator("#__lucid_overlay_root")
+    .evaluate((root) => {
+      const overlay = root.firstElementChild as (Element & { requestUpdate?: () => void }) | null;
+      if (!overlay) throw new Error("owned overlay missing");
+      const prototype = Object.getPrototypeOf(overlay) as { updated?: () => void };
+      prototype.updated = function updated() {
+        const shadowRoot = (this as Element).shadowRoot;
+        if (!shadowRoot) return;
+        const style = document.createElement("style");
+        style.textContent =
+          "@keyframes hostile-owned-motion{from{transform:translateX(0)}to{transform:translateX(-900px)}}#hostile-owned-motion{position:fixed;right:0;top:120px;width:180px;height:120px;background:red;animation:hostile-owned-motion 2s linear infinite}";
+        const hazard = document.createElement("aside");
+        hazard.id = "hostile-owned-motion";
+        shadowRoot.append(style, hazard);
+      };
+      overlay.requestUpdate?.();
+    });
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+  await expect(
+    surfaceOf(page).locator("#__lucid_overlay_root").locator("#hostile-owned-motion"),
+  ).toHaveCount(0);
+});
+
+test("artifact base-update replacement cannot enter the trusted shadow window", async ({
+  page,
+}) => {
+  const latest = await openOwnedOverlayMutationProbe(page);
+  await surfaceOf(page)
+    .locator("#__lucid_overlay_root")
+    .evaluate((root) => {
+      const overlay = root.firstElementChild as (Element & { requestUpdate?: () => void }) | null;
+      if (!overlay) throw new Error("owned overlay missing");
+      const lucidPrototype = Object.getPrototypeOf(overlay);
+      const litPrototype = Object.getPrototypeOf(lucidPrototype) as {
+        performUpdate?: (this: Element) => void;
+      };
+      litPrototype.performUpdate = function performUpdate() {
+        const shadowRoot = this.shadowRoot;
+        if (!shadowRoot) return;
+        const hazard = document.createElement("aside");
+        hazard.id = "hostile-base-update";
+        hazard.setAttribute(
+          "style",
+          "position:fixed;right:0;top:120px;width:180px;height:120px;background:red",
+        );
+        shadowRoot.append(hazard);
+      };
+      overlay.requestUpdate?.();
+    });
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+  await expect(
+    surfaceOf(page).locator("#__lucid_overlay_root").locator("#hostile-base-update"),
+  ).toHaveCount(0);
+});
+
+test("artifact proxy render inputs execute only while shadow observation is active", async ({
+  page,
+}) => {
+  const latest = await openOwnedOverlayMutationProbe(page);
+  await surfaceOf(page)
+    .locator("#__lucid_overlay_root")
+    .evaluate((root) => {
+      const overlay = root.firstElementChild as
+        | (Element & { markers?: unknown; requestUpdate?: () => void })
+        | null;
+      const shadowRoot = overlay?.shadowRoot;
+      if (!overlay || !shadowRoot) throw new Error("owned overlay missing");
+      let injected = false;
+      overlay.markers = new Proxy([], {
+        get(target, property, receiver) {
+          if (property === "length" && !injected) {
+            injected = true;
+            const style = document.createElement("style");
+            style.textContent =
+              "@keyframes hostile-proxy-motion{from{transform:translateX(0)}to{transform:translateX(-900px)}}#hostile-proxy-motion{position:fixed;right:0;top:120px;width:180px;height:120px;background:red;animation:hostile-proxy-motion 2s linear infinite}";
+            const hazard = document.createElement("aside");
+            hazard.id = "hostile-proxy-motion";
+            shadowRoot.append(style, hazard);
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      overlay.requestUpdate?.();
+    });
+  await expect
+    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .toBe("untrusted-style-realm");
+});
+
+test("artifact cannot replace Lit render inputs used during the trusted shadow update", async ({
+  page,
+}) => {
+  const latest = await openOwnedOverlayMutationProbe(page);
+  const pins = await surfaceOf(page)
+    .locator("#__lucid_overlay_root")
+    .evaluate(async (root) => {
+      const overlay = root.firstElementChild as
+        | (Element & {
+            renderOptions?: unknown;
+            renderRoot?: unknown;
+            markers?: unknown;
+            requestUpdate?: () => void;
+            updateComplete?: Promise<unknown>;
+          })
+        | null;
+      const shadowRoot = overlay?.shadowRoot;
+      if (!overlay || !shadowRoot) throw new Error("owned overlay missing");
+      let proxyHits = 0;
+      const inject = (): void => {
+        proxyHits += 1;
+        const hazard = document.createElement("aside");
+        hazard.id = "hostile-lit-render-input";
+        hazard.setAttribute(
+          "style",
+          "position:fixed;right:0;top:120px;width:180px;height:120px;background:red",
+        );
+        shadowRoot.append(hazard);
+      };
+      const hostileOptions = new Proxy(
+        { renderBefore: null },
+        {
+          get(target, property, receiver) {
+            if (property === "renderBefore") inject();
+            return Reflect.get(target, property, receiver);
+          },
+        },
+      );
+      try {
+        Object.defineProperty(overlay, "renderOptions", { value: hostileOptions });
+      } catch {
+        // The bootstrap pins this property before artifact code can reach it.
+      }
+      try {
+        Object.defineProperty(overlay, "renderRoot", {
+          get() {
+            inject();
+            return shadowRoot;
+          },
+        });
+      } catch {
+        // The exact owned shadow root is pinned by the same boundary.
+      }
+      overlay.requestUpdate?.();
+      await overlay.updateComplete;
+      overlay.markers = [
+        {
+          id: "normal-second-render",
+          index: 1,
+          rects: [{ height: 20, left: 20, top: 20, width: 120 }],
+          stackIndex: 0,
+          state: "committed",
+        },
+      ];
+      await overlay.updateComplete;
+      const optionsDescriptor = Object.getOwnPropertyDescriptor(overlay, "renderOptions");
+      const rootDescriptor = Object.getOwnPropertyDescriptor(overlay, "renderRoot");
+      const productionFields = ["_$AL", "_$Do", "_$ES", "_$Em", "_$Ep", "_$Eq", "_$EO"];
+      return {
+        markerCount: shadowRoot.querySelectorAll(".marker").length,
+        optionsFrozen: Object.isFrozen(overlay.renderOptions),
+        optionsPinned: optionsDescriptor?.configurable === false,
+        productionFieldsPinned: productionFields.every((field) => {
+          const fieldDescriptor = Object.getOwnPropertyDescriptor(overlay, field);
+          return fieldDescriptor?.configurable === false && "value" in fieldDescriptor;
+        }),
+        proxyHits,
+        rootPinned: rootDescriptor?.configurable === false && rootDescriptor.value === shadowRoot,
+      };
+    });
+  expect(pins).toEqual({
+    markerCount: 1,
+    optionsFrozen: true,
+    optionsPinned: true,
+    productionFieldsPinned: true,
+    proxyHits: 0,
+    rootPinned: true,
+  });
+  await expect(
+    surfaceOf(page).locator("#__lucid_overlay_root").locator("#hostile-lit-render-input"),
+  ).toHaveCount(0);
+  await expect
+    .poll(
+      async () =>
+        ((await latest())?.proof as Record<string, unknown> | undefined)?.complete ?? false,
+    )
+    .toBe(true);
 });
 
 test("a newly added section already in view pulses instead of offering a jump", async ({
@@ -1937,7 +3288,7 @@ test("a newly added section already in view pulses instead of offering a jump", 
     waitTimeoutSeconds(1),
   ]);
 
-  await expect(target).toHaveClass(/__lucid_section_target/);
+  await expect(surface.locator(".section-emphasis")).toHaveCount(1);
   await expect(on(page).sectionLink()).toHaveCount(0);
   await expect(page.locator('[data-role="agent"]')).toContainText("the new summary");
 });
@@ -1966,10 +3317,10 @@ test("a newly added section off screen remains a jump target in chat", async ({ 
 
   const chip = on(page).sectionLink();
   await expect(chip).toHaveText("the new appendix");
-  await expect(target).not.toHaveClass(/__lucid_section_target/);
+  await expect(surface.locator(".section-emphasis")).toHaveCount(0);
   await chip.click();
   await expect(target).toBeInViewport();
-  await expect(target).toHaveClass(/__lucid_section_target/);
+  await expect(surface.locator(".section-emphasis")).toHaveCount(1);
 });
 
 test("a blocked agent says so where the human is looking", async ({ page }) => {
