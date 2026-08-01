@@ -220,6 +220,20 @@ Never fake the review loop, and never paste build instructions at the user.
      write -> the viewer live-reloads) and/or reply with
      `lucid wait <file> --reply "<what you changed>" --since <cursor>`. Persist the
      new `nextCursor` and loop.
+     - **Link to what you changed.** A reply that says "I added a section on
+       the brief" makes the reader hunt an 80KB document for it. When a
+       revision adds or materially rewrites a section, stamp that section with
+       a unique `data-lucid-id` and link it from the reply:
+
+       ```
+       Added as [the brief](lucid:section/brief) - a run now has two outputs.
+       ```
+
+       The viewer renders it as a chip that scrolls the artifact there and
+       pulses it once. Ephemeral by design: it is live only while that id
+       exists in the current version and degrades to plain text when a later
+       revision drops it, so it is a one-time "here it is", never a durable
+       anchor. Link the thing you changed, not every heading you passed.
      - **Say which of the two is coming, as soon as you know:**
        ```
        lucid intent <file> revise     # the artifact is about to change
