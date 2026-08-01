@@ -252,6 +252,17 @@ export class LucidOverlay extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
+      /* Optical centring, not geometric, and NOT inherited. align-items centres
+         the LINE BOX, whose height is the font's ascent plus descent - a digit
+         has no descender, so its ink hangs above the middle and the number
+         reads as high in the circle. Two parts, both measured rather than
+         reasoned: line-height 1 so the artifact's own leading cannot move the
+         baseline (this element inherits from the ARTIFACT's body, which can say
+         anything), and a 1px top pad for the residual. The chrome's numbered
+         chips carry the same pair. */
+      box-sizing: border-box;
+      line-height: 1;
+      padding-top: 1px;
       pointer-events: auto;
       cursor: pointer;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);

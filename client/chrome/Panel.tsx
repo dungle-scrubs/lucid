@@ -281,7 +281,10 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
         window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: "" }));
       }}
     >
-      <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center border border-dashed border-accent-dim bg-brass-400 text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+      {/* leading-none + pt-px: the same optical centring the sent card's chip
+          and the overlay's badge carry - a digit has no descender, so centring
+          the line box leaves the number sitting high. */}
+      <span className="absolute -top-px -left-px z-1 flex size-5 items-center justify-center border border-dashed border-accent-dim bg-brass-400 pt-px text-[11px] leading-none font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
         {index}
       </span>
       <span className="absolute -top-[9px] -right-[9px] z-1 bg-ink-600 px-[7px] py-px text-[10px] text-steel-300 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">

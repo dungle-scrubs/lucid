@@ -146,7 +146,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
       }`}
     >
       {orphaned ? null : (
-        <span className="absolute -top-px -left-px z-1 flex size-5 -translate-x-[33%] -translate-y-[33%] items-center justify-center rounded-full bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+        // leading-none + pt-px is optical centring, the pair the overlay's
+        // badge also carries: centring the line box leaves a descender-less
+        // digit sitting high in the circle, and pinning the leading keeps the
+        // correction from depending on whatever line-height it inherits.
+        <span className="absolute -top-px -left-px z-1 flex size-5 -translate-x-[33%] -translate-y-[33%] items-center justify-center rounded-full bg-accent pt-px text-[11px] leading-none font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           {data.index}
         </span>
       )}
