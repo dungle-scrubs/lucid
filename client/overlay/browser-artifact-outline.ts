@@ -238,11 +238,16 @@ export class BrowserArtifactOutlineController {
     this.#runtime.revise();
   }
 
+  revisionComplete(revision: number): void {
+    if (!this.#connected) return;
+    this.#post({ revision, type: "outline-revision-complete" });
+  }
+
   disconnect(): void {
     if (!this.#connected) return;
     this.#connected = false;
     this.#runtime.disconnect();
-    for (const stop of this.#stops.splice(0)) stop();
+    this.#stopObservers();
     this.#port.removeEventListener("message", this.#onMessage);
     this.#port.removeEventListener("close", this.#onClose);
     this.#port.close();
@@ -299,9 +304,19 @@ export class BrowserArtifactOutlineController {
     );
   }
 
+  #stopObservers(): void {
+    for (const stop of this.#stops.splice(0)) stop();
+    this.#started = false;
+  }
+
   readonly #onMessage = (event: MessageEvent<unknown>): void => {
     const message = validateOutlinePrivateInbound(event.data);
     if (message === null) return;
+    if (message.type === "outline-suspend") {
+      this.#runtime.suspend();
+      this.#stopObservers();
+      return;
+    }
     if (message.type === "outline-layout-request") {
       this.#startObservers();
       this.#runtime.requestLayout(message);

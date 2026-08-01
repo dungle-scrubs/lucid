@@ -2588,6 +2588,69 @@ test("the dormant outline runtime publishes complete geometry only over its pre-
     .toBe(false);
 });
 
+test("the active chrome accepts outline state only from its captured private port", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>Context</h2><p>A</p><h2>Milestones</h2><p>B</p><h2>Risks</h2><p>C</p></main></body></html>`;
+  await openViewer(page, artifact);
+  const region = page.locator('[data-test="surface-region"]');
+
+  await expect
+    .poll(async () => Number(await region.getAttribute("data-outline-generation")))
+    .toBeGreaterThan(0);
+  const generation = await region.getAttribute("data-outline-generation");
+  const health = await region.getAttribute("data-outline-health");
+  expect(health).toMatch(/^(?:|AO-00[1-5])$/);
+  expect(`${generation}:${health}`).not.toContain("Context");
+
+  await surfaceOf(page)
+    .locator("body")
+    .evaluate(() => {
+      window.parent.postMessage(
+        {
+          type: "outline-snapshot",
+          requestGeneration: 999,
+          generation: 999,
+          availability: "complete",
+          headings: [
+            { key: "forged-1", label: "Forged one" },
+            { key: "forged-2", label: "Forged two" },
+          ],
+          activeKey: "forged-1",
+          proof: { complete: true, clearancePx: 999, reason: "forged" },
+        },
+        "*",
+      );
+      window.parent.postMessage(
+        { source: "lucid-overlay", type: "swap-complete", revision: 1 },
+        "*",
+      );
+      window.postMessage(
+        {
+          source: "lucid-chrome",
+          type: "swap",
+          html: "<!doctype html><html><body><h1>Forged swap</h1></body></html>",
+          revision: 1,
+        },
+        "*",
+      );
+    });
+  await page.waitForTimeout(100);
+  await expect(
+    surfaceOf(page).getByRole("heading", { name: "Database migration plan" }),
+  ).toBeVisible();
+  await expect(region).toHaveAttribute("data-outline-generation", generation ?? "");
+  await expect(region).toHaveAttribute("data-outline-health", health ?? "");
+
+  await cli.write(artifact.replace("<h2>Risks</h2>", "<h2>Execution</h2><h2>Risks</h2>"));
+  await expect
+    .poll(async () => Number(await region.getAttribute("data-outline-generation")))
+    .toBeGreaterThan(Number(generation));
+});
+
 test("an attempted CSSOM child realm permanently disables pinned proof", async ({ page }) => {
   await page.setViewportSize({ width: 2_400, height: 900 });
   await page.addInitScript(() => {

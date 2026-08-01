@@ -128,6 +128,27 @@ describe("BrowserArtifactOutlineController lifecycle", () => {
       ]),
     );
 
+    port.receive({ type: "outline-suspend" });
+    expect(controller.debugInfo()).toMatchObject({
+      connected: true,
+      dormant: true,
+      pendingQuietTask: false,
+    });
+    expect(harness.stopped).toEqual(harness.active);
+    expect(port.closed).toBe(false);
+
+    controller.revisionComplete(7);
+    expect(port.messages.at(-1)).toEqual({ revision: 7, type: "outline-revision-complete" });
+
+    harness.stopped.clear();
+    port.receive({
+      type: "outline-layout-request",
+      generation: 2,
+      preferredWidth: 240,
+      safeInsets: { bottom: 24, right: 16, top: 80 },
+    });
+    expect(controller.debugInfo()).toMatchObject({ dormant: false, pendingQuietTask: true });
+
     harness.callbacks.get("frame-detach")?.();
     expect(controller.debugInfo()).toMatchObject({ connected: false, pendingQuietTask: false });
     expect(harness.stopped).toEqual(harness.active);

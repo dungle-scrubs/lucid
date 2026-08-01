@@ -1045,7 +1045,10 @@ export class LucidOverlay extends LitElement {
   };
 
   private readonly onMessage = (e: MessageEvent): void => {
-    if (!isChromeMessage(e.data)) return;
+    // Artifact scripts share this Window and can forge message payloads, but
+    // they cannot forge the parent WindowProxy as event.source. This check is
+    // the public-channel authority boundary for every chrome command.
+    if (e.source !== window.parent || !isChromeMessage(e.data)) return;
     const msg = e.data as ChromeMessage;
     if (msg.type === "highlight") {
       this.committed = [...msg.annotations];
@@ -1055,7 +1058,7 @@ export class LucidOverlay extends LitElement {
       this.shownCommitted = msg.shownCommitted === undefined ? null : new Set(msg.shownCommitted);
       this.reposition();
     } else if (msg.type === "swap") {
-      this.swapArtifact(msg.html);
+      this.swapArtifact(msg.html, msg.revision);
     } else if (msg.type === "diff-show") {
       this.swapArtifact(msg.html);
       this.injectDiffStyles();
@@ -1217,7 +1220,7 @@ export class LucidOverlay extends LitElement {
    * Subtree-only swap (D-042): replace the artifact body nodes while preserving
    * the overlay host, then re-resolve anchors. Head <style>/<link> are synced.
    */
-  private swapArtifact(htmlText: string): void {
+  private swapArtifact(htmlText: string, outlineRevision?: number): void {
     this.removeDiffStyles();
     this.clearSectionEmphasis();
     this.#outlineController?.revise();
@@ -1269,6 +1272,9 @@ export class LucidOverlay extends LitElement {
         .filter((id): id is string => id !== null && id !== ""),
     );
     this.publishSectionIds(new Set([...currentIds].filter((id) => !previousIds.has(id))));
+    if (outlineRevision !== undefined) {
+      this.#outlineController?.revisionComplete(outlineRevision);
+    }
   }
 
   protected updated(_changed: PropertyValues): void {

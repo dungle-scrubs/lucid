@@ -224,6 +224,24 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.invalidate("revision");
   }
 
+  suspend(): void {
+    if (!this.#connected) return;
+    this.#scheduleVersion += 1;
+    this.#cancelQuiet?.();
+    this.#cancelQuiet = null;
+    this.#cancelFrame?.();
+    this.#cancelFrame = null;
+    this.#cancelActiveSample?.();
+    this.#cancelActiveSample = null;
+    this.#clearPendingSnapshot();
+    this.#request = null;
+    this.#elementsByKey.clear();
+    this.#projection = { generation: this.#generation, kind: "absent" };
+    this.#activeKey = null;
+    this.#proofComplete = false;
+    this.#proofReason = "suspended";
+  }
+
   #withdrawProjection(reason: string): void {
     if (this.#projection.kind !== "complete") return;
     this.#cancelActiveSample?.();

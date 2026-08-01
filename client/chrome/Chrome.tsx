@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
-import { SessionProvider } from "./context.tsx";
-import { MAX_PICK_TARGETS, toggleAnchor } from "./store.ts";
+import { SessionProvider, useSession } from "./context.tsx";
+import {
+  MAX_PICK_TARGETS,
+  selectOutlineGeneration,
+  selectOutlineHealthCode,
+  toggleAnchor,
+} from "./store.ts";
 import { Header } from "./Header.tsx";
 import { QuestionDrawer, useQuestionDrawer } from "./QuestionDrawer.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
@@ -59,6 +64,7 @@ const isTextEntry = (node: EventTarget | null): boolean =>
  */
 const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: boolean): void => {
   useEffect(() => {
+    session.surface.setOutlineActive(active);
     // A hidden tab's view stays mounted (drafts survive switching), but only
     // the ACTIVE session may own the window: N sets of keyboard/postMessage
     // listeners would all fire on one gesture.
@@ -274,6 +280,7 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
       window.removeEventListener("keydown", onDiffKey);
       window.removeEventListener("keydown", onSendKey);
       window.removeEventListener("keydown", onPanelKey);
+      surface.setOutlineActive(false);
     };
   }, [session, panelDigits, active]);
 };
@@ -292,6 +299,8 @@ const SurfaceRegion = ({
   readonly attachSurface: (el: HTMLIFrameElement | null) => void;
 }) => {
   const drawer = useQuestionDrawer();
+  const outlineCode = useSession(selectOutlineHealthCode);
+  const outlineGeneration = useSession(selectOutlineGeneration);
   const bottomOverlayObserver = useRef<ResizeObserver | null>(null);
   const [bottomOverlayHeight, setBottomOverlayHeight] = useState(0);
   const attachBottomOverlay = useCallback((element: HTMLElement | null): void => {
@@ -313,6 +322,8 @@ const SurfaceRegion = ({
   return (
     <section
       data-test="surface-region"
+      data-outline-health={outlineCode}
+      data-outline-generation={outlineGeneration}
       aria-label="Artifact review surface"
       tabIndex={-1}
       className="relative min-h-0 flex-1 overflow-hidden outline-none focus-visible:annot-outline"

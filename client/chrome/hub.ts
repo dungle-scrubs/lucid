@@ -351,6 +351,7 @@ export const activateTab = (key: string): void => {
 export const closeTab = (key: string): void => {
   const handle = getSession(key);
   handle?.disconnect();
+  handle?.surface.dispose();
   lastActivated.delete(key);
   const wasActive = useShell.getState().activeKey === key;
   let promoted: string | null = null;
