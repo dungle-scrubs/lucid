@@ -1077,6 +1077,12 @@ export class LucidOverlay extends LitElement {
 }
 
 export const mountOverlay = (): void => {
+  // The artifact is here, so whatever the stand-in document was counting is
+  // over. It parks its retry backoff in the frame's name (the only thing that
+  // survives a reload on an opaque origin); clearing it here means a LATER gap
+  // starts asking again promptly instead of inheriting a maxed-out wait, and
+  // an artifact never sees a window name Lucid left behind.
+  if (window.name.startsWith("lucid-retry:")) window.name = "";
   if (!customElements.get("lucid-overlay")) {
     customElements.define("lucid-overlay", LucidOverlay);
   }

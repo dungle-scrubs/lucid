@@ -187,6 +187,53 @@ const BROWSER_PROBES = new Set([
   "/robots.txt",
 ]);
 
+/**
+ * The stand-in document served in the surface iframe when there is no artifact
+ * to serve, in the two states that can mean.
+ *
+ * It heals itself. The 404 that brought a reader here is very often momentary -
+ * a session is created a beat before its first version is committed, and a page
+ * that asked in that gap used to sit on this screen until someone reloaded by
+ * hand. Nothing else can fix that from outside: there is no overlay in this
+ * document, so the chrome's live-swap has nothing to talk to. So the page keeps
+ * asking, backing off as it goes, and reloads the moment the artifact answers.
+ */
+const missingArtifactDoc = (opened: boolean): string => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>${opened ? "Artifact missing" : "Waiting for the artifact"}</title></head>
+<body style="font-family:ui-monospace,monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#4c566a;background:#eceff4">
+<div style="max-width:420px;text-align:center;font-size:13px;line-height:1.6">
+${
+  opened
+    ? `<p style="font-weight:600">This session's artifact file is missing.</p>
+<p>Nothing is served for it right now - the file may have been moved or deleted. Reopening it (<code>lucid open</code> on the artifact) rebuilds this view, and this page comes back on its own when the file does.</p>`
+    : `<p style="font-weight:600">Waiting for this session's first version.</p>
+<p>The session is open but nothing has been committed to it yet. This page shows the artifact as soon as it lands - there is nothing to do.</p>`
+}
+</div>
+<script>
+(() => {
+  // Reload, rather than fetch-then-reload: this frame is sandboxed WITHOUT
+  // allow-same-origin (D-020), so it is an opaque origin - a fetch back to its
+  // own URL is cross-origin and would be refused, while navigating itself is
+  // not. A reload that finds the artifact simply renders it, overlay and all.
+  //
+  // The backoff rides in window.name because it must survive the reload, and
+  // the opaque origin has no storage to keep it in: sessionStorage throws
+  // there, and the URL is the artifact's own (a retry counter left in its hash
+  // would outlive the wait). Nothing else reads the frame's name.
+  const KEY = "lucid-retry:";
+  const n = window.name.startsWith(KEY) ? Number(window.name.slice(KEY.length)) || 0 : 0;
+  window.name = KEY + (n + 1);
+  const wait = Math.min(Math.round(700 * 1.4 ** n), 15000);
+  // A hidden tab waits rather than reloading: the answer is only wanted by
+  // someone looking at it, and a forgotten tab must not reload all day.
+  const go = () =>
+    document.visibilityState === "hidden" ? setTimeout(go, 2000) : location.reload();
+  setTimeout(go, wait);
+})();
+</script>
+</body></html>`;
+
 const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response =>
   new Response(JSON.stringify(body), {
     status,
@@ -1222,17 +1269,16 @@ export const createSessionHost = (
       if (html === null) {
         // This renders INSIDE the surface iframe - raw JSON there reads as a
         // broken app. Say what is actually wrong, as a document.
-        return new Response(
-          `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Artifact missing</title></head>
-<body style="font-family:ui-monospace,monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#4c566a;background:#eceff4">
-<div style="max-width:420px;text-align:center;font-size:13px;line-height:1.6">
-<p style="font-weight:600">This session's artifact file is missing.</p>
-<p>Nothing is served for it right now - the file may have been moved or deleted. Reopening it (<code>lucid open</code> on the artifact) rebuilds this view.</p>
-</div>
-</body></html>`,
-          { status: 404, headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
-        );
+        //
+        // WHICH wrong thing depends on the log: a session whose first version
+        // has not been committed yet has nothing to serve for a second or two
+        // during creation, and calling that a moved-or-deleted file is a lie
+        // told at the one moment the human is most likely to be looking.
+        const opened = foldLog((await readEvents(paths.logPath)).events).status !== "none";
+        return new Response(missingArtifactDoc(opened), {
+          status: 404,
+          headers: { "content-type": "text/html; charset=utf-8", ...noStore },
+        });
       }
       const injected = renderInjected(html, base, new URL(req.url).origin);
       return new Response(injected.body, {

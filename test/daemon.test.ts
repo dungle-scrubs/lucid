@@ -128,6 +128,38 @@ describe("hub daemon", () => {
   });
 
   /**
+   * The stand-in document, in the two states "nothing to serve" can mean.
+   *
+   * A session is created a beat before its first version is committed, and a
+   * viewer that asks in that gap used to be told the file "may have been moved
+   * or deleted" - a fabricated cause, delivered at the one moment a human is
+   * most likely to be watching. The log knows which state this is, so it says.
+   */
+  test("the artifact stand-in tells the truth about WHY there is nothing to serve", async () => {
+    const opened = await seedSession("proj", "notes"); // log has session_opened
+    const fresh = join(root, "proj", "draft.html");
+    await mkdir(join(root, "proj", "draft", "run"), { recursive: true });
+    await writeFile(join(root, "proj", "draft", "log.ndjson"), ""); // created, never opened
+    await registerSession(canonicalArtifactPath(fresh), registryPath);
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+
+    const gone = await get(daemon.port, `/s/${sessionId(opened)}/`);
+    expect(gone.status).toBe(404);
+    const goneBody = await gone.text();
+    expect(goneBody).toContain("artifact file is missing");
+
+    const waiting = await get(daemon.port, `/s/${sessionId(canonicalArtifactPath(fresh))}/`);
+    expect(waiting.status).toBe(404);
+    const waitingBody = await waiting.text();
+    expect(waitingBody).toContain("Waiting for this session's first version");
+    expect(waitingBody).not.toContain("moved or deleted");
+
+    // Both heal themselves: the frame is sandboxed onto an opaque origin, so a
+    // reload is the only way back and nothing outside can trigger it.
+    for (const body of [goneBody, waitingBody]) expect(body).toContain("location.reload()");
+  });
+
+  /**
    * The review page under a mount, in BOTH hosting shapes (plan 06).
    *
    * A solo-view URL is held by a chat app's pane across reloads, and a session
