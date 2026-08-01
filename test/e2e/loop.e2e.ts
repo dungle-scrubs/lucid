@@ -2629,6 +2629,109 @@ test("the active chrome accepts outline state only from its captured private por
     .toBeGreaterThan(Number(generation));
 });
 
+test("delayed font, image, and content reflow withdraw stale outline state until stable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await page.addInitScript(() => {
+    const state: { messages: unknown[]; port: MessagePort | null } = {
+      messages: [],
+      port: null,
+    };
+    Object.defineProperty(window, "__outlineAssetTest", { value: state });
+    window.addEventListener("message", (event) => {
+      if (
+        event.data?.source !== "lucid-overlay-bootstrap" ||
+        event.data.type !== "private-channel" ||
+        state.port !== null
+      ) {
+        return;
+      }
+      state.port = event.ports[0] ?? null;
+      if (state.port) {
+        state.port.addEventListener("message", (message) => state.messages.push(message.data));
+        state.port.start();
+      }
+    });
+  });
+  await page.route("https://lucid.invalid/delayed.woff2", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await route.abort("failed");
+  });
+  await page.route("https://lucid.invalid/delayed.png", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await route.fulfill({
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+      contentType: "image/png",
+    });
+  });
+  const artifact = `<!doctype html><html><head><style>
+    @font-face{font-family:DelayedOutline;src:url(https://lucid.invalid/delayed.woff2)}
+    body{max-width:700px;margin:40px auto;font-family:DelayedOutline,system-ui}
+  </style></head><body><main><h1>Delayed outline</h1>
+    <h2>Context</h2><p data-lucid-id="pick-after-stable">A</p>
+    <img alt="layout probe" src="https://lucid.invalid/delayed.png">
+    <h2>Milestones</h2><p>B</p><h2>Risks</h2><p>C</p>
+  </main></body></html>`;
+  await openViewer(page, artifact, "Delayed outline");
+
+  const messages = async (): Promise<Array<Record<string, unknown>>> =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __outlineAssetTest: { messages: Array<Record<string, unknown>> };
+          }
+        ).__outlineAssetTest.messages,
+    );
+  const snapshots = async (): Promise<Array<Record<string, unknown>>> =>
+    (await messages()).filter(({ type }) => type === "outline-snapshot");
+
+  await expect
+    .poll(async () =>
+      (await snapshots()).some(
+        ({ proof }) =>
+          (proof as Record<string, unknown> | undefined)?.reason === "layout-unsettled",
+      ),
+    )
+    .toBe(true);
+  await expect(on(page).artifactOutline()).toHaveAttribute("data-mode", "pinned");
+  const stableSnapshots = await snapshots();
+  const stable = stableSnapshots.at(-1);
+  expect(stable).toMatchObject({
+    availability: "complete",
+    headings: [{ label: "Context" }, { label: "Milestones" }, { label: "Risks" }],
+    proof: { complete: true },
+  });
+  const stableGeneration = Number(stable?.generation ?? 0);
+
+  await surfaceOf(page)
+    .locator("main")
+    .evaluate((main) => {
+      const reflow = document.createElement("div");
+      reflow.id = "delayed-content-reflow";
+      reflow.style.height = "240px";
+      main.prepend(reflow);
+    });
+  await expect
+    .poll(async () => Number((await snapshots()).at(-1)?.generation ?? 0))
+    .toBeGreaterThan(stableGeneration);
+  const afterReflow = (await snapshots()).at(-1);
+  expect(afterReflow).toMatchObject({
+    availability: "complete",
+    headings: [{ label: "Context" }, { label: "Milestones" }, { label: "Risks" }],
+  });
+  expect((await messages()).some(({ type }) => type === "outline-invalidated")).toBe(true);
+
+  await surfaceOf(page).locator('[data-lucid-id="pick-after-stable"]').click();
+  await expect(on(page).annotationNote()).toBeVisible();
+  await expect(on(page).warning()).toHaveCount(0);
+  expect(JSON.stringify(await outlineDebugInfo(page))).not.toContain("Context");
+});
+
 test("a proven gutter renders a pinned, accessible outline without changing the artifact frame", async ({
   page,
 }) => {
