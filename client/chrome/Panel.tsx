@@ -504,6 +504,7 @@ const SelectionPicker = ({
 export const SelectionPickers = () => {
   const { transport, store, notify } = useSessionHandle();
   const info = useSession((s) => s.selectionInfo);
+  const harnesses = useSession((s) => s.selectionHarnesses);
   const selection = useSession((s) => s.selection);
   const listening = useSession((s) => s.agentsListening);
   const attendant = useSession((s) => s.lastAttendant);
@@ -528,18 +529,19 @@ export const SelectionPickers = () => {
   // model the registry no longer lists has no per-model vocabulary), or the
   // pick would be invisible and unclearable until the model changed.
   const showEffort = ladder.length > 0 || effortValue !== "";
-  if (models.length === 0 && !showEffort) return null;
+  const showHarness = harnesses.length > 1;
+  if (!showHarness && models.length === 0 && !showEffort) return null;
 
   const harness = selection.harness ?? attendant?.harness ?? info.name;
   const inherited = `inherited from ${harness}`;
 
   /** A POST replaces the whole selection, so both fields ride every write. */
-  const commit = async (model: string, effort: string): Promise<void> => {
+  const commit = async (targetHarness: string, model: string, effort: string): Promise<void> => {
     setBusy(true);
     const res = await hubFetch(`${transport.base}/__lucid/selection`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, effort }),
+      body: JSON.stringify({ harness: targetHarness, model, effort }),
     }).catch(() => null);
     setBusy(false);
     if (!res) {
@@ -559,7 +561,11 @@ export const SelectionPickers = () => {
       );
       return;
     }
-    store.setState({ selection: body.selection, selectionInfo: body.info ?? null });
+    store.setState({
+      selection: body.selection,
+      selectionHarnesses: body.harnesses ?? [],
+      selectionInfo: body.info ?? null,
+    });
   };
 
   // A model change re-picks the ladder, so an effort the new model does not
@@ -567,7 +573,7 @@ export const SelectionPickers = () => {
   const pickModel = (v: string): void => {
     const next = effortLadder(info, v);
     const effort = selection.effort ?? "";
-    void commit(v, effort !== "" && next?.includes(effort) ? effort : "");
+    void commit(harness, v, effort !== "" && next?.includes(effort) ? effort : "");
   };
 
   return (
@@ -576,6 +582,21 @@ export const SelectionPickers = () => {
       data-readonly={readOnly ? "true" : "false"}
       className="flex flex-wrap items-center gap-x-3 gap-y-1"
     >
+      {showHarness ? (
+        <SelectionPicker
+          label="harness"
+          test="selection-harness"
+          value={readOnly ? (attendant?.harness ?? harness) : harness}
+          busy={busy}
+          readOnly={readOnly}
+          display={(value) => value}
+          options={harnesses.map((candidate) => ({
+            value: candidate.name,
+            label: candidate.name,
+          }))}
+          onPick={(value) => void commit(value, "", "")}
+        />
+      ) : null}
       {models.length > 0 ? (
         <SelectionPicker
           label="model"
@@ -629,7 +650,7 @@ export const SelectionPickers = () => {
             },
             ...withCurrent(ladder, effortValue).map((e) => ({ value: e, label: e })),
           ]}
-          onPick={(v) => void commit(selection.model ?? "", v)}
+          onPick={(v) => void commit(harness, selection.model ?? "", v)}
         />
       ) : null}
     </div>
