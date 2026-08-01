@@ -174,6 +174,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   shellTab: (): Locator => root.locator(hook("shell-tab")),
   shellTabbar: (): Locator => root.locator(hook("shell-tabbar")),
   skip: (): Locator => root.locator(hook("skip")),
+  agentBlocked: (): Locator => root.locator(hook("agent-blocked")),
   surfaceUpdating: (): Locator => root.locator(hook("surface-updating")),
   tabAdd: (): Locator => root.locator(hook("tab-add")),
   tabAttention: (): Locator => root.locator(hook("tab-attention")),

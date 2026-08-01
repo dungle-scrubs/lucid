@@ -9,7 +9,7 @@ import { ARTIFACT_DIR, canonicalArtifactPath, projectRootOf, sessionPaths } from
 import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
 import { themeReadiness, themeWarning } from "../core/theme.ts";
 import { registerSession } from "../core/registry.ts";
-import { sanitizeProgress } from "../core/progress.ts";
+import { sanitizeBlocked, sanitizeProgress } from "../core/progress.ts";
 import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import {
   assertCanonicalLocation,
@@ -340,6 +340,37 @@ export const runIntent = async (file: string, intent: "revise" | "reply"): Promi
  * Call at fan-out start with `--total`, then re-call to bump `--done` as tasks
  * report. Advisory like `intent`: the window still only closes on real output.
  */
+/**
+ * `lucid blocked <file> --reason "<one line>"` - the turn cannot continue
+ * without the human.
+ *
+ * A headless turn has no terminal anyone is reading: a permission prompt it
+ * cannot answer, a credential it does not have, an instruction it cannot act
+ * on - each of those ends with the agent stopping and saying so into a void,
+ * while the viewer shows a spinner over work that will never resume. This puts
+ * the sentence where the human is actually looking. It does not end the turn:
+ * answer the block and the agent's next ack clears it.
+ */
+export const runBlocked = async (file: string, reason: string): Promise<void> => {
+  const paths = sessionPaths(file);
+  // Validated here as well as server-side, for the same reason `progress` is:
+  // the no-daemon path appends straight to the log without passing the ack
+  // handler.
+  const cleaned = sanitizeBlocked(reason);
+  if (!cleaned) {
+    throw new ValidationError({ message: "blocked needs a --reason", detail: { file } });
+  }
+  const attendant = attendantStamp();
+  await deliver(paths, {
+    t: "agent_ack",
+    id: randomId(),
+    ...turnStamp(),
+    blocked: cleaned,
+    ...(attendant ? { attendant } : {}),
+  });
+  print({ ok: true, blocked: cleaned });
+};
+
 export const runProgress = async (
   file: string,
   progress: { label?: string; total?: number; done?: number },

@@ -226,6 +226,13 @@ export interface AgentAckEvent extends BaseEvent {
    */
   readonly progress?: AgentProgress;
   /**
+   * Why the turn is stuck on the human (`lucid blocked`): a permission it
+   * cannot be granted headlessly, a credential it does not have, an
+   * instruction it cannot act on without an answer. Reported so the viewer
+   * says what is wrong instead of showing motion that is not happening.
+   */
+  readonly blocked?: string;
+  /**
    * The highest seq the acknowledged batch covered - the cursor the taker had
    * just read (D20). Delivery is a claim about a RANGE, not about the ack's own
    * position: feedback can land between the read and the ack, and a presence-only

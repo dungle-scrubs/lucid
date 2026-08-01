@@ -283,6 +283,10 @@ export const SurfaceUpdating = () => {
     return () => clearInterval(t);
   }, [working]);
   if (working?.intent !== "revise" || status !== "active") return null;
+  // A blocked turn has a reason worth reading, and the panel is where it fits.
+  // Promising an update over the document while the agent waits on a person is
+  // the same lie as promising one after it died.
+  if (working.blocked) return null;
   const { stale, mm } = workingClock(working, now);
   return (
     <div

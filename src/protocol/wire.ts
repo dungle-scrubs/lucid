@@ -29,6 +29,15 @@ export interface AgentWorking {
   readonly intent?: "revise" | "reply";
   /** Self-reported fan-out progress; present iff the agent called `lucid progress`. */
   readonly progress?: AgentProgress;
+  /**
+   * Why this turn cannot continue without the human, self-reported by
+   * `lucid blocked`. A headless turn has no terminal anyone is reading, so a
+   * question it asks there reaches nobody: it stops, and the viewer shows a
+   * spinner over work that will never resume. This is the sentence that
+   * replaces the spinner. Cleared by the agent's next ordinary ack, because
+   * moving again IS the unblocking.
+   */
+  readonly blocked?: string;
 }
 
 /**

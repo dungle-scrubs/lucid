@@ -258,6 +258,17 @@ Never fake the review loop, and never paste build instructions at the user.
        The one-liner renders under the working indicator (and under
        "authoring…" in the create dialog). Each report also refreshes the
        working window, so a long narrated turn cannot go stale mid-edit.
+     - **If you cannot continue without the human, say so IN the session:**
+       ```
+       lucid blocked <file> --reason "needs the WebFetch permission to read the source"
+       ```
+       You have no terminal anyone is reading. A permission you cannot be
+       granted headlessly, a credential you do not have, an instruction you
+       cannot act on without an answer - stopping and explaining it where you
+       are does not reach the human, who is watching a spinner over work that
+       will never resume. This puts the sentence where they are looking. It
+       does not end your turn; answer the block and your next `lucid progress`
+       clears it.
      - **If you farm the revision out to parallel subagents** (read-only audits,
        a workflow), tell the viewer so the human sees *why* the wait is long.
        At fan-out start, and again each time a subagent reports, call:

@@ -16,6 +16,7 @@ import {
   runApp,
   runAsk,
   runIntent,
+  runBlocked,
   runProgress,
   runContext,
   runEnd,
@@ -162,6 +163,13 @@ const progressCommand = Command.make(
     ),
 );
 
+const blockedReason = Options.text("reason");
+const blockedCommand = Command.make(
+  "blocked",
+  { file: fileArg, reason: blockedReason },
+  ({ file, reason }) => runEffect(() => runBlocked(file, reason)),
+);
+
 const ctxPct = Options.integer("pct").pipe(Options.optional);
 const ctxUsed = Options.integer("used").pipe(Options.optional);
 const ctxTotal = Options.integer("total").pipe(Options.optional);
@@ -244,6 +252,7 @@ const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe
     askCommand,
     intentCommand,
     progressCommand,
+    blockedCommand,
     contextCommand,
     serveCommand,
     hubCommand,
