@@ -162,6 +162,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   sectionLink: (): Locator => root.locator(hook("section-link")),
   sessionGone: (): Locator => root.locator(hook("session-gone")),
   selectionEffort: (): Locator => root.locator(hook("selection-effort")),
+  selectionHarness: (): Locator => root.locator(hook("selection-harness")),
   selectionModel: (): Locator => root.locator(hook("selection-model")),
   selectionPickers: (): Locator => root.locator(hook("selection-pickers")),
   sendMessage: (): Locator => root.locator(hook("send-message")),
