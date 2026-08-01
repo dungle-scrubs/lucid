@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
 import { isOverlayMessage } from "../shared/protocol.ts";
-import { SessionProvider, useActions, useSession } from "./context.tsx";
+import { SessionProvider } from "./context.tsx";
 import { MAX_PICK_TARGETS, toggleAnchor } from "./store.ts";
 import { Header } from "./Header.tsx";
 import { QuestionDrawer, useQuestionDrawer } from "./QuestionDrawer.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
 import type { SessionHandle } from "./session.ts";
 import { Sessions } from "./Sessions.tsx";
+import { SurfaceControls } from "./surface-controls.tsx";
 import {
   CHROME_MIN_WIDTH,
   defaultChromeWidth,
@@ -21,7 +22,6 @@ import {
   DiffBar,
   Lightbox,
   NewerVersionBanner,
-  SurfaceUpdating,
   SessionGoneBanner,
   VersionViewBanner,
 } from "./Surface.tsx";
@@ -284,48 +284,6 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
  * must read the session store (the drawer's raised state drives the parallax),
  * and SessionView is the thing that PROVIDES that store.
  */
-/**
- * Cancel every staged pick in one gesture: the composer's collected spots and
- * all answer pins across questions. Chrome furniture on the SURFACE corner,
- * because that is where the marks it cancels are lit - by the time spots are
- * scattered across a draft and two answers, per-chip × is bookkeeping.
- */
-const CancelPicksButton = () => {
-  const { cancelAllPicks } = useActions();
-  const composer = useSession((s) =>
-    s.pendingTargets.length > 0 ? s.pendingTargets.length : s.pendingTarget ? 1 : 0,
-  );
-  const pins = useSession((s) =>
-    s.questions
-      .filter((q) => !q.answered)
-      .reduce(
-        (n, q) => n + (s.answerAnchorLists[q.id]?.length ?? (s.answerAnchors[q.id] ? 1 : 0)),
-        0,
-      ),
-  );
-  const count = composer + pins;
-  if (count === 0) return null;
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            data-test="cancel-picks"
-            onClick={cancelAllPicks}
-            className="absolute right-3 top-3 z-30 flex cursor-pointer items-center gap-1 border border-ink-500 bg-ink-850/95 px-2.5 py-1 text-[11px] text-fg-muted shadow-[0_2px_10px_rgba(0,0,0,0.35)] hover:border-rust-300/60 hover:text-fg"
-          >
-            × Cancel picks ({count})
-          </button>
-        }
-      />
-      <TooltipContent>
-        Cancel every collected spot - the annotation draft and all answer pins
-      </TooltipContent>
-    </Tooltip>
-  );
-};
-
 const SurfaceRegion = ({
   session,
   attachSurface,
@@ -333,21 +291,43 @@ const SurfaceRegion = ({
   readonly session: SessionHandle;
   readonly attachSurface: (el: HTMLIFrameElement | null) => void;
 }) => {
-  const { raised } = useQuestionDrawer();
+  const drawer = useQuestionDrawer();
+  const bottomOverlayObserver = useRef<ResizeObserver | null>(null);
+  const [bottomOverlayHeight, setBottomOverlayHeight] = useState(0);
+  const attachBottomOverlay = useCallback((element: HTMLElement | null): void => {
+    bottomOverlayObserver.current?.disconnect();
+    bottomOverlayObserver.current = null;
+    if (element === null) {
+      setBottomOverlayHeight((height) => (height === 0 ? height : 0));
+      return;
+    }
+    const measure = (): void => {
+      const height = element.getBoundingClientRect().height;
+      setBottomOverlayHeight((current) => (current === height ? current : height));
+    };
+    measure();
+    bottomOverlayObserver.current = new ResizeObserver(measure);
+    bottomOverlayObserver.current.observe(element);
+  }, []);
+  useEffect(() => () => bottomOverlayObserver.current?.disconnect(), []);
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden">
+    <section
+      data-test="surface-region"
+      aria-label="Artifact review surface"
+      tabIndex={-1}
+      className="relative min-h-0 flex-1 overflow-hidden outline-none focus-visible:annot-outline"
+    >
       <NewerVersionBanner />
       <DiffBar />
       <VersionViewBanner />
       <SessionGoneBanner />
-      <SurfaceUpdating />
-      <CancelPicksButton />
+      <SurfaceControls bottomOverlayHeight={bottomOverlayHeight} />
       {/* The surface parallaxes UP while the question drawer is raised - the
           projects drawer's motion language, rotated. The artifact stays live
           and targetable the whole time; the drawer covers only its own band. */}
       <div
         className={`h-full w-full transition-transform duration-200 ease-out ${
-          raised ? "-translate-y-3" : "translate-y-0"
+          drawer.raised ? "-translate-y-3" : "translate-y-0"
         }`}
       >
         <iframe
@@ -376,8 +356,8 @@ const SurfaceRegion = ({
       {/* Over the SURFACE, never the review panel: a pending question is about
           the artifact, and the artifact must stay visible while it is
           answered (D11). */}
-      <QuestionDrawer />
-    </div>
+      <QuestionDrawer state={drawer} attach={attachBottomOverlay} />
+    </section>
   );
 };
 

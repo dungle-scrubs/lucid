@@ -18,6 +18,10 @@ export interface Surface {
    *  belongs to the ELEMENT (see markOverlayReady), so detaching and
    *  re-attaching the same live iframe keeps its running overlay. */
   readonly attach: (el: HTMLIFrameElement | null) => void;
+  /** Register the one parent-owned rectangle future surface controls may use.
+   * Callers measure this slot, never the independent notices above it. */
+  readonly attachOutlineSlot: (el: HTMLDivElement | null) => void;
+  readonly outlineSlotRect: () => DOMRect | null;
   /** The overlay signalled `ready` (or the iframe finished loading, which
    *  implies the overlay module ran - a missed one-shot `ready` must not leave
    *  the surface unpainted). */
@@ -63,6 +67,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   const set = store.setState;
 
   let iframeEl: HTMLIFrameElement | null = null;
+  let outlineSlotEl: HTMLDivElement | null = null;
   /**
    * The element whose overlay has announced itself. Readiness is a fact about
    * an ELEMENT, not this controller: a boolean here got wiped by a
@@ -245,13 +250,21 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     iframeEl = el;
   };
 
+  const attachOutlineSlot = (el: HTMLDivElement | null): void => {
+    outlineSlotEl = el;
+  };
+
+  const outlineSlotRect = (): DOMRect | null => outlineSlotEl?.getBoundingClientRect() ?? null;
+
   const ownsSource = (source: MessageEventSource | null): boolean =>
     iframeEl !== null && source === iframeEl.contentWindow;
 
   return {
     attach,
+    attachOutlineSlot,
     markOverlayReady,
     ownsSource,
+    outlineSlotRect,
     toOverlay,
     pushHighlights,
     applyDeferredSwapIfReady,

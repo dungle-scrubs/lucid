@@ -62,11 +62,13 @@ const pendingCount = (open: readonly AgentQuestion[]): number =>
  * means. The oldest outstanding ask is the one on screen; answering it raises
  * the next.
  */
-export const useQuestionDrawer = (): {
+export interface QuestionDrawerState {
   readonly current: AgentQuestion | undefined;
   readonly pending: number;
   readonly raised: boolean;
-} => {
+}
+
+export const useQuestionDrawer = (): QuestionDrawerState => {
   const questions = useSession((s) => s.questions);
   const dismissed = useSession((s) => s.questionDrawerDismissed);
   const open = questions.filter((q) => !q.answered);
@@ -612,11 +614,13 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
  *  parent, so a new ask gets a fresh panel (and a fresh slide-up) rather than
  *  inheriting the last one's transient state. */
 const Drawer = ({
+  attach,
   q,
   group,
   pending,
   animate,
 }: {
+  readonly attach: (element: HTMLElement | null) => void;
   readonly q: AgentQuestion;
   readonly group: QuestionGroup;
   readonly pending: number;
@@ -720,6 +724,7 @@ const Drawer = ({
 
   return (
     <section
+      ref={attach}
       data-test="question-drawer"
       aria-label="Question from the agent"
       onKeyDown={onKeyDown}
@@ -906,10 +911,17 @@ const Drawer = ({
 
 /** The lowered drawer's trace: a slim bar naming what is still owed. A drawer
  *  the human lowered must never become an invisible obligation. */
-const ReopenBar = ({ pending }: { readonly pending: number }) => {
+const ReopenBar = ({
+  attach,
+  pending,
+}: {
+  readonly attach: (element: HTMLElement | null) => void;
+  readonly pending: number;
+}) => {
   const { raiseQuestionDrawer } = useActions();
   return (
     <button
+      ref={attach}
       type="button"
       data-test="question-reopen"
       onClick={raiseQuestionDrawer}
@@ -926,8 +938,14 @@ const ReopenBar = ({ pending }: { readonly pending: number }) => {
  * the artifact and never the review panel. Renders nothing while no question is
  * outstanding.
  */
-export const QuestionDrawer = () => {
-  const { current, pending, raised } = useQuestionDrawer();
+interface QuestionDrawerProps {
+  readonly attach: (element: HTMLElement | null) => void;
+  readonly state: QuestionDrawerState;
+}
+
+export const QuestionDrawer = (props: QuestionDrawerProps) => {
+  const { attach, state } = props;
+  const { current, pending, raised } = state;
   const { cancelAnswerPick, dismissQuestionDrawer } = useActions();
   const picking = useSession((s) => s.answerPickFor);
   const diffMode = useSession((s) => s.diffMode);
@@ -964,8 +982,15 @@ export const QuestionDrawer = () => {
 
   if (!current) return null;
   return raised ? (
-    <Drawer key={current.id} q={current} group={group} pending={pending} animate={!wasUp.current} />
+    <Drawer
+      key={current.id}
+      attach={attach}
+      q={current}
+      group={group}
+      pending={pending}
+      animate={!wasUp.current}
+    />
   ) : (
-    <ReopenBar pending={pending} />
+    <ReopenBar attach={attach} pending={pending} />
   );
 };
