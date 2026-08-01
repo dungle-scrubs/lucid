@@ -567,12 +567,16 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const applied = await applicableSelection(resolved.name, resolved.recipe);
     const argv = insertSelectionArgs(
       resolved.name,
-      buildArgv(resolved.recipe.resume, {
-        id: record.sessionId,
-        artifact: paths.artifactPath,
-        cwd,
-        prompt,
-      }),
+      buildArgv(
+        resolved.recipe.resume,
+        {
+          id: record.sessionId,
+          artifact: paths.artifactPath,
+          cwd,
+          prompt,
+        },
+        resolved.recipe.tools,
+      ),
       applied.args,
       resolved.recipe.resume,
     );

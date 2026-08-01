@@ -173,6 +173,62 @@ describe("recipes registry", () => {
     expect(argv).toEqual(["claude", "-p", "--session-id", "abc", "do it"]);
   });
 
+  test("`tools` is an editable grant the argv references, never a silent empty one", async () => {
+    await writeFile(
+      regPath,
+      JSON.stringify({
+        default: "claude_code",
+        harnesses: {
+          claude_code: {
+            spawn: ["claude", "-p", "{prompt}", "--allowedTools", "{tools}"],
+            resume: ["claude", "--resume", "{id}", "-p", "{prompt}", "--allowedTools", "{tools}"],
+            tools: ["Bash(lucid *)", "Write", "Edit", "Read", "WebFetch"],
+          },
+        },
+      }),
+    );
+    const reg = await loadRegistry(regPath);
+    const recipe = reg && resolveRecipe(reg, "claude_code")?.recipe;
+    expect(recipe?.tools).toEqual(["Bash(lucid *)", "Write", "Edit", "Read", "WebFetch"]);
+    // One argv token, space-joined in declared order - the shape the CLI's own
+    // allowlist flag takes. Which flag it is stays the recipe's business.
+    expect(buildArgv(recipe?.spawn ?? [], { prompt: "go" }, recipe?.tools)).toEqual([
+      "claude",
+      "-p",
+      "go",
+      "--allowedTools",
+      "Bash(lucid *) Write Edit Read WebFetch",
+    ]);
+    // The same grant covers a revise turn: a turn allowed to write on creation
+    // and not on revision is a grant nobody meant to make.
+    expect(buildArgv(recipe?.resume ?? [], { id: "s1", prompt: "again" }, recipe?.tools)).toContain(
+      "Bash(lucid *) Write Edit Read WebFetch",
+    );
+  });
+
+  test("{tools} with nothing behind it is refused, not substituted empty", async () => {
+    // `--allowedTools ""` is a turn granted nothing: it fails on its first tool
+    // call with nothing to read. Refused at load, while the file is on screen.
+    await writeFile(
+      regPath,
+      JSON.stringify({
+        harnesses: { claude_code: { spawn: ["claude", "--allowedTools", "{tools}"] } },
+      }),
+    );
+    await expect(loadRegistry(regPath)).rejects.toThrow(/uses \{tools\}/);
+
+    // And again at the point a caller could reintroduce it by forgetting.
+    expect(() => buildArgv(["claude", "--allowedTools", "{tools}"], {})).toThrow(/\{tools\}/);
+  });
+
+  test("an empty or non-string `tools` list is rejected", async () => {
+    await writeFile(
+      regPath,
+      JSON.stringify({ harnesses: { claude_code: { spawn: ["claude"], tools: [] } } }),
+    );
+    await expect(loadRegistry(regPath)).rejects.toThrow(/tools/);
+  });
+
   test("a malformed registry throws rather than silently disabling", async () => {
     await writeFile(regPath, JSON.stringify({ harnesses: { bad: { spawn: [] } } }));
     await expect(loadRegistry(regPath)).rejects.toThrow(/non-empty/);
