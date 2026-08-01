@@ -160,6 +160,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   saveEdit: (): Locator => root.locator(hook("save-edit")),
   scrollBottom: (): Locator => root.locator(hook("scroll-bottom")),
   sectionLink: (): Locator => root.locator(hook("section-link")),
+  sessionGone: (): Locator => root.locator(hook("session-gone")),
   selectionEffort: (): Locator => root.locator(hook("selection-effort")),
   selectionModel: (): Locator => root.locator(hook("selection-model")),
   selectionPickers: (): Locator => root.locator(hook("selection-pickers")),

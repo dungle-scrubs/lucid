@@ -439,6 +439,12 @@ export interface SessionState {
    *  opened. Null means "not looked yet", which is distinct from "none found". */
   sessions: SessionSummary[] | null;
   sessionsLoading: boolean;
+  /** This session is not on the hub any more - its record was removed, or it
+   *  was opened somewhere this viewer cannot reach. Terminal: the stream stops
+   *  retrying, because every further attempt is a 404 that can only fail the
+   *  same way, and ~180 of them in a row is what starved a shell of the
+   *  connections it needed to list its own sessions. */
+  gone: boolean;
   /** Show the annotation marks on the surface. Remembered per session. */
   showTargets: boolean;
   /** Focus every SENT annotation at once (the header's highlighter). Off until
@@ -551,6 +557,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     streamRetries: 0,
     sessions: null,
     sessionsLoading: false,
+    gone: false,
     showTargets: storage.readShowTargets(),
     focusAll: storage.readFocusAll(),
     focusedId: null,

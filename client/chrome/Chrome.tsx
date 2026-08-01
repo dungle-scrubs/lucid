@@ -22,6 +22,7 @@ import {
   Lightbox,
   NewerVersionBanner,
   SurfaceUpdating,
+  SessionGoneBanner,
   VersionViewBanner,
 } from "./Surface.tsx";
 import { Thread } from "./Thread.tsx";
@@ -328,6 +329,7 @@ const SurfaceRegion = ({
       <NewerVersionBanner />
       <DiffBar />
       <VersionViewBanner />
+      <SessionGoneBanner />
       <SurfaceUpdating />
       <CancelPicksButton />
       {/* The surface parallaxes UP while the question drawer is raised - the

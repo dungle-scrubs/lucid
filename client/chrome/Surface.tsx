@@ -231,6 +231,32 @@ export const NewerVersionBanner = () => {
 };
 
 /**
+ * The session behind this tab is gone.
+ *
+ * Terminal by construction: the stream stopped for good on a definite 404, so
+ * nothing here spins or counts down. What is left is the one useful fact and
+ * the one useful act - the record is not on this hub, and this tab has nothing
+ * left to do. Said on the surface rather than in the panel because the surface
+ * is what the reader is looking at when the artifact stops loading.
+ */
+export const SessionGoneBanner = () => {
+  const gone = useSession((s) => s.gone);
+  if (!gone) return null;
+  return (
+    <div
+      data-test="session-gone"
+      className="absolute top-3 left-1/2 z-5 flex max-w-[min(560px,calc(100%-32px))] -translate-x-1/2 flex-col gap-1 border border-rust-500/60 bg-ink-900/95 px-3.5 py-2 text-[12px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+    >
+      <span className="font-semibold text-rust-300">This session is no longer on the hub.</span>
+      <span className="text-fg-muted">
+        Its record was removed or renamed, so there is nothing left to connect to and this tab has
+        stopped trying. Close it - reopening the artifact (<code>lucid open</code>) makes a new one.
+      </span>
+    </div>
+  );
+};
+
+/**
  * The agent has declared its next output will revise this document. Upper-RIGHT
  * of the surface: it is a status about the document, not part of it, and where
  * reading starts is the document's own business. Declared intent is a promise,
