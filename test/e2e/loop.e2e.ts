@@ -2690,12 +2690,15 @@ test("delayed font, image, and content reflow withdraw stale outline state until
     #font-probe{display:inline-block;font-size:48px}
     #delayed-content-reflow{height:240px}
   </style></head><body><main><h1>Delayed outline</h1>
-    <h2>Context</h2><p id="font-probe" data-lucid-id="pick-while-unsettled">&#xea60;</p>
+    <h2>Context</h2><p id="font-probe" data-lucid-id="pick-while-unsettled">&#xea60;&#xea60;&#xea60;&#xea60;</p>
     <h2>Milestones</h2><p>B</p><h2>Risks</h2><p>C</p>
   </main></body></html>`;
   await openViewer(page, artifact, "Delayed outline");
   const snapshots = (): Promise<Array<Record<string, unknown>>> => outlineProbeSnapshots(page);
 
+  await expect
+    .poll(async () => (await outlineDebugInfo(page))?.proofReason ?? "missing")
+    .toBe("complete-unused-rectangle");
   await expect(on(page).artifactOutline()).toHaveAttribute("data-mode", "pinned");
   const initialGeneration = Number((await snapshots()).at(-1)?.generation ?? 0);
   const beforeImage = (await outlineProbeMessages(page)).length;
@@ -2777,6 +2780,17 @@ test("delayed font, image, and content reflow withdraw stale outline state until
       ),
     )
     .toBeGreaterThan(imageUnsettledGeneration);
+  await expect(on(page).artifactOutline()).toHaveCount(0);
+  expect(
+    (await outlineProbeMessages(page))
+      .slice(beforeFont)
+      .some(
+        ({ availability, proof, type }) =>
+          type === "outline-snapshot" &&
+          (availability === "complete" ||
+            (proof as Record<string, unknown> | undefined)?.complete === true),
+      ),
+  ).toBe(false);
   const fontUnsettledGeneration = Number((await snapshots()).at(-1)?.generation ?? 0);
   releaseFont();
   await surfaceOf(page)
@@ -2857,7 +2871,7 @@ const hostileOutlineFixtures = [
     name: "absolute paint",
     markup: '<aside id="hazard"></aside>',
     style:
-      "#hazard{position:absolute;left:calc(50% + 362px);top:120px;width:240px;height:120px;background:red}",
+      "#hazard{position:absolute;right:240px;top:120px;width:240px;height:120px;background:red}",
   },
   {
     name: "transformed paint",
@@ -2896,6 +2910,7 @@ const hostileOutlineFixtures = [
 for (const fixture of hostileOutlineFixtures) {
   test(`hostile ${fixture.name} fails pinned outline proof closed`, async ({ page }) => {
     await page.setViewportSize({ width: 2_400, height: 900 });
+    await installOutlinePublicationProbe(page);
     const artifact = `<!doctype html><html><head><style>
       body{max-width:700px;margin:40px auto;font-family:system-ui}${fixture.style}
     </style></head><body><main><h1>Hostile outline</h1>
@@ -2905,17 +2920,33 @@ for (const fixture of hostileOutlineFixtures) {
     await openViewer(page, artifact, "Hostile outline");
 
     const outline = on(page).artifactOutline();
+    await expect
+      .poll(async () => (await outlineDebugInfo(page))?.taskCount ?? 0)
+      .toBeGreaterThan(0);
+    await expect.poll(async () => (await outlineDebugInfo(page))?.headingCount ?? 0).toBe(3);
+    await expect
+      .poll(async () => (await outlineDebugInfo(page))?.pendingQuietTask ?? true)
+      .toBe(false);
     const debug = await outlineDebugInfo(page);
-    expect(debug?.proofComplete).toBe(false);
-    expect([0, 3]).toContain(debug?.headingCount);
-    if ((await outline.count()) > 0) {
-      await expect(outline).not.toHaveAttribute("data-mode", "pinned");
-      await on(page).artifactOutlineRail().click();
-      await expect(outline).toHaveAttribute("data-mode", "transient_latched");
-      await expect(on(page).artifactOutlineItem()).toHaveCount(3);
-      await expect(on(page).artifactOutlineItem().nth(0)).toHaveAccessibleName("Context");
-      await expect(on(page).artifactOutlineItem().nth(2)).toHaveAccessibleName("Risks");
-    }
+    expect(debug).toMatchObject({
+      headingCount: 3,
+      pendingQuietTask: false,
+      proofComplete: false,
+    });
+    expect(debug?.proofReason).not.toBe("not-requested");
+    expect(
+      (await outlineProbeSnapshots(page)).filter(
+        ({ availability, proof }) =>
+          availability === "complete" &&
+          (proof as Record<string, unknown> | undefined)?.complete === true,
+      ),
+    ).toEqual([]);
+    await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+    await on(page).artifactOutlineRail().click();
+    await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+    await expect(on(page).artifactOutlineItem()).toHaveCount(3);
+    await expect(on(page).artifactOutlineItem().nth(0)).toHaveAccessibleName("Context");
+    await expect(on(page).artifactOutlineItem().nth(2)).toHaveAccessibleName("Risks");
 
     await surfaceOf(page).locator('[data-lucid-id="hostile-pick"]').click();
     await expect(on(page).annotationNote()).toBeVisible();

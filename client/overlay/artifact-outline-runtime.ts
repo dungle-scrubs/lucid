@@ -640,6 +640,15 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
             complete: false,
             reason: "fewer-than-two-headings",
           };
+    if (!proof.complete && proof.reason === "layout-unsettled") {
+      this.#publishUnavailable(
+        request,
+        work,
+        proof.reason,
+        health("AO-003", this.#generation, proof.reason),
+      );
+      return;
+    }
     this.#activeKey =
       projection.kind === "complete"
         ? activeOutlineKey(

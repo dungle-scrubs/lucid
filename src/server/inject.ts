@@ -92,7 +92,7 @@ installOverlay:(element)=>{if(element!==ownedOverlay||ownedSealed)return;install
 isConnected:(element)=>apply(nodeConnected,element,[]),isLightDom:(element)=>apply(nodeRoot,element,[])===document,
 isOwned:(element)=>apply(weakSetHas,ownedElements,[element]),
 overlayRoot:()=>ownedRoot,
-isSettled:()=>{const images=from(apply(documentQuery,document,["img"]));return(!fontStatus||apply(fontStatus,fonts,[])==="loaded")&&images.every(image=>apply(imageComplete,image,[]))},
+isSettled:()=>{const images=from(apply(documentQuery,document,["img"]));return apply(documentReady,document,[])==="complete"&&(!fontStatus||apply(fontStatus,fonts,[])==="loaded")&&images.every(image=>apply(imageComplete,image,[]))},
 now:clock,
 observeMutations:(callback)=>{const observer=new TrustedMutationObserver(callback),root=apply(documentRoot,document,[]);if(root)apply(mutationObserve,observer,[root,{attributes:true,characterData:true,childList:true,subtree:true}]);return()=>apply(mutationDisconnect,observer,[])},
 observeResize:(callback)=>{const observer=new TrustedResizeObserver(callback),root=apply(documentRoot,document,[]),body=apply(documentBody,document,[]);if(root)apply(resizeObserve,observer,[root]);if(body)apply(resizeObserve,observer,[body]);return()=>apply(resizeDisconnect,observer,[])},

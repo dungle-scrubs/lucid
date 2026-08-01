@@ -530,9 +530,13 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
         pseudoContent: () => ({ after: fixture.pseudo ?? "none", before: "none" }),
         settled: fixture.settled,
       });
-      expect(complete([main, hazard], custom)).toMatchObject({
+      const publication = complete([main, hazard], custom);
+      expect(publication).toMatchObject({
         proof: { complete: false, reason: fixture.reason },
       });
+      if (fixture.reason === "layout-unsettled") {
+        expect(publication).toMatchObject({ availability: "absent", headings: [] });
+      }
     }
   });
 
