@@ -16,6 +16,7 @@ import type { SessionPaths } from "./paths.ts";
 const ROUTES: Partial<Record<LogEventType, string>> = {
   agent_reply: "/__lucid/reply",
   agent_ack: "/__lucid/ack",
+  agent_turn_ended: "/__lucid/turn-ended",
   question: "/__lucid/question",
   session_ended: "/__lucid/end",
 };

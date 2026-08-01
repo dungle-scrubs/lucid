@@ -17,7 +17,7 @@
  * filename, a customer's name - would ride along with the sentence into both
  * (D-005: records carry identifiers and outcomes, never content).
  */
-export type UsageLimitKind = "usage-limit" | "session-limit" | "credits" | "quota";
+export type UsageLimitKind = "usage-limit" | "session-limit" | "weekly-limit" | "credits" | "quota";
 
 /** The condition in Lucid's own words, framed by each consumer ("Delivery is
  *  paused: the attending harness is …", "The stub harness is …"). One place,
@@ -25,6 +25,7 @@ export type UsageLimitKind = "usage-limit" | "session-limit" | "credits" | "quot
 export const USAGE_LIMIT_WORDING: Readonly<Record<UsageLimitKind, string>> = {
   "usage-limit": "over its usage limit",
   "session-limit": "over its session limit",
+  "weekly-limit": "over its weekly usage limit",
   credits: "out of credits",
   quota: "over its provider quota",
 };
@@ -34,6 +35,8 @@ const LIMIT_PATTERNS: ReadonlyArray<readonly [RegExp, UsageLimitKind]> = [
   [/you'?ve hit your usage limit/i, "usage-limit"],
   // claude code: "You've hit your session limit · resets 6:30pm"
   [/you'?ve hit your session limit/i, "session-limit"],
+  // claude code: "You've hit your weekly limit · resets 2am (Asia/Bangkok)"
+  [/you'?ve hit your weekly limit/i, "weekly-limit"],
   [/usage limit (?:reached|exceeded)/i, "usage-limit"],
   // credit-metered plans (codex names credits explicitly)
   [/purchase more credits|insufficient credits|out of credits/i, "credits"],

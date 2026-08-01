@@ -67,8 +67,10 @@ matrices, anything the human will want to mark up at the element or phrase level
      emphasis). Plain prose still reads as plain prose.
    - **Section permalink.** To point the reviewer straight at a section you just
      added, give that section a unique `data-lucid-id` and link to it from the
-     reply as `[label](lucid:section/<id>)`. The viewer renders it as a chip that
-     scrolls the artifact to the section on click. It is **ephemeral by design**:
+     reply as `[label](lucid:section/<id>)`. If the newly added section is already
+     in the artifact viewport, the viewer pulses it and leaves the reply text
+     inline. If it is offscreen, the viewer renders a chip that scrolls to and
+     pulses the section on click. It is **ephemeral by design**:
      the chip is live only while that `data-lucid-id` still exists in the current
      version and degrades to plain text once a later revision drops it - a
      one-time "here it is", not a durable anchor.
@@ -262,12 +264,11 @@ command that resumes its conversation (including any autonomy flag, e.g.
 and re-summon the original conversation themselves. It is display data only:
 Lucid never executes it, and re-invocation stays external (D-064).
 
-## Model and effort selection - additive
+## Harness, model, and effort selection - additive
 
-The human picks which **model** and **effort/reasoning level** an artifact's
-UNATTENDED turns run on. The vocabulary is per harness and comes from the
-harness registry ([LAUNCHER.md](LAUNCHER.md)); Lucid never invents a model name
-or an effort level.
+The human picks which **harness**, **model**, and **effort/reasoning level** an
+artifact's UNATTENDED turns run on. The vocabulary comes from the harness
+registry ([LAUNCHER.md](LAUNCHER.md)); Lucid never invents any of these names.
 
 The pick sticks to the artifact in `.lucid/<name>/run/selection.json`:
 
@@ -292,14 +293,15 @@ Three surfaces carry it, all additive:
   efforts?, defaultEffort? }]` beside the unchanged `harnesses: string[]`.
   Each `models[]` entry is `{ id, label?, efforts? }`.
 - `GET|POST {base}/__lucid/selection` reads and writes the artifact's own
-  pick. `POST { model?, effort? }` validates against the registry (`400 {
-  error }` when the harness cannot run it) and answers with the current state.
+  pick. `POST { harness?, model?, effort? }` validates against the registry
+  (`400 { error }` when the harness cannot run it) and answers with the current state.
   A POST **replaces the whole selection**, so send both fields - `POST
   { "effort": "high" }` clears `model`. A parsed body with no usable fields
   (`{}`, or `"default"` in both) clears the pick; a body that is not a JSON
   object is a `400`, never a clear. Both methods answer
-  `{ harness?, selection: { harness?, model?, effort? }, info? }`, where `info`
-  is that harness's `harnessInfo` entry so a picker can render without a hub.
+  `{ harness?, selection: { harness?, model?, effort? }, info?, harnesses? }`,
+  where `info` is the selected harness's `harnessInfo` entry and `harnesses`
+  lists every configured continuation target, so the pickers render without a hub.
   A `selection` SSE frame carries the same object to other open windows, and
   `/__lucid/state` carries the current `selection` alongside `lastAttendant`.
 
@@ -308,6 +310,20 @@ the turn runs on THAT session's settings, so a pick would be ignored. Export
 `LUCID_MODEL` / `LUCID_EFFORT` alongside `LUCID_HARNESS` / `LUCID_SESSION_ID`
 and the `attendant` stamp carries them (`{ harness, sessionId?, cwd?, model?,
 effort? }`); the viewer displays them, subdued, in place of the pickers.
+
+**Changing harness is a handoff, not a resume.** The next pending batch starts
+the target recipe's `spawn` command with a fresh session id. Its prompt points
+to the current artifact and the complete append-only Lucid log, which contains
+the shared transcript, annotations, replies, questions, answers, and versions.
+It cannot transfer private context or tool traces held only by the source
+harness. The target's provenance stamp becomes the latest session-history
+record, so later unattended turns use its `resume` recipe. A handoff away from
+a usage-limited harness bypasses that harness's delivery cooldown.
+
+**Usage limits end the turn in chat.** A recognized harness limit produces a
+durable `agent_turn_ended` event with `reason: "usage_limit"` and a stable code
+such as `weekly_limit`. The chat explains why the agent stopped and that the
+feedback can continue after reset or through another configured harness.
 
 ## Context-window usage (`lucid context`)
 
@@ -389,4 +405,3 @@ not recognise is reported rather than ignored.
 
 The flag governs internal narration only. The request records above are
 baseline evidence and are never gated by it.
-
