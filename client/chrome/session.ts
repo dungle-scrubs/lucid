@@ -105,7 +105,11 @@ export const createSession = (config: SessionConfig): SessionHandle => {
    * fired before a pick lands after it.
    */
   const applySelection = (r: SelectionResponse): void => {
-    set({ selection: r.selection, selectionInfo: r.info ?? null });
+    set({
+      selection: r.selection,
+      selectionHarnesses: r.harnesses ?? [],
+      selectionInfo: r.info ?? null,
+    });
   };
 
   /** Read once per (re)connect: a registry edited while this tab was open would

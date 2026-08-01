@@ -19,6 +19,7 @@
 const USAGE_LIMIT_WORDING: Readonly<Record<string, string>> = {
   "usage-limit": "over its usage limit",
   "session-limit": "over its session limit",
+  "weekly-limit": "over its weekly usage limit",
   credits: "out of credits",
   quota: "over its provider quota",
 };

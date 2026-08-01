@@ -424,6 +424,8 @@ export interface SessionState {
   /** The artifact's sticky model/effort: what every UNATTENDED turn runs on.
    *  Empty = nothing picked, so the harness CLI decides. */
   selection: SelectionState;
+  /** Every configured harness that can take over the next unattended turn. */
+  selectionHarnesses: readonly HarnessInfo[];
   /** The vocabulary those picks are made in, from the artifact's own harness
    *  recipe. Null = no recipe (or a server that predates the route), which is
    *  what suppresses the pickers entirely. */
@@ -461,6 +463,13 @@ export interface SessionState {
    *  while null (optimistic) or present, and degrades to plain text once the
    *  set is known and the id is absent. */
   sectionIds: readonly string[] | null;
+  /** Stable ids added by the newest live version and whether they were already
+   *  visible when that version landed. Empty on boot and on versions with no
+   *  newly-addressable section. */
+  addedSectionVisibility: Readonly<Record<string, boolean>>;
+  /** Visible additions already pulsed for the current version. The action
+   *  guards this synchronously so React effect replay cannot restart it. */
+  emphasizedSectionIds: ReadonlySet<string>;
   hoveredId: string | null;
   diffMode: boolean;
   diffData: DiffData | null;
@@ -552,6 +561,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     resumable: false,
     contextUsage: null,
     selection: {},
+    selectionHarnesses: [],
     selectionInfo: null,
     live: true,
     streamRetries: 0,
@@ -562,6 +572,8 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     focusAll: storage.readFocusAll(),
     focusedId: null,
     sectionIds: null,
+    addedSectionVisibility: {},
+    emphasizedSectionIds: new Set(),
     hoveredId: null,
     diffMode: false,
     diffData: null,
