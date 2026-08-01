@@ -415,7 +415,10 @@ export class LucidOverlay extends LitElement {
    * Only the standard tokens are declared. An artifact's own extra variables,
    * and anything it derives from these, follow automatically.
    */
+  private requestedTheme: "light" | "dark" = "light";
+
   private applyTheme(theme: "light" | "dark"): void {
+    this.requestedTheme = theme;
     // An artifact with NO dark form must not be forced into one. Declaring
     // `color-scheme: dark` flips the browser's own canvas to near-black while
     // the document's hardcoded ink stays dark - dark text on a dark ground,
@@ -446,6 +449,11 @@ export class LucidOverlay extends LitElement {
       }
     `,
     );
+  }
+
+  /** Re-evaluate the reader's choice after a live swap installs new styles. */
+  private reapplyTheme(): void {
+    this.applyTheme(this.requestedTheme);
   }
 
   /**
@@ -1093,8 +1101,12 @@ export class LucidOverlay extends LitElement {
     parsed.head.querySelectorAll('link[rel="stylesheet"]').forEach((s) => {
       const clone = document.importNode(s, true);
       clone.setAttribute("data-lucid-artifact-style", "true");
+      clone.addEventListener("load", () => this.reapplyTheme(), { once: true });
       document.head.appendChild(clone);
     });
+    // New inline sheets are ready now. Linked sheets re-run this on load above,
+    // so a dark-capable artifact is not pinned light by an early capability check.
+    this.reapplyTheme();
     this.scheduleReposition();
     const currentIds = new Set(
       Array.from(document.querySelectorAll("[data-lucid-id]"))
