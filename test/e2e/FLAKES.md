@@ -80,6 +80,12 @@ is a different problem with a different fix.
   incident, so whatever this is, it is not general instability under load. The
   test landed in M4.1 (#68) and flaked on the next full run after it.
 - **Plan-db:** finding #49.
+- **Resolved:** the tab activation path queued composer focus with
+  `requestAnimationFrame`. If the palette opened before that frame, the stale
+  callback stole focus from the palette input. The callback now yields while
+  the palette is open, and the input owns mount-time focus with `autoFocus`.
+  The exact test reproduced 7 failures during an interrupted 20-run baseline,
+  then passed 20/20 after the fix.
 
 ## Not a flake: the orphan the teardown reports
 
