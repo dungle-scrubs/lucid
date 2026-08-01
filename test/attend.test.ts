@@ -606,7 +606,7 @@ describe("hub attend mode", () => {
     // per-test budget is not enough on a cold bun.
   }, 20_000);
 
-  test("a usage-limited turn stands down naming the pattern, not the harness's line", async () => {
+  test("a usage-limited turn ends in chat and stands down after one attempt", async () => {
     // A harness prints its wall on the same line as whatever it was working
     // on. Both consumers of a detection are RETAINED records - the hub log and
     // the viewer's warning - so the line itself can reach neither (D-005).
@@ -614,7 +614,7 @@ describe("hub attend mode", () => {
     const walledStub = join(dir, "stub-walled.ts");
     await writeFile(
       walledStub,
-      `console.log(${JSON.stringify(`You've hit your session limit · resets 6:30pm ${sentinel}`)});\nprocess.exit(1);\n`,
+      `console.log(${JSON.stringify(`You've hit your weekly limit · resets 2am (Asia/Bangkok) ${sentinel}`)});\nprocess.exit(1);\n`,
     );
     await writeFile(
       harnessesPath,
@@ -648,18 +648,26 @@ describe("hub attend mode", () => {
     const deliveries = (): number => logs.filter((l) => l.includes("delivering feedback")).length;
     try {
       const deadline = Date.now() + 10_000;
-      while (Date.now() < deadline && warnings.length === 0) {
+      let ended: LogEvent | undefined;
+      while (Date.now() < deadline && ended === undefined) {
         await attendant.tick();
         await sleep(120);
+        ended = (await readEvents(paths.logPath)).events.find(
+          (event) => event.t === "agent_turn_ended" && event.reason === "usage_limit",
+        );
       }
-      // The CODE, not a sentence. The viewer owns the wording
-      // (client/chrome/warnings.ts), which is what makes this a warning the
-      // client renders in its own voice - and what keeps the harness's own
-      // line out of a retained log (07#13).
-      expect(warnings).toEqual([{ code: "HARNESS_USAGE_LIMIT", message: "session-limit" }]);
+      if (ended === undefined) {
+        throw new Error(
+          `no usage-limit turn end\nlogs=${JSON.stringify(logs)}\nevents=${JSON.stringify((await readEvents(paths.logPath)).events)}\noutput=${await readFile(paths.attendLog, "utf8").catch(() => "<missing>")}`,
+        );
+      }
+      expect(ended).toMatchObject({ reason: "usage_limit", code: "weekly_limit" });
+      // This is now part of the durable chat state, not a duplicate transient
+      // warning below the conversation.
+      expect(warnings).toEqual([]);
       // The identifier is what the hub log holds, and the harness's own words
       // are still on disk - so this cannot pass by never having read them.
-      expect(logs.some((l) => l.includes("session-limit"))).toBe(true);
+      expect(logs.some((l) => l.includes("weekly-limit"))).toBe(true);
       expect(logs.some((l) => l.includes(sentinel))).toBe(false);
       expect(await readFile(paths.attendLog, "utf8")).toContain(sentinel);
       // A wall is not a flake: one turn, then the cool-off holds the mount off.
@@ -1192,6 +1200,9 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
   model: process.env.LUCID_MODEL ?? null,
   effort: process.env.LUCID_EFFORT ?? null,
 }));
+if (process.env.LUCID_HARNESS === "codex") {
+  console.log(JSON.stringify({ type: "thread.started", thread_id: "codex-thread-from-output" }));
+}
 `,
     );
     await chmod(scriptPath, 0o755);
@@ -1237,6 +1248,13 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
             models: [{ id: "opus-5", label: "Opus 5" }, { id: "sonnet-5" }],
             defaultModel: "opus-5",
             efforts: ["low", "medium", "high", "xhigh", "max"],
+          },
+          codex: {
+            spawn: [createStub, "{id}", "{artifact}", "{prompt}"],
+            resume: [attendStub, "{id}", "{artifact}", "{prompt}"],
+            models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+            defaultModel: "gpt-5.6-sol",
+            efforts: ["medium", "high", "xhigh", "max", "ultra"],
           },
         },
       }),
@@ -1303,6 +1321,25 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
     expect(body.info?.models?.map((m) => m.id)).toEqual(["opus-5", "sonnet-5"]);
     expect(body.info?.defaultModel).toBe("opus-5");
     expect(body.info?.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(body.harnesses?.map((harness) => harness.name)).toEqual(["claude-code", "codex"]);
+  });
+
+  test("POST /__lucid/selection switches the vocabulary to another harness", async () => {
+    const hub = await startDaemon();
+    await mount(hub);
+    const switched = await req(hub.port, selectionUrl(), {
+      method: "POST",
+      body: JSON.stringify({ harness: "codex", model: "gpt-5.6-sol", effort: "xhigh" }),
+    });
+    expect(switched.status).toBe(200);
+    const body = (await switched.json()) as SelectionResponse;
+    expect(body.harness).toBe("codex");
+    expect(body.info?.defaultModel).toBe("gpt-5.6-sol");
+    expect(body.selection).toEqual({
+      harness: "codex",
+      model: "gpt-5.6-sol",
+      effort: "xhigh",
+    });
   });
 
   test("POST /__lucid/selection round-trips, and clearing it restores the CLI's defaults", async () => {
@@ -1460,7 +1497,7 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
       harnesses: string[];
       harnessInfo: HarnessInfo[];
     };
-    expect(body.harnesses).toEqual(["claude-code"]);
+    expect(body.harnesses).toEqual(["claude-code", "codex"]);
     expect(body.harnessInfo).toEqual([
       {
         name: "claude-code",
@@ -1468,6 +1505,102 @@ await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
         defaultModel: "opus-5",
         efforts: ["low", "medium", "high", "xhigh", "max"],
       },
+      {
+        name: "codex",
+        models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+        defaultModel: "gpt-5.6-sol",
+        efforts: ["medium", "high", "xhigh", "max", "ultra"],
+      },
     ]);
   });
+
+  test("switching harness starts a fresh session with the full Lucid record", async () => {
+    const hub = await startDaemon();
+    await mount(hub);
+    await appendEvent(paths.logPath, {
+      t: "agent_reply",
+      id: "prior-reply",
+      text: "The earlier answer that the next harness must inherit.",
+      attendant: { harness: "claude-code", sessionId: "sess-1", cwd: paths.artifactDir },
+    });
+    const switched = await req(hub.port, selectionUrl(), {
+      method: "POST",
+      body: JSON.stringify({ harness: "codex", model: "gpt-5.6-sol", effort: "high" }),
+    });
+    expect(switched.status).toBe(200);
+    await annotate("continue this with codex");
+
+    const marker = await readMarker(createMarker, 10_000);
+    const handoffSessionId = marker.sessionId as string;
+    expect(marker.harness).toBe("codex");
+    expect(handoffSessionId).not.toBe("sess-1");
+    expect(marker.model).toBe("gpt-5.6-sol");
+    expect(marker.effort).toBe("high");
+    const argv = marker.argv as string[];
+    expect(argv.join("\n")).toContain(paths.logPath);
+    expect(argv.join("\n")).toContain("full Lucid review record");
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.sessionHistory.at(-1)).toMatchObject({
+      harness: "codex",
+      sessionId: "codex-thread-from-output",
+    });
+
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a2",
+      version: 1,
+      target: elementTarget,
+      note: "a second turn on the exact codex thread",
+    });
+    const resumed = await readMarker(attendMarker, 10_000);
+    expect(resumed.argv as string[]).toContain("codex-thread-from-output");
+  }, 20_000);
+
+  test("switching harness bypasses the usage-limited harness's cooldown", async () => {
+    const limited = join(dir, "limited-claude");
+    const codex = join(dir, "codex-create");
+    await writeFile(
+      limited,
+      '#!/bin/sh\necho "You\'ve hit your weekly limit - resets 2am" >&2\nexit 1\n',
+    );
+    await chmod(limited, 0o755);
+    await writeExecStub(codex, createMarker);
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "claude-code",
+        harnesses: {
+          "claude-code": {
+            spawn: [limited, "{prompt}"],
+            resume: [limited, "{prompt}"],
+          },
+          codex: {
+            spawn: [codex, "{id}", "{artifact}", "{prompt}"],
+            resume: [codex, "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+
+    const hub = await startDaemon();
+    await mount(hub);
+    await annotate("continue despite the old harness limit");
+    const limitedBy = Date.now() + 10_000;
+    let hitLimit = false;
+    while (Date.now() < limitedBy && !hitLimit) {
+      hitLimit = (await readEvents(paths.logPath)).events.some(
+        (event) => event.t === "agent_turn_ended" && event.reason === "usage_limit",
+      );
+      if (!hitLimit) await sleep(50);
+    }
+    expect(hitLimit).toBe(true);
+
+    const switched = await req(hub.port, selectionUrl(), {
+      method: "POST",
+      body: JSON.stringify({ harness: "codex" }),
+    });
+    expect(switched.status).toBe(200);
+    const marker = await readMarker(createMarker, 10_000);
+    expect(marker.harness).toBe("codex");
+  }, 20_000);
 });
