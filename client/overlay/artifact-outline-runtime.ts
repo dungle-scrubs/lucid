@@ -167,6 +167,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #cancelQuiet: (() => void) | null = null;
   #connected = true;
   #elementsByKey = new Map<string, ElementType>();
+  #elementKeys = new WeakMap<object, string>();
   #generation = 0;
   #health: OutlineHealth | null = null;
   #examinedTextCodeUnits = 0;
@@ -182,6 +183,8 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #proofReason = "not-requested";
   #request: OutlineLayoutRequest | null = null;
   readonly #rateGate = createOutlineRateGate();
+  #keyEpoch = 0;
+  #nextElementKey = 0;
   #scheduleVersion = 0;
   #taskCount = 0;
 
@@ -219,6 +222,9 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#withdrawProjection("revision");
     this.#clearPendingSnapshot();
     this.#generation += 1;
+    this.#keyEpoch += 1;
+    this.#nextElementKey = 0;
+    this.#elementKeys = new WeakMap<object, string>();
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#elementsByKey.clear();
     this.invalidate("revision");
@@ -354,6 +360,16 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
 
   #withinTime(work: WorkState): boolean {
     return this.#dependencies.now() - work.startedAt <= ARTIFACT_OUTLINE_POLICY.proofTimeBudgetMs;
+  }
+
+  #keyFor(element: ElementType): string {
+    const identity = element.nativeElement ?? element;
+    const existing = this.#elementKeys.get(identity);
+    if (existing !== undefined) return existing;
+    this.#nextElementKey += 1;
+    const key = `ao-${this.#keyEpoch}-${this.#nextElementKey}`;
+    this.#elementKeys.set(identity, key);
+    return key;
   }
 
   #clearPendingSnapshot(): void {
@@ -574,9 +590,9 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       }
     }
 
-    const keyed = eligible.map((element, index) => ({
+    const keyed = eligible.map((element) => ({
       element,
-      input: { key: `ao-${this.#generation}-${index + 1}`, text: element.text },
+      input: { key: this.#keyFor(element), text: element.text },
     }));
     const projection = projectOutlineHeadings(
       this.#generation,

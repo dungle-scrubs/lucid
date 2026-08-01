@@ -7,6 +7,8 @@ import {
   projectOutlineHeadings,
   reduceOutlinePresentation,
   resolveOutlineActivation,
+  type OutlinePresentationMode,
+  type OutlinePresentationState,
   validateOutlineSnapshot,
 } from "../client/shared/artifact-outline.ts";
 import { validateOutlinePrivateInbound } from "../client/shared/protocol.ts";
@@ -169,10 +171,11 @@ describe("artifact outline protocol bounds", () => {
     expect(snapshot).not.toBeNull();
     if (snapshot === null) return;
     expect(
-      reduceOutlinePresentation({ mode: "PINNED" }, projectionEvent(snapshot.proof)).mode,
+      reduceOutlinePresentation({ mode: "PINNED" }, projectionEvent(snapshot.proof)).state.mode,
     ).toBe("PINNED");
     expect(
-      reduceOutlinePresentation({ mode: "TRANSIENT_CLOSED" }, projectionEvent(snapshot.proof)).mode,
+      reduceOutlinePresentation({ mode: "TRANSIENT_CLOSED" }, projectionEvent(snapshot.proof)).state
+        .mode,
     ).toBe("TRANSIENT_CLOSED");
   });
 });
@@ -184,6 +187,8 @@ const projectionEvent = (proof: { readonly clearancePx: number; readonly complet
 });
 
 describe("artifact outline presentation state machine", () => {
+  const state = (mode: OutlinePresentationMode): OutlinePresentationState =>
+    mode === "TRANSIENT_LATCHED" ? { latchOrigin: "user", mode } : { mode };
   const projection = (headingCount: number, clearancePx: number, complete = true) => ({
     type: "projection" as const,
     headingCount,
@@ -237,7 +242,7 @@ describe("artifact outline presentation state machine", () => {
       "PINNED",
     ],
   ] as const)("%s", (_name, mode, event, expected) => {
-    expect(reduceOutlinePresentation({ mode }, event).mode).toBe(expected);
+    expect(reduceOutlinePresentation(state(mode), event).state.mode).toBe(expected);
   });
 
   test("every state becomes absent below two headings", () => {
@@ -248,7 +253,7 @@ describe("artifact outline presentation state machine", () => {
       "TRANSIENT_HOVER",
       "TRANSIENT_LATCHED",
     ] as const) {
-      expect(reduceOutlinePresentation({ mode }, projection(1, 20)).mode).toBe("ABSENT");
+      expect(reduceOutlinePresentation(state(mode), projection(1, 20)).state.mode).toBe("ABSENT");
     }
   });
 
@@ -260,27 +265,46 @@ describe("artifact outline presentation state machine", () => {
       "TRANSIENT_HOVER",
       "TRANSIENT_LATCHED",
     ] as const) {
-      expect(reduceOutlinePresentation({ mode }, { type: "invalidate" }).mode).toBe("ABSENT");
+      expect(reduceOutlinePresentation(state(mode), { type: "invalidate" }).state.mode).toBe(
+        "ABSENT",
+      );
     }
   });
 
   test("invalidation requests focus handoff before removing a focused control", () => {
     expect(
       reduceOutlinePresentation({ mode: "PINNED" }, { type: "invalidate", focusInside: true }),
-    ).toEqual({ effects: ["focus-surface"], mode: "ABSENT" });
+    ).toEqual({ effects: ["focus-surface"], state: { mode: "ABSENT" } });
+  });
+
+  test("records whether a latch came from the user or a focused gutter loss", () => {
+    expect(
+      reduceOutlinePresentation({ mode: "PINNED" }, { ...projection(2, 7), focusInside: true }),
+    ).toEqual({ state: { latchOrigin: "gutter", mode: "TRANSIENT_LATCHED" } });
+    expect(reduceOutlinePresentation({ mode: "TRANSIENT_HOVER" }, { type: "latch" })).toEqual({
+      state: { latchOrigin: "user", mode: "TRANSIENT_LATCHED" },
+    });
+    expect(
+      reduceOutlinePresentation(
+        { latchOrigin: "gutter", mode: "TRANSIENT_LATCHED" },
+        { ...projection(2, 12), type: "interaction-finished" },
+      ),
+    ).toEqual({ state: { mode: "PINNED" } });
   });
 
   test("the four-pixel hysteresis band retains pinned at 8px but requires 12px to enter", () => {
-    expect(reduceOutlinePresentation({ mode: "PINNED" }, projection(2, 8)).mode).toBe("PINNED");
-    expect(reduceOutlinePresentation({ mode: "PINNED" }, projection(2, 7)).mode).toBe(
-      "TRANSIENT_CLOSED",
-    );
-    expect(reduceOutlinePresentation({ mode: "TRANSIENT_CLOSED" }, projection(2, 11)).mode).toBe(
-      "TRANSIENT_CLOSED",
-    );
-    expect(reduceOutlinePresentation({ mode: "TRANSIENT_CLOSED" }, projection(2, 12)).mode).toBe(
+    expect(reduceOutlinePresentation({ mode: "PINNED" }, projection(2, 8)).state.mode).toBe(
       "PINNED",
     );
+    expect(reduceOutlinePresentation({ mode: "PINNED" }, projection(2, 7)).state.mode).toBe(
+      "TRANSIENT_CLOSED",
+    );
+    expect(
+      reduceOutlinePresentation({ mode: "TRANSIENT_CLOSED" }, projection(2, 11)).state.mode,
+    ).toBe("TRANSIENT_CLOSED");
+    expect(
+      reduceOutlinePresentation({ mode: "TRANSIENT_CLOSED" }, projection(2, 12)).state.mode,
+    ).toBe("PINNED");
   });
 });
 

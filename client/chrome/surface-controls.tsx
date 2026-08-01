@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { ArtifactOutline } from "./artifact-outline.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { SurfaceUpdating } from "./Surface.tsx";
 import { Button } from "./ui/button.tsx";
@@ -105,8 +106,10 @@ export const SurfaceControls = (props: SurfaceControlsProps) => {
         ref={surface.attachOutlineSlot}
         data-test="surface-outline-slot"
         style={slotStyle}
-        className="pointer-events-none mt-2 min-h-0 w-[240px] flex-1 overflow-y-auto"
-      />
+        className="pointer-events-none mt-2 flex min-h-0 w-[240px] flex-1 flex-col items-end overflow-y-auto"
+      >
+        <ArtifactOutline />
+      </div>
     </div>
   );
 };

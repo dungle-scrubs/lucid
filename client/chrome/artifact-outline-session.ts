@@ -12,11 +12,13 @@ export type OutlineHealthRecord = OutlineDiagnosticHealth;
 
 export interface OutlineStatePatch {
   readonly outlineHealth?: OutlineHealthRecord | null;
+  readonly outlinePending?: boolean;
   readonly outlineSnapshot?: OutlineSnapshot | null;
 }
 
 export interface OutlineStateView {
   readonly outlineHealth: OutlineHealthRecord | null;
+  readonly outlinePending: boolean;
   readonly outlineSnapshot: OutlineSnapshot | null;
 }
 
@@ -81,10 +83,16 @@ export const createChromeArtifactOutline = (
   let nextRevision = 0;
   let pendingRevision: number | null = null;
 
-  const clearProjection = (): void => {
+  const clearProjection = (pending = false): void => {
     const state = options.getState();
-    if (state.outlineHealth === null && state.outlineSnapshot === null) return;
-    options.setState({ outlineHealth: null, outlineSnapshot: null });
+    if (
+      state.outlineHealth === null &&
+      state.outlineSnapshot === null &&
+      state.outlinePending === pending
+    ) {
+      return;
+    }
+    options.setState({ outlineHealth: null, outlinePending: pending, outlineSnapshot: null });
   };
 
   const closePort = (): void => {
@@ -108,7 +116,7 @@ export const createChromeArtifactOutline = (
     lastLayoutKey = nextLayoutKey;
     requestGeneration += 1;
     rateGate = createOutlineRateGate();
-    clearProjection();
+    clearProjection(true);
     port.postMessage({
       ...layout,
       generation: requestGeneration,
@@ -138,6 +146,7 @@ export const createChromeArtifactOutline = (
       latestProjectionGeneration = message.generation;
       options.setState({
         outlineHealth: message.health,
+        outlinePending: false,
         outlineSnapshot: message.snapshot,
       });
       return;
@@ -160,7 +169,11 @@ export const createChromeArtifactOutline = (
 
     if (message.generation < latestProjectionGeneration) return;
     latestProjectionGeneration = message.generation;
-    options.setState({ outlineHealth: message.health, outlineSnapshot: null });
+    options.setState({
+      outlineHealth: message.health,
+      outlinePending: true,
+      outlineSnapshot: null,
+    });
   };
 
   const acceptPort = (candidate: OutlinePort): boolean => {

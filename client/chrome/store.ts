@@ -477,6 +477,9 @@ export interface SessionState {
   outlineSnapshot: OutlineSnapshot | null;
   /** Text-free AO diagnostics for the active projection boundary. */
   outlineHealth: OutlineHealthRecord | null;
+  /** A safe-slot refresh is in flight. The canonical snapshot is already
+   * cleared; focused presentation may wait briefly for its replacement. */
+  outlinePending: boolean;
   hoveredId: string | null;
   diffMode: boolean;
   diffData: DiffData | null;
@@ -522,6 +525,7 @@ export type SessionStore = StoreApi<SessionState>;
  * `useMemo` at the rendering boundary, never in a Zustand selector. */
 export const selectOutlineSnapshot = (state: SessionState) => state.outlineSnapshot;
 export const selectOutlineHealth = (state: SessionState) => state.outlineHealth;
+export const selectOutlinePending = (state: SessionState) => state.outlinePending;
 export const selectOutlineGeneration = (state: SessionState): number =>
   state.outlineSnapshot?.generation ?? state.outlineHealth?.generation ?? 0;
 export const selectOutlineHealthCode = (state: SessionState): string =>
@@ -592,6 +596,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     emphasizedSectionIds: new Set(),
     outlineSnapshot: null,
     outlineHealth: null,
+    outlinePending: false,
     hoveredId: null,
     diffMode: false,
     diffData: null,

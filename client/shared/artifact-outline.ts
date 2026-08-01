@@ -232,9 +232,15 @@ export type OutlinePresentationMode =
   | "TRANSIENT_HOVER"
   | "TRANSIENT_LATCHED";
 
-export interface OutlinePresentationState {
-  readonly mode: OutlinePresentationMode;
-}
+export type OutlinePresentationState =
+  | {
+      readonly mode: Exclude<OutlinePresentationMode, "TRANSIENT_LATCHED">;
+      readonly latchOrigin?: never;
+    }
+  | {
+      readonly mode: "TRANSIENT_LATCHED";
+      readonly latchOrigin: "gutter" | "user";
+    };
 
 export interface OutlineProof {
   readonly complete: boolean;
@@ -262,12 +268,14 @@ export type OutlinePresentationEvent =
   | { readonly type: "dismiss" };
 
 export interface OutlinePresentationResult {
-  readonly mode: OutlinePresentationMode;
+  readonly state: OutlinePresentationState;
   readonly effects?: readonly ["focus-surface"];
 }
 
 const leaveForAbsent = (focusInside: boolean): OutlinePresentationResult =>
-  focusInside ? { effects: ["focus-surface"], mode: "ABSENT" } : { mode: "ABSENT" };
+  focusInside
+    ? { effects: ["focus-surface"], state: { mode: "ABSENT" } }
+    : { state: { mode: "ABSENT" } };
 
 export const reduceOutlinePresentation = (
   state: OutlinePresentationState,
@@ -279,7 +287,7 @@ export const reduceOutlinePresentation = (
     if (event.headingCount < 2) return leaveForAbsent(event.focusInside === true);
 
     if (state.mode === "TRANSIENT_LATCHED" && event.type !== "interaction-finished") {
-      return { mode: "TRANSIENT_LATCHED" };
+      return { state };
     }
 
     const threshold =
@@ -287,31 +295,35 @@ export const reduceOutlinePresentation = (
         ? ARTIFACT_OUTLINE_POLICY.pinnedRetainClearancePx
         : ARTIFACT_OUTLINE_POLICY.pinnedEnterClearancePx;
     if (event.proof.complete && event.proof.clearancePx >= threshold) {
-      return { mode: "PINNED" };
+      return { state: { mode: "PINNED" } };
     }
     if (state.mode === "PINNED" && event.focusInside === true) {
-      return { mode: "TRANSIENT_LATCHED" };
+      return { state: { latchOrigin: "gutter", mode: "TRANSIENT_LATCHED" } };
     }
-    return { mode: "TRANSIENT_CLOSED" };
+    return { state: { mode: "TRANSIENT_CLOSED" } };
   }
 
   if (state.mode === "TRANSIENT_CLOSED") {
-    if (event.type === "hover-intent") return { mode: "TRANSIENT_HOVER" };
-    if (event.type === "latch") return { mode: "TRANSIENT_LATCHED" };
+    if (event.type === "hover-intent") return { state: { mode: "TRANSIENT_HOVER" } };
+    if (event.type === "latch") {
+      return { state: { latchOrigin: "user", mode: "TRANSIENT_LATCHED" } };
+    }
   }
   if (state.mode === "TRANSIENT_HOVER") {
-    if (event.type === "latch") return { mode: "TRANSIENT_LATCHED" };
+    if (event.type === "latch") {
+      return { state: { latchOrigin: "user", mode: "TRANSIENT_LATCHED" } };
+    }
     if (event.type === "pointer-leave" || event.type === "activate") {
-      return { mode: "TRANSIENT_CLOSED" };
+      return { state: { mode: "TRANSIENT_CLOSED" } };
     }
   }
   if (
     state.mode === "TRANSIENT_LATCHED" &&
     (event.type === "activate" || event.type === "dismiss")
   ) {
-    return { mode: "TRANSIENT_CLOSED" };
+    return { state: { mode: "TRANSIENT_CLOSED" } };
   }
-  return { mode: state.mode };
+  return { state };
 };
 
 export type OutlineRateChannel = "snapshot" | "active-key";

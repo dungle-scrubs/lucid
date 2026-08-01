@@ -38,7 +38,11 @@ const setup = () => {
     preferredWidth: 240,
     safeInsets: { bottom: 40, right: 30, top: 60 },
   };
-  let state: OutlineStateView = { outlineHealth: null, outlineSnapshot: null };
+  let state: OutlineStateView = {
+    outlineHealth: null,
+    outlinePending: false,
+    outlineSnapshot: null,
+  };
   const controller = createChromeArtifactOutline({
     getState: () => state,
     measureLayout: () => layout,
@@ -140,6 +144,7 @@ describe("active-session artifact outline bridge", () => {
     });
     expect(patches.at(-1)).toEqual({
       outlineHealth: { code: "AO-003", count: 3, generation: 8 },
+      outlinePending: true,
       outlineSnapshot: null,
     });
   });
@@ -176,7 +181,11 @@ describe("active-session artifact outline bridge", () => {
     controller.acceptPort(port);
     port.receive(completeSnapshot(1));
     controller.setActive(false);
-    expect(patches.at(-1)).toEqual({ outlineHealth: null, outlineSnapshot: null });
+    expect(patches.at(-1)).toEqual({
+      outlineHealth: null,
+      outlinePending: false,
+      outlineSnapshot: null,
+    });
     const count = patches.length;
     port.receive(completeSnapshot(1, 9));
     expect(patches).toHaveLength(count);
@@ -201,7 +210,11 @@ describe("active-session artifact outline bridge", () => {
 
     loseLayout();
     controller.setLayoutAvailable(false);
-    expect(patches.at(-1)).toEqual({ outlineHealth: null, outlineSnapshot: null });
+    expect(patches.at(-1)).toEqual({
+      outlineHealth: null,
+      outlinePending: false,
+      outlineSnapshot: null,
+    });
     const patchCount = patches.length;
     port.receive(completeSnapshot(1, 8));
     expect(patches).toHaveLength(patchCount);
@@ -231,6 +244,23 @@ describe("active-session artifact outline bridge", () => {
     expect(port.sent.at(-1)).toMatchObject({ generation: 3, type: "outline-layout-request" });
     port.receive(completeSnapshot(3, 9));
     expect(patches.at(-1)?.outlineSnapshot?.generation).toBe(9);
+  });
+
+  test("layout invalidation keeps the refresh pending until its replacement snapshot", () => {
+    const { controller, patches } = setup();
+    const port = new FakePort();
+    controller.acceptPort(port);
+    port.receive(completeSnapshot(1));
+    controller.requestLayout(true);
+    port.receive({
+      generation: 8,
+      health: { code: "AO-005", generation: 8, occurrenceCount: 1, reason: "layout-request" },
+      type: "outline-invalidated",
+    });
+    expect(patches.at(-1)?.outlinePending).toBe(true);
+
+    port.receive(completeSnapshot(2, 9));
+    expect(patches.at(-1)?.outlinePending).toBe(false);
   });
 
   test("a first private port supersedes a revision orphaned by the missing-artifact frame", () => {
