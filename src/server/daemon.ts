@@ -28,6 +28,7 @@ import { escapeHtml } from "../core/escape.ts";
 import { renderViewer, sseMaxBackoffFromEnv } from "./viewer.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
 import { projectRoot } from "../core/sessions.ts";
+import { swr } from "../core/swr.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
 import { detectAuthFailure, detectUsageLimit } from "../launch/limits.ts";
 import { readEvents } from "../core/log.ts";
@@ -399,7 +400,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     return title;
   };
 
-  const listHub = async (): Promise<HubSession[]> => {
+  const computeListing = async (): Promise<HubSession[]> => {
     const entries = await listAll(await scanRootSet(), registryPath);
     rememberIds(entries);
     return Promise.all(
@@ -418,6 +419,23 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       }),
     );
   };
+
+  /**
+   * The listing, served from the last answer while the next is computed.
+   *
+   * Every row of it is filesystem work - a walk of each root, a stat and a
+   * title read per record - so its cost is the machine's, not the hub's. Under
+   * a Time Machine copy plus an indexer plus a pegged core it measured 40s,
+   * and because the route awaited it, everything else queued behind: a message
+   * POST hit its 10s deadline and dropped into the composer's outbox, and
+   * `/hub/identity` - which touches nothing - took 16s. The listing is a query
+   * over slow-moving state, so a caller who can take a two-second-old answer
+   * should never wait on a disk.
+   */
+  const listing = swr(computeListing);
+  /** The listing for a READER: the freshest that exists, never a wait on I/O
+   *  when one exists at all. */
+  const listHub = (): Promise<HubSession[]> => listing.cached();
 
   /** Unmount a hosted session: close its streams/watchers and release the
    *  descriptor if it is ours. Appends nothing (suspend is the caller's call). */
@@ -687,7 +705,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // the shell reloads itself - a hub restart updates live windows instead
     // of leaving them on the old bundle.
     const stamp = devBundleStamp() ?? CLIENT_BUNDLE_HASH;
-    return JSON.stringify({ sessions: await listHub(), bundle: stamp });
+    // FRESH, unlike the HTTP route: a snapshot is broadcast because something
+    // changed - a session opened, a root was added - and a frame carrying the
+    // state before that change would be a shell told the news and shown the
+    // old world. It also warms the cache the route reads.
+    return JSON.stringify({ sessions: await listing.fresh(), bundle: stamp });
   };
 
   /** Fan one frame out to every shell window. A send that throws is a window
@@ -1297,6 +1319,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const chosen = await chooseFolder(body, "Choose a folder to scan for Lucid sessions");
     if ("res" in chosen) return chosen.res;
     await addRoot(chosen.dir, rootsPath);
+    // The listing's cached answer was computed for the OLD root set, so it is
+    // not stale here - it is wrong. Drop it: the next reader waits for a scan
+    // that includes what they just added, which is the whole point of adding it.
+    listing.invalidate();
     // ANSWER on the persist, do not wait on the scan (07#14). Scanning a home
     // directory was measured at ~16s, and the root is already saved before it
     // starts - so any client-side abort reported failure for an add that had

@@ -135,6 +135,35 @@ describe("hub daemon", () => {
    * or deleted" - a fabricated cause, delivered at the one moment a human is
    * most likely to be watching. The log knows which state this is, so it says.
    */
+  /**
+   * The listing is filesystem work, so its cost belongs to the machine rather
+   * than to Lucid: measured at 40s on a box running a backup, an indexer and a
+   * pegged core, with every other request queued behind it. The route serves
+   * the previous answer instead of waiting.
+   */
+  test("the session listing is served from cache, and a new session still appears", async () => {
+    const scanned = await seedSession("proj", "notes");
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+
+    const first = await get(daemon.port, "/hub/sessions");
+    expect(first.status).toBe(200);
+    const before = (await first.json()) as { sessions: Array<{ artifact: string }> };
+    expect(before.sessions.map((s) => s.artifact)).toEqual([scanned]);
+
+    // A second session appears on disk. The very next read may legitimately
+    // still be the cached answer - that IS the feature - but the listing must
+    // converge without anything restarting or re-scanning by hand.
+    const later = await seedSession("proj", "rollout");
+    let listed: string[] = [];
+    for (let i = 0; i < 100 && listed.length < 2; i++) {
+      const res = await get(daemon?.port ?? 0, "/hub/sessions");
+      const body = (await res.json()) as { sessions: Array<{ artifact: string }> };
+      listed = body.sessions.map((s) => s.artifact).sort();
+      if (listed.length < 2) await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(listed).toEqual([later, scanned].sort());
+  });
+
   test("the artifact stand-in tells the truth about WHY there is nothing to serve", async () => {
     const opened = await seedSession("proj", "notes"); // log has session_opened
     const fresh = join(root, "proj", "draft.html");
