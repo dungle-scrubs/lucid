@@ -318,7 +318,11 @@ the shared transcript, annotations, replies, questions, answers, and versions.
 It cannot transfer private context or tool traces held only by the source
 harness. The target's provenance stamp becomes the latest session-history
 record, so later unattended turns use its `resume` recipe. A handoff away from
-a usage-limited harness bypasses that harness's delivery cooldown.
+a failing harness bypasses that harness's delivery cooldown, whether the
+failure was recognized as a usage limit or exhausted the generic retry budget.
+If the artifact moved to another project, the next turn is also a fresh handoff
+rooted at the artifact's current project. This gives a sandboxed harness write
+access to the artifact instead of preserving a stale workspace root.
 
 **Usage limits end the turn in chat.** A recognized harness limit produces a
 durable `agent_turn_ended` event with `reason: "usage_limit"` and a stable code

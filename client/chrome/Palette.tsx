@@ -1,6 +1,6 @@
 import { Command } from "cmdk";
 import { matchScore } from "./list.ts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "zustand";
 import { addRoot, closeTab, setPaletteOpen, useHub } from "./hub.ts";
 import { projectName } from "./naming.ts";
@@ -76,7 +76,6 @@ export const addFolderStatus = (outcome: Awaited<ReturnType<typeof addRoot>>): s
 export const Palette = () => {
   const open = useHub((s) => s.paletteOpen);
   const activeKey = useShell((s) => s.activeKey);
-  const inputRef = useRef<HTMLInputElement>(null);
   /** The last thing the add-folder row has to say. Cleared on each open: a
    *  count from the previous pick would read as this one's. */
   const [added, setAdded] = useState<string | null>(null);
@@ -84,10 +83,7 @@ export const Palette = () => {
   const active = activeKey !== null ? getSession(activeKey) : undefined;
 
   useEffect(() => {
-    if (open) {
-      inputRef.current?.focus();
-      setAdded(null);
-    }
+    if (open) setAdded(null);
   }, [open]);
 
   if (!open) return null;
@@ -128,7 +124,7 @@ export const Palette = () => {
         className="relative w-[560px] max-w-[calc(100vw-48px)] border border-ink-500 bg-ink-800 shadow-[0_18px_50px_rgba(0,0,0,0.6)]"
       >
         <Command.Input
-          ref={inputRef}
+          autoFocus
           data-test="palette-input"
           placeholder="Jump to a session, or run a command…"
           className="w-full border-b border-ink-600 bg-bg-inset px-3 py-2.5 font-sans text-[13px] text-fg outline-none placeholder:text-fg-faint"

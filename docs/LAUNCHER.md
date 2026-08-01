@@ -136,7 +136,9 @@ target's `spawn` recipe with a fresh session id and tells it to read the current
 artifact plus the complete Lucid review log before applying pending feedback.
 Later turns use the target's `resume` recipe. This transfers Lucid's shared
 record, not private prompt context or tool traces that exist only inside the
-source harness.
+source harness. Any source-harness delivery cooldown is released by the switch.
+If the artifact moved to another project, Lucid starts a fresh session from the
+artifact's current project so a sandboxed harness can write it.
 
 For Codex, keep `--json` on `spawn` and `{id}` on `resume`. Lucid reads the
 `thread.started` event from the spawn output and records Codex's own thread id.

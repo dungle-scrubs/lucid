@@ -339,6 +339,9 @@ export const activateTab = (key: string): void => {
   // composer is where typing goes next; rAF waits for the view to show
   // (visibleEl, because every open tab's view stays mounted).
   requestAnimationFrame(() => {
+    // A palette opened after activation owns the keyboard. The callback was
+    // queued by the earlier tab click and must not steal focus one frame later.
+    if (useHub.getState().paletteOpen) return;
     visibleEl<HTMLTextAreaElement>('[data-test="message-input"]')?.focus();
   });
 };
