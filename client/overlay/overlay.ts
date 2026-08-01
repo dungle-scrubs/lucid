@@ -150,9 +150,9 @@ export class LucidOverlay extends LitElement {
   private showTargets = true;
   /** Focus minted by `reveal-annotation` (the palette jump, a card's keyboard
    *  open). A card HOVER is cleared by the card's own mouseleave, but a reveal
-   *  has no counterpart on the chrome side - and focus now paints a quiet sent
-   *  mark, so an uncleared reveal would pin that mark on forever while its
-   *  card still offers "Show in artifact". Transient by design: the first real
+   *  has no counterpart on the chrome side - and this glow also paints a quiet
+   *  sent mark, so an uncleared reveal would pin that mark on forever while its
+   *  card still offers "Focus". Transient by design: the first real
    *  pointer move that is not over the revealed mark ends it. */
   private revealFocusId: string | null = null;
   private hoverAnnotationId: string | null = null;
@@ -252,6 +252,17 @@ export class LucidOverlay extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
+      /* Optical centring, not geometric, and NOT inherited. align-items centres
+         the LINE BOX, whose height is the font's ascent plus descent - a digit
+         has no descender, so its ink hangs above the middle and the number
+         reads as high in the circle. Two parts, both measured rather than
+         reasoned: line-height 1 so the artifact's own leading cannot move the
+         baseline (this element inherits from the ARTIFACT's body, which can say
+         anything), and a 1px top pad for the residual. The chrome's numbered
+         chips carry the same pair. */
+      box-sizing: border-box;
+      line-height: 1;
+      padding-top: 1px;
       pointer-events: auto;
       cursor: pointer;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
@@ -1066,6 +1077,12 @@ export class LucidOverlay extends LitElement {
 }
 
 export const mountOverlay = (): void => {
+  // The artifact is here, so whatever the stand-in document was counting is
+  // over. It parks its retry backoff in the frame's name (the only thing that
+  // survives a reload on an opaque origin); clearing it here means a LATER gap
+  // starts asking again promptly instead of inheriting a maxed-out wait, and
+  // an artifact never sees a window name Lucid left behind.
+  if (window.name.startsWith("lucid-retry:")) window.name = "";
   if (!customElements.get("lucid-overlay")) {
     customElements.define("lucid-overlay", LucidOverlay);
   }

@@ -833,7 +833,7 @@ test("annotations on one element cascade instead of hiding each other", async ({
   await expect(on(page).annotation()).toHaveCount(2);
 
   // Sent marks are quiet by default; the header default brings them all back.
-  await on(page).toggleSentMarks().click();
+  await on(page).toggleFocusAll().click();
   await expect(surface.locator(".badge")).toHaveCount(2);
 
   // Same anchor -> same rect. Without a cascade both badges land on the same
@@ -1400,7 +1400,7 @@ test("the target toggle quiets the surface for reading and restores it", async (
   await on(page).addToQueue().click();
   await on(page).sendQueue().click();
   await expect(on(page).annotation()).toHaveCount(1);
-  await on(page).toggleMark().click();
+  await on(page).toggleFocus().click();
   await expect(marker).toHaveCount(1);
 
   // Read mode: marks gone, and clicking the artifact no longer picks a target -
@@ -1420,9 +1420,7 @@ test("the target toggle quiets the surface for reading and restores it", async (
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
 });
 
-test("a sent annotation's mark is quiet by default and comes back per card or all at once", async ({
-  page,
-}) => {
+test("focus is exclusive: one card at a time, or every card from the header", async ({ page }) => {
   await openViewer(page);
   const surface = surfaceOf(page);
   const marker = surface.locator(".marker.committed");
@@ -1449,35 +1447,54 @@ test("a sent annotation's mark is quiet by default and comes back per card or al
   await on(page).messageInput().hover();
   await expect(marker).toHaveCount(0);
 
-  // The second card's link pins only its own mark - which keeps its own
-  // number: hiding #1 must not renumber #2's badge off its card.
-  const link = on(page).toggleMark().nth(1);
-  await expect(link).toHaveText("Show in artifact");
-  await link.click();
-  await on(page).messageInput().hover(); // off the card, so focus is not what paints it
+  // Focusing the second card pins only its own mark - which keeps its own
+  // number: leaving #1 unfocused must not renumber #2's badge off its card.
+  const first = on(page).toggleFocus().nth(0);
+  const second = on(page).toggleFocus().nth(1);
+  await expect(second).toHaveText("Focus");
+  await second.click();
+  // Off the card entirely - pointer AND keyboard focus, since a card that holds
+  // either lights its mark on its own. What is left is what focus pinned.
+  await on(page).messageInput().click();
   await expect(badge).toHaveText(["2"]);
-  await expect(link).toHaveText("Hide in artifact");
+  await expect(second).toHaveText("Unfocus");
 
-  // The header default shows every sent mark at once...
-  await on(page).toggleSentMarks().click();
-  await expect(badge).toHaveText(["1", "2"]);
+  // Focus moves rather than accumulating: taking it releases the card that
+  // held it, so the artifact is only ever pointing at one thing.
+  await first.click();
+  await on(page).messageInput().click();
+  await expect(badge).toHaveText(["1"]);
+  await expect(second).toHaveText("Focus");
 
-  // ...and flipping it back also clears the per-card exception: the toggle
-  // means "hide all", not "hide all except what was once shown".
-  await on(page).toggleSentMarks().click();
+  // And the focused card gives it back, leaving nothing focused.
+  await first.click();
+  await on(page).messageInput().click();
   await expect(marker).toHaveCount(0);
-  await expect(link).toHaveText("Show in artifact");
+  await expect(first).toHaveText("Focus");
 
-  // The default is the session's remembered preference: still on after reload.
-  await on(page).toggleSentMarks().click();
+  // The header focuses every mark at once. No single card holds that focus,
+  // so each still offers to narrow the artifact down to itself.
+  await on(page).toggleFocusAll().click();
+  await expect(badge).toHaveText(["1", "2"]);
+  await expect(first).toHaveText("Focus");
+
+  // Taking one card's focus out of all-at-once leaves that card alone lit,
+  // and the header toggle says so.
+  await second.click();
+  await on(page).messageInput().click();
+  await expect(badge).toHaveText(["2"]);
+  await expect(on(page).toggleFocusAll()).toHaveAttribute("aria-pressed", "false");
+
+  // All-at-once is the session's remembered preference; a single focus is not.
+  await on(page).toggleFocusAll().click();
   await expect(marker).toHaveCount(2);
   await page.reload();
   await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
-  await expect(on(page).toggleSentMarks()).toHaveAttribute("aria-pressed", "true");
+  await expect(on(page).toggleFocusAll()).toHaveAttribute("aria-pressed", "true");
   await expect(surfaceOf(page).locator(".marker.committed")).toHaveCount(2);
 });
 
-test("the mark toggles cannot paint today's annotations onto a historical snapshot", async ({
+test("the focus toggles cannot paint today's annotations onto a historical snapshot", async ({
   page,
 }) => {
   await openViewer(page);
@@ -1501,18 +1518,16 @@ test("the mark toggles cannot paint today's annotations onto a historical snapsh
 
   // Both toggles stay clickable in history view, and each one pushes
   // highlights - neither push may land marks on the snapshot.
-  await on(page).toggleSentMarks().click();
-  await on(page).toggleMark().click();
+  await on(page).toggleFocusAll().click();
+  await on(page).toggleFocus().click(); // narrows all-at-once down to this card
   await overlaySettled(page);
   await expect(surface.locator(".marker.committed")).toHaveCount(0);
 
-  // Back to the live artifact, the same state paints: default on, and the
-  // card's link was flipped to hide while the snapshot was up.
+  // Back on the live artifact, the state built while the snapshot was up
+  // paints: all-at-once released, this one card focused.
   await on(page).versionViewExit().click();
   await expect(surface.locator("h1")).toContainText("revised");
-  await expect(on(page).toggleSentMarks()).toHaveAttribute("aria-pressed", "true");
-  await expect(surface.locator(".marker.committed")).toHaveCount(0); // the card override says hide
-  await on(page).toggleMark().click();
+  await expect(on(page).toggleFocusAll()).toHaveAttribute("aria-pressed", "false");
   await on(page).messageInput().hover();
   await expect(surface.locator(".marker.committed")).toHaveCount(1);
 });

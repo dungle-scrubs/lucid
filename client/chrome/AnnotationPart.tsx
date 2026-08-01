@@ -3,7 +3,6 @@ import type { Anchor } from "../../src/anchors/anchor.ts";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { DeliveryLabel } from "./Delivery.tsx";
 import { FoldedText } from "./FoldedText.tsx";
-import { sentMarkShown } from "./store.ts";
 import type { MessageImage } from "./types.ts";
 import { Kbd } from "./ui/kbd.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
@@ -62,11 +61,14 @@ export const TargetSnippet = ({ target }: { readonly target: Anchor }) => {
   );
 };
 
-const focus = (id: string): void => {
+/** The transient hover light - the mark glows while the pointer (or keyboard
+ *  focus) is on the card and goes out when it leaves. Distinct from the card's
+ *  Focus link, which pins the mark until something else takes the focus. */
+const lightMark = (id: string): void => {
   window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: id }));
 };
 
-/** Focus lights the mark; reveal also scrolls the surface to it. The keyboard
+/** Lighting shows the mark; reveal also scrolls the surface to it. The keyboard
  *  "open": a reader on the card who wants to look at the thing it points at. */
 const reveal = (id: string): void => {
   window.dispatchEvent(new CustomEvent("lucid:reveal-annotation", { detail: id }));
@@ -84,10 +86,13 @@ const reveal = (id: string): void => {
  * pointed at is still what the note is about.
  */
 export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data }) => {
-  const { setHovered, openLightbox, toggleSentMark } = useActions();
+  const { setHovered, openLightbox, toggleFocus } = useActions();
   const { transport } = useSessionHandle();
   const hovered = useSession((s) => s.hoveredId === data.id);
-  const markShown = useSession((s) => sentMarkShown(s, data.id));
+  // The card's own focus, not the header's all-at-once: with everything lit
+  // there is nothing for one card to release, so each still offers to narrow
+  // the artifact down to itself.
+  const focused = useSession((s) => s.focusedId === data.id);
   const images: readonly MessageImage[] = data.images ?? [];
   const orphaned = data.index === null;
   // Located, but only because something still occupies that slot. Saying
@@ -96,11 +101,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
   const positional = !orphaned && data.confidence === "low";
   const enter = (): void => {
     setHovered(data.id);
-    focus(data.id);
+    lightMark(data.id);
   };
   const leave = (): void => {
     setHovered(null);
-    focus("");
+    lightMark("");
   };
   return (
     // A labelled <section> rather than a div+role: it carries the region role
@@ -141,7 +146,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
       }`}
     >
       {orphaned ? null : (
-        <span className="absolute -top-px -left-px z-1 flex size-5 -translate-x-[33%] -translate-y-[33%] items-center justify-center rounded-full bg-accent text-[11px] font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
+        // leading-none + pt-px is optical centring, the pair the overlay's
+        // badge also carries: centring the line box leaves a descender-less
+        // digit sitting high in the circle, and pinning the leading keeps the
+        // correction from depending on whatever line-height it inherits.
+        <span className="absolute -top-px -left-px z-1 flex size-5 -translate-x-[33%] -translate-y-[33%] items-center justify-center rounded-full bg-accent pt-px text-[11px] leading-none font-bold tabular-nums text-on-accent shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
           {data.index}
         </span>
       )}
@@ -216,24 +225,29 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
           ))}
         </div>
       ) : null}
-      {/* Bottom row: the mark link on the left, delivery on the right - the
+      {/* Bottom row: the focus link on the left, delivery on the right - the
           last thing read on the card is where it got to. Sent marks are quiet
           by default (delivered feedback's markup is noise on the artifact),
-          so this link is how one mark comes back: showing also scrolls the
-          surface to it. Hovering the card lights it briefly either way. An
-          orphan has no mark to show, so it keeps the delivery label alone. */}
+          so this link is how one mark comes back: focusing also scrolls the
+          surface to it, and releases whatever was focused before. Hovering the
+          card lights it briefly either way. An orphan has no mark to focus, so
+          it keeps the delivery label alone. */}
       {orphaned ? (
         <DeliveryLabel className="self-end" />
       ) : (
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"
-            data-test="toggle-mark"
-            aria-pressed={markShown}
-            onClick={() => toggleSentMark(data.id)}
-            className="cursor-pointer text-[11px] text-steel-300 underline decoration-steel-500/60 underline-offset-2 hover:text-accent-bright"
+            data-test="toggle-focus"
+            aria-pressed={focused}
+            onClick={() => toggleFocus(data.id)}
+            className={`cursor-pointer text-[11px] underline underline-offset-2 hover:text-accent-bright ${
+              focused
+                ? "text-accent-bright decoration-accent/60"
+                : "text-steel-300 decoration-steel-500/60"
+            }`}
           >
-            {markShown ? "Hide in artifact" : "Show in artifact"}
+            {focused ? "Unfocus" : "Focus"}
           </button>
           <DeliveryLabel />
         </div>
