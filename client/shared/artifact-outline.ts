@@ -151,9 +151,14 @@ export interface OutlineActivation {
   readonly key: string;
 }
 
+export interface OutlineActivationHealth extends OutlineHealth {
+  readonly code: "AO-002";
+  readonly reason: "stale-generation" | "unknown-key";
+}
+
 export type OutlineActivationResolution =
   | { readonly accepted: true; readonly key: string }
-  | { readonly accepted: false; readonly health: OutlineHealth };
+  | { readonly accepted: false; readonly health: OutlineActivationHealth };
 
 export const resolveOutlineActivation = (
   projection: OutlineProjection,

@@ -17,6 +17,11 @@ import {
   type PayloadAnnotationLike,
   type QueuedAnchorLike,
 } from "../shared/protocol.ts";
+import {
+  emphasizeElement,
+  revealElement as revealOutlineElement,
+  SECTION_TARGET_CLASS,
+} from "./reveal.ts";
 
 /**
  * A stylesheet the overlay adds to the ARTIFACT's document, as a constructed
@@ -148,6 +153,9 @@ export class LucidOverlay extends LitElement {
   /** Read mode when false: no marks painted, no targeting. The chrome owns this
    *  and restates it on every highlight, so the two can never drift. */
   private showTargets = true;
+  /** The reveal seam maintains at most one emphasized section. Keeping its
+   * element avoids rescanning an arbitrarily large artifact on every pulse. */
+  private sectionEmphasis: Element | null = null;
   /** Focus minted by `reveal-annotation` (the palette jump, a card's keyboard
    *  open). A card HOVER is cleared by the card's own mouseleave, but a reveal
    *  has no counterpart on the chrome side - and this glow also paints a quiet
@@ -303,6 +311,7 @@ export class LucidOverlay extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.clearSectionEmphasis();
     window.removeEventListener("mousemove", this.onMouseMove, true);
     window.removeEventListener("mousedown", this.onMouseDown, true);
     window.removeEventListener("click", this.onClick, true);
@@ -691,11 +700,11 @@ export class LucidOverlay extends LitElement {
         20% { box-shadow: inset 0 0 0 9999px rgba(94,129,172,0.22); }
         100% { box-shadow: inset 0 0 0 9999px rgba(94,129,172,0); }
       }
-      .__lucid_section_target { scroll-margin: 80px; animation: __lucid_section_pulse 2.6s ease-in-out; }
+      .${SECTION_TARGET_CLASS} { scroll-margin: 80px; animation: __lucid_section_pulse 2.6s ease-in-out; }
       /* A pulse that is not allowed to animate says nothing at all, so this
          reader gets the same information as a resting outline instead. */
       @media (prefers-reduced-motion: reduce) {
-        .__lucid_section_target {
+        .${SECTION_TARGET_CLASS} {
           animation: none;
           outline: 2px solid rgba(94,129,172,0.9);
           outline-offset: 3px;
@@ -709,23 +718,44 @@ export class LucidOverlay extends LitElement {
    *  chat permalink's landing; a no-op if the id is gone (the chip that sent it
    *  should already have degraded to plain text from the published id set). */
   private revealSection(lucidId: string): void {
-    this.pulseSection(lucidId);
     const target = this.sectionById(lucidId);
     if (!target) return;
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    this.revealElement(target);
   }
+
+  private revealElement(target: Element): boolean {
+    const revealed = revealOutlineElement(
+      target,
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "normal",
+      {
+        clearEmphasis: this.clearSectionEmphasis,
+        ensureStyles: () => this.injectSectionStyle(),
+        // Permalink resolution queries the live document immediately above.
+        // Outline activation supplies the generation-correlated invalidation
+        // callback when its runtime is wired in M2.3.
+        invalidate: () => {},
+      },
+    );
+    if (revealed) this.sectionEmphasis = target;
+    return revealed;
+  }
+
+  private readonly clearSectionEmphasis = (): void => {
+    this.sectionEmphasis?.classList.remove(SECTION_TARGET_CLASS);
+    this.sectionEmphasis = null;
+  };
 
   /** Flash a section where it already sits. This is the no-scroll half of the
    *  update-location rule: if the new material is already under the reader's
    *  eyes, moving the page would destroy rather than improve orientation. */
   private pulseSection(lucidId: string): void {
-    this.injectSectionStyle();
-    for (const el of document.querySelectorAll(".__lucid_section_target")) {
-      el.classList.remove("__lucid_section_target");
-    }
     const target = this.sectionById(lucidId);
     if (!target) return;
-    target.classList.add("__lucid_section_target");
+    emphasizeElement(target, {
+      clearEmphasis: this.clearSectionEmphasis,
+      ensureStyles: () => this.injectSectionStyle(),
+    });
+    this.sectionEmphasis = target;
   }
 
   /** Match by attribute value rather than building a selector: an id with a
@@ -1063,6 +1093,7 @@ export class LucidOverlay extends LitElement {
    */
   private swapArtifact(htmlText: string): void {
     this.removeDiffStyles();
+    this.clearSectionEmphasis();
     const parsed = new DOMParser().parseFromString(htmlText, "text/html");
     const previousIds = new Set(
       Array.from(document.querySelectorAll("[data-lucid-id]"))

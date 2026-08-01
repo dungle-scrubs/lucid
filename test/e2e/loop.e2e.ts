@@ -1861,13 +1861,54 @@ test("a section permalink in a reply lands the reader on that section", async ({
   await chip.click();
   await expect(target).toHaveClass(/__lucid_section_target/);
   await expect(target).toBeInViewport();
+  await expect(target).not.toBeFocused();
+  const previousTarget = await target.elementHandle();
+  expect(previousTarget).not.toBeNull();
 
   // A permalink to something this version does not have is not a chip at all:
   // a dead link that still looks clickable is worse than plain prose.
   await cli.write(PLAN_V2.replace('data-lucid-id="step-backfill"', 'data-lucid-id="renamed"'));
   await expect(surface.locator("h1")).toContainText("revised");
+  expect(
+    await previousTarget?.evaluate(
+      (element) => !element.isConnected && !element.classList.contains("__lucid_section_target"),
+    ),
+  ).toBe(true);
   await expect(on(page).sectionLink()).toHaveCount(0);
   await expect(page.locator('[data-role="agent"]')).toContainText("the backfill step");
+});
+
+test("a reduced-motion section reveal rests without focusing the artifact heading", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await openViewer(page);
+  const surface = surfaceOf(page);
+  await surface.locator("html").evaluate((root) => {
+    root.style.scrollBehavior = "smooth";
+  });
+  await cli.run([
+    "wait",
+    cli.artifact,
+    "--reply",
+    "See [the backfill step](lucid:section/step-backfill).",
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ]);
+
+  const target = surface.locator('[data-lucid-id="step-backfill"]');
+  await on(page).sectionLink().click();
+  expect(
+    await target.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= window.innerHeight;
+    }),
+  ).toBe(true);
+  await expect(target).toHaveClass(/__lucid_section_target/);
+  await expect(target).toHaveCSS("animation-name", "none");
+  await expect(target).toHaveCSS("outline-style", "solid");
+  await expect(target).toBeInViewport();
+  await expect(target).not.toBeFocused();
 });
 
 test("a newly added section already in view pulses instead of offering a jump", async ({
