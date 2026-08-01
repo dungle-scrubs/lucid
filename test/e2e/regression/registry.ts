@@ -123,6 +123,20 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     },
   },
   {
+    sha: "theme-live-swap",
+    broke:
+      "A live artifact update made light sections and inline code dark until the theme was toggled twice.",
+    testFile: "test/e2e/regression/theme-live-swap-stays-light.e2e.ts",
+    testName: "light sections and code stay light through every artifact update",
+    mutation: {
+      kind: "edit",
+      file: "client/overlay/overlay.ts",
+      find: "  private reapplyTheme(): void {",
+      replace:
+        "  private reapplyTheme(): void {\n    return; // mutation: swapped styles keep following the OS",
+    },
+  },
+  {
     sha: "a52aa58",
     broke: "Fork with an empty note silently did nothing.",
     testFile: "test/e2e/regression/a52aa58-fork-with-an-empty-note.e2e.ts",
