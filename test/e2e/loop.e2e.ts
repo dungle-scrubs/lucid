@@ -1,6 +1,6 @@
 import { hook, mod, on } from "./locators.ts";
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ARTIFACT_OUTLINE_POLICY } from "../../client/shared/artifact-outline.ts";
 import {
@@ -2660,13 +2660,17 @@ test("delayed font, image, and content reflow withdraw stale outline state until
   const imageGate = new Promise<void>((resolve) => {
     releaseImage = resolve;
   });
-  const fontBytes = await readFile("/System/Library/Fonts/Supplemental/Georgia.ttf");
   await page.route("https://lucid.invalid/delayed.ttf", async (route) => {
     await fontGate;
     await route.fulfill({
-      body: fontBytes,
       contentType: "font/ttf",
       headers: { "access-control-allow-origin": "*" },
+      // This font ships with the locked Playwright dependency, so the fixture
+      // is repository-reproducible rather than coupled to a host font install.
+      path: join(
+        process.cwd(),
+        "node_modules/playwright-core/lib/vite/recorder/assets/codicon-DCmgc-ay.ttf",
+      ),
     });
   });
   await page.route("https://lucid.invalid/delayed.png", async (route) => {
@@ -2686,7 +2690,7 @@ test("delayed font, image, and content reflow withdraw stale outline state until
     #font-probe{display:inline-block;font-size:48px}
     #delayed-content-reflow{height:240px}
   </style></head><body><main><h1>Delayed outline</h1>
-    <h2>Context</h2><p id="font-probe" data-lucid-id="pick-while-unsettled">mmmmmmmmmm</p>
+    <h2>Context</h2><p id="font-probe" data-lucid-id="pick-while-unsettled">&#xea60;</p>
     <h2>Milestones</h2><p>B</p><h2>Risks</h2><p>C</p>
   </main></body></html>`;
   await openViewer(page, artifact, "Delayed outline");
@@ -2853,17 +2857,17 @@ const hostileOutlineFixtures = [
     name: "absolute paint",
     markup: '<aside id="hazard"></aside>',
     style:
-      "#hazard{position:absolute;left:calc(50% + 350px);top:120px;width:180px;height:120px;background:red}",
+      "#hazard{position:absolute;left:calc(50% + 362px);top:120px;width:240px;height:120px;background:red}",
   },
   {
     name: "transformed paint",
     markup: '<aside id="hazard"></aside>',
-    style: "#hazard{width:80px;height:30px;margin-left:650px;transform:translateX(1px)}",
+    style: "#hazard{width:240px;height:30px;margin-left:712px;transform:translateX(1px)}",
   },
   {
     name: "sticky paint",
     markup: '<aside id="hazard"></aside>',
-    style: "#hazard{position:sticky;top:20px;width:80px;height:30px;margin-left:650px}",
+    style: "#hazard{position:sticky;top:20px;width:240px;height:30px;margin-left:712px}",
   },
   {
     name: "visible overflow",
@@ -2968,9 +2972,13 @@ test("repeated permanent outline failure stays parent-owned, bounded, and silent
   await expect(region).toHaveAttribute("data-outline-health", "AO-001");
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
+    const beforeTaskCount = (await outlineDebugInfo(page))?.taskCount ?? 0;
     await surfaceOf(page)
       .locator("body")
       .evaluate((body, value) => body.setAttribute("data-permanent-retry", String(value)), attempt);
+    await expect
+      .poll(async () => (await outlineDebugInfo(page))?.taskCount ?? 0)
+      .toBeGreaterThan(beforeTaskCount);
     await expect(region).toHaveAttribute("data-outline-health", "AO-001");
   }
   await expect(on(page).artifactOutline()).toHaveCount(0);
