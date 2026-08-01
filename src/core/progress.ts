@@ -36,3 +36,16 @@ export const sanitizeProgress = (input: unknown): AgentProgress | undefined => {
     ...(done !== undefined ? { done } : {}),
   };
 };
+
+/**
+ * Canonical validation for a `blocked` reason, applied at both delivery
+ * boundaries like `sanitizeProgress`. One line, bounded the same way: it rides
+ * every ack, renders where a spinner would be, and lives in the log forever.
+ * Empty (or non-string) means "not blocked", which is how an ordinary ack
+ * clears the flag.
+ */
+export const sanitizeBlocked = (input: unknown): string | undefined => {
+  if (typeof input !== "string") return undefined;
+  const line = input.replace(/\s+/g, " ").trim().slice(0, LABEL_MAX);
+  return line.length > 0 ? line : undefined;
+};

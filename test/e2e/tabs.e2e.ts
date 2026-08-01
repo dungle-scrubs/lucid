@@ -1,9 +1,11 @@
 import { chord, hook, on } from "./locators.ts";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
+  fixedHubPort,
+  killHubOnPort,
   makeCli,
   openIntoHub,
   PLAN_V1,
@@ -348,4 +350,47 @@ test("closing the only tab lands on the pick screen offering it again", async ({
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText("Migration plan");
   await expect(on(page).allOpen()).toHaveCount(0);
+});
+
+/**
+ * A tab whose session is gone: the record is deleted under it (a cleaned-up
+ * scratch session, a renamed artifact), so the hub answers 404 for everything
+ * addressed to that mount.
+ *
+ * A WebSocket handshake refused with 404 is indistinguishable in the browser
+ * from a refused connection - the status never reaches JS - so this retried on
+ * a backoff forever: ~180 failures in a row, competing with the fetches the
+ * shell needs to list its own sessions. The tab now asks a route that CAN
+ * answer, and stops for good on a definite 404.
+ */
+test("a tab whose session is gone stops knocking, and says why", async ({ page }) => {
+  const port = fixedHubPort();
+  await killHubOnPort(port);
+  hub = await startHub({ port, sseMaxBackoffMs: 1000 });
+  const opened = await openIntoHub(hub, PLAN_V1);
+  const cli = opened.cli;
+  clis.push(cli);
+  await page.goto(opened.shellUrl);
+  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
+
+  // The record disappears under the open tab, and the hub comes back without
+  // it - the sequence that produced the storm: a session deleted while its tab
+  // stayed open, and a hub that no longer resolves that mount.
+  await rm(join(dirname(cli.artifact), "plan"), { recursive: true, force: true });
+  await rm(cli.artifact, { force: true });
+  const kept = hub.dir;
+  await hub.stop({ keepState: true });
+  // While the hub is DOWN the tab must keep trying: unreachable is not gone.
+  await expect(on(page).sessionGone()).toHaveCount(0);
+  hub = await startHub({ port, dir: kept, sseMaxBackoffMs: 1000 });
+
+  await expect(on(page).sessionGone()).toBeVisible({ timeout: 30_000 });
+  await expect(on(page).sessionGone()).toContainText("no longer on the hub");
+
+  // Terminal, not merely quiet. The banner is only rendered after the client
+  // has closed the stream for good, so its continued presence a reconnect
+  // window later is the assertion that nothing re-opened underneath it - a
+  // retrying tab would have cleared `gone` on its next successful open.
+  await page.waitForTimeout(5_000);
+  await expect(on(page).sessionGone()).toBeVisible();
 });

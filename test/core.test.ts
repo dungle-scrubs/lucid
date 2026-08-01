@@ -449,6 +449,40 @@ describe("foldLog segments", () => {
     expect(foldLog([opened, first]).agentWorking?.heardAt).toBe("2026-01-01T00:00:00Z");
   });
 
+  test("a blocked report replaces the window's motion, and the next ack clears it", () => {
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const working = ev({
+      t: "agent_ack",
+      seq: 2,
+      id: "a1",
+      progress: { label: "reading" },
+    } as never);
+    const stuck = ev({ t: "agent_ack", seq: 3, id: "a2", blocked: "needs WebFetch" } as never);
+
+    expect(foldLog([opened, working]).agentWorking?.blocked).toBeUndefined();
+    expect(foldLog([opened, working, stuck]).agentWorking?.blocked).toBe("needs WebFetch");
+
+    // Moving again IS unblocking: an ordinary ack carries no `blocked`, and
+    // the flag must not outlive the condition it described.
+    const moving = ev({
+      t: "agent_ack",
+      seq: 4,
+      id: "a3",
+      progress: { label: "writing" },
+    } as never);
+    const after = foldLog([opened, working, stuck, moving]);
+    expect(after.agentWorking?.blocked).toBeUndefined();
+    expect(after.agentWorking?.progress?.label).toBe("writing");
+  });
+
   test("agent_ack progress accumulates last-writer-wins and closes on output", () => {
     const opened = ev({
       t: "session_opened",

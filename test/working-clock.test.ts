@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { WORKING_STALE_MS, workingClock } from "../client/chrome/working.ts";
+import { sanitizeBlocked } from "../src/core/progress.ts";
 
 /**
  * The rule both the thread line and the surface chip read, so the two can never
@@ -41,5 +42,19 @@ describe("the working clock", () => {
     expect(c.mm).toBe(0);
     expect(c.ss).toBe("00");
     expect(c.stale).toBe(false);
+  });
+});
+
+describe("the blocked report", () => {
+  test("keeps a one-line reason and drops what is not one", () => {
+    expect(sanitizeBlocked("  needs the WebFetch\n  permission  ")).toBe(
+      "needs the WebFetch permission",
+    );
+    expect(sanitizeBlocked("")).toBeUndefined();
+    expect(sanitizeBlocked("   ")).toBeUndefined();
+    expect(sanitizeBlocked(undefined)).toBeUndefined();
+    expect(sanitizeBlocked(42)).toBeUndefined();
+    // Bounded like a progress label: it rides every ack and lives in the log.
+    expect(sanitizeBlocked("x".repeat(500))?.length).toBe(200);
   });
 });

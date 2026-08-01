@@ -458,6 +458,8 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     heardAt: string;
     intent?: "revise" | "reply";
     progress?: AgentProgress;
+    /** Why the turn is stuck on the human, if it said so. */
+    blocked?: string;
   }
   const openTurns = new Map<string, OpenTurn>();
   // Turns that have already closed in this segment. A late ack MUST NOT
@@ -491,6 +493,10 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       // --total, later bump --done), so each refines the report rather than
       // wiping the ones it omits.
       if (e.progress) open.progress = { ...open.progress, ...e.progress };
+      // NOT merged, unlike progress: being blocked is a current state, not an
+      // accumulating report. An ordinary ack carries no `blocked` and so
+      // clears it - moving again is what unblocking looks like from here.
+      open.blocked = e.blocked;
       openTurns.set(turn, open);
     } else if (e.t === "version" || e.t === "agent_reply" || e.t === "question") {
       lastAgentOutputSeq = e.seq;
@@ -548,6 +554,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
         heardAt: oldestOpen.heardAt,
         ...(oldestOpen.intent ? { intent: oldestOpen.intent } : {}),
         ...(oldestOpen.progress ? { progress: oldestOpen.progress } : {}),
+        ...(oldestOpen.blocked ? { blocked: oldestOpen.blocked } : {}),
       }
     : null;
 

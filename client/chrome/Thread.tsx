@@ -199,6 +199,12 @@ const WorkingIndicator = () => {
   const presence = useSession((s) => s.attendantPresence);
   const attendant = useSession((s) => s.lastAttendant);
   const resumable = useSession((s) => s.resumable);
+  // Was anything ever handed to this agent? A create/authoring turn is working
+  // on an empty session - nothing was picked up, so the stale line must not
+  // say it was. Selected as two counts rather than a derived slice: a selector
+  // that builds an array re-renders forever (React #185).
+  const annotationCount = useSession((s) => s.annotations.length);
+  const messageCount = useSession((s) => s.messages.length);
   const attend = useHub((s) => s.attend) === true;
   const [now, setNow] = useState(() => Date.now());
 
@@ -249,6 +255,20 @@ const WorkingIndicator = () => {
   // Shared with the surface's chip so the two cannot disagree about whether
   // the same turn is still working (client/chrome/working.ts).
   const { stale, mm, ss } = workingClock(working, now);
+  const delivered = annotationCount > 0 || messageCount > 0;
+
+  // Blocked outranks every other state here, stale included. The turn is not
+  // slow and it is not dead - it is waiting on a person, and that person is
+  // reading this line. Rust, because it is the one state that asks for
+  // something rather than reporting.
+  if (working.blocked) {
+    return (
+      <div data-test="agent-blocked" className="flex flex-col gap-0.5 text-[12px]">
+        <span className="text-rust-300">The agent is blocked and needs you.</span>
+        <span className="text-[11px] text-fg-muted">{working.blocked}</span>
+      </div>
+    );
+  }
 
   const progress = working.progress;
   // A lone turn narrating its phases (`lucid progress --label`, no counts):
@@ -321,9 +341,13 @@ const WorkingIndicator = () => {
     >
       {stale ? (
         <span className="text-fg-muted">
-          {/* Plural only on a declared fan-out; a label-only narration is one turn. */}
-          {progress?.total ? "agents picked up" : "agent picked up"} your feedback {mm}m ago · no
-          response yet
+          {/* An authoring turn was never handed anything: saying it "picked up
+              your feedback" describes an exchange that never happened, which is
+              how a session whose agent died before writing its first version
+              read for eight minutes. */}
+          {delivered
+            ? `${progress?.total ? "agents picked up" : "agent picked up"} your feedback ${mm}m ago · no response yet`
+            : `nothing from the agent for ${mm}m · it may have stopped`}
         </span>
       ) : (
         <>

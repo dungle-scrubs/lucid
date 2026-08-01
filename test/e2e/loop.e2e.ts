@@ -1868,3 +1868,28 @@ test("a section permalink in a reply lands the reader on that section", async ({
   await expect(on(page).sectionLink()).toHaveCount(0);
   await expect(page.locator('[data-role="agent"]')).toContainText("the backfill step");
 });
+
+test("a blocked agent says so where the human is looking", async ({ page }) => {
+  await openViewer(page);
+  await on(page).messageInput().fill("Research the source and add a section.");
+  await on(page).sendMessage().click();
+  await expect(page.locator('[data-role="human"]')).toContainText("Research the source");
+
+  // The turn takes delivery, declares it will revise, then hits a wall it
+  // cannot clear on its own - the exact shape of a headless agent asking for a
+  // permission in a terminal nobody is reading.
+  await cli.run(["intent", cli.artifact, "revise"]);
+  await expect(on(page).surfaceUpdating()).toBeVisible();
+  await cli.run(["blocked", cli.artifact, "--reason", "needs the WebFetch permission"]);
+
+  const blocked = on(page).agentBlocked();
+  await expect(blocked).toContainText("blocked and needs you");
+  await expect(blocked).toContainText("needs the WebFetch permission");
+  // The document stops promising an update it is not going to get.
+  await expect(on(page).surfaceUpdating()).toHaveCount(0);
+
+  // Answering the block is the agent moving again; nothing else clears it.
+  await cli.run(["progress", cli.artifact, "--label", "reading the source"]);
+  await expect(on(page).agentBlocked()).toHaveCount(0);
+  await expect(on(page).workingPhase()).toContainText("reading the source");
+});

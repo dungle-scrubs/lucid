@@ -54,7 +54,7 @@ import type {
   SessionsResponse,
   StateResponse,
 } from "../protocol/wire.ts";
-import { sanitizeProgress } from "../core/progress.ts";
+import { sanitizeBlocked, sanitizeProgress } from "../core/progress.ts";
 import {
   CHROME_BUNDLE,
   CHROME_CSS,
@@ -853,6 +853,7 @@ export const createSessionHost = (
     if (!body || typeof body.id !== "string") return json({ error: "invalid ack" }, 400);
     const intent = body.intent === "revise" || body.intent === "reply" ? body.intent : undefined;
     const progress = sanitizeProgress(body.progress);
+    const blocked = sanitizeBlocked(body.blocked);
     const attendant = parseAttendant(body.attendant);
     // The delivered range (D20). A non-integer or negative claim is dropped
     // rather than clamped: the panel says "recorded" instead of asserting a
@@ -874,6 +875,7 @@ export const createSessionHost = (
         id: body.id,
         ...(intent ? { intent } : {}),
         ...(progress ? { progress } : {}),
+        ...(blocked ? { blocked } : {}),
         ...(covers !== undefined ? { covers } : {}),
         ...(turnId ? { turnId } : {}),
         ...(attendant ? { attendant } : {}),

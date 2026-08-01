@@ -173,6 +173,23 @@ export const createSession = (config: SessionConfig): SessionHandle => {
 
   let stream: LiveStream | null = null;
 
+  /**
+   * Is this session still on the server, or is the tab pointing at a record
+   * that is gone? Only a definite 404 answers yes-it-is-gone: a network error
+   * or a 5xx means the server is unreachable or unwell, which is exactly what
+   * retrying is for.
+   */
+  const checkGone = async (): Promise<void> => {
+    try {
+      const res = await hubFetch(`${config.base}/__lucid/identity`, { cache: "no-store" });
+      if (res.status !== 404) return;
+    } catch {
+      return; // unreachable, not gone
+    }
+    set({ gone: true, live: false });
+    disconnect();
+  };
+
   const connect = (): void => {
     if (stream !== null) return;
     stream = openStream(
@@ -197,7 +214,17 @@ export const createSession = (config: SessionConfig): SessionHandle => {
         // A drop is a state to show, not a warning to accumulate: one warning
         // per failed attempt spammed the panel and told the human to reload,
         // which was never true.
-        onDown: (retries) => set({ live: false, streamRetries: retries }),
+        //
+        // But a drop that keeps happening deserves ONE question: is there
+        // still a session here? A WebSocket handshake refused with 404 is
+        // indistinguishable from a refused connection in the browser - the
+        // status never reaches JS - so the socket alone can retry a session
+        // that no longer exists until the tab is closed. Two failures in,
+        // ask a route that CAN answer.
+        onDown: (retries) => {
+          set({ live: false, streamRetries: retries });
+          if (retries === 2) void checkGone();
+        },
       },
       ...(config.sseMaxBackoffMs === undefined
         ? []
