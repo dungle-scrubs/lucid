@@ -137,6 +137,33 @@ runs under exactly the tools its recipe grants. Grant the **least** it needs
 (`Bash(lucid *)`, `Write`, `Edit`, `Read`), not `--dangerously-skip-permissions`.
 The recipe is where that posture is declared, once.
 
+Declare it as a list, not as a string inside an argv. `tools` is a property of
+the harness; write `{tools}` where that harness takes its allowlist and the
+entries land there, space-joined, in declared order:
+
+```json
+"claude-code": {
+  "spawn":  ["claude", "-p", "--session-id", "{id}", "{prompt}", "--allowedTools", "{tools}"],
+  "resume": ["claude", "--resume", "{id}", "-p", "{prompt}", "--allowedTools", "{tools}"],
+  "tools":  ["Bash(lucid *)", "Write", "Edit", "Read", "WebFetch", "WebSearch"]
+}
+```
+
+Editing what an unattended turn may do is then editing one list, rather than
+keeping two argv templates in sync and hoping they agree. **Which flag** carries
+it stays the recipe's business - `--allowedTools` here, something else for
+another harness - because Lucid compiles no launch command of its own.
+
+`spawn` and `resume` share the list on purpose: a turn allowed to write the
+artifact when it creates it and not when it revises it is a grant nobody meant
+to make. A mode that genuinely needs a different set spells it literally in its
+own argv and omits the placeholder.
+
+`{tools}` with no `tools` behind it is **refused at load**. Substituting empty
+would produce `--allowedTools ""` - a turn granted nothing, failing on its first
+tool call with no hint as to why - and a permission list that silently becomes
+empty is the one failure mode worth being loud about.
+
 ## What happens on a fork
 
 1. The launcher polls the parent session's log for new `fork` events.

@@ -352,6 +352,7 @@ const createChild = async (
       cwd: parent.artifactDir,
       prompt: createPrompt(seedPath, childArtifact),
     }),
+    resolved.recipe.tools,
   );
   const short = safeForkId(fork.id).slice(0, 8);
   log(`fork ${short}: spawning "${resolved.name}" -> ${childArtifact}`);
@@ -487,12 +488,16 @@ export const attendChild = async (
       // The CHILD session's identity (D18): the launcher acts on its behalf.
       attendant: { harness: harnessName, sessionId, cwd: child.artifactDir },
     }).catch(() => {});
-    const argv = buildArgv(recipe.resume, {
-      id: sessionId,
-      artifact: child.artifactPath,
-      cwd: child.artifactDir,
-      prompt,
-    });
+    const argv = buildArgv(
+      recipe.resume,
+      {
+        id: sessionId,
+        artifact: child.artifactPath,
+        cwd: child.artifactDir,
+        prompt,
+      },
+      recipe.tools,
+    );
     log(`${child.name}: applying feedback via resume`);
     const code = await runSpawn(argv, child.artifactDir, join(child.sessionDir, "revise.out.log"), {
       harness: harnessName,

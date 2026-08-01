@@ -17,9 +17,9 @@ import { canonicalHarness } from "./selection.ts";
  */
 
 /** The placeholders a recipe's argv may reference, filled per fork. */
-export type RecipeVar = "id" | "seed" | "artifact" | "cwd" | "prompt";
+export type RecipeVar = "id" | "seed" | "artifact" | "cwd" | "prompt" | "tools";
 
-const RECIPE_VARS: readonly RecipeVar[] = ["id", "seed", "artifact", "cwd", "prompt"];
+const RECIPE_VARS: readonly RecipeVar[] = ["id", "seed", "artifact", "cwd", "prompt", "tools"];
 
 /** One model a harness offers for headless turns (registry v2, additive).
  *  `efforts` is the model's OWN effort vocabulary when it differs from the
@@ -43,6 +43,24 @@ export interface SpawnRecipe {
    * and flags are the recipe's own tokens.
    */
   readonly spawn: readonly string[];
+  /**
+   * What a headless turn is allowed to do, as an editable list rather than a
+   * string buried in `spawn`.
+   *
+   * This is the security posture of every unattended turn, so it deserves to
+   * be a property someone can read and change without re-deriving an argv:
+   * write `{tools}` where the harness takes its allowlist and the entries land
+   * there, space-joined, in order. Which flag that is stays the recipe's
+   * business - `--allowedTools` for claude-code, something else elsewhere -
+   * because the whole point of the registry is that Lucid compiles no launch
+   * command of its own.
+   *
+   * Shared by `spawn` and `resume` deliberately: a turn that may write the
+   * artifact on creation and not on revision is a grant nobody meant to make.
+   * A mode that genuinely needs a different list spells it literally in its
+   * own argv and omits the placeholder.
+   */
+  readonly tools?: readonly string[];
   /**
    * The REVISE turn's argv template (shape-C liveness): re-drive the SAME
    * session (`{id}`) to apply a batch of review feedback. Same placeholders,
@@ -221,9 +239,33 @@ const parseRegistry = (raw: string, path: string): HarnessRegistry => {
         detail: { path, harness: name },
       });
     }
+    const tools = (value as { tools?: unknown })?.tools;
+    if (
+      tools !== undefined &&
+      (!isStringArray(tools) || tools.length === 0 || tools.some((x) => x.trim() === ""))
+    ) {
+      throw new ValidationError({
+        message: `harness "${name}" \`tools\` must be a non-empty string[] of tool grants when present`,
+        detail: { path, harness: name },
+      });
+    }
+    // A `{tools}` with nothing behind it would substitute empty, which for
+    // claude-code means `--allowedTools ""` - a turn granted nothing, failing
+    // on its first tool call with no hint as to why. Refused at load, where
+    // the file being edited is still on screen.
+    const wantsTools = [...spawn, ...(isStringArray(resume) ? resume : [])].some((tok) =>
+      tok.includes("{tools}"),
+    );
+    if (wantsTools && !isStringArray(tools)) {
+      throw new ValidationError({
+        message: `harness "${name}" uses {tools} in its argv but declares no \`tools\` list`,
+        detail: { path, harness: name },
+      });
+    }
     harnesses[name] = {
       spawn,
       ...(resume ? { resume } : {}),
+      ...(isStringArray(tools) ? { tools } : {}),
       ...parseSelectionFields(name, value as Record<string, unknown>, path),
     };
   }
@@ -287,9 +329,29 @@ export const resolveRecipe = (
 export const buildArgv = (
   template: readonly string[],
   subs: Readonly<Partial<Record<RecipeVar, string>>>,
-): string[] =>
-  template.map((tok) =>
+  /** The recipe's own `tools`, filling `{tools}`. Separate from `subs` because
+   *  it comes from the recipe rather than from the fork, and because passing
+   *  it is what the check below can then insist on. */
+  tools?: readonly string[],
+): string[] => {
+  const grant = tools?.join(" ") ?? "";
+  // An empty grant substituted into `--allowedTools {tools}` is a turn allowed
+  // nothing, which fails on its first tool call with nothing to read. The
+  // registry refuses that combination at load; this is the same refusal at the
+  // one point a caller could reintroduce it by forgetting to pass the list.
+  if (grant === "" && template.some((tok) => tok.includes("{tools}"))) {
+    throw new ValidationError({
+      message: "recipe argv uses {tools} but no tool grants were supplied",
+      detail: { argv: template.join(" ") },
+    });
+  }
+  return template.map((tok) =>
     tok.replace(/\{([a-z]+)\}/g, (whole, key: string) =>
-      RECIPE_VARS.includes(key as RecipeVar) ? (subs[key as RecipeVar] ?? "") : whole,
+      key === "tools"
+        ? grant
+        : RECIPE_VARS.includes(key as RecipeVar)
+          ? (subs[key as RecipeVar] ?? "")
+          : whole,
     ),
   );
+};

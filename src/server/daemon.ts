@@ -1045,12 +1045,16 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       const paths = sessionPaths(artifact);
       const argv = insertSelectionArgs(
         resolved.name,
-        buildArgv(resolved.recipe.spawn, {
-          id: childSessionId,
-          artifact,
-          cwd: project,
-          prompt: createArtifactPrompt(artifact, prompt, title || undefined),
-        }),
+        buildArgv(
+          resolved.recipe.spawn,
+          {
+            id: childSessionId,
+            artifact,
+            cwd: project,
+            prompt: createArtifactPrompt(artifact, prompt, title || undefined),
+          },
+          resolved.recipe.tools,
+        ),
         selArgs,
         resolved.recipe.spawn,
       );
