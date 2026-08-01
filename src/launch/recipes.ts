@@ -304,6 +304,29 @@ export const loadRegistry = async (path = registryPath()): Promise<HarnessRegist
 export const normalizeHarness = (name: string): string =>
   name.trim().toLowerCase().replace(/_/g, "-");
 
+/**
+ * Recover the session identity a harness minted during spawn. Most recipes
+ * accept Lucid's `{id}` directly. Codex mints its own thread id, exposed by
+ * `codex exec --json` as a `thread.started` event, so a later resume can name
+ * the exact thread instead of racing on `--last`.
+ */
+export const spawnedSessionId = (harness: string, output: string): string | undefined => {
+  if (normalizeHarness(harness) !== "codex") return undefined;
+  for (const line of output.split("\n")) {
+    if (!line.includes("thread.started")) continue;
+    try {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      if (event.type === "thread.started" && typeof event.thread_id === "string") {
+        return event.thread_id;
+      }
+    } catch {
+      // A harness log may mix narration with JSON events. Non-JSON lines are
+      // evidence for humans, not a reason to discard a later structured id.
+    }
+  }
+  return undefined;
+};
+
 export const resolveRecipe = (
   registry: HarnessRegistry,
   harness?: string,

@@ -314,6 +314,8 @@ export interface SelectionResponse {
   /** Empty object when nothing is picked: the CLI's own defaults apply. */
   readonly selection: SelectionState;
   readonly info?: HarnessInfo;
+  /** Every configured harness available as a continuation target. */
+  readonly harnesses?: readonly HarnessInfo[];
 }
 
 /** One session in a project, as `lucid` (bare) and `/__lucid/sessions` report it. */
