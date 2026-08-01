@@ -640,6 +640,40 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     expect(runtime.debugInfo()).toMatchObject({ connected: false, pendingQuietTask: false });
   });
 
+  test("a transient work-budget miss gets one quiet retry and then stops", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    const base = geometry([main]);
+    let traversals = 0;
+    let now = 0;
+    const result = harness([main], {
+      geometry: {
+        ...base,
+        completeTraversal: () => {
+          traversals += 1;
+          return traversals > 1;
+        },
+      },
+      now: () => now,
+    });
+
+    result.runtime.requestLayout(request);
+    result.scheduler.flushQuiet();
+    expect(result.publications.at(-1)).toMatchObject({
+      availability: "absent",
+      health: { code: "AO-004", reason: "item-budget-exhausted" },
+    });
+    expect(result.runtime.debugInfo()).toMatchObject({ pendingQuietTask: true, taskCount: 1 });
+
+    now += 250;
+    result.scheduler.flushQuiet();
+    expect(result.publications.at(-1)).toMatchObject({ availability: "complete" });
+    expect(result.runtime.debugInfo()).toMatchObject({ pendingQuietTask: false, taskCount: 2 });
+    result.scheduler.flushQuiet();
+    expect(result.runtime.debugInfo()).toMatchObject({ pendingQuietTask: false, taskCount: 2 });
+  });
+
   test("sustained just-quiet mutations bound projection work and retain one trailing rebuild", () => {
     const main = node("main", { tagName: "MAIN" });
     append(main, node("One"));

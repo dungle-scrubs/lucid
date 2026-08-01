@@ -195,6 +195,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #nextElementKey = 0;
   #scheduleVersion = 0;
   #taskCount = 0;
+  #budgetRetriesRemaining = 0;
 
   constructor(dependencies: RuntimeDependencies<ElementType>) {
     this.#dependencies = dependencies;
@@ -209,8 +210,9 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.invalidate(initialRequest ? "initial-layout-request" : "layout-request", false);
   }
 
-  invalidate(reason: string, publishInvalidation = true): void {
+  invalidate(reason: string, publishInvalidation = true, replenishBudgetRetry = true): void {
     if (!this.#connected || this.#request === null) return;
+    if (replenishBudgetRetry) this.#budgetRetriesRemaining = 1;
     this.#scheduleVersion += 1;
     const version = this.#scheduleVersion;
     this.#cancelQuiet?.();
@@ -393,6 +395,12 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#cancelSnapshot?.();
     this.#cancelSnapshot = null;
     this.#pendingSnapshot = null;
+  }
+
+  #scheduleBudgetRetry(): void {
+    if (this.#budgetRetriesRemaining === 0) return;
+    this.#budgetRetriesRemaining -= 1;
+    this.invalidate("budget-retry", false, false);
   }
 
   #publishSnapshot(publication: OutlineSnapshotPublication): void {
@@ -681,6 +689,9 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       requestGeneration: request.generation,
       type: "snapshot",
     });
+    if (!proof.complete && proof.reason === "work-budget-exhausted") {
+      this.#scheduleBudgetRetry();
+    }
   }
 
   #publishUnavailable(
@@ -708,5 +719,6 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       requestGeneration: request.generation,
       type: "snapshot",
     });
+    if (record.code === "AO-004") this.#scheduleBudgetRetry();
   }
 }
