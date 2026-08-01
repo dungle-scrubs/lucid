@@ -419,6 +419,36 @@ describe("foldLog segments", () => {
     expect(s.questions[0]?.answerAnchor).toEqual(spot(1));
   });
 
+  test("every ack is a heartbeat: heardAt moves, since does not", () => {
+    const opened = ev({
+      t: "session_opened",
+      seq: 1,
+      segment: 1,
+      artifact: "a.html",
+      version: 1,
+      hash: "h",
+      path: "versions/s1/v1.html",
+    } as never);
+    const first = ev({ t: "agent_ack", seq: 2, id: "a1", intent: "revise" } as never);
+    const later = ev({
+      t: "agent_ack",
+      seq: 3,
+      id: "a2",
+      at: "2026-01-01T00:20:00Z",
+      progress: { label: "still going" },
+    } as never);
+
+    // Delivery happened once; the turn has spoken twice. A viewer asking "is
+    // this alive?" reads the second clock, and asking "how long have I waited?"
+    // reads the first - so they must not be the same field.
+    const open = foldLog([opened, first, later]);
+    expect(open.agentWorking?.since).toBe("2026-01-01T00:00:00Z");
+    expect(open.agentWorking?.heardAt).toBe("2026-01-01T00:20:00Z");
+
+    // A turn that never re-acked is heard from exactly when it was delivered.
+    expect(foldLog([opened, first]).agentWorking?.heardAt).toBe("2026-01-01T00:00:00Z");
+  });
+
   test("agent_ack progress accumulates last-writer-wins and closes on output", () => {
     const opened = ev({
       t: "session_opened",

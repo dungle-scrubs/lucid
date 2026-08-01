@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import type { DiffHunk } from "./types.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
+import { workingClock } from "./working.ts";
 
 const HUNK_SIGN: Readonly<Record<DiffHunk["kind"], string>> = {
   added: "+",
@@ -235,32 +236,74 @@ export const NewerVersionBanner = () => {
  * reading starts is the document's own business. Declared intent is a promise,
  * not a fact - which is why it only ever says an update is on the way, and the
  * update itself (live reload, version bump) remains the proof.
+ *
+ * And a promise that has gone quiet stops being reported as motion. A turn
+ * whose process died leaves its window open forever - nothing in the log can
+ * close it - so the spinner sat over the document claiming an update was
+ * coming for forty-five minutes after the agent had stopped existing. Past the
+ * shared stale threshold the chip stays (the promise WAS made, and the human
+ * is still owed it) and says what is actually known: how long since anything
+ * was heard. No spin, no accent - a fact, not an animation.
  */
 export const SurfaceUpdating = () => {
   const working = useSession((s) => s.agentWorking);
   const status = useSession((s) => s.status);
+  const [now, setNow] = useState(() => Date.now());
+  // Only while a window is open, and only per minute: the reading changes at
+  // minute granularity, and this sits over a document being read.
+  useEffect(() => {
+    if (!working) return;
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, [working]);
   if (working?.intent !== "revise" || status !== "active") return null;
+  const { stale, mm } = workingClock(working, now);
   return (
     <div
       data-test="surface-updating"
-      className="absolute top-3 right-3 z-5 flex items-center gap-2 border border-ink-400 bg-ink-900/95 py-1 pr-3 pl-2 text-[12px] text-fg shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+      data-stale={stale ? "true" : "false"}
+      className={`absolute top-3 right-3 z-5 flex items-center gap-2 border py-1 pr-3 pl-2 text-[12px] shadow-[0_4px_14px_rgba(0,0,0,0.45)] ${
+        stale
+          ? "border-ink-500 bg-ink-900/95 text-fg-muted"
+          : "border-ink-400 bg-ink-900/95 text-fg"
+      }`}
     >
-      {/* lucide loader-circle */}
-      <svg
-        viewBox="0 0 24 24"
-        width="14"
-        height="14"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-        className="animate-spin text-accent-bright"
-      >
-        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-      </svg>
-      update on the way…
+      {stale ? (
+        /* lucide clock - the same size and slot as the spinner, so the chip
+           settles in place rather than resizing under the eye. */
+        <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+          className="text-fg-faint"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 6v6l4 2" />
+        </svg>
+      ) : (
+        /* lucide loader-circle */
+        <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+          className="animate-spin text-accent-bright"
+        >
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
+      )}
+      {stale ? `no update for ${mm}m` : "update on the way…"}
     </div>
   );
 };

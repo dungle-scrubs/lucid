@@ -672,8 +672,27 @@ export class LucidOverlay extends LitElement {
     adoptStyle(
       "__lucid_section_style",
       `
-      @keyframes __lucid_section_flash { from { outline-color: rgba(94,129,172,0.9); } to { outline-color: rgba(94,129,172,0); } }
-      .__lucid_section_target { outline: 2px solid rgba(94,129,172,0.9); outline-offset: 3px; scroll-margin: 80px; animation: __lucid_section_flash 1.6s ease-out forwards; }
+      /* A wash that rises and falls once, slowly - the eye is arriving from
+         another pane and needs to be told where it landed, not alarmed. An
+         INSET shadow rather than a background: it paints over the section's own
+         background and under its text, so a section that carries a colour of
+         its own is tinted rather than blanked, and nothing of ours survives the
+         animation to overwrite the document's styling afterwards. */
+      @keyframes __lucid_section_pulse {
+        0% { box-shadow: inset 0 0 0 9999px rgba(94,129,172,0); }
+        20% { box-shadow: inset 0 0 0 9999px rgba(94,129,172,0.22); }
+        100% { box-shadow: inset 0 0 0 9999px rgba(94,129,172,0); }
+      }
+      .__lucid_section_target { scroll-margin: 80px; animation: __lucid_section_pulse 2.6s ease-in-out; }
+      /* A pulse that is not allowed to animate says nothing at all, so this
+         reader gets the same information as a resting outline instead. */
+      @media (prefers-reduced-motion: reduce) {
+        .__lucid_section_target {
+          animation: none;
+          outline: 2px solid rgba(94,129,172,0.9);
+          outline-offset: 3px;
+        }
+      }
     `,
     );
   }

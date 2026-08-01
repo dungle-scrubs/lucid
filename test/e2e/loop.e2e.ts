@@ -1835,3 +1835,36 @@ test("a turn that ends with nothing to show says so, instead of going quiet", as
   await cli.run(["wait", cli.artifact, "--reply", "done", "--timeout", waitTimeoutSeconds(1)]);
   await expect(on(page).turnEnded()).toHaveCount(0);
 });
+
+test("a section permalink in a reply lands the reader on that section", async ({ page }) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+
+  // The reply points at a section by the id the artifact already carries -
+  // what the skill tells an agent to do after adding one.
+  await cli.run([
+    "wait",
+    cli.artifact,
+    "--reply",
+    "Rewrote it - see [the backfill step](lucid:section/step-backfill).",
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ]);
+  const chip = on(page).sectionLink();
+  await expect(chip).toHaveText("the backfill step");
+
+  // The artifact starts at the top; the click is what puts the section on
+  // screen, and the pulse class is what says the eye was told where it landed.
+  const target = surface.locator('[data-lucid-id="step-backfill"]');
+  await expect(target).not.toHaveClass(/__lucid_section_target/);
+  await chip.click();
+  await expect(target).toHaveClass(/__lucid_section_target/);
+  await expect(target).toBeInViewport();
+
+  // A permalink to something this version does not have is not a chip at all:
+  // a dead link that still looks clickable is worse than plain prose.
+  await cli.write(PLAN_V2.replace('data-lucid-id="step-backfill"', 'data-lucid-id="renamed"'));
+  await expect(surface.locator("h1")).toContainText("revised");
+  await expect(on(page).sectionLink()).toHaveCount(0);
+  await expect(page.locator('[data-role="agent"]')).toContainText("the backfill step");
+});

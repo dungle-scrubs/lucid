@@ -26,6 +26,7 @@ import {
 } from "./Panel.tsx";
 import { QaPart } from "./QaPart.tsx";
 import { deliveredWaiting } from "./store.ts";
+import { workingClock } from "./working.ts";
 import { markdownComponents, prose, urlTransform } from "./ui/markdown.tsx";
 import { closeButtonSmall } from "./ui/close.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
@@ -182,10 +183,6 @@ const Composer = () => {
   );
 };
 
-/** Ten minutes with no output stops being "working" and becomes a fact the
- *  human should see plainly: the feedback was picked up, nothing came back. */
-const WORKING_STALE_MS = 10 * 60 * 1000;
-
 /**
  * The agent took delivery and has not produced anything yet. Sage, because it
  * is the agent speaking - or rather, the agent's silence. Driven entirely by
@@ -249,10 +246,9 @@ const WorkingIndicator = () => {
   }
 
   if (!working || status !== "active") return null;
-  const elapsed = Math.max(0, now - new Date(working.since).getTime());
-  const stale = elapsed >= WORKING_STALE_MS;
-  const mm = Math.floor(elapsed / 60000);
-  const ss = String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0");
+  // Shared with the surface's chip so the two cannot disagree about whether
+  // the same turn is still working (client/chrome/working.ts).
+  const { stale, mm, ss } = workingClock(working, now);
 
   const progress = working.progress;
   // A lone turn narrating its phases (`lucid progress --label`, no counts):
