@@ -985,6 +985,28 @@ describe("hub attend mode", () => {
     // Two appended runs: the LAST footer wins.
     const twoRuns = `${codexRun}\nOpenAI Codex v0.145.0\ncodex\nSecond turn.\ntokens used\n12,004\nReplied in Lucid. No artifact change was needed.`;
     expect(codexFinalMessage(twoRuns)).toBe("Replied in Lucid. No artifact change was needed.");
+    const jsonRun = [
+      JSON.stringify({ type: "thread.started", thread_id: "019c-thread" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item_19",
+          type: "agent_message",
+          text: "The artifact is outside this writable workspace.",
+        },
+      }),
+      JSON.stringify({ type: "turn.completed", usage: { input_tokens: 845_455 } }),
+    ].join("\n");
+    expect(codexFinalMessage(jsonRun)).toBe("The artifact is outside this writable workspace.");
+    expect(relayableReply(jsonRun)).toBe("The artifact is outside this writable workspace.");
+    expect(
+      relayableReply(
+        [
+          JSON.stringify({ type: "thread.started", thread_id: "019c-thread" }),
+          JSON.stringify({ type: "turn.completed", usage: { input_tokens: 12 } }),
+        ].join("\n"),
+      ),
+    ).toBe("");
     // A run with no recognizable footer falls back to the bounded tail.
     expect(relayableReply("just some words from a quieter harness")).toBe(
       "just some words from a quieter harness",
@@ -1195,10 +1217,11 @@ describe("model/effort selection", () => {
       `#!/usr/bin/env bun
 await Bun.write(${JSON.stringify(markerPath)}, JSON.stringify({
   argv: process.argv.slice(2),
-  harness: process.env.LUCID_HARNESS ?? null,
-  sessionId: process.env.LUCID_SESSION_ID ?? null,
-  model: process.env.LUCID_MODEL ?? null,
+  cwd: process.cwd(),
   effort: process.env.LUCID_EFFORT ?? null,
+  harness: process.env.LUCID_HARNESS ?? null,
+  model: process.env.LUCID_MODEL ?? null,
+  sessionId: process.env.LUCID_SESSION_ID ?? null,
 }));
 if (process.env.LUCID_HARNESS === "codex") {
   console.log(JSON.stringify({ type: "thread.started", thread_id: "codex-thread-from-output" }));
@@ -1536,6 +1559,7 @@ if (process.env.LUCID_HARNESS === "codex") {
     expect(handoffSessionId).not.toBe("sess-1");
     expect(marker.model).toBe("gpt-5.6-sol");
     expect(marker.effort).toBe("high");
+    expect(marker.cwd).toBe(realpathSync(proj));
     const argv = marker.argv as string[];
     expect(argv.join("\n")).toContain(paths.logPath);
     expect(argv.join("\n")).toContain("full Lucid review record");
@@ -1555,6 +1579,29 @@ if (process.env.LUCID_HARNESS === "codex") {
     const resumed = await readMarker(attendMarker, 10_000);
     expect(resumed.argv as string[]).toContain("codex-thread-from-output");
   }, 20_000);
+
+  test("a moved artifact starts a fresh same-harness session in its new project", async () => {
+    const oldProject = join(dir, "old-project");
+    const lucidDir = join(proj, ".lucid");
+    await mkdir(oldProject, { recursive: true });
+    await mkdir(lucidDir, { recursive: true });
+    artifact = join(lucidDir, "moved.html");
+    await writeFile(artifact, DOC);
+    paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "codex", sessionId: "old-codex-thread", cwd: oldProject },
+    });
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
+
+    const hub = await startDaemon();
+    await mount(hub);
+    await annotate("retry from the artifact's new project");
+
+    const marker = await readMarker(createMarker, 2_000);
+    expect(marker.cwd).toBe(realpathSync(proj));
+    expect(marker.harness).toBe("codex");
+    expect(marker.sessionId).not.toBe("old-codex-thread");
+  }, 10_000);
 
   test("switching harness bypasses the usage-limited harness's cooldown", async () => {
     const limited = join(dir, "limited-claude");
@@ -1603,4 +1650,49 @@ if (process.env.LUCID_HARNESS === "codex") {
     const marker = await readMarker(createMarker, 10_000);
     expect(marker.harness).toBe("codex");
   }, 20_000);
+
+  test("switching harness bypasses a generic delivery-failure cooldown", async () => {
+    const failed = join(dir, "failed-claude");
+    const codex = join(dir, "codex-create");
+    await writeFile(failed, '#!/bin/sh\necho "transport broke" >&2\nexit 1\n');
+    await chmod(failed, 0o755);
+    await writeExecStub(codex, createMarker);
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "claude-code",
+        harnesses: {
+          "claude-code": {
+            spawn: [failed, "{prompt}"],
+            resume: [failed, "{prompt}"],
+          },
+          codex: {
+            spawn: [codex, "{id}", "{artifact}", "{prompt}"],
+            resume: [codex, "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+
+    const hub = await startDaemon();
+    await mount(hub);
+    await annotate("continue after the source harness fails");
+    const failedBy = Date.now() + 10_000;
+    let failures = 0;
+    while (Date.now() < failedBy && failures < 3) {
+      failures = (await readEvents(paths.logPath)).events.filter(
+        (event) => event.t === "agent_turn_ended" && event.reason === "failed",
+      ).length;
+      if (failures < 3) await sleep(50);
+    }
+    expect(failures).toBe(3);
+
+    const switched = await req(hub.port, selectionUrl(), {
+      method: "POST",
+      body: JSON.stringify({ harness: "codex" }),
+    });
+    expect(switched.status).toBe(200);
+    const marker = await readMarker(createMarker, 2_000);
+    expect(marker.harness).toBe("codex");
+  }, 15_000);
 });

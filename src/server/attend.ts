@@ -1,4 +1,5 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 import { tracer } from "../core/verbose.ts";
 import { artifactAttendant } from "../core/attendant.ts";
 import { deliver } from "../core/deliver.ts";
@@ -6,6 +7,7 @@ import { shellArg } from "../core/escape.ts";
 import type { LogEvent, LogEventType } from "../core/events.ts";
 import { foldLog, type FoldedState } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
+import { ARTIFACT_DIR, projectRootOf } from "../core/paths.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { assemblePayload } from "../core/payload.ts";
 import { harnessSessionCwd, harnessSessionId, presenceFor } from "../core/presence.ts";
@@ -167,7 +169,34 @@ export const relayableTail = (output: string): string =>
  * footer belongs to the run that just finished. A "tokens used" the agent
  * happened to SAY fails the count-line check and the scan keeps walking back.
  */
-export const codexFinalMessage = (output: string): string | undefined => {
+const codexJsonFinalMessage = (
+  output: string,
+): { readonly message?: string; readonly recognized: boolean } => {
+  let message: string | undefined;
+  let recognized = false;
+  for (const line of output.split("\n")) {
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+    const event = value as Record<string, unknown>;
+    if (typeof event.type !== "string" || !/^(?:item|thread|turn)\./.test(event.type)) continue;
+    recognized = true;
+    if (event.type !== "item.completed") continue;
+    if (typeof event.item !== "object" || event.item === null || Array.isArray(event.item))
+      continue;
+    const item = event.item as Record<string, unknown>;
+    if (item.type === "agent_message" && typeof item.text === "string" && item.text.trim() !== "") {
+      message = item.text;
+    }
+  }
+  return message === undefined ? { recognized } : { message, recognized };
+};
+
+const codexTextFinalMessage = (output: string): string | undefined => {
   const marker = "\ntokens used\n";
   for (let at = output.lastIndexOf(marker); at !== -1; at = output.lastIndexOf(marker, at - 1)) {
     const after = output.slice(at + marker.length);
@@ -180,6 +209,11 @@ export const codexFinalMessage = (output: string): string | undefined => {
   return undefined;
 };
 
+export const codexFinalMessage = (output: string): string | undefined => {
+  const structured = codexJsonFinalMessage(output);
+  return structured.recognized ? structured.message : codexTextFinalMessage(output);
+};
+
 /**
  * The words a quiet turn gets relayed under: the harness's own final message
  * when the output carries a framing this engine knows how to read, else the
@@ -188,7 +222,9 @@ export const codexFinalMessage = (output: string): string | undefined => {
  * as markdown code blocks in the viewer.
  */
 export const relayableReply = (output: string): string => {
-  const final = codexFinalMessage(output);
+  const structured = codexJsonFinalMessage(output);
+  if (structured.recognized && structured.message === undefined) return "";
+  const final = structured.recognized ? structured.message : codexTextFinalMessage(output);
   if (final === undefined) return relayableTail(output);
   return stripNarration(final).slice(0, FINAL_MESSAGE_MAX).trim();
 };
@@ -274,6 +310,13 @@ const usableCwd = async (recorded: string | undefined, fallback: string): Promis
   return ok ? recorded : fallback;
 };
 
+/** A fresh harness owns the artifact, not the source harness's old checkout.
+ * Canonical artifacts live under `<project>/.lucid/`, so the directory above
+ * `.lucid` is the fallback when no enclosing checkout exists. */
+const artifactProjectCwd = (paths: SessionPaths): string =>
+  projectRootOf(paths.artifactDir) ??
+  (basename(paths.artifactDir) === ARTIFACT_DIR ? dirname(paths.artifactDir) : paths.artifactDir);
+
 /**
  * One artifact's delivery watcher. Created per mount, driven by the daemon's
  * timer.
@@ -301,7 +344,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   let stopped = false;
   /** Epoch ms before which this watcher does nothing (structural back-off). */
   let pausedUntil = 0;
-  /** Harness that caused a usage-wall pause. A deliberate switch bypasses it. */
+  /** Harness that caused a delivery pause. A deliberate switch bypasses it. */
   let pausedHarness: string | undefined;
   /** The seq of our own outstanding delivery claim. Read back from the log it
    *  would look like somebody else took the batch, and the turn it belongs to
@@ -525,6 +568,10 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const switchesHarness =
       selection?.harness !== undefined &&
       normalizeHarness(selection.harness) !== normalizeHarness(record.harness);
+    const priorCwd = await usableCwd(record.cwd, paths.artifactDir);
+    const priorProjectCwd = projectRootOf(priorCwd) ?? priorCwd;
+    const projectCwd = artifactProjectCwd(paths);
+    const startsFresh = switchesHarness || resolve(priorProjectCwd) !== resolve(projectCwd);
     const wantedHarness = switchesHarness ? selection.harness : record.harness;
     const resolved = registry ? resolveRecipe(registry, wantedHarness) : undefined;
     if (!resolved) {
@@ -541,9 +588,9 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       unattendable(`harness "${wantedHarness}" is not in the registry`);
       return;
     }
-    const recipeTemplate = switchesHarness ? resolved.recipe.spawn : resolved.recipe.resume;
+    const recipeTemplate = startsFresh ? resolved.recipe.spawn : resolved.recipe.resume;
     if (!recipeTemplate) {
-      unattendable(`recipe "${resolved.name}" has no ${switchesHarness ? "spawn" : "resume"} argv`);
+      unattendable(`recipe "${resolved.name}" has no ${startsFresh ? "spawn" : "resume"} argv`);
       return;
     }
 
@@ -568,11 +615,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       return;
     }
 
-    // Resume is cwd-scoped (D10): the session's own directory, else the
-    // artifact's. The child is that harness session, never the hub's.
-    const cwd = await usableCwd(record.cwd, paths.artifactDir);
-    const sessionId = switchesHarness ? crypto.randomUUID() : record.sessionId;
-    const prompt = switchesHarness
+    // A resume stays in the established session's cwd (D10). A fresh handoff
+    // starts from the artifact's current project, so a sandboxed target can
+    // write the artifact after it moved between projects.
+    const cwd = startsFresh ? projectCwd : priorCwd;
+    const sessionId = startsFresh ? crypto.randomUUID() : record.sessionId;
+    const prompt = startsFresh
       ? [
           "You are continuing an existing Lucid review in a new harness session.",
           `Read the full Lucid review record at ${paths.logPath}.`,
@@ -637,12 +685,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       // its own provenance. Stamping the target here made a pre-session failure
       // look resumable on retry, so handoff delivery remains unattributed until
       // the process establishes that session.
-      ...(!switchesHarness ? { attendant: { harness: resolved.name, sessionId, cwd } } : {}),
+      ...(!startsFresh ? { attendant: { harness: resolved.name, sessionId, cwd } } : {}),
     }).catch(() => {
       /* presence is advisory; a failed ack must not cancel the delivery */
     });
     log(
-      `attend ${paths.name}: delivering feedback via "${resolved.name}" ${switchesHarness ? "handoff" : "resume"}`,
+      `attend ${paths.name}: delivering feedback via "${resolved.name}" ${startsFresh ? "handoff" : "resume"}`,
     );
     // Where this run's output will start in the shared attend log, so a
     // silent-turn relay reads THIS turn's words and never an earlier run's.
@@ -665,7 +713,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // crash inherit an earlier turn's usage wall.
     const runOutput = (await readFile(paths.attendLog, "utf8").catch(() => "")).slice(outputFrom);
     const limit = code === 0 ? null : detectUsageLimit(runOutput);
-    const establishedSessionId = switchesHarness
+    const establishedSessionId = startsFresh
       ? (spawnedSessionId(resolved.name, runOutput) ?? (code === 0 ? sessionId : undefined))
       : sessionId;
     // The turn stopped, whatever it produced. The hub holds the child, so it
@@ -711,7 +759,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     }
     if (fails >= MAX_ATTEND_FAILS) {
       fails = 0;
-      pauseFor(ATTEND_COOLOFF_MS);
+      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
       log(
         `attend ${paths.name}: resume failed ${MAX_ATTEND_FAILS}x (exit ${code}); pausing attendance for ${ATTEND_COOLOFF_MS / 60000} minutes - see ${paths.attendLog}`,
       );
