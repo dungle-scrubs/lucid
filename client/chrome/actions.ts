@@ -925,6 +925,16 @@ export const createActions = (ctx: ActionsCtx) => {
     toOverlay({ source: "lucid-chrome", type: "reveal-section", lucidId });
   };
 
+  /** Emphasize an update already in view, once per version. The store guard is
+   *  synchronous so React's development effect replay cannot restart the same
+   *  pulse and make a soft glance read as a persistent animation. */
+  const pulseSection = (lucidId: string): void => {
+    const seen = get().emphasizedSectionIds;
+    if (seen.has(lucidId)) return;
+    set({ emphasizedSectionIds: new Set([...seen, lucidId]) });
+    toOverlay({ source: "lucid-chrome", type: "pulse-section", lucidId });
+  };
+
   // ---- hover + lightbox -----------------------------------------------------
 
   /** Mirror a card hover onto the surface mark (and back off with null/""). */
@@ -1091,6 +1101,7 @@ export const createActions = (ctx: ActionsCtx) => {
     skipQuestion,
     reaskQuestion,
     focusQuestionRef,
+    pulseSection,
     revealSection,
     setHovered,
     openLightbox,
