@@ -35,6 +35,76 @@ const openViewer = async (
   return { nextCursor: session.nextCursor };
 };
 
+interface OutlinePublicationProbe {
+  readonly errors: string[];
+  readonly messages: Array<Record<string, unknown>>;
+  readonly port: MessagePort | null;
+  readonly windowOutlineMessages: number;
+}
+
+type OutlinePublicationProbeView = Omit<OutlinePublicationProbe, "port"> & {
+  readonly connected: boolean;
+};
+
+const installOutlinePublicationProbe = async (page: Page): Promise<void> => {
+  await page.addInitScript(() => {
+    const state: OutlinePublicationProbe = {
+      errors: [],
+      messages: [],
+      port: null,
+      windowOutlineMessages: 0,
+    };
+    Object.defineProperty(window, "__outlineTest", { value: state });
+    window.addEventListener("message", (event) => {
+      if (
+        event.data?.source === "lucid-overlay-bootstrap" &&
+        event.data.type === "private-channel" &&
+        state.port === null
+      ) {
+        const port = event.ports[0] ?? null;
+        Object.defineProperty(state, "port", { configurable: true, value: port });
+        if (port) {
+          port.addEventListener("message", (message) =>
+            state.messages.push(message.data as Record<string, unknown>),
+          );
+          port.start();
+        }
+      } else if (event.data?.type === "outline-snapshot") {
+        Object.defineProperty(state, "windowOutlineMessages", {
+          configurable: true,
+          value: state.windowOutlineMessages + 1,
+        });
+      }
+    });
+    window.addEventListener("error", (event) =>
+      state.errors.push(event.error?.stack ?? event.message),
+    );
+  });
+};
+
+const outlineProbe = async (page: Page): Promise<OutlinePublicationProbeView> =>
+  page.evaluate(() => {
+    const state = (window as unknown as { __outlineTest: OutlinePublicationProbe }).__outlineTest;
+    return {
+      connected: state.port !== null,
+      errors: state.errors,
+      messages: state.messages,
+      windowOutlineMessages: state.windowOutlineMessages,
+    };
+  });
+
+const outlineProbeMessages = async (page: Page): Promise<Array<Record<string, unknown>>> =>
+  (await outlineProbe(page)).messages;
+
+const outlineProbeSnapshots = async (page: Page): Promise<Array<Record<string, unknown>>> =>
+  (await outlineProbeMessages(page)).filter(({ type }) => type === "outline-snapshot");
+
+const latestOutlineProbeSnapshot = async (page: Page): Promise<Record<string, unknown> | null> =>
+  (await outlineProbeSnapshots(page)).at(-1) ?? null;
+
+const outlineProbeSnapshotCount = async (page: Page): Promise<number> =>
+  (await outlineProbeSnapshots(page)).length;
+
 test("Enter sends the message, which is what the composer's placeholder promises", async ({
   page,
 }) => {
@@ -1922,33 +1992,7 @@ test("the active outline runtime publishes complete geometry only over its pre-a
   page,
 }) => {
   await page.setViewportSize({ width: 2_400, height: 900 });
-  await page.addInitScript(() => {
-    const state: {
-      errors: string[];
-      messages: unknown[];
-      port: MessagePort | null;
-      windowOutlineMessages: number;
-    } = { errors: [], messages: [], port: null, windowOutlineMessages: 0 };
-    Object.defineProperty(window, "__outlineTest", { value: state });
-    window.addEventListener("message", (event) => {
-      if (
-        event.data?.source === "lucid-overlay-bootstrap" &&
-        event.data.type === "private-channel" &&
-        state.port === null
-      ) {
-        state.port = event.ports[0] ?? null;
-        if (state.port) {
-          state.port.addEventListener("message", (message) => state.messages.push(message.data));
-          state.port.start();
-        }
-      } else if (event.data?.type === "outline-snapshot") {
-        state.windowOutlineMessages += 1;
-      }
-    });
-    window.addEventListener("error", (event) =>
-      state.errors.push(event.error?.stack ?? event.message),
-    );
-  });
+  await installOutlinePublicationProbe(page);
   const artifact = `<!doctype html><html><head><meta charset="utf-8"><title>Outline runtime</title>
     <style>body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}.__lucid_section_target{position:fixed!important;right:20px;top:120px;width:180px;height:120px;box-shadow:0 0 80px red!important}</style></head><body>
     <main><h1>Database migration plan outline runtime</h1><h2>Context</h2><p>One</p><h2>Milestones</h2><p>Two</p><h2>Risks</h2><p>Three</p></main>
@@ -2053,27 +2097,9 @@ test("the active outline runtime publishes complete geometry only over its pre-a
       ),
     )
     .toBeGreaterThan(0);
-  const latestSnapshot = async (): Promise<Record<string, unknown> | null> =>
-    page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __outlineTest: { messages: Array<Record<string, unknown>> };
-          }
-        ).__outlineTest.messages
-          .filter(({ type }) => type === "outline-snapshot")
-          .at(-1) ?? null,
-    );
-  const snapshot = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __outlineTest: { messages: Array<Record<string, unknown>> };
-        }
-      ).__outlineTest.messages
-        .filter(({ type }) => type === "outline-snapshot")
-        .at(-1) ?? null,
-  );
+  const latestSnapshot = (): Promise<Record<string, unknown> | null> =>
+    latestOutlineProbeSnapshot(page);
+  const snapshot = await latestSnapshot();
   expect(snapshot).not.toBeNull();
   if (!snapshot) throw new Error("outline snapshot missing");
   expect(snapshot).toMatchObject({
@@ -2083,15 +2109,7 @@ test("the active outline runtime publishes complete geometry only over its pre-a
     proof: { complete: true, reason: "complete-unused-rectangle" },
   });
   const taskCount = async (): Promise<number> => (await outlineDebugInfo(page))?.taskCount ?? 0;
-  const snapshotCount = async (): Promise<number> =>
-    page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __outlineTest: { messages: Array<Record<string, unknown>> };
-          }
-        ).__outlineTest.messages.filter(({ type }) => type === "outline-snapshot").length,
-    );
+  const snapshotCount = (): Promise<number> => outlineProbeSnapshotCount(page);
   const initialTaskCount = await taskCount();
   const initialSnapshotCount = await snapshotCount();
 
@@ -2627,6 +2645,391 @@ test("the active chrome accepts outline state only from its captured private por
   await expect
     .poll(async () => Number(await region.getAttribute("data-outline-generation")))
     .toBeGreaterThan(Number(generation));
+});
+
+test("delayed font, image, and content reflow withdraw stale outline state until stable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await installOutlinePublicationProbe(page);
+  let releaseFont!: () => void;
+  let releaseImage!: () => void;
+  const fontGate = new Promise<void>((resolve) => {
+    releaseFont = resolve;
+  });
+  const imageGate = new Promise<void>((resolve) => {
+    releaseImage = resolve;
+  });
+  await page.route("https://lucid.invalid/delayed.ttf", async (route) => {
+    await fontGate;
+    await route.fulfill({
+      contentType: "font/ttf",
+      headers: { "access-control-allow-origin": "*" },
+      // This font ships with the locked Playwright dependency, so the fixture
+      // is repository-reproducible rather than coupled to a host font install.
+      path: join(
+        process.cwd(),
+        "node_modules/playwright-core/lib/vite/recorder/assets/codicon-DCmgc-ay.ttf",
+      ),
+    });
+  });
+  await page.route("https://lucid.invalid/delayed.png", async (route) => {
+    await imageGate;
+    await route.fulfill({
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+      contentType: "image/png",
+    });
+  });
+  const artifact = `<!doctype html><html><head><style>
+    @font-face{font-family:DelayedOutline;src:url(https://lucid.invalid/delayed.ttf)}
+    body{max-width:700px;margin:40px auto;font-family:system-ui}
+    body.load-delayed-font{font-family:DelayedOutline,system-ui}
+    #font-probe{display:inline-block;font-size:48px}
+    #delayed-content-reflow{height:240px}
+  </style></head><body><main><h1>Delayed outline</h1>
+    <h2>Context</h2><p id="font-probe" data-lucid-id="pick-while-unsettled">&#xea60;&#xea60;&#xea60;&#xea60;</p>
+    <h2>Milestones</h2><p>B</p><h2>Risks</h2><p>C</p>
+  </main></body></html>`;
+  await openViewer(page, artifact, "Delayed outline");
+  const snapshots = (): Promise<Array<Record<string, unknown>>> => outlineProbeSnapshots(page);
+
+  await expect
+    .poll(async () => (await outlineDebugInfo(page))?.proofReason ?? "missing")
+    .toBe("complete-unused-rectangle");
+  await expect(on(page).artifactOutline()).toHaveAttribute("data-mode", "pinned");
+  const initialGeneration = Number((await snapshots()).at(-1)?.generation ?? 0);
+  const beforeImage = (await outlineProbeMessages(page)).length;
+  await surfaceOf(page)
+    .locator("main")
+    .evaluate((main) => {
+      const image = document.createElement("img");
+      image.alt = "layout probe";
+      image.src = "https://lucid.invalid/delayed.png";
+      main.prepend(image);
+      const view = main.ownerDocument.defaultView as Window & { __assetTimer?: number };
+      view.__assetTimer = view.setInterval(() => {
+        main.ownerDocument.body.toggleAttribute("data-assets-active");
+      }, 10);
+    });
+  await expect
+    .poll(async () =>
+      (await outlineProbeMessages(page))
+        .slice(beforeImage)
+        .some(({ type }) => type === "outline-invalidated"),
+    )
+    .toBe(true);
+  await expect(on(page).artifactOutline()).toHaveCount(0);
+  await surfaceOf(page).locator('[data-lucid-id="pick-while-unsettled"]').click();
+  await expect(on(page).annotationNote()).toBeVisible();
+  await on(page).annotationNote().press("Escape");
+  await expect(on(page).annotationNote()).toHaveCount(0);
+  await surfaceOf(page)
+    .locator("main")
+    .evaluate((main) => {
+      const view = main.ownerDocument.defaultView as Window & { __assetTimer?: number };
+      if (view.__assetTimer !== undefined) view.clearInterval(view.__assetTimer);
+    });
+  await expect
+    .poll(async () =>
+      Number(
+        (await snapshots()).findLast(
+          ({ proof }) =>
+            (proof as Record<string, unknown> | undefined)?.reason === "layout-unsettled",
+        )?.generation ?? 0,
+      ),
+    )
+    .toBeGreaterThan(initialGeneration);
+  const unsettledDebug = await outlineDebugInfo(page);
+  expect(unsettledDebug).toMatchObject({ proofComplete: false, proofReason: "layout-unsettled" });
+  expect(unsettledDebug?.taskCount).toBeLessThanOrEqual(3);
+  expect(unsettledDebug?.lastDurationMs).toBeLessThanOrEqual(
+    ARTIFACT_OUTLINE_POLICY.proofTimeBudgetMs + 4,
+  );
+
+  const imageUnsettledGeneration = Number((await snapshots()).at(-1)?.generation ?? 0);
+  releaseImage();
+  await expect
+    .poll(async () => Number((await snapshots()).at(-1)?.generation ?? 0))
+    .toBeGreaterThan(imageUnsettledGeneration);
+  await expect(on(page).artifactOutline()).toHaveAttribute("data-mode", "pinned");
+
+  const fontWidthBefore = await surfaceOf(page)
+    .locator("#font-probe")
+    .evaluate((element) => element.getBoundingClientRect().width);
+  const beforeFont = (await outlineProbeMessages(page)).length;
+  await surfaceOf(page)
+    .locator("body")
+    .evaluate((body) => body.setAttribute("class", "load-delayed-font"));
+  await expect
+    .poll(async () =>
+      (await outlineProbeMessages(page))
+        .slice(beforeFont)
+        .some(({ type }) => type === "outline-invalidated"),
+    )
+    .toBe(true);
+  await expect
+    .poll(async () =>
+      Number(
+        (await snapshots()).findLast(
+          ({ proof }) =>
+            (proof as Record<string, unknown> | undefined)?.reason === "layout-unsettled",
+        )?.generation ?? 0,
+      ),
+    )
+    .toBeGreaterThan(imageUnsettledGeneration);
+  await expect(on(page).artifactOutline()).toHaveCount(0);
+  expect(
+    (await outlineProbeMessages(page))
+      .slice(beforeFont)
+      .some(
+        ({ availability, proof, type }) =>
+          type === "outline-snapshot" &&
+          (availability === "complete" ||
+            (proof as Record<string, unknown> | undefined)?.complete === true),
+      ),
+  ).toBe(false);
+  const fontUnsettledGeneration = Number((await snapshots()).at(-1)?.generation ?? 0);
+  releaseFont();
+  await surfaceOf(page)
+    .locator("body")
+    .evaluate(() => document.fonts.ready);
+  await expect
+    .poll(async () => Number((await snapshots()).at(-1)?.generation ?? 0))
+    .toBeGreaterThan(fontUnsettledGeneration);
+  await expect(on(page).artifactOutline()).toHaveAttribute("data-mode", "pinned");
+  const fontWidthAfter = await surfaceOf(page)
+    .locator("#font-probe")
+    .evaluate((element) => element.getBoundingClientRect().width);
+  expect(Math.abs(fontWidthAfter - fontWidthBefore)).toBeGreaterThan(1);
+  const stableSnapshots = await snapshots();
+  const stable = stableSnapshots.at(-1);
+  expect(stable).toMatchObject({
+    availability: "complete",
+    headings: [{ label: "Context" }, { label: "Milestones" }, { label: "Risks" }],
+    proof: { complete: true },
+  });
+  const stableGeneration = Number(stable?.generation ?? 0);
+  const stableMessageCount = (await outlineProbeMessages(page)).length;
+
+  await surfaceOf(page)
+    .locator("main")
+    .evaluate((main) => {
+      const reflow = document.createElement("div");
+      reflow.id = "delayed-content-reflow";
+      main.prepend(reflow);
+      const view = main.ownerDocument.defaultView as Window & { __reflowTimer?: number };
+      view.__reflowTimer = view.setInterval(() => {
+        main.ownerDocument.body.toggleAttribute("data-reflow-active");
+      }, 10);
+    });
+  await expect
+    .poll(async () =>
+      (await outlineProbeMessages(page))
+        .slice(stableMessageCount)
+        .some(({ type }) => type === "outline-invalidated"),
+    )
+    .toBe(true);
+  await expect(on(page).artifactOutline()).toHaveCount(0);
+  expect(
+    (await outlineProbeMessages(page))
+      .slice(stableMessageCount)
+      .findIndex(({ type }) => type === "outline-snapshot"),
+  ).toBe(-1);
+  await surfaceOf(page)
+    .locator("main")
+    .evaluate((main) => {
+      const view = main.ownerDocument.defaultView as Window & { __reflowTimer?: number };
+      if (view.__reflowTimer !== undefined) view.clearInterval(view.__reflowTimer);
+    });
+  await expect
+    .poll(async () => Number((await snapshots()).at(-1)?.generation ?? 0))
+    .toBeGreaterThan(stableGeneration);
+  const afterReflow = (await snapshots()).at(-1);
+  expect(afterReflow).toMatchObject({
+    availability: "complete",
+    headings: [{ label: "Context" }, { label: "Milestones" }, { label: "Risks" }],
+  });
+  await expect(on(page).warning()).toHaveCount(0);
+  expect(JSON.stringify(await outlineDebugInfo(page))).not.toContain("Context");
+});
+
+const hostileOutlineFixtures = [
+  {
+    name: "full-width wrapper",
+    markup: '<aside id="hazard"></aside>',
+    style: "#hazard{height:24px;width:100vw;margin-left:calc((700px - 100vw)/2);background:#eee}",
+  },
+  {
+    name: "fixed paint",
+    markup: '<aside id="hazard"></aside>',
+    style: "#hazard{position:fixed;right:240px;top:120px;width:180px;height:120px;background:red}",
+  },
+  {
+    name: "absolute paint",
+    markup: '<aside id="hazard"></aside>',
+    style:
+      "#hazard{position:absolute;right:240px;top:120px;width:240px;height:120px;background:red}",
+  },
+  {
+    name: "transformed paint",
+    markup: '<aside id="hazard"></aside>',
+    style: "#hazard{width:240px;height:30px;margin-left:712px;transform:translateX(1px)}",
+  },
+  {
+    name: "sticky paint",
+    markup: '<aside id="hazard"></aside>',
+    style: "#hazard{position:sticky;top:20px;width:240px;height:30px;margin-left:712px}",
+  },
+  {
+    name: "visible overflow",
+    markup: '<aside id="hazard"><span></span></aside>',
+    style:
+      "#hazard{width:10px;height:30px;margin-left:650px;overflow:visible}#hazard span{display:block;width:300px;height:20px}",
+  },
+  {
+    name: "pseudo-content",
+    markup: '<aside id="hazard"></aside>',
+    style:
+      '#hazard{width:40px;height:30px;margin-left:650px}#hazard::after{content:"generated paint"}',
+  },
+  {
+    name: "shadow paint",
+    markup: '<aside id="hazard"></aside>',
+    style: "#hazard{width:40px;height:30px;margin-left:650px;box-shadow:80px 0 40px red}",
+  },
+  {
+    name: "clipped paint",
+    markup: '<aside id="hazard"></aside>',
+    style: "#hazard{width:40px;height:30px;margin-left:650px;clip-path:inset(1px)}",
+  },
+] as const;
+
+for (const fixture of hostileOutlineFixtures) {
+  test(`hostile ${fixture.name} fails pinned outline proof closed`, async ({ page }) => {
+    await page.setViewportSize({ width: 2_400, height: 900 });
+    await installOutlinePublicationProbe(page);
+    const artifact = `<!doctype html><html><head><style>
+      body{max-width:700px;margin:40px auto;font-family:system-ui}${fixture.style}
+    </style></head><body><main><h1>Hostile outline</h1>
+      <h2>Context</h2><p id="pick-target" data-lucid-id="hostile-pick">A</p>
+      <h2>Milestones</h2><p>B</p><h2>Risks</h2><p>C</p>${fixture.markup}
+    </main></body></html>`;
+    await openViewer(page, artifact, "Hostile outline");
+
+    const outline = on(page).artifactOutline();
+    await expect
+      .poll(async () => (await outlineDebugInfo(page))?.taskCount ?? 0)
+      .toBeGreaterThan(0);
+    await expect.poll(async () => (await outlineDebugInfo(page))?.headingCount ?? 0).toBe(3);
+    await expect
+      .poll(async () => (await outlineDebugInfo(page))?.pendingQuietTask ?? true)
+      .toBe(false);
+    const debug = await outlineDebugInfo(page);
+    expect(debug).toMatchObject({
+      headingCount: 3,
+      pendingQuietTask: false,
+      proofComplete: false,
+    });
+    expect(debug?.proofReason).not.toBe("not-requested");
+    expect(
+      (await outlineProbeSnapshots(page)).filter(
+        ({ availability, proof }) =>
+          availability === "complete" &&
+          (proof as Record<string, unknown> | undefined)?.complete === true,
+      ),
+    ).toEqual([]);
+    await expect(outline).toHaveAttribute("data-mode", "transient_closed");
+    await on(page).artifactOutlineRail().click();
+    await expect(outline).toHaveAttribute("data-mode", "transient_latched");
+    await expect(on(page).artifactOutlineItem()).toHaveCount(3);
+    await expect(on(page).artifactOutlineItem().nth(0)).toHaveAccessibleName("Context");
+    await expect(on(page).artifactOutlineItem().nth(2)).toHaveAccessibleName("Risks");
+
+    await surfaceOf(page).locator('[data-lucid-id="hostile-pick"]').click();
+    await expect(on(page).annotationNote()).toBeVisible();
+    await expect(on(page).warning()).toHaveCount(0);
+  });
+}
+
+test("nested scroller and shadow headings stay transient and out of the projection", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}
+    #nested{height:80px;overflow-y:auto}#nested p{height:240px}
+  </style></head><body><main><h1>Hostile outline</h1>
+    <h2>Light one</h2><p data-lucid-id="hostile-pick">A</p>
+    <div id="nested"><h2>Nested hidden</h2><p>B</p></div>
+    <span id="shadow-host"></span><h2>Light two</h2><p>C</p><h2>Light three</h2><p>D</p>
+  </main><script>
+    const root=document.querySelector("#shadow-host").attachShadow({mode:"open"});
+    root.innerHTML="<h2>Shadow hidden</h2><p>Secret</p>";
+  </script></body></html>`;
+  await openViewer(page, artifact, "Hostile outline");
+
+  await expect(on(page).artifactOutline()).toHaveAttribute("data-mode", "transient_closed");
+  await on(page).artifactOutlineRail().click();
+  await expect(on(page).artifactOutline()).toHaveAttribute("data-mode", "transient_latched");
+  await expect(on(page).artifactOutlineItem()).toHaveCount(3);
+  await expect(on(page).artifactOutlineItem()).toHaveText([
+    "Light one",
+    "Light two",
+    "Light three",
+  ]);
+  await expect(page.getByText("Nested hidden", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Shadow hidden", { exact: true })).toHaveCount(0);
+  await surfaceOf(page).locator('[data-lucid-id="hostile-pick"]').click();
+  await expect(on(page).annotationNote()).toBeVisible();
+});
+
+test("repeated permanent outline failure stays parent-owned, bounded, and silent", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  const headings = Array.from(
+    { length: 65 },
+    (_, index) => `<h2>Sensitive permanent label ${index}</h2>`,
+  ).join("");
+  const { nextCursor } = await openViewer(
+    page,
+    `<!doctype html><html><head><style>body{max-width:700px;margin:40px auto}</style></head><body><h1>Permanent outline failure</h1>${headings}</body></html>`,
+    "Permanent outline failure",
+  );
+  const region = on(page).surfaceRegion();
+  await expect(region).toHaveAttribute("data-outline-health", "AO-001");
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const beforeTaskCount = (await outlineDebugInfo(page))?.taskCount ?? 0;
+    await surfaceOf(page)
+      .locator("body")
+      .evaluate((body, value) => body.setAttribute("data-permanent-retry", String(value)), attempt);
+    await expect
+      .poll(async () => (await outlineDebugInfo(page))?.taskCount ?? 0)
+      .toBeGreaterThan(beforeTaskCount);
+    await expect(region).toHaveAttribute("data-outline-health", "AO-001");
+  }
+  await expect(on(page).artifactOutline()).toHaveCount(0);
+  // Gate 4's escape hatch deliberately suppresses the optional visible
+  // escalation. Zero warnings satisfies the bounded at-most-one contract.
+  await expect(on(page).warning()).toHaveCount(0);
+  await expect(page.locator('[data-role="human"], [data-role="agent"]')).toHaveCount(0);
+  expect(await page.locator("body").innerText()).not.toContain("Sensitive permanent label");
+  expect(
+    await page.evaluate(() => Object.keys(localStorage).filter((key) => key.includes("outline"))),
+  ).toEqual([]);
+  const payload = (await cli.run([
+    "wait",
+    cli.artifact,
+    "--since",
+    nextCursor,
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ])) as { annotations?: unknown[]; messages?: unknown[]; status: string };
+  expect(payload).toMatchObject({ annotations: [], messages: [], status: "waiting" });
 });
 
 test("a proven gutter renders a pinned, accessible outline without changing the artifact frame", async ({

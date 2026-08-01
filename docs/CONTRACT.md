@@ -39,6 +39,15 @@ matrices, anything the human will want to mark up at the element or phrase level
    whole group as a unit; without it the only target for the group itself is the
    hairline gap between children.
 
+   For long documents, semantic `h2` section headings are recommended as an
+   optional navigation enhancement. Lucid may derive an outline from ordinary
+   eligible `h2` elements without changing the artifact's width. Authors MUST NOT
+   reserve space for the outline or treat it as part of the document, and they do
+   not need to author a table of contents, prescribe a content width, or add
+   `data-lucid-id` attributes for navigation. The artifact remains complete when
+   no outline is available, and the derived outline is independent of authored
+   IDs.
+
 2. **Reference assets with relative paths.** `./diagram.png` resolves both under
    Lucid and on a direct `file://` open. Root-prefixed `/diagram.png` also works
    under Lucid but not on direct open. Keep referenced assets at or below the

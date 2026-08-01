@@ -59,6 +59,13 @@ Never fake the review loop, and never paste build instructions at the user.
    get feedback; keep each id unique within the document - duplicate ids are
    skipped during anchor resolution.
 
+   **For a long artifact, prefer semantic `h2` section headings.** Lucid can
+   derive an optional navigation outline from ordinary eligible `h2` elements.
+   This is a width-neutral enhancement: do not reserve a rail, prescribe a
+   content width, author a table of contents, or add `data-lucid-id` solely for
+   navigation. The artifact remains complete and reviewable when the outline is
+   absent, and heading navigation does not depend on authored IDs.
+
    **Mark anything you want a yes or no on** with `data-lucid-decision` on the
    element that holds it - a recommended action, a proposed default, an option
    you are advising for:

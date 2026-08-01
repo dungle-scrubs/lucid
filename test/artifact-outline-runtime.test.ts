@@ -530,9 +530,13 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
         pseudoContent: () => ({ after: fixture.pseudo ?? "none", before: "none" }),
         settled: fixture.settled,
       });
-      expect(complete([main, hazard], custom)).toMatchObject({
+      const publication = complete([main, hazard], custom);
+      expect(publication).toMatchObject({
         proof: { complete: false, reason: fixture.reason },
       });
+      if (fixture.reason === "layout-unsettled") {
+        expect(publication).toMatchObject({ availability: "absent", headings: [] });
+      }
     }
   });
 
@@ -634,6 +638,81 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     scheduler.flushQuiet();
     expect(publications).toEqual([]);
     expect(runtime.debugInfo()).toMatchObject({ connected: false, pendingQuietTask: false });
+  });
+
+  test("a transient work-budget miss gets one quiet retry and recovers", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    const base = geometry([main]);
+    let traversals = 0;
+    let now = 0;
+    const result = harness([main], {
+      geometry: {
+        ...base,
+        completeTraversal: () => {
+          traversals += 1;
+          return traversals > 1;
+        },
+      },
+      now: () => now,
+    });
+
+    result.runtime.requestLayout(request);
+    result.scheduler.flushQuiet();
+    expect(result.publications.at(-1)).toMatchObject({
+      availability: "absent",
+      health: { code: "AO-004", reason: "item-budget-exhausted" },
+    });
+    expect(result.runtime.debugInfo()).toMatchObject({ pendingQuietTask: true, taskCount: 1 });
+
+    now += 250;
+    result.scheduler.flushQuiet();
+    expect(result.publications.at(-1)).toMatchObject({ availability: "complete" });
+    expect(result.runtime.debugInfo()).toMatchObject({ pendingQuietTask: false, taskCount: 2 });
+    result.scheduler.flushQuiet();
+    expect(result.runtime.debugInfo()).toMatchObject({ pendingQuietTask: false, taskCount: 2 });
+  });
+
+  test("persistent budget failure gets one retry per invalidation and disconnect cancels it", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    let now = 0;
+    const alwaysExhausted = {
+      ...geometry([main]),
+      completeTraversal: () => false,
+    };
+    const result = harness([main], { geometry: alwaysExhausted, now: () => now });
+
+    result.runtime.requestLayout(request);
+    result.scheduler.flushQuiet();
+    now += 250;
+    result.scheduler.flushQuiet();
+    result.scheduler.flushQuiet();
+    expect(result.runtime.debugInfo()).toMatchObject({ pendingQuietTask: false, taskCount: 2 });
+
+    result.runtime.invalidate("fresh-external-change");
+    now += 250;
+    result.scheduler.flushQuiet();
+    expect(result.runtime.debugInfo()).toMatchObject({ pendingQuietTask: true, taskCount: 3 });
+    now += 250;
+    result.scheduler.flushQuiet();
+    result.scheduler.flushQuiet();
+    expect(result.runtime.debugInfo()).toMatchObject({ pendingQuietTask: false, taskCount: 4 });
+
+    const cancelled = harness([main], { geometry: alwaysExhausted, now: () => now });
+    cancelled.runtime.requestLayout(request);
+    cancelled.scheduler.flushQuiet();
+    expect(cancelled.runtime.debugInfo()).toMatchObject({ pendingQuietTask: true, taskCount: 1 });
+    cancelled.runtime.disconnect();
+    now += 250;
+    cancelled.scheduler.flushQuiet();
+    expect(cancelled.runtime.debugInfo()).toMatchObject({
+      connected: false,
+      pendingQuietTask: false,
+      taskCount: 1,
+    });
   });
 
   test("sustained just-quiet mutations bound projection work and retain one trailing rebuild", () => {
