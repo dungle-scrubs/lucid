@@ -3897,6 +3897,28 @@ test("a tall outline stays clear of stale controls, a question, and the root scr
   }
 });
 
+test("a numbered heading keeps its gap in the outline", async ({ page }) => {
+  // The number a reader sees is usually its own element, spaced by CSS:
+  // `<h2><span class="n">1.</span>Where I'm at</h2>`. Reading raw text nodes
+  // fused them into "1.Where I'm at" in the outline while the artifact itself
+  // read correctly - the gap is in the rendering, not in the text.
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>html,body{margin:0;width:100%;font-family:system-ui}h1,h2,p{padding:0 24px}.n{margin-right:.5em}</style></head><body><main><h1>Numbered plan</h1><h2><span class="n">1.</span>Where I'm at</h2><p>A</p><h2><span class="n">2.</span>What I need</h2><p style="height:500px">B</p><h2>3. Already spaced</h2><p>C</p></main></body></html>`,
+    "Numbered plan",
+  );
+
+  const outline = on(page).artifactOutline();
+  if ((await outline.getAttribute("data-mode")) !== "pinned") {
+    await on(page).artifactOutlineRail().focus();
+  }
+  const items = on(page).artifactOutlineItem();
+  await expect(items.nth(0)).toHaveText("1. Where I'm at");
+  await expect(items.nth(1)).toHaveText("2. What I need");
+  // A heading that already carries its own spacing is untouched - no doubling.
+  await expect(items.nth(2)).toHaveText("3. Already spaced");
+});
+
 test("outline geometry remains crisp at representative one-x and two-x scales", async ({
   browser,
 }) => {

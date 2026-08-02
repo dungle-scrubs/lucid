@@ -321,12 +321,20 @@ and the `attendant` stamp carries them (`{ harness, sessionId?, cwd?, model?,
 effort?, sessionIdAuthority?, launchId? }`); the viewer displays them, subdued,
 in place of the pickers.
 
-These are a CAPTURE, not a live reading: Lucid records what the environment
-said when the attending session last ran `lucid wait`, and nothing re-reads it
-afterwards. A session that changes its model or thinking level mid-conversation
-keeps displaying the values it started with, and a harness that exports neither
-shows no model at all - the viewer can only report what the attendant told it.
-Re-export before the next `wait` to correct it.
+The environment is read once, when the session starts, so a session that
+changes model or thinking level mid-conversation would keep displaying what it
+began with. State the current values on the wait instead:
+
+```sh
+lucid wait plan.html --harness pi --model anthropic/claude-opus-4-8 --effort max
+```
+
+`--model` / `--effort` are this turn's answer to "what are you running", and
+they outrank the environment. Every wait is a fresh process and a fresh chance
+to say, so a harness that knows its own settings keeps the viewer honest
+without exporting anything. A field a wait does not state keeps its last known
+value - the update is a merge, never a replacement - and a harness that states
+nothing falls back to the exported environment exactly as before.
 
 **Changing harness is a handoff, not a resume.** The next pending batch starts
 the target recipe's `spawn` command with a fresh session id. Its prompt points

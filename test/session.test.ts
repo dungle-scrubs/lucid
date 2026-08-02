@@ -21,6 +21,7 @@ import { assemblePayload, buildWaitPayload } from "../src/core/payload.ts";
 import { cursorSidecarPath, sessionPaths, snapshotPath } from "../src/core/paths.ts";
 import { commitWatchedChange, ensureSessionDirs, openSession } from "../src/core/session.ts";
 import { promotePendingBindings } from "../src/core/deliver.ts";
+import { runWaitCli } from "../src/cli/run.ts";
 import { listSessions, projectRoot } from "../src/core/sessions.ts";
 
 let dir: string;
@@ -1205,6 +1206,61 @@ describe("the CLI's own stamps carry launch identity from the environment", () =
       sessionIdAuthority: "observed",
     });
   }, 20_000);
+});
+
+describe("an attending session can state what it is running, per wait", () => {
+  test("a stated model/effort updates the sidecar the viewer reads", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+
+    // The session starts on one setting...
+    await runWaitCli(artifact, {
+      harness: "pi",
+      model: "anthropic/claude-opus-4-8",
+      effort: "high",
+      timeoutMs: 0,
+    });
+    expect(await readLastAttendant(paths)).toMatchObject({
+      harness: "pi",
+      model: "anthropic/claude-opus-4-8",
+      effort: "high",
+    });
+
+    // ...the human turns thinking up mid-conversation, and the next wait says
+    // so. Without this the viewer shows the level the session STARTED with
+    // forever, which is what made a pi session at max read as "high".
+    await runWaitCli(artifact, { harness: "pi", effort: "max", timeoutMs: 0 });
+    const updated = await readLastAttendant(paths);
+    expect(updated?.effort).toBe("max");
+    // A field the wait did not state keeps its last known value rather than
+    // being erased - the merge is an update, not a replacement.
+    expect(updated?.model).toBe("anthropic/claude-opus-4-8");
+  });
+
+  test("a stated setting outranks a stale environment", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    const previous = { effort: process.env.LUCID_EFFORT, model: process.env.LUCID_MODEL };
+    process.env.LUCID_MODEL = "exported-once-at-startup";
+    process.env.LUCID_EFFORT = "low";
+    try {
+      await runWaitCli(artifact, {
+        harness: "pi",
+        model: "what-it-actually-runs",
+        effort: "max",
+        timeoutMs: 0,
+      });
+      expect(await readLastAttendant(paths)).toMatchObject({
+        model: "what-it-actually-runs",
+        effort: "max",
+      });
+    } finally {
+      if (previous.model === undefined) delete process.env.LUCID_MODEL;
+      else process.env.LUCID_MODEL = previous.model;
+      if (previous.effort === undefined) delete process.env.LUCID_EFFORT;
+      else process.env.LUCID_EFFORT = previous.effort;
+    }
+  });
 });
 
 describe("pending binding promotion (identity before the log exists)", () => {

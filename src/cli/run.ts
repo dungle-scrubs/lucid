@@ -71,14 +71,19 @@ const turnStamp = (): { turnId?: string } => {
   return t && t.length > 0 ? { turnId: t.slice(0, 128) } : {};
 };
 
-const attendantStamp = (harness?: string): AttendantStamp | undefined => {
+const attendantStamp = (
+  harness?: string,
+  live?: { readonly model?: string; readonly effort?: string },
+): AttendantStamp | undefined => {
   const h = harness || process.env.LUCID_HARNESS;
   const sessionId = process.env.LUCID_SESSION_ID;
   if (!h && !sessionId) return undefined;
   // Model/effort ride the same way (LUCID_MODEL / LUCID_EFFORT): the viewer's
-  // inherited pickers show what the attending session actually runs.
-  const model = process.env.LUCID_MODEL;
-  const effort = process.env.LUCID_EFFORT;
+  // inherited pickers show what the attending session actually runs. A caller
+  // that STATES them (a wait declaring its current settings) outranks the
+  // environment, which was read once when the session started.
+  const model = live?.model ?? process.env.LUCID_MODEL;
+  const effort = live?.effort ?? process.env.LUCID_EFFORT;
   // Through the shared normalizer even though we authored it: the direct-
   // append path bypasses the server, and the log's invariants (bounded,
   // control-free strings) must not depend on which writer was live.
@@ -261,6 +266,18 @@ export interface WaitCliOptions extends WaitOptions {
   /** Ready-to-paste command that resumes this harness conversation. Recorded
    *  in the sidecar and surfaced (viewer, listing); never executed by Lucid. */
   readonly resume?: string;
+  /**
+   * What the attending session is running RIGHT NOW.
+   *
+   * The environment is read once, when the session starts; a human who changes
+   * model or thinking level mid-conversation leaves Lucid displaying what the
+   * session began with, and a harness that exports neither shows no model at
+   * all. Every wait is a fresh process and a fresh chance to say - so a
+   * harness that knows its current settings states them here, and the viewer
+   * stops presenting a start-of-session capture as current state.
+   */
+  readonly model?: string;
+  readonly effort?: string;
 }
 
 /** `lucid wait <file> [--since] [--timeout] [--reply] [--harness] [--resume]` - block
@@ -270,7 +287,10 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   const paths = sessionPaths(file);
 
   if (options.reply !== undefined && options.reply.length > 0) {
-    const attendant = attendantStamp(options.harness);
+    const attendant = attendantStamp(options.harness, {
+      ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    });
     await deliver(paths, {
       t: "agent_reply",
       id: randomId(),
@@ -287,7 +307,10 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   // hand-off (D-064).
   if (payload.status === "feedback" && options.since !== undefined) {
     try {
-      const attendant = attendantStamp(options.harness);
+      const attendant = attendantStamp(options.harness, {
+        ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.effort !== undefined ? { effort: options.effort } : {}),
+      });
       // What this hand-off actually covers (D20): the cursor just read, not
       // the ack's own position. Feedback that lands between the read and this
       // append belongs to the NEXT batch, and the hub's attend engine reads
@@ -313,14 +336,21 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
     // log agree on what the attending session runs.
     // The RESOLVED harness, not the flag: `--resume` alone still names an
     // attendant, and its declared model/effort must reach the sidecar too.
-    const stamp = attendantStamp(harness);
+    const stamp = attendantStamp(harness, {
+      ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.effort !== undefined ? { effort: options.effort } : {}),
+    });
+    // The FLAGS win over the environment: they are this turn's answer to
+    // "what are you running", where the env is whatever was exported once.
+    const model = options.model ?? stamp?.model;
+    const effort = options.effort ?? stamp?.effort;
     await mergeAttendantSidecar(paths, {
       harness,
       nextCursor: payload.nextCursor,
       at: new Date().toISOString(),
       ...(options.resume ? { resume: options.resume } : {}),
-      ...(stamp?.model ? { model: stamp.model } : {}),
-      ...(stamp?.effort ? { effort: stamp.effort } : {}),
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
     });
   }
 

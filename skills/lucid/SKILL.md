@@ -220,6 +220,12 @@ Never fake the review loop, and never paste build instructions at the user.
    export LUCID_MODEL=opus-4.8 LUCID_EFFORT=high
    ```
 
+   If your settings can CHANGE mid-conversation (the human turns thinking up,
+   switches model), state them on each wait rather than relying on that one
+   export - `lucid wait <file> --harness <name> --model <id> --effort <level>`.
+   The flags outrank the environment, and a value you do not state keeps
+   whatever Lucid last knew.
+
    Lucid only records and displays this command; running it is always the
    human's act, in their terminal.
    - `status: "feedback"` -> apply the `annotations` (each has a `note`, the target
