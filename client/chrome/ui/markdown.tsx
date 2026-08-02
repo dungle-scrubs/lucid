@@ -15,13 +15,34 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip.tsx";
  *  once without hunting. Ephemeral by design - it's a live chip only while the
  *  overlay still reports that id, and degrades to plain text the moment a later
  *  version drops it (no dead links left in the log). */
-const SECTION_SCHEME = "lucid:section/";
+const SCHEME = "lucid:";
+const SECTION_PREFIX = "section/";
+
+/**
+ * The section id inside a `lucid:` href, or null if the href is not one.
+ *
+ * Both `lucid:section/<id>` (what CONTRACT.md documents) and the bare
+ * `lucid:<id>` are accepted: agents write the short form constantly, and the
+ * viewer used to hand anything it did not recognize to the browser as an
+ * external link - so a mis-scheme'd permalink opened a new window on an
+ * unhandled protocol instead of scrolling the artifact. Being liberal here
+ * costs nothing; the id either resolves against the overlay's set or the link
+ * degrades to plain text.
+ */
+export const sectionIdOf = (href: string | undefined): string | null => {
+  if (href === undefined || !href.startsWith(SCHEME)) return null;
+  const rest = href.slice(SCHEME.length);
+  const id = rest.startsWith(SECTION_PREFIX) ? rest.slice(SECTION_PREFIX.length) : rest;
+  // One path segment, nothing else: a `lucid:` href with more structure than
+  // that is not a permalink, and must not be guessed at.
+  return id.length > 0 && !id.includes("/") ? id : null;
+};
 
 /** react-markdown's default sanitizer strips unknown protocols, which would
  *  blank our `lucid:` hrefs; allow that one scheme through and sanitize the
  *  rest exactly as before (no javascript:, no data:). */
 export const urlTransform = (url: string): string =>
-  url.startsWith(SECTION_SCHEME) ? url : defaultUrlTransform(url);
+  url.startsWith(SCHEME) ? url : defaultUrlTransform(url);
 
 /** Lucide `locate-fixed` - "find this in the artifact". */
 const LocateGlyph = () => (
@@ -55,7 +76,7 @@ const MarkdownLink = ({
 }) => {
   const { pulseSection, revealSection } = useActions();
   const sectionIds = useSession((s) => s.sectionIds);
-  const sectionId = href?.startsWith(SECTION_SCHEME) ? href.slice(SECTION_SCHEME.length) : null;
+  const sectionId = sectionIdOf(href);
   const addedInViewport = useSession((s) =>
     sectionId === null ? false : s.addedSectionVisibility[sectionId] === true,
   );
@@ -91,6 +112,11 @@ const MarkdownLink = ({
       </Tooltip>
     );
   }
+
+  // A `lucid:` href the parser could not read as a permalink is still OURS -
+  // handing it to the browser opens a window on an unhandled protocol. It gets
+  // the dead-permalink treatment: plain text, going nowhere.
+  if (href?.startsWith(SCHEME)) return <span>{children}</span>;
 
   return (
     <a
