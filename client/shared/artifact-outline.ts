@@ -6,7 +6,14 @@
  * other side cannot safely produce.
  */
 
-export const ARTIFACT_OUTLINE_POLICY = Object.freeze({
+/**
+ * This literal deliberately avoids Object.freeze(). The overlay bundle begins
+ * evaluating after artifact-authored scripts, so invoking the realm's mutable
+ * Object.freeze here would hand the policy object to hostile code. The bundle
+ * does not export this binding to the artifact; readonly typing protects its
+ * internal call sites without crossing that mutable intrinsic boundary.
+ */
+export const ARTIFACT_OUTLINE_POLICY = {
   outlineWidthPx: 240,
   railInsetPx: 18,
   paintClearancePx: 12,
@@ -26,7 +33,10 @@ export const ARTIFACT_OUTLINE_POLICY = Object.freeze({
   maxPreferredWidthPx: 1_024,
   maxTextNodesPerHeading: 4_096,
   activeReadingThresholdPx: 80,
-});
+} as const;
+
+/** A pre-trust timestamp sentinel that invokes no artifact-controlled intrinsic. */
+export const OUTLINE_UNSEEN_TIMESTAMP_MS = -1 / 0;
 
 type OutlineLabelParse =
   | { readonly ok: true; readonly label: string }
@@ -100,6 +110,10 @@ export interface OutlineLayoutRequest {
   readonly preferredWidth: number;
   readonly safeInsets: OutlineSafeInsets;
 }
+
+export type OutlineLayoutMeasurement = Omit<OutlineLayoutRequest, "generation">;
+
+export type OutlineMotionPreference = "normal" | "reduced";
 
 export interface OutlineSnapshotProof extends OutlineProof {
   readonly reason: string;
@@ -359,8 +373,8 @@ export interface OutlineRateGate {
 export const createOutlineRateGate = (): OutlineRateGate => {
   const accepted: Record<OutlineRateChannel, number[]> = { "active-key": [], snapshot: [] };
   const lastSeen: Record<OutlineRateChannel, number> = {
-    "active-key": Number.NEGATIVE_INFINITY,
-    snapshot: Number.NEGATIVE_INFINITY,
+    "active-key": OUTLINE_UNSEEN_TIMESTAMP_MS,
+    snapshot: OUTLINE_UNSEEN_TIMESTAMP_MS,
   };
   return {
     accept: (channel, nowMs) => {

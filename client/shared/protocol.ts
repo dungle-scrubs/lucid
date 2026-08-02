@@ -7,6 +7,7 @@ import {
   type OutlineActivation,
   type OutlineHealthCode,
   type OutlineLayoutRequest,
+  type OutlineMotionPreference,
   type OutlineRuntimePublication,
   type OutlineSnapshot,
   type OutlineSnapshotPublication,
@@ -57,7 +58,7 @@ export type OutlinePrivateInbound =
   | { readonly type: "outline-suspend" }
   | (OutlineActivation & {
       readonly type: "outline-activate";
-      readonly motion: "normal" | "reduced";
+      readonly motion: OutlineMotionPreference;
     });
 
 export type OutlinePrivateOutbound =

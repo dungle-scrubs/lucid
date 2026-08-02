@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   BrowserArtifactOutlineController,
   type TrustedOutlineCapabilities,
+  type TrustedOutlinePort,
 } from "../client/overlay/browser-artifact-outline.ts";
 
-class FakePort extends EventTarget {
+class FakePort extends EventTarget implements TrustedOutlinePort {
   closed = false;
   readonly messages: unknown[] = [];
 
@@ -12,11 +13,20 @@ class FakePort extends EventTarget {
     this.closed = true;
   }
 
-  postMessage(message: unknown): void {
+  post(message: unknown): void {
     this.messages.push(message);
   }
 
-  start(): void {}
+  listen(onMessage: (data: unknown) => void, onClose: () => void): () => void {
+    const messageListener = (event: Event): void =>
+      onMessage((event as MessageEvent<unknown>).data);
+    this.addEventListener("message", messageListener);
+    this.addEventListener("close", onClose);
+    return () => {
+      this.removeEventListener("message", messageListener);
+      this.removeEventListener("close", onClose);
+    };
+  }
 
   receive(data: unknown): void {
     this.dispatchEvent(new MessageEvent("message", { data }));
@@ -24,9 +34,11 @@ class FakePort extends EventTarget {
 }
 
 const capabilitiesHarness = () => {
+  const proofTrust = { current: true };
   const active = new Set<string>();
   const stopped = new Set<string>();
   const callbacks = new Map<string, () => void>();
+  const quietTasks: (() => void)[] = [];
   const observe =
     (name: string) =>
     (callback: () => void): (() => void) => {
@@ -39,6 +51,8 @@ const capabilitiesHarness = () => {
     ariaHidden: () => false,
     clientHeight: () => 0,
     clientWidth: () => 0,
+    createMap: () => new Map(),
+    createWeakMap: () => new WeakMap(),
     hasActiveMotion: () => false,
     hidden: () => false,
     inert: () => false,
@@ -57,9 +71,18 @@ const capabilitiesHarness = () => {
     onWindowScroll: observe("window-scroll"),
     parentElement: () => null,
     pseudoContent: () => ({ after: "none", before: "none" }),
+    proofRealmTrusted: () => proofTrust.current,
     rect: () => ({ bottom: 0, left: 0, right: 0, top: 0 }),
     scheduleFrame: () => () => undefined,
-    scheduleQuiet: () => () => undefined,
+    scheduleQuiet: (_delayMs, callback) => {
+      let cancelled = false;
+      quietTasks.push(() => {
+        if (!cancelled) callback();
+      });
+      return () => {
+        cancelled = true;
+      };
+    },
     scrollHeight: () => 0,
     scrollWidth: () => 0,
     style: () => ({
@@ -82,21 +105,68 @@ const capabilitiesHarness = () => {
     text: () => ({ complete: true, examinedNodes: 0, value: "" }),
     viewport: () => ({ clientWidth: 1_600, height: 900, width: 1_600 }),
   };
-  return { active, callbacks, capabilities, stopped };
+  return { active, callbacks, capabilities, proofTrust, quietTasks, stopped };
+};
+
+const expectNonDetachObserversStopped = (
+  active: ReadonlySet<string>,
+  stopped: ReadonlySet<string>,
+): void => {
+  expect(stopped).toEqual(new Set([...active].filter((name) => name !== "frame-detach")));
+  expect(stopped).not.toContain("frame-detach");
 };
 
 describe("BrowserArtifactOutlineController lifecycle", () => {
+  test("trust failure withdraws the runtime and stops every active observer", () => {
+    const port = new FakePort();
+    const harness = capabilitiesHarness();
+    const controller = new BrowserArtifactOutlineController(port, harness.capabilities, {
+      clearEmphasis: () => undefined,
+      ensureStyles: () => undefined,
+    });
+    port.receive({
+      type: "outline-layout-request",
+      generation: 1,
+      preferredWidth: 240,
+      safeInsets: { bottom: 24, right: 16, top: 80 },
+    });
+    expect(controller.debugInfo()).toMatchObject({ dormant: false, pendingQuietTask: true });
+
+    harness.proofTrust.current = false;
+    port.receive({ type: "outline-suspend" });
+
+    expect(controller.debugInfo()).toMatchObject({ pendingQuietTask: false, proofComplete: false });
+    expectNonDetachObserversStopped(harness.active, harness.stopped);
+  });
+
+  test("delayed trust failure stops every active observer", () => {
+    const port = new FakePort();
+    const harness = capabilitiesHarness();
+    const controller = new BrowserArtifactOutlineController(port, harness.capabilities, {
+      clearEmphasis: () => undefined,
+      ensureStyles: () => undefined,
+    });
+    port.receive({
+      type: "outline-layout-request",
+      generation: 1,
+      preferredWidth: 240,
+      safeInsets: { bottom: 24, right: 16, top: 80 },
+    });
+
+    harness.proofTrust.current = false;
+    for (const task of harness.quietTasks.splice(0)) task();
+
+    expect(controller.debugInfo()).toMatchObject({ pendingQuietTask: false, proofComplete: false });
+    expectNonDetachObserversStopped(harness.active, harness.stopped);
+  });
+
   test("keeps frame detach observed while dormant and cancels every observer on pagehide", () => {
     const port = new FakePort();
     const harness = capabilitiesHarness();
-    const controller = new BrowserArtifactOutlineController(
-      port as unknown as MessagePort,
-      harness.capabilities,
-      {
-        clearEmphasis: () => undefined,
-        ensureStyles: () => undefined,
-      },
-    );
+    const controller = new BrowserArtifactOutlineController(port, harness.capabilities, {
+      clearEmphasis: () => undefined,
+      ensureStyles: () => undefined,
+    });
 
     expect(controller.debugInfo()).toMatchObject({ dormant: true, connected: true });
     expect(harness.active).toEqual(new Set(["frame-detach"]));

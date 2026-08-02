@@ -21,6 +21,7 @@ import { emphasizeElement, revealElement as revealOutlineElement } from "./revea
 import {
   BrowserArtifactOutlineController,
   type TrustedOutlineCapabilities,
+  type TrustedOutlinePort,
 } from "./browser-artifact-outline.ts";
 import type { TrustedOverlayCapabilities, TrustedOverlayHostHandle } from "./trusted-overlay.ts";
 
@@ -97,6 +98,13 @@ interface OverlayRenderSnapshot {
 /** Horizontal step per cascaded badge - less than the badge width, so they
  *  overlap and read as a stack rather than a row. */
 const BADGE_STEP_PX = 13;
+
+/**
+ * A hostile highlight payload must not turn one Lit update into an unbounded
+ * DOM allocation. The snapshot is complete or absent: crossing the global
+ * budget drops every marker instead of painting a misleading partial set.
+ */
+const MAX_RENDERED_MARKER_RECTS = 512;
 
 /**
  * Merge a range's client rects into one box per visual line. `getClientRects()`
@@ -230,6 +238,8 @@ export class LucidOverlay extends LitElement {
     try {
       const rawMarkers = Array.isArray(this.markers) ? this.markers : [];
       const markers: Marker[] = [];
+      let renderedRectCount = 0;
+      let markerBudgetExceeded = false;
       for (
         let markerIndex = 0;
         markerIndex < Math.min(rawMarkers.length, 2_000);
@@ -250,8 +260,15 @@ export class LucidOverlay extends LitElement {
         const rects: Rect[] = [];
         for (let rectIndex = 0; rectIndex < Math.min(rawRects.length, 64); rectIndex += 1) {
           const captured = rect(rawRects[rectIndex]);
-          if (captured !== null) rects.push(captured);
+          if (captured === null) continue;
+          renderedRectCount += 1;
+          if (renderedRectCount > MAX_RENDERED_MARKER_RECTS) {
+            markerBudgetExceeded = true;
+            break;
+          }
+          rects.push(captured);
         }
+        if (markerBudgetExceeded) break;
         markers.push({
           id: typeof candidate.id === "string" ? candidate.id.slice(0, 256) : "",
           index: Math.trunc(number(candidate.index)),
@@ -263,7 +280,7 @@ export class LucidOverlay extends LitElement {
       return {
         focusedId: typeof this.focusedId === "string" ? this.focusedId.slice(0, 256) : null,
         hoverRect: rect(this.hoverRect),
-        markers,
+        markers: markerBudgetExceeded ? [] : markers,
         sectionPulse: Math.trunc(number(this.sectionPulse)),
         sectionRect: rect(this.sectionRect),
       };
@@ -455,7 +472,7 @@ export class LucidOverlay extends LitElement {
    * call this public custom-element method, but cannot replace or inspect the
    * private controller or the MessagePort it already owns. */
   configureOutlineChannel(
-    port: MessagePort,
+    port: TrustedOutlinePort,
     outlineCapabilities: TrustedOutlineCapabilities,
     hostHandle: TrustedOverlayHostHandle,
   ): void {
@@ -1335,7 +1352,7 @@ export class LucidOverlay extends LitElement {
 }
 
 export const mountOverlay = (
-  outlinePort: MessagePort,
+  outlinePort: TrustedOutlinePort,
   tagName: string,
   capabilities: TrustedOverlayCapabilities,
 ): void => {

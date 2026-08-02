@@ -8,10 +8,12 @@
 import {
   activeOutlineKey,
   ARTIFACT_OUTLINE_POLICY,
+  OUTLINE_UNSEEN_TIMESTAMP_MS,
   createOutlineRateGate,
   type OutlineActivation,
   type OutlineHealth,
   type OutlineLayoutRequest,
+  type OutlineMotionPreference,
   type OutlineProjection,
   type OutlineRuntimePublication,
   type OutlineSnapshotProof,
@@ -78,6 +80,7 @@ export interface ArtifactOutlineGeometry<ElementType extends OutlineRuntimeEleme
     readonly before: string;
   };
   readonly rect?: (element: ElementType) => OutlineRuntimeRect;
+  readonly proofRealmTrusted?: () => boolean;
   readonly styleRealmTrusted?: () => boolean;
   readonly viewport: () => {
     readonly clientWidth: number;
@@ -106,11 +109,25 @@ export interface ArtifactOutlineDebugInfo {
 }
 
 interface RuntimeDependencies<ElementType extends OutlineRuntimeElement> {
+  readonly createMap?: <Key, Value>() => OutlineRuntimeMap<Key, Value>;
+  readonly createWeakMap?: <Key extends object, Value>() => OutlineRuntimeWeakMap<Key, Value>;
   readonly geometry: ArtifactOutlineGeometry<ElementType>;
   readonly now: () => number;
+  readonly onProofRealmRejected?: () => void;
   readonly publish: (publication: OutlineRuntimePublication) => void;
   readonly scheduleFrame: (task: () => void) => () => void;
   readonly scheduleQuiet: (delayMs: number, task: () => void) => () => void;
+}
+
+export interface OutlineRuntimeMap<Key, Value> {
+  readonly clear: () => void;
+  readonly get: (key: Key) => Value | undefined;
+  readonly set: (key: Key, value: Value) => void;
+}
+
+export interface OutlineRuntimeWeakMap<Key extends object, Value> {
+  readonly get: (key: Key) => Value | undefined;
+  readonly set: (key: Key, value: Value) => void;
 }
 
 interface WorkState {
@@ -170,17 +187,17 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #cancelFrame: (() => void) | null = null;
   #cancelQuiet: (() => void) | null = null;
   #connected = true;
-  #elementsByKey = new Map<string, ElementType>();
-  #elementKeys = new WeakMap<object, string>();
+  #elementsByKey: OutlineRuntimeMap<string, ElementType>;
+  #elementKeys: OutlineRuntimeWeakMap<object, string>;
   #generation = 0;
   #health: OutlineHealth | null = null;
   #examinedTextCodeUnits = 0;
   #examinedTextNodes = 0;
   #inspected = 0;
   #lastDurationMs = 0;
-  #lastProjectionStartedAt = Number.NEGATIVE_INFINITY;
-  #lastSnapshotAt = Number.NEGATIVE_INFINITY;
-  #lastActiveSampleAt = Number.NEGATIVE_INFINITY;
+  #lastProjectionStartedAt = OUTLINE_UNSEEN_TIMESTAMP_MS;
+  #lastSnapshotAt = OUTLINE_UNSEEN_TIMESTAMP_MS;
+  #lastActiveSampleAt = OUTLINE_UNSEEN_TIMESTAMP_MS;
   #cancelSnapshot: (() => void) | null = null;
   #pendingSnapshot: OutlineSnapshotPublication | null = null;
   #projection: OutlineProjection = { generation: 0, kind: "absent" };
@@ -199,6 +216,16 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
 
   constructor(dependencies: RuntimeDependencies<ElementType>) {
     this.#dependencies = dependencies;
+    this.#elementsByKey = this.#createMap();
+    this.#elementKeys = this.#createWeakMap();
+  }
+
+  #createMap<Key, Value>(): OutlineRuntimeMap<Key, Value> {
+    return this.#dependencies.createMap?.<Key, Value>() ?? new Map<Key, Value>();
+  }
+
+  #createWeakMap<Key extends object, Value>(): OutlineRuntimeWeakMap<Key, Value> {
+    return this.#dependencies.createWeakMap?.<Key, Value>() ?? new WeakMap<Key, Value>();
   }
 
   requestLayout(request: OutlineLayoutRequest): void {
@@ -212,6 +239,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
 
   invalidate(reason: string, publishInvalidation = true, replenishBudgetRetry = true): void {
     if (!this.#connected || this.#request === null) return;
+    if (this.#rejectIfProofRealmUntrusted()) return;
     if (replenishBudgetRetry) this.#budgetRetriesRemaining = 1;
     this.#scheduleVersion += 1;
     const version = this.#scheduleVersion;
@@ -222,6 +250,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     const schedule = (delayMs: number): void => {
       this.#cancelQuiet = this.#dependencies.scheduleQuiet(delayMs, () => {
         this.#cancelQuiet = null;
+        if (this.#rejectIfProofRealmUntrusted()) return;
         if (!this.#connected || version !== this.#scheduleVersion) return;
         if (throttleCompute) {
           const remaining =
@@ -238,6 +267,26 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     schedule(ARTIFACT_OUTLINE_POLICY.quietLayoutMs);
   }
 
+  invalidateWithHealth(record: OutlineHealth): void {
+    if (!this.#connected) return;
+    if (this.#projection.kind === "complete") {
+      this.#withdrawProjection(record.reason ?? "activation-invalidated", record);
+    } else {
+      this.#health = record;
+      this.#dependencies.publish({
+        generation: record.generation,
+        health: record,
+        type: "invalidated",
+      });
+    }
+    this.invalidate(record.reason ?? "activation-invalidated", false);
+  }
+
+  rejectUntrustedProofRealm(): void {
+    if (!this.#connected) return;
+    this.#rejectUntrustedProofRealm();
+  }
+
   revise(): void {
     if (!this.#connected) return;
     this.#withdrawProjection("revision");
@@ -245,7 +294,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#generation += 1;
     this.#keyEpoch += 1;
     this.#nextElementKey = 0;
-    this.#elementKeys = new WeakMap<object, string>();
+    this.#elementKeys = this.#createWeakMap();
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#elementsByKey.clear();
     this.invalidate("revision");
@@ -268,12 +317,12 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#proofDiagnostic = { clearancePx: 0, complete: false, reason: "suspended" };
   }
 
-  #withdrawProjection(reason: string): void {
+  #withdrawProjection(reason: string, healthOverride?: OutlineHealth): void {
     if (this.#projection.kind !== "complete") return;
     this.#cancelActiveSample?.();
     this.#cancelActiveSample = null;
     this.#clearPendingSnapshot();
-    this.#health = health("AO-005", this.#generation, reason);
+    this.#health = healthOverride ?? health("AO-005", this.#generation, reason);
     this.#dependencies.publish({
       generation: this.#generation,
       health: this.#health,
@@ -285,9 +334,33 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#proofDiagnostic = { clearancePx: 0, complete: false, reason };
   }
 
+  #rejectUntrustedProofRealm(): void {
+    this.#scheduleVersion += 1;
+    this.#cancelQuiet?.();
+    this.#cancelQuiet = null;
+    this.#cancelFrame?.();
+    this.#cancelFrame = null;
+    this.#cancelActiveSample?.();
+    this.#cancelActiveSample = null;
+    this.#clearPendingSnapshot();
+    this.#withdrawProjection("untrusted-proof-realm");
+    this.#proofDiagnostic = {
+      clearancePx: 0,
+      complete: false,
+      reason: "untrusted-proof-realm",
+    };
+    this.#dependencies.onProofRealmRejected?.();
+  }
+
+  #rejectIfProofRealmUntrusted(): boolean {
+    if (this.#dependencies.geometry.proofRealmTrusted?.() !== false) return false;
+    this.#rejectUntrustedProofRealm();
+    return true;
+  }
+
   activate(
     activation: OutlineActivation,
-    motion: "normal" | "reduced",
+    motion: OutlineMotionPreference,
     environment: RevealEnvironment,
   ): boolean {
     return revealOutlineActivation(
@@ -300,10 +373,12 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   }
 
   trackActive(): void {
+    if (this.#rejectIfProofRealmUntrusted()) return;
     if (!this.#connected || this.#request === null || this.#projection.kind !== "complete") return;
     if (this.#cancelFrame !== null || this.#cancelActiveSample !== null) return;
     this.#cancelFrame = this.#dependencies.scheduleFrame(() => {
       this.#cancelFrame = null;
+      if (this.#rejectIfProofRealmUntrusted()) return;
       if (!this.#connected || this.#projection.kind !== "complete") return;
       const now = this.#dependencies.now();
       const minimumIntervalMs = 1_000 / ARTIFACT_OUTLINE_POLICY.maxActiveKeysPerSecond;
@@ -413,6 +488,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
           Math.ceil(SNAPSHOT_MINIMUM_INTERVAL_MS - elapsed),
           () => {
             this.#cancelSnapshot = null;
+            if (this.#rejectIfProofRealmUntrusted()) return;
             const pending = this.#pendingSnapshot;
             if (pending !== null && this.#connected) this.#publishSnapshot(pending);
           },
@@ -426,6 +502,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
           SNAPSHOT_MINIMUM_INTERVAL_MS,
           () => {
             this.#cancelSnapshot = null;
+            if (this.#rejectIfProofRealmUntrusted()) return;
             const pending = this.#pendingSnapshot;
             if (pending !== null && this.#connected) this.#publishSnapshot(pending);
           },
@@ -575,6 +652,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   #runProjection(): void {
     const request = this.#request;
     if (request === null) return;
+    if (this.#rejectIfProofRealmUntrusted()) return;
     this.#lastProjectionStartedAt = this.#dependencies.now();
     this.#taskCount += 1;
     this.#generation += 1;

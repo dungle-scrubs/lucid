@@ -8,11 +8,10 @@
 import {
   type OutlineActivation,
   type OutlineActivationHealth,
+  type OutlineMotionPreference,
   type OutlineProjection,
   resolveOutlineActivation,
 } from "../shared/artifact-outline.ts";
-
-export type RevealMotionPreference = "normal" | "reduced";
 
 export interface RevealInvalidation extends Omit<OutlineActivationHealth, "reason"> {
   readonly code: "AO-002";
@@ -37,7 +36,7 @@ export const emphasizeElement = (element: Element, environment: EmphasisEnvironm
 
 export const revealElement = (
   element: Element,
-  motion: RevealMotionPreference,
+  motion: OutlineMotionPreference,
   environment: RevealEnvironment,
   generation = 0,
 ): boolean => {
@@ -62,7 +61,7 @@ export const revealOutlineActivation = (
   projection: OutlineProjection,
   activation: OutlineActivation,
   elementByKey: (key: string) => Element | null,
-  motion: RevealMotionPreference,
+  motion: OutlineMotionPreference,
   environment: RevealEnvironment,
 ): boolean => {
   const resolution = resolveOutlineActivation(projection, activation);

@@ -56,6 +56,11 @@ describe("injectOverlay: splices outside the hostile containers", () => {
     expect(out).toContain("allElements:(limit,deadline)");
     expect(out).toContain("text:boundedText");
     expect(out).toContain("let styleRealmTrusted=true");
+    expect(out).toContain("proofRealmTrusted");
+    expect(out).toContain('descriptor(window,"Array")?.value!==arrayConstructor');
+    expect(out).toContain("apply(setSize,styleCallbacks,[])===0");
+    expect(out).toContain("apply(setForEach,styleCallbacks");
+    expect(out).not.toContain("getOwnPropertySymbols");
     expect(out).not.toContain('["body *"]');
     expect(out).not.toContain('<script type="module"');
   });

@@ -21,8 +21,8 @@ describe("artifact outline labels", () => {
     expect(normalizeOutlineLabel(" ".repeat(4_097))).toBeNull();
   });
 
-  test("all initial presentation and work budgets live in one frozen policy", () => {
-    expect(Object.isFrozen(ARTIFACT_OUTLINE_POLICY)).toBe(true);
+  test("all initial presentation and work budgets live in one module-private literal policy", () => {
+    expect(Object.isFrozen(ARTIFACT_OUTLINE_POLICY)).toBe(false);
     expect(ARTIFACT_OUTLINE_POLICY).toMatchObject({
       maxActiveKeysPerSecond: 10,
       maxAggregateLabelCodeUnits: 8_192,
