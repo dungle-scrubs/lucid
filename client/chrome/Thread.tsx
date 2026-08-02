@@ -25,6 +25,7 @@ import {
   Warnings,
 } from "./Panel.tsx";
 import { QaPart } from "./QaPart.tsx";
+import { VerdictPart } from "./VerdictPart.tsx";
 import { deliveredWaiting } from "./store.ts";
 import { workingClock } from "./working.ts";
 import { markdownComponents, prose, urlTransform } from "./ui/markdown.tsx";
@@ -686,6 +687,8 @@ export const Thread = () => {
   // questions never reach the transcript - they live in the drawer over the
   // surface, which is why there is no questions panel above the composer.
   useAssistantDataUI({ name: "qa", render: QaPart });
+  // Approving and reopening are entries in the record, at their own moment.
+  useAssistantDataUI({ name: "verdict", render: VerdictPart });
   return (
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
       <ThreadPrimitive.Viewport

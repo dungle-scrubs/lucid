@@ -21,6 +21,7 @@ import type {
   OutboxMessage,
   PastedImage,
   QueuedAnnotation,
+  ReviewVerdict,
   SessionSummary,
   TimelineItem,
   WarningItem,
@@ -343,6 +344,9 @@ export interface SessionState {
   session: string;
   version: number;
   reviewResolved: boolean;
+  /** Approve/reopen events with their own times, so the record can show WHEN
+   *  the review was settled rather than only that it is. */
+  verdicts: ReviewVerdict[];
   pendingTarget: Anchor | null;
   /** Every spot of the in-flight draft, in pick order. INVARIANT:
    *  `pendingTarget === pendingTargets[0] ?? null` - the single field stays
@@ -554,6 +558,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     session: config.session,
     version: config.version,
     reviewResolved: false,
+    verdicts: [],
     pendingTarget: null,
     pendingTargets: [],
     composerNote: "",
@@ -738,6 +743,7 @@ export const buildTimeline = (
   messages: readonly ConversationMessage[],
   queue: readonly QueuedAnnotation[],
   questions: readonly AgentQuestion[] = [],
+  verdicts: readonly ReviewVerdict[] = [],
 ): TimelineItem[] => {
   let located = 0;
   const sentIds = new Set(annotations.map((a) => a.id));
@@ -786,6 +792,11 @@ export const buildTimeline = (
         at: question.answeredAt ?? question.at ?? "",
         question,
       })),
+    // Approving and reopening are things that HAPPENED, and they sort with
+    // everything else. Held as state instead, an approval appeared nowhere in
+    // the record and a reopening only as a notice pinned under the composer,
+    // below messages that came after it.
+    ...verdicts.map((verdict) => ({ kind: "verdict" as const, at: verdict.at, verdict })),
   ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 };
 

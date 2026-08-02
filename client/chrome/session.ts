@@ -79,12 +79,21 @@ export const createSession = (config: SessionConfig): SessionHandle => {
       case "version":
         void surface.onNewVersion(ev.version);
         break;
+      // A verdict is state AND an entry in the record: the boolean drives the
+      // header and the approve guard, the appended event is what lets the
+      // transcript show where it happened. Appended by seq so a frame that
+      // arrives twice cannot double-enter the record.
       case "review_resolved":
-        set({ reviewResolved: true });
+      case "review_reopened": {
+        const resolved = ev.t === "review_resolved";
+        set((s) => ({
+          reviewResolved: resolved,
+          verdicts: s.verdicts.some((v) => v.seq === ev.seq)
+            ? s.verdicts
+            : [...s.verdicts, { at: ev.at, resolved, seq: ev.seq }],
+        }));
         break;
-      case "review_reopened":
-        set({ reviewResolved: false });
-        break;
+      }
       case "session_ended":
         set({ status: "ended" });
         break;

@@ -108,6 +108,12 @@ export interface FoldedState {
   readonly reviewResolved: boolean;
   /** seq of the last review_resolved/review_reopened toggle in the segment (0 if none). */
   readonly reviewToggleSeq: number;
+  /** Every approve/reopen in the segment, in log order, each with its own
+   *  moment. The boolean above is the CURRENT verdict and says nothing about
+   *  when it was reached - a viewer that only has the boolean can render an
+   *  approval nowhere and a reopening only at the bottom, out of sequence with
+   *  the messages either side of it. */
+  readonly verdicts: readonly ReviewVerdictRecord[];
   /** Live annotations of the current segment, in log order (D-056). */
   readonly annotations: readonly AnnotationRecord[];
   /** Fork requests of the current segment, in log order. Consumed by the
@@ -214,6 +220,14 @@ const statusFromLifecycle = (t: string): SessionStatus => {
   }
 };
 
+/** One approve/reopen, projected from `review_resolved`/`review_reopened`. */
+export interface ReviewVerdictRecord {
+  readonly at: string;
+  /** True for an approval, false for a reopening. */
+  readonly resolved: boolean;
+  readonly seq: number;
+}
+
 /** One explicit binding, projected from a `harness_session_bound` event. */
 export interface HarnessBindingRecord {
   readonly at: string;
@@ -301,6 +315,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       version: 0,
       reviewResolved: false,
       reviewToggleSeq: 0,
+      verdicts: [],
       annotations: [],
       forks: [],
       messages: [],
@@ -347,6 +362,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   const questionOrder: string[] = [];
   let reviewResolved = false;
   let reviewToggleSeq = 0;
+  const verdicts: ReviewVerdictRecord[] = [];
 
   if (opened && opened.t === "session_opened") {
     segment = opened.segment;
@@ -469,10 +485,12 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       case "review_resolved":
         reviewResolved = true;
         reviewToggleSeq = e.seq;
+        verdicts.push({ at: e.at, resolved: true, seq: e.seq });
         break;
       case "review_reopened":
         reviewResolved = false;
         reviewToggleSeq = e.seq;
+        verdicts.push({ at: e.at, resolved: false, seq: e.seq });
         break;
       default:
         break;
@@ -604,6 +622,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     version,
     reviewResolved,
     reviewToggleSeq,
+    verdicts,
     annotations,
     forks,
     messages,

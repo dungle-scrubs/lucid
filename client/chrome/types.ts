@@ -159,6 +159,25 @@ export type TimelineItem =
       readonly at: string;
       readonly question: AgentQuestion;
     }
+  | {
+      /** The review being approved or reopened, at the moment it happened.
+       *  A verdict is an event in the record, not a status: collapsing it to a
+       *  boolean left an approval with no trace anywhere in the transcript and
+       *  a reopening pinned below messages that came after it. */
+      readonly kind: "verdict";
+      readonly at: string;
+      readonly verdict: ReviewVerdict;
+    }
   | { readonly kind: "message"; readonly at: string; readonly message: ConversationMessage };
+
+/** One `review_resolved`/`review_reopened` event, kept with its own time so it
+ *  can sit in the record where it belongs. `seq` is the log's own ordering and
+ *  is what makes the id stable across reloads. */
+export interface ReviewVerdict {
+  readonly at: string;
+  /** True for `review_resolved` (approved), false for `review_reopened`. */
+  readonly resolved: boolean;
+  readonly seq: number;
+}
 
 export type { Anchor, PayloadAnnotationLike };
