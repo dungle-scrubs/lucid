@@ -481,6 +481,70 @@ describe("launcher handleForks (integration, stub harness)", () => {
     expect(again).toHaveLength(0);
   });
 
+  test("a caller-assigned fork hands the child the id Lucid minted, with authority", async () => {
+    // The OTHER identity strategy through the same createChild path: Lucid
+    // mints the id, the argv carries it adjacent to the declared flag, and
+    // the child's env says who vouches for it.
+    const assignedStub = join(dir, "assigned-stub.ts");
+    const envDump = join(dir, "assigned-env.json");
+    await writeFile(
+      assignedStub,
+      `const args = process.argv.slice(2);
+const sid = args[args.indexOf("--sid") + 1];
+const [seedPath, artifactPath] = args.filter((a, i) => a !== "--sid" && args[i - 1] !== "--sid");
+await Bun.write(${JSON.stringify(envDump)}, JSON.stringify({
+  argvSid: sid,
+  envSid: process.env.LUCID_SESSION_ID ?? null,
+  envAuthority: process.env.LUCID_SESSION_ID_AUTHORITY ?? null,
+  envLaunch: process.env.LUCID_LAUNCH_ID ?? null,
+}));
+const seed = await Bun.file(seedPath).text();
+const directive = seed.match(/\\*\\*Directive:\\*\\* (.*)/)?.[1] ?? "forked artifact";
+await Bun.write(artifactPath, \`<!doctype html><html><head><title>x</title></head><body><h1 data-lucid-id="t">\${directive}</h1></body></html>\`);
+`,
+    );
+    await writeFile(
+      regPath,
+      JSON.stringify({
+        default: "assigned",
+        harnesses: {
+          assigned: {
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [process.execPath, assignedStub, "--sid", "{id}", "{seed}", "{artifact}"],
+          },
+        },
+      }),
+    );
+    await appendEvent(parent.logPath, {
+      t: "fork",
+      id: "fork-assigned",
+      version: 1,
+      target: elementTarget("Hello"),
+      note: "assigned-identity child",
+    });
+    const registry = await loadRegistry(regPath);
+    expect(registry).not.toBeNull();
+    if (!registry) return;
+    const created = await handleForks(parent, registry, {
+      openBrowser: false,
+      openChild,
+      log: () => {},
+    });
+    expect(created[0]?.status).toBe("created");
+    const seen = JSON.parse(await readFile(envDump, "utf8")) as Record<string, string | null>;
+    // One id, three witnesses: the argv token, the child env, and the loop's
+    // resume target all name the id Lucid minted.
+    expect(seen.argvSid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(seen.envSid).toBe(seen.argvSid ?? "");
+    expect(seen.envAuthority).toBe("assigned");
+    expect(seen.envLaunch).toMatch(/^[a-f0-9]{16}$/);
+    expect(created[0]?.childSessionId).toBe(seen.argvSid ?? "");
+    // And the assigned binding is durable in the child's log.
+    const childPaths2 = sessionPaths(created[0]?.childArtifact ?? "");
+    const bound = foldLog((await readEvents(childPaths2.logPath)).events).bindings;
+    expect(bound[0]).toMatchObject({ authority: "assigned", sessionId: seen.argvSid });
+  });
+
   test("a corrupt handled.json throws rather than silently re-spawning every fork", async () => {
     await appendEvent(parent.logPath, {
       t: "fork",

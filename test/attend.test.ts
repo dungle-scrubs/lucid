@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/events.ts";
 import { foldLog } from "../src/core/fold.ts";
+import { readLastAttendant } from "../src/core/attendant.ts";
 import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
@@ -1190,6 +1191,75 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
     // makes an authoring turn traceable back to the click (D-001).
     expect(marker.requestId).toBe("beefcafe12345678");
   });
+
+  test("a DISCOVERED hub create binds the announced thread, never a pre-minted UUID", async () => {
+    // The registry switches to a stdout-jsonl harness: the stub announces its
+    // own thread id the way Codex does, and Lucid must bind THAT - handing
+    // the child a minted UUID here was the synthetic identity that poisoned
+    // resume (the reported EZE failure).
+    const discoveredStub = join(dir, "stub-discovered.ts");
+    await writeFile(
+      discoveredStub,
+      `process.stdout.write('{"type":"thread.started","thread_');
+await new Promise((r) => setTimeout(r, 20));
+process.stdout.write('id":"0199-hub-native"}\\n');
+await Bun.write(${JSON.stringify(createMarker)}, JSON.stringify({
+  envSid: process.env.LUCID_SESSION_ID ?? null,
+  envLaunch: process.env.LUCID_LAUNCH_ID ?? null,
+  argv: process.argv.slice(2),
+}));
+const artifact = process.argv[3];
+await Bun.write(artifact, "<!doctype html><html><head><title>d</title></head><body><h1>d</h1></body></html>");
+`,
+    );
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "disco",
+        harnesses: {
+          disco: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [process.execPath, "run", discoveredStub, "--json", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+    const hub = await startDaemon(true);
+    const res = await post(hub.port, "/hub/create", {
+      project: proj,
+      name: "disco.html",
+      prompt: "author it",
+    });
+    expect(res.status).toBe(202);
+    const marker = await readMarker(createMarker);
+    // No inherited identity reached the child; the launch correlation did.
+    expect(marker.envSid).toBeNull();
+    expect(marker.envLaunch).toMatch(/^[a-f0-9]{16}$/);
+    // The ANNOUNCED thread is waiting in the child's sidecar as a pending
+    // binding under this launch - which is everything the child's own
+    // `lucid open` needs to make it durable (promotion is pinned in the
+    // session suite). This stub deliberately does not open; the full
+    // spawn->announce->open->bind chain is the fork integration test's.
+    const childPaths = sessionPaths(join(proj, ".lucid", "disco.html"));
+    const deadline = Date.now() + 5000;
+    let pending: Awaited<ReturnType<typeof readLastAttendant>>;
+    while (Date.now() < deadline && pending?.sessionId === undefined) {
+      pending = await readLastAttendant(childPaths);
+      if (pending?.sessionId === undefined) await sleep(50);
+    }
+    expect(pending).toMatchObject({
+      harness: "disco",
+      launchId: marker.envLaunch,
+      pendingBinding: true,
+      sessionId: "0199-hub-native",
+      sessionIdAuthority: "observed",
+    });
+  }, 20_000);
 
   test("POST /hub/create answers 202 and spawns the recipe with a child identity", async () => {
     const hub = await startDaemon(true);

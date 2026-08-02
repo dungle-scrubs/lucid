@@ -1065,6 +1065,46 @@ describe("attendant sidecar mutation (harness session identity)", () => {
   });
 });
 
+describe("the CLI's own stamps carry launch identity from the environment", () => {
+  test("an ack written by the CLI carries launchId and authority", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    // The CLI is its own process; the stamp fields ride the environment the
+    // spawner exported (runSpawn), so the test hands them the same way.
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(import.meta.dir, "..", "src", "cli", "main.ts"),
+        "intent",
+        artifact,
+        "reply",
+      ],
+      {
+        env: {
+          ...process.env,
+          LUCID_HARNESS: "codex",
+          LUCID_SESSION_ID: "0199-native",
+          LUCID_SESSION_ID_AUTHORITY: "observed",
+          LUCID_LAUNCH_ID: "abc123def4567890",
+        },
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    await proc.exited;
+    expect(proc.exitCode).toBe(0);
+    const { events } = await readEvents(paths.logPath);
+    const ack = events.findLast((e) => e.t === "agent_ack");
+    expect(ack && "attendant" in ack ? ack.attendant : undefined).toMatchObject({
+      harness: "codex",
+      launchId: "abc123def4567890",
+      sessionId: "0199-native",
+      sessionIdAuthority: "observed",
+    });
+  }, 20_000);
+});
+
 describe("pending binding promotion (identity before the log exists)", () => {
   const identity = {
     harness: "codex",

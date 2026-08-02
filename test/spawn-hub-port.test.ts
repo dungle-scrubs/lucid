@@ -157,11 +157,15 @@ exit 0
       identity: { authority: "observed", harness: "codex", sessionId: "019f-native" },
       status: "completed",
     });
-    // The log sink got every byte the harness wrote, split or not.
+    // The log sink got EXACTLY the bytes the harness wrote - equality, not
+    // containment, because a tee that duplicated or reordered chunks would
+    // still "contain" every line.
     const log = await readFile(join(dir, "out.log"), "utf8");
-    expect(log).toContain('{"type":"thread.started","thread_id":"019f-native"}');
-    expect(log).toContain("narration line the log must keep");
-    expect(log).toContain('{"type":"turn.completed"}');
+    expect(log).toBe(
+      '{"type":"thread.started","thread_id":"019f-native"}\n' +
+        "narration line the log must keep\n" +
+        '{"type":"turn.completed"}\n',
+    );
   });
 
   test("a clean discovered exit without identity is HSI002; a nonzero exit stays a process failure", async () => {
@@ -223,11 +227,26 @@ exit 0
   test("discovered recipes clear inherited identity; caller-assigned exports it with authority", async () => {
     const { exe, dump } = await writeEnvDumper();
 
-    await runSpawn([exe, "--json"], dir, join(dir, "e1.log"), {
-      harness: "codex",
-      launchId,
-      strategy: codexStrategy,
-    });
+    // Plant an inherited identity: the assertion below is that the child does
+    // NOT see these, which asserts nothing unless they exist to leak.
+    const previous = {
+      authority: process.env.LUCID_SESSION_ID_AUTHORITY,
+      sessionId: process.env.LUCID_SESSION_ID,
+    };
+    process.env.LUCID_SESSION_ID = "parent-session-must-not-leak";
+    process.env.LUCID_SESSION_ID_AUTHORITY = "observed";
+    try {
+      await runSpawn([exe, "--json"], dir, join(dir, "e1.log"), {
+        harness: "codex",
+        launchId,
+        strategy: codexStrategy,
+      });
+    } finally {
+      if (previous.sessionId === undefined) delete process.env.LUCID_SESSION_ID;
+      else process.env.LUCID_SESSION_ID = previous.sessionId;
+      if (previous.authority === undefined) delete process.env.LUCID_SESSION_ID_AUTHORITY;
+      else process.env.LUCID_SESSION_ID_AUTHORITY = previous.authority;
+    }
     let env = await readFile(dump, "utf8");
     // A discovered harness mints its own id: the parent's must not leak in,
     // or the child stamps its events as a conversation that is not its own.

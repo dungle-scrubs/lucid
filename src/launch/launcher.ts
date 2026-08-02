@@ -1,6 +1,7 @@
 import { stdoutSink } from "../server/observe.ts";
 import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import {
+  classifyObservedIdentity,
   classifySpawnResult,
   mintLaunchId,
   SessionIdentityDecoder,
@@ -303,8 +304,18 @@ export const runSpawn = async (
   const fd = openSync(logFile, "a");
   let observed: NativeSessionIdentity | undefined;
   let callbackDone: Promise<void> | undefined;
+  // Wrapped so a SYNCHRONOUS throw from the callback is a settled rejection
+  // (Promise.resolve(fn()) would let it escape into the tee loop), and so the
+  // swallow is in one place.
+  const fireDiscovery = (found: NativeSessionIdentity): void => {
+    observed = found;
+    callbackDone = (async () => identity?.onIdentityDiscovered?.(found))()
+      .then(() => undefined)
+      .catch(() => {});
+  };
+  let proc: ReturnType<typeof Bun.spawn>;
   try {
-    const proc = Bun.spawn(argv, {
+    proc = Bun.spawn(argv, {
       cwd,
       env,
       stdin: "ignore",
@@ -314,42 +325,57 @@ export const runSpawn = async (
       stdout: discovered ? "pipe" : fd,
       stderr: fd,
     });
+  } catch {
+    // ONLY a spawn that could not start (missing executable) is spawn-failed:
+    // this catch is deliberately narrow, because labeling a mid-stream error
+    // "spawn-failed" told the caller to retry against a child that was still
+    // running - two concurrent turns driving one conversation.
+    try {
+      closeSync(fd);
+    } catch {
+      /* fd already closed */
+    }
+    return { code: 127, status: "spawn-failed" };
+  }
+  try {
     if (discovered && identity?.strategy?.source === "stdout-jsonl" && proc.stdout) {
-      const decoder = new SessionIdentityDecoder(identity.harness, identity.strategy);
-      const text = new TextDecoder();
-      for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
-        writeSync(fd, chunk);
-        if (observed) continue; // first announcement wins; the rest is output
-        for (const event of decoder.push(text.decode(chunk))) {
-          if (observed) continue;
-          observed = event.identity;
-          // Fired while the child is LIVE (awaited before returning): the
-          // sidecar knows the identity before the turn can end, so a crash
-          // after authoring still leaves a resumable record.
-          callbackDone = Promise.resolve(identity.onIdentityDiscovered?.(event.identity)).catch(
-            () => {},
-          );
+      try {
+        const decoder = new SessionIdentityDecoder(identity.harness, identity.strategy);
+        const text = new TextDecoder();
+        for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
+          writeSync(fd, chunk);
+          if (observed) continue; // first announcement wins; the rest is output
+          // stream:true so a multibyte character split across chunks decodes
+          // whole instead of as replacement bytes inside a JSONL line.
+          for (const event of decoder.push(text.decode(chunk, { stream: true }))) {
+            if (!observed) fireDiscovery(event.identity);
+          }
         }
-      }
-      if (!observed) {
-        for (const event of decoder.finish()) {
-          observed = event.identity;
-          callbackDone = Promise.resolve(identity.onIdentityDiscovered?.(event.identity)).catch(
-            () => {},
-          );
-          break;
+        if (!observed) {
+          const event = decoder.finish()[0];
+          if (event) fireDiscovery(event.identity);
         }
+      } catch {
+        // The TEE broke (out-log ENOSPC, stream error) - not the child. The
+        // child cannot be left running with nobody draining its stdout: kill
+        // it, and let the exit classification below tell the truth about a
+        // turn this parent had to abandon.
+        proc.kill();
       }
     }
     await proc.exited;
-    await callbackDone;
-    const code = proc.exitCode ?? 0;
+    // The callback's work is bounded elsewhere too (sidecar locks time out),
+    // but its HTTP leg is not - and a wedged hub must not wedge every future
+    // turn of this session behind an await that cannot settle.
+    if (callbackDone) {
+      await Promise.race([callbackDone, new Promise((r) => setTimeout(r, 10_000))]);
+    }
+    // A signal-killed child has no exit code; it is anything but clean.
+    const code = proc.exitCode ?? (proc.signalCode !== null ? 1 : 0);
     if (identity?.strategy) return classifySpawnResult(code, identity.strategy, observed);
     // Legacy recipe: no declaration, no discovery - a clean exit is complete
     // (nothing was promised), a bad one is a process failure.
     return code === 0 ? { code: 0, status: "completed" } : { code, status: "process-failed" };
-  } catch {
-    return { code: 127, status: "spawn-failed" }; // could not spawn (e.g. executable not found)
   } finally {
     try {
       closeSync(fd);
@@ -360,13 +386,52 @@ export const runSpawn = async (
 };
 
 /**
+ * The ONE discovery-persistence callback (plan 03, M3): every spawner that
+ * taps stdout hands runSpawn this, so what happens to an announced identity
+ * cannot differ by call site. A CREATE launch takes whatever arrives; a
+ * RESUME launch guards with the mismatch policy first - an announcement that
+ * names a DIFFERENT session than requested is HSI005, and binding it would
+ * attach the review to a conversation that never saw the artifact. The
+ * refusal is silent here; the failure surface (warning codes, quarantine)
+ * is the recovery milestone's.
+ */
+export const discoveryPersistence =
+  (
+    target: SessionPaths,
+    harness: string,
+    launchId: string,
+    guard?: { readonly requestedSessionId: string; readonly allowRotation: boolean },
+  ): ((identity: NativeSessionIdentity) => Promise<void>) =>
+  async (identity) => {
+    if (guard) {
+      const outcome = classifyObservedIdentity(
+        guard.requestedSessionId,
+        identity,
+        guard.allowRotation,
+      );
+      if (outcome.status === "mismatch") return;
+    }
+    await recordPendingIdentity(target, {
+      harness,
+      sessionId: identity.sessionId,
+      sessionIdAuthority: identity.authority,
+      launchId,
+    });
+    // Promotion is live-aware and idempotent: if the session is already open
+    // the binding lands NOW through the locked path; if not, the sidecar
+    // keeps owing it and the child's own `lucid open` promotes.
+    await promotePendingBindings(target).catch(() => {});
+  };
+
+/**
  * The ONE spawn-identity setup (plan 03, M3): resolve the adapter's declared
  * strategy (HSI001 before any process exists when there is none), mint the
  * launch correlation, assign the native id when the strategy is
  * caller-assigned, and bind the persistence callback that records discovered
- * identity against the target session. Fork create, child revise, hub create,
- * and attend all build their runSpawn identity through here, so the four
- * spawners cannot drift.
+ * identity against the target session. Fork create and hub create ride it
+ * whole; the resume paths (attend, child revise) mint per-turn launches but
+ * share `discoveryPersistence`, so the part that can poison a record - what
+ * happens to an announced identity - has exactly one implementation.
  */
 export const prepareSpawnIdentity = (
   harness: string,
@@ -396,19 +461,7 @@ export const prepareSpawnIdentity = (
     launchId,
     strategy,
     ...(assignedSessionId ? { sessionId: assignedSessionId } : {}),
-    onIdentityDiscovered: async (identity) => {
-      await recordPendingIdentity(target, {
-        harness,
-        sessionId: identity.sessionId,
-        sessionIdAuthority: identity.authority,
-        launchId,
-      });
-      // Promotion is live-aware and idempotent: if the session is already
-      // open (a revise turn), the binding lands NOW through the locked path;
-      // if not, the sidecar keeps owing it and the child's own `lucid open`
-      // promotes. Failure here must not kill the stream tee.
-      await promotePendingBindings(target).catch(() => {});
-    },
+    onIdentityDiscovered: discoveryPersistence(target, harness, launchId),
     ...extra,
   });
   /** An ASSIGNED identity is known before the process exists: record it
@@ -683,9 +736,13 @@ export const attendChild = async (
     );
     log(`${child.name}: applying feedback via resume`);
     // Every resume turn is its OWN launch: fresh correlation, the recipe's
-    // declared strategy, and discovery persistence against the child - a
-    // resumed Codex announcing its thread re-binds it under this launch.
+    // declared strategy, and guarded discovery persistence - a resume that
+    // announces the SAME thread re-binds under this launch; one that names a
+    // stranger is refused (HSI005), never adopted.
     const reviseLaunchId = mintLaunchId();
+    const allowRotation =
+      recipe.sessionIdentity?.source === "stdout-jsonl" &&
+      recipe.sessionIdentity.allowRotation === true;
     const result = await runSpawn(
       argv,
       child.artifactDir,
@@ -695,15 +752,10 @@ export const attendChild = async (
         sessionId,
         launchId: reviseLaunchId,
         ...(recipe.sessionIdentity ? { strategy: recipe.sessionIdentity } : {}),
-        onIdentityDiscovered: async (identity) => {
-          await recordPendingIdentity(child, {
-            harness: harnessName,
-            sessionId: identity.sessionId,
-            sessionIdAuthority: identity.authority,
-            launchId: reviseLaunchId,
-          });
-          await promotePendingBindings(child).catch(() => {});
-        },
+        onIdentityDiscovered: discoveryPersistence(child, harnessName, reviseLaunchId, {
+          requestedSessionId: sessionId,
+          allowRotation,
+        }),
       },
     );
     const code = result.code;

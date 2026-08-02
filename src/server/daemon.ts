@@ -1164,11 +1164,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // channel a revise turn narrates through). Pre-open, `deliver` falls
       // back to a direct append, so the labels are already sitting in the
       // child's log - the heartbeat reads the newest one and carries it, and
-      // the dialog stops being a bare clock. Owned by SESSION ID, not by
-      // timestamp: the spawned child runs under childSessionId (runSpawn
-      // exports it) and `lucid progress` stamps its acks with it, so a
-      // leftover process from a deleted artifact of the same name can never
-      // narrate this creation, however its clock reads.
+      // the dialog stops being a bare clock.
       const lastPhaseLabel = async (): Promise<string | undefined> => {
         const { events } = await readEvents(paths.logPath).catch(() => ({ events: [] as const }));
         for (let i = events.length - 1; i >= 0; i -= 1) {

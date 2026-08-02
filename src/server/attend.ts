@@ -1,8 +1,8 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { tracer } from "../core/verbose.ts";
-import { artifactAttendant, recordPendingIdentity } from "../core/attendant.ts";
-import { deliver, promotePendingBindings } from "../core/deliver.ts";
+import { artifactAttendant } from "../core/attendant.ts";
+import { deliver } from "../core/deliver.ts";
 import { shellArg } from "../core/escape.ts";
 import type { LogEvent, LogEventType } from "../core/events.ts";
 import { foldLog, type FoldedState } from "../core/fold.ts";
@@ -12,8 +12,8 @@ import type { SessionPaths } from "../core/paths.ts";
 import { assemblePayload } from "../core/payload.ts";
 import { harnessSessionCwd, harnessSessionId, presenceFor } from "../core/presence.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
-import { revisePrompt, runSpawn } from "../launch/launcher.ts";
-import { mintLaunchId } from "../launch/session-identity.ts";
+import { discoveryPersistence, revisePrompt, runSpawn } from "../launch/launcher.ts";
+import { classifyObservedIdentity, mintLaunchId } from "../launch/session-identity.ts";
 import { detectUsageLimit } from "../launch/limits.ts";
 import {
   buildArgv,
@@ -710,24 +710,21 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       () => 0,
     );
     const launchId = mintLaunchId();
+    const allowRotation = strategy?.source === "stdout-jsonl" && strategy.allowRotation === true;
     const result = await runSpawn(argv, cwd, paths.attendLog, {
       harness: resolved.name,
       ...(sessionId ? { sessionId } : {}),
       turnId,
       launchId,
       ...(strategy ? { strategy } : {}),
-      onIdentityDiscovered: async (identity) => {
-        // Persist while the turn is LIVE, and promote through the locked
-        // path: the hub is hosting this session, so promotion POSTs the
-        // binding and the viewer learns of it in the same breath.
-        await recordPendingIdentity(paths, {
-          harness: resolved.name,
-          sessionId: identity.sessionId,
-          sessionIdAuthority: identity.authority,
-          launchId,
-        });
-        await promotePendingBindings(paths).catch(() => {});
-      },
+      // Persistence while the turn is LIVE, through the one guarded callback:
+      // a resume that announces a STRANGER is refused (HSI005), never bound.
+      onIdentityDiscovered: discoveryPersistence(
+        paths,
+        resolved.name,
+        launchId,
+        !startsFresh && sessionId ? { requestedSessionId: sessionId, allowRotation } : undefined,
+      ),
       ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
       // Only what the argv actually carries: a dropped stale pick must not
       // stamp the child as running a model it was never given.
@@ -735,22 +732,50 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
     });
     const code = result.code;
+    if (result.status === "identity-missing") {
+      // Same HSI002 parity as the create paths: the turn ran clean but
+      // announced nothing, so whatever it did, THIS launch is not resumable.
+      log(`attend ${paths.name}: turn announced no session identity (HSI002)`);
+    }
     // Inspect THIS run before recording how it ended. The attend log appends
     // every attempt, so scanning the whole file could make an unrelated later
     // crash inherit an earlier turn's usage wall.
     const runOutput = (await readFile(paths.attendLog, "utf8").catch(() => "")).slice(outputFrom);
     const limit = code === 0 ? null : detectUsageLimit(runOutput);
-    // Identity established by this turn: what the harness ANNOUNCED wins;
-    // the legacy whole-output scan covers recipes that predate declarations;
-    // a clean caller-assigned handoff established the id it was given.
+    // Identity established by this turn. Fresh handoff: what the harness
+    // ANNOUNCED wins; the legacy whole-output scan covers recipes that
+    // predate declarations (retired with the registry migration); a clean
+    // caller-assigned handoff established the id it was given. Resume: the
+    // REQUESTED session stands - an announcement of the same id confirms it,
+    // an allowed rotation adopts the new one, and a refused mismatch keeps
+    // the requested id with the observed stranger left unbound (HSI005; the
+    // recovery milestone surfaces it).
     const observedId = "identity" in result ? result.identity?.sessionId : undefined;
+    const resumeOutcome =
+      !startsFresh && sessionId && observedId
+        ? classifyObservedIdentity(
+            sessionId,
+            { authority: "observed", harness: resolved.name, sessionId: observedId },
+            allowRotation,
+          )
+        : undefined;
     const establishedSessionId = startsFresh
       ? (observedId ??
         spawnedSessionId(resolved.name, runOutput) ??
         (code === 0 ? sessionId : undefined))
-      : (observedId ?? sessionId);
+      : resumeOutcome?.status === "rotated"
+        ? observedId
+        : sessionId;
+    // Authority is a claim about HOW the id is known, so it never exceeds the
+    // evidence: observed only for an announcement that was not refused,
+    // assigned only for a caller-assigned handoff that ran clean - an id
+    // recovered by scanning output text has no authority at all.
     const establishedAuthority =
-      observedId !== undefined ? "observed" : startsFresh && code === 0 ? "assigned" : undefined;
+      observedId !== undefined && resumeOutcome?.status !== "mismatch"
+        ? "observed"
+        : startsFresh && code === 0 && strategy?.source === "caller-assigned"
+          ? "assigned"
+          : undefined;
     // The turn stopped, whatever it produced. The hub holds the child, so it
     // is the authoritative witness - and without this a turn that read the
     // feedback and produced nothing left its window open forever (finding #1).

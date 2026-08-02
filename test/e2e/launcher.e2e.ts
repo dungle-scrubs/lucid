@@ -96,11 +96,15 @@ const stubRegistry = (
     default: "stub",
     harnesses: {
       stub: {
+        // Caller-assigned identity: unattended launch refuses an undeclared
+        // recipe (HSI001), and the shell stub takes the id as its second
+        // argv element ($2, after the artifact).
+        sessionIdentity: { argument: "--sid", source: "caller-assigned" },
         // `{artifact}` rides as an argv element rather than inside the script,
         // so each recorded line names WHICH child the turn was for - "one line
         // per fork" is otherwise indistinguishable from "two lines for one".
-        spawn: ["sh", "-c", create, "--", "{artifact}"],
-        resume: ["sh", "-c", record("resumed"), "--", "{artifact}"],
+        spawn: ["sh", "-c", create, "--", "{artifact}", "--sid", "{id}"],
+        resume: ["sh", "-c", record("resumed"), "--", "{artifact}", "--sid", "{id}"],
       },
     },
   };
