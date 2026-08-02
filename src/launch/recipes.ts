@@ -257,13 +257,26 @@ const parseSessionIdentity = (
       fail(`harness "${name}" caller-assigned identity needs a bounded \`argument\` flag`);
     }
     const argument = d.argument;
+    if (d.resumeArgument !== undefined && !isBoundedSelector(d.resumeArgument)) {
+      fail(`harness "${name}" \`resumeArgument\` must be a bounded flag when present`);
+    }
+    // The resume flag may differ from the assign flag: claude assigns with
+    // `--session-id <id>` and re-enters with `--resume <id>`, and demanding
+    // one spelling for both would refuse a correct recipe.
+    const resumeArgument = isBoundedSelector(d.resumeArgument) ? d.resumeArgument : argument;
     if (!adjacentIdAfter(spawn, argument)) {
       fail(`harness "${name}" spawn argv must pass "${argument}" immediately followed by "{id}"`);
     }
-    if (resume && !adjacentIdAfter(resume, argument)) {
-      fail(`harness "${name}" resume argv must pass "${argument}" immediately followed by "{id}"`);
+    if (resume && !adjacentIdAfter(resume, resumeArgument)) {
+      fail(
+        `harness "${name}" resume argv must pass "${resumeArgument}" immediately followed by "{id}"`,
+      );
     }
-    return { argument, source: "caller-assigned" };
+    return {
+      argument,
+      ...(resumeArgument !== argument ? { resumeArgument } : {}),
+      source: "caller-assigned",
+    };
   }
 
   if (d.source === "stdout-jsonl") {

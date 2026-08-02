@@ -38,6 +38,12 @@ import { hasControlCharacters } from "../core/events.ts";
 export interface CallerAssignedSessionIdentity {
   /** The argv flag whose NEXT token is the `{id}` Lucid mints and assigns. */
   readonly argument: string;
+  /**
+   * The flag that RESUMES that id, when the harness spells it differently -
+   * claude assigns with `--session-id <id>` and re-enters with `--resume
+   * <id>`. Defaults to `argument` for harnesses that use one flag for both.
+   */
+  readonly resumeArgument?: string;
   readonly source: "caller-assigned";
 }
 

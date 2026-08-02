@@ -318,7 +318,15 @@ Three surfaces carry it, all additive:
 the turn runs on THAT session's settings, so a pick would be ignored. Export
 `LUCID_MODEL` / `LUCID_EFFORT` alongside `LUCID_HARNESS` / `LUCID_SESSION_ID`
 and the `attendant` stamp carries them (`{ harness, sessionId?, cwd?, model?,
-effort? }`); the viewer displays them, subdued, in place of the pickers.
+effort?, sessionIdAuthority?, launchId? }`); the viewer displays them, subdued,
+in place of the pickers.
+
+These are a CAPTURE, not a live reading: Lucid records what the environment
+said when the attending session last ran `lucid wait`, and nothing re-reads it
+afterwards. A session that changes its model or thinking level mid-conversation
+keeps displaying the values it started with, and a harness that exports neither
+shows no model at all - the viewer can only report what the attendant told it.
+Re-export before the next `wait` to correct it.
 
 **Changing harness is a handoff, not a resume.** The next pending batch starts
 the target recipe's `spawn` command with a fresh session id. Its prompt points

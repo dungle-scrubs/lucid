@@ -275,6 +275,32 @@ describe("recipes registry", () => {
     }
   });
 
+  test("a harness that assigns and resumes with DIFFERENT flags declares both", async () => {
+    // Claude assigns with `--session-id <id>` and re-enters with `--resume
+    // <id>`. Demanding one spelling for both refused a correct recipe - found
+    // by migrating the real managed registry.
+    const valid = {
+      resume: ["claude", "--resume", "{id}", "-p", "{prompt}"],
+      sessionIdentity: {
+        argument: "--session-id",
+        resumeArgument: "--resume",
+        source: "caller-assigned",
+      },
+      spawn: ["claude", "-p", "--session-id", "{id}", "{prompt}"],
+    } satisfies { resume: string[]; sessionIdentity: SessionIdentityRecipe; spawn: string[] };
+    await writeHarnesses({ claude_code: valid });
+    const registry = await loadRegistry(regPath);
+    expect(registry && resolveRecipe(registry, "claude_code")?.recipe.sessionIdentity).toEqual(
+      valid.sessionIdentity,
+    );
+
+    // The resume flag is held to the same adjacency rule as the assign flag.
+    await writeHarnesses({
+      claude_code: { ...valid, resume: ["claude", "--resume", "x", "{id}", "-p", "{prompt}"] },
+    });
+    await expect(loadRegistry(regPath)).rejects.toMatchObject({ code: "HSI001" });
+  });
+
   test("stdout JSONL identity validates bounded selectors and complete argv protocol", async () => {
     const valid = {
       resume: ["codex", "exec", "resume", "{id}", "--json", "{prompt}"],
