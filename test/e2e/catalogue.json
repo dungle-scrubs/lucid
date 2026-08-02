@@ -45,7 +45,7 @@
             "Start `lucid hub --port 17492`, then start a second hub on the same port",
             "Read the envelope's `error.code`"
           ],
-          "expected": "One of the documented codes (VALIDATION_ERROR/NOT_FOUND/ARTIFACT_ERROR/SERVER_ERROR/LOG_ERROR). Today it is `EADDRINUSE` — a raw Bun error masquerading as a typed Lucid error, so an agent switching on the documented set falls through.",
+          "expected": "One of the documented codes (VALIDATION_ERROR/NOT_FOUND/ARTIFACT_ERROR/SERVER_ERROR/LOG_ERROR). Today it is `EADDRINUSE` \u2014 a raw Bun error masquerading as a typed Lucid error, so an agent switching on the documented set falls through.",
           "risk": "medium",
           "kind": "functional",
           "status": "declined",
@@ -78,7 +78,7 @@
           "id": "plan-bare-usage-is-not-json",
           "title": "`lucid plan` prints usage, and that is documented as non-JSON",
           "steps": ["Run `lucid plan` with no subcommand"],
-          "expected": "Two usage lines on stdout, exit 0 — deliberately not JSON, which a scripted caller must not parse.",
+          "expected": "Two usage lines on stdout, exit 0 \u2014 deliberately not JSON, which a scripted caller must not parse.",
           "risk": "low",
           "kind": "functional",
           "status": "declined",
@@ -160,7 +160,7 @@
             "Create a canonical record `<dir>/.lucid/canon/log.ndjson` beside `<dir>/.lucid/canon.html`",
             "Run `lucid` in <dir>"
           ],
-          "expected": "Both listed once, each resolving to its own artifact — the canonical row keeps `.lucid` in its path (that is where its artifact lives), the sibling row has none; no duplicates, no vanishing.",
+          "expected": "Both listed once, each resolving to its own artifact \u2014 the canonical row keeps `.lucid` in its path (that is where its artifact lives), the sibling row has none; no duplicates, no vanishing.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
@@ -208,7 +208,7 @@
             "Set TMPDIR to a durable-looking directory, write the artifact inside it",
             "Run `lucid open`"
           ],
-          "expected": "Refused with the same VALIDATION_ERROR — volatileRoots() includes resolve($TMPDIR).",
+          "expected": "Refused with the same VALIDATION_ERROR \u2014 volatileRoots() includes resolve($TMPDIR).",
           "risk": "medium",
           "kind": "functional",
           "status": "covered",
@@ -334,7 +334,7 @@
             "Write valid HTML to `<dir>/plan` (no extension)",
             "Run `lucid open <dir>/plan`"
           ],
-          "expected": "A clean typed error or a distinct session folder. sessionName returns the basename unchanged, so sessionDir === the artifact path — a raw ENOTDIR/EEXIST trace or a clobbered artifact is a failure.",
+          "expected": "A clean typed error or a distinct session folder. sessionName returns the basename unchanged, so sessionDir === the artifact path \u2014 a raw ENOTDIR/EEXIST trace or a clobbered artifact is a failure.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -361,7 +361,7 @@
           "id": "path-with-spaces-and-unicode",
           "title": "Spaces and non-ASCII in an artifact path work end to end",
           "steps": [
-            "Open `<dir>/my plan (v2) – рабочий.html`",
+            "Open `<dir>/my plan (v2) \u2013 \u0440\u0430\u0431\u043e\u0447\u0438\u0439.html`",
             "Annotate, run wait, inspect the session folder name and the printed url"
           ],
           "expected": "open/wait/ask/end all work, the folder is named from the stem, the url loads, and nothing is shell-quoted incorrectly when spawning the server.",
@@ -375,7 +375,7 @@
           "id": "open-missing-file",
           "title": "Opening a path that does not exist gives a typed error",
           "steps": ["Run `lucid open /durable/does-not-exist.html`"],
-          "expected": "Exit 1, ARTIFACT_ERROR \"cannot read artifact: …\" with detail.path — not an unhandled ENOENT stack.",
+          "expected": "Exit 1, ARTIFACT_ERROR \"cannot read artifact: \u2026\" with detail.path \u2014 not an unhandled ENOENT stack.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -427,7 +427,7 @@
           "id": "status-empty-directory",
           "title": "Bare `lucid` with no sessions is empty, not an error",
           "steps": ["Run `lucid` in a fresh empty directory"],
-          "expected": "Exit 0 with `{sessions:[], usage:{…}}` — the usage block is the discoverability affordance and must always be present.",
+          "expected": "Exit 0 with `{sessions:[], usage:{\u2026}}` \u2014 the usage block is the discoverability affordance and must always be present.",
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
@@ -476,7 +476,7 @@
           "id": "status-hub-hosted-viewer-url",
           "title": "A hub-hosted session lists its shell tab url, not a per-session viewer path",
           "steps": ["Open a session into a hub, run bare `lucid`"],
-          "expected": "viewer is `http://127.0.0.1:<hub>/?s=<id>` — `/s/<id>/__lucid/viewer` would render a second chrome inside the window.",
+          "expected": "viewer is `http://127.0.0.1:<hub>/?s=<id>` \u2014 `/s/<id>/__lucid/viewer` would render a second chrome inside the window.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -487,7 +487,7 @@
           "id": "status-attendant-surfaced",
           "title": "lastAttendant reaches the listing after a --harness wait",
           "steps": ["Run a wait with --harness/--resume and model env, then bare `lucid`"],
-          "expected": "lastAttendant carries harness, at, resume, model and effort — the fields the shell and a returning human read.",
+          "expected": "lastAttendant carries harness, at, resume, model and effort \u2014 the fields the shell and a returning human read.",
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
@@ -501,12 +501,29 @@
             "Follow docs/CONTRACT.md's statusline snippet verbatim against a live session",
             "Check whether it reports context usage"
           ],
-          "expected": "It works. Today CONTRACT.md documents `.lucid/<name>/cursor.<harness>.json`, `selection.json`, `context.json` and greps `-path '*/.lucid/*'` for server.json — none of which match the new layout, so a copied statusline silently stops reporting.",
+          "expected": "It works. Today CONTRACT.md documents `.lucid/<name>/cursor.<harness>.json`, `selection.json`, `context.json` and greps `-path '*/.lucid/*'` for server.json \u2014 none of which match the new layout, so a copied statusline silently stops reporting.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
           "status": "uncovered",
           "blockedBy": "Finding #65: the claim is FALSE today - docs/CONTRACT.md documents the pre-move .lucid/<name>/ layout in four places and its statusline snippet greps a path that no longer exists, silently reporting no context usage. Returns when the doc is fixed - as a doc-drift UNIT test asserting the paths CONTRACT.md names resolve against src/core/paths.ts, not as a bash block scraped from markdown. Moved here from declined by the D-079 guard for the same reason as status-large-tree-performance."
+        },
+        {
+          "id": "poisoned-record-resumes-the-real-thread",
+          "title": "A synthetic log stamp never reaches resume argv",
+          "steps": [
+            "Open an artifact, then append an attendant stamp whose sessionId is a UUID Lucid minted and the harness never knew",
+            "Write the machine-local sidecar carrying the thread the harness actually announced, with explicit authority",
+            "Leave a human annotation pending and mount the artifact in an attend-mode hub with a stub codex recipe",
+            "Read the argv the stub harness was resumed with"
+          ],
+          "expected": "The resume argv names the sidecar's announced thread and never the synthetic id. Before the fix the untyped log mention was the resume target, so codex answered 'no rollout found for thread id', feedback stalled behind a generic failed-turn line, and every retry asked the same dead question.",
+          "risk": "high",
+          "kind": "functional",
+          "status": "covered",
+          "testFile": "test/e2e/regression/hsi-poisoned-record-resumes-the-real-thread.e2e.ts",
+          "testName": "a poisoned record resumes the harness's real thread, never the synthetic id",
+          "mutation": "src/server/attend.ts attendTarget: prefer `recorded.sessionId` (the untyped log mention) over the ranked candidates - i.e. restore the synthetic-ID preference. Verified to red this test."
         }
       ]
     },
@@ -538,7 +555,7 @@
             "Open a session, take nextCursor",
             "Run `lucid wait plan.html --since <cursor> --timeout 0` and wait 60s"
           ],
-          "expected": "An immediate drain-and-return (`waiting`), or an explicit refusal of 0. Today timeoutMs 0 maps to POSITIVE_INFINITY, so the process never returns and the agent's turn hangs — the opposite of what `0` reads as.",
+          "expected": "An immediate drain-and-return (`waiting`), or an explicit refusal of 0. Today timeoutMs 0 maps to POSITIVE_INFINITY, so the process never returns and the agent's turn hangs \u2014 the opposite of what `0` reads as.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
@@ -570,7 +587,7 @@
             "Hold a `wait --since <c>`; send message A so wait returns",
             "Immediately send message B before the next wait; inspect both delivery chips"
           ],
-          "expected": "A shows delivered, B still shows recorded — the ack's `covers` is the cursor just read, not the ack's own position.",
+          "expected": "A shows delivered, B still shows recorded \u2014 the ack's `covers` is the cursor just read, not the ack's own position.",
           "risk": "high",
           "kind": "concurrency",
           "status": "declined",
@@ -588,7 +605,7 @@
             "Run `lucid intent plan.html revise` and `lucid progress plan.html --total 3`",
             "Re-check the chip"
           ],
-          "expected": "Still \"recorded\" — a presence-only re-ack carries no `covers`, so it claims no batch.",
+          "expected": "Still \"recorded\" \u2014 a presence-only re-ack carries no `covers`, so it claims no batch.",
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
@@ -605,7 +622,7 @@
             "Run `lucid wait plan.html --timeout 1` with no --since",
             "Read the item's delivery chip"
           ],
-          "expected": "status feedback with the full folded state, but the item still shows \"recorded\" — a bootstrap read is not a hand-off.",
+          "expected": "status feedback with the full folded state, but the item still shows \"recorded\" \u2014 a bootstrap read is not a hand-off.",
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
@@ -621,7 +638,7 @@
             "Open, `lucid end`, then `lucid open` again",
             "Read version, segment (bare `lucid`) and nextCursor"
           ],
-          "expected": "segment 2, version back to 1, nextCursor strictly greater than the cursor held before `end` — a persisted cursor stays valid across the reopen.",
+          "expected": "segment 2, version back to 1, nextCursor strictly greater than the cursor held before `end` \u2014 a persisted cursor stays valid across the reopen.",
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
@@ -669,7 +686,7 @@
             "Start `wait --since <c>`, send an annotation, SIGKILL the wait before it prints",
             "Re-run the identical wait command"
           ],
-          "expected": "The annotation is delivered again with the same id — nothing is consumed by the killed process.",
+          "expected": "The annotation is delivered again with the same id \u2014 nothing is consumed by the killed process.",
           "risk": "high",
           "kind": "recovery",
           "status": "covered",
@@ -741,7 +758,7 @@
           "id": "wait-bare-integer-cursor",
           "title": "A bare integer cursor is an alias for evt_NNNNN",
           "steps": ["Run `lucid wait --since 3 --timeout 3` after events 1..3 exist"],
-          "expected": "Same result as `--since evt_00003` — the delta excludes seq<=3.",
+          "expected": "Same result as `--since evt_00003` \u2014 the delta excludes seq<=3.",
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
@@ -963,7 +980,7 @@
             "Run `lucid wait --since <c> --timeout 20`; read the viewer",
             "Send a message from the tab, then `lucid open` again"
           ],
-          "expected": "wait returns \"suspended\", the viewer explains how to resume, the message still reaches the log (the mount re-hosts on demand — never a permanent 404), and the reopen brings the annotations back intact.",
+          "expected": "wait returns \"suspended\", the viewer explains how to resume, the message still reaches the log (the mount re-hosts on demand \u2014 never a permanent 404), and the reopen brings the annotations back intact.",
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
@@ -987,7 +1004,7 @@
     },
     {
       "name": "D. Asking questions",
-      "purpose": "`lucid ask` validation and the grouped-question round trip — the path where a malformed call must never half-record a question the human will be asked to answer.",
+      "purpose": "`lucid ask` validation and the grouped-question round trip \u2014 the path where a malformed call must never half-record a question the human will be asked to answer.",
       "scenarios": [
         {
           "id": "ask-group-answer-round-trip",
@@ -1022,7 +1039,7 @@
           "id": "ask-text-and-group-are-exclusive",
           "title": "--group plus --text/--option/--multi is refused, not silently preferred",
           "steps": ["Run `lucid ask plan.html --text hi --group q.json`"],
-          "expected": "Exit 1, VALIDATION_ERROR \"lucid ask takes --group or --text/--option/--multi, not both\" — flags the caller believed they sent are never dropped.",
+          "expected": "Exit 1, VALIDATION_ERROR \"lucid ask takes --group or --text/--option/--multi, not both\" \u2014 flags the caller believed they sent are never dropped.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -1120,7 +1137,7 @@
           "id": "ask-group-empty-stdin",
           "title": "An empty stdin group is refused with a specific message",
           "steps": ["Run `lucid ask plan.html --group - < /dev/null`"],
-          "expected": "Exit 1, VALIDATION_ERROR \"no question group on stdin\" — not a JSON parse error.",
+          "expected": "Exit 1, VALIDATION_ERROR \"no question group on stdin\" \u2014 not a JSON parse error.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -1133,7 +1150,7 @@
           "id": "ask-group-invalid-json",
           "title": "Malformed group JSON reports the parse problem, not a stack trace",
           "steps": ["Write `{not json` to q.json and run `lucid ask plan.html --group q.json`"],
-          "expected": "Exit 1, VALIDATION_ERROR \"question group is not valid JSON: …\" with detail.source.",
+          "expected": "Exit 1, VALIDATION_ERROR \"question group is not valid JSON: \u2026\" with detail.source.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -1146,7 +1163,7 @@
           "id": "ask-no-session",
           "title": "ask before open is NOT_FOUND",
           "steps": ["Run `lucid ask /durable/never-opened.html --text hi`"],
-          "expected": "Exit 1 NOT_FOUND — an agent that skipped `open` is told, rather than writing a question nobody will see.",
+          "expected": "Exit 1 NOT_FOUND \u2014 an agent that skipped `open` is told, rather than writing a question nobody will see.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -1250,7 +1267,7 @@
           "id": "queue-is-lost-on-reload",
           "title": "A reload silently destroys queued annotations while messages survive",
           "steps": ["Queue two annotations, reload the page, inspect the panel"],
-          "expected": "Today both queued cards are gone with no warning and no recovery card, while an undelivered MESSAGE survives the same reload — the asymmetry is the finding. Either the queue persists too, or the loss is warned about.",
+          "expected": "Today both queued cards are gone with no warning and no recovery card, while an undelivered MESSAGE survives the same reload \u2014 the asymmetry is the finding. Either the queue persists too, or the loss is warned about.",
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
@@ -1283,7 +1300,7 @@
             "Annotate an element and send it (card 1)",
             "Annotate a different element and leave it queued"
           ],
-          "expected": "The queued card's badge reads 2 and the artifact shows badges 1 and 2 — no two cards or markers labelled 1.",
+          "expected": "The queued card's badge reads 2 and the artifact shows badges 1 and 2 \u2014 no two cards or markers labelled 1.",
           "risk": "high",
           "kind": "visual",
           "needsCapability": "",
@@ -1298,7 +1315,7 @@
           "steps": [
             "Click an element, fill the note with '   ', click [data-test=add-to-queue], wait 500ms"
           ],
-          "expected": "Either it queues or it explains itself. Today no queued card appears, the Send bar stays absent, and the still-enabled button gives no reason — the refusal is invisible.",
+          "expected": "Either it queues or it explains itself. Today no queued card appears, the Send bar stays absent, and the still-enabled button gives no reason \u2014 the refusal is invisible.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
@@ -1330,7 +1347,7 @@
             "Cmd-click the same element again to toggle the spot off",
             "Click a different element to start a new pick"
           ],
-          "expected": "The composer unmounts on the toggle-off and the new pick opens with an EMPTY note and no image chips — the old note and images never resurrect.",
+          "expected": "The composer unmounts on the toggle-off and the new pick opens with an EMPTY note and no image chips \u2014 the old note and images never resurrect.",
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
@@ -1399,7 +1416,7 @@
           "id": "multi-spot-chip-remove-keeps-draft",
           "title": "Removing one collected spot leaves the note and the other spots intact",
           "steps": [
-            "Cmd-click two elements, type a note, click the × on the first [data-test=target-chip]"
+            "Cmd-click two elements, type a note, click the \u00d7 on the first [data-test=target-chip]"
           ],
           "expected": "One spot remains (chips collapse to a single snippet), the note is unchanged, and the surface shows one pending marker.",
           "risk": "medium",
@@ -1439,7 +1456,7 @@
             "Route POST **/__lucid/fork to delay 3s; click an element, type, click Fork",
             "Try to type into the note"
           ],
-          "expected": "[data-test=annotation-note] is disabled, the button reads 'Forking…', and a second click cannot mint a second fork.",
+          "expected": "[data-test=annotation-note] is disabled, the button reads 'Forking\u2026', and a second click cannot mint a second fork.",
           "risk": "medium",
           "kind": "concurrency",
           "status": "covered",
@@ -1452,7 +1469,7 @@
           "id": "annotation-image-chip-remove",
           "title": "A staged annotation image can be removed before queueing",
           "steps": [
-            "Click an element, paste an image, click × on [data-test=annotation-chip]",
+            "Click an element, paste an image, click \u00d7 on [data-test=annotation-chip]",
             "Queue and send"
           ],
           "expected": "The chip disappears and the annotation reaching `lucid wait` carries no images.",
@@ -1518,7 +1535,7 @@
           "id": "queue-blocks-session-switch",
           "title": "Switching sessions with unsent work is refused, not silently discarded",
           "steps": [
-            "Queue an annotation, press ⌘2 for the Sessions tab, click another session row"
+            "Queue an annotation, press \u23182 for the Sessions tab, click another session row"
           ],
           "expected": "The page does not navigate and a warning reads 'Send or discard your unsent feedback before switching sessions.'",
           "risk": "medium",
@@ -1530,7 +1547,7 @@
         {
           "id": "queue-survives-panel-tab-switch",
           "title": "Glancing at the Sessions tab keeps the queue, the draft and the scroll",
-          "steps": ["Queue an annotation, start typing a second note, press ⌘2 then ⌘1"],
+          "steps": ["Queue an annotation, start typing a second note, press \u23182 then \u23181"],
           "expected": "Queued card, half-typed note, its pick and the scroll position are all as they were (keepMounted).",
           "risk": "medium",
           "kind": "state",
@@ -1545,7 +1562,7 @@
             "Open a viewer on PLAN_V1, click li[data-lucid-id=step-backfill] in the artifact frame",
             "Read document.activeElement"
           ],
-          "expected": "[data-test=annotation-note] is visible and focused; the heading reads 'New annotation' with the '⌘-click adds more spots' hint.",
+          "expected": "[data-test=annotation-note] is visible and focused; the heading reads 'New annotation' with the '\u2318-click adds more spots' hint.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -1585,7 +1602,7 @@
         {
           "id": "queue-survives-panel-collapse",
           "title": "Collapsing and reopening the panel keeps unsent work",
-          "steps": ["Queue an annotation, press ⌘B to collapse, ⌘B to reopen"],
+          "steps": ["Queue an annotation, press \u2318B to collapse, \u2318B to reopen"],
           "expected": "The queued card and the Send bar are still there with the same note.",
           "risk": "low",
           "kind": "state",
@@ -1671,7 +1688,7 @@
             "Take the server down and submit two messages so both show 'not delivered'",
             "Route POST **/__lucid/message to hang, click Retry on the first"
           ],
-          "expected": "Only the first card's button reads 'Sending…' and is disabled; the second card's Retry and Discard stay clickable, and Discard on it works immediately.",
+          "expected": "Only the first card's button reads 'Sending\u2026' and is disabled; the second card's Retry and Discard stay clickable, and Discard on it works immediately.",
           "risk": "high",
           "kind": "concurrency",
           "status": "covered",
@@ -1703,7 +1720,7 @@
             "Route POST **/__lucid/message to delay 3s",
             "Type a message, press Enter, watch the panel"
           ],
-          "expected": "After ~1.2s a [data-test=unsent-message] appears under 'Sending' reading 'sending…' (not 'not delivered'); when the POST lands the card disappears and exactly ONE human bubble exists.",
+          "expected": "After ~1.2s a [data-test=unsent-message] appears under 'Sending' reading 'sending\u2026' (not 'not delivered'); when the POST lands the card disappears and exactly ONE human bubble exists.",
           "risk": "high",
           "kind": "functional",
           "status": "covered",
@@ -1719,7 +1736,7 @@
             "Route POST **/__lucid/message to 503 with body {error:'the log is busy'}",
             "Send a message"
           ],
-          "expected": "The warning reads \"Your message didn't send (HTTP 503 - the log is busy) - it's kept below, and you can retry it.\" — the server's reason, not a bare generic failure.",
+          "expected": "The warning reads \"Your message didn't send (HTTP 503 - the log is busy) - it's kept below, and you can retry it.\" \u2014 the server's reason, not a bare generic failure.",
           "risk": "high",
           "kind": "recovery",
           "status": "covered",
@@ -1735,7 +1752,7 @@
             "Take the server down, submit A, B, C",
             "Restore the server, let the outbox drain, read the log"
           ],
-          "expected": "The record and the agent's payload both show A, B, C in that order — never reordered by retry timing.",
+          "expected": "The record and the agent's payload both show A, B, C in that order \u2014 never reordered by retry timing.",
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
@@ -1751,7 +1768,7 @@
             "Send a message against a healthy server",
             "Poll [data-test=unsent-message] continuously for 2s"
           ],
-          "expected": "The card never appears at any point — the common path must not stutter.",
+          "expected": "The card never appears at any point \u2014 the common path must not stutter.",
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
@@ -1789,7 +1806,7 @@
     },
     {
       "name": "G. The shell window: tabs, boot, and scale",
-      "purpose": "The hub shell as the human actually lives in it — booting into a session, juggling tabs, and not losing state when tabs come and go.",
+      "purpose": "The hub shell as the human actually lives in it \u2014 booting into a session, juggling tabs, and not losing state when tabs come and go.",
       "scenarios": [
         {
           "id": "boot-s-opens-tab",
@@ -1827,10 +1844,10 @@
           "id": "boot-s-consumed-once",
           "title": "A closed boot tab does not resurrect on the next listing snapshot",
           "steps": [
-            "Load via /?s=<id>, wait for the tab, close it with its ×",
+            "Load via /?s=<id>, wait for the tab, close it with its \u00d7",
             "Force a new listing snapshot (rewrite the artifact's <title>, or open a second artifact)"
           ],
-          "expected": "The closed tab stays closed — the ?s= boot never re-fires on later snapshots.",
+          "expected": "The closed tab stays closed \u2014 the ?s= boot never re-fires on later snapshots.",
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
@@ -1841,7 +1858,7 @@
         },
         {
           "id": "tab-close-x-keeps-session-running",
-          "title": "Closing a tab with × leaves the session alive and re-openable",
+          "title": "Closing a tab with \u00d7 leaves the session alive and re-openable",
           "steps": [
             "Open a tab, click [data-test=tab-close]",
             "Run `lucid wait <artifact> --timeout 2`, then click \"+\""
@@ -1852,18 +1869,18 @@
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/e2e/tabs.e2e.ts",
-          "testName": "closing a tab with × leaves the session alive and re-openable",
-          "mutation": "client/chrome/hub.ts: Make closing a tab tear the SESSION down too - the close path POSTs /__lucid/end alongside dropping the stream - which is exactly the \"the tab bar is not a kill switch\" promise the × tooltip makes."
+          "testName": "closing a tab with \u00d7 leaves the session alive and re-openable",
+          "mutation": "client/chrome/hub.ts: Make closing a tab tear the SESSION down too - the close path POSTs /__lucid/end alongside dropping the stream - which is exactly the \"the tab bar is not a kill switch\" promise the \u00d7 tooltip makes."
         },
         {
           "id": "tab-close-promotes-a-live-neighbor",
           "title": "Closing the active tab promotes a neighbor whose stream is actually live",
           "steps": [
             "Open 3 tabs in one project and visit each so streams exist",
-            "Activate the middle tab, close it with ⌘W",
+            "Activate the middle tab, close it with \u2318W",
             "Append an agent reply to the promoted neighbor's session from the CLI"
           ],
-          "expected": "The promoted tab is showing and the new reply appears without any extra click or reload — not a frozen, disconnected view.",
+          "expected": "The promoted tab is showing and the new reply appears without any extra click or reload \u2014 not a frozen, disconnected view.",
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "",
@@ -1875,8 +1892,8 @@
         {
           "id": "tab-close-last-returns-to-picker",
           "title": "Closing the only tab lands on the pick screen offering it again",
-          "steps": ["Open exactly one tab, close it with ⌘W"],
-          "expected": "The pick screen renders and lists the just-closed artifact as an openable row — not 'Every session is already open', not a blank pane.",
+          "steps": ["Open exactly one tab, close it with \u2318W"],
+          "expected": "The pick screen renders and lists the just-closed artifact as an openable row \u2014 not 'Every session is already open', not a blank pane.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
@@ -1906,7 +1923,7 @@
             "Open 12 sessions as tabs, activate the first-opened one",
             "Append an annotation or agent reply to that session from the CLI"
           ],
-          "expected": "The reactivated tab refolds its state and shows the new event live — never a frozen snapshot.",
+          "expected": "The reactivated tab refolds its state and shows the new event live \u2014 never a frozen snapshot.",
           "risk": "high",
           "kind": "recovery",
           "status": "uncovered",
@@ -1978,7 +1995,7 @@
           "kind": "state",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"\u2318K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "background-tab-keeps-folding-events",
@@ -1987,7 +2004,7 @@
             "Open two tabs; while B is hidden, have the agent post a reply and take delivery on B's session",
             "Switch to B"
           ],
-          "expected": "B already shows the reply and the correct delivery state — no re-fetch flash, no missing events.",
+          "expected": "B already shows the reply and the correct delivery state \u2014 no re-fetch flash, no missing events.",
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
@@ -2000,7 +2017,7 @@
           "id": "activate-focuses-composer",
           "title": "Landing on a tab lands the keyboard in that tab's composer",
           "steps": [
-            "Open two tabs, click the background tab (repeat with ⌘1)",
+            "Open two tabs, click the background tab (repeat with \u23181)",
             "Type immediately without clicking anything"
           ],
           "expected": "The typed text lands in the newly active tab's VISIBLE message input, not a hidden tab's.",
@@ -2045,17 +2062,17 @@
         },
         {
           "id": "cmd-w-with-unsent-queue",
-          "title": "⌘W on a tab holding an unsent queue does not silently destroy work",
+          "title": "\u2318W on a tab holding an unsent queue does not silently destroy work",
           "steps": [
-            "Queue an annotation without sending, press ⌘W, reopen the session from the picker"
+            "Queue an annotation without sending, press \u2318W, reopen the session from the picker"
           ],
-          "expected": "Either the queued item is still there after reopening, or the close was gated/warned — a human-authored note must not vanish without a trace.",
+          "expected": "Either the queued item is still there after reopening, or the close was gated/warned \u2014 a human-authored note must not vanish without a trace.",
           "risk": "high",
           "kind": "state",
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/e2e/tabs.e2e.ts",
-          "testName": "⌘W over an unsent queue: reopening the artifact restores the queued note",
+          "testName": "\u2318W over an unsent queue: reopening the artifact restores the queued note",
           "mutation": "client/chrome/store.ts: restore `queue: [],` in the initial state - the reopened tab restores nothing and the note is gone (the same seam the m4.1-queue-reload registry row proves from the reload door)"
         },
         {
@@ -2113,7 +2130,7 @@
           "steps": [
             "Write an artifact whose <head> has no <title>, `lucid open` it, load the shell"
           ],
-          "expected": "The tab reads the filename (e.g. \"plan.html\") — never an empty label or \"undefined\".",
+          "expected": "The tab reads the filename (e.g. \"plan.html\") \u2014 never an empty label or \"undefined\".",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -2143,7 +2160,7 @@
             "Create plan.html and rollout.html in ONE project both titled \"Migration plan\", open both",
             "Hover each tab, then click each"
           ],
-          "expected": "Each tab's tooltip shows its own artifact path and each shows its own document — never two identical labels with no differentiator.",
+          "expected": "Each tab's tooltip shows its own artifact path and each shows its own document \u2014 never two identical labels with no differentiator.",
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
@@ -2156,7 +2173,7 @@
           "id": "tabs-cross-project-name-collision",
           "title": "Same-named artifacts from different projects are told apart by their group",
           "steps": ["Open plan.html from project A and plan.html from project B (same title)"],
-          "expected": "Both tabs read the bare title (D-012); each sits under its own project's group heading, which is the disambiguation (D-027 - deliberately flips the old `· <project>` qualifier, closing e2e finding #56 by design).",
+          "expected": "Both tabs read the bare title (D-012); each sits under its own project's group heading, which is the disambiguation (D-027 - deliberately flips the old `\u00b7 <project>` qualifier, closing e2e finding #56 by design).",
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
@@ -2171,7 +2188,7 @@
           "steps": [
             "Open an artifact whose <title> is 200 characters; inspect the tab width and the \"+\" position"
           ],
-          "expected": "The tab clamps at its max width with an ellipsis, the close × stays clickable, and \"+\" is still on screen.",
+          "expected": "The tab clamps at its max width with an ellipsis, the close \u00d7 stays clickable, and \"+\" is still on screen.",
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
@@ -2182,7 +2199,7 @@
           "id": "tab-close-background-leaves-active-alone",
           "title": "Closing a background tab does not disturb the active one",
           "steps": [
-            "Open two tabs, type an unsent draft in the active one, close the OTHER via its ×"
+            "Open two tabs, type an unsent draft in the active one, close the OTHER via its \u00d7"
           ],
           "expected": "The active tab stays active, its draft unchanged, and its surface does not remount or scroll to top.",
           "risk": "medium",
@@ -2194,7 +2211,7 @@
         {
           "id": "tab-close-affordance-on-hover",
           "title": "An inactive tab's close button appears on hover and closes that tab only",
-          "steps": ["Open two tabs, hover the inactive one and click its ×"],
+          "steps": ["Open two tabs, hover the inactive one and click its \u00d7"],
           "expected": "The hovered tab closes; the active tab is untouched and stays active.",
           "risk": "medium",
           "kind": "functional",
@@ -2204,8 +2221,8 @@
         },
         {
           "id": "tab-close-all-then-cmdw-noop",
-          "title": "⌘W with nothing open is a harmless no-op",
-          "steps": ["Open 2 tabs, press ⌘W twice to empty the strip, press ⌘W again"],
+          "title": "\u2318W with nothing open is a harmless no-op",
+          "steps": ["Open 2 tabs, press \u2318W twice to empty the strip, press \u2318W again"],
           "expected": "The pick screen stays, no error, the browser tab itself unaffected.",
           "risk": "medium",
           "kind": "functional",
@@ -2241,7 +2258,7 @@
           "id": "tab-attention-approved",
           "title": "An approved review marks its tab with a check",
           "steps": ["Open two tabs, approve the review in one, switch away"],
-          "expected": "That tab shows data-kind=\"approved\" (✓); reopening the review removes it.",
+          "expected": "That tab shows data-kind=\"approved\" (\u2713); reopening the review removes it.",
           "risk": "low",
           "kind": "state",
           "needsCapability": "",
@@ -2257,7 +2274,7 @@
           "steps": [
             "Drive a session into both states (unanswered question AND agent mid-turn), observe its tab"
           ],
-          "expected": "Exactly one dot renders, kind=\"question\" — the strip advertises the human's turn.",
+          "expected": "Exactly one dot renders, kind=\"question\" \u2014 the strip advertises the human's turn.",
           "risk": "low",
           "kind": "state",
           "needsCapability": "",
@@ -2281,7 +2298,7 @@
           "steps": [
             "Click [data-test=tab-add], read document.activeElement; repeat for the drawer badge and New artifact"
           ],
-          "expected": "Focus is not left burning on the control — each blurs on activation.",
+          "expected": "Focus is not left burning on the control \u2014 each blurs on activation.",
           "risk": "low",
           "kind": "a11y",
           "needsCapability": "",
@@ -2301,7 +2318,7 @@
           "id": "picker-looking-state-before-first-snapshot",
           "title": "Before the first listing arrives the screen says it is LOOKING, not empty",
           "steps": ["Delay GET /hub/events by ~2s in the browser context, load the shell root"],
-          "expected": "\"Looking for sessions…\" shows during the delay; \"No reviews here yet\" never appears before the first snapshot.",
+          "expected": "\"Looking for sessions\u2026\" shows during the delay; \"No reviews here yet\" never appears before the first snapshot.",
           "risk": "high",
           "kind": "state",
           "status": "covered",
@@ -2330,13 +2347,13 @@
           "kind": "visual",
           "status": "declined",
           "builtCapability": "isHittable in test/e2e/visual.ts",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"\u2318K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "picker-all-open-scoped-copy",
           "title": "\"Everything is open\" in a scope offers widening, not a dead end",
           "steps": ["Open every artifact in project A, click \"+\" while scoped to A"],
-          "expected": "Copy names the project (\"Every artifact in A is already open\") and offers \"all projects\" plus New artifact — never \"No reviews here yet\".",
+          "expected": "Copy names the project (\"Every artifact in A is already open\") and offers \"all projects\" plus New artifact \u2014 never \"No reviews here yet\".",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
@@ -2352,7 +2369,7 @@
           "kind": "visual",
           "status": "declined",
           "builtCapability": "isHittable in test/e2e/visual.ts",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"\u2318K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-open-large-project",
@@ -2372,7 +2389,7 @@
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"\u2318K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-opens-whole-project",
@@ -2381,7 +2398,7 @@
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"\u2318K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "picker-hides-open-artifacts",
@@ -2437,7 +2454,7 @@
         },
         {
           "id": "drawer-open-close-routes",
-          "title": "The drawer opens and closes by badge, ×, and click-away",
+          "title": "The drawer opens and closes by badge, \u00d7, and click-away",
           "steps": [
             "Click [data-test=drawer-toggle], then [data-test=drawer-close]",
             "Reopen and click the backdrop; reopen and click the badge again"
@@ -2471,7 +2488,7 @@
             "Open the drawer while a project row exists, delete that project's session data",
             "Click the stale row before the next snapshot arrives"
           ],
-          "expected": "The scoped pick screen renders with its explanatory copy and a way out (all projects) — never a blank window under a project badge.",
+          "expected": "The scoped pick screen renders with its explanatory copy and a way out (all projects) \u2014 never a blank window under a project badge.",
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
@@ -2526,7 +2543,7 @@
             "Add an agent-scratchpad folder as a root so its artifact is listed under the project it was about",
             "Open the pick screen"
           ],
-          "expected": "The row subtitle is the bare filename, not a nonsense sliced path like \"…/artifact.html\" chopped mid-path.",
+          "expected": "The row subtitle is the bare filename, not a nonsense sliced path like \"\u2026/artifact.html\" chopped mid-path.",
           "risk": "medium",
           "kind": "visual",
           "needsCapability": "",
@@ -2550,7 +2567,7 @@
           "id": "add-folder-zero-reviews",
           "title": "A folder holding no reviews explains itself instead of going silent",
           "steps": ["Paste an empty temp directory and Add"],
-          "expected": "[data-test=add-folder-result] says it is watching the folder but found no reviews, and explains scratchpads — not a bare \"added\".",
+          "expected": "[data-test=add-folder-result] says it is watching the folder but found no reviews, and explains scratchpads \u2014 not a bare \"added\".",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -2600,7 +2617,7 @@
           "steps": [
             "Register a session, delete its directory, wait a listing pass, open the pick screen"
           ],
-          "expected": "No row for the dead session, or a row that reports the failure on click — never a blank tab.",
+          "expected": "No row for the dead session, or a row that reports the failure on click \u2014 never a blank tab.",
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
@@ -2627,7 +2644,7 @@
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"\u2318K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-counts-and-plurals",
@@ -2636,7 +2653,7 @@
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"\u2318K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-header-has-add-folder-only",
@@ -2645,7 +2662,7 @@
           "kind": "visual",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"\u2318K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "drawer-long-project-name-layout",
@@ -2665,25 +2682,27 @@
     },
     {
       "name": "I. Keyboard map and command palette",
-      "purpose": "The power path. Nearly untested today: only ⌘K and ⌘W have any coverage, and the failure mode is a shortcut firing on the wrong tab or eating a keystroke meant for a text field.",
+      "purpose": "The power path. Nearly untested today: only \u2318K and \u2318W have any coverage, and the failure mode is a shortcut firing on the wrong tab or eating a keystroke meant for a text field.",
       "scenarios": [
         {
           "id": "palette-over-a-composer-draft",
-          "title": "⌘K from inside the composer opens the palette and preserves the draft",
-          "steps": ["Type text in the message composer, press ⌘K and type a query, press Escape"],
+          "title": "\u2318K from inside the composer opens the palette and preserves the draft",
+          "steps": [
+            "Type text in the message composer, press \u2318K and type a query, press Escape"
+          ],
           "expected": "Typed characters go into the palette input (not the composer); after Escape the composer still holds the original draft.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/e2e/tabs-focus.e2e.ts",
-          "testName": "⌘K over a composer draft types into the palette, and Escape gives the draft back",
-          "mutation": "client/chrome/Palette.tsx: Remove the palette input's autofocus on open, so ⌘K raises the palette while the keyboard stays in the composer."
+          "testName": "\u2318K over a composer draft types into the palette, and Escape gives the draft back",
+          "mutation": "client/chrome/Palette.tsx: Remove the palette input's autofocus on open, so \u2318K raises the palette while the keyboard stays in the composer."
         },
         {
           "id": "palette-open-tab-item-activates",
           "title": "Selecting an already-open session activates its tab instead of duplicating it",
-          "steps": ["Open two tabs, ⌘K, pick the background one from \"Open tabs\""],
+          "steps": ["Open two tabs, \u2318K, pick the background one from \"Open tabs\""],
           "expected": "Tab count unchanged, that tab becomes active, and its composer receives focus.",
           "risk": "high",
           "kind": "functional",
@@ -2695,17 +2714,21 @@
         },
         {
           "id": "cmd-digits-index-visible-tabs",
-          "title": "⌘1-9 index the VISIBLE, project-scoped strip",
+          "title": "\u23181-9 index the VISIBLE, project-scoped strip",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
           "status": "declined",
-          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"⌘K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
+          "declineReason": "OBSOLETE (plan 03, M2.1). Project-as-scope and the projects drawer are deleted - the strip shows every open tab (M2.2 groups them). The scope/drawer scenario this covered no longer exists; surviving behaviors are covered elsewhere: draft survival across a tab switch by tabs-focus.e2e.ts (\"\u2318K over a composer draft\" / \"\\\"+\\\" deselects the tab you are on; it closes nothing and loses no draft\"), hidden-tab folding by \"a hidden tab keeps folding events\". Recorded in the M2.5 ledger reconciliation."
         },
         {
           "id": "palette-opens-and-opens-a-session",
-          "title": "⌘K fuzzy-opens another session and runs an action on the active one",
-          "steps": ["⌘K, type a session name, Enter", "⌘K, type \"toggle\", Enter", "⌘K, Escape"],
+          "title": "\u2318K fuzzy-opens another session and runs an action on the active one",
+          "steps": [
+            "\u2318K, type a session name, Enter",
+            "\u2318K, type \"toggle\", Enter",
+            "\u2318K, Escape"
+          ],
           "expected": "The session opens as a tab and rescopes the strip; the action runs; Escape closes without running anything.",
           "risk": "high",
           "kind": "functional",
@@ -2717,9 +2740,9 @@
         },
         {
           "id": "palette-cmdk-toggles",
-          "title": "⌘K a second time closes the palette",
-          "steps": ["Press ⌘K, then ⌘K again"],
-          "expected": "The overlay is gone — the handler toggles rather than re-opening.",
+          "title": "\u2318K a second time closes the palette",
+          "steps": ["Press \u2318K, then \u2318K again"],
+          "expected": "The overlay is gone \u2014 the handler toggles rather than re-opening.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -2729,7 +2752,7 @@
         {
           "id": "palette-with-no-active-session",
           "title": "The palette on the pick screen omits the review group and does not crash",
-          "steps": ["From an empty or deselected shell press ⌘K"],
+          "steps": ["From an empty or deselected shell press \u2318K"],
           "expected": "No \"This review\" group and no \"Close this tab\" item; session groups still list and open.",
           "risk": "medium",
           "kind": "functional",
@@ -2743,7 +2766,7 @@
         {
           "id": "palette-close-this-tab",
           "title": "\"Close this tab\" from the palette closes the tab and the palette",
-          "steps": ["With two tabs open press ⌘K, type \"close\", Enter"],
+          "steps": ["With two tabs open press \u2318K, type \"close\", Enter"],
           "expected": "Tab count drops by one, palette closes, and a neighbor is promoted and live.",
           "risk": "medium",
           "kind": "functional",
@@ -2754,7 +2777,7 @@
         {
           "id": "palette-filters-by-project",
           "title": "Typing a project name narrows the palette to that project's sessions",
-          "steps": ["List sessions across 3 projects, ⌘K, type the project's basename"],
+          "steps": ["List sessions across 3 projects, \u2318K, type the project's basename"],
           "expected": "Only that project's sessions remain (the project name rides each item's value).",
           "risk": "medium",
           "kind": "functional",
@@ -2765,7 +2788,7 @@
         {
           "id": "palette-annotation-jump",
           "title": "The palette lists located annotations and jumps to one",
-          "steps": ["Create a located annotation, ⌘K, type part of the note, Enter"],
+          "steps": ["Create a located annotation, \u2318K, type part of the note, Enter"],
           "expected": "The palette closes and the artifact scrolls the annotated element into view.",
           "risk": "medium",
           "kind": "functional",
@@ -2775,9 +2798,9 @@
         },
         {
           "id": "palette-cmdw-does-not-close-underneath",
-          "title": "⌘W while the palette is open must not close the tab behind it",
-          "steps": ["Open two tabs, press ⌘K, press ⌘W while the palette shows"],
-          "expected": "The tab under the palette is not closed out from under the human — the shell's window handler should not act while a modal owns focus.",
+          "title": "\u2318W while the palette is open must not close the tab behind it",
+          "steps": ["Open two tabs, press \u2318K, press \u2318W while the palette shows"],
+          "expected": "The tab under the palette is not closed out from under the human \u2014 the shell's window handler should not act while a modal owns focus.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -2790,7 +2813,7 @@
         {
           "id": "palette-while-hub-is-down",
           "title": "The palette still works after the hub drops",
-          "steps": ["Open the shell, stop the hub, press ⌘K and select a not-open session"],
+          "steps": ["Open the shell, stop the hub, press \u2318K and select a not-open session"],
           "expected": "The palette opens over the last-known listing; the failed open does not blank the window and the shell keeps its current tab.",
           "risk": "medium",
           "kind": "recovery",
@@ -2803,12 +2826,12 @@
         },
         {
           "id": "cmd-bracket-cycles-with-wrap",
-          "title": "⌘⇧] and ⌘⇧[ step through tabs and wrap around",
+          "title": "\u2318\u21e7] and \u2318\u21e7[ step through tabs and wrap around",
           "steps": [
             "Open 3 tabs in one project, activate the first",
-            "Press ⌘⇧] three times, then ⌘⇧[ once"
+            "Press \u2318\u21e7] three times, then \u2318\u21e7[ once"
           ],
-          "expected": "Selection walks 1→2→3→1 then back to 3 — wraparound both directions, within the visible strip only.",
+          "expected": "Selection walks 1\u21922\u21923\u21921 then back to 3 \u2014 wraparound both directions, within the visible strip only.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -2821,7 +2844,7 @@
           "id": "cmd-bracket-uses-keycode",
           "title": "Bracket stepping keys off e.code, so a non-US layout still cycles",
           "steps": ["Dispatch keydown with metaKey+shiftKey, code=\"BracketRight\", key=\"*\""],
-          "expected": "The next tab activates — the binding does not depend on the produced character.",
+          "expected": "The next tab activates \u2014 the binding does not depend on the produced character.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -2832,8 +2855,8 @@
         },
         {
           "id": "cmd-w-on-pick-screen",
-          "title": "⌘W with no active tab is a no-op",
-          "steps": ["Click \"+\" so no tab is active, press ⌘W"],
+          "title": "\u2318W with no active tab is a no-op",
+          "steps": ["Click \"+\" so no tab is active, press \u2318W"],
           "expected": "Nothing closes, the pick screen stays, and the event is not preventDefault'd into a dead gesture.",
           "risk": "medium",
           "kind": "functional",
@@ -2841,12 +2864,12 @@
           "status": "covered",
           "testFile": "test/keymap.test.ts",
           "testName": "with nothing in front it is not ours to swallow",
-          "mutation": "client/chrome/keymap.ts: drop the close guard (`state.activeKey === null ? { kind: \"none\" } : ...` -> always close) - ⌘W on the pick screen resolves to a close with no tab to close"
+          "mutation": "client/chrome/keymap.ts: drop the close guard (`state.activeKey === null ? { kind: \"none\" } : ...` -> always close) - \u2318W on the pick screen resolves to a close with no tab to close"
         },
         {
           "id": "shortcuts-work-while-typing",
-          "title": "⌘2 while typing in the composer switches tabs and inserts no character",
-          "steps": ["Open two tabs, focus the composer and type \"abc\", press ⌘2"],
+          "title": "\u23182 while typing in the composer switches tabs and inserts no character",
+          "steps": ["Open two tabs, focus the composer and type \"abc\", press \u23182"],
           "expected": "The second tab activates and the first tab's draft is still exactly \"abc\".",
           "risk": "medium",
           "kind": "functional",
@@ -2860,7 +2883,7 @@
         {
           "id": "palette-empty-result",
           "title": "A query matching nothing says so",
-          "steps": ["⌘K, type \"zzzzqqq\""],
+          "steps": ["\u2318K, type \"zzzzqqq\""],
           "expected": "\"Nothing matches.\" is shown and Enter does nothing.",
           "risk": "low",
           "kind": "functional",
@@ -2870,8 +2893,8 @@
         },
         {
           "id": "cmd-digit-out-of-range",
-          "title": "⌘5 with two tabs changes nothing",
-          "steps": ["Open two tabs, press ⌘5"],
+          "title": "\u23185 with two tabs changes nothing",
+          "steps": ["Open two tabs, press \u23185"],
           "expected": "The active tab is unchanged and no error is thrown.",
           "risk": "low",
           "kind": "functional",
@@ -2879,12 +2902,12 @@
           "status": "covered",
           "testFile": "test/keymap.test.ts",
           "testName": "a digit past the end does nothing, and swallows nothing",
-          "mutation": "client/chrome/keymap.ts: drop the digit bounds check (`return key ? { kind: \"activate\", key } : { kind: \"none\" }` -> `return { kind: \"activate\", key }`) - ⌘5 with three tabs resolves to an activate for undefined"
+          "mutation": "client/chrome/keymap.ts: drop the digit bounds check (`return key ? { kind: \"activate\", key } : { kind: \"none\" }` -> `return { kind: \"activate\", key }`) - \u23185 with three tabs resolves to an activate for undefined"
         },
         {
           "id": "cmd-bracket-single-tab-noop",
           "title": "Bracket stepping with one tab does nothing",
-          "steps": ["Open one tab, press ⌘⇧] and ⌘⇧["],
+          "steps": ["Open one tab, press \u2318\u21e7] and \u2318\u21e7["],
           "expected": "No change, no error, no flicker of the pick screen.",
           "risk": "low",
           "kind": "functional",
@@ -2896,16 +2919,16 @@
         },
         {
           "id": "alt-modifier-ignored",
-          "title": "⌥⌘K does not open the palette",
+          "title": "\u2325\u2318K does not open the palette",
           "steps": ["Press Alt+Meta+k"],
-          "expected": "No palette overlay — alt-modified chords are left to the OS and browser.",
+          "expected": "No palette overlay \u2014 alt-modified chords are left to the OS and browser.",
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
           "status": "covered",
           "testFile": "test/keymap.test.ts",
           "testName": "alt disqualifies every chord",
-          "mutation": "client/chrome/keymap.ts: drop the alt disqualifier in resolveShortcut (`if (!(chord.metaKey || chord.ctrlKey) || chord.altKey)` -> `if (!(chord.metaKey || chord.ctrlKey))`) - ⌥⌘K is answered as if it were ⌘K, taking a chord that may belong to the OS"
+          "mutation": "client/chrome/keymap.ts: drop the alt disqualifier in resolveShortcut (`if (!(chord.metaKey || chord.ctrlKey) || chord.altKey)` -> `if (!(chord.metaKey || chord.ctrlKey))`) - \u2325\u2318K is answered as if it were \u2318K, taking a chord that may belong to the OS"
         }
       ]
     },
@@ -2919,7 +2942,7 @@
           "steps": [
             "Post progress, then write a new artifact version by atomic rename, watch the surface"
           ],
-          "expected": "The fan-out indicator is replaced by the live-reloaded version — progress is advisory presence, never a window that outlives the turn.",
+          "expected": "The fan-out indicator is replaced by the live-reloaded version \u2014 progress is advisory presence, never a window that outlives the turn.",
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
@@ -2982,7 +3005,7 @@
           "steps": [
             "Run `--total 7 --done 2`, then `--done 3.7`, then `--total -1`, watching after each"
           ],
-          "expected": "Counts floor (3.7 → 3), negatives are dropped (the previous total stands), and the indicator never shows a negative or NaN.",
+          "expected": "Counts floor (3.7 \u2192 3), negatives are dropped (the previous total stands), and the indicator never shows a negative or NaN.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -2995,7 +3018,7 @@
           "id": "context-stale-daemon-404",
           "title": "An older server without /__lucid/context falls through to the sidecar",
           "steps": ["Stub the route to 404 and run `lucid context plan.html --pct 55`"],
-          "expected": "live:false and the sidecar written — never a `live:true` success for a POST that 404'd.",
+          "expected": "live:false and the sidecar written \u2014 never a `live:true` success for a POST that 404'd.",
           "risk": "medium",
           "kind": "recovery",
           "status": "covered",
@@ -3025,7 +3048,7 @@
           "steps": [
             "Run `lucid context plan.html --pct N` 50 times, count lines in log.ndjson before and after"
           ],
-          "expected": "Line count unchanged — usage lives only in the last-value sidecar.",
+          "expected": "Line count unchanged \u2014 usage lives only in the last-value sidecar.",
           "risk": "medium",
           "kind": "state",
           "needsCapability": "",
@@ -3059,7 +3082,7 @@
             "Start `lucid hub`, open two artifacts into it (two tabs in one window)",
             "Run `lucid open <first> --restart`, check /hub/identity and both tabs"
           ],
-          "expected": "The hub process survives, both tabs keep working, and the second session is unaffected — stopServer refuses a descriptor carrying a `base`.",
+          "expected": "The hub process survives, both tabs keep working, and the second session is unaffected \u2014 stopServer refuses a descriptor carrying a `base`.",
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "",
@@ -3153,7 +3176,7 @@
             "Kill and restart the hub on the same port with the same registry",
             "Wait through the backoff, then append an agent reply from the CLI"
           ],
-          "expected": "The reconnecting indicator clears on its own, both tabs come back with drafts intact, the new event appears in the open tab — no duplicate tabs, no stuck \"reconnecting…\", no manual reload.",
+          "expected": "The reconnecting indicator clears on its own, both tabs come back with drafts intact, the new event appears in the open tab \u2014 no duplicate tabs, no stuck \"reconnecting\u2026\", no manual reload.",
           "risk": "high",
           "kind": "recovery",
           "status": "covered",
@@ -3168,7 +3191,7 @@
             "Start the hub with two sessions and a shell window loaded, send SIGTERM",
             "Watch the window and the hub's exit code"
           ],
-          "expected": "Exactly one [data-test=reconnecting] indicator, at the composer — not a growing pile of warnings — and the process exits 0 after daemon.stop().",
+          "expected": "Exactly one [data-test=reconnecting] indicator, at the composer \u2014 not a growing pile of warnings \u2014 and the process exits 0 after daemon.stop().",
           "risk": "high",
           "kind": "recovery",
           "needsCapability": "",
@@ -3207,7 +3230,7 @@
           "id": "open-many-sessions-port-pool",
           "title": "Opening more sessions than the fixed port pool still works",
           "steps": ["Without a hub, open 12 different artifacts, then run bare `lucid`"],
-          "expected": "All 12 report live:true with distinct viewer urls (17412–17419 then ephemeral ports); none fail with a bind error.",
+          "expected": "All 12 report live:true with distinct viewer urls (17412\u201317419 then ephemeral ports); none fail with a bind error.",
           "risk": "medium",
           "kind": "concurrency",
           "status": "covered",
@@ -3388,7 +3411,7 @@
           "steps": [
             "Unset LUCID_HARNESSES, point XDG_CONFIG_HOME at an empty dir, run `lucid launch plan.html`"
           ],
-          "expected": "Exit 1, VALIDATION_ERROR naming the resolved registry path with a complete example registry in detail.example — actionable without reading the docs.",
+          "expected": "Exit 1, VALIDATION_ERROR naming the resolved registry path with a complete example registry in detail.example \u2014 actionable without reading the docs.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
@@ -3403,7 +3426,7 @@
           "steps": [
             "Write a registry declaring `models` for a harness Lucid knows no flags for, run `lucid launch plan.html`"
           ],
-          "expected": "Exit 1 with a ValidationError carrying the registry path and the offending harness name — never a picker offering models the CLI will reject at spawn.",
+          "expected": "Exit 1 with a ValidationError carrying the registry path and the offending harness name \u2014 never a picker offering models the CLI will reject at spawn.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "",
@@ -3470,7 +3493,7 @@
             "Run `lucid plan render notes.md`",
             "Run `lucid plan render notes.md --out /durable/custom.html`"
           ],
-          "expected": "First writes notes.lucid.html printing `{artifact, next:\"lucid open …\"}`; second writes exactly the --out path. Both paths absolute in the output.",
+          "expected": "First writes notes.lucid.html printing `{artifact, next:\"lucid open \u2026\"}`; second writes exactly the --out path. Both paths absolute in the output.",
           "risk": "medium",
           "kind": "functional",
           "status": "covered",
@@ -3495,7 +3518,7 @@
           "id": "plan-render-missing-doc",
           "title": "plan render on a missing doc is a typed ARTIFACT_ERROR",
           "steps": ["Run `lucid plan render /nope.md`"],
-          "expected": "Exit 1 with ARTIFACT_ERROR \"cannot read plan doc: …\" and detail.path.",
+          "expected": "Exit 1 with ARTIFACT_ERROR \"cannot read plan doc: \u2026\" and detail.path.",
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
@@ -3521,7 +3544,7 @@
           "steps": [
             "Pipe a `waiting` payload with no annotations/messages into `lucid plan ingest --plan p`"
           ],
-          "expected": "Exit 0 with `{plan:\"p\", items:[], commands:[]}` — no invented commands.",
+          "expected": "Exit 0 with `{plan:\"p\", items:[], commands:[]}` \u2014 no invented commands.",
           "risk": "low",
           "kind": "functional",
           "needsCapability": "",
@@ -3555,7 +3578,7 @@
           "id": "app-starts-hub-in-attend-mode",
           "title": "`lucid app` brings up a hub that actually drives delivery",
           "steps": ["With no hub running, run `lucid app`, then GET /hub/identity on 17428"],
-          "expected": "attend:true — the app front door is a human sitting down to review, so feedback is not left waiting. Asserted deliberately so it cannot regress to a review-only hub.",
+          "expected": "attend:true \u2014 the app front door is a human sitting down to review, so feedback is not left waiting. Asserted deliberately so it cannot regress to a review-only hub.",
           "risk": "high",
           "kind": "functional",
           "needsCapability": "",
@@ -3583,7 +3606,7 @@
           "id": "app-hub-fails-to-start",
           "title": "`lucid app` fails loudly when the hub cannot come up",
           "steps": ["Occupy port 17428 with a non-Lucid server, run `lucid app`"],
-          "expected": "After the 8s deadline, exit 1 with SERVER_ERROR \"hub daemon failed to start\" and detail.port — never a silent success or an endless spin.",
+          "expected": "After the 8s deadline, exit 1 with SERVER_ERROR \"hub daemon failed to start\" and detail.port \u2014 never a silent success or an endless spin.",
           "risk": "medium",
           "kind": "recovery",
           "needsCapability": "",
@@ -3596,7 +3619,7 @@
           "steps": [
             "Disable external network access, run open, wait, ask, context, hub, app end to end"
           ],
-          "expected": "All succeed — everything is 127.0.0.1, so a Lucid review works on a plane and never phones home.",
+          "expected": "All succeed \u2014 everything is 127.0.0.1, so a Lucid review works on a plane and never phones home.",
           "risk": "medium",
           "kind": "functional",
           "needsCapability": "no-network",
@@ -3623,17 +3646,17 @@
       "scenarios": [
         {
           "id": "tab-tooltip-does-not-eat-clicks",
-          "title": "An open tab tooltip never blocks a click on a neighboring tab or its ×",
+          "title": "An open tab tooltip never blocks a click on a neighboring tab or its \u00d7",
           "steps": [
             "Open 3 tabs, hover tab 1 until its tooltip shows",
-            "Immediately click tab 3, then tab 3's ×, verifying with elementFromPoint at the click coordinates"
+            "Immediately click tab 3, then tab 3's \u00d7, verifying with elementFromPoint at the click coordinates"
           ],
-          "expected": "Tab 3 activates and then closes — the portalled tooltip popup never intercepts the pointer.",
+          "expected": "Tab 3 activates and then closes \u2014 the portalled tooltip popup never intercepts the pointer.",
           "risk": "high",
           "kind": "visual",
           "status": "covered",
           "testFile": "test/e2e/tabbar-overlays.e2e.ts",
-          "testName": "an open tab tooltip never reaches the strip: neighbours and their × stay hittable",
+          "testName": "an open tab tooltip never reaches the strip: neighbours and their \u00d7 stay hittable",
           "mutation": "client/chrome/ui/tooltip.tsx: sideOffset = 6 -> -40 - the popup lands at y 16-41 across the strip and the left neighbour, its close button and the right neighbour all stop answering elementFromPoint. The fixture proves the tooltip is the interceptor KIND before exonerating it: portalled to body, z-index 100, pointer-events auto, with NO pointer-events:none anywhere in its chain - placement is the entire defence. Hovers the MIDDLE of three tabs so the popup has a neighbour on each side; an end tab can only exonerate one direction.",
           "builtCapability": "isHittable in test/e2e/visual.ts"
         },
@@ -3655,7 +3678,7 @@
           "id": "tabbar-a11y-labels",
           "title": "Strip controls carry usable accessible names",
           "steps": ["Inspect the close button, attention dot, drawer badge and \"+\""],
-          "expected": "Close is \"Close <artifact name>\", the dot is role=img with a stateful label, the badge exposes aria-expanded, and \"+\" names the ⌘K equivalent.",
+          "expected": "Close is \"Close <artifact name>\", the dot is role=img with a stateful label, the badge exposes aria-expanded, and \"+\" names the \u2318K equivalent.",
           "risk": "medium",
           "kind": "a11y",
           "needsCapability": "",
@@ -3906,7 +3929,7 @@
     }
   ],
   "newCapabilities": [
-    "raw-cli: a runner that returns {stdout, stderr, code} without JSON.parse. makeCli.run today parses stdout and execFileAsync throws on non-zero exit, so no existing test can even observe a polluted stdout or a wrong exit code — the single highest-value harness gap.",
+    "raw-cli: a runner that returns {stdout, stderr, code} without JSON.parse. makeCli.run today parses stdout and execFileAsync throws on non-zero exit, so no existing test can even observe a polluted stdout or a wrong exit code \u2014 the single highest-value harness gap.",
     "durable-path-fixture: a fixture rooted outside $TMPDIR, and a runner that omits LUCID_ALLOW_TEMP. Every e2e today sets LUCID_ALLOW_TEMP=1 in a temp dir, so the entire volatile-path refusal path is structurally untestable.",
     "kill-server: read server.json for the pid and SIGKILL/SIGTERM the dedicated session server (and the hub) mid-test. Today only `lucid end` is used, which is a clean shutdown and exercises none of the suspended/stale-descriptor paths.",
     "fixed-port-hub-restart: start a hub on a stable port, stop it, and start a second one on the same port with the same registry inside one test. startHub uses --port 0 and its stop() deletes the state dir, so reattach and self-recovery cannot be exercised.",
@@ -3918,7 +3941,7 @@
     "compiled-binary: `bun run build` then drive dist/lucid in e2e. Every test runs `bun run src/cli/main.ts`, so selfInvocation regressions in the shipped binary ship green.",
     "clipboard: grant clipboard-read/write permissions on the context and read navigator.clipboard, plus a stub that rejects writeText.",
     "stub-harness-launcher: run `lucid launch` as a long-lived child with a stub harness recipe (test/launch-stub.ts exists but is not driven end to end), capture its substituted argv, and send it SIGINT.",
-    "log-corruption: mutate log.ndjson mid-test — append a torn tail, replace a committed line — and assert the recovery path.",
+    "log-corruption: mutate log.ndjson mid-test \u2014 append a torn tail, replace a committed line \u2014 and assert the recovery path.",
     "bundle-stamp: touch or rebuild the chrome bundle mid-test so the dev stamp moves, for --restart-serves-new-bundle and the self-reload.",
     "no-network: run a full loop with outbound networking disabled, to prove the loopback-only claim."
   ]

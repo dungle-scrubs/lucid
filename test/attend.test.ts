@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/events.ts";
 import { foldLog } from "../src/core/fold.ts";
+import {
+  mergeAttendantSidecar,
+  readAttendantSidecars,
+  readLastAttendant,
+} from "../src/core/attendant.ts";
 import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
@@ -428,8 +433,17 @@ describe("hub attend mode", () => {
         default: "stub",
         harnesses: {
           stub: {
-            spawn: [process.execPath, "run", createStub, "{id}", "{artifact}", "{prompt}"],
-            resume: [process.execPath, "run", attendStub, "{id}", "{artifact}", "{prompt}"],
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [process.execPath, "run", createStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+            resume: [
+              process.execPath,
+              "run",
+              attendStub,
+              "--sid",
+              "{id}",
+              "{artifact}",
+              "{prompt}",
+            ],
           },
         },
       }),
@@ -442,6 +456,17 @@ describe("hub attend mode", () => {
     // resumes (D18 stamps -> fold.sessionHistory).
     await openSession(paths, {
       attendant: { harness: "stub", sessionId: "sess-1", cwd: paths.artifactDir },
+    });
+    // Automatic resume ranks EVIDENCE, not mentions (plan 03, M4): an untyped
+    // log stamp is display-only now, so the fixture records the id the modern
+    // way - a sidecar with explicit authority, which is what the attend
+    // engine's tier-one candidate reads.
+    await mergeAttendantSidecar(paths, {
+      harness: "stub",
+      sessionId: "sess-1",
+      sessionIdAuthority: "declared",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
     });
   });
 
@@ -521,7 +546,7 @@ describe("hub attend mode", () => {
       await attendant.tick();
       const marker = await readMarker(attendMarker, 4000);
       expect(marker.sessionId).toBe("sess-1");
-      expect((marker.argv as string[])[2]).toContain("this must not be swallowed");
+      expect((marker.argv as string[])[3]).toContain("this must not be swallowed");
       expect(logs.some((l) => l.includes("delivery claim went unanswered"))).toBe(true);
     } finally {
       attendant.stop();
@@ -559,7 +584,7 @@ describe("hub attend mode", () => {
       await sleep(60);
       await attendant.tick();
       const marker = await readMarker(attendMarker, 4000);
-      expect((marker.argv as string[])[2]).toContain("three dead turns must not swallow this");
+      expect((marker.argv as string[])[3]).toContain("three dead turns must not swallow this");
     } finally {
       attendant.stop();
     }
@@ -713,9 +738,10 @@ describe("hub attend mode", () => {
     // Resume is cwd-scoped (D10): the session's recorded directory.
     expect(marker.cwd).toBe(realpathSync(paths.artifactDir));
     const argv = marker.argv as string[];
-    expect(argv[0]).toBe("sess-1");
-    expect(argv[1]).toBe(paths.artifactPath);
-    expect(argv[2]).toContain("backfill must run first");
+    expect(argv[0]).toBe("--sid");
+    expect(argv[1]).toBe("sess-1");
+    expect(argv[2]).toBe(paths.artifactPath);
+    expect(argv[3]).toContain("backfill must run first");
 
     // The delivery is RECORDED before it is made (D20): the panel says
     // "delivered" for the whole headless turn, and any other watcher reading
@@ -1041,12 +1067,15 @@ describe("hub attend mode", () => {
     // unowned ack proves the filter.
     await writeFile(
       slowStub,
-      `const artifact = process.argv[3];
+      `const artifact = process.argv[4];
 const mine = JSON.stringify({
   t: "agent_ack",
   id: "phase-1",
   progress: { label: "writing the sections" },
-  attendant: { harness: "slow", sessionId: process.env.LUCID_SESSION_ID },
+  // LAUNCH-owned, deliberately without a session id: a discovered harness has
+  // no native id until it announces one, and the heartbeat must still relay
+  // the phases of the launch it started.
+  attendant: { harness: "slow", launchId: process.env.LUCID_LAUNCH_ID },
   seq: 1,
   at: new Date().toISOString(),
 });
@@ -1068,7 +1097,10 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
       JSON.stringify({
         default: "slow",
         harnesses: {
-          slow: { spawn: [process.execPath, "run", slowStub, "{id}", "{artifact}", "{prompt}"] },
+          slow: {
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [process.execPath, "run", slowStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+          },
         },
       }),
     );
@@ -1175,6 +1207,75 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
     expect(marker.requestId).toBe("beefcafe12345678");
   });
 
+  test("a DISCOVERED hub create binds the announced thread, never a pre-minted UUID", async () => {
+    // The registry switches to a stdout-jsonl harness: the stub announces its
+    // own thread id the way Codex does, and Lucid must bind THAT - handing
+    // the child a minted UUID here was the synthetic identity that poisoned
+    // resume (the reported EZE failure).
+    const discoveredStub = join(dir, "stub-discovered.ts");
+    await writeFile(
+      discoveredStub,
+      `process.stdout.write('{"type":"thread.started","thread_');
+await new Promise((r) => setTimeout(r, 20));
+process.stdout.write('id":"0199-hub-native"}\\n');
+await Bun.write(${JSON.stringify(createMarker)}, JSON.stringify({
+  envSid: process.env.LUCID_SESSION_ID ?? null,
+  envLaunch: process.env.LUCID_LAUNCH_ID ?? null,
+  argv: process.argv.slice(2),
+}));
+const artifact = process.argv[3];
+await Bun.write(artifact, "<!doctype html><html><head><title>d</title></head><body><h1>d</h1></body></html>");
+`,
+    );
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "disco",
+        harnesses: {
+          disco: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [process.execPath, "run", discoveredStub, "--json", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+    const hub = await startDaemon(true);
+    const res = await post(hub.port, "/hub/create", {
+      project: proj,
+      name: "disco.html",
+      prompt: "author it",
+    });
+    expect(res.status).toBe(202);
+    const marker = await readMarker(createMarker);
+    // No inherited identity reached the child; the launch correlation did.
+    expect(marker.envSid).toBeNull();
+    expect(marker.envLaunch).toMatch(/^[a-f0-9]{16}$/);
+    // The ANNOUNCED thread is waiting in the child's sidecar as a pending
+    // binding under this launch - which is everything the child's own
+    // `lucid open` needs to make it durable (promotion is pinned in the
+    // session suite). This stub deliberately does not open; the full
+    // spawn->announce->open->bind chain is the fork integration test's.
+    const childPaths = sessionPaths(join(proj, ".lucid", "disco.html"));
+    const deadline = Date.now() + 5000;
+    let pending: Awaited<ReturnType<typeof readLastAttendant>>;
+    while (Date.now() < deadline && pending?.sessionId === undefined) {
+      pending = await readLastAttendant(childPaths);
+      if (pending?.sessionId === undefined) await sleep(50);
+    }
+    expect(pending).toMatchObject({
+      harness: "disco",
+      launchId: marker.envLaunch,
+      pendingBinding: true,
+      sessionId: "0199-hub-native",
+      sessionIdAuthority: "observed",
+    });
+  }, 20_000);
+
   test("POST /hub/create answers 202 and spawns the recipe with a child identity", async () => {
     const hub = await startDaemon(true);
     const res = await post(hub.port, "/hub/create", {
@@ -1201,9 +1302,10 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
     expect(marker.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(marker.cwd).toBe(realpathSync(proj));
     const argv = marker.argv as string[];
-    expect(argv[1]).toBe(join(proj, ".lucid", "new-plan.html"));
-    expect(argv[2]).toContain("map the migration");
-    expect(argv[2]).toContain(`lucid open ${join(proj, ".lucid", "new-plan.html")}`);
+    expect(argv[0]).toBe("--sid");
+    expect(argv[2]).toBe(join(proj, ".lucid", "new-plan.html"));
+    expect(argv[3]).toContain("map the migration");
+    expect(argv[3]).toContain(`lucid open ${join(proj, ".lucid", "new-plan.html")}`);
   }, 20_000);
 });
 
@@ -1291,15 +1393,25 @@ if (process.env.LUCID_HARNESS === "codex") {
         default: "claude-code",
         harnesses: {
           "claude-code": {
-            spawn: [createStub, "{id}", "{artifact}", "{prompt}"],
-            resume: [attendStub, "{id}", "{artifact}", "{prompt}"],
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [createStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+            resume: [attendStub, "--sid", "{id}", "{artifact}", "{prompt}"],
             models: [{ id: "opus-5", label: "Opus 5" }, { id: "sonnet-5" }],
             defaultModel: "opus-5",
             efforts: ["low", "medium", "high", "xhigh", "max"],
           },
           codex: {
-            spawn: [createStub, "{id}", "{artifact}", "{prompt}"],
-            resume: [attendStub, "{id}", "{artifact}", "{prompt}"],
+            // Codex is a DISCOVERED harness for real: the stub announces its
+            // thread on stdout exactly as `codex exec --json` does, and that
+            // announced id - never a Lucid-minted one - is what resume names.
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [createStub, "--json", "{artifact}", "{prompt}"],
+            resume: [attendStub, "--json", "{id}", "{artifact}", "{prompt}"],
             models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
             defaultModel: "gpt-5.6-sol",
             efforts: ["medium", "high", "xhigh", "max", "ultra"],
@@ -1313,6 +1425,15 @@ if (process.env.LUCID_HARNESS === "codex") {
     paths = sessionPaths(artifact);
     await openSession(paths, {
       attendant: { harness: "claude-code", sessionId: "sess-1", cwd: paths.artifactDir },
+    });
+    // Evidence, not mention (plan 03, M4): the modern identity record the
+    // attend engine's tier-one candidate reads.
+    await mergeAttendantSidecar(paths, {
+      harness: "claude-code",
+      sessionId: "sess-1",
+      sessionIdAuthority: "declared",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
     });
   });
 
@@ -1471,9 +1592,10 @@ if (process.env.LUCID_HARNESS === "codex") {
     // Inserted after argv[0], so the recipe's own positional tokens keep their
     // order and the prompt is still the last one.
     expect(argv.slice(0, 4)).toEqual(["--model", "sonnet-5", "--effort", "max"]);
-    expect(argv[4]).toBe("sess-1");
-    expect(argv[5]).toBe(paths.artifactPath);
-    expect(argv[6]).toContain("use the new schema");
+    expect(argv[4]).toBe("--sid");
+    expect(argv[5]).toBe("sess-1");
+    expect(argv[6]).toBe(paths.artifactPath);
+    expect(argv[7]).toContain("use the new schema");
     // The child stamps what IT runs, so the viewer shows the real settings.
     expect(marker.model).toBe("sonnet-5");
     expect(marker.effort).toBe("max");
@@ -1492,7 +1614,7 @@ if (process.env.LUCID_HARNESS === "codex") {
 
     const marker = await readMarker(attendMarker);
     // Degraded, not stalled: the turn ran on the CLI's own defaults.
-    expect(marker.argv).toEqual(["sess-1", paths.artifactPath, expect.any(String)]);
+    expect(marker.argv).toEqual(["--sid", "sess-1", paths.artifactPath, expect.any(String)]);
     expect(marker.model).toBeNull();
     expect(logs.some((m) => m.includes("Model/effort selection ignored"))).toBe(true);
   }, 20_000);
@@ -1607,6 +1729,259 @@ if (process.env.LUCID_HARNESS === "codex") {
     expect(resumed.argv as string[]).toContain("codex-thread-from-output");
   }, 20_000);
 
+  test("the poisoned record: a synthetic log stamp never reaches resume argv", async () => {
+    // The EXACT reported failure. The log carries an old untyped stamp whose
+    // sessionId is a Lucid-minted UUID codex never knew (cf4f...), while the
+    // sidecar holds the real thread codex announced. Resume must name the
+    // sidecar's thread and must never offer the synthetic one.
+    const synthetic = "cf4f0000-1111-4222-8333-444455556666";
+    artifact = join(proj, "poisoned.html");
+    await writeFile(artifact, DOC);
+    paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "codex", sessionId: synthetic, cwd: paths.artifactDir },
+    });
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "0199-real-codex-thread",
+      sessionIdAuthority: "observed",
+      launchId: "abc123def4567890",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
+    });
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
+
+    const hub = await startDaemon();
+    await mount(hub);
+    await annotate("resume the thread codex actually has");
+
+    const resumed = await readMarker(attendMarker, 10_000);
+    const argv = (resumed.argv as string[]).join(" ");
+    expect(argv).toContain("0199-real-codex-thread");
+    expect(argv).not.toContain(synthetic);
+  }, 20_000);
+
+  test("a not-found session is quarantined across restart, and one fallback is tried", async () => {
+    // The harness says the thread does not exist here (HSI004). That is a
+    // verdict: the id is quarantined durably, the transient ladder is
+    // bypassed, and the ONE distinct fallback candidate is tried next.
+    const notFound = join(dir, "codex-not-found");
+    await writeFile(
+      notFound,
+      '#!/bin/sh\necho "Error: no rollout found for thread id" >&2\nexit 1\n',
+    );
+    await chmod(notFound, 0o755);
+    artifact = join(proj, "gone.html");
+    await writeFile(artifact, DOC);
+    paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "codex", sessionId: "dead-thread", cwd: paths.artifactDir },
+    });
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "dead-thread",
+      sessionIdAuthority: "observed",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
+    });
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "codex",
+        harnesses: {
+          codex: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [notFound, "--json", "{artifact}", "{prompt}"],
+            resume: [notFound, "--json", "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
+
+    const hub = await startDaemon();
+    await mount(hub);
+    await annotate("this feedback must survive a dead thread");
+
+    // The quarantine is DURABLE: it lands in the sidecar, so a restarted
+    // engine does not ask the harness about the same dead id again.
+    const deadline = Date.now() + 10_000;
+    let invalidated: readonly string[] | undefined;
+    while (Date.now() < deadline && invalidated === undefined) {
+      invalidated = (await readLastAttendant(paths))?.invalidatedSessionIds;
+      if (invalidated === undefined) await sleep(100);
+    }
+    expect(invalidated).toContain("dead-thread");
+    // And the human's feedback is still theirs: nothing advanced past it.
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.annotations.length).toBeGreaterThan(0);
+  }, 20_000);
+
+  test("after a not-found verdict the ONE weaker candidate is tried, then the engine stands down", async () => {
+    // Two provable candidates, both dead. The first not-found retires it and
+    // the fallback is tried; the second exhausts the ladder, and the human is
+    // told rather than left watching silent retries forever.
+    const notFound = join(dir, "codex-none");
+    await writeFile(
+      notFound,
+      '#!/bin/sh\necho "Error: no rollout found for thread id" >&2\nexit 1\n',
+    );
+    await chmod(notFound, 0o755);
+    artifact = join(proj, "exhausted.html");
+    await writeFile(artifact, DOC);
+    paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "codex", sessionId: "thread-a", cwd: paths.artifactDir },
+    });
+    // Two candidates for ONE harness: the sidecar id (tier 1, the primary)
+    // and a durable binding whose id this machine's Codex store corroborates
+    // (tier 2, the single permitted fallback).
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "thread-b",
+      sessionIdAuthority: "observed",
+      at: "2026-08-01T09:00:00.000Z",
+    });
+    const codexStore = join(dir, "codex-store");
+    await mkdir(join(codexStore, "2026", "08", "01"), { recursive: true });
+    await writeFile(
+      join(codexStore, "2026", "08", "01", "rollout-2026-08-01T10-00-00-thread-a.jsonl"),
+      "{}\n",
+    );
+    process.env.LUCID_CODEX_SESSIONS = codexStore;
+    await appendEvent(paths.logPath, {
+      t: "harness_session_bound",
+      id: "hsb:abc123def4567890:thread-a",
+      launchId: "abc123def4567890",
+      attendant: {
+        harness: "codex",
+        sessionId: "thread-a",
+        sessionIdAuthority: "observed",
+      },
+    });
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "codex",
+        harnesses: {
+          codex: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [notFound, "--json", "{artifact}", "{prompt}"],
+            resume: [notFound, "--json", "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
+
+    const hub = await startDaemon();
+    await mount(hub);
+    await annotate("both recorded threads are gone");
+
+    // BOTH ids end up quarantined - the primary, then the one fallback.
+    const deadline = Date.now() + 12_000;
+    let dead: readonly string[] = [];
+    while (Date.now() < deadline && dead.length < 2) {
+      const sidecars = await readAttendantSidecars(paths);
+      dead = sidecars.flatMap((a) => a.invalidatedSessionIds ?? []);
+      if (dead.length < 2) await sleep(100);
+    }
+    expect([...dead].sort()).toEqual(["thread-a", "thread-b"]);
+    // The feedback is still the human's: nothing consumed it.
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.annotations.length).toBeGreaterThan(0);
+  }, 20_000);
+
+  test("identity warnings and the hub log carry no review content", async () => {
+    // R1: a warning is a CODE plus Lucid's own sentence. Neither it nor the
+    // retained hub log may carry the human's words, the harness's output, or
+    // the artifact - the one place those live is the session's own record.
+    const secret = "SECRET-ANNOTATION-TEXT-do-not-leak";
+    const notFound = join(dir, "codex-leaky");
+    await writeFile(
+      notFound,
+      `#!/bin/sh\necho "Error: no rollout found for thread id" >&2\necho "harness prose: HARNESS-OUTPUT-do-not-leak" >&2\nexit 1\n`,
+    );
+    await chmod(notFound, 0o755);
+    artifact = join(proj, "redaction.html");
+    await writeFile(artifact, DOC);
+    paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "codex", sessionId: "dead-one", cwd: paths.artifactDir },
+    });
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "dead-one",
+      sessionIdAuthority: "observed",
+      at: new Date().toISOString(),
+    });
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "codex",
+        harnesses: {
+          codex: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [notFound, "--json", "{artifact}", "{prompt}"],
+            resume: [notFound, "--json", "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
+
+    logs.length = 0;
+    const hub = await startDaemon();
+    await mount(hub);
+    // Watch the session's own frames: warnings reach a human this way.
+    const frames: string[] = [];
+    const stream = await fetch(
+      `http://127.0.0.1:${hub.port}/s/${sessionId(paths.artifactPath)}/__lucid/events`,
+      { headers: { host: `127.0.0.1:${hub.port}` } },
+    );
+    const reader = stream.body?.getReader();
+    const decoder = new TextDecoder();
+    void (async () => {
+      while (reader) {
+        const { value, done } = await reader.read().catch(() => ({ done: true, value: undefined }));
+        if (done) return;
+        if (value) frames.push(decoder.decode(value, { stream: true }));
+      }
+    })();
+    await annotate(secret);
+
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      const sidecar = await readLastAttendant(paths);
+      if ((sidecar?.invalidatedSessionIds ?? []).length > 0) break;
+      await sleep(100);
+    }
+    await sleep(300);
+    await reader?.cancel().catch(() => {});
+    const seen = frames.join("");
+    // The warning surface: Lucid's own sentence, never the harness's.
+    expect(seen).not.toContain("HARNESS-OUTPUT-do-not-leak");
+    // The retained hub log: it may NAME the file to read, never quote it.
+    const hubLog = logs.join("\n");
+    expect(hubLog).not.toContain(secret);
+    expect(hubLog).not.toContain("HARNESS-OUTPUT-do-not-leak");
+  }, 20_000);
+
   test("a moved artifact starts a fresh same-harness session in its new project", async () => {
     const oldProject = join(dir, "old-project");
     const lucidDir = join(proj, ".lucid");
@@ -1617,6 +1992,16 @@ if (process.env.LUCID_HARNESS === "codex") {
     paths = sessionPaths(artifact);
     await openSession(paths, {
       attendant: { harness: "codex", sessionId: "old-codex-thread", cwd: oldProject },
+    });
+    // A PROVABLE candidate, so the fresh handoff below is driven by the
+    // project move - not by the artifact simply having no resumable session,
+    // which would make this test pass for the wrong reason.
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "old-codex-thread",
+      sessionIdAuthority: "declared",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
     });
     await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
 

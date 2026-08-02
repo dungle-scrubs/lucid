@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   harnessPidsIn,
+  harnessStoreHas,
+  parseHarnessResumeCommand,
   headlessPidsIn,
   harnessSessionCwd,
   harnessSessionId,
@@ -403,5 +405,93 @@ describe("interactiveResumeCommand yolo flag", () => {
       "claude --resume s1",
     );
     expect(interactiveResumeCommand("claude-code", "s1")).toBe("claude --resume s1");
+  });
+});
+
+describe("parseHarnessResumeCommand - fixed per-harness extraction (D-011)", () => {
+  const id = "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000";
+
+  test("claude: exactly the id after --resume, nothing else", () => {
+    expect(parseHarnessResumeCommand("claude-code", `claude --resume ${id}`)).toBe(id);
+    expect(
+      parseHarnessResumeCommand(
+        "claude_code",
+        `claude --resume ${id} --dangerously-skip-permissions`,
+      ),
+    ).toBe(id);
+    // A UUID ANYWHERE else is not a session: a path or prompt containing one
+    // must never become a resume target (the first-UUID scan did exactly that).
+    expect(
+      parseHarnessResumeCommand("claude-code", `claude -p "see /tmp/${id}/notes.md"`),
+    ).toBeUndefined();
+  });
+
+  test("codex: exactly the id after resume", () => {
+    expect(parseHarnessResumeCommand("codex", `codex resume ${id}`)).toBe(id);
+    expect(
+      parseHarnessResumeCommand(
+        "codex",
+        `codex resume ${id} --dangerously-bypass-approvals-and-sandbox`,
+      ),
+    ).toBe(id);
+  });
+
+  test("an unknown harness's command is display-only, never parsed", () => {
+    expect(parseHarnessResumeCommand("mystery", `mystery --resume ${id}`)).toBeUndefined();
+  });
+
+  test("a command with two ids is ambiguous, and ambiguity is not a candidate", () => {
+    const other = "11112222-3333-4444-8555-666677778888";
+    expect(
+      parseHarnessResumeCommand("claude-code", `claude --resume ${id} --file /x/${other}/f`),
+    ).toBeUndefined();
+    expect(parseHarnessResumeCommand("codex", `codex resume ${id} ${other}`)).toBeUndefined();
+  });
+});
+
+describe("harnessStoreHas - current-machine corroboration", () => {
+  test("claude: a transcript in the projects store proves the id exists here", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-store-")));
+    try {
+      // A directory whose encoded path does NOT resolve on this machine:
+      // corroboration asks whether the transcript is here, never whether the
+      // cwd it names can be decoded (which differs by OS, and made this pass
+      // on macOS and fail on Linux).
+      const proj = join(dir, "-nonexistent-elsewhere-proj");
+      await mkdir(proj, { recursive: true });
+      await writeFile(join(proj, "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000.jsonl"), "{}\n");
+      expect(
+        await harnessStoreHas("claude-code", "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000", {
+          claudeProjectsDir: dir,
+        }),
+      ).toBe(true);
+      expect(
+        await harnessStoreHas("claude-code", "not-recorded-here", { claudeProjectsDir: dir }),
+      ).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("codex: a rollout file naming the thread id proves it exists here", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-codex-")));
+    try {
+      const day = join(dir, "2026", "08", "01");
+      await mkdir(day, { recursive: true });
+      const thread = "0199bbbb-cccc-4ddd-8eee-ffff00001111";
+      await writeFile(join(day, `rollout-2026-08-01T10-00-00-${thread}.jsonl`), "{}\n");
+      expect(await harnessStoreHas("codex", thread, { codexSessionsDir: dir })).toBe(true);
+      expect(
+        await harnessStoreHas("codex", "0199bbbb-cccc-4ddd-8eee-ffff00009999", {
+          codexSessionsDir: dir,
+        }),
+      ).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a harness with no known store corroborates nothing", async () => {
+    expect(await harnessStoreHas("mystery", "any-id")).toBe(false);
   });
 });

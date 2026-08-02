@@ -2,13 +2,24 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ForkRecord } from "../src/core/fold.ts";
-import { appendEvent } from "../src/core/log.ts";
+import { foldLog, type ForkRecord } from "../src/core/fold.ts";
+import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import type { WaitPayload } from "../src/protocol/wire.ts";
-import { childArtifactPath, handleForks, revisePrompt } from "../src/launch/launcher.ts";
-import { buildArgv, loadRegistry, resolveRecipe } from "../src/launch/recipes.ts";
+import {
+  attendedByAnother,
+  childArtifactPath,
+  handleForks,
+  revisePrompt,
+} from "../src/launch/launcher.ts";
+import {
+  buildArgv,
+  loadRegistry,
+  requireSessionIdentity,
+  resolveRecipe,
+} from "../src/launch/recipes.ts";
+import type { SessionIdentityRecipe } from "../src/launch/session-identity.ts";
 import { forkDirFor, writeForkSeed } from "../src/launch/seed.ts";
 import { discoverLiveServer, readServerDescriptor } from "../src/server/discovery.ts";
 import { runServer } from "../src/server/server.ts";
@@ -241,6 +252,119 @@ describe("recipes registry", () => {
     );
     await expect(loadRegistry(regPath)).rejects.toThrow(/default/);
   });
+
+  const writeHarnesses = (harnesses: Record<string, unknown>) =>
+    writeFile(regPath, JSON.stringify({ harnesses }));
+
+  test("caller-assigned identity requires an adjacent argument and id token", async () => {
+    const valid = {
+      resume: ["claude", "--resume", "x", "--session-id", "{id}", "-p", "{prompt}"],
+      sessionIdentity: { argument: "--session-id", source: "caller-assigned" },
+      spawn: ["claude", "--session-id", "{id}", "-p", "{prompt}"],
+    } satisfies { resume: string[]; sessionIdentity: SessionIdentityRecipe; spawn: string[] };
+    await writeHarnesses({ claude_code: valid });
+    const registry = await loadRegistry(regPath);
+    const resolved = registry && resolveRecipe(registry, "claude_code");
+    expect(resolved?.recipe.sessionIdentity).toEqual(valid.sessionIdentity);
+    expect(requireSessionIdentity(resolved?.name ?? "", resolved?.recipe, regPath)).toEqual(
+      valid.sessionIdentity,
+    );
+
+    for (const malformed of [
+      { ...valid, spawn: ["claude", "--session-id=x", "{id}"] },
+      { ...valid, spawn: ["claude", "{id}", "--session-id"] },
+      { ...valid, resume: ["claude", "--resume", "{id}"] },
+    ]) {
+      await writeHarnesses({ claude_code: malformed });
+      await expect(loadRegistry(regPath)).rejects.toMatchObject({ code: "HSI001" });
+    }
+  });
+
+  test("a harness that assigns and resumes with DIFFERENT flags declares both", async () => {
+    // Claude assigns with `--session-id <id>` and re-enters with `--resume
+    // <id>`. Demanding one spelling for both refused a correct recipe - found
+    // by migrating the real managed registry.
+    const valid = {
+      resume: ["claude", "--resume", "{id}", "-p", "{prompt}"],
+      sessionIdentity: {
+        argument: "--session-id",
+        resumeArgument: "--resume",
+        source: "caller-assigned",
+      },
+      spawn: ["claude", "-p", "--session-id", "{id}", "{prompt}"],
+    } satisfies { resume: string[]; sessionIdentity: SessionIdentityRecipe; spawn: string[] };
+    await writeHarnesses({ claude_code: valid });
+    const registry = await loadRegistry(regPath);
+    expect(registry && resolveRecipe(registry, "claude_code")?.recipe.sessionIdentity).toEqual(
+      valid.sessionIdentity,
+    );
+
+    // The resume flag is held to the same adjacency rule as the assign flag.
+    await writeHarnesses({
+      claude_code: { ...valid, resume: ["claude", "--resume", "x", "{id}", "-p", "{prompt}"] },
+    });
+    await expect(loadRegistry(regPath)).rejects.toMatchObject({ code: "HSI001" });
+  });
+
+  test("stdout JSONL identity validates bounded selectors and complete argv protocol", async () => {
+    const valid = {
+      resume: ["codex", "exec", "resume", "{id}", "--json", "{prompt}"],
+      sessionIdentity: {
+        event: "thread.started",
+        field: "thread_id",
+        requiredArgument: "--json",
+        source: "stdout-jsonl",
+      },
+      spawn: ["codex", "exec", "--json", "{prompt}"],
+    } satisfies { resume: string[]; sessionIdentity: SessionIdentityRecipe; spawn: string[] };
+    await writeHarnesses({ codex: valid });
+    const registry = await loadRegistry(regPath);
+    const recipe = registry && resolveRecipe(registry, "codex")?.recipe;
+    expect(recipe?.sessionIdentity).toEqual({ ...valid.sessionIdentity, allowRotation: false });
+
+    for (const malformed of [
+      { ...valid, spawn: ["codex", "exec", "{prompt}"] },
+      { ...valid, resume: ["codex", "exec", "resume", "{id}", "{prompt}"] },
+      { ...valid, resume: ["codex", "exec", "resume", "--json", "{prompt}"] },
+      { ...valid, sessionIdentity: { ...valid.sessionIdentity, event: "x".repeat(129) } },
+      { ...valid, sessionIdentity: { ...valid.sessionIdentity, field: "thread\nid" } },
+    ]) {
+      await writeHarnesses({ codex: malformed });
+      await expect(loadRegistry(regPath)).rejects.toMatchObject({ code: "HSI001" });
+    }
+  });
+
+  test("legacy identity-free recipes load for diagnosis but refuse unattended use as HSI001", async () => {
+    await writeHarnesses({ legacy: { spawn: ["legacy", "{prompt}"] } });
+    const registry = await loadRegistry(regPath);
+    const resolved = registry && resolveRecipe(registry, "legacy");
+    expect(resolved?.recipe.sessionIdentity).toBeUndefined();
+    expect(() => requireSessionIdentity("legacy", resolved?.recipe, regPath)).toThrow(
+      /identity strategy/,
+    );
+    try {
+      requireSessionIdentity("legacy", resolved?.recipe, regPath);
+    } catch (error) {
+      expect(error).toMatchObject({ code: "HSI001", detail: { harness: "legacy", path: regPath } });
+    }
+  });
+});
+
+describe("the launcher yields to a human, not to its own identity record", () => {
+  test("an identity sidecar is not attendance; an attendance sidecar is", async () => {
+    // The launcher plants an identity sidecar naming the REAL harness before
+    // it spawns (so a child that dies pre-open is still resumable). Reading
+    // that as "a human attached" made attendChild return on its first pass
+    // and left every forked artifact one-shot. What distinguishes them is
+    // `nextCursor`: only a reader that took delivery records one.
+    const identityOnly = { at: "2026-08-01T10:00:00.000Z", harness: "claude-code" };
+    const attended = { ...identityOnly, nextCursor: "evt_00007" };
+    const launcherOwn = { ...attended, harness: "lucid-launcher" };
+    expect(attendedByAnother(identityOnly)).toBe(false);
+    expect(attendedByAnother(attended)).toBe(true);
+    // The launcher's own attendance record is not somebody else.
+    expect(attendedByAnother(launcherOwn)).toBe(false);
+  });
 });
 
 describe("safe fork ids", () => {
@@ -323,7 +447,17 @@ describe("launcher handleForks (integration, stub harness)", () => {
       regPath,
       JSON.stringify({
         default: "stub",
-        harnesses: { stub: { spawn: [process.execPath, STUB, "{seed}", "{artifact}"] } },
+        harnesses: {
+          stub: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [process.execPath, STUB, "--json", "{seed}", "{artifact}"],
+          },
+        },
       }),
     );
     process.env.LUCID_HARNESSES = regPath;
@@ -365,10 +499,24 @@ describe("launcher handleForks (integration, stub harness)", () => {
     });
     expect(created).toHaveLength(1);
     expect(created[0]?.status).toBe("created");
+    // The DISCOVERED identity is what the attend loop will resume: the stub
+    // announced its own thread id, and that - never a Lucid-minted UUID - is
+    // the child's resumable session.
+    expect(created[0]?.childSessionId).toBe("stub-thread-0001");
 
     const childPaths = sessionPaths(created[0]?.childArtifact ?? "");
     // The stub authored the child artifact from the seed directive.
     expect(await readFile(childPaths.artifactPath, "utf8")).toContain("greeting");
+    // And the binding is durable in the child's log, right where resume
+    // resolution will look for it.
+    const childEvents = (await readEvents(childPaths.logPath)).events;
+    const bound = childEvents.filter((e) => e.t === "harness_session_bound");
+    expect(bound).toHaveLength(1);
+    expect(foldLog(childEvents).bindings[0]).toMatchObject({
+      authority: "observed",
+      harness: "stub",
+      sessionId: "stub-thread-0001",
+    });
     // The launcher ensured a live viewer for it.
     expect(await discoverLiveServer(childPaths)).toBeTruthy();
 
@@ -379,6 +527,70 @@ describe("launcher handleForks (integration, stub harness)", () => {
       log: () => {},
     });
     expect(again).toHaveLength(0);
+  });
+
+  test("a caller-assigned fork hands the child the id Lucid minted, with authority", async () => {
+    // The OTHER identity strategy through the same createChild path: Lucid
+    // mints the id, the argv carries it adjacent to the declared flag, and
+    // the child's env says who vouches for it.
+    const assignedStub = join(dir, "assigned-stub.ts");
+    const envDump = join(dir, "assigned-env.json");
+    await writeFile(
+      assignedStub,
+      `const args = process.argv.slice(2);
+const sid = args[args.indexOf("--sid") + 1];
+const [seedPath, artifactPath] = args.filter((a, i) => a !== "--sid" && args[i - 1] !== "--sid");
+await Bun.write(${JSON.stringify(envDump)}, JSON.stringify({
+  argvSid: sid,
+  envSid: process.env.LUCID_SESSION_ID ?? null,
+  envAuthority: process.env.LUCID_SESSION_ID_AUTHORITY ?? null,
+  envLaunch: process.env.LUCID_LAUNCH_ID ?? null,
+}));
+const seed = await Bun.file(seedPath).text();
+const directive = seed.match(/\\*\\*Directive:\\*\\* (.*)/)?.[1] ?? "forked artifact";
+await Bun.write(artifactPath, \`<!doctype html><html><head><title>x</title></head><body><h1 data-lucid-id="t">\${directive}</h1></body></html>\`);
+`,
+    );
+    await writeFile(
+      regPath,
+      JSON.stringify({
+        default: "assigned",
+        harnesses: {
+          assigned: {
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [process.execPath, assignedStub, "--sid", "{id}", "{seed}", "{artifact}"],
+          },
+        },
+      }),
+    );
+    await appendEvent(parent.logPath, {
+      t: "fork",
+      id: "fork-assigned",
+      version: 1,
+      target: elementTarget("Hello"),
+      note: "assigned-identity child",
+    });
+    const registry = await loadRegistry(regPath);
+    expect(registry).not.toBeNull();
+    if (!registry) return;
+    const created = await handleForks(parent, registry, {
+      openBrowser: false,
+      openChild,
+      log: () => {},
+    });
+    expect(created[0]?.status).toBe("created");
+    const seen = JSON.parse(await readFile(envDump, "utf8")) as Record<string, string | null>;
+    // One id, three witnesses: the argv token, the child env, and the loop's
+    // resume target all name the id Lucid minted.
+    expect(seen.argvSid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(seen.envSid).toBe(seen.argvSid ?? "");
+    expect(seen.envAuthority).toBe("assigned");
+    expect(seen.envLaunch).toMatch(/^[a-f0-9]{16}$/);
+    expect(created[0]?.childSessionId).toBe(seen.argvSid ?? "");
+    // And the assigned binding is durable in the child's log.
+    const childPaths2 = sessionPaths(created[0]?.childArtifact ?? "");
+    const bound = foldLog((await readEvents(childPaths2.logPath)).events).bindings;
+    expect(bound[0]).toMatchObject({ authority: "assigned", sessionId: seen.argvSid });
   });
 
   test("a corrupt handled.json throws rather than silently re-spawning every fork", async () => {

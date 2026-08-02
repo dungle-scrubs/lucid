@@ -318,7 +318,23 @@ Three surfaces carry it, all additive:
 the turn runs on THAT session's settings, so a pick would be ignored. Export
 `LUCID_MODEL` / `LUCID_EFFORT` alongside `LUCID_HARNESS` / `LUCID_SESSION_ID`
 and the `attendant` stamp carries them (`{ harness, sessionId?, cwd?, model?,
-effort? }`); the viewer displays them, subdued, in place of the pickers.
+effort?, sessionIdAuthority?, launchId? }`); the viewer displays them, subdued,
+in place of the pickers.
+
+The environment is read once, when the session starts, so a session that
+changes model or thinking level mid-conversation would keep displaying what it
+began with. State the current values on the wait instead:
+
+```sh
+lucid wait plan.html --harness pi --model anthropic/claude-opus-4-8 --effort max
+```
+
+`--model` / `--effort` are this turn's answer to "what are you running", and
+they outrank the environment. Every wait is a fresh process and a fresh chance
+to say, so a harness that knows its own settings keeps the viewer honest
+without exporting anything. A field a wait does not state keeps its last known
+value - the update is a merge, never a replacement - and a harness that states
+nothing falls back to the exported environment exactly as before.
 
 **Changing harness is a handoff, not a resume.** The next pending batch starts
 the target recipe's `spawn` command with a fresh session id. Its prompt points

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeAttendantSidecar } from "../src/core/attendant.ts";
+import { mergeAttendantSidecar } from "../src/core/attendant.ts";
 import { readContextSidecar } from "../src/core/context.ts";
 import { runContext } from "../src/cli/run.ts";
 import { foldLog } from "../src/core/fold.ts";
@@ -90,7 +90,7 @@ describe("server routes + security", () => {
     const siblingPaths = sessionPaths(join(dir, "notes.html"));
     await writeFile(siblingPaths.artifactPath, DOC);
     await openSession(siblingPaths);
-    await writeAttendantSidecar(siblingPaths, {
+    await mergeAttendantSidecar(siblingPaths, {
       harness: "codex",
       nextCursor: "evt_00001",
       at: "2026-07-16T10:00:00.000Z",
@@ -483,6 +483,74 @@ describe("server routes + security", () => {
     expect(payload.forks?.[0]?.images?.[0]?.path).toContain("a1b2c3.png");
   });
 
+  test("a live-session binding is appended, broadcast, and idempotent", async () => {
+    await startServer();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", host: `127.0.0.1:${port}` },
+        body: JSON.stringify(body),
+      });
+
+    // A subscriber is watching; the binding must reach it as a frame.
+    const stream = await fetch(`http://127.0.0.1:${port}/__lucid/events`, {
+      headers: { host: `127.0.0.1:${port}` },
+    });
+    const reader = stream.body?.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    const readUntil = async (predicate: () => boolean, timeoutMs = 4000): Promise<void> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline && !predicate()) {
+        const { value, done } = await reader!.read();
+        if (done) return;
+        buf += decoder.decode(value, { stream: true });
+      }
+    };
+    await readUntil(() => buf.includes(": connected"));
+
+    const binding = {
+      launchId: "abc123def4567890",
+      attendant: { harness: "codex", sessionId: "0199-native", sessionIdAuthority: "observed" },
+    };
+    const first = await post("/__lucid/bind", binding);
+    expect(first.status).toBe(200);
+    // The SAME discovery announcing again (a rotation-free resume) dedupes.
+    const second = await post("/__lucid/bind", binding);
+    expect(second.status).toBe(200);
+
+    const { events } = await readEvents(paths.logPath);
+    const bound = events.filter((e) => e.t === "harness_session_bound");
+    expect(bound).toHaveLength(1);
+    expect(bound[0]).toMatchObject({
+      launchId: "abc123def4567890",
+      attendant: { harness: "codex", sessionId: "0199-native", sessionIdAuthority: "observed" },
+    });
+
+    // Broadcast reached the live subscriber exactly once.
+    await readUntil(() => buf.includes("harness_session_bound"));
+    await new Promise((r) => setTimeout(r, 100));
+    await readUntil(() => false, 150); // drain anything further in flight
+    await reader?.cancel();
+    expect(buf.split("harness_session_bound").length - 1).toBe(1);
+
+    // A binding whose stamp cannot vouch (no sessionId) is refused typed.
+    const refused = await post("/__lucid/bind", {
+      launchId: "abc123def4567890",
+      attendant: { harness: "codex" },
+    });
+    expect(refused.status).toBe(400);
+    // And a malformed launchId never reaches the log.
+    const malformed = await post("/__lucid/bind", {
+      launchId: "not hex!",
+      attendant: { harness: "codex", sessionId: "x", sessionIdAuthority: "observed" },
+    });
+    expect(malformed.status).toBe(400);
+    expect(
+      (await readEvents(paths.logPath)).events.filter((e) => e.t === "harness_session_bound"),
+    ).toHaveLength(1);
+  });
+
   test("attendant stamps ride agent events and fold into session history (D18)", async () => {
     await startServer();
     const post = (path: string, body: unknown) =>
@@ -631,7 +699,7 @@ describe("server routes + security", () => {
 
   test("the attendant's model/effort surface in /__lucid/state for the inherited pickers", async () => {
     await startServer();
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "claude-code",
       nextCursor: "evt_00001",
       at: "2026-07-16T10:00:00.000Z",
@@ -1066,7 +1134,7 @@ describe("server routes + security", () => {
     // omission rather than by inventing a command.
     expect(await (await get("/__lucid/state")).json()).not.toHaveProperty("lastAttendant");
 
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "claude-code",
       nextCursor: "evt_00003",
       at: new Date().toISOString(),

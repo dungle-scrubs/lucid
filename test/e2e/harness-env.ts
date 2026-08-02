@@ -41,6 +41,9 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   LUCID_SETTINGS: "isolate",
   LUCID_CLAUDE_SESSIONS: "isolate",
   LUCID_CLAUDE_PROJECTS: "isolate",
+  // The Codex rollout store (plan 03): same shape as the Claude stores -
+  // unset, corroboration reads the developer's real ~/.codex/sessions.
+  LUCID_CODEX_SESSIONS: "isolate",
   LUCID_REGISTRY: "isolate",
   LUCID_ROOTS: "isolate",
   LUCID_HARNESSES: "isolate",
@@ -92,6 +95,14 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   LUCID_MODEL: "clear",
   LUCID_EFFORT: "clear",
   LUCID_SESSION_ID: "clear",
+  // Who vouches for that id (plan 03). Rides with LUCID_SESSION_ID and dies
+  // with it: an inherited authority without the launch it belongs to is a
+  // false claim of provenance.
+  LUCID_SESSION_ID_AUTHORITY: "clear",
+  // The launch this process IS (plan 03). Inherited from the developer's
+  // shell it would correlate a test's turns with a launch that never spawned
+  // them - same false-correlation shape as LUCID_REQUEST_ID.
+  LUCID_LAUNCH_ID: "clear",
   // Written for spawned turns by the hub's create path (plan 07, M1.3) and
   // read back by cliRequestId, which joins a turn's hub calls to the click
   // that spawned it. Inherited from a developer's agent session, it would
@@ -186,6 +197,7 @@ export const harnessEnv = (
     LUCID_SETTINGS: join(dir, "settings.json"),
     LUCID_CLAUDE_SESSIONS: join(dir, "claude-sessions"),
     LUCID_CLAUDE_PROJECTS: join(dir, "claude-projects"),
+    LUCID_CODEX_SESSIONS: join(dir, "codex-sessions"),
     LUCID_HARNESSES: join(dir, "harnesses.json"),
     LUCID_HUB_LOG: join(dir, "hub.log"),
   };

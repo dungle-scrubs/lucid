@@ -21,6 +21,14 @@ JSON file at `$LUCID_HARNESSES`, or `$XDG_CONFIG_HOME/lucid/harnesses.json`
   "default": "claude_code",
   "harnesses": {
     "claude_code": {
+      // How this harness's session identity is established (see below).
+      // Required for unattended launch: without it Lucid would start turns
+      // it could never resume.
+      "sessionIdentity": {
+        "source": "caller-assigned",
+        "argument": "--session-id",
+        "resumeArgument": "--resume"
+      },
       // CREATE turn: a fresh headless session authors the new artifact.
       "spawn": [
         "claude", "-p", "--session-id", "{id}", "{prompt}",
@@ -52,6 +60,81 @@ the turn dies with "input must be provided".
 fork: `{id}` (new harness session id), `{seed}` (fork seed file), `{artifact}`
 (the file the agent must write + `lucid open`), `{cwd}` (project root), `{prompt}`
 (the instruction Lucid composes).
+
+### Session identity (required for unattended launch)
+
+Every recipe must declare how its harness's **native session identity** is
+established. Without it Lucid can start a turn it could never resume: the
+registry still loads (so an old file stays inspectable), but an unattended
+launch refuses before spawning, with the file path and harness in the error
+(`HSI001`).
+
+Two strategies, because harnesses divide into two kinds:
+
+```jsonc
+{
+  "harnesses": {
+    "claude-code": {
+      // CALLER-ASSIGNED: Lucid mints the id and hands it over. The flag must
+      // be immediately followed by {id} in spawn AND resume - adjacency, not
+      // mere presence, because a flag bound to the wrong token is how an id
+      // ends up inside a prompt.
+      "sessionIdentity": {
+        "source": "caller-assigned",
+        "argument": "--session-id",
+        "resumeArgument": "--resume"
+      },
+      "spawn": ["claude", "-p", "--session-id", "{id}", "{prompt}"],
+      "resume": ["claude", "--resume", "{id}", "-p", "{prompt}"]
+    },
+    "codex": {
+      // DISCOVERED: the harness mints its own id and announces it on
+      // structured stdout. Lucid reads it as the turn runs and never invents
+      // one - a pre-minted UUID here is a session codex has never heard of.
+      "sessionIdentity": {
+        "source": "stdout-jsonl",
+        "event": "thread.started",
+        "field": "thread_id",
+        "requiredArgument": "--json"
+      },
+      "spawn": ["codex", "exec", "--json", "{prompt}"],
+      "resume": ["codex", "exec", "resume", "{id}", "--json", "{prompt}"]
+    }
+  }
+}
+```
+
+- **caller-assigned** needs `argument` immediately followed by `{id}` in
+  `spawn`, and the same in `resume`. When the harness spells the two
+  differently - claude assigns with `--session-id <id>` and re-enters with
+  `--resume <id>` - declare `resumeArgument` for the second one.
+- **stdout-jsonl** needs `requiredArgument` (the flag that turns structured
+  output on) in `spawn` and `resume`, and an exact `{id}` token in `resume`.
+  `event`/`field` select the record and the field carrying the id;
+  `allowRotation` (default `false`) says whether a resume may legitimately
+  answer with a DIFFERENT id.
+- All four selector strings are bounded and control-character free. A
+  malformed declaration fails the registry load.
+
+**What Lucid does with it.** A discovered harness gets no `LUCID_SESSION_ID`
+at all - it mints its own, announces it, and Lucid records that as the
+artifact's resumable session. Every launch also exports `LUCID_LAUNCH_ID`,
+correlation for one process that never enters resume argv.
+
+**How a session is chosen for an unattended resume**, strongest evidence
+first: an explicit sidecar id with authority; a durable log binding whose id
+this machine's harness store corroborates; exactly one id a harness-specific
+parser finds in a recorded resume command; a corroborated scratchpad id. A
+bare mention in the log is display data, never a resume target - that is how a
+synthetic id once reached `codex resume` and stalled every retry.
+
+**When a session is gone.** If the harness says the id does not exist here
+(`HSI004`), Lucid quarantines it on this machine - durably, across restarts -
+skips the transient retry ladder, and tries at most one weaker candidate
+before standing down with `HARNESS_SESSION_UNAVAILABLE`. If a resume answers
+with a different conversation (`HSI005`, rotation not allowed), delivery stops
+without binding, invalidating, retrying, or advancing: your feedback stays
+recorded, and the viewer says so.
 
 ### Model and effort (optional, per harness)
 
@@ -107,6 +190,11 @@ A harness Lucid has no flags for cannot carry a selection. Declaring `models`,
 `efforts`, `defaultModel`, or `defaultEffort` on one **fails the registry
 load**, with the file path in the error: a picker whose every pick is refused
 at spawn is worse than no picker.
+
+Declaring `efforts` WITHOUT `models` is legal and does exactly what it says -
+an effort picker and no model picker. It is also rarely what anyone means: a
+harness that shows a thinking level but never a model name looks broken rather
+than minimal. If the harness accepts `--model`, declare the models too.
 
 **Where they are inserted:** right after `argv[0]` for `claude-code`/`pi`, and
 after the last `exec` (or `exec resume`) subcommand tokens for `codex`. Never

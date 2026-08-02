@@ -5,7 +5,7 @@ import type {
   QuestionOption,
   SessionHistoryRecord,
 } from "../protocol/wire.ts";
-import type { LogEvent, PromptImage } from "./events.ts";
+import type { LogEvent, PromptImage, SessionIdAuthority } from "./events.ts";
 import type { ItemAnswer, QuestionItem } from "./question-contract.ts";
 import { maxSeq } from "./log.ts";
 
@@ -96,6 +96,10 @@ export interface FoldedState {
   /** Every harness session that ever touched this artifact, in first-touch
    *  order (D18: derived from event stamps, oldest association first). */
   readonly sessionHistory: readonly SessionHistoryRecord[];
+  /** Explicit `harness_session_bound` provenance, whole-log, in seq order:
+   *  the DELIBERATE bindings, as opposed to sessionHistory's incidental
+   *  mentions. Resume resolution ranks these; it never ranks mentions. */
+  readonly bindings: readonly HarnessBindingRecord[];
   readonly status: SessionStatus;
   /** Current lifecycle segment number (1-based). */
   readonly segment: number;
@@ -210,6 +214,39 @@ const statusFromLifecycle = (t: string): SessionStatus => {
   }
 };
 
+/** One explicit binding, projected from a `harness_session_bound` event. */
+export interface HarnessBindingRecord {
+  readonly at: string;
+  readonly authority: SessionIdAuthority;
+  readonly harness: string;
+  readonly launchId: string;
+  readonly sessionId: string;
+  readonly seq: number;
+  readonly turnId?: string;
+}
+
+/** Project the explicit bindings, whole-log, in seq (= file) order. A binding
+ *  whose stamp lacks a sessionId or authority vouches for nothing and is
+ *  skipped - malformed provenance must not poison resolution. */
+const deriveBindings = (events: readonly LogEvent[]): HarnessBindingRecord[] => {
+  const bindings: HarnessBindingRecord[] = [];
+  for (const e of events) {
+    if (e.t !== "harness_session_bound") continue;
+    const { attendant } = e;
+    if (!attendant.sessionId || !attendant.sessionIdAuthority) continue;
+    bindings.push({
+      at: e.at,
+      authority: attendant.sessionIdAuthority,
+      harness: attendant.harness,
+      launchId: e.launchId,
+      sessionId: attendant.sessionId,
+      seq: e.seq,
+      ...(e.turnId ? { turnId: e.turnId } : {}),
+    });
+  }
+  return bindings;
+};
+
 /** Derive the artifact's session history from attendant stamps (D18):
  *  whole-log, not segment-scoped - provenance is the artifact's lifetime
  *  story, and there is no second store to drift. */
@@ -259,6 +296,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     return {
       status: "none",
       sessionHistory: [],
+      bindings: [],
       segment: 0,
       version: 0,
       reviewResolved: false,
@@ -561,6 +599,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   return {
     status,
     sessionHistory: deriveSessionHistory(events),
+    bindings: deriveBindings(events),
     segment,
     version,
     reviewResolved,

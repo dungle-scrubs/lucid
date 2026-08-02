@@ -73,6 +73,10 @@ const sinceOpt = Options.text("since").pipe(Options.optional);
 const replyOpt = Options.text("reply").pipe(Options.optional);
 const harnessOpt = Options.text("harness").pipe(Options.optional);
 const resumeOpt = Options.text("resume").pipe(Options.optional);
+/** What the attending session is running RIGHT NOW - stated per wait, because
+ *  a level changed mid-conversation is invisible to an env read once. */
+const modelOpt = Options.text("model").pipe(Options.optional);
+const effortOpt = Options.text("effort").pipe(Options.optional);
 const timeoutOpt = Options.integer("timeout").pipe(Options.optional);
 const waitCommand = Command.make(
   "wait",
@@ -82,15 +86,19 @@ const waitCommand = Command.make(
     reply: replyOpt,
     harness: harnessOpt,
     resume: resumeOpt,
+    model: modelOpt,
+    effort: effortOpt,
     timeout: timeoutOpt,
   },
-  ({ file, since, reply, harness, resume, timeout }) =>
+  ({ file, since, reply, harness, resume, model, effort, timeout }) =>
     runEffect(() =>
       runWaitCli(file, {
         since: Option.getOrUndefined(since),
         reply: Option.getOrUndefined(reply),
         harness: Option.getOrUndefined(harness),
         resume: Option.getOrUndefined(resume),
+        model: Option.getOrUndefined(model),
+        effort: Option.getOrUndefined(effort),
         timeoutMs: Option.match(timeout, { onNone: () => undefined, onSome: (s) => s * 1000 }),
       }),
     ),

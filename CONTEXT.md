@@ -407,6 +407,30 @@ custom one). Lucid is **harness-agnostic**: the only integration surface is
 the CLI protocol and the co-located event log, so any harness can drive or
 resume a session.
 
+### Native session identity
+The **harness's own** conversation id - the thing `claude --resume <id>` or
+`codex exec resume <id>` re-enters. Either assigned by Lucid before the spawn
+or announced by the harness on structured stdout, and always carrying an
+**authority** that says which. Only an id with authority may enter resume
+argv.
+_Avoid_: session id (ambiguous - a Lucid session is the review), thread id
+(Codex's own spelling for one case of it).
+
+### Launch id
+Lucid-owned correlation for ONE spawned process, exported as
+`LUCID_LAUNCH_ID`. It names an attempt, not a conversation: it never enters
+resume argv, and a turn that has not yet announced a native identity still
+correlates its progress by this.
+_Avoid_: session id, run id.
+
+### Binding
+The durable record that a native session belongs to this artifact
+(`harness_session_bound`), appended after `session_opened` and carrying the
+launch that established it. Distinct from a **mention** - an identity that
+merely appears in some event's provenance stamp. Resume resolution ranks
+bindings and machine-local records; it never ranks mentions, because a
+mention can name a session no harness ever had.
+
 ## Glossary - the shell
 
 The vocabulary of the window a human keeps open, as opposed to the

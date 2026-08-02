@@ -42,14 +42,39 @@ export interface AttendantStamp {
    *  trace, inherited via LUCID_REQUEST_ID, so an authored event points back
    *  at the request log line that started it. */
   readonly trace?: string;
+  /** Who vouches for `sessionId`: `assigned` (Lucid handed the harness its
+   *  id), `observed` (the harness announced it on structured stdout), or
+   *  `declared` (a human or tool asserted it). Only meaningful WITH a
+   *  sessionId - authority over nothing vouches for nothing. */
+  readonly sessionIdAuthority?: SessionIdAuthority;
+  /** Lucid-owned correlation for one launched process (LUCID_LAUNCH_ID).
+   *  Correlation, not identity: it names a launch attempt, never enters
+   *  resume argv, and must never be read as a sessionId. */
+  readonly launchId?: string;
 }
 
+/** The closed authority vocabulary, allowlist-checked on every write path:
+ *  an unknown authority is dropped, never coerced into a known one. */
+export const SESSION_ID_AUTHORITIES = ["assigned", "declared", "observed"] as const;
+export type SessionIdAuthority = (typeof SESSION_ID_AUTHORITIES)[number];
+
+/** True when the string carries a C0 control character or DEL. A code-point
+ *  scan rather than a control-char regex (which lint rejects for good reason):
+ *  the ONE spelling of "control-free" shared by stamp cleaning here and the
+ *  identity validators in `launch/`. */
+export const hasControlCharacters = (value: string): boolean => {
+  for (let i = 0; i < value.length; i += 1) {
+    const c = value.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+};
+
 /** Strip control characters (incl. the NUL a naive dedupe key would collide
- *  on) and bound the length. Empty after cleaning = absent. */
-const cleanStampField = (value: unknown, max: number): string | undefined => {
+ *  on) and bound the length. Empty after cleaning = absent. Exported for the
+ *  sidecar normalizer, which enforces the same bounds on the same fields. */
+export const cleanStampField = (value: unknown, max: number): string | undefined => {
   if (typeof value !== "string") return undefined;
-  // Code-point filter rather than a control-char regex (which lint rejects
-  // for good reason elsewhere): C0 controls and DEL are dropped.
   const cleaned = [...value]
     .filter((ch) => {
       const c = ch.charCodeAt(0);
@@ -79,6 +104,14 @@ export const sanitizeAttendant = (input: unknown): AttendantStamp | undefined =>
   // Stricter than the text fields: a trace is well-formed hex or it is
   // nothing (R4) - no truncation, no cleaning, no keeping.
   const trace = typeof o.trace === "string" && WELL_FORMED_ID.test(o.trace) ? o.trace : undefined;
+  // Authority is a closed set, and only a present sessionId can carry it.
+  const sessionIdAuthority =
+    sessionId && SESSION_ID_AUTHORITIES.includes(o.sessionIdAuthority as SessionIdAuthority)
+      ? (o.sessionIdAuthority as SessionIdAuthority)
+      : undefined;
+  // Same log-injection rule as `trace`: a launch id is well-formed or absent.
+  const launchId =
+    typeof o.launchId === "string" && WELL_FORMED_ID.test(o.launchId) ? o.launchId : undefined;
   return {
     harness,
     ...(sessionId ? { sessionId } : {}),
@@ -86,6 +119,8 @@ export const sanitizeAttendant = (input: unknown): AttendantStamp | undefined =>
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
     ...(trace ? { trace } : {}),
+    ...(sessionIdAuthority ? { sessionIdAuthority } : {}),
+    ...(launchId ? { launchId } : {}),
   };
 };
 
@@ -404,6 +439,34 @@ export interface SessionEndedEvent extends BaseEvent {
   readonly t: "session_ended";
 }
 
+/**
+ * Durable record that a harness-native session was BOUND to this review:
+ * which harness, which native id, on whose authority, from which launch.
+ *
+ * Appended only after `session_opened`, and deliberately inert everywhere
+ * else: it wakes no waiter (not in WAKES_WAIT), closes no turn, and is not
+ * agent output - provenance is news about the past, not activity. The `id`
+ * is derived from (launchId, sessionId) so re-discovering the same binding
+ * dedupes in the append lock instead of stuttering the log.
+ */
+export interface HarnessSessionBoundEvent extends BaseEvent {
+  readonly t: "harness_session_bound";
+  readonly id: string;
+  /** The launch that discovered or assigned the identity - required, so a
+   *  binding can always be traced back to one process. */
+  readonly launchId: string;
+  /** The turn the binding arrived in, when one exists. */
+  readonly turnId?: string;
+  /** The authoritative stamp: harness + sessionId + sessionIdAuthority are
+   *  what make this a binding rather than an incidental mention. */
+  readonly attendant: AttendantStamp;
+}
+
+/** The idempotency id for a binding: same launch, same native id - same
+ *  event, however many times discovery announces it. */
+export const bindingEventId = (launchId: string, sessionId: string): string =>
+  `hsb:${launchId}:${sessionId}`;
+
 export type LogEvent =
   | SessionOpenedEvent
   | VersionEvent
@@ -420,7 +483,8 @@ export type LogEvent =
   | ReviewReopenedEvent
   | SessionSuspendedEvent
   | SessionResumedEvent
-  | SessionEndedEvent;
+  | SessionEndedEvent
+  | HarnessSessionBoundEvent;
 
 export type LogEventType = LogEvent["t"];
 
@@ -436,6 +500,7 @@ const IDENTIFIED_TYPES = [
   "revert",
   "question",
   "question_answered",
+  "harness_session_bound",
 ] as const satisfies readonly LogEventType[];
 
 /** Events that carry a client/CLI-minted idempotent id used for dedupe (D-057). */

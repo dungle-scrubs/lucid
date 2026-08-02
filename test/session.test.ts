@@ -3,7 +3,14 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readLastAttendant, writeAttendantSidecar } from "../src/core/attendant.ts";
+import {
+  mutateAttendantSidecar,
+  resolveResumeCandidates,
+  readLastAttendant,
+  recordPendingIdentity,
+  recordSessionInvalidation,
+  mergeAttendantSidecar,
+} from "../src/core/attendant.ts";
 import { parseHTML } from "linkedom";
 import { captureElementAnchor } from "../src/anchors/dom.ts";
 import type { DomElementLike, DomRootLike } from "../src/anchors/dom.ts";
@@ -12,7 +19,9 @@ import { foldLog } from "../src/core/fold.ts";
 import { appendEvent, appendEvents, readEvents } from "../src/core/log.ts";
 import { assemblePayload, buildWaitPayload } from "../src/core/payload.ts";
 import { cursorSidecarPath, sessionPaths, snapshotPath } from "../src/core/paths.ts";
-import { commitWatchedChange, openSession } from "../src/core/session.ts";
+import { commitWatchedChange, ensureSessionDirs, openSession } from "../src/core/session.ts";
+import { promotePendingBindings } from "../src/core/deliver.ts";
+import { runWaitCli } from "../src/cli/run.ts";
 import { listSessions, projectRoot } from "../src/core/sessions.ts";
 
 let dir: string;
@@ -881,13 +890,13 @@ describe("attendant sidecars (D-051 identity)", () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
 
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "codex",
       nextCursor: "evt_00001",
       at: "2026-07-16T09:00:00.000Z",
       resume: "codex resume abc --yolo",
     });
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "claude-code",
       nextCursor: "evt_00009",
       at: "2026-07-16T10:00:00.000Z",
@@ -917,7 +926,7 @@ describe("attendant sidecars (D-051 identity)", () => {
     await writeFile(cursorSidecarPath(paths, "broken"), "{not json");
     expect(await readLastAttendant(paths)).toBeUndefined();
 
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "gpt",
       nextCursor: "evt_00002",
       at: "2026-07-16T11:00:00.000Z",
@@ -925,6 +934,447 @@ describe("attendant sidecars (D-051 identity)", () => {
     const latest = await readLastAttendant(paths);
     expect(latest?.harness).toBe("gpt");
     expect(latest?.resume).toBeUndefined(); // a harness may decline to record one
+  });
+});
+
+describe("attendant sidecar mutation (harness session identity)", () => {
+  test("a writer that names fewer fields no longer erases the other writer's", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    // The agent's wait turn records the full identity story...
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      nextCursor: "evt_00004",
+      at: "2026-07-16T09:00:00.000Z",
+      resume: "codex exec resume abc",
+      model: "gpt-5.6-sol",
+      effort: "high",
+    });
+    // ...and the launcher's narrower stamp must UPDATE, not clobber.
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      nextCursor: "evt_00009",
+      at: "2026-07-16T10:00:00.000Z",
+    });
+    const merged = await readLastAttendant(paths);
+    expect(merged).toMatchObject({
+      harness: "codex",
+      nextCursor: "evt_00009",
+      at: "2026-07-16T10:00:00.000Z",
+      resume: "codex exec resume abc",
+      model: "gpt-5.6-sol",
+      effort: "high",
+    });
+  });
+
+  test("identity, cursor, and invalidations survive concurrent updates", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    await mutateAttendantSidecar(paths, "codex", (current) => ({
+      ...(current ?? { harness: "codex", at: "2026-07-16T09:00:00.000Z" }),
+      sessionId: "0199-native",
+      sessionIdAuthority: "observed",
+      launchId: "abc123def4567890",
+    }));
+    // Discovery, `lucid wait`, and invalidation all write at once.
+    await Promise.all([
+      ...Array.from({ length: 6 }, (_, i) =>
+        recordSessionInvalidation(paths, "codex", `dead-${i}`),
+      ),
+      mutateAttendantSidecar(paths, "codex", (current) => ({
+        ...(current ?? { harness: "codex", at: "x" }),
+        nextCursor: "evt_00042",
+        at: "2026-07-16T11:00:00.000Z",
+      })),
+      mutateAttendantSidecar(paths, "codex", (current) => ({
+        ...(current ?? { harness: "codex", at: "x" }),
+        model: "gpt-5.6-sol",
+      })),
+    ]);
+    const final = await readLastAttendant(paths);
+    expect(final?.sessionId).toBe("0199-native");
+    expect(final?.sessionIdAuthority).toBe("observed");
+    expect(final?.launchId).toBe("abc123def4567890");
+    expect(final?.nextCursor).toBe("evt_00042");
+    expect(final?.model).toBe("gpt-5.6-sol");
+    expect([...(final?.invalidatedSessionIds ?? [])].sort()).toEqual(
+      Array.from({ length: 6 }, (_, i) => `dead-${i}`).sort(),
+    );
+  });
+
+  test("the sidecar on disk is always a complete JSON document", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    const target = cursorSidecarPath(paths, "codex");
+    const writes = Array.from({ length: 25 }, (_, i) =>
+      mutateAttendantSidecar(paths, "codex", (current) => ({
+        ...(current ?? { harness: "codex", at: "2026-07-16T09:00:00.000Z" }),
+        nextCursor: `evt_${String(i).padStart(5, "0")}`,
+      })),
+    );
+    // Read while the writes are in flight: a torn or half-written file is the
+    // failure this test exists to catch.
+    const reads = (async () => {
+      for (let i = 0; i < 40; i++) {
+        try {
+          JSON.parse(await readFile(target, "utf8"));
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+        }
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    })();
+    await Promise.all([...writes, reads]);
+    const raw = JSON.parse(await readFile(target, "utf8"));
+    expect(raw.harness).toBe("codex");
+  });
+
+  test("invalidations are bounded, deduplicated, and retained across restart", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    for (let i = 0; i < 12; i++) {
+      await recordSessionInvalidation(paths, "codex", `dead-${i}`);
+    }
+    await recordSessionInvalidation(paths, "codex", "dead-11"); // repeat: no growth
+    const final = await readLastAttendant(paths);
+    // Bounded to the newest MAX_SESSION_INVALIDATIONS, oldest evicted first.
+    expect(final?.invalidatedSessionIds).toEqual(
+      Array.from({ length: 8 }, (_, i) => `dead-${i + 4}`),
+    );
+    // "Across restart" = a fresh read from disk, no shared in-memory state.
+    const reread = await readLastAttendant(paths);
+    expect(reread?.invalidatedSessionIds).toEqual(final?.invalidatedSessionIds);
+  });
+
+  test("a pending pre-open sidecar may omit delivery cursor fields", async () => {
+    const paths = sessionPaths(artifact);
+    await ensureSessionDirs(paths);
+    await recordPendingIdentity(paths, {
+      harness: "codex",
+      launchId: "abc123def4567890",
+      sessionId: "0199-native",
+      sessionIdAuthority: "observed",
+    });
+    const pending = await readLastAttendant(paths);
+    expect(pending).toMatchObject({
+      harness: "codex",
+      sessionId: "0199-native",
+      sessionIdAuthority: "observed",
+      launchId: "abc123def4567890",
+      pendingBinding: true,
+    });
+    expect(pending?.nextCursor).toBeUndefined();
+  });
+});
+
+describe("resolveResumeCandidates - ordered, deduplicated, locally proven", () => {
+  const sidecar = (over: Record<string, unknown>) => ({
+    harness: "codex",
+    at: "2026-08-01T10:00:00.000Z",
+    ...over,
+  });
+  const binding = (over: Record<string, unknown>) => ({
+    at: "2026-08-01T09:00:00.000Z",
+    authority: "observed" as const,
+    harness: "codex",
+    launchId: "abc123def4567890",
+    sessionId: "b-1",
+    seq: 5,
+    ...over,
+  });
+
+  test("tier 1: only an explicit sidecar id WITH authority; newest at wins", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => false,
+      sidecars: [
+        sidecar({ sessionId: "old", sessionIdAuthority: "observed", at: "2026-08-01T08:00:00Z" }),
+        sidecar({ sessionId: "new", sessionIdAuthority: "declared", at: "2026-08-01T11:00:00Z" }),
+        sidecar({ sessionId: "no-authority" }), // display data, never automatic
+      ],
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([
+      [1, "new"],
+      [1, "old"],
+    ]);
+  });
+
+  test("tier 2: a durable binding needs current-machine corroboration", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [
+        binding({ sessionId: "here", seq: 9 }),
+        binding({ sessionId: "other-machine", seq: 11 }),
+      ],
+      corroborate: async (_h, id) => id === "here",
+      sidecars: [],
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([[2, "here"]]);
+  });
+
+  test("tier 3/4: one parsed legacy id; a corroborated scratchpad id trails everything", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => true,
+      legacyResume: {
+        harness: "claude-code",
+        command: "claude --resume 0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000",
+      },
+      scratchpad: { harness: "claude-code", sessionId: "0199cccc-dddd-4eee-8fff-000011112222" },
+      sidecars: [],
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([
+      [3, "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000"],
+      [4, "0199cccc-dddd-4eee-8fff-000011112222"],
+    ]);
+  });
+
+  test("locally invalidated ids are excluded at every tier; dedupe keeps the strongest", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [binding({ sessionId: "s-1", seq: 3 }), binding({ sessionId: "dead", seq: 8 })],
+      corroborate: async () => true,
+      sidecars: [
+        sidecar({
+          sessionId: "s-1",
+          sessionIdAuthority: "observed",
+          invalidatedSessionIds: ["dead"],
+        }),
+      ],
+    });
+    // s-1 appears once (tier 1 beats its own binding); dead is quarantined.
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([[1, "s-1"]]);
+  });
+
+  test("deterministic across same-timestamp histories: tier, then seq, then id", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [binding({ sessionId: "b-low", seq: 4 }), binding({ sessionId: "b-high", seq: 7 })],
+      corroborate: async () => true,
+      sidecars: [],
+    });
+    expect(candidates.map((c) => c.sessionId)).toEqual(["b-high", "b-low"]);
+  });
+
+  test("the poisoned-record shape: a synthetic stamp never outranks the sidecar", async () => {
+    // The reported failure: an old log stamp carries a Lucid-minted UUID that
+    // codex never knew (it landed in sessionHistory, untyped, no authority),
+    // while the sidecar holds the REAL thread codex announced. Resolution
+    // must offer the sidecar id and must not offer the synthetic one at all -
+    // sessionHistory mentions are not candidates.
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => true,
+      sidecars: [sidecar({ sessionId: "0199-real-codex-thread", sessionIdAuthority: "observed" })],
+    });
+    expect(candidates.map((c) => c.sessionId)).toEqual(["0199-real-codex-thread"]);
+  });
+});
+
+describe("the CLI's own stamps carry launch identity from the environment", () => {
+  test("an ack written by the CLI carries launchId and authority", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    // The CLI is its own process; the stamp fields ride the environment the
+    // spawner exported (runSpawn), so the test hands them the same way.
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(import.meta.dir, "..", "src", "cli", "main.ts"),
+        "intent",
+        artifact,
+        "reply",
+      ],
+      {
+        env: {
+          ...process.env,
+          LUCID_HARNESS: "codex",
+          LUCID_SESSION_ID: "0199-native",
+          LUCID_SESSION_ID_AUTHORITY: "observed",
+          LUCID_LAUNCH_ID: "abc123def4567890",
+        },
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    await proc.exited;
+    expect(proc.exitCode).toBe(0);
+    const { events } = await readEvents(paths.logPath);
+    const ack = events.findLast((e) => e.t === "agent_ack");
+    expect(ack && "attendant" in ack ? ack.attendant : undefined).toMatchObject({
+      harness: "codex",
+      launchId: "abc123def4567890",
+      sessionId: "0199-native",
+      sessionIdAuthority: "observed",
+    });
+  }, 20_000);
+});
+
+describe("an attended session leaves evidence it can be resumed from", () => {
+  test("a wait that declares an id records it with authority, so resume can rank it", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    const previous = process.env.LUCID_SESSION_ID;
+    process.env.LUCID_SESSION_ID = "0199-human-session";
+    try {
+      await runWaitCli(artifact, {
+        harness: "claude-code",
+        resume: "claude --resume 0199-human-session",
+        timeoutMs: 0,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.LUCID_SESSION_ID;
+      else process.env.LUCID_SESSION_ID = previous;
+    }
+    // Evidence, not a mention: a stamped id alone never ranks, so a session
+    // that only stamped events would have become unresumable.
+    const sidecar = await readLastAttendant(paths);
+    expect(sidecar).toMatchObject({
+      harness: "claude-code",
+      sessionId: "0199-human-session",
+      sessionIdAuthority: "declared",
+    });
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => false,
+      sidecars: [sidecar!],
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([[1, "0199-human-session"]]);
+  });
+
+  test("a recorded resume command still ranks when the log also carries a stamp", async () => {
+    // The regression: the resume command was read through a resolver that
+    // returns early on a stamped id and carries no command, so the artifacts
+    // that followed the integration guide MOST completely lost resume.
+    const sidecars = [
+      {
+        at: "2026-08-01T10:00:00.000Z",
+        harness: "claude-code",
+        resume: "claude --resume 0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000",
+      },
+    ];
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => false,
+      legacyResume: { command: sidecars[0]!.resume, harness: sidecars[0]!.harness },
+      sidecars,
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([
+      [3, "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000"],
+    ]);
+  });
+});
+
+describe("an attending session can state what it is running, per wait", () => {
+  test("a stated model/effort updates the sidecar the viewer reads", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+
+    // The session starts on one setting...
+    await runWaitCli(artifact, {
+      harness: "pi",
+      model: "anthropic/claude-opus-4-8",
+      effort: "high",
+      timeoutMs: 0,
+    });
+    expect(await readLastAttendant(paths)).toMatchObject({
+      harness: "pi",
+      model: "anthropic/claude-opus-4-8",
+      effort: "high",
+    });
+
+    // ...the human turns thinking up mid-conversation, and the next wait says
+    // so. Without this the viewer shows the level the session STARTED with
+    // forever, which is what made a pi session at max read as "high".
+    await runWaitCli(artifact, { harness: "pi", effort: "max", timeoutMs: 0 });
+    const updated = await readLastAttendant(paths);
+    expect(updated?.effort).toBe("max");
+    // A field the wait did not state keeps its last known value rather than
+    // being erased - the merge is an update, not a replacement.
+    expect(updated?.model).toBe("anthropic/claude-opus-4-8");
+  });
+
+  test("a stated setting outranks a stale environment", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    const previous = { effort: process.env.LUCID_EFFORT, model: process.env.LUCID_MODEL };
+    process.env.LUCID_MODEL = "exported-once-at-startup";
+    process.env.LUCID_EFFORT = "low";
+    try {
+      await runWaitCli(artifact, {
+        harness: "pi",
+        model: "what-it-actually-runs",
+        effort: "max",
+        timeoutMs: 0,
+      });
+      expect(await readLastAttendant(paths)).toMatchObject({
+        model: "what-it-actually-runs",
+        effort: "max",
+      });
+    } finally {
+      if (previous.model === undefined) delete process.env.LUCID_MODEL;
+      else process.env.LUCID_MODEL = previous.model;
+      if (previous.effort === undefined) delete process.env.LUCID_EFFORT;
+      else process.env.LUCID_EFFORT = previous.effort;
+    }
+  });
+});
+
+describe("pending binding promotion (identity before the log exists)", () => {
+  const identity = {
+    harness: "codex",
+    launchId: "abc123def4567890",
+    sessionId: "0199-native",
+    sessionIdAuthority: "observed",
+  } as const;
+
+  test("promotion appends the binding right after session_opened, once", async () => {
+    const paths = sessionPaths(artifact);
+    await ensureSessionDirs(paths);
+    await recordPendingIdentity(paths, identity);
+
+    // BEFORE open there is nothing to promote into: refused, not misfiled.
+    expect(await promotePendingBindings(paths)).toEqual([]);
+
+    await openSession(paths);
+    const promoted = await promotePendingBindings(paths);
+    expect(promoted.length).toBe(1);
+
+    const { events } = await readEvents(paths.logPath);
+    // A fresh review log still begins with session_opened...
+    expect(events[0]?.t).toBe("session_opened");
+    // ...and the binding lands immediately after it, in seq order.
+    expect(events[1]).toMatchObject({
+      t: "harness_session_bound",
+      launchId: identity.launchId,
+      attendant: {
+        harness: "codex",
+        sessionId: "0199-native",
+        sessionIdAuthority: "observed",
+      },
+    });
+    expect(foldLog(events).bindings.length).toBe(1);
+
+    // The sidecar keeps the identity but no longer owes the log a binding.
+    const after = await readLastAttendant(paths);
+    expect(after?.pendingBinding).toBeUndefined();
+    expect(after?.sessionId).toBe("0199-native");
+
+    // Promotion is idempotent: run again, nothing new lands.
+    expect(await promotePendingBindings(paths)).toEqual([]);
+    const again = await readEvents(paths.logPath);
+    expect(again.events.filter((e) => e.t === "harness_session_bound").length).toBe(1);
+  });
+
+  test("re-discovering the same identity dedupes instead of stuttering the log", async () => {
+    const paths = sessionPaths(artifact);
+    await ensureSessionDirs(paths);
+    await openSession(paths);
+    await recordPendingIdentity(paths, identity);
+    await promotePendingBindings(paths);
+    // The same launch announces the same thread again (a resume confirming).
+    await recordPendingIdentity(paths, identity);
+    await promotePendingBindings(paths);
+    const { events } = await readEvents(paths.logPath);
+    expect(events.filter((e) => e.t === "harness_session_bound").length).toBe(1);
   });
 });
 
@@ -954,7 +1404,7 @@ describe("listSessions", () => {
     await writeFile(zetaPaths.artifactPath, V1);
     await openSession(zetaPaths);
     await openSession(alphaPaths);
-    await writeAttendantSidecar(zetaPaths, {
+    await mergeAttendantSidecar(zetaPaths, {
       harness: "codex",
       nextCursor: "evt_00001",
       at: "2026-07-16T12:00:00.000Z",

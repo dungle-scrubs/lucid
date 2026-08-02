@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { isUsableSessionId } from "../launch/session-identity.ts";
 import { decodeFlattenedPath } from "./scratchpad.ts";
 
 /**
@@ -295,7 +296,10 @@ export const harnessSessionCwd = async (
   return answer;
 };
 
-const findSessionCwd = async (root: string, sessionId: string): Promise<string | undefined> => {
+/** The flattened directory whose transcript names this session, or undefined
+ *  when this machine holds none. EXISTENCE only - decoding that directory to
+ *  a real cwd is a separate question with a separate failure mode. */
+const findSessionDir = async (root: string, sessionId: string): Promise<string | undefined> => {
   let names: string[];
   try {
     names = await readdir(root);
@@ -304,17 +308,112 @@ const findSessionCwd = async (root: string, sessionId: string): Promise<string |
   }
   for (const name of names) {
     try {
-      if (!(await stat(join(root, name, `${sessionId}.jsonl`))).isFile()) continue;
+      if ((await stat(join(root, name, `${sessionId}.jsonl`))).isFile()) return name;
     } catch {
-      continue; // not this one
+      // not this one
     }
-    return await decodeFlattenedPath(name);
   }
   return undefined;
 };
 
+const findSessionCwd = async (root: string, sessionId: string): Promise<string | undefined> => {
+  const name = await findSessionDir(root, sessionId);
+  return name === undefined ? undefined : decodeFlattenedPath(name);
+};
+
 /** A 36-char UUID, as every harness names its sessions. */
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const UUID_EVERYWHERE = new RegExp(UUID.source, "gi");
+
+/**
+ * Fixed per-harness extraction of the session id a RECORDED resume command
+ * names (D-011). Replaces the first-UUID-wins scan for automatic resume: a
+ * UUID sitting in a path argument or quoted prompt text was returned as the
+ * session id with no error, and resuming it started a stranger.
+ *
+ * The rules are deliberately rigid: the id must sit exactly where the
+ * harness's own CLI puts it, the command must contain no OTHER uuid (two ids
+ * is ambiguity, and ambiguity is display-only), and a harness this module
+ * has no parser for yields nothing - never a guess.
+ */
+export const parseHarnessResumeCommand = (harness: string, command: string): string | undefined => {
+  const kind = harness.trim().toLowerCase().replace(/_/g, "-");
+  const anchored =
+    kind === "claude-code" || kind === "claude"
+      ? new RegExp(String.raw`--resume\s+(${UUID.source})(?:\s|$)`, "i").exec(command)
+      : kind === "codex"
+        ? new RegExp(String.raw`\bresume\s+(${UUID.source})(?:\s|$)`, "i").exec(command)
+        : null;
+  const id = anchored?.[1];
+  if (!id) return undefined;
+  const all = command.match(UUID_EVERYWHERE) ?? [];
+  return all.length === 1 ? id : undefined;
+};
+
+/** Where Codex files its rollout transcripts (one per thread), overridable
+ *  the same way the Claude stores are. */
+export const codexSessionsDir = (dir?: string): string => {
+  if (dir) return dir;
+  if (process.env.LUCID_CODEX_SESSIONS) return process.env.LUCID_CODEX_SESSIONS;
+  return join(homedir(), ".codex", "sessions");
+};
+
+/** True when a rollout file naming this thread id exists in the local Codex
+ *  store: `<store>/YYYY/MM/DD/rollout-<stamp>-<threadId>.jsonl`. A bounded
+ *  three-level walk over date directories; any read failure is "not here". */
+const codexStoreHas = async (sessionId: string, dir?: string): Promise<boolean> => {
+  const root = codexSessionsDir(dir);
+  const needle = `-${sessionId}.jsonl`;
+  try {
+    for (const year of await readdir(root)) {
+      const yearDir = join(root, year);
+      for (const month of await readdir(yearDir).catch(() => [])) {
+        const monthDir = join(yearDir, month);
+        for (const day of await readdir(monthDir).catch(() => [])) {
+          const names = await readdir(join(monthDir, day)).catch(() => []);
+          if (names.some((name) => name.endsWith(needle))) return true;
+        }
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+};
+
+/**
+ * Current-machine corroboration (D-010): does THIS machine's harness store
+ * hold the native session? A durable log binding can name an id minted on
+ * another machine; resuming it here starts a stranger, so automatic resume
+ * demands local evidence - a Claude transcript in the projects store, a Codex
+ * rollout file - before a durable id may enter argv. A harness with no known
+ * store corroborates nothing, which keeps its records display-only.
+ */
+export const harnessStoreHas = async (
+  harness: string,
+  sessionId: string,
+  opts: { readonly claudeProjectsDir?: string; readonly codexSessionsDir?: string } = {},
+): Promise<boolean> => {
+  // The id becomes a PATH SEGMENT below (`<store>/<dir>/<id>.jsonl`), and it
+  // reaches here from a log event, a sidecar file, or a harness's stdout -
+  // none of them ours. An id shaped like `../../../etc/passwd` would stat its
+  // way out of the store and answer "corroborated" for a file that has
+  // nothing to do with any harness.
+  if (!isUsableSessionId(sessionId)) return false;
+  const kind = harness.trim().toLowerCase().replace(/_/g, "-");
+  if (kind === "claude-code" || kind === "claude") {
+    return (
+      // Existence, NOT decodability: the question is whether this machine
+      // holds the conversation, and a transcript filed under a directory whose
+      // encoded path does not resolve here is still a transcript. Asking
+      // findSessionCwd conflated the two and answered "not here" for every
+      // session recorded under a path this machine does not have.
+      (await findSessionDir(claudeProjectsDir(opts.claudeProjectsDir), sessionId)) !== undefined
+    );
+  }
+  if (kind === "codex") return codexStoreHas(sessionId, opts.codexSessionsDir);
+  return false;
+};
 
 /**
  * The harness session id behind an artifact, from the best source available:

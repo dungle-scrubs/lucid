@@ -15,6 +15,8 @@ import {
   TURN_END_REASONS,
   type TurnEndReason,
 } from "../core/events.ts";
+import { appendSessionBindings } from "../core/deliver.ts";
+import { WELL_FORMED_ID } from "../core/request-id.ts";
 import {
   legacyProjection,
   normalizeItemAnswers,
@@ -885,6 +887,40 @@ export const createSessionHost = (
   };
 
   /**
+   * `POST /__lucid/bind` - a launch announcing which harness-native session it
+   * bound (plan 03, M2). Validation is refusal, not coercion: a stamp that
+   * cannot vouch (no sessionId, no authority) or a malformed launchId is a
+   * 400, never a cleaned-up record. The append goes through the ONE binding
+   * writer - after-open guard, derived idempotency id - and only the events
+   * that are genuinely fresh are broadcast: a re-announced binding is one log
+   * line and one frame, however many times it arrives.
+   */
+  const handleBind = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body) return json({ error: "invalid binding" }, 400);
+    const launchId =
+      typeof body.launchId === "string" && WELL_FORMED_ID.test(body.launchId)
+        ? body.launchId
+        : undefined;
+    if (!launchId) return json({ error: "invalid launchId" }, 400);
+    const attendant = parseAttendant(body.attendant);
+    if (!attendant?.sessionId || !attendant.sessionIdAuthority) {
+      return json({ error: "binding stamp needs sessionId and sessionIdAuthority" }, 400);
+    }
+    const turnId =
+      typeof body.turnId === "string" && body.turnId.length > 0
+        ? body.turnId.slice(0, 128)
+        : undefined;
+    const result = await appendSessionBindings(paths.logPath, [
+      { launchId, attendant, ...(turnId ? { turnId } : {}) },
+    ]);
+    if (!result.opened) return json({ error: "session not opened" }, 409);
+    for (const e of result.fresh) broadcast(e);
+    touch();
+    return json({ ok: true });
+  };
+
+  /**
    * `POST /__lucid/turn-ended` - a turn saying it stopped (plan 08, RFC-01).
    *
    * Every field is a CLOSED set, refused rather than coerced. A `reason` this
@@ -1261,6 +1297,7 @@ export const createSessionHost = (
     if (pathname === "/__lucid/reply" && req.method === "POST") return handleReply(req);
     if (pathname === "/__lucid/ack" && req.method === "POST") return handleAck(req);
     if (pathname === "/__lucid/turn-ended" && req.method === "POST") return handleTurnEnded(req);
+    if (pathname === "/__lucid/bind" && req.method === "POST") return handleBind(req);
     if (pathname === "/__lucid/context" && req.method === "POST") return handleContext(req);
     if (pathname === "/__lucid/resolve" && req.method === "POST") {
       await serverAppend([{ t: "review_resolved" }]);
