@@ -10,11 +10,13 @@ import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../cor
 import { diffHtml } from "../diff/diff.ts";
 import { foldLog, versionRef } from "../core/fold.ts";
 import {
+  bindingEventId,
   sanitizeAttendant,
   TURN_END_CODE,
   TURN_END_REASONS,
   type TurnEndReason,
 } from "../core/events.ts";
+import { WELL_FORMED_ID } from "../core/request-id.ts";
 import {
   legacyProjection,
   normalizeItemAnswers,
@@ -25,6 +27,7 @@ import {
   validateGroup,
 } from "../core/question-contract.ts";
 import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/events.ts";
+import { hasId } from "../core/events.ts";
 import { appendEvents, appendEventsIf, readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
@@ -885,6 +888,58 @@ export const createSessionHost = (
   };
 
   /**
+   * `POST /__lucid/bind` - a launch announcing which harness-native session it
+   * bound (plan 03, M2). Validation is refusal, not coercion: a stamp that
+   * cannot vouch (no sessionId, no authority) or a malformed launchId is a
+   * 400, never a cleaned-up record. The append dedupes by the binding id
+   * derived from (launchId, sessionId), so a re-announcing resume is one log
+   * line however many times it arrives - and the broadcast rides serverAppend
+   * like every other live event.
+   */
+  const handleBind = async (req: Request): Promise<Response> => {
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body) return json({ error: "invalid binding" }, 400);
+    const launchId =
+      typeof body.launchId === "string" && WELL_FORMED_ID.test(body.launchId)
+        ? body.launchId
+        : undefined;
+    if (!launchId) return json({ error: "invalid launchId" }, 400);
+    const attendant = parseAttendant(body.attendant);
+    if (!attendant?.sessionId || !attendant.sessionIdAuthority) {
+      return json({ error: "binding stamp needs sessionId and sessionIdAuthority" }, 400);
+    }
+    const turnId =
+      typeof body.turnId === "string" && body.turnId.length > 0
+        ? body.turnId.slice(0, 128)
+        : undefined;
+    const id = bindingEventId(launchId, attendant.sessionId);
+    // Not serverAppend: a re-announced binding dedupes in the lock and would
+    // re-broadcast the OLD event - one binding, one frame, however many times
+    // discovery repeats itself. The guard runs inside the append lock, so
+    // "was it fresh" cannot race a concurrent announce.
+    let fresh = false;
+    const appended = await appendEventsIf(
+      paths.logPath,
+      (events) => {
+        fresh = !events.some((e) => hasId(e) && e.id === id);
+        return true;
+      },
+      [
+        {
+          t: "harness_session_bound",
+          id,
+          launchId,
+          ...(turnId ? { turnId } : {}),
+          attendant,
+        },
+      ],
+    );
+    if (fresh) for (const e of appended) broadcast(e);
+    touch();
+    return json({ ok: true });
+  };
+
+  /**
    * `POST /__lucid/turn-ended` - a turn saying it stopped (plan 08, RFC-01).
    *
    * Every field is a CLOSED set, refused rather than coerced. A `reason` this
@@ -1261,6 +1316,7 @@ export const createSessionHost = (
     if (pathname === "/__lucid/reply" && req.method === "POST") return handleReply(req);
     if (pathname === "/__lucid/ack" && req.method === "POST") return handleAck(req);
     if (pathname === "/__lucid/turn-ended" && req.method === "POST") return handleTurnEnded(req);
+    if (pathname === "/__lucid/bind" && req.method === "POST") return handleBind(req);
     if (pathname === "/__lucid/context" && req.method === "POST") return handleContext(req);
     if (pathname === "/__lucid/resolve" && req.method === "POST") {
       await serverAppend([{ t: "review_resolved" }]);

@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { writeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
-import { deliver } from "../core/deliver.ts";
+import { deliver, promotePendingBindings } from "../core/deliver.ts";
 import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
 import { ARTIFACT_DIR, canonicalArtifactPath, projectRootOf, sessionPaths } from "../core/paths.ts";
@@ -134,6 +134,11 @@ export const runOpen = async (file: string, options: OpenOptions = {}): Promise<
   const paths = sessionPaths(file);
   const opener = attendantStamp();
   const result = await openSession(paths, opener ? { attendant: opener } : undefined);
+  // Identity discovered before this open (a spawned harness announcing its
+  // native session while authoring) has been waiting in the sidecar as a
+  // pending binding; the log exists now, so the durable record lands
+  // immediately after session_opened.
+  await promotePendingBindings(paths);
 
   // A running daemon embeds the client bundle it loaded at start; `open` alone
   // reattaches to it, so a rebuild is invisible until the process is replaced.

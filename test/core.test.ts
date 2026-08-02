@@ -283,6 +283,39 @@ describe("sanitizeAttendant", () => {
     expect(sanitizeAttendant({ harness: "pi", trace: "NOT-HEX" })).toEqual({ harness: "pi" });
     expect(sanitizeAttendant({ harness: "pi", model: 7, effort: null })).toEqual({ harness: "pi" });
   });
+
+  test("native authority is a closed vocabulary and vouches only for a present sessionId", () => {
+    expect(
+      sanitizeAttendant({ harness: "codex", sessionId: "t-1", sessionIdAuthority: "observed" }),
+    ).toEqual({ harness: "codex", sessionId: "t-1", sessionIdAuthority: "observed" });
+    expect(
+      sanitizeAttendant({ harness: "codex", sessionId: "t-1", sessionIdAuthority: "assigned" }),
+    ).toEqual({ harness: "codex", sessionId: "t-1", sessionIdAuthority: "assigned" });
+    // An unknown authority is dropped, never truncated into a known one.
+    expect(
+      sanitizeAttendant({ harness: "codex", sessionId: "t-1", sessionIdAuthority: "root" }),
+    ).toEqual({ harness: "codex", sessionId: "t-1" });
+    // An authority with no sessionId vouches for nothing: dropped.
+    expect(sanitizeAttendant({ harness: "codex", sessionIdAuthority: "observed" })).toEqual({
+      harness: "codex",
+    });
+  });
+
+  test("launch correlation rides well-formed or not at all, and never becomes identity", () => {
+    const launchId = "abc123def4567890";
+    expect(sanitizeAttendant({ harness: "codex", launchId })).toEqual({
+      harness: "codex",
+      launchId,
+    });
+    // Same log-injection rule as trace: malformed is DROPPED, not cleaned.
+    expect(sanitizeAttendant({ harness: "codex", launchId: "not hex!" })).toEqual({
+      harness: "codex",
+    });
+    // A launch id is correlation for one process, not a resumable session:
+    // it must never leak into the sessionId field.
+    const stamp = sanitizeAttendant({ harness: "codex", launchId });
+    expect(stamp?.sessionId).toBeUndefined();
+  });
 });
 
 describe("foldLog segments", () => {
@@ -930,6 +963,93 @@ describe("foldLog segments", () => {
     ];
     expect(foldLog(events).reviewResolved).toBe(false);
     expect(foldLog(events.slice(0, 2)).reviewResolved).toBe(true);
+  });
+});
+
+describe("harness_session_bound", () => {
+  const ev = (e: Partial<LogEvent> & { t: LogEvent["t"]; seq: number }): LogEvent =>
+    ({ at: "2026-01-01T00:00:00Z", ...e }) as LogEvent;
+  const opened = ev({
+    t: "session_opened",
+    seq: 1,
+    segment: 1,
+    artifact: "a.html",
+    version: 1,
+    hash: "h",
+    path: "p",
+  } as never);
+  const bound = (seq: number, extra: Record<string, unknown> = {}): LogEvent =>
+    ev({
+      t: "harness_session_bound",
+      seq,
+      id: `hsb:${seq}`,
+      launchId: "abc123def4567890",
+      attendant: {
+        harness: "codex",
+        sessionId: "0199-native",
+        sessionIdAuthority: "observed",
+      },
+      ...extra,
+    } as never);
+
+  test("folds as durable binding provenance in sequence order", () => {
+    const state = foldLog([
+      opened,
+      bound(2),
+      bound(3, {
+        id: "hsb:other",
+        attendant: { harness: "codex", sessionId: "0200-later", sessionIdAuthority: "observed" },
+      }),
+    ]);
+    expect(state.bindings).toEqual([
+      {
+        at: "2026-01-01T00:00:00Z",
+        authority: "observed",
+        harness: "codex",
+        launchId: "abc123def4567890",
+        sessionId: "0199-native",
+        seq: 2,
+      },
+      {
+        at: "2026-01-01T00:00:00Z",
+        authority: "observed",
+        harness: "codex",
+        launchId: "abc123def4567890",
+        sessionId: "0200-later",
+        seq: 3,
+      },
+    ]);
+    // The stamp also enters sessionHistory like every other stamped event.
+    expect(state.sessionHistory.some((r) => r.sessionId === "0199-native")).toBe(true);
+  });
+
+  test("a binding wakes no waiter, closes no turn, and is not agent output", () => {
+    const ack = ev({
+      t: "agent_ack",
+      seq: 2,
+      id: "ack-1",
+      turnId: "turn-1",
+      attendant: { harness: "codex" },
+    } as never);
+    const before = foldLog([opened, ack]);
+    const after = foldLog([opened, ack, bound(3)]);
+    // No wake: the wait gate is lastNonAckSeq, and the binding must not move it.
+    expect(after.lastNonAckSeq).toBe(before.lastNonAckSeq);
+    // No turn close: the ack's working window stays open.
+    expect(after.agentWorking).toEqual(before.agentWorking);
+    // Not agent output: delivered feedback cannot become "answered" by it.
+    expect(after.lastAgentOutputSeq).toBe(before.lastAgentOutputSeq);
+    expect(after.deliveredThroughSeq).toBe(before.deliveredThroughSeq);
+    // But the cursor still advances past it, like any recorded event.
+    expect(after.highSeq).toBe(3);
+  });
+
+  test("a malformed binding folds inert instead of poisoning provenance", () => {
+    const state = foldLog([
+      opened,
+      bound(2, { attendant: { harness: "codex" } }), // no sessionId: vouches for nothing
+    ]);
+    expect(state.bindings).toEqual([]);
   });
 });
 
