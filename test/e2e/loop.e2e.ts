@@ -105,6 +105,37 @@ const latestOutlineProbeSnapshot = async (page: Page): Promise<Record<string, un
 const outlineProbeSnapshotCount = async (page: Page): Promise<number> =>
   (await outlineProbeSnapshots(page)).length;
 
+const waitForOutlineProbeConnection = async (page: Page): Promise<void> => {
+  await expect.poll(async () => (await outlineProbe(page)).connected).toBe(true);
+};
+
+const postOutlineProbeMessage = async (
+  page: Page,
+  message: Record<string, unknown>,
+): Promise<void> => {
+  await page.evaluate((outbound) => {
+    const state = (window as unknown as { __outlineTest: OutlinePublicationProbe }).__outlineTest;
+    state.port?.postMessage(outbound);
+  }, message);
+};
+
+const requestOutlineProbeLayout = async (page: Page): Promise<void> => {
+  await postOutlineProbeMessage(page, {
+    type: "outline-layout-request",
+    generation: 1_000_000,
+    preferredWidth: 240,
+    safeInsets: { top: 80, right: 20, bottom: 24 },
+  });
+};
+
+const openOutlineProbeArtifact = async (page: Page, artifact: string): Promise<void> => {
+  await page.setViewportSize({ width: 2_400, height: 900 });
+  await installOutlinePublicationProbe(page);
+  await openViewer(page, artifact);
+  await waitForOutlineProbeConnection(page);
+  await requestOutlineProbeLayout(page);
+};
+
 test("Enter sends the message, which is what the composer's placeholder promises", async ({
   page,
 }) => {
@@ -183,6 +214,38 @@ test("full loop: render -> annotate element -> wait -> revise -> live reload", a
   };
   expect(afterRevise.status).toBe("waiting");
   expect(afterRevise.version).toBe(2);
+});
+
+test("hostile marker payloads fail closed at the global render budget", async ({ page }) => {
+  await openViewer(page);
+  const surface = surfaceOf(page);
+  await surface.locator("#__lucid_overlay_root").evaluate(async (root) => {
+    const overlay = root.firstElementChild as
+      | (HTMLElement & {
+          markers: unknown[];
+          requestUpdate(): void;
+          updateComplete: Promise<unknown>;
+        })
+      | null;
+    if (!overlay) throw new Error("owned overlay missing");
+    const rects = Array.from({ length: 64 }, (_, index) => ({
+      height: 10,
+      left: index,
+      top: index,
+      width: 10,
+    }));
+    overlay.markers = Array.from({ length: 9 }, (_, index) => ({
+      id: `hostile-${index}`,
+      index: index + 1,
+      rects,
+      stackIndex: 0,
+      state: "committed",
+    }));
+    overlay.requestUpdate();
+    await overlay.updateComplete;
+  });
+
+  await expect(surface.locator("[data-annotation-id]")).toHaveCount(0);
 });
 
 test("lucid progress renders a distinct fan-out indicator that output clears", async ({ page }) => {
@@ -2005,42 +2068,12 @@ test("the active outline runtime publishes complete geometry only over its pre-a
   await openViewer(page, artifact);
   const surface = surfaceOf(page);
 
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        Boolean(
-          (window as unknown as { __outlineTest: { port: MessagePort | null } }).__outlineTest.port,
-        ),
-      ),
-    )
-    .toBe(true);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as unknown as { __outlineTest: { messages: unknown[] } }).__outlineTest.messages
-            .length,
-      ),
-    )
-    .toBeGreaterThan(0);
-  expect(
-    await page.evaluate(
-      () =>
-        (window as unknown as { __outlineTest: { windowOutlineMessages: number } }).__outlineTest
-          .windowOutlineMessages,
-    ),
-  ).toBe(1);
+  await waitForOutlineProbeConnection(page);
+  await expect.poll(async () => (await outlineProbeMessages(page)).length).toBeGreaterThan(0);
+  expect((await outlineProbe(page)).windowOutlineMessages).toBe(1);
   expect(await outlineDebugInfo(page)).toMatchObject({ dormant: false, connected: true });
 
-  await page.evaluate(() => {
-    const port = (window as unknown as { __outlineTest: { port: MessagePort } }).__outlineTest.port;
-    port.postMessage({
-      type: "outline-layout-request",
-      generation: 1_000_000,
-      preferredWidth: 240,
-      safeInsets: { top: 80, right: 20, bottom: 24 },
-    });
-  });
+  await requestOutlineProbeLayout(page);
   await expect
     .poll(() =>
       surface.locator("#__lucid_overlay_root").evaluate((root) => {
@@ -2061,11 +2094,7 @@ test("the active outline runtime publishes complete geometry only over its pre-a
       }),
     )
     .toBeGreaterThanOrEqual(1);
-  expect(
-    await page.evaluate(
-      () => (window as unknown as { __outlineTest: { errors: string[] } }).__outlineTest.errors,
-    ),
-  ).toEqual([]);
+  expect((await outlineProbe(page)).errors).toEqual([]);
   expect(
     await surface
       .locator("html")
@@ -2088,15 +2117,7 @@ test("the active outline runtime publishes complete geometry only over its pre-a
     headingCount: 3,
   });
   expect(JSON.stringify(afterTaskDebug)).not.toContain("Context");
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as unknown as { __outlineTest: { messages: unknown[] } }).__outlineTest.messages
-            .length,
-      ),
-    )
-    .toBeGreaterThan(0);
+  await expect.poll(async () => (await outlineProbeMessages(page)).length).toBeGreaterThan(0);
   const latestSnapshot = (): Promise<Record<string, unknown> | null> =>
     latestOutlineProbeSnapshot(page);
   const snapshot = await latestSnapshot();
@@ -2181,16 +2202,7 @@ test("the active outline runtime publishes complete geometry only over its pre-a
       return (current?.headings as Array<Record<string, unknown>> | undefined)?.[0]?.label;
     })
     .toBe("Updated context");
-  const revisedSnapshot = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __outlineTest: { messages: Array<Record<string, unknown>> };
-        }
-      ).__outlineTest.messages
-        .filter(({ type }) => type === "outline-snapshot")
-        .at(-1) ?? null,
-  );
+  const revisedSnapshot = await latestOutlineProbeSnapshot(page);
   if (!revisedSnapshot) throw new Error("revised outline snapshot missing");
   expect(revisedSnapshot).toMatchObject({
     availability: "complete",
@@ -2512,14 +2524,12 @@ test("the active outline runtime publishes complete geometry only over its pre-a
 
   const first = (activationSnapshot.headings as { key: string }[])[0];
   if (!first) throw new Error("outline heading missing");
-  await page.evaluate(
-    ({ generation, key }) => {
-      const port = (window as unknown as { __outlineTest: { port: MessagePort } }).__outlineTest
-        .port;
-      port.postMessage({ type: "outline-activate", generation, key, motion: "reduced" });
-    },
-    { generation: activationSnapshot.generation as number, key: first.key },
-  );
+  await postOutlineProbeMessage(page, {
+    type: "outline-activate",
+    generation: activationSnapshot.generation as number,
+    key: first.key,
+    motion: "reduced",
+  });
   const target = surface.locator("h2").first();
   await expect
     .poll(() =>
@@ -3944,25 +3954,6 @@ test("outline geometry remains crisp at representative one-x and two-x scales", 
 });
 
 test("an attempted CSSOM child realm permanently disables pinned proof", async ({ page }) => {
-  await page.setViewportSize({ width: 2_400, height: 900 });
-  await page.addInitScript(() => {
-    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
-    Object.defineProperty(window, "__outlineRealmTest", { value: state });
-    window.addEventListener("message", (event) => {
-      if (
-        event.data?.source !== "lucid-overlay-bootstrap" ||
-        event.data.type !== "private-channel" ||
-        state.port !== null
-      ) {
-        return;
-      }
-      state.port = event.ports[0] ?? null;
-      if (state.port) {
-        state.port.addEventListener("message", (message) => state.messages.push(message.data));
-        state.port.start();
-      }
-    });
-  });
   const artifact = `<!doctype html><html><head><style>
     body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
     </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main>
@@ -3977,39 +3968,13 @@ test("an attempted CSSOM child realm permanently disables pinned proof", async (
       }
       realm.remove();
     </script></body></html>`;
-  await openViewer(page, artifact);
+  await openOutlineProbeArtifact(page, artifact);
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as unknown as { __outlineRealmTest: { port: MessagePort | null } })
-            .__outlineRealmTest.port !== null,
-      ),
+    .poll(
+      async () =>
+        ((await latestOutlineProbeSnapshot(page))?.proof as Record<string, unknown> | undefined)
+          ?.reason,
     )
-    .toBe(true);
-  await page.evaluate(() => {
-    const port = (window as unknown as { __outlineRealmTest: { port: MessagePort } })
-      .__outlineRealmTest.port;
-    port.postMessage({
-      type: "outline-layout-request",
-      generation: 1_000_000,
-      preferredWidth: 240,
-      safeInsets: { top: 80, right: 20, bottom: 24 },
-    });
-  });
-  const latest = async (): Promise<Record<string, unknown> | null> =>
-    page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __outlineRealmTest: { messages: Array<Record<string, unknown>> };
-          }
-        ).__outlineRealmTest.messages
-          .filter(({ type }) => type === "outline-snapshot")
-          .at(-1) ?? null,
-    );
-  await expect
-    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
     .toBe("untrusted-style-realm");
 
   expect(
@@ -4023,26 +3988,131 @@ test("an attempted CSSOM child realm permanently disables pinned proof", async (
   ).toBe("SecurityError");
 });
 
-test("shadow-root paint permanently disables pinned proof", async ({ page }) => {
-  await page.setViewportSize({ width: 2_400, height: 900 });
-  await page.addInitScript(() => {
-    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
-    Object.defineProperty(window, "__outlineShadowTest", { value: state });
-    window.addEventListener("message", (event) => {
-      if (
-        event.data?.source !== "lucid-overlay-bootstrap" ||
-        event.data.type !== "private-channel" ||
-        state.port !== null
-      ) {
-        return;
-      }
-      state.port = event.ports[0] ?? null;
-      if (state.port) {
-        state.port.addEventListener("message", (message) => state.messages.push(message.data));
-        state.port.start();
-      }
+test("collection intrinsic tampering cannot omit a paint hazard from proof", async ({ page }) => {
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    #hazard{position:fixed;right:20px;top:120px;width:180px;height:120px;background:red}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main>
+    <aside id="hazard"></aside><script>
+      const originalSlice = Array.prototype.slice;
+      Array.prototype.slice = function (...args) {
+        const sliced = originalSlice.apply(this, args);
+        return sliced.filter((value) => value?.id !== "hazard");
+      };
+    </script></body></html>`;
+  await openOutlineProbeArtifact(page, artifact);
+  await page.waitForTimeout(250);
+  expect(await outlineProbeSnapshotCount(page)).toBe(0);
+});
+
+test("a self-restoring push trap cannot capture outline observer teardown", async ({ page }) => {
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main>
+    <script>
+      const originalPush = Array.prototype.push;
+      Array.prototype.push = function (...values) {
+        const result = originalPush.apply(this, values);
+        if (values.length === 7 && values.every((value) => typeof value === "function")) {
+          Array.prototype.push = originalPush;
+          for (const stop of values) stop();
+          setTimeout(() => {
+            const hazard = document.createElement("aside");
+            hazard.id = "late-observer-hazard";
+            hazard.setAttribute("style", "position:fixed;right:20px;top:120px;width:180px;height:120px;background:red");
+            document.body.append(hazard);
+          }, 100);
+        }
+        return result;
+      };
+    </script></body></html>`;
+  await openOutlineProbeArtifact(page, artifact);
+  await page.waitForTimeout(400);
+  expect(await outlineProbeSnapshotCount(page)).toBe(0);
+});
+
+test("geometry intrinsic tampering cannot move proof away from a paint hazard", async ({
+  page,
+}) => {
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    #hazard{position:fixed;right:20px;top:120px;width:180px;height:120px;background:red}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main>
+    <aside id="hazard"></aside></body></html>`;
+  await openOutlineProbeArtifact(page, artifact);
+  await surfaceOf(page)
+    .locator("body")
+    .evaluate(() => {
+      const originalMax = Math.max;
+      Math.max = (...values: number[]) => {
+        if (values.length === 2 && values[0] === 20) return 500;
+        return originalMax(...values);
+      };
     });
+  await page.waitForTimeout(250);
+  expect(await outlineProbeSnapshotCount(page)).toBe(0);
+});
+
+test("a self-restoring Object.freeze trap cannot poison the outline policy", async ({ page }) => {
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    #hazard{position:fixed;right:20px;top:120px;width:180px;height:120px;background:red}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main>
+    <aside id="hazard"></aside><script>
+      const originalFreeze = Object.freeze;
+      Object.freeze = (value) => {
+        if (value && typeof value === "object" && "proofTimeBudgetMs" in value) {
+          Object.freeze = originalFreeze;
+          Object.defineProperty(value, "proofTimeBudgetMs", {
+            get() {
+              const originalMax = Math.max;
+              Math.max = (...values) => values.length === 2 && values[0] === 20
+                ? 500
+                : originalMax(...values);
+              return 8;
+            },
+          });
+        }
+        return value;
+      };
+    </script></body></html>`;
+  await openOutlineProbeArtifact(page, artifact);
+  await expect.poll(() => outlineProbeSnapshotCount(page)).toBeGreaterThan(0);
+  expect(await latestOutlineProbeSnapshot(page)).toMatchObject({
+    proof: { complete: false, reason: "box-intersection" },
   });
+});
+
+test("artifact MessagePort prototype traps cannot intercept the private outline channel", async ({
+  page,
+}) => {
+  const artifact = `<!doctype html><html><head><style>
+    body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
+    </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main>
+    <script>
+      window.__outlinePortIntercepted = false;
+      for (const name of ["addEventListener", "removeEventListener", "postMessage", "start", "close"]) {
+        const original = MessagePort.prototype[name];
+        MessagePort.prototype[name] = function (...args) {
+          window.__outlinePortIntercepted = true;
+          return original.apply(this, args);
+        };
+      }
+    </script></body></html>`;
+  await openOutlineProbeArtifact(page, artifact);
+  await expect.poll(() => outlineProbeSnapshotCount(page)).toBeGreaterThan(0);
+  expect(
+    await surfaceOf(page)
+      .locator("body")
+      .evaluate(
+        () =>
+          (window as unknown as { __outlinePortIntercepted?: boolean }).__outlinePortIntercepted ??
+          null,
+      ),
+  ).toBe(false);
+});
+
+test("shadow-root paint permanently disables pinned proof", async ({ page }) => {
   const artifact = `<!doctype html><html><head><style>
     body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
     </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p>
@@ -4054,106 +4124,26 @@ test("shadow-root paint permanently disables pinned proof", async ({ page }) => 
       hazard.setAttribute("style", "position:fixed;right:20px;top:120px;width:180px;height:120px;background:red");
       root.append(hazard);
     </script></body></html>`;
-  await openViewer(page, artifact);
+  await openOutlineProbeArtifact(page, artifact);
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as unknown as { __outlineShadowTest: { port: MessagePort | null } })
-            .__outlineShadowTest.port !== null,
-      ),
+    .poll(
+      async () =>
+        ((await latestOutlineProbeSnapshot(page))?.proof as Record<string, unknown> | undefined)
+          ?.reason,
     )
-    .toBe(true);
-  await page.evaluate(() => {
-    const port = (window as unknown as { __outlineShadowTest: { port: MessagePort } })
-      .__outlineShadowTest.port;
-    port.postMessage({
-      type: "outline-layout-request",
-      generation: 1_000_000,
-      preferredWidth: 240,
-      safeInsets: { top: 80, right: 20, bottom: 24 },
-    });
-  });
-  const latest = async (): Promise<Record<string, unknown> | null> =>
-    page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __outlineShadowTest: { messages: Array<Record<string, unknown>> };
-          }
-        ).__outlineShadowTest.messages
-          .filter(({ type }) => type === "outline-snapshot")
-          .at(-1) ?? null,
-    );
-  await expect
-    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
     .toBe("untrusted-style-realm");
 });
 
 test("runtime declarative shadow DOM permanently disables pinned proof", async ({ page }) => {
-  await page.setViewportSize({ width: 2_400, height: 900 });
-  await page.addInitScript(() => {
-    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
-    Object.defineProperty(window, "__outlineDeclarativeShadowTest", { value: state });
-    window.addEventListener("message", (event) => {
-      if (
-        event.data?.source !== "lucid-overlay-bootstrap" ||
-        event.data.type !== "private-channel" ||
-        state.port !== null
-      ) {
-        return;
-      }
-      state.port = event.ports[0] ?? null;
-      if (state.port) {
-        state.port.addEventListener("message", (message) => state.messages.push(message.data));
-        state.port.start();
-      }
-    });
-  });
   const artifact = `<!doctype html><html><head><style>
     body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
     </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main></body></html>`;
-  await openViewer(page, artifact);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as unknown as {
-              __outlineDeclarativeShadowTest: { port: MessagePort | null };
-            }
-          ).__outlineDeclarativeShadowTest.port !== null,
-      ),
-    )
-    .toBe(true);
-  await page.evaluate(() => {
-    const port = (
-      window as unknown as {
-        __outlineDeclarativeShadowTest: { port: MessagePort };
-      }
-    ).__outlineDeclarativeShadowTest.port;
-    port.postMessage({
-      type: "outline-layout-request",
-      generation: 1_000_000,
-      preferredWidth: 240,
-      safeInsets: { top: 80, right: 20, bottom: 24 },
-    });
-  });
-  const latest = async (): Promise<Record<string, unknown> | null> =>
-    page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __outlineDeclarativeShadowTest: { messages: Array<Record<string, unknown>> };
-          }
-        ).__outlineDeclarativeShadowTest.messages
-          .filter(({ type }) => type === "outline-snapshot")
-          .at(-1) ?? null,
-    );
+  await openOutlineProbeArtifact(page, artifact);
   await expect
     .poll(
       async () =>
-        ((await latest())?.proof as Record<string, unknown> | undefined)?.complete ?? false,
+        ((await latestOutlineProbeSnapshot(page))?.proof as Record<string, unknown> | undefined)
+          ?.complete ?? false,
     )
     .toBe(true);
 
@@ -4171,133 +4161,41 @@ test("runtime declarative shadow DOM permanently disables pinned proof", async (
       body.append(document.adoptNode(host));
     });
   await expect
-    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .poll(
+      async () =>
+        ((await latestOutlineProbeSnapshot(page))?.proof as Record<string, unknown> | undefined)
+          ?.reason,
+    )
     .toBe("untrusted-style-realm");
 });
 
 const openOwnedOverlayMutationProbe = async (
   page: Page,
 ): Promise<() => Promise<Record<string, unknown> | null>> => {
-  await page.setViewportSize({ width: 2_400, height: 900 });
-  await page.addInitScript(() => {
-    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
-    Object.defineProperty(window, "__outlineOwnedMutationTest", { value: state });
-    window.addEventListener("message", (event) => {
-      if (
-        event.data?.source !== "lucid-overlay-bootstrap" ||
-        event.data.type !== "private-channel" ||
-        state.port !== null
-      ) {
-        return;
-      }
-      state.port = event.ports[0] ?? null;
-      if (state.port) {
-        state.port.addEventListener("message", (message) => state.messages.push(message.data));
-        state.port.start();
-      }
-    });
-  });
   const artifact = `<!doctype html><html><head><style>
     body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
     </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main></body></html>`;
-  await openViewer(page, artifact);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as unknown as { __outlineOwnedMutationTest: { port: MessagePort | null } })
-            .__outlineOwnedMutationTest.port !== null,
-      ),
-    )
-    .toBe(true);
-  await page.evaluate(() => {
-    const port = (window as unknown as { __outlineOwnedMutationTest: { port: MessagePort } })
-      .__outlineOwnedMutationTest.port;
-    port.postMessage({
-      type: "outline-layout-request",
-      generation: 1_000_000,
-      preferredWidth: 240,
-      safeInsets: { top: 80, right: 20, bottom: 24 },
-    });
-  });
-  const latest = async (): Promise<Record<string, unknown> | null> =>
-    page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __outlineOwnedMutationTest: { messages: Array<Record<string, unknown>> };
-          }
-        ).__outlineOwnedMutationTest.messages
-          .filter(({ type }) => type === "outline-snapshot")
-          .at(-1) ?? null,
-    );
+  await openOutlineProbeArtifact(page, artifact);
   await expect
     .poll(
       async () =>
-        ((await latest())?.proof as Record<string, unknown> | undefined)?.complete ?? false,
+        ((await latestOutlineProbeSnapshot(page))?.proof as Record<string, unknown> | undefined)
+          ?.complete ?? false,
     )
     .toBe(true);
-  return latest;
+  return () => latestOutlineProbeSnapshot(page);
 };
 
 test("artifact children cannot enter the exact owned overlay root", async ({ page }) => {
-  await page.setViewportSize({ width: 2_400, height: 900 });
-  await page.addInitScript(() => {
-    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
-    Object.defineProperty(window, "__outlineOwnedRootTest", { value: state });
-    window.addEventListener("message", (event) => {
-      if (
-        event.data?.source !== "lucid-overlay-bootstrap" ||
-        event.data.type !== "private-channel" ||
-        state.port !== null
-      ) {
-        return;
-      }
-      state.port = event.ports[0] ?? null;
-      if (state.port) {
-        state.port.addEventListener("message", (message) => state.messages.push(message.data));
-        state.port.start();
-      }
-    });
-  });
   const artifact = `<!doctype html><html><head><style>
     body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
     </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main></body></html>`;
-  await openViewer(page, artifact);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as unknown as { __outlineOwnedRootTest: { port: MessagePort | null } })
-            .__outlineOwnedRootTest.port !== null,
-      ),
-    )
-    .toBe(true);
-  await page.evaluate(() => {
-    const port = (window as unknown as { __outlineOwnedRootTest: { port: MessagePort } })
-      .__outlineOwnedRootTest.port;
-    port.postMessage({
-      type: "outline-layout-request",
-      generation: 1_000_000,
-      preferredWidth: 240,
-      safeInsets: { top: 80, right: 20, bottom: 24 },
-    });
-  });
-  const latest = async (): Promise<Record<string, unknown> | null> =>
-    page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __outlineOwnedRootTest: { messages: Array<Record<string, unknown>> };
-          }
-        ).__outlineOwnedRootTest.messages
-          .filter(({ type }) => type === "outline-snapshot")
-          .at(-1) ?? null,
-    );
+  await openOutlineProbeArtifact(page, artifact);
   await expect
     .poll(
       async () =>
-        ((await latest())?.proof as Record<string, unknown> | undefined)?.complete ?? false,
+        ((await latestOutlineProbeSnapshot(page))?.proof as Record<string, unknown> | undefined)
+          ?.complete ?? false,
     )
     .toBe(true);
 
@@ -4312,70 +4210,26 @@ test("artifact children cannot enter the exact owned overlay root", async ({ pag
       root.append(hazard);
     });
   await expect
-    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .poll(
+      async () =>
+        ((await latestOutlineProbeSnapshot(page))?.proof as Record<string, unknown> | undefined)
+          ?.reason,
+    )
     .toBe("untrusted-style-realm");
 });
 
 test("artifact mutations inside the owned overlay shadow tree disable pinned proof", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 2_400, height: 900 });
-  await page.addInitScript(() => {
-    const state: { messages: unknown[]; port: MessagePort | null } = { messages: [], port: null };
-    Object.defineProperty(window, "__outlineOwnedShadowTest", { value: state });
-    window.addEventListener("message", (event) => {
-      if (
-        event.data?.source !== "lucid-overlay-bootstrap" ||
-        event.data.type !== "private-channel" ||
-        state.port !== null
-      ) {
-        return;
-      }
-      state.port = event.ports[0] ?? null;
-      if (state.port) {
-        state.port.addEventListener("message", (message) => state.messages.push(message.data));
-        state.port.start();
-      }
-    });
-  });
   const artifact = `<!doctype html><html><head><style>
     body{max-width:700px;margin:40px auto;font-family:system-ui}main{position:static}
     </style></head><body><main><h1>Database migration plan</h1><h2>One</h2><p>A</p><h2>Two</h2><p>B</p></main></body></html>`;
-  await openViewer(page, artifact);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as unknown as { __outlineOwnedShadowTest: { port: MessagePort | null } })
-            .__outlineOwnedShadowTest.port !== null,
-      ),
-    )
-    .toBe(true);
-  await page.evaluate(() => {
-    const port = (window as unknown as { __outlineOwnedShadowTest: { port: MessagePort } })
-      .__outlineOwnedShadowTest.port;
-    port.postMessage({
-      type: "outline-layout-request",
-      generation: 1_000_000,
-      preferredWidth: 240,
-      safeInsets: { top: 80, right: 20, bottom: 24 },
-    });
-  });
-  const latest = async (): Promise<Record<string, unknown> | null> =>
-    page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __outlineOwnedShadowTest: { messages: Array<Record<string, unknown>> };
-          }
-        ).__outlineOwnedShadowTest.messages
-          .filter(({ type }) => type === "outline-snapshot")
-          .at(-1) ?? null,
-    );
+  await openOutlineProbeArtifact(page, artifact);
   await expect
     .poll(
       async () =>
-        ((await latest())?.proof as Record<string, unknown> | undefined)?.complete ?? false,
+        ((await latestOutlineProbeSnapshot(page))?.proof as Record<string, unknown> | undefined)
+          ?.complete ?? false,
     )
     .toBe(true);
 
@@ -4394,7 +4248,11 @@ test("artifact mutations inside the owned overlay shadow tree disable pinned pro
       overlay.performUpdate?.();
     });
   await expect
-    .poll(async () => ((await latest())?.proof as Record<string, unknown> | undefined)?.reason)
+    .poll(
+      async () =>
+        ((await latestOutlineProbeSnapshot(page))?.proof as Record<string, unknown> | undefined)
+          ?.reason,
+    )
     .toBe("untrusted-style-realm");
 });
 

@@ -14,8 +14,10 @@ import {
   type ArtifactOutlineGeometry,
   ArtifactOutlineRuntime,
   type OutlineRuntimeElement,
+  type OutlineRuntimeMap,
   type OutlineRuntimeRect,
   type OutlineRuntimeStyle,
+  type OutlineRuntimeWeakMap,
 } from "./artifact-outline-runtime.ts";
 import type { EmphasisEnvironment } from "./reveal.ts";
 
@@ -27,6 +29,9 @@ export interface TrustedOutlineCapabilities {
   readonly ariaHidden: (element: Element) => boolean;
   readonly clientHeight: (element: Element) => number;
   readonly clientWidth: (element: Element) => number;
+  readonly createMap: <Key, Value>() => OutlineRuntimeMap<Key, Value>;
+  readonly createWeakMap: <Key extends object, Value>() => OutlineRuntimeWeakMap<Key, Value>;
+  readonly proofRealmTrusted: () => boolean;
   readonly hasActiveMotion: (element: Element) => boolean;
   readonly hidden: (element: Element) => boolean;
   readonly inert: (element: Element) => boolean;
@@ -70,6 +75,17 @@ export interface TrustedOutlineCapabilities {
   };
 }
 
+/**
+ * The pre-artifact bootstrap owns the raw MessagePort and exposes only these
+ * captured operations. Artifact code can mutate MessagePort.prototype before
+ * this module evaluates, so the controller must never invoke it directly.
+ */
+export interface TrustedOutlinePort {
+  readonly close: () => void;
+  readonly listen: (onMessage: (data: unknown) => void, onClose: () => void) => () => void;
+  readonly post: (message: unknown) => void;
+}
+
 interface BrowserElement extends OutlineRuntimeElement {
   readonly nativeElement: Element;
   parent: BrowserElement | null;
@@ -79,8 +95,9 @@ const snapshotGeometry = (
   capabilities: TrustedOutlineCapabilities,
   deadlineMs: number,
 ): {
+  readonly completeTraversal: boolean;
   readonly elements: readonly BrowserElement[];
-  readonly geometry: ArtifactOutlineGeometry<BrowserElement>;
+  readonly headings: readonly BrowserElement[];
 } => {
   const traversal = capabilities.allElements(
     ARTIFACT_OUTLINE_POLICY.proofElementLimit + 1,
@@ -89,7 +106,7 @@ const snapshotGeometry = (
   const completeTraversal =
     traversal.complete && traversal.elements.length <= ARTIFACT_OUTLINE_POLICY.proofElementLimit;
   const boundedElements = traversal.elements.slice(0, ARTIFACT_OUTLINE_POLICY.proofElementLimit);
-  const byNative = new Map<Element, BrowserElement>();
+  const byNative = capabilities.createMap<Element, BrowserElement>();
   const elements: BrowserElement[] = [];
   let wrappedTraversal = completeTraversal;
   for (const nativeElement of boundedElements) {
@@ -188,17 +205,9 @@ const snapshotGeometry = (
     elements.push(snapshot);
   }
   return {
+    completeTraversal: wrappedTraversal,
     elements,
-    geometry: {
-      allElements: () => elements,
-      completeTraversal: () => wrappedTraversal,
-      headingCandidates: () => elements.filter(({ tagName }) => tagName === "H2"),
-      isSettled: capabilities.isSettled,
-      parentElement: (element) => element.parent,
-      pseudoContent: (element) => capabilities.pseudoContent(element.nativeElement),
-      rect: (element) => capabilities.rect(element.nativeElement),
-      viewport: capabilities.viewport,
-    },
+    headings: elements.filter(({ tagName }) => tagName === "H2"),
   };
 };
 
@@ -213,16 +222,17 @@ const toOutbound = (publication: OutlineRuntimePublication): OutlinePrivateOutbo
 export class BrowserArtifactOutlineController {
   readonly #capabilities: TrustedOutlineCapabilities;
   readonly #emphasis: EmphasisEnvironment;
-  readonly #port: MessagePort;
+  readonly #port: TrustedOutlinePort;
   #runtime: ArtifactOutlineRuntime<BrowserElement>;
   #connected = true;
   #started = false;
   #stops: (() => void)[] = [];
   #stopFrameDetach: (() => void) | null;
+  readonly #stopPort: () => void;
   #transportPublications = 0;
 
   constructor(
-    port: MessagePort,
+    port: TrustedOutlinePort,
     capabilities: TrustedOutlineCapabilities,
     emphasis: EmphasisEnvironment,
   ) {
@@ -231,9 +241,7 @@ export class BrowserArtifactOutlineController {
     this.#emphasis = emphasis;
     this.#runtime = this.#createRuntime();
     this.#stopFrameDetach = this.#capabilities.onFrameDetach(() => this.#detachFrame());
-    this.#port.addEventListener("message", this.#onMessage);
-    this.#port.addEventListener("close", this.#onClose);
-    this.#port.start();
+    this.#stopPort = this.#port.listen(this.#onMessage, this.#onClose);
   }
 
   revise(): void {
@@ -266,8 +274,7 @@ export class BrowserArtifactOutlineController {
     this.#stopObservers();
     this.#stopFrameDetach?.();
     this.#stopFrameDetach = null;
-    this.#port.removeEventListener("message", this.#onMessage);
-    this.#port.removeEventListener("close", this.#onClose);
+    this.#stopPort();
     if (policy.closePort) this.#port.close();
     // A detaching realm leaves its local endpoint open so the queued notice
     // remains deliverable. The parent closes its endpoint after receiving it.
@@ -286,19 +293,23 @@ export class BrowserArtifactOutlineController {
       allElements: () => current?.elements ?? [],
       completeTraversal: (deadlineMs) => {
         current = snapshotGeometry(this.#capabilities, deadlineMs);
-        return current.geometry.completeTraversal?.(deadlineMs) ?? false;
+        return current.completeTraversal;
       },
-      headingCandidates: () => current?.geometry.headingCandidates() ?? [],
+      headingCandidates: () => current?.headings ?? [],
       isSettled: this.#capabilities.isSettled,
       parentElement: (element) => element.parent,
       pseudoContent: (element) => this.#capabilities.pseudoContent(element.nativeElement),
       rect: (element) => this.#capabilities.rect(element.nativeElement),
+      proofRealmTrusted: this.#capabilities.proofRealmTrusted,
       styleRealmTrusted: this.#capabilities.styleRealmTrusted,
       viewport: this.#capabilities.viewport,
     };
     return new ArtifactOutlineRuntime({
+      createMap: this.#capabilities.createMap,
+      createWeakMap: this.#capabilities.createWeakMap,
       geometry,
       now: this.#capabilities.now,
+      onProofRealmRejected: () => this.#stopObservers(),
       publish: (publication) => this.#post(toOutbound(publication)),
       scheduleFrame: this.#capabilities.scheduleFrame,
       scheduleQuiet: this.#capabilities.scheduleQuiet,
@@ -317,19 +328,27 @@ export class BrowserArtifactOutlineController {
       this.#capabilities.onFontsSettled(invalidate),
       this.#capabilities.onWindowResize(invalidate),
       this.#capabilities.onWindowScroll(() => {
-        this.#runtime.trackActive();
         this.#runtime.invalidate("root-scroll");
       }),
     );
   }
 
   #stopObservers(): void {
-    for (const stop of this.#stops.splice(0)) stop();
+    const stops = this.#stops;
+    this.#stops = [];
+    for (let index = 0; index < stops.length; index += 1) stops[index]?.();
     this.#started = false;
   }
 
-  readonly #onMessage = (event: MessageEvent<unknown>): void => {
-    const message = validateOutlinePrivateInbound(event.data);
+  readonly #onMessage = (data: unknown): void => {
+    // The quiet projection checks again before proof work. This first check is
+    // the synchronous gate that keeps poisoned validators and observer-array
+    // methods from running while handling the request itself.
+    if (!this.#capabilities.proofRealmTrusted()) {
+      this.#runtime.rejectUntrustedProofRealm();
+      return;
+    }
+    const message = validateOutlinePrivateInbound(data);
     if (message === null) return;
     if (message.type === "outline-suspend") {
       this.#runtime.suspend();
@@ -343,14 +362,7 @@ export class BrowserArtifactOutlineController {
     }
     this.#runtime.activate(message, message.motion, {
       ...this.#emphasis,
-      invalidate: (record) => {
-        this.#post({
-          generation: record.generation,
-          health: record,
-          type: "outline-invalidated",
-        } satisfies OutlinePrivateOutbound);
-        this.#runtime.invalidate(record.reason);
-      },
+      invalidate: (record) => this.#runtime.invalidateWithHealth(record),
     });
   };
 
@@ -358,6 +370,6 @@ export class BrowserArtifactOutlineController {
 
   #post(message: OutlinePrivateOutbound): void {
     this.#transportPublications += 1;
-    this.#port.postMessage(message);
+    this.#port.post(message);
   }
 }

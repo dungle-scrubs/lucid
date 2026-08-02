@@ -1,4 +1,5 @@
 import type { StateResponse } from "../../src/protocol/wire.ts";
+import type { OutlineMotionPreference } from "../shared/artifact-outline.ts";
 import type { ChromeMessage } from "../shared/protocol.ts";
 import { createChromeArtifactOutline, type OutlinePort } from "./artifact-outline-session.ts";
 import {
@@ -34,7 +35,7 @@ export interface Surface {
   readonly setOutlineActive: (active: boolean) => void;
   /** Suspend proof while parent chrome is moving the artifact frame. */
   readonly setOutlineGeometryMoving: (source: "divider" | "drawer", moving: boolean) => void;
-  readonly activateOutline: (key: string, motion: "normal" | "reduced") => boolean;
+  readonly activateOutline: (key: string, motion: OutlineMotionPreference) => boolean;
   /** The overlay signalled `ready` (or the iframe finished loading, which
    *  implies the overlay module ran - a missed one-shot `ready` must not leave
    *  the surface unpainted). */

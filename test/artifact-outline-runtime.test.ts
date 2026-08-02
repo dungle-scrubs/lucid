@@ -69,6 +69,7 @@ const geometry = (
       readonly before: string;
     };
     readonly settled?: boolean;
+    readonly proofRealmTrusted?: boolean;
     readonly styleRealmTrusted?: boolean;
     readonly width?: number;
   } = {},
@@ -86,6 +87,7 @@ const geometry = (
     isSettled: () => options.settled ?? true,
     parentElement: (element) => element.parent,
     pseudoContent: options.pseudoContent ?? (() => ({ after: "none", before: "none" })),
+    proofRealmTrusted: () => options.proofRealmTrusted ?? true,
     styleRealmTrusted: () => options.styleRealmTrusted ?? true,
     viewport: () => ({
       clientWidth: options.width ?? 1_600,
@@ -302,6 +304,39 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
     expect(second.headings.map(({ key }) => key)).not.toEqual(first.headings.map(({ key }) => key));
   });
 
+  test("AO-002 withdrawal publishes one correlated diagnostic", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    const { publications, runtime, scheduler } = harness([main]);
+    runtime.requestLayout(request);
+    scheduler.flushQuiet();
+    const snapshot = publications[0];
+    expect(snapshot?.type).toBe("snapshot");
+    if (snapshot?.type !== "snapshot") throw new Error("snapshot missing");
+
+    runtime.invalidateWithHealth({
+      code: "AO-002",
+      generation: snapshot.generation,
+      occurrenceCount: 1,
+      reason: "disconnected-heading",
+    });
+
+    expect(publications.slice(1)).toEqual([
+      {
+        generation: snapshot.generation,
+        health: {
+          code: "AO-002",
+          generation: snapshot.generation,
+          occurrenceCount: 1,
+          reason: "disconnected-heading",
+        },
+        type: "invalidated",
+      },
+    ]);
+    expect(runtime.debugInfo()).toMatchObject({ healthCode: "AO-002", headingCount: 0 });
+  });
+
   test("layout-only reprojection preserves native heading identity across fresh wrappers", () => {
     const one = {} as Element;
     const two = {} as Element;
@@ -464,6 +499,22 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
     });
   });
 
+  test("proof intrinsic tampering makes projection unavailable before traversal", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    const { publications, runtime, scheduler } = harness([main], {
+      geometry: geometry([main], { proofRealmTrusted: false }),
+    });
+    runtime.requestLayout(request);
+    scheduler.flushQuiet();
+    expect(publications).toEqual([]);
+    expect(runtime.debugInfo()).toMatchObject({
+      proofComplete: false,
+      proofReason: "untrusted-proof-realm",
+    });
+  });
+
   test("nested scrolling, overflow, shadows, clipping, pseudo-content, and unsettled layout fail closed", () => {
     const cases: Array<{
       readonly element?: Partial<FakeElement>;
@@ -590,6 +641,55 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
 });
 
 describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () => {
+  test("every delayed callback rechecks proof trust before doing work", () => {
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    let trusted = true;
+    let now = 0;
+    const guardedGeometry = {
+      ...geometry([main]),
+      proofRealmTrusted: () => trusted,
+    };
+
+    const quiet = harness([main], { geometry: guardedGeometry, now: () => now });
+    quiet.runtime.requestLayout(request);
+    trusted = false;
+    quiet.scheduler.flushQuiet();
+    expect(quiet.publications).toEqual([]);
+    expect(quiet.runtime.debugInfo()).toMatchObject({
+      proofReason: "untrusted-proof-realm",
+      taskCount: 0,
+    });
+
+    trusted = true;
+    const frame = harness([main], { geometry: guardedGeometry, now: () => now });
+    frame.runtime.requestLayout(request);
+    frame.scheduler.flushQuiet();
+    frame.runtime.trackActive();
+    trusted = false;
+    for (const task of frame.scheduler.frameTasks.splice(0)) task();
+    expect(frame.runtime.debugInfo()).toMatchObject({
+      pendingFrame: false,
+      proofReason: "untrusted-proof-realm",
+    });
+
+    trusted = true;
+    const snapshot = harness([main], { geometry: guardedGeometry, now: () => now });
+    snapshot.runtime.requestLayout(request);
+    snapshot.scheduler.flushQuiet();
+    now = 10;
+    snapshot.runtime.revise();
+    snapshot.scheduler.flushQuiet();
+    expect(snapshot.scheduler.quietTasks).not.toHaveLength(0);
+    trusted = false;
+    snapshot.scheduler.flushQuiet();
+    expect(snapshot.publications.filter(({ type }) => type === "snapshot")).toHaveLength(1);
+    expect(snapshot.runtime.debugInfo()).toMatchObject({
+      proofReason: "untrusted-proof-realm",
+    });
+  });
+
   test("a replacement layout request withdraws the published proof before quiet work", () => {
     const main = node("main", { tagName: "MAIN" });
     append(main, node("One"));

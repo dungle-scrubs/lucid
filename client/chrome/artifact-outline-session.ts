@@ -1,8 +1,11 @@
 import {
   ARTIFACT_OUTLINE_POLICY,
   createOutlineRateGate,
+  type OutlineLayoutMeasurement,
+  type OutlineMotionPreference,
   type OutlineSnapshot,
 } from "../shared/artifact-outline.ts";
+export type { OutlineLayoutMeasurement } from "../shared/artifact-outline.ts";
 import {
   type OutlineDiagnosticHealth,
   validateOutlinePrivateOutbound,
@@ -29,18 +32,9 @@ export interface OutlinePort {
   close(): void;
 }
 
-export interface OutlineLayoutMeasurement {
-  readonly preferredWidth: number;
-  readonly safeInsets: {
-    readonly bottom: number;
-    readonly right: number;
-    readonly top: number;
-  };
-}
-
 export interface ChromeArtifactOutline {
   readonly acceptPort: (port: OutlinePort) => boolean;
-  readonly activate: (key: string, motion: "normal" | "reduced") => boolean;
+  readonly activate: (key: string, motion: OutlineMotionPreference) => boolean;
   readonly dispose: () => void;
   readonly prepareRevision: () => number;
   readonly requestLayout: (force?: boolean) => boolean;
@@ -248,7 +242,7 @@ export const createChromeArtifactOutline = (
     clearProjection();
   };
 
-  const activate = (key: string, motion: "normal" | "reduced"): boolean => {
+  const activate = (key: string, motion: OutlineMotionPreference): boolean => {
     const state = options.getState();
     const snapshot = state.outlineSnapshot;
     if (

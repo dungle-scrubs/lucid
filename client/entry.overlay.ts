@@ -1,4 +1,5 @@
 import { mountOverlay } from "./overlay/overlay.ts";
+import type { TrustedOutlinePort } from "./overlay/browser-artifact-outline.ts";
 import type { TrustedOverlayCapabilities } from "./overlay/trusted-overlay.ts";
 
 /**
@@ -9,7 +10,7 @@ import type { TrustedOverlayCapabilities } from "./overlay/trusted-overlay.ts";
  * none of the chrome's React/Tailwind weight into the sandbox.
  */
 export const bootOverlay = (
-  outlinePort: MessagePort,
+  outlinePort: TrustedOutlinePort,
   tagName: string,
   capabilities: TrustedOverlayCapabilities,
 ): void => mountOverlay(outlinePort, tagName, capabilities);
