@@ -75,17 +75,26 @@ const OutlinePanel = ({ mode, onActivate, snapshot }: OutlinePanelProps) => (
   <div
     data-test="artifact-outline-panel"
     data-mode={mode.toLowerCase()}
+    // Only the TRANSIENT panel animates: it is the one that arrives, out of
+    // the rail a human just pointed at. A pinned panel is simply there.
     className={`pointer-events-auto flex max-h-full min-h-0 w-full flex-col border border-ink-500 bg-ink-850/95 text-fg ${
-      mode === "PINNED" ? "" : "shadow-[0_8px_24px_rgba(0,0,0,0.42)]"
+      mode === "PINNED" ? "" : "outline-panel-enter shadow-[0_8px_24px_rgba(0,0,0,0.42)]"
     }`}
   >
-    <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-ink-600 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-fg-muted">
+    <div
+      className={`flex h-7 shrink-0 items-center gap-1.5 border-b border-ink-600 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-fg-muted ${
+        mode === "PINNED" ? "" : "outline-labels-enter"
+      }`}
+    >
       <span className="size-3.5" aria-hidden="true">
         <ListIcon />
       </span>
       Sections
     </div>
-    <nav aria-label="Artifact sections" className="min-h-0 overflow-y-auto py-1">
+    <nav
+      aria-label="Artifact sections"
+      className={`min-h-0 overflow-y-auto py-1 ${mode === "PINNED" ? "" : "outline-labels-enter"}`}
+    >
       {snapshot.headings.map((heading) => {
         const current = heading.key === snapshot.activeKey;
         return (
