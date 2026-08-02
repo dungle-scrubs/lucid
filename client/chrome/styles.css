@@ -262,12 +262,15 @@
 /**
  * The transient outline grows out of its rail.
  *
- * The rail is the thing a human pointed at, so the panel comes FROM it rather
- * than appearing beside it: the transform origin sits at the panel's top-right
- * corner, which is exactly where the rail is, and the panel scales up into its
- * natural size. The labels arrive a beat later - a panel whose text is already
- * legible at 90% scale reads as a jump-cut, where text that settles after the
- * box does reads as one movement.
+ * Literally out of it: the panel starts at the rail's own footprint - 18px
+ * wide, 64px tall, which is a fourteenth of the panel's width - anchored at
+ * the corner the rail occupies, and expands to full size. A gentler scale read
+ * as a pop, because a box that begins at 88% has nowhere visible to travel.
+ *
+ * The labels wait. Text inside a box scaling 12x horizontally is text being
+ * stretched, so it stays invisible until the box is most of the way there and
+ * then settles in place - the eye reads one movement (a panel arriving) rather
+ * than two (a box growing, then words distorting).
  *
  * Motion only; the panel's resting geometry is unchanged, which is what keeps
  * the crispness and placement assertions measuring a still target (the
@@ -276,32 +279,37 @@
  */
 @keyframes outline-panel-in {
   from {
-    opacity: 0;
-    transform: scale(0.88);
+    opacity: 0.35;
+    transform: scale(0.075, 0.22);
+  }
+  35% {
+    opacity: 1;
   }
   to {
     opacity: 1;
-    transform: scale(1);
+    transform: scale(1, 1);
   }
 }
 
 @keyframes outline-labels-in {
   from {
     opacity: 0;
-    transform: translateY(-2px);
+  }
+  45% {
+    opacity: 0;
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
 .outline-panel-enter {
+  /* The rail sits at the panel's top-right corner, so that is where the
+     expansion starts from. */
   transform-origin: top right;
-  /* Expo-ish ease-out: quick to leave the rail, slow to settle. */
-  animation: outline-panel-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: outline-panel-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .outline-labels-enter {
-  animation: outline-labels-in 200ms cubic-bezier(0.16, 1, 0.3, 1) 70ms backwards;
+  animation: outline-labels-in 260ms linear;
 }
