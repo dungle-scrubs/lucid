@@ -233,6 +233,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
         // conversation, not the frame, and must not wait on the draft.
         ...(pendingSwapHtml === null ? { version: payload.version } : {}),
         reviewResolved: payload.reviewResolved,
+        verdicts: [...(payload.verdicts ?? [])],
         annotations: [...payload.annotations],
         messages: [...payload.messages],
         questions: [...(payload.questions ?? [])],

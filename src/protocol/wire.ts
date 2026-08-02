@@ -155,6 +155,21 @@ export interface PayloadMessage {
   readonly answered?: true;
 }
 
+/**
+ * One approve or reopen, with the moment it happened.
+ *
+ * The `reviewResolved` flag beside it is the CURRENT verdict and carries no
+ * time, so a viewer holding only that can say the review is approved but never
+ * where in the conversation it was approved - and a reopening ends up pinned
+ * below messages that came after it.
+ */
+export interface PayloadVerdict {
+  readonly at: string;
+  /** True for an approval, false for a reopening. */
+  readonly resolved: boolean;
+  readonly seq: number;
+}
+
 export interface PayloadRevert {
   readonly target: Anchor;
   readonly targetVersion: number;
@@ -227,6 +242,10 @@ export interface WaitPayload {
   readonly status: PayloadStatus;
   readonly nextCursor: string;
   readonly reviewResolved: boolean;
+  /** Every approve/reopen in this segment, each with its own moment, so the
+   *  viewer can place them in the record instead of showing only the latest
+   *  state. Omitted when the review has never been settled. */
+  readonly verdicts?: readonly PayloadVerdict[];
   readonly annotations: readonly PayloadAnnotation[];
   /** Fork requests to act on (spin off a new artifact); omitted when none. */
   readonly forks?: readonly PayloadFork[];

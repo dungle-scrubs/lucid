@@ -45,9 +45,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 const DIVIDER_WIDTH = 5;
 
 /** True when a key event is destined for a text field, so window-level
- *  shortcuts can leave the caret alone. */
+ *  shortcuts can leave the caret alone. contentEditable counts: the composer's
+ *  rich-text mode is not a <textarea>, and a shortcut that skips only the two
+ *  tag names still fires mid-sentence there. */
 const isTextEntry = (node: EventTarget | null): boolean =>
-  node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement;
+  node instanceof HTMLTextAreaElement ||
+  node instanceof HTMLInputElement ||
+  (node instanceof HTMLElement && node.isContentEditable);
 
 /**
  * Everything window-level for the ACTIVE session: the overlay postMessage
@@ -266,6 +270,14 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
         e.preventDefault();
         actions.toggleTargets();
       } else if (e.key === "Enter" && e.shiftKey && !e.isComposing) {
+        // NOT while typing. The composer teaches ⇧↵ for a newline in its own
+        // placeholder, so ⌘⇧↵ is one slipped modifier away from ending the
+        // review - silently, mid-sentence, with the draft still in the box.
+        // That happened; the log records an approval nobody meant to make.
+        // Approving from a text field buys nothing (the button and ⌘K are both
+        // one gesture away) and costs a review that cannot be un-ended without
+        // the agent already having been released.
+        if (isTextEntry(e.target)) return;
         e.preventDefault();
         void actions.approveReview();
       }

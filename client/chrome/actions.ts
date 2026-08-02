@@ -626,6 +626,8 @@ export const createActions = (ctx: ActionsCtx) => {
       // The reopen landed in the log, but approval already released the agent -
       // if nobody is in a wait loop, feedback sent now sits recorded until an
       // agent checks back in, and the human should know that before writing it.
+      // The listener line carries the same fact, but only inside a tooltip:
+      // this is the one place it is said without being hunted for.
       if (get().agentsListening === 0) {
         notice(
           "Review reopened - no agent is listening right now. Feedback is recorded and delivered when one checks in.",

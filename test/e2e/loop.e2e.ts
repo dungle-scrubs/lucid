@@ -1,4 +1,4 @@
-import { hook, mod, on } from "./locators.ts";
+import { chord, hook, mod, on } from "./locators.ts";
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -702,7 +702,25 @@ test("reopen with nobody listening says feedback is record-only", async ({ page 
 
   await on(page).reopen().click();
   await expect(on(page).resolvedBar()).toHaveCount(0);
-  await expect(page.getByText("no agent is listening right now")).toBeVisible();
+  const advisory = page.getByText("no agent is listening right now");
+  await expect(advisory).toBeVisible();
+
+  // And it sits ABOVE the live status line, never under it: an advisory about
+  // what just happened, rendered below "something is happening now", reads as
+  // though it came last. Sending feedback opens that slot, so both are on
+  // screen together and the order is a real comparison rather than a skipped
+  // one. (The reopening itself is an entry in the record above both.)
+  const input = page.locator(`${hook("message-input")}:visible`);
+  await input.fill("written after reopening");
+  await input.press("Enter");
+  const working = on(page).awaitingAck();
+  await expect(working).toBeVisible();
+  const advisoryBox = await advisory.boundingBox();
+  const workingBox = await working.boundingBox();
+  expect(advisoryBox).not.toBeNull();
+  expect(workingBox).not.toBeNull();
+  if (advisoryBox === null || workingBox === null) return;
+  expect(advisoryBox.y).toBeLessThan(workingBox.y);
 });
 
 test("reopen on an ended session explains the way back instead of failing", async ({ page }) => {
@@ -3080,6 +3098,222 @@ test("a proven gutter renders a pinned, accessible outline without changing the 
       .locator('iframe[title="artifact surface"]')
       .evaluate((frame) => frame.getBoundingClientRect().width),
   ).toBe(frameWidth);
+});
+
+/**
+ * The transient panel is centered ON the rail: its middle lines up with the
+ * rail's middle, so it expands out of the thing the pointer is on. It used to
+ * hang off the rail's bottom edge, arriving entirely below the pointer.
+ */
+/**
+ * Regression: ⌘⇧↵ cannot end a review from inside the composer.
+ *
+ * The shortcut was bound to the window "text fields included", and the
+ * composer's own placeholder teaches ⇧↵ for a newline - so one slipped
+ * modifier while writing approved the review, released the agent, and left no
+ * entry in the record saying who did it. That happened to a real review.
+ */
+test("the approve shortcut does not fire while typing in the composer", async ({ page }) => {
+  cli = await makeCli(PLAN_V1);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
+
+  const input = page.locator(`${hook("message-input")}:visible`);
+  await input.fill("a note I am still writing");
+  // chord(), not a literal "Meta+": on Linux a hardcoded Meta drives a chord
+  // the product never receives, and this test - which asserts that NOTHING
+  // happened - would pass for the wrong reason on the wrong platform.
+  await input.press(chord("Shift+Enter"));
+
+  // The draft is untouched - the keystroke did nothing at all.
+  await expect(input).toHaveValue("a note I am still writing");
+
+  // A BARRIER before asserting the absence. Approving is a round trip (POST,
+  // append, frame back), so `toHaveCount(0)` on its own can pass simply by
+  // running first - and then the deliberate press below is swallowed by
+  // `reviewResolved`, leaving one verdict and a green test that proved
+  // nothing. Sending a message is the same round trip, strictly after the
+  // keystroke: once its bubble is on screen, an approval would have landed too.
+  await input.fill("a message that forces a round trip");
+  await input.press("Enter");
+  await expect(page.locator('[data-role="human"]')).toHaveCount(1);
+
+  // Nothing was approved: no verdict entered the record, and the header still
+  // offers the button.
+  await expect(on(page).verdict()).toHaveCount(0);
+  await expect(on(page).approve()).toBeVisible();
+
+  // And the shortcut still works where it always did: outside a text field.
+  await input.blur();
+  await on(page)
+    .threadViewport()
+    .click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press(chord("Shift+Enter"));
+  await expect(on(page).verdict()).toHaveCount(1);
+});
+
+/**
+ * Regression: approving and reopening are ENTRIES in the record, at the moment
+ * they happened.
+ *
+ * They used to be state only - a boolean - so an approval left no trace in the
+ * transcript at all, and a reopening surfaced as a notice pinned to the bottom
+ * of the thread: below every message that came after it, and below the live
+ * working line, which reads as though the reopening happened last.
+ */
+test("approve and reopen sit in the record where they happened", async ({ page }) => {
+  cli = await makeCli(PLAN_V1);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
+
+  await cli.run([
+    "wait",
+    cli.artifact,
+    "--reply",
+    "before the verdict",
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ]);
+  await expect(page.locator('[data-role="agent"]')).toHaveCount(1);
+
+  await on(page).approve().click();
+  await expect(on(page).verdict()).toHaveCount(1);
+  await expect(on(page).verdict().first()).toHaveAttribute("data-resolved", "true");
+
+  await on(page).reopen().click();
+  await expect(on(page).verdict()).toHaveCount(2);
+  await expect(on(page).verdict().last()).toHaveAttribute("data-resolved", "false");
+
+  // A message sent AFTER the reopening lands below it - the ordering the
+  // bottom-pinned notice could never produce.
+  const input = page.locator(`${hook("message-input")}:visible`);
+  await input.fill("after the verdict");
+  await input.press("Enter");
+  await expect(page.locator('[data-role="human"]')).toHaveCount(1);
+
+  const order = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-role], [data-test="verdict"]')).map(
+      (el) => (el as HTMLElement).dataset.role ?? `verdict:${(el as HTMLElement).dataset.resolved}`,
+    ),
+  );
+  expect(order).toEqual(["agent", "verdict:true", "verdict:false", "human"]);
+
+  // And it survives a reload: the verdicts come from the log, not from the
+  // click that made them.
+  await page.reload();
+  await expect(on(page).verdict()).toHaveCount(2);
+  const afterReload = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-role], [data-test="verdict"]')).map(
+      (el) => (el as HTMLElement).dataset.role ?? `verdict:${(el as HTMLElement).dataset.resolved}`,
+    ),
+  );
+  expect(afterReload).toEqual(["agent", "verdict:true", "verdict:false", "human"]);
+});
+
+/**
+ * Regression: a `lucid:` permalink in agent prose scrolls the artifact - it
+ * never navigates the browser.
+ *
+ * Only `lucid:section/<id>` was recognized; the short `lucid:<id>` form agents
+ * actually write fell through to an external `<a target="_blank">`, so every
+ * one of those links opened a window on an unhandled protocol.
+ */
+test("a lucid: permalink in an agent reply scrolls instead of opening a window", async ({
+  page,
+}) => {
+  cli = await makeCli(PLAN_V1);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
+
+  await cli.run([
+    "wait",
+    cli.artifact,
+    "--reply",
+    "Rewrote [the backfill step](lucid:step-backfill) and [again](lucid:section/step-backfill).",
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ]);
+
+  const reply = page.locator('[data-role="agent"]');
+  await expect(reply).toHaveCount(1);
+  // Both forms became live section chips...
+  await expect(on(page).sectionLink()).toHaveCount(2);
+  // ...and NOTHING in the reply is an anchor the browser would navigate.
+  expect(await reply.locator("a").count()).toBe(0);
+
+  // The chip scrolls the artifact rather than opening anything: a new page
+  // would arrive as a popup on the context, and the section comes into view.
+  const popups: unknown[] = [];
+  page.context().on("page", (p) => popups.push(p));
+  await on(page).sectionLink().first().click();
+  await expect
+    .poll(async () =>
+      surfaceOf(page)
+        .locator('li[data-lucid-id="step-backfill"]')
+        .evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          return (
+            box.top >= 0 && box.bottom <= (element.ownerDocument.defaultView?.innerHeight ?? 0)
+          );
+        }),
+    )
+    .toBe(true);
+  expect(popups).toHaveLength(0);
+});
+
+test("the transient outline panel opens centered on the rail", async ({ page }) => {
+  await page.setViewportSize({ width: 1_180, height: 900 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>html,body,main{margin:0;width:100%;font-family:system-ui}h1,h2,p{padding:0 24px}</style></head><body><main><h1>Wide plan</h1><h2>Context</h2><p>A</p><h2>Execution</h2><p style="height:500px">B</p><h2>Risks</h2><p>C</p></main></body></html>`,
+    "Wide plan",
+  );
+
+  const rail = on(page).artifactOutlineRail();
+  const panel = on(page).artifactOutlinePanel();
+  // Settle first: the rail re-centers a frame behind a surface that is still
+  // laying out, and its resting place is what the geometry below pins.
+  let railBox = await rail.boundingBox();
+  await expect
+    .poll(async () => {
+      const next = await rail.boundingBox();
+      const settled = next?.y === railBox?.y;
+      railBox = next;
+      return settled;
+    })
+    .toBe(true);
+
+  await rail.hover();
+  await expect(panel).toBeVisible();
+  // The panel animates in over 260ms from a 22%-height scale; measuring before
+  // it settles would read the animation, not the layout.
+  await panel.evaluate((element) =>
+    Promise.all(
+      element
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished.catch(() => {})),
+    ),
+  );
+  const panelBox = await panel.boundingBox();
+  const slotBox = await on(page).surfaceOutlineSlot().boundingBox();
+  expect(railBox).not.toBeNull();
+  expect(panelBox).not.toBeNull();
+  expect(slotBox).not.toBeNull();
+  if (railBox === null || panelBox === null || slotBox === null) return;
+
+  const railCenter = railBox.y + railBox.height / 2;
+  const panelCenter = panelBox.y + panelBox.height / 2;
+  expect(Math.abs(panelCenter - railCenter)).toBeLessThanOrEqual(1);
+  // Centered means it extends BOTH ways from the rail - which is exactly what
+  // a panel hung below the rail could never do.
+  expect(panelBox.y).toBeLessThan(railBox.y);
+  expect(panelBox.y + panelBox.height).toBeGreaterThan(railBox.y + railBox.height);
+  // And it stays inside the slot rather than centering itself off the surface.
+  expect(panelBox.y).toBeGreaterThanOrEqual(slotBox.y - 1);
+  expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(slotBox.y + slotBox.height + 1);
 });
 
 test("the transient outline supports hover, latch, tab, Escape, and keyboard activation", async ({

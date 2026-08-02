@@ -77,6 +77,18 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
             content: [{ type: "data-qa", data: { id: item.question.id } }],
           } as ThreadMessageLike;
         }
+        if (item.kind === "verdict") {
+          // The record's own marker for "the review was settled here". Keyed by
+          // the log seq so a reload rebuilds the same id.
+          return {
+            role: "user",
+            id: `verdict-${item.verdict.seq}`,
+            createdAt: new Date(item.at),
+            content: [
+              { type: "data-verdict", data: { resolved: item.verdict.resolved, at: item.at } },
+            ],
+          } as ThreadMessageLike;
+        }
         if (item.kind === "annotation") {
           return {
             role: "user",
@@ -166,9 +178,10 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
   const queue = useSession((s) => s.queue);
   const sending = useSession((s) => s.sending);
   const questions = useSession((s) => s.questions);
+  const verdicts = useSession((s) => s.verdicts);
   const timeline = useMemo(
-    () => buildTimeline(annotations, messages, queue, questions),
-    [annotations, messages, queue, questions],
+    () => buildTimeline(annotations, messages, queue, questions, verdicts),
+    [annotations, messages, queue, questions, verdicts],
   );
 
   /**

@@ -25,6 +25,7 @@ import {
   Warnings,
 } from "./Panel.tsx";
 import { QaPart } from "./QaPart.tsx";
+import { VerdictPart } from "./VerdictPart.tsx";
 import { deliveredWaiting } from "./store.ts";
 import { workingClock } from "./working.ts";
 import { markdownComponents, prose, urlTransform } from "./ui/markdown.tsx";
@@ -686,6 +687,8 @@ export const Thread = () => {
   // questions never reach the transcript - they live in the drawer over the
   // surface, which is why there is no questions panel above the composer.
   useAssistantDataUI({ name: "qa", render: QaPart });
+  // Approving and reopening are entries in the record, at their own moment.
+  useAssistantDataUI({ name: "verdict", render: VerdictPart });
   return (
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
       <ThreadPrimitive.Viewport
@@ -715,11 +718,15 @@ export const Thread = () => {
             scrolls from the top, oldest-first, unchanged. */}
         <div aria-hidden className="mt-auto" />
         <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
-        <WorkingIndicator />
-        {/* Staged work lives at the end of the record, where the eye already is
-            after a pick - and where auto-scroll brings it. */}
+        {/* Advisories sit between the record and the live status line, never
+            under it. What HAPPENED - including a reopening, which is an entry
+            in the record above - can never render below "something is
+            happening now"; that ordering reads as though the advisory came
+            last. Staged work still lives at the end of the record, where the
+            eye already is after a pick and where auto-scroll brings it. */}
         <Warnings />
         <Notices />
+        <WorkingIndicator />
         {/* Undelivered messages sit directly above the composer that lost them,
             where the eye lands after pressing Enter. */}
         <UnsentMessages />
