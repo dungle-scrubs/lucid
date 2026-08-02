@@ -10,7 +10,7 @@ import {
   type SessionIdentityRecipe,
   type SpawnResult,
 } from "./session-identity.ts";
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Anchor } from "../anchors/anchor.ts";
 import {
@@ -720,9 +720,13 @@ export const attendChild = async (
     // What this turn takes delivery of (D20) - the batch just read, not
     // whatever has landed by the time the ack appends.
     const covers = parseCursor(payload.nextCursor);
+    // Named so the terminator below can close THIS turn (D-013): an ack whose
+    // turn nobody can name is a working window nobody can close.
+    const reviseTurnId = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     await deliver(child, {
       t: "agent_ack",
       id: crypto.randomUUID(),
+      turnId: reviseTurnId,
       // No intent, same reason as the hub's ack: an order to revise is not an
       // outcome, and the turn declares what it is actually doing.
       ...(covers !== undefined ? { covers } : {}),
@@ -745,43 +749,60 @@ export const attendChild = async (
     // announces the SAME thread re-binds under this launch; one that names a
     // stranger is refused (HSI005), never adopted.
     const reviseLaunchId = mintLaunchId();
+    // Where THIS run's output starts: the log is opened in append mode, so
+    // classifying the whole file would let an earlier turn's not-found banner
+    // durably quarantine a live session (the hub slices for the same reason).
+    const reviseLog = join(child.sessionDir, "revise.out.log");
+    const outputFrom = await stat(reviseLog).then(
+      (st) => st.size,
+      () => 0,
+    );
     const allowRotation =
       recipe.sessionIdentity?.source === "stdout-jsonl" &&
       recipe.sessionIdentity.allowRotation === true;
-    const result = await runSpawn(
-      argv,
-      child.artifactDir,
-      join(child.sessionDir, "revise.out.log"),
-      {
-        harness: harnessName,
-        sessionId,
-        launchId: reviseLaunchId,
-        ...(recipe.sessionIdentity ? { strategy: recipe.sessionIdentity } : {}),
-        onIdentityDiscovered: discoveryPersistence(child, harnessName, reviseLaunchId, {
-          requestedSessionId: sessionId,
-          allowRotation,
-        }),
-      },
-    );
+    const result = await runSpawn(argv, child.artifactDir, reviseLog, {
+      harness: harnessName,
+      sessionId,
+      launchId: reviseLaunchId,
+      ...(recipe.sessionIdentity ? { strategy: recipe.sessionIdentity } : {}),
+      onIdentityDiscovered: discoveryPersistence(child, harnessName, reviseLaunchId, {
+        requestedSessionId: sessionId,
+        allowRotation,
+      }),
+    });
     const code = result.code;
     // The same three identity rules the hub's attend engine applies, because
     // a child driven here and an artifact attended there must not disagree
     // about what a harness said (plan 03, D-012).
     const announced = "identity" in result ? result.identity?.sessionId : undefined;
+    /** The turn is over, whatever it produced: the claim this loop made must
+     *  not outlive it. Without a terminator the batch sits marked delivered
+     *  with nothing to show for it, which is what the hub's own turn-ended
+     *  append exists to prevent. */
+    const endTurn = async (reason: "failed", code_: string): Promise<void> => {
+      await deliver(child, {
+        t: "agent_turn_ended",
+        turnId: reviseTurnId,
+        reason,
+        code: code_,
+        attendant: { harness: harnessName, sessionId, cwd: child.artifactDir },
+      }).catch(() => {});
+    };
     if (announced && announced !== sessionId && !allowRotation) {
       // HSI005: a different conversation answered. Do not bind, do not
-      // invalidate, do not advance - the feedback stays undelivered.
+      // invalidate, do not advance - the feedback stays the human's.
+      await endTurn("failed", "hsi005_session_mismatch");
       log(`${child.name}: resume announced a different session (HSI005); stopping this batch`);
       return;
     }
     if (code !== 0) {
-      const outputTail = await readFile(join(child.sessionDir, "revise.out.log"), "utf8").catch(
-        () => "",
-      );
-      if (classifySessionFailure(harnessName, outputTail) === "HSI004") {
+      // THIS run's output only, sliced like the hub's.
+      const runOutput = (await readFile(reviseLog, "utf8").catch(() => "")).slice(outputFrom);
+      if (classifySessionFailure(harnessName, runOutput) === "HSI004") {
         // A verdict, not a flake: quarantine the id durably and stop driving
         // this child - there is no second candidate to try down here.
         await recordSessionInvalidation(child, harnessName, sessionId).catch(() => {});
+        await endTurn("failed", "hsi004_session_not_found");
         log(`${child.name}: harness says session ${sessionId} does not exist here (HSI004)`);
         return;
       }

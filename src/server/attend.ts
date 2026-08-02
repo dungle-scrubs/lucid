@@ -379,11 +379,20 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   /** The last selection-rejection already warned about, so a standing stale
    *  pick warns once instead of on every turn - but a NEW reason still does. */
   let saidSelectionInvalid = "";
-  /** Native ids already TRIED for the current undelivered batch (D-004): the
-   *  primary plus at most one distinct fallback. Keyed by the batch's covers
-   *  seq so a new batch starts fresh; exhaustion is a wall, never a loop. */
-  let attemptedForBatch = new Set<string>();
-  let attemptedBatchSeq = 0;
+  /** Native ids RULED OUT for the current undelivered batch (D-004): a
+   *  harness not-found verdict (HSI004) retires an id, and at most one
+   *  distinct weaker candidate is tried after it before the engine stands
+   *  down. Only a verdict retires an id - a transient failure keeps the
+   *  ordinary retry ladder on the same session, because the transport broke,
+   *  not the conversation.
+   *
+   *  Keyed by the DELIVERED boundary, not by highSeq: the engine's own ack
+   *  and turn-ended events raise highSeq on every attempt, so keying on it
+   *  wiped the set each pass and the fallback could never be reached. The
+   *  boundary moves only when a turn actually delivers - exactly when a new
+   *  batch begins. */
+  let ruledOutForBatch = new Set<string>();
+  let ruledOutBatchFrom = -1;
 
   const pauseFor = (ms: number, harness?: string): void => {
     pausedUntil = Date.now() + ms;
@@ -495,9 +504,11 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
    * excluded. sessionHistory MENTIONS never rank: an untyped stamp is how the
    * synthetic UUID reached resume argv (the reported failure).
    */
-  const attendCandidates = async (state: FoldedState): Promise<readonly ResumeCandidate[]> => {
+  const attendCandidates = async (
+    state: FoldedState,
+    legacy: Awaited<ReturnType<typeof artifactAttendant>>,
+  ): Promise<readonly ResumeCandidate[]> => {
     const sidecars = await readAttendantSidecars(paths);
-    const legacy = await artifactAttendant(paths, state.sessionHistory);
     const scratchpadId = harnessSessionId({ artifactDir: paths.artifactDir });
     return resolveResumeCandidates({
       sidecars,
@@ -525,12 +536,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       }
     | undefined
   > => {
-    const candidates = await attendCandidates(state);
-    const best = candidates[0];
-    // The RECORDED association still names who attends and where it sat -
-    // placement evidence, not identity; the harness store's own filing
-    // (resumeCwd) outranks its cwd when present.
+    // ONE read of the recorded association, shared by ranking (it supplies
+    // the legacy resume command and the harness a scratchpad id belongs to)
+    // and by placement (its cwd decides fresh-vs-resume).
     const recorded = await artifactAttendant(paths, state.sessionHistory);
+    const candidates = await attendCandidates(state, recorded);
+    const best = candidates[0];
     if (!best) {
       // No id survives the trust ladder (untyped stamps are display-only,
       // uncorroborated bindings stay put). A recorded HARNESS still supports
@@ -662,9 +673,9 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     }
 
     const target = state.highSeq;
-    if (target !== attemptedBatchSeq) {
-      attemptedBatchSeq = target;
-      attemptedForBatch = new Set<string>();
+    if (deliveredFrom !== ruledOutBatchFrom) {
+      ruledOutBatchFrom = deliveredFrom;
+      ruledOutForBatch = new Set<string>();
     }
     // The id THIS attempt resumes: the primary, or - after a not-found
     // quarantined it - the one permitted fallback. Both spent means the
@@ -673,7 +684,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const resumeTargetId = startsFresh
       ? undefined
       : [record.sessionId, record.fallback?.sessionId].find(
-          (id): id is string => id !== undefined && !attemptedForBatch.has(id),
+          (id): id is string => id !== undefined && !ruledOutForBatch.has(id),
         );
     if (!startsFresh && resumeTargetId === undefined) {
       pauseFor(ATTEND_COOLOFF_MS, resolved.name);
@@ -719,7 +730,6 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
         ? undefined
         : crypto.randomUUID()
       : resumeTargetId;
-    if (!startsFresh && sessionId) attemptedForBatch.add(sessionId);
     const prompt = startsFresh
       ? [
           "You are continuing an existing Lucid review in a new harness session.",
@@ -930,6 +940,10 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
         ? classifySessionFailure(resolved.name, runOutput)
         : null;
     if (notFound === "HSI004") {
+      // Retired for this batch as well as quarantined on disk: the durable
+      // record stops the id coming back after a restart, and this set is what
+      // bounds the batch to one weaker candidate before standing down.
+      ruledOutForBatch.add(sessionId as string);
       await recordSessionInvalidation(paths, resolved.name, sessionId as string).catch(() => {});
       log(
         `attend ${paths.name}: harness says session ${sessionId} does not exist here (HSI004); quarantined`,

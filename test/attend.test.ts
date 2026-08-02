@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/events.ts";
 import { foldLog } from "../src/core/fold.ts";
-import { mergeAttendantSidecar, readLastAttendant } from "../src/core/attendant.ts";
+import {
+  mergeAttendantSidecar,
+  readAttendantSidecars,
+  readLastAttendant,
+} from "../src/core/attendant.ts";
 import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
@@ -1818,6 +1822,86 @@ if (process.env.LUCID_HARNESS === "codex") {
     expect(state.annotations.length).toBeGreaterThan(0);
   }, 20_000);
 
+  test("after a not-found verdict the ONE weaker candidate is tried, then the engine stands down", async () => {
+    // Two provable candidates, both dead. The first not-found retires it and
+    // the fallback is tried; the second exhausts the ladder, and the human is
+    // told rather than left watching silent retries forever.
+    const notFound = join(dir, "codex-none");
+    await writeFile(
+      notFound,
+      '#!/bin/sh\necho "Error: no rollout found for thread id" >&2\nexit 1\n',
+    );
+    await chmod(notFound, 0o755);
+    artifact = join(proj, "exhausted.html");
+    await writeFile(artifact, DOC);
+    paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "codex", sessionId: "thread-a", cwd: paths.artifactDir },
+    });
+    // Two candidates for ONE harness: the sidecar id (tier 1, the primary)
+    // and a durable binding whose id this machine's Codex store corroborates
+    // (tier 2, the single permitted fallback).
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "thread-b",
+      sessionIdAuthority: "observed",
+      at: "2026-08-01T09:00:00.000Z",
+    });
+    const codexStore = join(dir, "codex-store");
+    await mkdir(join(codexStore, "2026", "08", "01"), { recursive: true });
+    await writeFile(
+      join(codexStore, "2026", "08", "01", "rollout-2026-08-01T10-00-00-thread-a.jsonl"),
+      "{}\n",
+    );
+    process.env.LUCID_CODEX_SESSIONS = codexStore;
+    await appendEvent(paths.logPath, {
+      t: "harness_session_bound",
+      id: "hsb:abc123def4567890:thread-a",
+      launchId: "abc123def4567890",
+      attendant: {
+        harness: "codex",
+        sessionId: "thread-a",
+        sessionIdAuthority: "observed",
+      },
+    });
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "codex",
+        harnesses: {
+          codex: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [notFound, "--json", "{artifact}", "{prompt}"],
+            resume: [notFound, "--json", "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
+
+    const hub = await startDaemon();
+    await mount(hub);
+    await annotate("both recorded threads are gone");
+
+    // BOTH ids end up quarantined - the primary, then the one fallback.
+    const deadline = Date.now() + 12_000;
+    let dead: readonly string[] = [];
+    while (Date.now() < deadline && dead.length < 2) {
+      const sidecars = await readAttendantSidecars(paths);
+      dead = sidecars.flatMap((a) => a.invalidatedSessionIds ?? []);
+      if (dead.length < 2) await sleep(100);
+    }
+    expect([...dead].sort()).toEqual(["thread-a", "thread-b"]);
+    // The feedback is still the human's: nothing consumed it.
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.annotations.length).toBeGreaterThan(0);
+  }, 20_000);
+
   test("a moved artifact starts a fresh same-harness session in its new project", async () => {
     const oldProject = join(dir, "old-project");
     const lucidDir = join(proj, ".lucid");
@@ -1828,6 +1912,16 @@ if (process.env.LUCID_HARNESS === "codex") {
     paths = sessionPaths(artifact);
     await openSession(paths, {
       attendant: { harness: "codex", sessionId: "old-codex-thread", cwd: oldProject },
+    });
+    // A PROVABLE candidate, so the fresh handoff below is driven by the
+    // project move - not by the artifact simply having no resumable session,
+    // which would make this test pass for the wrong reason.
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "old-codex-thread",
+      sessionIdAuthority: "declared",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
     });
     await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
 
