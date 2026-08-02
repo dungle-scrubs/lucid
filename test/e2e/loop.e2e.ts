@@ -1,4 +1,4 @@
-import { hook, mod, on } from "./locators.ts";
+import { chord, hook, mod, on } from "./locators.ts";
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -3121,20 +3121,35 @@ test("the approve shortcut does not fire while typing in the composer", async ({
 
   const input = page.locator(`${hook("message-input")}:visible`);
   await input.fill("a note I am still writing");
-  await input.press("Meta+Shift+Enter");
-  await input.press("Control+Shift+Enter");
+  // chord(), not a literal "Meta+": on Linux a hardcoded Meta drives a chord
+  // the product never receives, and this test - which asserts that NOTHING
+  // happened - would pass for the wrong reason on the wrong platform.
+  await input.press(chord("Shift+Enter"));
+
+  // The draft is untouched - the keystroke did nothing at all.
+  await expect(input).toHaveValue("a note I am still writing");
+
+  // A BARRIER before asserting the absence. Approving is a round trip (POST,
+  // append, frame back), so `toHaveCount(0)` on its own can pass simply by
+  // running first - and then the deliberate press below is swallowed by
+  // `reviewResolved`, leaving one verdict and a green test that proved
+  // nothing. Sending a message is the same round trip, strictly after the
+  // keystroke: once its bubble is on screen, an approval would have landed too.
+  await input.fill("a message that forces a round trip");
+  await input.press("Enter");
+  await expect(page.locator('[data-role="human"]')).toHaveCount(1);
 
   // Nothing was approved: no verdict entered the record, and the header still
   // offers the button.
   await expect(on(page).verdict()).toHaveCount(0);
   await expect(on(page).approve()).toBeVisible();
-  // The draft is untouched - the keystroke did nothing at all.
-  await expect(input).toHaveValue("a note I am still writing");
 
   // And the shortcut still works where it always did: outside a text field.
   await input.blur();
-  await page.locator('[data-test="thread-viewport"]').click({ position: { x: 5, y: 5 } });
-  await page.keyboard.press("Meta+Shift+Enter");
+  await on(page)
+    .threadViewport()
+    .click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press(chord("Shift+Enter"));
   await expect(on(page).verdict()).toHaveCount(1);
 });
 
