@@ -160,6 +160,46 @@ describe("hub daemon", () => {
   });
 
   /**
+   * The listing route answers from cache, and still converges on the disk.
+   *
+   * Serving the previous answer is only acceptable if the next one arrives on
+   * its own: a cache that needed a restart to notice a new session would trade
+   * one bug for a worse one.
+   */
+  test("the session listing is served from cache, and a new session still appears", async () => {
+    const scanned = await seedSession("proj", "notes");
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+
+    const first = await get(daemon.port, "/hub/sessions");
+    expect(first.status).toBe(200);
+    const before = (await first.json()) as { sessions: Array<{ artifact: string }> };
+    expect(before.sessions.map((s) => s.artifact)).toEqual([scanned]);
+
+    // A second session appears on disk. The very next read may legitimately
+    // still be the cached answer - that IS the feature - and with no shell
+    // connected the only thing that refreshes is a read that finds the value
+    // older than POLL_MS, so convergence takes a beat. What it must not take
+    // is a restart or a hand-run scan.
+    const later = await seedSession("proj", "rollout");
+    let listed: string[] = [];
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && listed.length < 2) {
+      const res = await get(daemon.port, "/hub/sessions");
+      const body = (await res.json()) as { sessions: Array<{ artifact: string }> };
+      listed = body.sessions.map((s) => s.artifact).sort();
+      if (listed.length < 2) await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(listed).toEqual([later, scanned].sort());
+
+    // `?fresh=1` skips the wait entirely: the caller that was just told a
+    // session exists must see it on the first ask, not the fourth.
+    const third = await seedSession("proj", "handoff");
+    const forced = await get(daemon.port, "/hub/sessions?fresh=1");
+    const now = (await forced.json()) as { sessions: Array<{ artifact: string }> };
+    expect(now.sessions.map((s) => s.artifact).sort()).toEqual([later, scanned, third].sort());
+  });
+
+  /**
    * The review page under a mount, in BOTH hosting shapes (plan 06).
    *
    * A solo-view URL is held by a chat app's pane across reloads, and a session

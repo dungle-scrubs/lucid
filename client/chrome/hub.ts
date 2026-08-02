@@ -498,10 +498,15 @@ const onHubFrame = (type: string, payload: string): void => {
         const { id } = JSON.parse(payload) as { id: string };
         void (async () => {
           try {
-            // The listing unions a scan of every root - same walk, same budget.
-            const listed = (await hubFetch("/hub/sessions", { timeoutMs: SCAN_TIMEOUT_MS }).then(
-              (r) => (r.ok ? (r.json() as Promise<{ sessions: HubSession[] }>) : null),
-            )) as { sessions: HubSession[] } | null;
+            // `fresh` because the row we are looking for is the one that was
+            // just created: the hub's cached listing predates it by definition,
+            // and a miss here is a tab that silently never opens. The listing
+            // unions a scan of every root - same walk, same budget.
+            const listed = (await hubFetch("/hub/sessions?fresh=1", {
+              timeoutMs: SCAN_TIMEOUT_MS,
+            }).then((r) => (r.ok ? (r.json() as Promise<{ sessions: HubSession[] }>) : null))) as {
+              sessions: HubSession[];
+            } | null;
             const row = listed?.sessions.find((s) => s.id === id);
             if (row) await openTab(row);
           } catch {
