@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ValidationError } from "../errors.ts";
+import { IdentityDeclarationError, ValidationError } from "../errors.ts";
 import { canonicalHarness } from "./selection.ts";
+import type { SessionIdentityRecipe } from "./session-identity.ts";
 
 /**
  * The spawn-recipe registry: how the launcher stays agent-agnostic. Launching a
@@ -79,6 +80,15 @@ export interface SpawnRecipe {
   /** The effort preselected in pickers; must be in the ladder that applies
    *  (the default model's `efforts`, else the harness-wide `efforts`). */
   readonly defaultEffort?: string;
+  /**
+   * How this harness's native session identity is established - assigned by
+   * Lucid through an argv flag, or discovered from structured stdout. Optional
+   * at the JSON boundary so an old registry still LOADS (its recipes remain
+   * inspectable), but unattended launch refuses an absent declaration as
+   * HSI001: a session that cannot be identified cannot be resumed, and finding
+   * that out after the turn ran is the bug this field exists to prevent.
+   */
+  readonly sessionIdentity?: SessionIdentityRecipe;
 }
 
 export interface HarnessRegistry {
@@ -197,6 +207,121 @@ const parseSelectionFields = (
   };
 };
 
+/** A declaration selector: what identity validation will match against argv
+ *  tokens or JSONL records. Bounded so a registry typo (or a hostile file)
+ *  cannot smuggle control characters into matching or grow without limit. */
+const SELECTOR_MAX = 128;
+const isBoundedSelector = (v: unknown): v is string =>
+  typeof v === "string" &&
+  v.length > 0 &&
+  v.length <= SELECTOR_MAX &&
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the bound IS the point
+  !/[\x00-\x1f\x7f]/.test(v);
+
+/**
+ * Validate a PRESENT `sessionIdentity` declaration against the recipe's own
+ * argv templates. The declaration and the argv are one protocol - an identity
+ * flag the spawn never passes, or a resume with nowhere to put the id, is a
+ * recipe that will launch sessions it can never find again. That must fail at
+ * load (HSI001), while the file is on screen, not at the first resume.
+ *
+ * Caller-assigned: the identity argument must be immediately followed by
+ * `{id}` in spawn AND resume - adjacency, not mere presence, because
+ * `--session-id` binding to the wrong token is exactly how an id ends up in a
+ * prompt.
+ * Discovered (stdout-jsonl): spawn and resume must carry the structured-output
+ * argument (or discovery is blind), and resume must carry an exact `{id}`
+ * token for the discovered id to re-enter.
+ */
+const parseSessionIdentity = (
+  name: string,
+  value: Record<string, unknown>,
+  spawn: readonly string[],
+  resume: readonly string[] | undefined,
+  path: string,
+): SessionIdentityRecipe | undefined => {
+  const decl = value.sessionIdentity;
+  if (decl === undefined) return undefined;
+  const fail = (message: string): never => {
+    throw new IdentityDeclarationError({ message, detail: { path, harness: name } });
+  };
+  if (typeof decl !== "object" || decl === null) {
+    fail(`harness "${name}" \`sessionIdentity\` must be an object when present`);
+  }
+  const d = decl as Record<string, unknown>;
+  const adjacentIdAfter = (argv: readonly string[], argument: string): boolean =>
+    argv.some((tok, i) => tok === argument && argv[i + 1] === "{id}");
+
+  if (d.source === "caller-assigned") {
+    if (!isBoundedSelector(d.argument)) {
+      fail(`harness "${name}" caller-assigned identity needs a bounded \`argument\` flag`);
+    }
+    const argument = d.argument as string;
+    if (!adjacentIdAfter(spawn, argument)) {
+      fail(`harness "${name}" spawn argv must pass "${argument}" immediately followed by "{id}"`);
+    }
+    if (resume && !adjacentIdAfter(resume, argument)) {
+      fail(`harness "${name}" resume argv must pass "${argument}" immediately followed by "{id}"`);
+    }
+    return { argument, source: "caller-assigned" };
+  }
+
+  if (d.source === "stdout-jsonl") {
+    for (const key of ["event", "field", "requiredArgument"] as const) {
+      if (!isBoundedSelector(d[key])) {
+        fail(`harness "${name}" stdout-jsonl identity needs a bounded \`${key}\``);
+      }
+    }
+    if (d.allowRotation !== undefined && typeof d.allowRotation !== "boolean") {
+      fail(`harness "${name}" \`allowRotation\` must be a boolean when present`);
+    }
+    const requiredArgument = d.requiredArgument as string;
+    if (!spawn.includes(requiredArgument)) {
+      fail(`harness "${name}" spawn argv must pass "${requiredArgument}" for identity discovery`);
+    }
+    if (resume) {
+      if (!resume.includes(requiredArgument)) {
+        fail(
+          `harness "${name}" resume argv must pass "${requiredArgument}" for identity discovery`,
+        );
+      }
+      if (!resume.includes("{id}")) {
+        fail(`harness "${name}" resume argv must carry an exact "{id}" token to resume`);
+      }
+    }
+    return {
+      allowRotation: d.allowRotation === true,
+      event: d.event as string,
+      field: d.field as string,
+      requiredArgument,
+      source: "stdout-jsonl",
+    };
+  }
+
+  return fail(
+    `harness "${name}" \`sessionIdentity.source\` must be "caller-assigned" or "stdout-jsonl"`,
+  );
+};
+
+/**
+ * The identity strategy unattended launch requires, or HSI001. Loading keeps
+ * legacy identity-free recipes visible for diagnosis; SPAWNING one unattended
+ * is refused here, before any process exists, because the resulting session
+ * could never be safely resumed.
+ */
+export const requireSessionIdentity = (
+  harness: string,
+  recipe: SpawnRecipe | undefined,
+  path: string,
+): SessionIdentityRecipe => {
+  const declared = recipe?.sessionIdentity;
+  if (declared) return declared;
+  throw new IdentityDeclarationError({
+    message: `harness "${harness}" declares no session identity strategy; unattended launch would create a session Lucid cannot resume`,
+    detail: { path, harness },
+  });
+};
+
 const parseRegistry = (raw: string, path: string): HarnessRegistry => {
   let data: unknown;
   try {
@@ -262,11 +387,19 @@ const parseRegistry = (raw: string, path: string): HarnessRegistry => {
         detail: { path, harness: name },
       });
     }
+    const sessionIdentity = parseSessionIdentity(
+      name,
+      value as Record<string, unknown>,
+      spawn,
+      isStringArray(resume) ? resume : undefined,
+      path,
+    );
     harnesses[name] = {
       spawn,
       ...(resume ? { resume } : {}),
       ...(isStringArray(tools) ? { tools } : {}),
       ...parseSelectionFields(name, value as Record<string, unknown>, path),
+      ...(sessionIdentity ? { sessionIdentity } : {}),
     };
   }
   const def = typeof record.default === "string" ? record.default : undefined;

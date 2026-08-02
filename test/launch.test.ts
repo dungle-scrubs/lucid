@@ -8,7 +8,12 @@ import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import type { WaitPayload } from "../src/protocol/wire.ts";
 import { childArtifactPath, handleForks, revisePrompt } from "../src/launch/launcher.ts";
-import { buildArgv, loadRegistry, resolveRecipe } from "../src/launch/recipes.ts";
+import {
+  buildArgv,
+  loadRegistry,
+  requireSessionIdentity,
+  resolveRecipe,
+} from "../src/launch/recipes.ts";
 import { forkDirFor, writeForkSeed } from "../src/launch/seed.ts";
 import { discoverLiveServer, readServerDescriptor } from "../src/server/discovery.ts";
 import { runServer } from "../src/server/server.ts";
@@ -240,6 +245,76 @@ describe("recipes registry", () => {
       JSON.stringify({ default: "ghost", harnesses: { real: { spawn: ["x"] } } }),
     );
     await expect(loadRegistry(regPath)).rejects.toThrow(/default/);
+  });
+
+  test("caller-assigned identity requires an adjacent argument and id token", async () => {
+    const valid = {
+      sessionIdentity: { source: "caller-assigned" as const, argument: "--session-id" },
+      spawn: ["claude", "--session-id", "{id}", "-p", "{prompt}"],
+      resume: ["claude", "--resume", "x", "--session-id", "{id}", "-p", "{prompt}"],
+    };
+    await writeFile(regPath, JSON.stringify({ harnesses: { claude_code: valid } }));
+    const registry = await loadRegistry(regPath);
+    const resolved = registry && resolveRecipe(registry, "claude_code");
+    expect(resolved?.recipe.sessionIdentity).toEqual(valid.sessionIdentity);
+    expect(requireSessionIdentity(resolved?.name ?? "", resolved?.recipe, regPath)).toEqual(
+      valid.sessionIdentity,
+    );
+
+    for (const malformed of [
+      { ...valid, spawn: ["claude", "--session-id=x", "{id}"] },
+      { ...valid, spawn: ["claude", "{id}", "--session-id"] },
+      { ...valid, resume: ["claude", "--resume", "{id}"] },
+    ]) {
+      await writeFile(regPath, JSON.stringify({ harnesses: { claude_code: malformed } }));
+      await expect(loadRegistry(regPath)).rejects.toMatchObject({ code: "HSI001" });
+    }
+  });
+
+  test("stdout JSONL identity validates bounded selectors and complete argv protocol", async () => {
+    const valid = {
+      sessionIdentity: {
+        source: "stdout-jsonl" as const,
+        event: "thread.started",
+        field: "thread_id",
+        requiredArgument: "--json",
+      },
+      spawn: ["codex", "exec", "--json", "{prompt}"],
+      resume: ["codex", "exec", "resume", "{id}", "--json", "{prompt}"],
+    };
+    await writeFile(regPath, JSON.stringify({ harnesses: { codex: valid } }));
+    const registry = await loadRegistry(regPath);
+    const recipe = registry && resolveRecipe(registry, "codex")?.recipe;
+    expect(recipe?.sessionIdentity).toEqual({ ...valid.sessionIdentity, allowRotation: false });
+
+    for (const malformed of [
+      { ...valid, spawn: ["codex", "exec", "{prompt}"] },
+      { ...valid, resume: ["codex", "exec", "resume", "{id}", "{prompt}"] },
+      { ...valid, resume: ["codex", "exec", "resume", "--json", "{prompt}"] },
+      { ...valid, sessionIdentity: { ...valid.sessionIdentity, event: "x".repeat(129) } },
+      { ...valid, sessionIdentity: { ...valid.sessionIdentity, field: "thread\nid" } },
+    ]) {
+      await writeFile(regPath, JSON.stringify({ harnesses: { codex: malformed } }));
+      await expect(loadRegistry(regPath)).rejects.toMatchObject({ code: "HSI001" });
+    }
+  });
+
+  test("legacy identity-free recipes load for diagnosis but refuse unattended use as HSI001", async () => {
+    await writeFile(
+      regPath,
+      JSON.stringify({ harnesses: { legacy: { spawn: ["legacy", "{prompt}"] } } }),
+    );
+    const registry = await loadRegistry(regPath);
+    const resolved = registry && resolveRecipe(registry, "legacy");
+    expect(resolved?.recipe.sessionIdentity).toBeUndefined();
+    expect(() => requireSessionIdentity("legacy", resolved?.recipe, regPath)).toThrow(
+      /identity strategy/,
+    );
+    try {
+      requireSessionIdentity("legacy", resolved?.recipe, regPath);
+    } catch (error) {
+      expect(error).toMatchObject({ code: "HSI001", detail: { harness: "legacy", path: regPath } });
+    }
   });
 });
 

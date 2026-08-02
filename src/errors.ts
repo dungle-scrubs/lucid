@@ -41,7 +41,24 @@ export class LogError extends Data.TaggedError("LogError")<{
   readonly code = "LOG_ERROR" as const;
 }
 
-export type LucidError = ValidationError | NotFoundError | ArtifactError | ServerError | LogError;
+/** A missing or malformed session-identity declaration (RFC HSI001): the
+ *  registry entry cannot support unattended launch, refused BEFORE spawning.
+ *  `detail` names the registry path and harness so the fix is a file edit,
+ *  not a log dig. */
+export class IdentityDeclarationError extends Data.TaggedError("IdentityDeclarationError")<{
+  readonly message: string;
+  readonly detail?: Readonly<Record<string, unknown>>;
+}> {
+  readonly code = "HSI001" as const;
+}
+
+export type LucidError =
+  | ValidationError
+  | NotFoundError
+  | ArtifactError
+  | ServerError
+  | LogError
+  | IdentityDeclarationError;
 
 /** A typed error, recognised across a throw boundary without importing every
  *  class: the stable `code` plus the Data.TaggedError `_tag` are the class
