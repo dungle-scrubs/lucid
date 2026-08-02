@@ -287,6 +287,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   let port = 0; // assigned once bound (below)
   let stopped = false;
   let notifying = false;
+  /** A change arrived while a notify pass was running; run one more after it. */
+  let notifyAgain = false;
   let lastSnapshot = "";
   // Attention rides its OWN SSE event, deduped independently of the listing, so
   // an agent working (a `working` flip) never rebroadcasts the listing (R3,
@@ -421,21 +423,14 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   };
 
   /**
-   * The listing, served from the last answer while the next is computed.
+   * The listing, served from the last answer while the next is computed
+   * (`core/swr.ts` has the why).
    *
-   * Every row of it is filesystem work - a walk of each root, a stat and a
-   * title read per record - so its cost is the machine's, not the hub's. Under
-   * a Time Machine copy plus an indexer plus a pegged core it measured 40s,
-   * and because the route awaited it, everything else queued behind: a message
-   * POST hit its 10s deadline and dropped into the composer's outbox, and
-   * `/hub/identity` - which touches nothing - took 16s. The listing is a query
-   * over slow-moving state, so a caller who can take a two-second-old answer
-   * should never wait on a disk.
+   * What the route awaiting this scan cost, specifically: a message POST hit
+   * its 10s deadline and dropped into the composer's outbox, and
+   * `/hub/identity` - which touches no disk at all - took 16s behind it.
    */
-  const listing = swr(computeListing);
-  /** The listing for a READER: the freshest that exists, never a wait on I/O
-   *  when one exists at all. */
-  const listHub = (): Promise<HubSession[]> => listing.cached();
+  const sessionListing = swr(computeListing, { minAgeMs: POLL_MS });
 
   /** Unmount a hosted session: close its streams/watchers and release the
    *  descriptor if it is ours. Appends nothing (suspend is the caller's call). */
@@ -572,8 +567,12 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     let artifact = idToArtifact.get(id);
     if (artifact === undefined) {
       // Unknown id: refresh the derived map once (a session opened after the
-      // last listing), then give up.
-      rememberIds(await listAll(await scanRootSet(), registryPath));
+      // last listing), then give up. Through the listing rather than a walk of
+      // its own - a shell restoring ten tabs against a hub that has just
+      // restarted asks ten times at once, and ten independent walks of the
+      // same tree (each rewriting the registry) is the pile-up single flight
+      // exists to prevent. `computeListing` calls `rememberIds` on the way.
+      await sessionListing.fresh();
       artifact = idToArtifact.get(id);
       if (artifact === undefined) return json({ error: "unknown session" }, 404);
     }
@@ -698,18 +697,28 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
 
   // ---- hub listing + events ---------------------------------------------------
 
-  const snapshot = async (): Promise<string> => {
+  /**
+   * A listing frame for the shell windows.
+   *
+   * `after` is for a snapshot taken BECAUSE something changed - a session
+   * opened, a root was added: a frame carrying the state before that change is
+   * a shell told the news and shown the old world, and it costs the wait for
+   * the walk in flight plus one more. Everything else - the poll tick, priming
+   * a window that just connected - takes the cached listing, because nothing
+   * happened just before it and a window that waited two walks to paint would
+   * sit longer on "Looking for sessions…" than it ever did before this cache
+   * existed.
+   */
+  const snapshot = async (mode: "cached" | "after-change" = "cached"): Promise<string> => {
     // The bundle stamp rides every snapshot: the watcher's file mtime in dev
     // mode, the embedded build hash in production. Either way, when a shell
     // reconnects to a hub running NEWER UI than it is, the stamp differs and
     // the shell reloads itself - a hub restart updates live windows instead
     // of leaving them on the old bundle.
     const stamp = devBundleStamp() ?? CLIENT_BUNDLE_HASH;
-    // FRESH, unlike the HTTP route: a snapshot is broadcast because something
-    // changed - a session opened, a root was added - and a frame carrying the
-    // state before that change would be a shell told the news and shown the
-    // old world. It also warms the cache the route reads.
-    return JSON.stringify({ sessions: await listing.fresh(), bundle: stamp });
+    const sessions =
+      mode === "after-change" ? await sessionListing.fresh() : await sessionListing.cached();
+    return JSON.stringify({ sessions, bundle: stamp });
   };
 
   /** Fan one frame out to every shell window. A send that throws is a window
@@ -746,14 +755,27 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
 
   // Re-broadcast the current listing whenever it changes. Gated on having
   // subscribers so a quiet daemon does not re-scan the disk, and never tighter
-  // than POLL_MS so there is no busy loop.
-  const notify = async (): Promise<void> => {
-    if (subscribers.size === 0 || notifying) return;
+  // than POLL_MS so there is no busy loop. `notifying` guards the whole pass -
+  // both snapshots, the dedupe and the fan-out - where the listing's own single
+  // flight guards only the scan inside it.
+  //
+  // A caller that has just CHANGED something passes "after-change", and that
+  // pass is never simply dropped: on a slow machine the poll tick that is
+  // already running holds a walk that predates the change, so returning here
+  // would broadcast the old world and store it as `lastSnapshot` - the change
+  // would then surface only when something else happened to move. It is queued
+  // instead, and runs once the pass in flight is done.
+  const notify = async (mode: "cached" | "after-change" = "cached"): Promise<void> => {
+    if (subscribers.size === 0) return;
+    if (notifying) {
+      if (mode === "after-change") notifyAgain = true;
+      return;
+    }
     notifying = true;
     try {
       // Listing and attention are deduped SEPARATELY: a `working` flip changes
       // only the attention snapshot, so the listing frame is not re-sent (R3).
-      const snap = await snapshot();
+      const snap = await snapshot(mode);
       if (snap !== lastSnapshot) {
         lastSnapshot = snap;
         broadcast(null, snap);
@@ -763,8 +785,16 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         lastAttentionSnapshot = att;
         broadcast("attention", att);
       }
+    } catch (err) {
+      // A listing that throws must not take the hub down: every caller here
+      // fires and forgets, so an escaping rejection is an unhandled one.
+      log(`[hub] listing broadcast failed: ${(err as Error).message}`);
     } finally {
       notifying = false;
+    }
+    if (notifyAgain) {
+      notifyAgain = false;
+      await notify("after-change");
     }
   };
 
@@ -887,7 +917,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const live = await discoverLiveServer(sessionPaths(artifact));
     if (!live || live.port === port) await mount(id, artifact);
     lastSnapshot = ""; // force the next notify to fire even inside POLL_MS
-    void notify();
+    void notify("after-change");
     // Tell open shell windows to surface this session as a tab NOW. The CLI
     // reads `shells` to decide whether a window took it - if one did, it
     // skips the default browser entirely (opening in Arc next to a live
@@ -962,7 +992,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // that a refusal on any ground is still queryable by project - while an
     // unrooted one still never reaches a record (07#12). Validating in the
     // other order forced a choice between those two, and both are wanted.
-    const listing = await listHub();
+    const rows = await sessionListing.cached();
     // A worktree is a listed root of its own, grouped under its main repo -
     // both are legitimate create targets; anything else is not a project the
     // hub knows about.
@@ -970,7 +1000,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // its real path, and a caller - a dialog, a script, a human - may hand over
     // any spelling that reaches the same folder.
     const asked = canonicalArtifactPath(project);
-    const known = listing.some(
+    const known = rows.some(
       (s) =>
         s.project === project ||
         s.worktree === project ||
@@ -1322,24 +1352,16 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // The listing's cached answer was computed for the OLD root set, so it is
     // not stale here - it is wrong. Drop it: the next reader waits for a scan
     // that includes what they just added, which is the whole point of adding it.
-    listing.invalidate();
-    // ANSWER on the persist, do not wait on the scan (07#14). Scanning a home
-    // directory was measured at ~16s, and the root is already saved before it
-    // starts - so any client-side abort reported failure for an add that had
-    // in fact succeeded, and the human re-added a folder the hub already had.
-    // The count is not what makes the add real; the persist is.
-    //
-    // The sessions themselves arrive on the listing stream, which the notify
-    // below triggers and which every window reads anyway - so nothing is lost
-    // by not counting them here, and the scan no longer sits between a human
-    // and their answer.
+    sessionListing.invalidate();
     // Counted from a scan of JUST this folder - `listAll` would union the
     // registry and report sessions that have nothing to do with the pick.
     // The count is what tells the human they picked the right folder, so it is
     // worth waiting a moment for - but only a moment. Scanning a home
     // directory was measured at ~16s, and the root is already persisted before
     // it starts, so a client that gave up reported failure for an add that had
-    // in fact succeeded (07#14).
+    // in fact succeeded, and the human re-added a folder the hub already had
+    // (07#14). The count is not what makes the add real; the persist is, and
+    // the sessions themselves arrive on the listing stream regardless.
     const scan = scanRoots([chosen.dir]).catch(() => []);
     const counted = await Promise.race([
       scan.then((found) => found.length),
@@ -1347,7 +1369,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     ]);
     // Either way the sessions arrive on the listing stream, which every window
     // reads - so a slow scan costs the count, never the add.
-    void scan.then(() => notify());
+    void scan.then(() => notify("after-change"));
     // The EFFECTIVE set, not just the persisted additions: this is what the
     // shell displays as "looking in", and answering with the additions alone
     // made it forget the defaults (`~/dev`, the scratchpads) it still scans.
@@ -1396,7 +1418,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // place a project can be recorded before it holds anything, so naming one
     // writes there - the same store the folder chooser on the roots route uses.
     await addRoot(proj.project, rootsPath);
-    void notify();
+    // Same mutation as the roots route: the cached listing was computed for a
+    // root set that did not include this folder, so it is wrong rather than
+    // merely old.
+    sessionListing.invalidate();
+    void notify("after-change");
     return json(
       {
         project: proj.project,
@@ -1410,7 +1436,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   };
 
   const handle = async (req: Request, observation: RequestObservation): Promise<Response> => {
-    const { pathname } = new URL(req.url);
+    const url = new URL(req.url);
+    const { pathname } = url;
 
     const sessionMatch = /^\/s\/([a-f0-9]{16})(\/.*)?$/.exec(pathname);
 
@@ -1505,7 +1532,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       );
     }
     if (pathname === "/hub/sessions" && req.method === "GET") {
-      return json({ sessions: await listHub() }, 200, noStore);
+      // `?fresh=1` is for a caller that has just been told something changed
+      // and is looking for the row that proves it - the shell's `open-tab`
+      // handler. Everyone else takes the cached answer and never waits on I/O.
+      const sessions = await (url.searchParams.get("fresh") === "1"
+        ? sessionListing.fresh()
+        : sessionListing.cached());
+      return json({ sessions }, 200, noStore);
     }
     if (pathname === "/hub/open" && req.method === "POST") {
       return handleHubOpen(req);
