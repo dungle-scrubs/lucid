@@ -61,6 +61,22 @@ presented in*. One word, one meaning: plan 06 nearly gave this one a second
 sense, and the two are a level apart - a surface is what you can point at, a
 view is where you are looking at it.
 
+### Artifact outline
+The Lucid-owned, current-version projection of an artifact's visible,
+non-empty H2 headings, used to reveal sections without becoming artifact
+content or requiring agent-authored navigation.
+_Avoid_: table of contents, ToC, sidebar.
+
+### Pinned outline mode
+The artifact outline presentation that remains visible only while it fits
+entirely in unused gutter outside the artifact's chosen content width, without
+changing that width.
+
+### Transient outline mode
+The artifact outline presentation that rests as an activation rail and expands
+temporarily when a full outline would overlap the artifact's chosen content
+width.
+
 ### Overlay
 The interaction layer Lucid injects into/over the artifact (built with Lit +
 Shadow DOM) that makes the surface addressable: hover targets, annotation
@@ -516,10 +532,21 @@ _Avoid_: request id (that names the record's own id), correlation id, span id.
 - A **hub** scans many **roots**; a **root** contains zero or more **artifacts**.
 - A **shell** holds zero or more **tabs**; each **tab** holds exactly one
   **artifact** and renders exactly one **viewer**.
+- A **surface** has at most one **artifact outline**, derived from its current
+  **version**; when present, the outline is in either **pinned outline mode** or
+  **transient outline mode** according to available gutter space.
 - Every **artifact** resolves to exactly one **project**; a **project** appears
   at most once in a shell, as one **tab group**.
 - Every **tab** has exactly one **attention state**; **unseen** is a separate
   property that can hold alongside any of them.
+
+## Example dialogue
+
+> **Dev:** "Should the artifact include a table of contents so Lucid can show
+> section navigation?"
+> **Domain expert:** "No. Lucid derives the **artifact outline** from the
+> current **version**. The artifact may still contain its own table of contents,
+> but that is ordinary artifact content."
 
 ## Flagged ambiguities
 
@@ -540,6 +567,9 @@ _Avoid_: request id (that names the record's own id), correlation id, span id.
   operational). Resolved: a bare "log" is the review's; the other is always
   "the hub log". The code needed this before the glossary did - `daemon.ts`
   names its option `hubLogPath` because `logPath` was taken.
+- **"Table of contents" could name either artifact content or Lucid's derived
+  navigation.** Resolved: **artifact outline** names the Lucid-owned projection;
+  table of contents names navigation authored into the artifact itself.
 - **A turn's end is recorded only when Lucid owns the turn.** Resolved for the
   spawned case (plan 08): the hub mints a **turn id**, exports it as
   `LUCID_TURN_ID` so the turn's own **acks** carry it, and appends
