@@ -702,7 +702,25 @@ test("reopen with nobody listening says feedback is record-only", async ({ page 
 
   await on(page).reopen().click();
   await expect(on(page).resolvedBar()).toHaveCount(0);
-  await expect(page.getByText("no agent is listening right now")).toBeVisible();
+  const advisory = page.getByText("no agent is listening right now");
+  await expect(advisory).toBeVisible();
+
+  // And it sits ABOVE the live status line, never under it: an advisory about
+  // what just happened, rendered below "something is happening now", reads as
+  // though it came last. Sending feedback opens that slot, so both are on
+  // screen together and the order is a real comparison rather than a skipped
+  // one. (The reopening itself is an entry in the record above both.)
+  const input = page.locator(`${hook("message-input")}:visible`);
+  await input.fill("written after reopening");
+  await input.press("Enter");
+  const working = on(page).awaitingAck();
+  await expect(working).toBeVisible();
+  const advisoryBox = await advisory.boundingBox();
+  const workingBox = await working.boundingBox();
+  expect(advisoryBox).not.toBeNull();
+  expect(workingBox).not.toBeNull();
+  if (advisoryBox === null || workingBox === null) return;
+  expect(advisoryBox.y).toBeLessThan(workingBox.y);
 });
 
 test("reopen on an ended session explains the way back instead of failing", async ({ page }) => {

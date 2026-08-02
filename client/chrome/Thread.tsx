@@ -718,11 +718,15 @@ export const Thread = () => {
             scrolls from the top, oldest-first, unchanged. */}
         <div aria-hidden className="mt-auto" />
         <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
-        <WorkingIndicator />
-        {/* Staged work lives at the end of the record, where the eye already is
-            after a pick - and where auto-scroll brings it. */}
+        {/* Advisories sit between the record and the live status line, never
+            under it. What HAPPENED - including a reopening, which is an entry
+            in the record above - can never render below "something is
+            happening now"; that ordering reads as though the advisory came
+            last. Staged work still lives at the end of the record, where the
+            eye already is after a pick and where auto-scroll brings it. */}
         <Warnings />
         <Notices />
+        <WorkingIndicator />
         {/* Undelivered messages sit directly above the composer that lost them,
             where the eye lands after pressing Enter. */}
         <UnsentMessages />

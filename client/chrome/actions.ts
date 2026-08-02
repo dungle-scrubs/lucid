@@ -623,13 +623,16 @@ export const createActions = (ctx: ActionsCtx) => {
     }
     try {
       await api("/__lucid/reopen", {});
-      // No notice: the reopen enters the record as its own entry, at the moment
-      // it happened. A toast for it was pinned to the bottom of the transcript,
-      // where it outlived its moment and sat below every message that followed
-      // - and under the live working line, which reads as though the reopening
-      // came last. What it used to add ("nobody is listening right now") is a
-      // standing fact the listener line above the composer already states, and
-      // states currently rather than frozen at click time.
+      // The reopen landed in the log, but approval already released the agent -
+      // if nobody is in a wait loop, feedback sent now sits recorded until an
+      // agent checks back in, and the human should know that before writing it.
+      // The listener line carries the same fact, but only inside a tooltip:
+      // this is the one place it is said without being hunted for.
+      if (get().agentsListening === 0) {
+        notice(
+          "Review reopened - no agent is listening right now. Feedback is recorded and delivered when one checks in.",
+        );
+      }
     } catch {
       // Re-check after the failure: the click can race the session_ended frame,
       // and by now the state knows which failure this actually was.
