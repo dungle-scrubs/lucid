@@ -25,6 +25,11 @@ const HOVER_INTENT_MS = 120;
 const HOVER_LEAVE_MS = 180;
 const PENDING_FOCUS_HOLD_MS = 500;
 
+/** The resting rail's height (`h-16`) and the gap to the panel that opens
+ *  under it. Named because the centering math below positions both. */
+const RAIL_HEIGHT_PX = 64;
+const RAIL_PANEL_GAP_PX = 4;
+
 const ListIcon = () => (
   // lucide list
   <svg
@@ -126,6 +131,41 @@ export const ArtifactOutline = () => {
     sourceSnapshot?.generation === renderedSnapshot?.generation ? sourceSnapshot : renderedSnapshot;
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
+
+  // Where the resting rail sits: vertically centered in the slot, rounded so
+  // its PAGE position lands on a whole CSS pixel. Measured rather than
+  // `top: 50%` because the slot's top and height are fractional by design
+  // (the half-pixel surface inset), and a rail on a half pixel renders a soft
+  // border at 1x - the crispness the outline's geometry tests pin. Rounding
+  // the local offset alone is not enough: the slot's own fractional top would
+  // put an integral offset back onto a half pixel, so the compensation is
+  // computed against the viewport. Null until the first measurement; the
+  // pure-CSS fallback below keeps the pre-measurement paint sane.
+  const [railTop, setRailTop] = useState<number | null>(null);
+  const transientNow = presentation.mode !== "PINNED" && presentation.mode !== "ABSENT";
+  useLayoutEffect(() => {
+    // The root only RENDERS once a snapshot exists: a mode flip that lands
+    // before the snapshot finds no element, so the snapshot is a real input -
+    // its arrival is what makes the first measurement possible.
+    if (!transientNow || snapshot === null) return undefined;
+    const root = rootRef.current;
+    if (!root) return undefined;
+    const measure = (): void => {
+      const rect = root.getBoundingClientRect();
+      const centered = rect.top + (rect.height - RAIL_HEIGHT_PX) / 2;
+      setRailTop(Math.max(0, Math.round(centered) - rect.top));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    // The compensation goes stale if the slot MOVES without resizing - the
+    // header's fonts settling shifts the whole surface region under a
+    // same-sized slot. The region cannot move without resizing (the viewport
+    // pins the column), so observing it catches what the root alone misses.
+    const region = root.closest('[data-test="surface-region"]');
+    if (region) observer.observe(region);
+    return () => observer.disconnect();
+  }, [transientNow, snapshot]);
 
   const focusSurface = useCallback((): void => {
     rootRef.current?.closest<HTMLElement>('[data-test="surface-region"]')?.focus();
@@ -344,8 +384,14 @@ export const ArtifactOutline = () => {
       }}
       data-test="artifact-outline"
       data-mode={presentation.mode.toLowerCase()}
-      className={`pointer-events-none flex max-h-full min-h-0 w-full flex-col items-end ${
-        transient ? "justify-end" : ""
+      // Transient mode floats the rail at the slot's vertical CENTER, like a
+      // side tab, with the panel opening below it. Both are absolutely
+      // positioned so opening NEVER moves the rail: a trigger that jumps when
+      // tapped is a trigger the tap's synthesized click then misses - the
+      // click lands on the artifact and becomes an accidental pick. Pinned
+      // mode keeps the top-anchored column.
+      className={`pointer-events-none max-h-full min-h-0 w-full ${
+        transient ? "relative h-full" : "flex flex-col items-end"
       }`}
     >
       {transient ? (
@@ -393,8 +439,15 @@ export const ArtifactOutline = () => {
                 }
                 transition({ type: "latch" });
               }}
-              style={{ width: `${ARTIFACT_OUTLINE_POLICY.railInsetPx}px` }}
-              className="pointer-events-auto h-16 cursor-pointer rounded-none border border-ink-500 bg-ink-850/95 px-0 text-fg-muted shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline"
+              style={{
+                top: railTop ?? `calc(50% - ${RAIL_HEIGHT_PX / 2}px)`,
+                width: `${ARTIFACT_OUTLINE_POLICY.railInsetPx}px`,
+              }}
+              // !transition-none: the Button base carries transition-all,
+              // which would ANIMATE `top` each time the centering compensation
+              // updates - a rail gliding a quarter pixel is a rail off the
+              // device-pixel grid for every frame of the glide.
+              className="!transition-none pointer-events-auto absolute right-0 h-16 cursor-pointer rounded-none border border-ink-500 bg-ink-850/95 px-0 text-fg-muted shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline"
             >
               <span className="size-3.5">
                 <ListIcon />
@@ -405,7 +458,16 @@ export const ArtifactOutline = () => {
       ) : null}
       <CollapsibleContent
         data-test="artifact-outline-content"
-        className={`pointer-events-auto min-h-0 w-full ${transient ? "mt-1" : "h-full"}`}
+        // Transient: an absolute region from just under the centered rail to
+        // the slot's bottom, so opening displaces nothing. Pointer events stay
+        // off on the REGION (it is mostly empty space over the artifact) and
+        // on on the panel, which re-enables them itself.
+        style={transient ? { top: (railTop ?? 0) + RAIL_HEIGHT_PX + RAIL_PANEL_GAP_PX } : undefined}
+        className={`min-h-0 w-full ${
+          transient
+            ? "pointer-events-none absolute inset-x-0 bottom-0"
+            : "pointer-events-auto h-full"
+        }`}
       >
         <OutlinePanel mode={presentation.mode} snapshot={snapshot} onActivate={activate} />
       </CollapsibleContent>

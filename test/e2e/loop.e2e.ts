@@ -3099,12 +3099,31 @@ test("the transient outline supports hover, latch, tab, Escape, and keyboard act
   await expect(outline).toHaveAttribute("data-mode", "transient_closed");
   await expect(rail).toHaveAccessibleName("Open artifact outline");
   await expect(panel).toBeHidden();
-  const railBox = await rail.boundingBox();
+  // Settle first: the rail re-centers a frame behind a surface that is still
+  // laying out, and its resting place is what the geometry below pins.
+  let railBox = await rail.boundingBox();
+  await expect
+    .poll(async () => {
+      const next = await rail.boundingBox();
+      const settled = next?.y === railBox?.y;
+      railBox = next;
+      return settled;
+    })
+    .toBe(true);
   const slotBox = await on(page).surfaceOutlineSlot().boundingBox();
   expect(railBox?.width).toBe(ARTIFACT_OUTLINE_POLICY.railInsetPx);
   expect(
     Math.abs(
       (railBox?.x ?? 0) + (railBox?.width ?? 0) - ((slotBox?.x ?? 0) + (slotBox?.width ?? 0)),
+    ),
+  ).toBeLessThanOrEqual(1);
+  // The resting rail floats at the slot's vertical CENTER, like a side tab -
+  // not parked under the control stack at the top.
+  expect(
+    Math.abs(
+      (railBox?.y ?? 0) +
+        (railBox?.height ?? 0) / 2 -
+        ((slotBox?.y ?? 0) + (slotBox?.height ?? 0) / 2),
     ),
   ).toBeLessThanOrEqual(1);
   expect(await outline.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("none");
@@ -3899,7 +3918,19 @@ test("outline geometry remains crisp at representative one-x and two-x scales", 
       const outline = on(scaledPage).artifactOutline();
       await expect(outline).toHaveAttribute("data-mode", "transient_closed");
       const rail = on(scaledPage).artifactOutlineRail();
-      const railBox = await rail.boundingBox();
+      // Crispness is a STEADY-STATE contract: during load the surface is still
+      // settling (fonts, the updating pill) and the rail re-centers a frame
+      // behind its moving anchor. Wait for two identical consecutive frames
+      // before holding the geometry to the whole-device-pixel bar.
+      let railBox = await rail.boundingBox();
+      await expect
+        .poll(async () => {
+          const next = await rail.boundingBox();
+          const settled = next?.y === railBox?.y && next?.height === railBox?.height;
+          railBox = next;
+          return settled;
+        })
+        .toBe(true);
       expect(railBox?.width).toBe(18);
       if (railBox === null) throw new Error("outline rail has no rendered box");
       const railCoordinates = [
