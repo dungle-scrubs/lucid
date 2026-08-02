@@ -2,17 +2,31 @@ import { describe, expect, test } from "bun:test";
 import { revealElement, revealOutlineActivation } from "../client/overlay/reveal.ts";
 import { projectOutlineHeadings } from "../client/shared/artifact-outline.ts";
 
+/** The heading sits 200px down a view already scrolled 500px, so the reveal
+ *  target is a number no other combination of the two could produce. */
+const HEADING_VIEWPORT_TOP = 200;
+const VIEW_SCROLL_Y = 500;
+
 const fakeElement = (connected = true) => {
-  const scrolls: ScrollIntoViewOptions[] = [];
+  const scrolls: ScrollToOptions[] = [];
   let focusCalls = 0;
   const element = {
     focus: () => {
       focusCalls += 1;
     },
+    getBoundingClientRect: () => ({ top: HEADING_VIEWPORT_TOP }) as DOMRect,
     get isConnected() {
       return connected;
     },
-    scrollIntoView: (options: ScrollIntoViewOptions) => scrolls.push(options),
+    ownerDocument: {
+      defaultView: {
+        scrollTo: (options: ScrollToOptions) => scrolls.push(options),
+        scrollY: VIEW_SCROLL_Y,
+      },
+    },
+    scrollIntoView: () => {
+      throw new Error("reveal must scroll the view, never the element");
+    },
   } as unknown as Element;
   return { element, focusCalls: () => focusCalls, scrolls };
 };
@@ -30,7 +44,10 @@ describe("outline element reveal", () => {
       }),
     ).toBe(true);
     expect(effects).toEqual(["styles", "clear", "mark"]);
-    expect(target.scrolls).toEqual([{ behavior: "smooth", block: "center" }]);
+    // Top-aligned, not centred: the heading is the top of what the reader came
+    // for, so the section opens below it rather than being cut in half. The
+    // 72px inset keeps it clear of the edge so an eyebrow above it survives.
+    expect(target.scrolls).toEqual([{ behavior: "smooth", top: 200 + 500 - 72 }]);
     expect(target.focusCalls()).toBe(0);
   });
 
@@ -46,7 +63,7 @@ describe("outline element reveal", () => {
       },
     });
     expect(emphasized).toEqual([target.element]);
-    expect(target.scrolls).toEqual([{ behavior: "instant", block: "center" }]);
+    expect(target.scrolls).toEqual([{ behavior: "instant", top: 200 + 500 - 72 }]);
     expect(target.focusCalls()).toBe(0);
   });
 

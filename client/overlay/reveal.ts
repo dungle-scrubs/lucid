@@ -13,6 +13,11 @@ import {
   resolveOutlineActivation,
 } from "../shared/artifact-outline.ts";
 
+/** How far below the viewport's top edge a revealed heading comes to rest.
+ *  Roughly one eyebrow line plus its spacing, so the kicker above a heading
+ *  arrives with it instead of being scrolled past. */
+const REVEAL_TOP_INSET_PX = 72;
+
 export interface RevealInvalidation extends Omit<OutlineActivationHealth, "reason"> {
   readonly code: "AO-002";
   readonly reason: "disconnected-heading" | "stale-generation" | "unknown-key";
@@ -50,10 +55,26 @@ export const revealElement = (
     return false;
   }
   emphasizeElement(element, environment);
-  element.scrollIntoView({
-    behavior: motion === "reduced" ? "instant" : "smooth",
-    block: "center",
-  });
+  // `start`, not `center`: a heading reached from the outline is the top of
+  // what you came to read, so the section should open BELOW it. Centring put
+  // the heading halfway down and filled the upper half with the section
+  // already left behind. The inset keeps it off the very edge, so the eyebrow
+  // line above a heading stays visible; `scroll-margin-top` is what
+  // `scrollIntoView` honours for that, and is inert for everything else.
+  const behavior = motion === "reduced" ? "instant" : "smooth";
+  // The inset cannot ride on the element's own `scroll-margin-top`: writing a
+  // style onto the artifact is a mutation of the document the outline runtime
+  // watches, and it invalidates that runtime's geometry proof (measured - the
+  // proof never completes again after one reveal). Scrolling the view to an
+  // absolute position leaves the artifact untouched and lands the heading in
+  // the same place, in one animation rather than a jump and a correction.
+  const view = element.ownerDocument?.defaultView ?? null;
+  if (view) {
+    const top = element.getBoundingClientRect().top + view.scrollY - REVEAL_TOP_INSET_PX;
+    view.scrollTo({ behavior, top: Math.max(0, top) });
+  } else {
+    element.scrollIntoView({ behavior, block: "start" });
+  }
   return true;
 };
 

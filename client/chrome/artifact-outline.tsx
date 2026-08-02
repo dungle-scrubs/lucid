@@ -25,10 +25,35 @@ const HOVER_INTENT_MS = 120;
 const HOVER_LEAVE_MS = 180;
 const PENDING_FOCUS_HOLD_MS = 500;
 
-/** The resting rail's height (`h-16`) and the gap to the panel that opens
- *  under it. Named because the centering math below positions both. */
+/** The resting rail's height (`h-16`) and the margin the panel keeps from the
+ *  slot's edges. Named because the centering math below positions both. */
 const RAIL_HEIGHT_PX = 64;
 const RAIL_PANEL_GAP_PX = 4;
+
+/** Measured placement of the resting rail inside its slot. */
+interface RailGeometry {
+  /** The slot's own height - the room the centered panel has to fit in. */
+  readonly slotHeight: number;
+  /** The rail's offset from the slot's top, on a whole device pixel. */
+  readonly top: number;
+}
+
+/**
+ * The transient panel is centered ON the rail: its middle lines up with the
+ * rail's middle, so it expands out of the thing the pointer is on rather than
+ * dropping below it. Symmetry is what does the centering - the region is the
+ * tallest box that fits inside the slot and is centered on the rail, and the
+ * panel centers itself in that. Near the slot's top or bottom the region is
+ * the short side doubled, so the panel gets smaller instead of drifting off
+ * the rail or overflowing the slot.
+ */
+const transientRegion = (
+  geometry: RailGeometry,
+): { readonly height: number; readonly top: number } => {
+  const center = geometry.top + RAIL_HEIGHT_PX / 2;
+  const half = Math.max(0, Math.min(center, geometry.slotHeight - center) - RAIL_PANEL_GAP_PX);
+  return { height: half * 2, top: center - half };
+};
 
 const ListIcon = () => (
   // lucide list
@@ -150,7 +175,12 @@ export const ArtifactOutline = () => {
   // put an integral offset back onto a half pixel, so the compensation is
   // computed against the viewport. Null until the first measurement; the
   // pure-CSS fallback below keeps the pre-measurement paint sane.
-  const [railTop, setRailTop] = useState<number | null>(null);
+  //
+  // The slot's own height rides along because the transient panel is centered
+  // on the rail, not hung below it: keeping it inside the slot needs both the
+  // room above the rail's centre and the room below it.
+  const [railGeometry, setRailGeometry] = useState<RailGeometry | null>(null);
+  const railTop = railGeometry?.top ?? null;
   const transientNow = presentation.mode !== "PINNED" && presentation.mode !== "ABSENT";
   useLayoutEffect(() => {
     // The root only RENDERS once a snapshot exists: a mode flip that lands
@@ -162,7 +192,14 @@ export const ArtifactOutline = () => {
     const measure = (): void => {
       const rect = root.getBoundingClientRect();
       const centered = rect.top + (rect.height - RAIL_HEIGHT_PX) / 2;
-      setRailTop(Math.max(0, Math.round(centered) - rect.top));
+      const top = Math.max(0, Math.round(centered) - rect.top);
+      // Same-reference return: the observer fires on every slot resize, and an
+      // unchanged geometry must not re-render the panel mid-animation.
+      setRailGeometry((previous) =>
+        previous && previous.top === top && previous.slotHeight === rect.height
+          ? previous
+          : { slotHeight: rect.height, top },
+      );
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -456,7 +493,13 @@ export const ArtifactOutline = () => {
               // which would ANIMATE `top` each time the centering compensation
               // updates - a rail gliding a quarter pixel is a rail off the
               // device-pixel grid for every frame of the glide.
-              className="!transition-none pointer-events-auto absolute right-0 h-16 cursor-pointer rounded-none border border-ink-500 bg-ink-850/95 px-0 text-fg-muted shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline"
+              //
+              // z-10: the panel is centered ON the rail and shares its right
+              // edge, so it opens over the rail's own footprint. The rail is
+              // the thing being pointed at - it stays on top, and the panel
+              // grows out from behind it. Painted under, the rail would stop
+              // being hoverable the moment its own hover opened the panel.
+              className="!transition-none pointer-events-auto absolute right-0 z-10 h-16 cursor-pointer rounded-none border border-ink-500 bg-ink-850/95 px-0 text-fg-muted shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline"
             >
               <span className="size-3.5">
                 <ListIcon />
@@ -467,14 +510,20 @@ export const ArtifactOutline = () => {
       ) : null}
       <CollapsibleContent
         data-test="artifact-outline-content"
-        // Transient: an absolute region from just under the centered rail to
-        // the slot's bottom, so opening displaces nothing. Pointer events stay
-        // off on the REGION (it is mostly empty space over the artifact) and
-        // on on the panel, which re-enables them itself.
-        style={transient ? { top: (railTop ?? 0) + RAIL_HEIGHT_PX + RAIL_PANEL_GAP_PX } : undefined}
+        // Transient: an absolute region centered on the rail, so opening
+        // displaces nothing and the panel arrives level with the pointer.
+        // `justify-center` inside a region that is itself symmetric about the
+        // rail is what puts the panel's middle on the rail's middle. Pointer
+        // events stay off on the REGION (it is mostly empty space over the
+        // artifact) and on on the panel, which re-enables them itself. Before
+        // the first measurement the region falls back to the whole slot -
+        // centered on the slot, which is where the rail is resting anyway.
+        style={transient && railGeometry ? transientRegion(railGeometry) : undefined}
         className={`min-h-0 w-full ${
           transient
-            ? "pointer-events-none absolute inset-x-0 bottom-0"
+            ? `pointer-events-none absolute inset-x-0 flex flex-col justify-center ${
+                railGeometry ? "" : "inset-y-0"
+              }`
             : "pointer-events-auto h-full"
         }`}
       >
