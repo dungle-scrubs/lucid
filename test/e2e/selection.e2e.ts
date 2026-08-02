@@ -224,6 +224,51 @@ test("an attending session's own model is shown, not offered", async ({ page }) 
   );
 });
 
+test("the inherited label names the session that is attending, not a sticky pick", async ({
+  page,
+}) => {
+  // The row reports what the ATTENDING session runs. A sticky pick names the
+  // harness a FUTURE unattended turn would use - a different thing, and one
+  // that has not run anything. Labelling the reported values with it produced
+  // rows that contradicted themselves: "claude-code / fable-5 / inherited
+  // from codex".
+  hub = await startHub({ harnesses: registry("/bin/true") });
+  const opened = await openIntoHub(hub, PLAN_V1);
+  cli = opened.cli;
+  const artifact = cli.artifact;
+  const env = { ...hub.env, LUCID_HARNESS: "claude-code", LUCID_MODEL: "opus-4.8" };
+  const waitArgs = [
+    "run",
+    MAIN,
+    "wait",
+    artifact,
+    "--harness",
+    "claude-code",
+    "--since",
+    "evt_00001",
+  ];
+  await new Promise<void>((resolve) => {
+    const done = spawn("bun", [...waitArgs, "--timeout", waitTimeoutSeconds(1)], {
+      env,
+      stdio: "ignore",
+    });
+    done.once("exit", () => resolve());
+  });
+  listener = spawn("bun", [...waitArgs, "--timeout", waitTimeoutSeconds(30)], {
+    env,
+    stdio: "ignore",
+  });
+  // The pick names a harness that is NOT the one attending.
+  await writeFile(selectionFile(cli), JSON.stringify({ harness: "codex", effort: "high" }));
+
+  await page.goto(opened.shellUrl);
+  const pickers = page.locator(`${hook("selection-pickers")}:visible`);
+  await expect(pickers).toHaveAttribute("data-readonly", "true", { timeout: 20_000 });
+  await expect(on(pickers).selectionHarness()).toContainText("claude-code");
+  await expect(on(pickers).selectionEffort()).toContainText("inherited from claude-code");
+  await expect(on(pickers).selectionEffort()).not.toContainText("codex");
+});
+
 test("an attendant arriving mid-session is read afresh, not from the open tab's snapshot", async ({
   page,
 }) => {

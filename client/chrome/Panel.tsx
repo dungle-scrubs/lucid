@@ -532,8 +532,15 @@ export const SelectionPickers = () => {
   const showHarness = harnesses.length > 1;
   if (!showHarness && models.length === 0 && !showEffort) return null;
 
+  // Two different harnesses, and conflating them was a row that contradicted
+  // itself. `harness` is the pick TARGET - which harness a new selection
+  // applies to, so a sticky pick wins. The reported values in read-only mode
+  // come from the session that is ATTENDING, so the label that explains them
+  // must name that one: a pick for some future unattended turn has not run
+  // anything, and crediting a live session's model to it read as
+  // "claude-code / fable-5 / inherited from codex".
   const harness = selection.harness ?? attendant?.harness ?? info.name;
-  const inherited = `inherited from ${harness}`;
+  const inherited = `inherited from ${attendant?.harness ?? info.name}`;
 
   /** A POST replaces the whole selection, so both fields ride every write. */
   const commit = async (targetHarness: string, model: string, effort: string): Promise<void> => {

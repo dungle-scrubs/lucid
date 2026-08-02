@@ -771,8 +771,27 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   // would broadcast the old world and store it as `lastSnapshot` - the change
   // would then surface only when something else happened to move. It is queued
   // instead, and runs once the pass in flight is done.
+  /**
+   * A frame that says nothing except "this hub is still here".
+   *
+   * A window cannot tell a quiet hub from a dead one: a browser holds a
+   * WebSocket to a process that no longer exists without ever firing `close`
+   * (measured - a Bun client sees the close on the same restart, Chrome does
+   * not), so a shell that waits for a close waits forever. It stops receiving
+   * the listing, and it never learns a new build shipped - every rollout
+   * lands on disk and reaches nobody's screen.
+   *
+   * So liveness is stated rather than inferred. The client treats silence
+   * past a few of these as a dead socket and reconnects, which is the one
+   * thing that does not depend on the network telling the truth.
+   */
+  const TICK_EVERY = Math.max(1, Math.round(10_000 / POLL_MS));
+  let ticks = 0;
+
   const notify = async (mode: "cached" | "after-change" = "cached"): Promise<void> => {
     if (subscribers.size === 0) return;
+    ticks += 1;
+    if (ticks % TICK_EVERY === 0) broadcast("tick", "");
     if (notifying) {
       if (mode === "after-change") notifyAgain = true;
       return;
