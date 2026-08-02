@@ -25,7 +25,11 @@ describe("bounded stdout JSONL session identity", () => {
         status: "identity",
       },
     ]);
-    expect(decoder.diagnostics()).toEqual([]);
+    expect(decoder.diagnostics()).toEqual({
+      "invalid-id": 0,
+      "line-overflow": 0,
+      "malformed-json": 0,
+    });
   });
 
   test("ignores unrelated records and returns every matching identity in order", () => {
@@ -55,12 +59,32 @@ describe("bounded stdout JSONL session identity", () => {
     decoder.push(`{"type":"thread.started","thread_id":"${"x".repeat(513)}"}\n`);
     decoder.push("x".repeat(65_537));
     decoder.push("\n");
-    expect(decoder.diagnostics().map(({ code }) => code)).toEqual([
-      "HSI003",
-      "HSI003",
-      "HSI003",
-      "HSI003",
+    expect(decoder.diagnostics()).toEqual({
+      "invalid-id": 2,
+      "line-overflow": 1,
+      "malformed-json": 1,
+    });
+  });
+
+  test("the line bound holds whether the pipe split the line or delivered it whole", () => {
+    // The same hostile bytes must decode identically however they arrive: an
+    // oversized identity record delivered in ONE chunk (newline included) is
+    // refused as overflow, never parsed - and a valid record after it on the
+    // same chunk still decodes.
+    const decoder = new SessionIdentityDecoder("codex", codexStrategy);
+    const huge = `{"type":"thread.started","thread_id":"pwned","pad":"${"x".repeat(70_000)}"}`;
+    const events = decoder.push(`${huge}\n{"type":"thread.started","thread_id":"after"}\n`);
+    expect(events).toEqual([
+      {
+        identity: { authority: "observed", harness: "codex", sessionId: "after" },
+        status: "identity",
+      },
     ]);
+    expect(decoder.diagnostics()).toEqual({
+      "invalid-id": 0,
+      "line-overflow": 1,
+      "malformed-json": 0,
+    });
   });
 
   test("a final record without newline is decoded on finish", () => {

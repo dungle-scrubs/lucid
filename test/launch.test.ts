@@ -14,6 +14,7 @@ import {
   requireSessionIdentity,
   resolveRecipe,
 } from "../src/launch/recipes.ts";
+import type { SessionIdentityRecipe } from "../src/launch/session-identity.ts";
 import { forkDirFor, writeForkSeed } from "../src/launch/seed.ts";
 import { discoverLiveServer, readServerDescriptor } from "../src/server/discovery.ts";
 import { runServer } from "../src/server/server.ts";
@@ -247,13 +248,16 @@ describe("recipes registry", () => {
     await expect(loadRegistry(regPath)).rejects.toThrow(/default/);
   });
 
+  const writeHarnesses = (harnesses: Record<string, unknown>) =>
+    writeFile(regPath, JSON.stringify({ harnesses }));
+
   test("caller-assigned identity requires an adjacent argument and id token", async () => {
     const valid = {
-      sessionIdentity: { source: "caller-assigned" as const, argument: "--session-id" },
-      spawn: ["claude", "--session-id", "{id}", "-p", "{prompt}"],
       resume: ["claude", "--resume", "x", "--session-id", "{id}", "-p", "{prompt}"],
-    };
-    await writeFile(regPath, JSON.stringify({ harnesses: { claude_code: valid } }));
+      sessionIdentity: { argument: "--session-id", source: "caller-assigned" },
+      spawn: ["claude", "--session-id", "{id}", "-p", "{prompt}"],
+    } satisfies { resume: string[]; sessionIdentity: SessionIdentityRecipe; spawn: string[] };
+    await writeHarnesses({ claude_code: valid });
     const registry = await loadRegistry(regPath);
     const resolved = registry && resolveRecipe(registry, "claude_code");
     expect(resolved?.recipe.sessionIdentity).toEqual(valid.sessionIdentity);
@@ -266,23 +270,23 @@ describe("recipes registry", () => {
       { ...valid, spawn: ["claude", "{id}", "--session-id"] },
       { ...valid, resume: ["claude", "--resume", "{id}"] },
     ]) {
-      await writeFile(regPath, JSON.stringify({ harnesses: { claude_code: malformed } }));
+      await writeHarnesses({ claude_code: malformed });
       await expect(loadRegistry(regPath)).rejects.toMatchObject({ code: "HSI001" });
     }
   });
 
   test("stdout JSONL identity validates bounded selectors and complete argv protocol", async () => {
     const valid = {
+      resume: ["codex", "exec", "resume", "{id}", "--json", "{prompt}"],
       sessionIdentity: {
-        source: "stdout-jsonl" as const,
         event: "thread.started",
         field: "thread_id",
         requiredArgument: "--json",
+        source: "stdout-jsonl",
       },
       spawn: ["codex", "exec", "--json", "{prompt}"],
-      resume: ["codex", "exec", "resume", "{id}", "--json", "{prompt}"],
-    };
-    await writeFile(regPath, JSON.stringify({ harnesses: { codex: valid } }));
+    } satisfies { resume: string[]; sessionIdentity: SessionIdentityRecipe; spawn: string[] };
+    await writeHarnesses({ codex: valid });
     const registry = await loadRegistry(regPath);
     const recipe = registry && resolveRecipe(registry, "codex")?.recipe;
     expect(recipe?.sessionIdentity).toEqual({ ...valid.sessionIdentity, allowRotation: false });
@@ -294,16 +298,13 @@ describe("recipes registry", () => {
       { ...valid, sessionIdentity: { ...valid.sessionIdentity, event: "x".repeat(129) } },
       { ...valid, sessionIdentity: { ...valid.sessionIdentity, field: "thread\nid" } },
     ]) {
-      await writeFile(regPath, JSON.stringify({ harnesses: { codex: malformed } }));
+      await writeHarnesses({ codex: malformed });
       await expect(loadRegistry(regPath)).rejects.toMatchObject({ code: "HSI001" });
     }
   });
 
   test("legacy identity-free recipes load for diagnosis but refuse unattended use as HSI001", async () => {
-    await writeFile(
-      regPath,
-      JSON.stringify({ harnesses: { legacy: { spawn: ["legacy", "{prompt}"] } } }),
-    );
+    await writeHarnesses({ legacy: { spawn: ["legacy", "{prompt}"] } });
     const registry = await loadRegistry(regPath);
     const resolved = registry && resolveRecipe(registry, "legacy");
     expect(resolved?.recipe.sessionIdentity).toBeUndefined();

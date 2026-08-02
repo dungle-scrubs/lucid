@@ -44,12 +44,22 @@ export interface AttendantStamp {
   readonly trace?: string;
 }
 
+/** True when the string carries a C0 control character or DEL. A code-point
+ *  scan rather than a control-char regex (which lint rejects for good reason):
+ *  the ONE spelling of "control-free" shared by stamp cleaning here and the
+ *  identity validators in `launch/`. */
+export const hasControlCharacters = (value: string): boolean => {
+  for (let i = 0; i < value.length; i += 1) {
+    const c = value.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+};
+
 /** Strip control characters (incl. the NUL a naive dedupe key would collide
  *  on) and bound the length. Empty after cleaning = absent. */
 const cleanStampField = (value: unknown, max: number): string | undefined => {
   if (typeof value !== "string") return undefined;
-  // Code-point filter rather than a control-char regex (which lint rejects
-  // for good reason elsewhere): C0 controls and DEL are dropped.
   const cleaned = [...value]
     .filter((ch) => {
       const c = ch.charCodeAt(0);

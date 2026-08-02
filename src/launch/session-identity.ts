@@ -1,3 +1,5 @@
+import { hasControlCharacters } from "../core/events.ts";
+
 /**
  * Native harness session identity: the types, the bounded stdout-JSONL
  * decoder, and the outcome classifiers.
@@ -19,9 +21,9 @@
  *   a log line that LOOKS like a session id is evidence for humans, not a
  *   resume target.
  * - Every record is bounded before it is believed: line length, id length,
- *   and character class. A record that fails any bound is ignored with an
- *   HSI003 diagnostic and scanning continues - one hostile or corrupt line
- *   must not cost the identity a later valid line carries.
+ *   and character class - and the bounds hold regardless of how the pipe
+ *   split the bytes. A record that fails a bound is counted (HSI003) and
+ *   scanning continues.
  * - Failure classifiers are compiled adapter code over bounded output tails,
  *   never registry-supplied patterns: the registry declares WHERE identity
  *   lives, the adapter decides WHAT harness failure text means.
@@ -42,7 +44,10 @@ export interface CallerAssignedSessionIdentity {
 export interface StdoutJsonlSessionIdentity {
   /** A resume may announce a DIFFERENT id than requested; default false. */
   readonly allowRotation?: boolean;
-  /** The record `type` that carries identity (Codex: `thread.started`). */
+  /** The value of the record's `type` key that carries identity (Codex:
+   *  `thread.started`). The discriminator KEY is fixed as `type` - the JSONL
+   *  event convention every supported harness follows - only its value and
+   *  the id field are declarable. */
   readonly event: string;
   /** The field on that record holding the native id (Codex: `thread_id`). */
   readonly field: string;
@@ -59,32 +64,44 @@ export type SessionIdentityRecipe = CallerAssignedSessionIdentity | StdoutJsonlS
 export type SessionIdentityAuthority = "assigned" | "declared" | "observed";
 
 export interface NativeSessionIdentity {
-  readonly authority: "assigned" | "observed";
+  readonly authority: Exclude<SessionIdentityAuthority, "declared">;
   readonly harness: string;
   readonly sessionId: string;
 }
 
-/** One decoded identity announcement. A record that fails a bound never
- *  becomes an event - it becomes a diagnostic (HSI003) and scanning goes on. */
+/**
+ * One harness, one identity, however it is spelled. A registry key of
+ * `claude_code` and an artifact stamped `claude-code` are the same harness -
+ * and treating them as different meant a recorded session could never be
+ * resumed on a machine whose registry used the other separator. Lives here
+ * because spelling-equivalence IS an identity question; `recipes.ts`
+ * re-exports it for its callers.
+ */
+export const normalizeHarness = (name: string): string =>
+  name.trim().toLowerCase().replace(/_/g, "-");
+
+/** One decoded identity announcement. */
 export interface SessionIdentityEvent {
   readonly identity: NativeSessionIdentity;
   readonly status: "identity";
 }
 
-export interface SessionIdentityDiagnostic {
-  readonly code: "HSI003";
-  readonly reason: "malformed-json" | "invalid-id" | "line-overflow";
-}
+/** Why records were refused, as COUNTS (HSI003). Not a list: a hostile or
+ *  chatty stream can refuse millions of lines, and retaining an object per
+ *  refusal measured at more memory than the stream itself. Three integers
+ *  say everything the refusals collectively know. */
+export type SessionIdentityDiagnostics = Readonly<
+  Record<"invalid-id" | "line-overflow" | "malformed-json", number>
+>;
 
-/** A JSONL line may not exceed this before its newline arrives; past it the
- *  line is discarded as hostile rather than buffered without limit. */
+/** A JSONL line may not exceed this - buffered OR arriving whole - before it
+ *  is discarded as hostile rather than parsed. */
 const LINE_MAX = 65_536;
-/** A native session id: printable, single-line, and short. Anything else is
- *  not an id Lucid will ever place into a resume argv. */
-const ID_MAX = 512;
-const hasControlChars = (v: string): boolean =>
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting them IS the point
-  /[\x00-\x1f\x7f]/.test(v);
+/** A native session id longer than this is not an id Lucid will ever place
+ *  into a resume argv. Matches the sidecar/stamp bound (`sanitizeAttendant`
+ *  cleans `sessionId` to 128) so the decoder cannot admit an id the record
+ *  layer would truncate into a DIFFERENT id. */
+export const SESSION_ID_MAX = 128;
 
 /**
  * Incremental bounded decoder for stdout-JSONL identity discovery.
@@ -92,13 +109,17 @@ const hasControlChars = (v: string): boolean =>
  * Fed raw stdout chunks as they stream; owns NO output bytes (the same chunks
  * continue to the log sink untouched, which is what keeps discovery invisible
  * to everything that already consumes harness output). Chunk boundaries carry
- * no meaning: a record split mid-key decodes exactly like one that arrived
- * whole, because real pipes split wherever they like.
+ * no meaning: a record split mid-key decodes - and a bound violation counts -
+ * exactly like one that arrived whole.
  */
 export class SessionIdentityDecoder {
   private buffer = "";
   private overflowing = false;
-  private readonly found: SessionIdentityDiagnostic[] = [];
+  private readonly refused: Record<"invalid-id" | "line-overflow" | "malformed-json", number> = {
+    "invalid-id": 0,
+    "line-overflow": 0,
+    "malformed-json": 0,
+  };
 
   constructor(
     private readonly harness: string,
@@ -113,22 +134,27 @@ export class SessionIdentityDecoder {
       const nl = rest.indexOf("\n");
       if (nl === -1) {
         if (this.overflowing) break; // still discarding an oversized line
-        this.buffer += rest;
-        if (this.buffer.length > LINE_MAX) {
-          // The line exceeded its bound before terminating: drop it and keep
-          // discarding until the newline shows up. One hostile line must cost
-          // exactly one diagnostic, not the rest of the stream.
-          this.found.push({ code: "HSI003", reason: "line-overflow" });
+        if (this.buffer.length + rest.length > LINE_MAX) {
+          this.refused["line-overflow"] += 1;
           this.buffer = "";
           this.overflowing = true;
+          break;
         }
+        this.buffer += rest;
         break;
       }
-      const line = this.buffer + rest.slice(0, nl);
+      const wasOverflowing = this.overflowing;
+      const lineLength = this.buffer.length + nl;
+      const line = wasOverflowing || lineLength > LINE_MAX ? "" : this.buffer + rest.slice(0, nl);
       rest = rest.slice(nl + 1);
       this.buffer = "";
-      if (this.overflowing) {
-        this.overflowing = false; // the oversized line finally ended; move on
+      this.overflowing = false;
+      if (wasOverflowing) continue; // the oversized line finally ended
+      if (lineLength > LINE_MAX) {
+        // Same bound whether the line was buffered across pushes or arrived
+        // whole in one chunk - a payload must not become parseable by luck
+        // of where the pipe split it.
+        this.refused["line-overflow"] += 1;
         continue;
       }
       const event = this.decodeLine(line);
@@ -146,9 +172,9 @@ export class SessionIdentityDecoder {
     return event ? [event] : [];
   }
 
-  /** Every bound violation seen so far, in arrival order. */
-  diagnostics(): readonly SessionIdentityDiagnostic[] {
-    return [...this.found];
+  /** How many records each bound has refused so far. */
+  diagnostics(): SessionIdentityDiagnostics {
+    return { ...this.refused };
   }
 
   private decodeLine(line: string): SessionIdentityEvent | undefined {
@@ -157,20 +183,28 @@ export class SessionIdentityDecoder {
     try {
       record = JSON.parse(line);
     } catch {
-      this.found.push({ code: "HSI003", reason: "malformed-json" });
+      this.refused["malformed-json"] += 1;
       return undefined;
     }
     if (typeof record !== "object" || record === null) {
-      this.found.push({ code: "HSI003", reason: "malformed-json" });
+      this.refused["malformed-json"] += 1;
       return undefined;
     }
     const r = record as Record<string, unknown>;
     // A structured record of some OTHER type is normal stream traffic, not a
     // bound violation - only the declared event may carry identity.
     if (r.type !== this.strategy.event) return undefined;
+    // Reading a registry-declared key off a parsed record is safe: JSON.parse
+    // creates own data properties (even `__proto__`), and anything inherited
+    // that survives the lookup fails the string check below.
     const id = r[this.strategy.field];
-    if (typeof id !== "string" || id === "" || id.length > ID_MAX || hasControlChars(id)) {
-      this.found.push({ code: "HSI003", reason: "invalid-id" });
+    if (
+      typeof id !== "string" ||
+      id === "" ||
+      id.length > SESSION_ID_MAX ||
+      hasControlCharacters(id)
+    ) {
+      this.refused["invalid-id"] += 1;
       return undefined;
     }
     return {
@@ -209,7 +243,9 @@ export const classifySpawnResult = (
   if (strategy.source === "stdout-jsonl") {
     return { code: 0, error: "HSI002", status: "identity-missing" };
   }
-  // Caller-assigned identity exists before the process does; nothing to miss.
+  // Caller-assigned discovery has nothing to observe on stdout; the caller
+  // holds the assigned identity it minted before the spawn and carries it
+  // alongside this result (wired in the spawn integration milestone).
   return { code: 0, status: "completed" };
 };
 
@@ -255,10 +291,12 @@ export const classifyObservedIdentity = (
 /** Per-harness matchers for "this native session does not exist" (HSI004),
  *  compiled here rather than declared in the registry: failure text is an
  *  adapter judgment, and a registry-supplied pattern would let a config file
- *  decide what gets quarantined. */
-const NOT_FOUND_MATCHERS: Readonly<Record<string, RegExp>> = {
+ *  decide what gets quarantined. Prototype-free: harness names arrive from
+ *  registry keys and stamps, and `classifySessionFailure`'s contract is that
+ *  an unknown one returns null - including one named `toString`. */
+const NOT_FOUND_MATCHERS: Readonly<Record<string, RegExp>> = Object.assign(Object.create(null), {
   codex: /no rollout found for thread/i,
-};
+});
 /** Only this much of the tail is consulted - failure banners sit at the end
  *  of output, and an unbounded scan of a runaway stream is its own bug. */
 const FAILURE_TAIL_MAX = 65_536;
@@ -270,7 +308,7 @@ const FAILURE_TAIL_MAX = 65_536;
  * an uncertain classifier must never invalidate.
  */
 export const classifySessionFailure = (harness: string, outputTail: string): "HSI004" | null => {
-  const matcher = NOT_FOUND_MATCHERS[harness];
+  const matcher = NOT_FOUND_MATCHERS[normalizeHarness(harness)];
   if (!matcher) return null;
   const tail =
     outputTail.length > FAILURE_TAIL_MAX ? outputTail.slice(-FAILURE_TAIL_MAX) : outputTail;
