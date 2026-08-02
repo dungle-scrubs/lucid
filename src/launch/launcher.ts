@@ -2,6 +2,7 @@ import { stdoutSink } from "../server/observe.ts";
 import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import {
   classifyObservedIdentity,
+  classifySessionFailure,
   classifySpawnResult,
   mintLaunchId,
   SessionIdentityDecoder,
@@ -16,6 +17,7 @@ import {
   mergeAttendantSidecar,
   readLastAttendant,
   recordPendingIdentity,
+  recordSessionInvalidation,
 } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver, promotePendingBindings } from "../core/deliver.ts";
@@ -654,7 +656,7 @@ export const handleForks = async (
  *  same session on each feedback batch, yield to a human who attaches. */
 export const attendChild = async (
   child: SessionPaths,
-  sessionId: string,
+  initialSessionId: string,
   recipe: SpawnRecipe,
   opts: LaunchOptions,
   harnessName = "agent",
@@ -664,6 +666,9 @@ export const attendChild = async (
     log(`${child.name}: recipe has no resume argv - forked artifact is one-shot`);
     return;
   }
+  // Reassignable: an ALLOWED rotation moves the loop to the thread the
+  // harness announced, so later turns resume what actually exists.
+  let sessionId = initialSessionId;
   // Start from now: a fresh child has no prior feedback to re-apply.
   let cursor = renderCursor(foldLog((await readEvents(child.logPath)).events).highSeq);
   let fails = 0;
@@ -759,6 +764,32 @@ export const attendChild = async (
       },
     );
     const code = result.code;
+    // The same three identity rules the hub's attend engine applies, because
+    // a child driven here and an artifact attended there must not disagree
+    // about what a harness said (plan 03, D-012).
+    const announced = "identity" in result ? result.identity?.sessionId : undefined;
+    if (announced && announced !== sessionId && !allowRotation) {
+      // HSI005: a different conversation answered. Do not bind, do not
+      // invalidate, do not advance - the feedback stays undelivered.
+      log(`${child.name}: resume announced a different session (HSI005); stopping this batch`);
+      return;
+    }
+    if (code !== 0) {
+      const outputTail = await readFile(join(child.sessionDir, "revise.out.log"), "utf8").catch(
+        () => "",
+      );
+      if (classifySessionFailure(harnessName, outputTail) === "HSI004") {
+        // A verdict, not a flake: quarantine the id durably and stop driving
+        // this child - there is no second candidate to try down here.
+        await recordSessionInvalidation(child, harnessName, sessionId).catch(() => {});
+        log(`${child.name}: harness says session ${sessionId} does not exist here (HSI004)`);
+        return;
+      }
+    }
+    if (announced && announced !== sessionId && allowRotation) {
+      // An allowed rotation: the loop follows the harness to its new thread.
+      sessionId = announced;
+    }
     // Consume the batch (advance the cursor) only on a clean turn, so a failed
     // resume is retried rather than silently dropping the feedback. Bounded, so a
     // persistently broken recipe can't spin forever.

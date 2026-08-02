@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/events.ts";
 import { foldLog } from "../src/core/fold.ts";
-import { readLastAttendant } from "../src/core/attendant.ts";
+import { mergeAttendantSidecar, readLastAttendant } from "../src/core/attendant.ts";
 import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
@@ -452,6 +452,17 @@ describe("hub attend mode", () => {
     // resumes (D18 stamps -> fold.sessionHistory).
     await openSession(paths, {
       attendant: { harness: "stub", sessionId: "sess-1", cwd: paths.artifactDir },
+    });
+    // Automatic resume ranks EVIDENCE, not mentions (plan 03, M4): an untyped
+    // log stamp is display-only now, so the fixture records the id the modern
+    // way - a sidecar with explicit authority, which is what the attend
+    // engine's tier-one candidate reads.
+    await mergeAttendantSidecar(paths, {
+      harness: "stub",
+      sessionId: "sess-1",
+      sessionIdAuthority: "declared",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
     });
   });
 
@@ -1386,9 +1397,17 @@ if (process.env.LUCID_HARNESS === "codex") {
             efforts: ["low", "medium", "high", "xhigh", "max"],
           },
           codex: {
-            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
-            spawn: [createStub, "--sid", "{id}", "{artifact}", "{prompt}"],
-            resume: [attendStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+            // Codex is a DISCOVERED harness for real: the stub announces its
+            // thread on stdout exactly as `codex exec --json` does, and that
+            // announced id - never a Lucid-minted one - is what resume names.
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [createStub, "--json", "{artifact}", "{prompt}"],
+            resume: [attendStub, "--json", "{id}", "{artifact}", "{prompt}"],
             models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
             defaultModel: "gpt-5.6-sol",
             efforts: ["medium", "high", "xhigh", "max", "ultra"],
@@ -1402,6 +1421,15 @@ if (process.env.LUCID_HARNESS === "codex") {
     paths = sessionPaths(artifact);
     await openSession(paths, {
       attendant: { harness: "claude-code", sessionId: "sess-1", cwd: paths.artifactDir },
+    });
+    // Evidence, not mention (plan 03, M4): the modern identity record the
+    // attend engine's tier-one candidate reads.
+    await mergeAttendantSidecar(paths, {
+      harness: "claude-code",
+      sessionId: "sess-1",
+      sessionIdAuthority: "declared",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
     });
   });
 
@@ -1695,6 +1723,99 @@ if (process.env.LUCID_HARNESS === "codex") {
     });
     const resumed = await readMarker(attendMarker, 10_000);
     expect(resumed.argv as string[]).toContain("codex-thread-from-output");
+  }, 20_000);
+
+  test("the poisoned record: a synthetic log stamp never reaches resume argv", async () => {
+    // The EXACT reported failure. The log carries an old untyped stamp whose
+    // sessionId is a Lucid-minted UUID codex never knew (cf4f...), while the
+    // sidecar holds the real thread codex announced. Resume must name the
+    // sidecar's thread and must never offer the synthetic one.
+    const synthetic = "cf4f0000-1111-4222-8333-444455556666";
+    artifact = join(proj, "poisoned.html");
+    await writeFile(artifact, DOC);
+    paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "codex", sessionId: synthetic, cwd: paths.artifactDir },
+    });
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "0199-real-codex-thread",
+      sessionIdAuthority: "observed",
+      launchId: "abc123def4567890",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
+    });
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
+
+    const hub = await startDaemon();
+    await mount(hub);
+    await annotate("resume the thread codex actually has");
+
+    const resumed = await readMarker(attendMarker, 10_000);
+    const argv = (resumed.argv as string[]).join(" ");
+    expect(argv).toContain("0199-real-codex-thread");
+    expect(argv).not.toContain(synthetic);
+  }, 20_000);
+
+  test("a not-found session is quarantined across restart, and one fallback is tried", async () => {
+    // The harness says the thread does not exist here (HSI004). That is a
+    // verdict: the id is quarantined durably, the transient ladder is
+    // bypassed, and the ONE distinct fallback candidate is tried next.
+    const notFound = join(dir, "codex-not-found");
+    await writeFile(
+      notFound,
+      '#!/bin/sh\necho "Error: no rollout found for thread id" >&2\nexit 1\n',
+    );
+    await chmod(notFound, 0o755);
+    artifact = join(proj, "gone.html");
+    await writeFile(artifact, DOC);
+    paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "codex", sessionId: "dead-thread", cwd: paths.artifactDir },
+    });
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "dead-thread",
+      sessionIdAuthority: "observed",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
+    });
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "codex",
+        harnesses: {
+          codex: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [notFound, "--json", "{artifact}", "{prompt}"],
+            resume: [notFound, "--json", "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
+
+    const hub = await startDaemon();
+    await mount(hub);
+    await annotate("this feedback must survive a dead thread");
+
+    // The quarantine is DURABLE: it lands in the sidecar, so a restarted
+    // engine does not ask the harness about the same dead id again.
+    const deadline = Date.now() + 10_000;
+    let invalidated: readonly string[] | undefined;
+    while (Date.now() < deadline && invalidated === undefined) {
+      invalidated = (await readLastAttendant(paths))?.invalidatedSessionIds;
+      if (invalidated === undefined) await sleep(100);
+    }
+    expect(invalidated).toContain("dead-thread");
+    // And the human's feedback is still theirs: nothing advanced past it.
+    const state = foldLog((await readEvents(paths.logPath)).events);
+    expect(state.annotations.length).toBeGreaterThan(0);
   }, 20_000);
 
   test("a moved artifact starts a fresh same-harness session in its new project", async () => {

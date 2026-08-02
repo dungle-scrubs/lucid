@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   mutateAttendantSidecar,
+  resolveResumeCandidates,
   readLastAttendant,
   recordPendingIdentity,
   recordSessionInvalidation,
@@ -1062,6 +1063,107 @@ describe("attendant sidecar mutation (harness session identity)", () => {
       pendingBinding: true,
     });
     expect(pending?.nextCursor).toBeUndefined();
+  });
+});
+
+describe("resolveResumeCandidates - ordered, deduplicated, locally proven", () => {
+  const sidecar = (over: Record<string, unknown>) => ({
+    harness: "codex",
+    at: "2026-08-01T10:00:00.000Z",
+    ...over,
+  });
+  const binding = (over: Record<string, unknown>) => ({
+    at: "2026-08-01T09:00:00.000Z",
+    authority: "observed" as const,
+    harness: "codex",
+    launchId: "abc123def4567890",
+    sessionId: "b-1",
+    seq: 5,
+    ...over,
+  });
+
+  test("tier 1: only an explicit sidecar id WITH authority; newest at wins", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => false,
+      sidecars: [
+        sidecar({ sessionId: "old", sessionIdAuthority: "observed", at: "2026-08-01T08:00:00Z" }),
+        sidecar({ sessionId: "new", sessionIdAuthority: "declared", at: "2026-08-01T11:00:00Z" }),
+        sidecar({ sessionId: "no-authority" }), // display data, never automatic
+      ],
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([
+      [1, "new"],
+      [1, "old"],
+    ]);
+  });
+
+  test("tier 2: a durable binding needs current-machine corroboration", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [
+        binding({ sessionId: "here", seq: 9 }),
+        binding({ sessionId: "other-machine", seq: 11 }),
+      ],
+      corroborate: async (_h, id) => id === "here",
+      sidecars: [],
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([[2, "here"]]);
+  });
+
+  test("tier 3/4: one parsed legacy id; a corroborated scratchpad id trails everything", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => true,
+      legacyResume: {
+        harness: "claude-code",
+        command: "claude --resume 0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000",
+      },
+      scratchpad: { harness: "claude-code", sessionId: "0199cccc-dddd-4eee-8fff-000011112222" },
+      sidecars: [],
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([
+      [3, "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000"],
+      [4, "0199cccc-dddd-4eee-8fff-000011112222"],
+    ]);
+  });
+
+  test("locally invalidated ids are excluded at every tier; dedupe keeps the strongest", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [binding({ sessionId: "s-1", seq: 3 }), binding({ sessionId: "dead", seq: 8 })],
+      corroborate: async () => true,
+      sidecars: [
+        sidecar({
+          sessionId: "s-1",
+          sessionIdAuthority: "observed",
+          invalidatedSessionIds: ["dead"],
+        }),
+      ],
+    });
+    // s-1 appears once (tier 1 beats its own binding); dead is quarantined.
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([[1, "s-1"]]);
+  });
+
+  test("deterministic across same-timestamp histories: tier, then seq, then id", async () => {
+    const candidates = await resolveResumeCandidates({
+      bindings: [binding({ sessionId: "b-low", seq: 4 }), binding({ sessionId: "b-high", seq: 7 })],
+      corroborate: async () => true,
+      sidecars: [],
+    });
+    expect(candidates.map((c) => c.sessionId)).toEqual(["b-high", "b-low"]);
+  });
+
+  test("the poisoned-record shape: a synthetic stamp never outranks the sidecar", async () => {
+    // The reported failure: an old log stamp carries a Lucid-minted UUID that
+    // codex never knew (it landed in sessionHistory, untyped, no authority),
+    // while the sidecar holds the REAL thread codex announced. Resolution
+    // must offer the sidecar id and must not offer the synthetic one at all -
+    // sessionHistory mentions are not candidates.
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => true,
+      sidecars: [sidecar({ sessionId: "0199-real-codex-thread", sessionIdAuthority: "observed" })],
+    });
+    expect(candidates.map((c) => c.sessionId)).toEqual(["0199-real-codex-thread"]);
   });
 });
 

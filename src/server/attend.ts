@@ -1,7 +1,13 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { tracer } from "../core/verbose.ts";
-import { artifactAttendant } from "../core/attendant.ts";
+import {
+  artifactAttendant,
+  readAttendantSidecars,
+  recordSessionInvalidation,
+  resolveResumeCandidates,
+  type ResumeCandidate,
+} from "../core/attendant.ts";
 import { deliver } from "../core/deliver.ts";
 import { shellArg } from "../core/escape.ts";
 import type { LogEvent, LogEventType } from "../core/events.ts";
@@ -10,10 +16,19 @@ import { readEvents } from "../core/log.ts";
 import { ARTIFACT_DIR, projectRootOf } from "../core/paths.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { assemblePayload } from "../core/payload.ts";
-import { harnessSessionCwd, harnessSessionId, presenceFor } from "../core/presence.ts";
+import {
+  harnessSessionCwd,
+  harnessSessionId,
+  harnessStoreHas,
+  presenceFor,
+} from "../core/presence.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
 import { discoveryPersistence, revisePrompt, runSpawn } from "../launch/launcher.ts";
-import { classifyObservedIdentity, mintLaunchId } from "../launch/session-identity.ts";
+import {
+  classifyObservedIdentity,
+  classifySessionFailure,
+  mintLaunchId,
+} from "../launch/session-identity.ts";
 import { detectUsageLimit } from "../launch/limits.ts";
 import {
   buildArgv,
@@ -364,6 +379,11 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   /** The last selection-rejection already warned about, so a standing stale
    *  pick warns once instead of on every turn - but a NEW reason still does. */
   let saidSelectionInvalid = "";
+  /** Native ids already TRIED for the current undelivered batch (D-004): the
+   *  primary plus at most one distinct fallback. Keyed by the batch's covers
+   *  seq so a new batch starts fresh; exhaustion is a wall, never a loop. */
+  let attemptedForBatch = new Set<string>();
+  let attemptedBatchSeq = 0;
 
   const pauseFor = (ms: number, harness?: string): void => {
     pausedUntil = Date.now() + ms;
@@ -467,30 +487,70 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     return cwd ? { cwd } : {};
   };
 
+  /**
+   * The ranked resume candidates for this artifact (plan 03, M4): sidecars
+   * with explicit authority, corroborated durable bindings, one id a
+   * harness-specific parser pulled from the recorded resume command, and a
+   * corroborated scratchpad id - in that order, with locally quarantined ids
+   * excluded. sessionHistory MENTIONS never rank: an untyped stamp is how the
+   * synthetic UUID reached resume argv (the reported failure).
+   */
+  const attendCandidates = async (state: FoldedState): Promise<readonly ResumeCandidate[]> => {
+    const sidecars = await readAttendantSidecars(paths);
+    const legacy = await artifactAttendant(paths, state.sessionHistory);
+    const scratchpadId = harnessSessionId({ artifactDir: paths.artifactDir });
+    return resolveResumeCandidates({
+      sidecars,
+      bindings: state.bindings,
+      corroborate: (harness, sessionId) => harnessStoreHas(harness, sessionId),
+      ...(legacy?.resume && legacy.harness
+        ? { legacyResume: { command: legacy.resume, harness: legacy.harness } }
+        : {}),
+      ...(scratchpadId && legacy?.harness
+        ? { scratchpad: { harness: legacy.harness, sessionId: scratchpadId } }
+        : {}),
+    });
+  };
+
   const attendTarget = async (
     state: FoldedState,
   ): Promise<
-    { readonly harness: string; readonly sessionId: string; readonly cwd?: string } | undefined
+    | {
+        readonly harness: string;
+        /** Absent when nothing PROVEN resumable exists: the artifact is still
+         *  attendable - by a fresh handoff, which resumes nothing. */
+        readonly sessionId?: string;
+        readonly cwd?: string;
+        readonly fallback?: { readonly harness: string; readonly sessionId: string };
+      }
+    | undefined
   > => {
-    const target = await artifactAttendant(paths, state.sessionHistory);
-    if (!target?.sessionId) {
-      // No id anywhere means nothing to resume - but a recorded resume command
-      // still carries one, which is how an artifact whose agent never exported
-      // `LUCID_SESSION_ID` stays attendable.
-      const fromResume = target?.resume
-        ? harnessSessionId({ resume: target.resume, artifactDir: paths.artifactDir })
-        : undefined;
-      if (!target?.harness || !fromResume) return undefined;
+    const candidates = await attendCandidates(state);
+    const best = candidates[0];
+    // The RECORDED association still names who attends and where it sat -
+    // placement evidence, not identity; the harness store's own filing
+    // (resumeCwd) outranks its cwd when present.
+    const recorded = await artifactAttendant(paths, state.sessionHistory);
+    if (!best) {
+      // No id survives the trust ladder (untyped stamps are display-only,
+      // uncorroborated bindings stay put). A recorded HARNESS still supports
+      // a fresh handoff; with not even that, there is nothing to attend.
+      if (!recorded?.harness) return undefined;
       return {
-        harness: target.harness,
-        sessionId: fromResume,
-        ...(await resumeCwd(fromResume, target.cwd)),
+        harness: recorded.harness,
+        ...(await resumeCwd(undefined, recorded.cwd)),
       };
     }
+    // The one permitted fallback (D-004): the next DISTINCT id, resolved now
+    // so a not-found on the primary needs no second resolution pass.
+    const next = candidates.find(
+      (c) => c.sessionId !== best.sessionId && c.harness === best.harness,
+    );
     return {
-      harness: target.harness,
-      sessionId: target.sessionId,
-      ...(await resumeCwd(target.sessionId, target.cwd)),
+      harness: best.harness,
+      sessionId: best.sessionId,
+      ...(await resumeCwd(best.sessionId, recorded?.cwd)),
+      ...(next ? { fallback: { harness: next.harness, sessionId: next.sessionId } } : {}),
     };
   };
 
@@ -560,7 +620,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // The artifact's LATEST identified harness session: the association to
     // resume (D10 - resume is per session id, from its own cwd).
     const record = await attendTarget(state);
-    if (!record?.sessionId) {
+    if (!record) {
       unattendable("no harness session recorded on this artifact");
       return;
     }
@@ -572,7 +632,13 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const priorCwd = await usableCwd(record.cwd, paths.artifactDir);
     const priorProjectCwd = projectRootOf(priorCwd) ?? priorCwd;
     const projectCwd = artifactProjectCwd(paths);
-    const startsFresh = switchesHarness || resolve(priorProjectCwd) !== resolve(projectCwd);
+    // Fresh when the harness switches, the artifact moved projects, or no
+    // PROVEN resumable session exists - a handoff resumes nothing, so it
+    // needs no candidate.
+    const startsFresh =
+      switchesHarness ||
+      record.sessionId === undefined ||
+      resolve(priorProjectCwd) !== resolve(projectCwd);
     const wantedHarness = switchesHarness ? selection.harness : record.harness;
     const resolved = registry ? resolveRecipe(registry, wantedHarness) : undefined;
     if (!resolved) {
@@ -596,6 +662,28 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     }
 
     const target = state.highSeq;
+    if (target !== attemptedBatchSeq) {
+      attemptedBatchSeq = target;
+      attemptedForBatch = new Set<string>();
+    }
+    // The id THIS attempt resumes: the primary, or - after a not-found
+    // quarantined it - the one permitted fallback. Both spent means the
+    // artifact's identity evidence is exhausted for this batch: say so once,
+    // keep the feedback undelivered (the cursor does not move), stand down.
+    const resumeTargetId = startsFresh
+      ? undefined
+      : [record.sessionId, record.fallback?.sessionId].find(
+          (id): id is string => id !== undefined && !attemptedForBatch.has(id),
+        );
+    if (!startsFresh && resumeTargetId === undefined) {
+      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
+      options.warn?.(
+        "HARNESS_SESSION_UNAVAILABLE",
+        "The recorded harness session cannot be resumed on this machine; feedback stays recorded until a session is re-established.",
+      );
+      log(`attend ${paths.name}: no resumable session candidate remains for this batch`);
+      return;
+    }
     const payload = await assemblePayload(paths, state, "feedback", {
       annotations: state.annotations.filter((a) => a.seq > deliveredFrom),
       messages: state.messages.filter((m) => m.role === "human" && m.seq > deliveredFrom),
@@ -630,7 +718,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       ? strategy?.source === "stdout-jsonl"
         ? undefined
         : crypto.randomUUID()
-      : record.sessionId;
+      : resumeTargetId;
+    if (!startsFresh && sessionId) attemptedForBatch.add(sessionId);
     const prompt = startsFresh
       ? [
           "You are continuing an existing Lucid review in a new harness session.",
@@ -805,6 +894,23 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       // into a loop. The stale state still covers the viewer.
     });
 
+    if (resumeOutcome?.status === "mismatch") {
+      // HSI005: the harness answered with a DIFFERENT conversation. Binding it
+      // was already refused in discovery; here the batch stops cold - no
+      // invalidation (the requested id may be fine elsewhere), no fallback (a
+      // second candidate cannot fix a harness that rotates), no cursor
+      // advance (the feedback stays the human's, undelivered), whatever the
+      // exit code claims.
+      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
+      options.warn?.(
+        "HARNESS_SESSION_MISMATCH",
+        "The harness resumed a different conversation than the one recorded; delivery stopped so feedback cannot land in a stranger's session.",
+      );
+      log(
+        `attend ${paths.name}: resume announced a different session than requested (HSI005); delivery stopped`,
+      );
+      return;
+    }
     if (code === 0) {
       // Advance only on a clean turn, so a failed one retries the batch
       // instead of silently swallowing the human's feedback.
@@ -812,6 +918,22 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       firstPendingAt = undefined;
       fails = 0;
       await reportSilentTurn(target, outputFrom);
+      return;
+    }
+    // A native-session-not-found is a VERDICT, not a flake (HSI004): the
+    // adapter's own classifier recognized it, so the id is quarantined on
+    // this machine - durably, across restarts - and the transient retry
+    // ladder is bypassed. The next tick tries the one permitted fallback;
+    // exhaustion is announced at selection time, above.
+    const notFound =
+      !startsFresh && sessionId && limit === null
+        ? classifySessionFailure(resolved.name, runOutput)
+        : null;
+    if (notFound === "HSI004") {
+      await recordSessionInvalidation(paths, resolved.name, sessionId as string).catch(() => {});
+      log(
+        `attend ${paths.name}: harness says session ${sessionId} does not exist here (HSI004); quarantined`,
+      );
       return;
     }
     fails += 1;
