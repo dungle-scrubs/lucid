@@ -33,10 +33,29 @@ let fixtures: string | undefined;
 /** The vocabulary shape the pickers must handle: a model with its OWN effort
  *  ladder (codex's per-generation subsets in miniature) beside one that falls
  *  back to the harness-wide ladder. */
+/** The stub answers nothing on stdout, so discovery finds no id and the turn
+ *  is non-resumable (HSI002) - fine here, where the argv is the assertion. */
+const IDENTITY_FOR_STUB = {
+  event: "thread.started",
+  field: "thread_id",
+  requiredArgument: "--print",
+  source: "stdout-jsonl",
+} as const;
+
 const registry = (exe: string) => ({
   default: "claude-code",
   harnesses: {
     "claude-code": {
+      // Identity is required for unattended launch (HSI001). The stub never
+      // announces one, so these turns run non-resumable (HSI002) - which is
+      // exactly the shape a real registry declares, minus a harness that
+      // answers.
+      sessionIdentity: {
+        event: "thread.started",
+        field: "thread_id",
+        requiredArgument: "--print",
+        source: "stdout-jsonl",
+      },
       spawn: [exe, "--print", "{prompt}"],
       models: [
         { id: "opus-4.8", label: "Opus 4.8", efforts: ["low", "medium", "high"] },
@@ -47,6 +66,12 @@ const registry = (exe: string) => ({
       defaultEffort: "medium",
     },
     codex: {
+      sessionIdentity: {
+        event: "thread.started",
+        field: "thread_id",
+        requiredArgument: "exec",
+        source: "stdout-jsonl",
+      },
       spawn: [exe, "exec", "{prompt}"],
       models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
       defaultModel: "gpt-5.6-sol",
@@ -324,7 +349,15 @@ test("a slow create turn is reported as running, and never accused of failing (p
   await chmod(exe, 0o755);
   hub = await startHub({
     attend: true,
-    harnesses: { default: "slow", harnesses: { slow: { spawn: [exe, "{prompt}"] } } },
+    harnesses: {
+      default: "slow",
+      harnesses: {
+        slow: {
+          sessionIdentity: IDENTITY_FOR_STUB,
+          spawn: [exe, "--print", "{prompt}"],
+        },
+      },
+    },
   });
   const opened = await openIntoHub(hub, PLAN_V1);
   cli = opened.cli;
@@ -382,7 +415,15 @@ test("a retry of a failed artifact is not reported as still-failed (plan 07, #90
   await chmod(exe, 0o755);
   hub = await startHub({
     attend: true,
-    harnesses: { default: "flaky", harnesses: { flaky: { spawn: [exe, "{prompt}"] } } },
+    harnesses: {
+      default: "flaky",
+      harnesses: {
+        flaky: {
+          sessionIdentity: IDENTITY_FOR_STUB,
+          spawn: [exe, "--print", "{prompt}"],
+        },
+      },
+    },
   });
   const opened = await openIntoHub(hub, PLAN_V1);
   cli = opened.cli;
@@ -443,7 +484,15 @@ test("a running create turn shows where to watch it, and an auth failure says wh
   await chmod(exe, 0o755);
   hub = await startHub({
     attend: true,
-    harnesses: { default: "auth", harnesses: { auth: { spawn: [exe, "{prompt}"] } } },
+    harnesses: {
+      default: "auth",
+      harnesses: {
+        auth: {
+          sessionIdentity: IDENTITY_FOR_STUB,
+          spawn: [exe, "--print", "{prompt}"],
+        },
+      },
+    },
   });
   const opened = await openIntoHub(hub, PLAN_V1);
   cli = opened.cli;

@@ -52,19 +52,36 @@ test("a long create turn keeps reporting progress and never claims failure", asy
   // rather than a process that merely sleeps: a create that produces nothing
   // would be a different (and weaker) test.
   // The target path rides in the prompt ("...to exactly <path>."), which is
+  // scanned across the WHOLE argv ("$*"), not $1: the recipe carries the
+  // harness's own flags too, so the prompt's position is the recipe's business.
   // what the real harness reads it from too - and the prompt's last
   // instruction is `lucid open <artifact>`, so the stub runs it. Skipping that
   // step is what makes a stub unrepresentative: the tab appears because the
   // agent opens the artifact, not because the hub watches the filesystem.
   await writeFile(
     exe,
-    `#!/bin/sh\nsleep ${RUN_S}\ntarget=$(printf '%s' "$1" | grep -o "/[^ ]*${artifact}" | head -1)\nmkdir -p "$(dirname "$target")"\nprintf '%s' '<!doctype html><html><head><title>authored</title></head><body><h1>authored</h1></body></html>' > "$target"\n${BINARY} open "$target" >/dev/null 2>&1\nexit 0\n`,
+    `#!/bin/sh\nsleep ${RUN_S}\ntarget=$(printf '%s' "$*" | grep -o "/[^ ]*${artifact}" | head -1)\nmkdir -p "$(dirname "$target")"\nprintf '%s' '<!doctype html><html><head><title>authored</title></head><body><h1>authored</h1></body></html>' > "$target"\n${BINARY} open "$target" >/dev/null 2>&1\nexit 0\n`,
   );
   await chmod(exe, 0o755);
 
   hub = await startHub({
     attend: true,
-    harnesses: { default: "slow", harnesses: { slow: { spawn: [exe, "{prompt}"] } } },
+    harnesses: {
+      default: "slow",
+      harnesses: {
+        slow: {
+          // Required for unattended launch (HSI001). The stub announces no id,
+          // so the turn simply runs non-resumable (HSI002).
+          sessionIdentity: {
+            event: "thread.started",
+            field: "thread_id",
+            requiredArgument: "--print",
+            source: "stdout-jsonl",
+          },
+          spawn: [exe, "--print", "{prompt}"],
+        },
+      },
+    },
   });
   const opened = await openIntoHub(hub, PLAN_V1);
   cli = opened.cli;
