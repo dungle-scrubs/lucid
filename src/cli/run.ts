@@ -91,6 +91,14 @@ const attendantStamp = (harness?: string): AttendantStamp | undefined => {
     // The click's trace (plan 07, M1.3): a spawned turn holds it in
     // LUCID_REQUEST_ID, and the sanitizer drops anything not well-formed.
     ...(process.env.LUCID_REQUEST_ID ? { trace: process.env.LUCID_REQUEST_ID } : {}),
+    // Who vouches for the session id, and which launch this turn IS (plan 03):
+    // both ride every stamp so a discovered create's progress can correlate
+    // by launch before any native id exists, and a resume can rank the id's
+    // authority. The sanitizer enforces the closed set / well-formed rule.
+    ...(process.env.LUCID_SESSION_ID_AUTHORITY
+      ? { sessionIdAuthority: process.env.LUCID_SESSION_ID_AUTHORITY }
+      : {}),
+    ...(process.env.LUCID_LAUNCH_ID ? { launchId: process.env.LUCID_LAUNCH_ID } : {}),
   });
 };
 

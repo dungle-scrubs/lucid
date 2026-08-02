@@ -80,6 +80,11 @@ export interface NativeSessionIdentity {
 export const normalizeHarness = (name: string): string =>
   name.trim().toLowerCase().replace(/_/g, "-");
 
+/** A fresh launch id: 16 hex chars, the same well-formed shape request ids
+ *  use (WELL_FORMED_ID), so the stamp normalizer's validate-or-drop rule
+ *  accepts exactly what this mints. */
+export const mintLaunchId = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+
 /** One decoded identity announcement. */
 export interface SessionIdentityEvent {
   readonly identity: NativeSessionIdentity;

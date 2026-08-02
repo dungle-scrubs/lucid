@@ -1,8 +1,8 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { tracer } from "../core/verbose.ts";
-import { artifactAttendant } from "../core/attendant.ts";
-import { deliver } from "../core/deliver.ts";
+import { artifactAttendant, recordPendingIdentity } from "../core/attendant.ts";
+import { deliver, promotePendingBindings } from "../core/deliver.ts";
 import { shellArg } from "../core/escape.ts";
 import type { LogEvent, LogEventType } from "../core/events.ts";
 import { foldLog, type FoldedState } from "../core/fold.ts";
@@ -13,6 +13,7 @@ import { assemblePayload } from "../core/payload.ts";
 import { harnessSessionCwd, harnessSessionId, presenceFor } from "../core/presence.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
 import { revisePrompt, runSpawn } from "../launch/launcher.ts";
+import { mintLaunchId } from "../launch/session-identity.ts";
 import { detectUsageLimit } from "../launch/limits.ts";
 import {
   buildArgv,
@@ -619,7 +620,17 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // starts from the artifact's current project, so a sandboxed target can
     // write the artifact after it moved between projects.
     const cwd = startsFresh ? projectCwd : priorCwd;
-    const sessionId = startsFresh ? crypto.randomUUID() : record.sessionId;
+    const strategy = resolved.recipe.sessionIdentity;
+    // A fresh handoff to a DISCOVERED harness assigns nothing - the harness
+    // mints its own id and announces it on stdout; a pre-minted UUID here is
+    // exactly the synthetic identity that poisoned resume. Caller-assigned
+    // (and legacy) handoffs keep minting; a resume always names the recorded
+    // session.
+    const sessionId = startsFresh
+      ? strategy?.source === "stdout-jsonl"
+        ? undefined
+        : crypto.randomUUID()
+      : record.sessionId;
     const prompt = startsFresh
       ? [
           "You are continuing an existing Lucid review in a new harness session.",
@@ -640,7 +651,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       buildArgv(
         recipeTemplate,
         {
-          id: sessionId,
+          id: sessionId ?? "",
           artifact: paths.artifactPath,
           cwd,
           prompt,
@@ -698,24 +709,48 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       (s) => s.size,
       () => 0,
     );
-    const code = await runSpawn(argv, cwd, paths.attendLog, {
+    const launchId = mintLaunchId();
+    const result = await runSpawn(argv, cwd, paths.attendLog, {
       harness: resolved.name,
-      sessionId,
+      ...(sessionId ? { sessionId } : {}),
       turnId,
+      launchId,
+      ...(strategy ? { strategy } : {}),
+      onIdentityDiscovered: async (identity) => {
+        // Persist while the turn is LIVE, and promote through the locked
+        // path: the hub is hosting this session, so promotion POSTs the
+        // binding and the viewer learns of it in the same breath.
+        await recordPendingIdentity(paths, {
+          harness: resolved.name,
+          sessionId: identity.sessionId,
+          sessionIdAuthority: identity.authority,
+          launchId,
+        });
+        await promotePendingBindings(paths).catch(() => {});
+      },
       ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
       // Only what the argv actually carries: a dropped stale pick must not
       // stamp the child as running a model it was never given.
       ...(applied.model !== undefined ? { model: applied.model } : {}),
       ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
     });
+    const code = result.code;
     // Inspect THIS run before recording how it ended. The attend log appends
     // every attempt, so scanning the whole file could make an unrelated later
     // crash inherit an earlier turn's usage wall.
     const runOutput = (await readFile(paths.attendLog, "utf8").catch(() => "")).slice(outputFrom);
     const limit = code === 0 ? null : detectUsageLimit(runOutput);
+    // Identity established by this turn: what the harness ANNOUNCED wins;
+    // the legacy whole-output scan covers recipes that predate declarations;
+    // a clean caller-assigned handoff established the id it was given.
+    const observedId = "identity" in result ? result.identity?.sessionId : undefined;
     const establishedSessionId = startsFresh
-      ? (spawnedSessionId(resolved.name, runOutput) ?? (code === 0 ? sessionId : undefined))
-      : sessionId;
+      ? (observedId ??
+        spawnedSessionId(resolved.name, runOutput) ??
+        (code === 0 ? sessionId : undefined))
+      : (observedId ?? sessionId);
+    const establishedAuthority =
+      observedId !== undefined ? "observed" : startsFresh && code === 0 ? "assigned" : undefined;
     // The turn stopped, whatever it produced. The hub holds the child, so it
     // is the authoritative witness - and without this a turn that read the
     // feedback and produced nothing left its window open forever (finding #1).
@@ -728,7 +763,17 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       // on the warning wire. Both remain identifiers, never harness prose.
       ...(limit !== null ? { code: limit.replaceAll("-", "_") } : {}),
       ...(establishedSessionId
-        ? { attendant: { harness: resolved.name, sessionId: establishedSessionId, cwd } }
+        ? {
+            attendant: {
+              harness: resolved.name,
+              sessionId: establishedSessionId,
+              cwd,
+              launchId,
+              ...(establishedAuthority && strategy
+                ? { sessionIdAuthority: establishedAuthority }
+                : {}),
+            },
+          }
         : {}),
     }).catch(() => {
       // The turn is over regardless; a failed append is not worth retrying

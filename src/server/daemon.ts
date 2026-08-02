@@ -32,8 +32,14 @@ import { swr } from "../core/swr.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
 import { detectAuthFailure, detectUsageLimit } from "../launch/limits.ts";
 import { readEvents } from "../core/log.ts";
-import { runSpawn } from "../launch/launcher.ts";
-import { buildArgv, loadRegistry, normalizeHarness, resolveRecipe } from "../launch/recipes.ts";
+import { prepareSpawnIdentity, runSpawn } from "../launch/launcher.ts";
+import {
+  buildArgv,
+  loadRegistry,
+  normalizeHarness,
+  registryPath as harnessRegistryPath,
+  resolveRecipe,
+} from "../launch/recipes.ts";
 import {
   insertSelectionArgs,
   sanitizeSelection,
@@ -1091,16 +1097,25 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       const selArgs = selection ? selectionArgs(resolved.name, resolved.recipe, selection) : [];
       if ("error" in selArgs) return json({ error: selArgs.error }, 400);
 
-      // The child is its own harness session from birth (D18): the id is minted
-      // here so the stamps it writes name a conversation that can be resumed.
-      const childSessionId = crypto.randomUUID();
       const paths = sessionPaths(artifact);
+      // The identity arrangement for this launch (plan 03, M3): caller-assigned
+      // recipes get an id minted here so the child's stamps name a resumable
+      // conversation from birth; DISCOVERED harnesses mint their own and
+      // announce it - handing them a UUID was the synthetic identity that
+      // poisoned resume. Legacy identity-free recipes are refused before any
+      // process exists (HSI001): an unattended session Lucid cannot resume is
+      // a session it should not start.
+      const spawnIdentity = prepareSpawnIdentity(
+        resolved.name,
+        resolved.recipe,
+        opts.harnessesPath ?? harnessRegistryPath(),
+      );
       const argv = insertSelectionArgs(
         resolved.name,
         buildArgv(
           resolved.recipe.spawn,
           {
-            id: childSessionId,
+            id: spawnIdentity.assignedSessionId ?? "",
             artifact,
             cwd: project,
             prompt: createArtifactPrompt(artifact, prompt, title || undefined),
@@ -1160,7 +1175,18 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           const e = events[i];
           if (e === undefined) return undefined;
           if (e.t !== "agent_ack") continue;
-          if (e.attendant?.sessionId !== childSessionId) continue;
+          // Owned by LAUNCH, not by native session id: a discovered harness
+          // has no id until it announces one, so its progress correlates by
+          // the launch (or the click's trace) the child exported - and a
+          // leftover process from a deleted artifact of the same name still
+          // cannot narrate this creation.
+          const stamp = e.attendant;
+          const owned =
+            stamp?.launchId === spawnIdentity.launchId ||
+            (spawnIdentity.assignedSessionId !== undefined &&
+              stamp?.sessionId === spawnIdentity.assignedSessionId) ||
+            (observation.trace !== undefined && stamp?.trace === observation.trace);
+          if (!owned) continue;
           const label = e.progress?.label;
           if (label !== undefined) return label;
         }
@@ -1226,20 +1252,32 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           }),
         );
       };
-      void runSpawn(argv, project, outLog, {
-        harness: resolved.name,
-        sessionId: childSessionId,
-        requestId: observation.trace,
-        // The create prompt ends with `lucid open <artifact>`; without this the
-        // turn opens it against the default port instead of this hub.
-        hubPort: port,
-        ...(selection?.model !== undefined ? { model: selection.model } : {}),
-        ...(selection?.effort !== undefined ? { effort: selection.effort } : {}),
-      })
-        .then((code) => {
-          if (code !== 0) {
-            log(`create ${name}: create turn exited ${code}`);
-            void reportFailure(code);
+      void spawnIdentity
+        .recordAssigned(paths)
+        .then(() =>
+          runSpawn(
+            argv,
+            project,
+            outLog,
+            spawnIdentity.identityFor(paths, {
+              requestId: observation.trace,
+              // The create prompt ends with `lucid open <artifact>`; without
+              // this the turn opens it against the default port instead of
+              // this hub.
+              hubPort: port,
+              ...(selection?.model !== undefined ? { model: selection.model } : {}),
+              ...(selection?.effort !== undefined ? { effort: selection.effort } : {}),
+            }),
+          ),
+        )
+        .then((result) => {
+          if (result.code !== 0) {
+            log(`create ${name}: create turn exited ${result.code}`);
+            void reportFailure(result.code);
+          } else if (result.status === "identity-missing") {
+            // The artifact survives; the launch is non-resumable (HSI002).
+            // Named in the hub log, where launch records live.
+            log(`create ${name}: turn announced no session identity (HSI002)`);
           }
         })
         .catch((err) => {

@@ -428,8 +428,17 @@ describe("hub attend mode", () => {
         default: "stub",
         harnesses: {
           stub: {
-            spawn: [process.execPath, "run", createStub, "{id}", "{artifact}", "{prompt}"],
-            resume: [process.execPath, "run", attendStub, "{id}", "{artifact}", "{prompt}"],
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [process.execPath, "run", createStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+            resume: [
+              process.execPath,
+              "run",
+              attendStub,
+              "--sid",
+              "{id}",
+              "{artifact}",
+              "{prompt}",
+            ],
           },
         },
       }),
@@ -521,7 +530,7 @@ describe("hub attend mode", () => {
       await attendant.tick();
       const marker = await readMarker(attendMarker, 4000);
       expect(marker.sessionId).toBe("sess-1");
-      expect((marker.argv as string[])[2]).toContain("this must not be swallowed");
+      expect((marker.argv as string[])[3]).toContain("this must not be swallowed");
       expect(logs.some((l) => l.includes("delivery claim went unanswered"))).toBe(true);
     } finally {
       attendant.stop();
@@ -559,7 +568,7 @@ describe("hub attend mode", () => {
       await sleep(60);
       await attendant.tick();
       const marker = await readMarker(attendMarker, 4000);
-      expect((marker.argv as string[])[2]).toContain("three dead turns must not swallow this");
+      expect((marker.argv as string[])[3]).toContain("three dead turns must not swallow this");
     } finally {
       attendant.stop();
     }
@@ -713,9 +722,10 @@ describe("hub attend mode", () => {
     // Resume is cwd-scoped (D10): the session's recorded directory.
     expect(marker.cwd).toBe(realpathSync(paths.artifactDir));
     const argv = marker.argv as string[];
-    expect(argv[0]).toBe("sess-1");
-    expect(argv[1]).toBe(paths.artifactPath);
-    expect(argv[2]).toContain("backfill must run first");
+    expect(argv[0]).toBe("--sid");
+    expect(argv[1]).toBe("sess-1");
+    expect(argv[2]).toBe(paths.artifactPath);
+    expect(argv[3]).toContain("backfill must run first");
 
     // The delivery is RECORDED before it is made (D20): the panel says
     // "delivered" for the whole headless turn, and any other watcher reading
@@ -1041,12 +1051,15 @@ describe("hub attend mode", () => {
     // unowned ack proves the filter.
     await writeFile(
       slowStub,
-      `const artifact = process.argv[3];
+      `const artifact = process.argv[4];
 const mine = JSON.stringify({
   t: "agent_ack",
   id: "phase-1",
   progress: { label: "writing the sections" },
-  attendant: { harness: "slow", sessionId: process.env.LUCID_SESSION_ID },
+  // LAUNCH-owned, deliberately without a session id: a discovered harness has
+  // no native id until it announces one, and the heartbeat must still relay
+  // the phases of the launch it started.
+  attendant: { harness: "slow", launchId: process.env.LUCID_LAUNCH_ID },
   seq: 1,
   at: new Date().toISOString(),
 });
@@ -1068,7 +1081,10 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
       JSON.stringify({
         default: "slow",
         harnesses: {
-          slow: { spawn: [process.execPath, "run", slowStub, "{id}", "{artifact}", "{prompt}"] },
+          slow: {
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [process.execPath, "run", slowStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+          },
         },
       }),
     );
@@ -1201,9 +1217,10 @@ await Bun.write(${JSON.stringify(createMarker)}, "done");
     expect(marker.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(marker.cwd).toBe(realpathSync(proj));
     const argv = marker.argv as string[];
-    expect(argv[1]).toBe(join(proj, ".lucid", "new-plan.html"));
-    expect(argv[2]).toContain("map the migration");
-    expect(argv[2]).toContain(`lucid open ${join(proj, ".lucid", "new-plan.html")}`);
+    expect(argv[0]).toBe("--sid");
+    expect(argv[2]).toBe(join(proj, ".lucid", "new-plan.html"));
+    expect(argv[3]).toContain("map the migration");
+    expect(argv[3]).toContain(`lucid open ${join(proj, ".lucid", "new-plan.html")}`);
   }, 20_000);
 });
 
@@ -1291,15 +1308,17 @@ if (process.env.LUCID_HARNESS === "codex") {
         default: "claude-code",
         harnesses: {
           "claude-code": {
-            spawn: [createStub, "{id}", "{artifact}", "{prompt}"],
-            resume: [attendStub, "{id}", "{artifact}", "{prompt}"],
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [createStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+            resume: [attendStub, "--sid", "{id}", "{artifact}", "{prompt}"],
             models: [{ id: "opus-5", label: "Opus 5" }, { id: "sonnet-5" }],
             defaultModel: "opus-5",
             efforts: ["low", "medium", "high", "xhigh", "max"],
           },
           codex: {
-            spawn: [createStub, "{id}", "{artifact}", "{prompt}"],
-            resume: [attendStub, "{id}", "{artifact}", "{prompt}"],
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [createStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+            resume: [attendStub, "--sid", "{id}", "{artifact}", "{prompt}"],
             models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
             defaultModel: "gpt-5.6-sol",
             efforts: ["medium", "high", "xhigh", "max", "ultra"],
@@ -1471,9 +1490,10 @@ if (process.env.LUCID_HARNESS === "codex") {
     // Inserted after argv[0], so the recipe's own positional tokens keep their
     // order and the prompt is still the last one.
     expect(argv.slice(0, 4)).toEqual(["--model", "sonnet-5", "--effort", "max"]);
-    expect(argv[4]).toBe("sess-1");
-    expect(argv[5]).toBe(paths.artifactPath);
-    expect(argv[6]).toContain("use the new schema");
+    expect(argv[4]).toBe("--sid");
+    expect(argv[5]).toBe("sess-1");
+    expect(argv[6]).toBe(paths.artifactPath);
+    expect(argv[7]).toContain("use the new schema");
     // The child stamps what IT runs, so the viewer shows the real settings.
     expect(marker.model).toBe("sonnet-5");
     expect(marker.effort).toBe("max");
@@ -1492,7 +1512,7 @@ if (process.env.LUCID_HARNESS === "codex") {
 
     const marker = await readMarker(attendMarker);
     // Degraded, not stalled: the turn ran on the CLI's own defaults.
-    expect(marker.argv).toEqual(["sess-1", paths.artifactPath, expect.any(String)]);
+    expect(marker.argv).toEqual(["--sid", "sess-1", paths.artifactPath, expect.any(String)]);
     expect(marker.model).toBeNull();
     expect(logs.some((m) => m.includes("Model/effort selection ignored"))).toBe(true);
   }, 20_000);

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ForkRecord } from "../src/core/fold.ts";
-import { appendEvent } from "../src/core/log.ts";
+import { foldLog, type ForkRecord } from "../src/core/fold.ts";
+import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import type { WaitPayload } from "../src/protocol/wire.ts";
@@ -399,7 +399,17 @@ describe("launcher handleForks (integration, stub harness)", () => {
       regPath,
       JSON.stringify({
         default: "stub",
-        harnesses: { stub: { spawn: [process.execPath, STUB, "{seed}", "{artifact}"] } },
+        harnesses: {
+          stub: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [process.execPath, STUB, "--json", "{seed}", "{artifact}"],
+          },
+        },
       }),
     );
     process.env.LUCID_HARNESSES = regPath;
@@ -441,10 +451,24 @@ describe("launcher handleForks (integration, stub harness)", () => {
     });
     expect(created).toHaveLength(1);
     expect(created[0]?.status).toBe("created");
+    // The DISCOVERED identity is what the attend loop will resume: the stub
+    // announced its own thread id, and that - never a Lucid-minted UUID - is
+    // the child's resumable session.
+    expect(created[0]?.childSessionId).toBe("stub-thread-0001");
 
     const childPaths = sessionPaths(created[0]?.childArtifact ?? "");
     // The stub authored the child artifact from the seed directive.
     expect(await readFile(childPaths.artifactPath, "utf8")).toContain("greeting");
+    // And the binding is durable in the child's log, right where resume
+    // resolution will look for it.
+    const childEvents = (await readEvents(childPaths.logPath)).events;
+    const bound = childEvents.filter((e) => e.t === "harness_session_bound");
+    expect(bound).toHaveLength(1);
+    expect(foldLog(childEvents).bindings[0]).toMatchObject({
+      authority: "observed",
+      harness: "stub",
+      sessionId: "stub-thread-0001",
+    });
     // The launcher ensured a live viewer for it.
     expect(await discoverLiveServer(childPaths)).toBeTruthy();
 

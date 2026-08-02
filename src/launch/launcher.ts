@@ -1,11 +1,23 @@
 import { stdoutSink } from "../server/observe.ts";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
+import {
+  classifySpawnResult,
+  mintLaunchId,
+  SessionIdentityDecoder,
+  type NativeSessionIdentity,
+  type SessionIdentityRecipe,
+  type SpawnResult,
+} from "./session-identity.ts";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Anchor } from "../anchors/anchor.ts";
-import { readLastAttendant, mergeAttendantSidecar } from "../core/attendant.ts";
+import {
+  mergeAttendantSidecar,
+  readLastAttendant,
+  recordPendingIdentity,
+} from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
-import { deliver } from "../core/deliver.ts";
+import { deliver, promotePendingBindings } from "../core/deliver.ts";
 import { shellArg } from "../core/escape.ts";
 import { foldLog, type ForkRecord } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
@@ -18,7 +30,9 @@ import { resolveView, wantsBrowserWindow } from "../server/view.ts";
 import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
 import {
   buildArgv,
+  requireSessionIdentity,
   resolveRecipe,
+  registryPath,
   type HarnessRegistry,
   type RecipeVar,
   type SpawnRecipe,
@@ -195,48 +209,73 @@ export const revisePrompt = (payload: WaitPayload, artifact: string): string | n
   ].join("\n");
 };
 
-/** Run a recipe argv to completion. Returns the exit code; a spawn that cannot
- *  even start (missing executable -> synchronous throw) returns 127 rather than
- *  throwing, so one bad recipe never crashes the caller. Shared with the hub's
- *  attend engine so both spawners carry the same identity + logging discipline. */
+/** What a spawner tells runSpawn about the launch's identity arrangement. */
+export interface SpawnIdentity {
+  readonly harness: string;
+  /** The id Lucid assigns (caller-assigned recipes) or the parent-known id a
+   *  legacy recipe still exports. Discovered recipes leave it unset - the
+   *  harness mints its own and announces it on stdout. */
+  readonly sessionId?: string;
+  readonly model?: string;
+  readonly effort?: string;
+  /** The hub request that caused this spawn (M1.3): stamped into the child
+   *  env so the turn's own hub calls carry the click's id. Absent for a
+   *  spawn no request caused (attend's poll) - and then CLEARED, so a
+   *  stale inherited id cannot claim the wrong click. */
+  readonly requestId?: string;
+  /** The TURN this spawn IS (plan 08, D-013). Minted by the caller so it
+   *  can name the same turn when it appends the terminator on exit, and
+   *  exported so the child's own acks carry it - a turn nobody can name is
+   *  a turn nobody can end. Cleared when absent, like requestId. */
+  readonly turnId?: string;
+  /** The hub doing the spawning (plan 08, finding #21). The create prompt
+   *  ends by telling the turn to run `lucid open`, and `open` finds a hub
+   *  through LUCID_HUB_PORT - so a hub anywhere but the default port spawned
+   *  turns that opened their artifact into whatever else was listening
+   *  there. Left ALONE when absent: not every spawner is a hub, and
+   *  inventing a port would route a turn at one that does not exist. */
+  readonly hubPort?: number;
+  /** Lucid-owned correlation for THIS launch (plan 03): exported as
+   *  LUCID_LAUNCH_ID so the child's stamps carry it, and required before any
+   *  discovered identity can be persisted against the launch that found it.
+   *  Never enters resume argv - correlation, not identity. */
+  readonly launchId?: string;
+  /** How this harness establishes native identity. Absent = legacy recipe:
+   *  no discovery, no authority export, the pre-identity env behavior. */
+  readonly strategy?: SessionIdentityRecipe;
+  /** Called on the FIRST valid identity announcement while the child is
+   *  still running, so discovery can be persisted before the turn ends. */
+  readonly onIdentityDiscovered?: (identity: NativeSessionIdentity) => void | Promise<void>;
+}
+
+/** Run a recipe argv to completion, typed. A spawn that cannot even start
+ *  (missing executable -> synchronous throw) is `spawn-failed` rather than a
+ *  throw, so one bad recipe never crashes the caller. Shared by the fork
+ *  launcher, the hub's create, and the attend engine so every spawner carries
+ *  the same identity + logging discipline. */
 export const runSpawn = async (
   argv: string[],
   cwd: string,
   logFile: string,
-  identity?: {
-    harness: string;
-    sessionId: string;
-    model?: string;
-    effort?: string;
-    /** The hub request that caused this spawn (M1.3): stamped into the child
-     *  env so the turn's own hub calls carry the click's id. Absent for a
-     *  spawn no request caused (attend's poll) - and then CLEARED, so a
-     *  stale inherited id cannot claim the wrong click. */
-    requestId?: string;
-    /** The TURN this spawn IS (plan 08, D-013). Minted by the caller so it
-     *  can name the same turn when it appends the terminator on exit, and
-     *  exported so the child's own acks carry it - a turn nobody can name is
-     *  a turn nobody can end. Cleared when absent, like requestId. */
-    turnId?: string;
-    /** The hub doing the spawning (plan 08, finding #21). The create prompt
-     *  ends by telling the turn to run `lucid open`, and `open` finds a hub
-     *  through LUCID_HUB_PORT - so a hub anywhere but the default port spawned
-     *  turns that opened their artifact into whatever else was listening
-     *  there. Left ALONE when absent: not every spawner is a hub, and
-     *  inventing a port would route a turn at one that does not exist. */
-    hubPort?: number;
-  },
-): Promise<number> => {
+  identity?: SpawnIdentity,
+): Promise<SpawnResult> => {
+  const discovered = identity?.strategy?.source === "stdout-jsonl";
   // The child is its OWN harness session: inheriting the launcher's
   // LUCID_SESSION_ID would stamp the child's events as the parent
   // conversation (D18 misattribution). Model/effort follow the same rule -
   // the child stamps what IT runs (the applied selection), never what the
-  // spawning process happened to inherit.
+  // spawning process happened to inherit. A DISCOVERED harness goes one
+  // further: even a caller-supplied id is cleared, because the harness mints
+  // its own and a pre-minted UUID in the child's env is exactly the synthetic
+  // identity that poisoned resume.
   const env = identity
     ? {
         ...process.env,
         LUCID_HARNESS: identity.harness,
-        LUCID_SESSION_ID: identity.sessionId,
+        LUCID_SESSION_ID: discovered ? undefined : identity.sessionId,
+        LUCID_SESSION_ID_AUTHORITY:
+          !discovered && identity.strategy && identity.sessionId ? "assigned" : undefined,
+        LUCID_LAUNCH_ID: identity.launchId,
         LUCID_MODEL: identity.model,
         LUCID_EFFORT: identity.effort,
         LUCID_REQUEST_ID: identity.requestId,
@@ -251,6 +290,8 @@ export const runSpawn = async (
         ...process.env,
         LUCID_HARNESS: undefined,
         LUCID_SESSION_ID: undefined,
+        LUCID_SESSION_ID_AUTHORITY: undefined,
+        LUCID_LAUNCH_ID: undefined,
         LUCID_MODEL: undefined,
         LUCID_EFFORT: undefined,
         LUCID_REQUEST_ID: undefined,
@@ -260,18 +301,55 @@ export const runSpawn = async (
   // yet when a fork's create turn spawns. mkdir defensively - idempotent.
   mkdirSync(dirname(logFile), { recursive: true });
   const fd = openSync(logFile, "a");
+  let observed: NativeSessionIdentity | undefined;
+  let callbackDone: Promise<void> | undefined;
   try {
     const proc = Bun.spawn(argv, {
       cwd,
       env,
       stdin: "ignore",
-      stdout: fd,
+      // Discovery taps stdout THROUGH the parent: the same bytes continue to
+      // the log fd untouched, chunk boundaries and all. Stderr stays wired
+      // straight to the log - it is logged evidence, never identity.
+      stdout: discovered ? "pipe" : fd,
       stderr: fd,
     });
+    if (discovered && identity?.strategy?.source === "stdout-jsonl" && proc.stdout) {
+      const decoder = new SessionIdentityDecoder(identity.harness, identity.strategy);
+      const text = new TextDecoder();
+      for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
+        writeSync(fd, chunk);
+        if (observed) continue; // first announcement wins; the rest is output
+        for (const event of decoder.push(text.decode(chunk))) {
+          if (observed) continue;
+          observed = event.identity;
+          // Fired while the child is LIVE (awaited before returning): the
+          // sidecar knows the identity before the turn can end, so a crash
+          // after authoring still leaves a resumable record.
+          callbackDone = Promise.resolve(identity.onIdentityDiscovered?.(event.identity)).catch(
+            () => {},
+          );
+        }
+      }
+      if (!observed) {
+        for (const event of decoder.finish()) {
+          observed = event.identity;
+          callbackDone = Promise.resolve(identity.onIdentityDiscovered?.(event.identity)).catch(
+            () => {},
+          );
+          break;
+        }
+      }
+    }
     await proc.exited;
-    return proc.exitCode ?? 0;
+    await callbackDone;
+    const code = proc.exitCode ?? 0;
+    if (identity?.strategy) return classifySpawnResult(code, identity.strategy, observed);
+    // Legacy recipe: no declaration, no discovery - a clean exit is complete
+    // (nothing was promised), a bad one is a process failure.
+    return code === 0 ? { code: 0, status: "completed" } : { code, status: "process-failed" };
   } catch {
-    return 127; // could not spawn (e.g. executable not found)
+    return { code: 127, status: "spawn-failed" }; // could not spawn (e.g. executable not found)
   } finally {
     try {
       closeSync(fd);
@@ -279,6 +357,79 @@ export const runSpawn = async (
       /* fd already closed */
     }
   }
+};
+
+/**
+ * The ONE spawn-identity setup (plan 03, M3): resolve the adapter's declared
+ * strategy (HSI001 before any process exists when there is none), mint the
+ * launch correlation, assign the native id when the strategy is
+ * caller-assigned, and bind the persistence callback that records discovered
+ * identity against the target session. Fork create, child revise, hub create,
+ * and attend all build their runSpawn identity through here, so the four
+ * spawners cannot drift.
+ */
+export const prepareSpawnIdentity = (
+  harness: string,
+  recipe: SpawnRecipe | undefined,
+  registryFile: string,
+): {
+  readonly launchId: string;
+  readonly strategy: SessionIdentityRecipe;
+  /** The `{id}` argv substitution for caller-assigned strategies; discovered
+   *  harnesses mint their own and get none from us. */
+  readonly assignedSessionId?: string;
+  /** The runSpawn identity for a launch targeting `target`, with discovery
+   *  persistence wired: an announced identity lands in the target's sidecar
+   *  (pending) and is promoted through the locked path immediately - the
+   *  sidecar knows before the turn can end. */
+  readonly identityFor: (target: SessionPaths, extra?: Partial<SpawnIdentity>) => SpawnIdentity;
+  /** Record a caller-assigned identity as pending against the target BEFORE
+   *  spawning - it is known already, and a child that crashes pre-open must
+   *  still leave a resumable record. No-op for discovered strategies. */
+  readonly recordAssigned: (target: SessionPaths) => Promise<void>;
+} => {
+  const strategy = requireSessionIdentity(harness, recipe, registryFile);
+  const launchId = mintLaunchId();
+  const assignedSessionId = strategy.source === "caller-assigned" ? crypto.randomUUID() : undefined;
+  const identityFor = (target: SessionPaths, extra?: Partial<SpawnIdentity>): SpawnIdentity => ({
+    harness,
+    launchId,
+    strategy,
+    ...(assignedSessionId ? { sessionId: assignedSessionId } : {}),
+    onIdentityDiscovered: async (identity) => {
+      await recordPendingIdentity(target, {
+        harness,
+        sessionId: identity.sessionId,
+        sessionIdAuthority: identity.authority,
+        launchId,
+      });
+      // Promotion is live-aware and idempotent: if the session is already
+      // open (a revise turn), the binding lands NOW through the locked path;
+      // if not, the sidecar keeps owing it and the child's own `lucid open`
+      // promotes. Failure here must not kill the stream tee.
+      await promotePendingBindings(target).catch(() => {});
+    },
+    ...extra,
+  });
+  /** An ASSIGNED identity is known before the process exists: record it
+   *  pending immediately, so even a child that crashes pre-open leaves a
+   *  resumable record - and the same promotion path lands its binding. */
+  const recordAssigned = async (target: SessionPaths): Promise<void> => {
+    if (!assignedSessionId) return;
+    await recordPendingIdentity(target, {
+      harness,
+      sessionId: assignedSessionId,
+      sessionIdAuthority: "assigned",
+      launchId,
+    });
+  };
+  return {
+    launchId,
+    strategy,
+    ...(assignedSessionId ? { assignedSessionId } : {}),
+    identityFor,
+    recordAssigned,
+  };
 };
 
 const fileExists = async (path: string): Promise<boolean> => {
@@ -343,10 +494,14 @@ const createChild = async (
     return { forkId: fork.id, childArtifact, childSessionId, harness, status: "no-recipe" };
   }
 
+  const spawnIdentity = prepareSpawnIdentity(resolved.name, resolved.recipe, registryPath());
   const argv = buildArgv(
     resolved.recipe.spawn,
     substitutions({
-      id: childSessionId,
+      // Caller-assigned recipes take the id Lucid minted; discovered recipes
+      // declared no {id} in spawn (the registry validated that), so the empty
+      // substitution never lands in an argv.
+      id: spawnIdentity.assignedSessionId ?? "",
       seed: seedPath,
       artifact: childArtifact,
       cwd: parent.artifactDir,
@@ -356,12 +511,21 @@ const createChild = async (
   );
   const short = safeForkId(fork.id).slice(0, 8);
   log(`fork ${short}: spawning "${resolved.name}" -> ${childArtifact}`);
-  const code = await runSpawn(argv, parent.artifactDir, join(forkDir, "run", "create.out.log"), {
-    harness: resolved.name,
-    sessionId: childSessionId,
-  });
-  if (code !== 0)
-    log(`fork ${short}: create turn exited ${code} (see ${forkDir}/run/create.out.log)`);
+  await spawnIdentity.recordAssigned(childPaths);
+  const result = await runSpawn(
+    argv,
+    parent.artifactDir,
+    join(forkDir, "run", "create.out.log"),
+    spawnIdentity.identityFor(childPaths),
+  );
+  if (result.code !== 0) {
+    log(`fork ${short}: create turn exited ${result.code} (see ${forkDir}/run/create.out.log)`);
+  } else if (result.status === "identity-missing") {
+    // The artifact (if authored) survives; the launch is simply not resumable
+    // (HSI002) - said HERE, where the launch record is, not discovered later
+    // as a resume that starts a stranger.
+    log(`fork ${short}: turn completed but announced no session identity (HSI002)`);
+  }
 
   const open = opts.openChild ?? ensureChildOpen;
   if (!(await open(childPaths, opts.openBrowser ?? true))) {
@@ -369,12 +533,31 @@ const createChild = async (
     return { forkId: fork.id, childArtifact, childSessionId, harness, status: "author-failed" };
   }
   log(`fork ${short}: opened ${childPaths.name}`);
-  // Shape-C liveness runs for the loop's lifetime; a failure here never aborts
-  // the parent watch, but it must be observable rather than silently swallowed.
-  void attendChild(childPaths, childSessionId, resolved.recipe, opts, resolved.name).catch((err) =>
-    log(`${childPaths.name}: attend loop errored: ${(err as Error).message}`),
-  );
-  return { forkId: fork.id, childArtifact, childSessionId, harness, status: "created" };
+  // The child's `lucid open` ran mid-turn, possibly before discovery fired:
+  // promote anything still pending now that the log exists.
+  await promotePendingBindings(childPaths).catch(() => {});
+  // The id the attend loop resumes: assigned, or whatever the harness
+  // announced. Neither means one-shot - the loop refuses to resume nothing.
+  const resumableId =
+    spawnIdentity.assignedSessionId ??
+    ("identity" in result ? result.identity?.sessionId : undefined);
+  if (resumableId) {
+    // Shape-C liveness runs for the loop's lifetime; a failure here never
+    // aborts the parent watch, but it must be observable rather than
+    // silently swallowed.
+    void attendChild(childPaths, resumableId, resolved.recipe, opts, resolved.name).catch((err) =>
+      log(`${childPaths.name}: attend loop errored: ${(err as Error).message}`),
+    );
+  } else {
+    log(`${childPaths.name}: no native identity to resume - artifact is one-shot`);
+  }
+  return {
+    forkId: fork.id,
+    childArtifact,
+    childSessionId: resumableId ?? "",
+    harness,
+    status: "created",
+  };
 };
 
 /**
@@ -499,10 +682,31 @@ export const attendChild = async (
       recipe.tools,
     );
     log(`${child.name}: applying feedback via resume`);
-    const code = await runSpawn(argv, child.artifactDir, join(child.sessionDir, "revise.out.log"), {
-      harness: harnessName,
-      sessionId,
-    });
+    // Every resume turn is its OWN launch: fresh correlation, the recipe's
+    // declared strategy, and discovery persistence against the child - a
+    // resumed Codex announcing its thread re-binds it under this launch.
+    const reviseLaunchId = mintLaunchId();
+    const result = await runSpawn(
+      argv,
+      child.artifactDir,
+      join(child.sessionDir, "revise.out.log"),
+      {
+        harness: harnessName,
+        sessionId,
+        launchId: reviseLaunchId,
+        ...(recipe.sessionIdentity ? { strategy: recipe.sessionIdentity } : {}),
+        onIdentityDiscovered: async (identity) => {
+          await recordPendingIdentity(child, {
+            harness: harnessName,
+            sessionId: identity.sessionId,
+            sessionIdAuthority: identity.authority,
+            launchId: reviseLaunchId,
+          });
+          await promotePendingBindings(child).catch(() => {});
+        },
+      },
+    );
+    const code = result.code;
     // Consume the batch (advance the cursor) only on a clean turn, so a failed
     // resume is retried rather than silently dropping the feedback. Bounded, so a
     // persistently broken recipe can't spin forever.

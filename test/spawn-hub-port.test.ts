@@ -3,6 +3,10 @@ import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSpawn } from "../src/launch/launcher.ts";
+import type {
+  NativeSessionIdentity,
+  StdoutJsonlSessionIdentity,
+} from "../src/launch/session-identity.ts";
 
 /**
  * A turn a hub spawns must call back to THAT hub (plan 08, finding #21).
@@ -99,5 +103,147 @@ describe("a spawned turn is told which hub spawned it", () => {
     } finally {
       if (previous !== undefined) process.env.LUCID_HUB_PORT = previous;
     }
+  });
+});
+
+describe("streaming identity discovery through runSpawn", () => {
+  const codexStrategy: StdoutJsonlSessionIdentity = {
+    allowRotation: false,
+    event: "thread.started",
+    field: "thread_id",
+    requiredArgument: "--json",
+    source: "stdout-jsonl",
+  };
+  const launchId = "abc123def4567890";
+
+  test("split JSONL discovers identity while the child is live; output bytes are untouched", async () => {
+    // The stub emits the thread id SPLIT across two writes (real pipes split
+    // wherever they like), then narrates, then WAITS for the discovery
+    // callback's handshake file before exiting - so a passing test PROVES the
+    // callback ran while the child was still alive, with no timing luck.
+    const exe = join(dir, "codex-stub");
+    const handshake = join(dir, "seen-by-parent");
+    await writeFile(
+      exe,
+      `#!/bin/sh
+printf '{"type":"thread.started","thread_'
+sleep 0.05
+printf 'id":"019f-native"}\n'
+echo "narration line the log must keep"
+i=0
+while [ ! -f ${handshake} ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done
+echo '{"type":"turn.completed"}'
+exit 0
+`,
+    );
+    await chmod(exe, 0o755);
+
+    const discovered: NativeSessionIdentity[] = [];
+    const result = await runSpawn([exe, "--json"], dir, join(dir, "out.log"), {
+      harness: "codex",
+      launchId,
+      strategy: codexStrategy,
+      onIdentityDiscovered: async (identity) => {
+        discovered.push(identity);
+        await writeFile(handshake, "ack");
+      },
+    });
+
+    expect(discovered).toEqual([
+      { authority: "observed", harness: "codex", sessionId: "019f-native" },
+    ]);
+    expect(result).toEqual({
+      code: 0,
+      identity: { authority: "observed", harness: "codex", sessionId: "019f-native" },
+      status: "completed",
+    });
+    // The log sink got every byte the harness wrote, split or not.
+    const log = await readFile(join(dir, "out.log"), "utf8");
+    expect(log).toContain('{"type":"thread.started","thread_id":"019f-native"}');
+    expect(log).toContain("narration line the log must keep");
+    expect(log).toContain('{"type":"turn.completed"}');
+  });
+
+  test("a clean discovered exit without identity is HSI002; a nonzero exit stays a process failure", async () => {
+    const silent = join(dir, "silent-stub");
+    await writeFile(silent, "#!/bin/sh\necho no structured output here\nexit 0\n");
+    await chmod(silent, 0o755);
+    expect(
+      await runSpawn([silent, "--json"], dir, join(dir, "s.log"), {
+        harness: "codex",
+        launchId,
+        strategy: codexStrategy,
+      }),
+    ).toEqual({ code: 0, error: "HSI002", status: "identity-missing" });
+
+    const failing = join(dir, "failing-stub");
+    await writeFile(failing, "#!/bin/sh\nexit 9\n");
+    await chmod(failing, 0o755);
+    expect(
+      await runSpawn([failing, "--json"], dir, join(dir, "f.log"), {
+        harness: "codex",
+        launchId,
+        strategy: codexStrategy,
+      }),
+    ).toEqual({ code: 9, status: "process-failed" });
+  });
+
+  test("a spawn that cannot start is spawn-failed, typed", async () => {
+    expect(
+      await runSpawn([join(dir, "does-not-exist")], dir, join(dir, "x.log"), {
+        harness: "codex",
+        launchId,
+        strategy: codexStrategy,
+      }),
+    ).toEqual({ code: 127, status: "spawn-failed" });
+  });
+
+  test("stderr is logged evidence, never identity", async () => {
+    const exe = join(dir, "stderr-stub");
+    await writeFile(
+      exe,
+      `#!/bin/sh\necho '{"type":"thread.started","thread_id":"via-stderr"}' >&2\nexit 0\n`,
+    );
+    await chmod(exe, 0o755);
+    const discovered: NativeSessionIdentity[] = [];
+    const result = await runSpawn([exe, "--json"], dir, join(dir, "err.log"), {
+      harness: "codex",
+      launchId,
+      strategy: codexStrategy,
+      onIdentityDiscovered: (identity) => {
+        discovered.push(identity);
+      },
+    });
+    // The line is in the log for a human to read - and established nothing.
+    expect(await readFile(join(dir, "err.log"), "utf8")).toContain("via-stderr");
+    expect(discovered).toEqual([]);
+    expect(result).toEqual({ code: 0, error: "HSI002", status: "identity-missing" });
+  });
+
+  test("discovered recipes clear inherited identity; caller-assigned exports it with authority", async () => {
+    const { exe, dump } = await writeEnvDumper();
+
+    await runSpawn([exe, "--json"], dir, join(dir, "e1.log"), {
+      harness: "codex",
+      launchId,
+      strategy: codexStrategy,
+    });
+    let env = await readFile(dump, "utf8");
+    // A discovered harness mints its own id: the parent's must not leak in,
+    // or the child stamps its events as a conversation that is not its own.
+    expect(sawValue(env, "LUCID_SESSION_ID")).toBeUndefined();
+    expect(sawValue(env, "LUCID_SESSION_ID_AUTHORITY")).toBeUndefined();
+    expect(sawValue(env, "LUCID_LAUNCH_ID")).toBe(launchId);
+
+    await runSpawn([exe], dir, join(dir, "e2.log"), {
+      harness: "claude",
+      sessionId: "assigned-1",
+      launchId,
+      strategy: { argument: "--session-id", source: "caller-assigned" },
+    });
+    env = await readFile(dump, "utf8");
+    expect(sawValue(env, "LUCID_SESSION_ID")).toBe("assigned-1");
+    expect(sawValue(env, "LUCID_SESSION_ID_AUTHORITY")).toBe("assigned");
+    expect(sawValue(env, "LUCID_LAUNCH_ID")).toBe(launchId);
   });
 });
