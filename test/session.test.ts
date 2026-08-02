@@ -1208,6 +1208,61 @@ describe("the CLI's own stamps carry launch identity from the environment", () =
   }, 20_000);
 });
 
+describe("an attended session leaves evidence it can be resumed from", () => {
+  test("a wait that declares an id records it with authority, so resume can rank it", async () => {
+    const paths = sessionPaths(artifact);
+    await openSession(paths);
+    const previous = process.env.LUCID_SESSION_ID;
+    process.env.LUCID_SESSION_ID = "0199-human-session";
+    try {
+      await runWaitCli(artifact, {
+        harness: "claude-code",
+        resume: "claude --resume 0199-human-session",
+        timeoutMs: 0,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.LUCID_SESSION_ID;
+      else process.env.LUCID_SESSION_ID = previous;
+    }
+    // Evidence, not a mention: a stamped id alone never ranks, so a session
+    // that only stamped events would have become unresumable.
+    const sidecar = await readLastAttendant(paths);
+    expect(sidecar).toMatchObject({
+      harness: "claude-code",
+      sessionId: "0199-human-session",
+      sessionIdAuthority: "declared",
+    });
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => false,
+      sidecars: [sidecar!],
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([[1, "0199-human-session"]]);
+  });
+
+  test("a recorded resume command still ranks when the log also carries a stamp", async () => {
+    // The regression: the resume command was read through a resolver that
+    // returns early on a stamped id and carries no command, so the artifacts
+    // that followed the integration guide MOST completely lost resume.
+    const sidecars = [
+      {
+        at: "2026-08-01T10:00:00.000Z",
+        harness: "claude-code",
+        resume: "claude --resume 0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000",
+      },
+    ];
+    const candidates = await resolveResumeCandidates({
+      bindings: [],
+      corroborate: async () => false,
+      legacyResume: { command: sidecars[0]!.resume, harness: sidecars[0]!.harness },
+      sidecars,
+    });
+    expect(candidates.map((c) => [c.tier, c.sessionId])).toEqual([
+      [3, "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000"],
+    ]);
+  });
+});
+
 describe("an attending session can state what it is running, per wait", () => {
   test("a stated model/effort updates the sidecar the viewer reads", async () => {
     const paths = sessionPaths(artifact);

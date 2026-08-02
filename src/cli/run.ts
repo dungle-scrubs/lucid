@@ -344,6 +344,13 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
     // "what are you running", where the env is whatever was exported once.
     const model = options.model ?? stamp?.model;
     const effort = options.effort ?? stamp?.effort;
+    // The attending session's OWN id, recorded as evidence rather than left
+    // as a log mention: a mention never ranks (that is how a synthetic id once
+    // reached resume argv), so a session that only ever stamped events would
+    // otherwise become unresumable. `declared` is the honest authority - the
+    // session asserted it through its environment; Lucid neither assigned nor
+    // observed it.
+    const declaredId = stamp?.sessionId;
     await mergeAttendantSidecar(paths, {
       harness,
       nextCursor: payload.nextCursor,
@@ -351,6 +358,7 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
       ...(options.resume ? { resume: options.resume } : {}),
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
+      ...(declaredId ? { sessionId: declaredId, sessionIdAuthority: "declared" } : {}),
     });
   }
 

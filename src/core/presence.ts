@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { isUsableSessionId } from "../launch/session-identity.ts";
 import { decodeFlattenedPath } from "./scratchpad.ts";
 
 /**
@@ -386,6 +387,12 @@ export const harnessStoreHas = async (
   sessionId: string,
   opts: { readonly claudeProjectsDir?: string; readonly codexSessionsDir?: string } = {},
 ): Promise<boolean> => {
+  // The id becomes a PATH SEGMENT below (`<store>/<dir>/<id>.jsonl`), and it
+  // reaches here from a log event, a sidecar file, or a harness's stdout -
+  // none of them ours. An id shaped like `../../../etc/passwd` would stat its
+  // way out of the store and answer "corroborated" for a file that has
+  // nothing to do with any harness.
+  if (!isUsableSessionId(sessionId)) return false;
   const kind = harness.trim().toLowerCase().replace(/_/g, "-");
   if (kind === "claude-code" || kind === "claude") {
     return (

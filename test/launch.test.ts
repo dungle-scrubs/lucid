@@ -7,7 +7,12 @@ import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import type { WaitPayload } from "../src/protocol/wire.ts";
-import { childArtifactPath, handleForks, revisePrompt } from "../src/launch/launcher.ts";
+import {
+  attendedByAnother,
+  childArtifactPath,
+  handleForks,
+  revisePrompt,
+} from "../src/launch/launcher.ts";
 import {
   buildArgv,
   loadRegistry,
@@ -342,6 +347,23 @@ describe("recipes registry", () => {
     } catch (error) {
       expect(error).toMatchObject({ code: "HSI001", detail: { harness: "legacy", path: regPath } });
     }
+  });
+});
+
+describe("the launcher yields to a human, not to its own identity record", () => {
+  test("an identity sidecar is not attendance; an attendance sidecar is", async () => {
+    // The launcher plants an identity sidecar naming the REAL harness before
+    // it spawns (so a child that dies pre-open is still resumable). Reading
+    // that as "a human attached" made attendChild return on its first pass
+    // and left every forked artifact one-shot. What distinguishes them is
+    // `nextCursor`: only a reader that took delivery records one.
+    const identityOnly = { at: "2026-08-01T10:00:00.000Z", harness: "claude-code" };
+    const attended = { ...identityOnly, nextCursor: "evt_00007" };
+    const launcherOwn = { ...attended, harness: "lucid-launcher" };
+    expect(attendedByAnother(identityOnly)).toBe(false);
+    expect(attendedByAnother(attended)).toBe(true);
+    // The launcher's own attendance record is not somebody else.
+    expect(attendedByAnother(launcherOwn)).toBe(false);
   });
 });
 

@@ -115,6 +115,23 @@ const LINE_MAX = 65_536;
 export const SESSION_ID_MAX = 128;
 
 /**
+ * The shape an id must have before Lucid will put it in a command line.
+ *
+ * A discovered id comes from the harness's own stdout, which is the least
+ * trusted input in the whole flow: it is read from a subprocess, believed,
+ * stored, and later substituted into `resume` argv. Bounding length and
+ * stripping control characters is not enough - an id of `--dangerously-skip-
+ * permissions` is printable, short, and would be handed to the CLI as a FLAG.
+ * So an id is an opaque token: letters, digits, and the few separators real
+ * harnesses use, never leading with a dash.
+ */
+const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/;
+
+/** True when this id may be believed and, later, placed into resume argv. */
+export const isUsableSessionId = (value: string): boolean =>
+  value.length > 0 && value.length <= SESSION_ID_MAX && SESSION_ID_SHAPE.test(value);
+
+/**
  * Incremental bounded decoder for stdout-JSONL identity discovery.
  *
  * Fed raw stdout chunks as they stream; owns NO output bytes (the same chunks
@@ -209,12 +226,7 @@ export class SessionIdentityDecoder {
     // creates own data properties (even `__proto__`), and anything inherited
     // that survives the lookup fails the string check below.
     const id = r[this.strategy.field];
-    if (
-      typeof id !== "string" ||
-      id === "" ||
-      id.length > SESSION_ID_MAX ||
-      hasControlCharacters(id)
-    ) {
+    if (typeof id !== "string" || hasControlCharacters(id) || !isUsableSessionId(id)) {
       this.refused["invalid-id"] += 1;
       return undefined;
     }

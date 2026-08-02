@@ -150,13 +150,17 @@ export const promotePendingBindings = async (paths: SessionPaths): Promise<reado
     const stamp: AttendantStamp = { harness, sessionId, sessionIdAuthority };
     if (live) {
       try {
-        await loopbackFetch(live.port, `${live.base ?? ""}/__lucid/bind`, {
+        const res = await loopbackFetch(live.port, `${live.base ?? ""}/__lucid/bind`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ launchId, attendant: stamp }),
         });
+        // A refusal is not a landing: a 409 (not opened yet) or a 400
+        // (malformed) leaves the binding owed, and clearing the pending flag
+        // on it would lose the identity for good.
+        if (!res.ok) continue;
       } catch {
-        continue; // the server refused or died; the binding stays owed
+        continue; // the server died; the binding stays owed
       }
     } else {
       const result = await appendSessionBindings(paths.logPath, [{ launchId, attendant: stamp }]);

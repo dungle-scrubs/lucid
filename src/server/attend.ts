@@ -510,15 +510,25 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   ): Promise<readonly ResumeCandidate[]> => {
     const sidecars = await readAttendantSidecars(paths);
     const scratchpadId = harnessSessionId({ artifactDir: paths.artifactDir });
+    // The recorded resume COMMAND comes from the sidecars directly, not from
+    // `artifactAttendant`: that resolver answers "who owns this artifact" and
+    // returns early on a stamped id, carrying no resume string - so reading
+    // the command through it made tier 3 vanish for exactly the artifacts
+    // that followed the integration guide most completely (export an id AND
+    // record a resume command). Newest sidecar that has one wins.
+    const recorded = [...sidecars]
+      .filter((a) => a.resume !== undefined)
+      .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))[0];
+    const harnessForScratchpad = recorded?.harness ?? legacy?.harness;
     return resolveResumeCandidates({
       sidecars,
       bindings: state.bindings,
       corroborate: (harness, sessionId) => harnessStoreHas(harness, sessionId),
-      ...(legacy?.resume && legacy.harness
-        ? { legacyResume: { command: legacy.resume, harness: legacy.harness } }
+      ...(recorded?.resume
+        ? { legacyResume: { command: recorded.resume, harness: recorded.harness } }
         : {}),
-      ...(scratchpadId && legacy?.harness
-        ? { scratchpad: { harness: legacy.harness, sessionId: scratchpadId } }
+      ...(scratchpadId && harnessForScratchpad
+        ? { scratchpad: { harness: harnessForScratchpad, sessionId: scratchpadId } }
         : {}),
     });
   };
@@ -533,6 +543,9 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
         readonly sessionId?: string;
         readonly cwd?: string;
         readonly fallback?: { readonly harness: string; readonly sessionId: string };
+        /** Every candidate this artifact had was proven dead on this machine:
+         *  a fresh handoff would answer a question nobody asked. */
+        readonly exhausted?: boolean;
       }
     | undefined
   > => {
@@ -543,12 +556,19 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const candidates = await attendCandidates(state, recorded);
     const best = candidates[0];
     if (!best) {
-      // No id survives the trust ladder (untyped stamps are display-only,
-      // uncorroborated bindings stay put). A recorded HARNESS still supports
-      // a fresh handoff; with not even that, there is nothing to attend.
+      // No id survives the trust ladder. Two very different situations hide
+      // here, and collapsing them was how the unavailable warning became
+      // unreachable: an artifact that never had a resumable session (a fresh
+      // handoff is right) versus one whose sessions this machine has PROVEN
+      // dead (quarantined) - where silently starting a stranger is the
+      // opposite of what the human is owed.
       if (!recorded?.harness) return undefined;
+      const quarantined = (await readAttendantSidecars(paths)).some(
+        (a) => (a.invalidatedSessionIds ?? []).length > 0,
+      );
       return {
         harness: recorded.harness,
+        ...(quarantined ? { exhausted: true } : {}),
         ...(await resumeCwd(undefined, recorded.cwd)),
       };
     }
@@ -686,6 +706,17 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       : [record.sessionId, record.fallback?.sessionId].find(
           (id): id is string => id !== undefined && !ruledOutForBatch.has(id),
         );
+    if (record.exhausted === true) {
+      // Say it, then stand down: the recorded sessions are gone, and the
+      // human decides whether to switch harness or attend it themselves.
+      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
+      options.warn?.(
+        "HARNESS_SESSION_UNAVAILABLE",
+        "The recorded harness session no longer exists on this machine; feedback stays recorded until a session is re-established.",
+      );
+      log(`attend ${paths.name}: every recorded session is quarantined here; standing down`);
+      return;
+    }
     if (!startsFresh && resumeTargetId === undefined) {
       pauseFor(ATTEND_COOLOFF_MS, resolved.name);
       options.warn?.(
@@ -1119,7 +1150,14 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // Asked of the SAME record driveTurn would resume, so the question is
     // exactly "is the thing I am about to resume already open?", never a
     // near-miss on some other stamp.
-    const live = await presenceFor(await attendTarget(state), paths.artifactDir);
+    // Asked of the artifact's RECORDED conversation, not of the resume
+    // candidate: "is a human sitting in the session this artifact belongs to"
+    // is an ownership question, and a mention that is deliberately unrankable
+    // for resume still names a session somebody can be sitting in. Ranking it
+    // here made the guard blind on exactly the artifacts whose evidence is a
+    // bare stamp.
+    const owner = await artifactAttendant(paths, state.sessionHistory);
+    const live = await presenceFor(owner, paths.artifactDir);
     if (live?.interactive) return;
     // Claim the turn HERE, with no await between the decision and the flag:
     // driveTurn's own awaits (registry, payload, spawn) would otherwise let a

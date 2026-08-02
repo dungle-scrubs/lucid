@@ -18,6 +18,7 @@ import {
   readLastAttendant,
   recordPendingIdentity,
   recordSessionInvalidation,
+  type Attendant,
 } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver, promotePendingBindings } from "../core/deliver.ts";
@@ -652,6 +653,18 @@ export const handleForks = async (
   );
 };
 
+/**
+ * Has somebody OTHER than this launcher taken delivery of the child?
+ *
+ * `nextCursor` is what makes a sidecar an ATTENDANCE record: it says a reader
+ * consumed the log up to a point. A sidecar without one is an identity record
+ * - the launcher's own `recordAssigned`/discovery write, naming the harness it
+ * is about to spawn - and reading that as "a human attached" made the loop
+ * yield to itself on its first pass, leaving every forked artifact one-shot.
+ */
+export const attendedByAnother = (attendant: Attendant): boolean =>
+  attendant.nextCursor !== undefined && attendant.harness !== LAUNCHER_HARNESS;
+
 /** Shape-C attend loop for one child: hold the listening presence, re-drive the
  *  same session on each feedback batch, yield to a human who attaches. */
 export const attendChild = async (
@@ -676,7 +689,7 @@ export const attendChild = async (
     if (opts.signal?.aborted) return;
     // Single-attendant: yield the moment a non-launcher harness attends.
     const attendant = await readLastAttendant(child);
-    if (attendant && attendant.harness !== LAUNCHER_HARNESS) {
+    if (attendant && attendedByAnother(attendant)) {
       log(`${child.name}: yielding to "${attendant.harness}" (human attached)`);
       return;
     }
@@ -703,7 +716,7 @@ export const attendChild = async (
     // sidecar can't lock, but re-checking here closes the common race window; do
     // NOT advance the cursor, so the human owns the unconsumed batch.
     const owner = await readLastAttendant(child);
-    if (owner && owner.harness !== LAUNCHER_HARNESS) {
+    if (owner && attendedByAnother(owner)) {
       log(`${child.name}: yielding to "${owner.harness}" before driving batch`);
       return;
     }
