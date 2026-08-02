@@ -8,6 +8,19 @@ Releases from 0.1.0 onward are managed by
 [release-please](https://github.com/googleapis/release-please) from Conventional
 Commit messages.
 
+## [0.4.0](https://github.com/dungle-scrubs/lucid/compare/v0.3.0...v0.4.0) (2026-08-02)
+
+
+### Added
+
+* **launcher:** the tool grant is a config property, not a string in an argv ([#109](https://github.com/dungle-scrubs/lucid/issues/109)) ([04d5334](https://github.com/dungle-scrubs/lucid/commit/04d53347a356ee16bdd7fae2763a165bd26cbcce))
+* **outline:** harden hostile layout handling ([#117](https://github.com/dungle-scrubs/lucid/issues/117)) ([5daa9f2](https://github.com/dungle-scrubs/lucid/commit/5daa9f2fd691e9a01a1338c105d987b2259dcdb7))
+
+
+### Fixed
+
+* **outline:** close whole-plan review findings ([f4f6a6e](https://github.com/dungle-scrubs/lucid/commit/f4f6a6ebda950eb46c11c1556cde8154425eb6f3))
+
 ## [0.3.0](https://github.com/dungle-scrubs/lucid/compare/v0.2.0...v0.3.0) (2026-07-31)
 
 
