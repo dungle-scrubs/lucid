@@ -1902,6 +1902,86 @@ if (process.env.LUCID_HARNESS === "codex") {
     expect(state.annotations.length).toBeGreaterThan(0);
   }, 20_000);
 
+  test("identity warnings and the hub log carry no review content", async () => {
+    // R1: a warning is a CODE plus Lucid's own sentence. Neither it nor the
+    // retained hub log may carry the human's words, the harness's output, or
+    // the artifact - the one place those live is the session's own record.
+    const secret = "SECRET-ANNOTATION-TEXT-do-not-leak";
+    const notFound = join(dir, "codex-leaky");
+    await writeFile(
+      notFound,
+      `#!/bin/sh\necho "Error: no rollout found for thread id" >&2\necho "harness prose: HARNESS-OUTPUT-do-not-leak" >&2\nexit 1\n`,
+    );
+    await chmod(notFound, 0o755);
+    artifact = join(proj, "redaction.html");
+    await writeFile(artifact, DOC);
+    paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "codex", sessionId: "dead-one", cwd: paths.artifactDir },
+    });
+    await mergeAttendantSidecar(paths, {
+      harness: "codex",
+      sessionId: "dead-one",
+      sessionIdAuthority: "observed",
+      at: new Date().toISOString(),
+    });
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "codex",
+        harnesses: {
+          codex: {
+            sessionIdentity: {
+              event: "thread.started",
+              field: "thread_id",
+              requiredArgument: "--json",
+              source: "stdout-jsonl",
+            },
+            spawn: [notFound, "--json", "{artifact}", "{prompt}"],
+            resume: [notFound, "--json", "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
+
+    logs.length = 0;
+    const hub = await startDaemon();
+    await mount(hub);
+    // Watch the session's own frames: warnings reach a human this way.
+    const frames: string[] = [];
+    const stream = await fetch(
+      `http://127.0.0.1:${hub.port}/s/${sessionId(paths.artifactPath)}/__lucid/events`,
+      { headers: { host: `127.0.0.1:${hub.port}` } },
+    );
+    const reader = stream.body?.getReader();
+    const decoder = new TextDecoder();
+    void (async () => {
+      while (reader) {
+        const { value, done } = await reader.read().catch(() => ({ done: true, value: undefined }));
+        if (done) return;
+        if (value) frames.push(decoder.decode(value, { stream: true }));
+      }
+    })();
+    await annotate(secret);
+
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      const sidecar = await readLastAttendant(paths);
+      if ((sidecar?.invalidatedSessionIds ?? []).length > 0) break;
+      await sleep(100);
+    }
+    await sleep(300);
+    await reader?.cancel().catch(() => {});
+    const seen = frames.join("");
+    // The warning surface: Lucid's own sentence, never the harness's.
+    expect(seen).not.toContain("HARNESS-OUTPUT-do-not-leak");
+    // The retained hub log: it may NAME the file to read, never quote it.
+    const hubLog = logs.join("\n");
+    expect(hubLog).not.toContain(secret);
+    expect(hubLog).not.toContain("HARNESS-OUTPUT-do-not-leak");
+  }, 20_000);
+
   test("a moved artifact starts a fresh same-harness session in its new project", async () => {
     const oldProject = join(dir, "old-project");
     const lucidDir = join(proj, ".lucid");

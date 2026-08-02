@@ -24,7 +24,23 @@ const USAGE_LIMIT_WORDING: Readonly<Record<string, string>> = {
   quota: "over its provider quota",
 };
 
+/**
+ * The two identity outcomes a human can act on (plan 03, RFC-01). Both are
+ * closed codes carrying no harness content, and both say what happened to
+ * the FEEDBACK - which is the only part the human has a stake in. A generic
+ * "the turn failed" line sent people to re-read a log for a cause Lucid
+ * already knew.
+ */
+const IDENTITY_WORDING: Readonly<Record<string, string>> = {
+  HARNESS_SESSION_MISMATCH:
+    "Delivery stopped: the harness resumed a different conversation than the one recorded, so your feedback was not sent to it. It is still recorded here.",
+  HARNESS_SESSION_UNAVAILABLE:
+    "Delivery is paused: the recorded harness session no longer exists on this machine. Your feedback stays recorded - switch harness, or attend the artifact yourself, to continue.",
+};
+
 export const warningText = (code: string, payload: string): string => {
+  const identity = IDENTITY_WORDING[code];
+  if (identity) return identity;
   if (code === "HARNESS_USAGE_LIMIT") {
     const wording = USAGE_LIMIT_WORDING[payload];
     return wording
