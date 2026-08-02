@@ -3,7 +3,7 @@ import { closeSync, mkdirSync, openSync } from "node:fs";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Anchor } from "../anchors/anchor.ts";
-import { readLastAttendant, writeAttendantSidecar } from "../core/attendant.ts";
+import { readLastAttendant, mergeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver } from "../core/deliver.ts";
 import { shellArg } from "../core/escape.ts";
@@ -471,7 +471,7 @@ export const attendChild = async (
       cursor = payload.nextCursor; // feedback with nothing to apply: skip the turn
       continue;
     }
-    await writeAttendantSidecar(child, {
+    await mergeAttendantSidecar(child, {
       harness: LAUNCHER_HARNESS,
       nextCursor: payload.nextCursor,
       at: new Date().toISOString(),

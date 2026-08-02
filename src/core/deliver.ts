@@ -1,6 +1,13 @@
 import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
 import { mutateAttendantSidecar, readPendingAttendants } from "./attendant.ts";
-import { bindingEventId, type EventInput, type LogEvent, type LogEventType } from "./events.ts";
+import {
+  bindingEventId,
+  hasId,
+  type AttendantStamp,
+  type EventInput,
+  type LogEvent,
+  type LogEventType,
+} from "./events.ts";
 import { appendEvent, appendEventsIf } from "./log.ts";
 import type { SessionPaths } from "./paths.ts";
 
@@ -26,7 +33,65 @@ const ROUTES: Partial<Record<LogEventType, string>> = {
 export interface DeliverResult {
   /** True when a live server took the event (and broadcast it). */
   readonly live: boolean;
+  /** Binding fallback only: the log holds no `session_opened` yet, so the
+   *  event was refused rather than appended - the binding is still owed. */
+  readonly refused?: boolean;
 }
+
+export interface BindingInput {
+  readonly launchId: string;
+  readonly attendant: AttendantStamp;
+  readonly turnId?: string;
+}
+
+export interface BindingAppendResult {
+  /** False when the log holds no `session_opened` yet: the binding is still
+   *  owed, nothing was written. */
+  readonly opened: boolean;
+  /** The binding events that are NEW in this append - a re-announced binding
+   *  dedupes to [] here even though the log returns the pre-existing event. */
+  readonly fresh: readonly LogEvent[];
+}
+
+/**
+ * The ONE writer of `harness_session_bound` at the log level: derives the
+ * idempotency id from (launchId, sessionId), enforces the after-open guard,
+ * and reports which events are genuinely NEW - all inside the append lock, so
+ * none of it can race a concurrent announce. Three paths used to build this
+ * event themselves and each enforced a different subset of its invariants.
+ */
+export const appendSessionBindings = async (
+  logPath: string,
+  bindings: readonly BindingInput[],
+): Promise<BindingAppendResult> => {
+  const inputs: EventInput[] = [];
+  for (const b of bindings) {
+    if (!b.attendant.sessionId || !b.attendant.sessionIdAuthority) continue;
+    inputs.push({
+      t: "harness_session_bound",
+      id: bindingEventId(b.launchId, b.attendant.sessionId),
+      launchId: b.launchId,
+      ...(b.turnId ? { turnId: b.turnId } : {}),
+      attendant: b.attendant,
+    });
+  }
+  if (inputs.length === 0) return { opened: true, fresh: [] };
+  let opened = false;
+  const existing = new Set<string>();
+  const appended = await appendEventsIf(
+    logPath,
+    (events) => {
+      opened = events.some((e) => e.t === "session_opened");
+      for (const e of events) if (hasId(e)) existing.add(e.id);
+      return opened;
+    },
+    inputs,
+  );
+  return {
+    opened,
+    fresh: appended.filter((e): e is LogEvent => hasId(e) && !existing.has(e.id)),
+  };
+};
 
 export const deliver = async (paths: SessionPaths, input: EventInput): Promise<DeliverResult> => {
   const route = ROUTES[input.t];
@@ -49,13 +114,13 @@ export const deliver = async (paths: SessionPaths, input: EventInput): Promise<D
     return { live: true };
   }
   if (input.t === "harness_session_bound") {
-    // A binding is news ABOUT an open session: the direct fallback keeps the
-    // same after-open guard the promotion path enforces, so a binding can
-    // never become a log's first line.
-    await appendEventsIf(paths.logPath, (events) => events.some((e) => e.t === "session_opened"), [
-      input,
+    // Through the one binding writer, so the offline fallback carries the
+    // same after-open guard and derived id as every other producer. A refusal
+    // is visible to the caller rather than a silent skip.
+    const result = await appendSessionBindings(paths.logPath, [
+      { launchId: input.launchId, attendant: input.attendant, turnId: input.turnId },
     ]);
-    return { live: false };
+    return { live: false, ...(result.opened ? {} : { refused: true }) };
   }
   await appendEvent(paths.logPath, input);
   return { live: false };
@@ -63,44 +128,53 @@ export const deliver = async (paths: SessionPaths, input: EventInput): Promise<D
 
 /**
  * Promote identity discovered BEFORE the review log existed: for every sidecar
- * still holding a pending binding, append the durable `harness_session_bound`
- * through the normal locked path and clear the flag.
+ * still holding a pending binding, land the durable `harness_session_bound`
+ * and clear the flag.
  *
- * Guarded on the log already holding a `session_opened` - a binding is news
- * ABOUT a session, so it never precedes the event that creates one; before
- * open, the sidecar keeps owing it and the call is a no-op. Idempotent twice
- * over: the guard-side dedupe by binding id means a re-discovered identity
- * lands once, and a cleared flag means a promoted sidecar stops volunteering.
+ * Landing honors the one-appender rule: a live server takes the binding over
+ * POST (and broadcasts it); only with no server does this append directly,
+ * guarded on the log already holding a `session_opened` - a binding is news
+ * ABOUT a session, so it never precedes the event that creates one. The flag
+ * is cleared only when the sidecar STILL holds the identity that was just
+ * promoted: an identity re-recorded mid-promotion stays pending for the next
+ * pass instead of being silently dropped.
  */
 export const promotePendingBindings = async (paths: SessionPaths): Promise<readonly LogEvent[]> => {
   const pending = await readPendingAttendants(paths);
   if (pending.length === 0) return [];
+  const live = await discoverLiveServer(paths);
   const promoted: LogEvent[] = [];
   for (const attendant of pending) {
-    // The reads in readPendingAttendants proved these present; the types
-    // carry them as optional because an ordinary sidecar may omit them.
     const { harness, sessionId, sessionIdAuthority, launchId } = attendant;
     if (!sessionId || !sessionIdAuthority || !launchId) continue;
-    const appended = await appendEventsIf(
-      paths.logPath,
-      (events) => events.some((e) => e.t === "session_opened"),
-      [
-        {
-          t: "harness_session_bound",
-          id: bindingEventId(launchId, sessionId),
-          launchId,
-          attendant: { harness, sessionId, sessionIdAuthority },
-        },
-      ],
-    );
-    if (appended.length === 0) continue; // not opened yet: still owed
-    promoted.push(...appended);
+    const stamp: AttendantStamp = { harness, sessionId, sessionIdAuthority };
+    if (live) {
+      try {
+        await loopbackFetch(live.port, `${live.base ?? ""}/__lucid/bind`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ launchId, attendant: stamp }),
+        });
+      } catch {
+        continue; // the server refused or died; the binding stays owed
+      }
+    } else {
+      const result = await appendSessionBindings(paths.logPath, [{ launchId, attendant: stamp }]);
+      if (!result.opened) continue; // not opened yet: still owed
+      promoted.push(...result.fresh);
+    }
     await mutateAttendantSidecar(paths, harness, (current) => {
-      const { pendingBinding: _cleared, ...rest } = current ?? {
-        at: new Date().toISOString(),
-        harness,
-      };
-      return rest;
+      // Only the identity we just promoted stops being pending; a NEWER
+      // identity recorded while we were appending keeps its flag.
+      if (
+        current?.pendingBinding &&
+        current.launchId === launchId &&
+        current.sessionId === sessionId
+      ) {
+        const { pendingBinding: _cleared, ...rest } = current;
+        return rest;
+      }
+      return current ?? { at: new Date().toISOString(), harness };
     });
   }
   return promoted;

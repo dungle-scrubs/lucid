@@ -8,7 +8,7 @@ import {
   readLastAttendant,
   recordPendingIdentity,
   recordSessionInvalidation,
-  writeAttendantSidecar,
+  mergeAttendantSidecar,
 } from "../src/core/attendant.ts";
 import { parseHTML } from "linkedom";
 import { captureElementAnchor } from "../src/anchors/dom.ts";
@@ -888,13 +888,13 @@ describe("attendant sidecars (D-051 identity)", () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
 
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "codex",
       nextCursor: "evt_00001",
       at: "2026-07-16T09:00:00.000Z",
       resume: "codex resume abc --yolo",
     });
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "claude-code",
       nextCursor: "evt_00009",
       at: "2026-07-16T10:00:00.000Z",
@@ -924,7 +924,7 @@ describe("attendant sidecars (D-051 identity)", () => {
     await writeFile(cursorSidecarPath(paths, "broken"), "{not json");
     expect(await readLastAttendant(paths)).toBeUndefined();
 
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "gpt",
       nextCursor: "evt_00002",
       at: "2026-07-16T11:00:00.000Z",
@@ -940,7 +940,7 @@ describe("attendant sidecar mutation (harness session identity)", () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
     // The agent's wait turn records the full identity story...
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "codex",
       nextCursor: "evt_00004",
       at: "2026-07-16T09:00:00.000Z",
@@ -949,7 +949,7 @@ describe("attendant sidecar mutation (harness session identity)", () => {
       effort: "high",
     });
     // ...and the launcher's narrower stamp must UPDATE, not clobber.
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "codex",
       nextCursor: "evt_00009",
       at: "2026-07-16T10:00:00.000Z",
@@ -1151,7 +1151,7 @@ describe("listSessions", () => {
     await writeFile(zetaPaths.artifactPath, V1);
     await openSession(zetaPaths);
     await openSession(alphaPaths);
-    await writeAttendantSidecar(zetaPaths, {
+    await mergeAttendantSidecar(zetaPaths, {
       harness: "codex",
       nextCursor: "evt_00001",
       at: "2026-07-16T12:00:00.000Z",

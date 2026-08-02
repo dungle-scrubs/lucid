@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { writeAttendantSidecar } from "../core/attendant.ts";
+import { mergeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver, promotePendingBindings } from "../core/deliver.ts";
 import { foldLog } from "../core/fold.ts";
@@ -306,7 +306,7 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
     // The RESOLVED harness, not the flag: `--resume` alone still names an
     // attendant, and its declared model/effort must reach the sidecar too.
     const stamp = attendantStamp(harness);
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness,
       nextCursor: payload.nextCursor,
       at: new Date().toISOString(),

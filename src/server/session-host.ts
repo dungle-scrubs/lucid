@@ -10,12 +10,12 @@ import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../cor
 import { diffHtml } from "../diff/diff.ts";
 import { foldLog, versionRef } from "../core/fold.ts";
 import {
-  bindingEventId,
   sanitizeAttendant,
   TURN_END_CODE,
   TURN_END_REASONS,
   type TurnEndReason,
 } from "../core/events.ts";
+import { appendSessionBindings } from "../core/deliver.ts";
 import { WELL_FORMED_ID } from "../core/request-id.ts";
 import {
   legacyProjection,
@@ -27,7 +27,6 @@ import {
   validateGroup,
 } from "../core/question-contract.ts";
 import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/events.ts";
-import { hasId } from "../core/events.ts";
 import { appendEvents, appendEventsIf, readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
@@ -891,10 +890,10 @@ export const createSessionHost = (
    * `POST /__lucid/bind` - a launch announcing which harness-native session it
    * bound (plan 03, M2). Validation is refusal, not coercion: a stamp that
    * cannot vouch (no sessionId, no authority) or a malformed launchId is a
-   * 400, never a cleaned-up record. The append dedupes by the binding id
-   * derived from (launchId, sessionId), so a re-announcing resume is one log
-   * line however many times it arrives - and the broadcast rides serverAppend
-   * like every other live event.
+   * 400, never a cleaned-up record. The append goes through the ONE binding
+   * writer - after-open guard, derived idempotency id - and only the events
+   * that are genuinely fresh are broadcast: a re-announced binding is one log
+   * line and one frame, however many times it arrives.
    */
   const handleBind = async (req: Request): Promise<Response> => {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
@@ -912,29 +911,11 @@ export const createSessionHost = (
       typeof body.turnId === "string" && body.turnId.length > 0
         ? body.turnId.slice(0, 128)
         : undefined;
-    const id = bindingEventId(launchId, attendant.sessionId);
-    // Not serverAppend: a re-announced binding dedupes in the lock and would
-    // re-broadcast the OLD event - one binding, one frame, however many times
-    // discovery repeats itself. The guard runs inside the append lock, so
-    // "was it fresh" cannot race a concurrent announce.
-    let fresh = false;
-    const appended = await appendEventsIf(
-      paths.logPath,
-      (events) => {
-        fresh = !events.some((e) => hasId(e) && e.id === id);
-        return true;
-      },
-      [
-        {
-          t: "harness_session_bound",
-          id,
-          launchId,
-          ...(turnId ? { turnId } : {}),
-          attendant,
-        },
-      ],
-    );
-    if (fresh) for (const e of appended) broadcast(e);
+    const result = await appendSessionBindings(paths.logPath, [
+      { launchId, attendant, ...(turnId ? { turnId } : {}) },
+    ]);
+    if (!result.opened) return json({ error: "session not opened" }, 409);
+    for (const e of result.fresh) broadcast(e);
     touch();
     return json({ ok: true });
   };

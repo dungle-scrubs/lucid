@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeAttendantSidecar } from "../src/core/attendant.ts";
+import { mergeAttendantSidecar } from "../src/core/attendant.ts";
 import { readContextSidecar } from "../src/core/context.ts";
 import { runContext } from "../src/cli/run.ts";
 import { foldLog } from "../src/core/fold.ts";
@@ -90,7 +90,7 @@ describe("server routes + security", () => {
     const siblingPaths = sessionPaths(join(dir, "notes.html"));
     await writeFile(siblingPaths.artifactPath, DOC);
     await openSession(siblingPaths);
-    await writeAttendantSidecar(siblingPaths, {
+    await mergeAttendantSidecar(siblingPaths, {
       harness: "codex",
       nextCursor: "evt_00001",
       at: "2026-07-16T10:00:00.000Z",
@@ -699,7 +699,7 @@ describe("server routes + security", () => {
 
   test("the attendant's model/effort surface in /__lucid/state for the inherited pickers", async () => {
     await startServer();
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "claude-code",
       nextCursor: "evt_00001",
       at: "2026-07-16T10:00:00.000Z",
@@ -1134,7 +1134,7 @@ describe("server routes + security", () => {
     // omission rather than by inventing a command.
     expect(await (await get("/__lucid/state")).json()).not.toHaveProperty("lastAttendant");
 
-    await writeAttendantSidecar(paths, {
+    await mergeAttendantSidecar(paths, {
       harness: "claude-code",
       nextCursor: "evt_00003",
       at: new Date().toISOString(),

@@ -1,7 +1,7 @@
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { cleanStampField, SESSION_ID_AUTHORITIES, type SessionIdAuthority } from "./events.ts";
-import { WELL_FORMED_ID } from "./request-id.ts";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { writeJsonFile } from "./atomic-json.ts";
+import { cleanStampField, sanitizeAttendant, type SessionIdAuthority } from "./events.ts";
 import { withAppendLock } from "./lock.ts";
 import { cursorSidecarPath, type SessionPaths } from "./paths.ts";
 
@@ -45,43 +45,44 @@ export interface Attendant {
 
 export const MAX_SESSION_INVALIDATIONS = 8;
 
-/** Normalize a sidecar record with the SAME bounds the log's stamp normalizer
- *  enforces - the sidecar feeds resume argv, so it is held to the stricter of
- *  the two standards, not trusted as "our own file". */
+/** Normalize a sidecar record with the SAME rules the log's stamp normalizer
+ *  enforces - by CALLING it, not copying it: the sidecar feeds resume argv,
+ *  and the two normalizers drifting apart is how the log and the sidecar
+ *  come to disagree about session identity. The stamp subset (harness,
+ *  sessionId, authority, launchId, model, effort) goes through
+ *  sanitizeAttendant; only the sidecar-native fields are handled here. */
 const normalizeAttendant = (value: unknown): Attendant | undefined => {
   if (typeof value !== "object" || value === null) return undefined;
   const o = value as Record<string, unknown>;
-  const harness = cleanStampField(o.harness, 64);
+  const stamp = sanitizeAttendant(o);
   const at = cleanStampField(o.at, 64);
-  if (!harness || !at) return undefined;
+  if (!stamp || !at) return undefined;
+  // The stamp's cwd/trace are log-event concerns; the sidecar does not carry
+  // them, and keeping them would grow the file with fields no reader uses.
+  const { cwd: _cwd, trace: _trace, ...identity } = stamp;
   const nextCursor = cleanStampField(o.nextCursor, 64);
   const resume = cleanStampField(o.resume, 1024);
-  const model = cleanStampField(o.model, 128);
-  const effort = cleanStampField(o.effort, 32);
-  const sessionId = cleanStampField(o.sessionId, 128);
-  const sessionIdAuthority =
-    sessionId && SESSION_ID_AUTHORITIES.includes(o.sessionIdAuthority as SessionIdAuthority)
-      ? (o.sessionIdAuthority as SessionIdAuthority)
-      : undefined;
-  const launchId =
-    typeof o.launchId === "string" && WELL_FORMED_ID.test(o.launchId) ? o.launchId : undefined;
   const invalidatedSessionIds = Array.isArray(o.invalidatedSessionIds)
     ? o.invalidatedSessionIds
         .map((id) => cleanStampField(id, 128))
         .filter((id): id is string => id !== undefined)
         .slice(-MAX_SESSION_INVALIDATIONS)
     : undefined;
+  // A pending binding is a PROMISE that promotion can keep: it requires the
+  // full identity (id + authority + launch). Anything less is not "pending",
+  // it is nothing - normalization drops the flag rather than letting an
+  // impossible state reach a reader that would have to re-prove it.
+  const pendingBinding =
+    o.pendingBinding === true &&
+    identity.sessionId !== undefined &&
+    identity.sessionIdAuthority !== undefined &&
+    identity.launchId !== undefined;
   return {
-    harness,
+    ...identity,
     at,
     ...(nextCursor ? { nextCursor } : {}),
     ...(resume ? { resume } : {}),
-    ...(model ? { model } : {}),
-    ...(effort ? { effort } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(sessionIdAuthority ? { sessionIdAuthority } : {}),
-    ...(launchId ? { launchId } : {}),
-    ...(o.pendingBinding === true ? { pendingBinding: true } : {}),
+    ...(pendingBinding ? { pendingBinding: true } : {}),
     ...(invalidatedSessionIds && invalidatedSessionIds.length > 0 ? { invalidatedSessionIds } : {}),
   };
 };
@@ -101,7 +102,6 @@ export const mutateAttendantSidecar = async (
   mutate: (current: Attendant | undefined) => Attendant,
 ): Promise<Attendant> => {
   const target = cursorSidecarPath(paths, harness);
-  await mkdir(dirname(target), { recursive: true }); // sidecars live in run/ (plan 02)
   return withAppendLock(target, async () => {
     let current: Attendant | undefined;
     try {
@@ -113,17 +113,17 @@ export const mutateAttendantSidecar = async (
     if (!next) {
       throw new Error(`attendant mutation for "${harness}" produced an invalid record`);
     }
-    const tmp = `${target}.tmp-${process.pid}`;
-    await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`);
-    await rename(tmp, target);
+    await writeJsonFile(target, next);
     return next;
   });
 };
 
-/** Merge-write the sidecar: fields the caller names are updated, fields it
- *  does not name survive. (The launcher's narrow stamp used to erase the
- *  agent's resume command; a merge cannot.) */
-export const writeAttendantSidecar = async (
+/** MERGE the sidecar: fields the caller names are updated, fields it does not
+ *  name survive. (The launcher's narrow stamp used to erase the agent's
+ *  resume command; a merge cannot.) Named for what it does - a caller that
+ *  needs to REMOVE a field builds the full record through
+ *  mutateAttendantSidecar instead. */
+export const mergeAttendantSidecar = async (
   paths: SessionPaths,
   attendant: Attendant,
 ): Promise<void> => {
@@ -174,41 +174,37 @@ export const recordSessionInvalidation = async (
     ].slice(-MAX_SESSION_INVALIDATIONS),
   }));
 
-/** Every sidecar still holding identity the log does not know yet. */
-export const readPendingAttendants = async (paths: SessionPaths): Promise<Attendant[]> => {
+/** Scan every `cursor.<harness>.json` sidecar, NORMALIZED - one scanner, one
+ *  parser, so the read path that feeds resume is held to the same standard as
+ *  the write path. Unreadable or invalid files are advisory data gone bad and
+ *  are skipped, which also absorbs any torn read from a pre-atomic writer. */
+const readSidecars = async (paths: SessionPaths): Promise<Attendant[]> => {
   let names: string[];
   try {
     names = await readdir(paths.runDir);
   } catch {
     return [];
   }
-  const pending: Attendant[] = [];
+  const records: Attendant[] = [];
   for (const name of names) {
     if (!/^cursor\..+\.json$/.test(name)) continue;
     try {
       const parsed = normalizeAttendant(
         JSON.parse(await readFile(join(paths.runDir, name), "utf8")),
       );
-      if (
-        parsed?.pendingBinding &&
-        parsed.sessionId &&
-        parsed.sessionIdAuthority &&
-        parsed.launchId
-      ) {
-        pending.push(parsed);
-      }
+      if (parsed) records.push(parsed);
     } catch {
       /* advisory data gone bad; skip */
     }
   }
-  return pending;
+  return records;
 };
 
-const isAttendant = (v: unknown): v is Attendant =>
-  typeof v === "object" &&
-  v !== null &&
-  typeof (v as Attendant).harness === "string" &&
-  typeof (v as Attendant).at === "string";
+/** Every sidecar still holding identity the log does not know yet. The
+ *  normalizer guarantees a pending record carries the full identity, so a
+ *  caller can promote without re-proving fields. */
+export const readPendingAttendants = async (paths: SessionPaths): Promise<Attendant[]> =>
+  (await readSidecars(paths)).filter((a) => a.pendingBinding === true);
 
 /**
  * The most recent attendant across all `cursor.<harness>.json` sidecars in the
@@ -216,22 +212,9 @@ const isAttendant = (v: unknown): v is Attendant =>
  * "who to resume" means the newest.
  */
 export const readLastAttendant = async (paths: SessionPaths): Promise<Attendant | undefined> => {
-  // The cursor sidecars are machine-scoped, so they live in run/ (plan 02).
-  let names: string[];
-  try {
-    names = await readdir(paths.runDir);
-  } catch {
-    return undefined;
-  }
   let latest: Attendant | undefined;
-  for (const name of names) {
-    if (!/^cursor\..+\.json$/.test(name)) continue;
-    try {
-      const parsed: unknown = JSON.parse(await readFile(join(paths.runDir, name), "utf8"));
-      if (isAttendant(parsed) && (!latest || parsed.at > latest.at)) latest = parsed;
-    } catch {
-      /* an unreadable sidecar is advisory data gone bad; skip it */
-    }
+  for (const record of await readSidecars(paths)) {
+    if (!latest || record.at > latest.at) latest = record;
   }
   return latest;
 };

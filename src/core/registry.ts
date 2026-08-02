@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { writeJsonFile } from "./atomic-json.ts";
 import { foldLog } from "./fold.ts";
 import { readEvents } from "./log.ts";
 import { canonicalArtifactPath, sessionPaths } from "./paths.ts";
@@ -79,7 +79,7 @@ export const addRoot = async (dir: string, rootsPath?: string): Promise<string[]
   const existing = await readRoots(path);
   if (existing.includes(root)) return existing;
   const next = [...existing, root].sort();
-  await writeJson(path, next);
+  await writeJsonFile(path, next);
   return next;
 };
 
@@ -90,7 +90,7 @@ export const removeRoot = async (dir: string, rootsPath?: string): Promise<strin
   const existing = await readRoots(path);
   if (!existing.includes(root)) return existing;
   const next = existing.filter((r) => r !== root);
-  await writeJson(path, next);
+  await writeJsonFile(path, next);
   return next;
 };
 
@@ -114,18 +114,8 @@ export const readRegistry = async (registryPath?: string): Promise<RegistryEntry
   }
 };
 
-/** Atomic write: serialize to a sibling temp file, then rename into place, so a
- *  concurrent reader sees either the old file or the new one - never a partial. */
-const writeJson = async (path: string, value: unknown): Promise<void> => {
-  const dir = dirname(path);
-  await mkdir(dir, { recursive: true });
-  const tmp = join(dir, `.${basename(path)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
-  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`);
-  await rename(tmp, path);
-};
-
 const writeRegistry = (path: string, entries: readonly RegistryEntry[]): Promise<void> =>
-  writeJson(path, entries);
+  writeJsonFile(path, entries);
 
 /**
  * Upsert a pointer for `artifactPath`, keyed by its canonical path, stamping
