@@ -41,6 +41,13 @@ export interface LiveStream {
   readonly close: () => void;
 }
 
+/** How long a connection may say nothing before it is presumed dead. The hub
+ *  states liveness every 10s, so this allows three missed statements - long
+ *  enough that a stalled event loop or a slow tab is not mistaken for a dead
+ *  hub, short enough that a window rejoins within a breath of a restart. */
+const SILENCE_MS = 35_000;
+const SILENCE_CHECK_MS = 5_000;
+
 /** The production ceiling on reconnect backoff. */
 const MAX_BACKOFF_MS = 15_000;
 
@@ -71,6 +78,18 @@ export const openStream = (
 ): LiveStream => {
   const ceiling = Math.min(options.maxBackoffMs ?? MAX_BACKOFF_MS, MAX_BACKOFF_MS);
   let socket: WebSocket | null = null;
+  /**
+   * When this connection last proved it was alive.
+   *
+   * A browser holds a socket to a process that no longer exists without ever
+   * firing `close` - measured across a hub restart, where a Bun client sees
+   * the close and Chrome does not. Waiting for one leaves the window on a
+   * dead socket: no listing, no new build, no way to know. The server states
+   * liveness on a timer, so silence past several of those is the signal a
+   * close would have been.
+   */
+  let lastFrameAt = Date.now();
+  let watchdog: ReturnType<typeof setInterval> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retries = 0;
   let openedAt = 0;
@@ -82,9 +101,11 @@ export const openStream = (
     socket = ws;
     ws.onopen = () => {
       openedAt = Date.now();
+      lastFrameAt = Date.now();
       handlers.onOpen();
     };
     ws.onmessage = (e: MessageEvent<string>) => {
+      lastFrameAt = Date.now();
       try {
         const frame = JSON.parse(e.data) as { event: string | null; data: string };
         if (frame.event === RECONNECT_FRAME) {
@@ -125,6 +146,16 @@ export const openStream = (
   };
 
   connect();
+  // Hang up on a socket that has gone quiet past the server's own liveness
+  // cadence. Closing it here is what routes into `onclose` above, so a dead
+  // connection reconnects exactly like a dropped one - the difference being
+  // that this one never announced itself.
+  watchdog = setInterval(() => {
+    if (closed || socket === null) return;
+    if (Date.now() - lastFrameAt < SILENCE_MS) return;
+    lastFrameAt = Date.now(); // the reconnect gets its own grace period
+    socket.close();
+  }, SILENCE_CHECK_MS);
 
   return {
     close: () => {
@@ -132,6 +163,10 @@ export const openStream = (
       if (retryTimer !== null) {
         clearTimeout(retryTimer);
         retryTimer = null;
+      }
+      if (watchdog !== null) {
+        clearInterval(watchdog);
+        watchdog = null;
       }
       const ws = socket;
       socket = null;
