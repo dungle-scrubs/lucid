@@ -3264,6 +3264,75 @@ test("a lucid: permalink in an agent reply scrolls instead of opening a window",
   expect(popups).toHaveLength(0);
 });
 
+/**
+ * The rail is the HOVER ZONE, and it belongs under the panel, never over it.
+ *
+ * Painted on top it swallowed clicks along the panel's right edge - two
+ * section rows deep - so pointing at a section near its right side latched the
+ * rail instead of jumping to the section. The panel now opens beside the
+ * rail's column, so the rail stays clickable (the only close gesture on touch)
+ * while every pixel of the panel belongs to the panel.
+ */
+test("the outline panel owns its own right edge, and the rail stays reachable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1_180, height: 900 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>html,body,main{margin:0;width:100%;font-family:system-ui}h1,h2,p{padding:0 24px}</style></head><body><main><h1>Wide plan</h1><h2>Context</h2><p>A</p><h2>Execution</h2><p style="height:500px">B</p><h2>Risks</h2><p>C</p></main></body></html>`,
+    "Wide plan",
+  );
+
+  const rail = on(page).artifactOutlineRail();
+  const panel = on(page).artifactOutlinePanel();
+  await rail.hover();
+  await expect(panel).toBeVisible();
+  await panel.evaluate((element) =>
+    Promise.all(
+      element
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished.catch(() => {})),
+    ),
+  );
+
+  const railBox = await rail.boundingBox();
+  const panelBox = await panel.boundingBox();
+  expect(railBox).not.toBeNull();
+  expect(panelBox).not.toBeNull();
+  if (railBox === null || panelBox === null) return;
+
+  // The panel stops where the rail begins: no shared pixels in either
+  // direction, so neither can steal the other's clicks.
+  expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(railBox.x + 1);
+
+  // The right edge of a section row is the section's, not the rail's. This is
+  // the click that used to latch instead of jumping.
+  const item = on(page).artifactOutlineItem().first();
+  const itemBox = await item.boundingBox();
+  expect(itemBox).not.toBeNull();
+  if (itemBox === null) return;
+  const atRightEdge = await page.evaluate(
+    ([x, y]) => document.elementFromPoint(x, y)?.closest("[data-test]")?.getAttribute("data-test"),
+    [itemBox.x + itemBox.width - 2, itemBox.y + itemBox.height / 2] as [number, number],
+  );
+  expect(atRightEdge).toBe("artifact-outline-item");
+
+  // And the rail is still hittable with the panel open - the only way to close
+  // it where there is no hover at all.
+  const onRail = await page.evaluate(
+    ([x, y]) => document.elementFromPoint(x, y)?.closest("[data-test]")?.getAttribute("data-test"),
+    [railBox.x + railBox.width / 2, railBox.y + railBox.height / 2] as [number, number],
+  );
+  expect(onRail).toBe("artifact-outline-rail");
+
+  // The zone REACHES: a 16px strip is hard to point at, so the outline opens
+  // on approach. Well below the tab's own box is still the rail's to answer.
+  await page.mouse.move(0, 0);
+  await expect(panel).toBeHidden();
+  await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + railBox.height + 16);
+  await expect(panel).toBeVisible();
+});
+
 test("the transient outline panel opens centered on the rail", async ({ page }) => {
   await page.setViewportSize({ width: 1_180, height: 900 });
   await openViewer(

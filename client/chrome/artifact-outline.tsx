@@ -30,6 +30,19 @@ const PENDING_FOCUS_HOLD_MS = 500;
 const RAIL_HEIGHT_PX = 64;
 const RAIL_PANEL_GAP_PX = 4;
 
+/**
+ * The rail's hit area, grown past the tab that is drawn.
+ *
+ * The visible rail is a 16px strip - deliberately quiet, and correspondingly
+ * hard to point at. This widens what RESPONDS without widening what shows:
+ * half a tab-height of reach above and below, and a full tab-width to the
+ * left, so the pointer opens the outline on approach rather than on a direct
+ * hit. Everything is on the pseudo-element, so the tab's own geometry (which
+ * the crispness tests pin to a device pixel) is untouched.
+ */
+const RAIL_HOVER_REACH =
+  "before:absolute before:-inset-y-8 before:-left-4 before:right-0 before:content-['']";
+
 /** Measured placement of the resting rail inside its slot. */
 interface RailGeometry {
   /** The slot's own height - the room the centered panel has to fit in. */
@@ -494,12 +507,19 @@ export const ArtifactOutline = () => {
               // updates - a rail gliding a quarter pixel is a rail off the
               // device-pixel grid for every frame of the glide.
               //
-              // z-10: the panel is centered ON the rail and shares its right
-              // edge, so it opens over the rail's own footprint. The rail is
-              // the thing being pointed at - it stays on top, and the panel
-              // grows out from behind it. Painted under, the rail would stop
-              // being hoverable the moment its own hover opened the panel.
-              className="!transition-none pointer-events-auto absolute right-0 z-10 h-16 cursor-pointer rounded-none border border-ink-500 bg-ink-850/95 px-0 text-fg-muted shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline"
+              // No z-index, and the reach is a pseudo-element: this button is
+              // the HOVER ZONE, not just the tab you see. Painted above the
+              // panel it swallowed clicks along the panel's right edge - two
+              // section rows deep - so pointing at a section near its right
+              // side latched the rail instead of jumping. Underneath, the
+              // panel wins every pixel it covers.
+              //
+              // `before:` grows the zone well past the tab (a 16px-wide strip
+              // is a small thing to find with a pointer) without moving the
+              // tab or changing what is drawn: a pseudo-element is part of the
+              // button for hit-testing, and it inherits the same z-order, so a
+              // bigger zone costs the panel nothing.
+              className={`!transition-none pointer-events-auto absolute right-0 h-16 cursor-pointer rounded-none border border-ink-500 bg-ink-850/95 px-0 text-fg-muted shadow-[0_4px_16px_rgba(0,0,0,0.4)] hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline ${RAIL_HOVER_REACH}`}
             >
               <span className="size-3.5">
                 <ListIcon />
@@ -518,13 +538,26 @@ export const ArtifactOutline = () => {
         // artifact) and on on the panel, which re-enables them itself. Before
         // the first measurement the region falls back to the whole slot -
         // centered on the slot, which is where the rail is resting anyway.
-        style={transient && railGeometry ? transientRegion(railGeometry) : undefined}
-        className={`min-h-0 w-full ${
+        style={
           transient
-            ? `pointer-events-none absolute inset-x-0 flex flex-col justify-center ${
+            ? {
+                // The rail's own column stays clear. The panel opens beside
+                // it, not over it: covered, the rail stops being clickable the
+                // moment its own hover opens the panel - and on touch, where
+                // there is no hover at all, tapping the rail again is the ONLY
+                // way to close. The hover zone still reaches under the panel
+                // (see RAIL_HOVER_REACH); it simply loses those pixels to it.
+                right: ARTIFACT_OUTLINE_POLICY.railInsetPx,
+                ...(railGeometry ? transientRegion(railGeometry) : {}),
+              }
+            : undefined
+        }
+        className={`min-h-0 ${
+          transient
+            ? `pointer-events-none absolute left-0 flex flex-col justify-center ${
                 railGeometry ? "" : "inset-y-0"
               }`
-            : "pointer-events-auto h-full"
+            : "pointer-events-auto h-full w-full"
         }`}
       >
         <OutlinePanel mode={presentation.mode} snapshot={snapshot} onActivate={activate} />
