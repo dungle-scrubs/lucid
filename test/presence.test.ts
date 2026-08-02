@@ -453,7 +453,11 @@ describe("harnessStoreHas - current-machine corroboration", () => {
   test("claude: a transcript in the projects store proves the id exists here", async () => {
     const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-store-")));
     try {
-      const proj = join(dir, "-Users-kevin-proj");
+      // A directory whose encoded path does NOT resolve on this machine:
+      // corroboration asks whether the transcript is here, never whether the
+      // cwd it names can be decoded (which differs by OS, and made this pass
+      // on macOS and fail on Linux).
+      const proj = join(dir, "-nonexistent-elsewhere-proj");
       await mkdir(proj, { recursive: true });
       await writeFile(join(proj, "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000.jsonl"), "{}\n");
       expect(

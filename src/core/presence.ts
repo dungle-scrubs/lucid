@@ -296,7 +296,10 @@ export const harnessSessionCwd = async (
   return answer;
 };
 
-const findSessionCwd = async (root: string, sessionId: string): Promise<string | undefined> => {
+/** The flattened directory whose transcript names this session, or undefined
+ *  when this machine holds none. EXISTENCE only - decoding that directory to
+ *  a real cwd is a separate question with a separate failure mode. */
+const findSessionDir = async (root: string, sessionId: string): Promise<string | undefined> => {
   let names: string[];
   try {
     names = await readdir(root);
@@ -305,13 +308,17 @@ const findSessionCwd = async (root: string, sessionId: string): Promise<string |
   }
   for (const name of names) {
     try {
-      if (!(await stat(join(root, name, `${sessionId}.jsonl`))).isFile()) continue;
+      if ((await stat(join(root, name, `${sessionId}.jsonl`))).isFile()) return name;
     } catch {
-      continue; // not this one
+      // not this one
     }
-    return await decodeFlattenedPath(name);
   }
   return undefined;
+};
+
+const findSessionCwd = async (root: string, sessionId: string): Promise<string | undefined> => {
+  const name = await findSessionDir(root, sessionId);
+  return name === undefined ? undefined : decodeFlattenedPath(name);
 };
 
 /** A 36-char UUID, as every harness names its sessions. */
@@ -396,7 +403,12 @@ export const harnessStoreHas = async (
   const kind = harness.trim().toLowerCase().replace(/_/g, "-");
   if (kind === "claude-code" || kind === "claude") {
     return (
-      (await findSessionCwd(claudeProjectsDir(opts.claudeProjectsDir), sessionId)) !== undefined
+      // Existence, NOT decodability: the question is whether this machine
+      // holds the conversation, and a transcript filed under a directory whose
+      // encoded path does not resolve here is still a transcript. Asking
+      // findSessionCwd conflated the two and answered "not here" for every
+      // session recorded under a path this machine does not have.
+      (await findSessionDir(claudeProjectsDir(opts.claudeProjectsDir), sessionId)) !== undefined
     );
   }
   if (kind === "codex") return codexStoreHas(sessionId, opts.codexSessionsDir);
