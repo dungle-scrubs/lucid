@@ -40,7 +40,7 @@ import {
   buildArgv,
   loadRegistry,
   normalizeHarness,
-  resolveRecipe,
+  resolveExactRecipe,
   spawnedSessionId,
   type SpawnRecipe,
 } from "../launch/recipes.ts";
@@ -733,19 +733,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       record.sessionId === undefined ||
       resolve(priorProjectCwd) !== resolve(projectCwd);
     const wantedHarness = switchesHarness ? selection.harness : record.harness;
-    const resolved = registry ? resolveRecipe(registry, wantedHarness) : undefined;
+    // Exact, unlike a fork: resuming session id X means re-entering ONE
+    // harness's conversation, so the registry default is not a stand-in for
+    // the harness that actually recorded it.
+    const resolved = registry ? resolveExactRecipe(registry, wantedHarness) : undefined;
     if (!resolved) {
       unattendable(`no spawn recipe for harness "${wantedHarness}"`);
-      return;
-    }
-    // Exact match only, unlike a fork: resuming session id X means re-entering
-    // ONE harness's conversation, so the registry default is not a stand-in
-    // for the harness that actually recorded it.
-    // Normalized: `claude_code` in the registry IS `claude-code` on the
-    // artifact. Still exact in every other sense - resuming session id X means
-    // re-entering ONE harness's conversation, never the registry default.
-    if (normalizeHarness(resolved.name) !== normalizeHarness(wantedHarness)) {
-      unattendable(`harness "${wantedHarness}" is not in the registry`);
       return;
     }
     const recipeTemplate = startsFresh ? resolved.recipe.spawn : resolved.recipe.resume;
