@@ -45,12 +45,12 @@
             "Start `lucid hub --port 17492`, then start a second hub on the same port",
             "Read the envelope's `error.code`"
           ],
-          "expected": "One of the documented codes (VALIDATION_ERROR/NOT_FOUND/ARTIFACT_ERROR/SERVER_ERROR/LOG_ERROR). Today it is `EADDRINUSE` \u2014 a raw Bun error masquerading as a typed Lucid error, so an agent switching on the documented set falls through.",
+          "expected": "One of the documented codes (VALIDATION_ERROR/NOT_FOUND/ARTIFACT_ERROR/SERVER_ERROR/LOG_ERROR). Today it is `SERVER_ERROR` (\"could not bind any port in [17492]: ...\"): both servers bind through `serveLoopback` in src/server/live.ts, which turns a refused bind into a typed error. It WAS a raw Bun `EADDRINUSE` masquerading as a typed Lucid error on the hub path, and nothing but this row would catch that coming back.",
           "risk": "medium",
           "kind": "functional",
           "status": "declined",
           "builtCapability": "duplicated locally in two m2.x regression files",
-          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves."
+          "declineReason": "SCOPE CUTOFF (D-082). Ranked medium in the M6.2 re-rank against measured cost (D-078) and left below the build line the maintainer set for this pass: high-risk rows only. The per-row cost/risk analysis survives in D-078's ledger entry. Not obsolete and not unreachable - this row returns through planner iterate the moment the cutoff moves. Its defect closed incidentally when the hub moved onto the shared loopback owner, so what it would buy now is regression cover for that owner, not a fix."
         },
         {
           "id": "help-lists-every-command",

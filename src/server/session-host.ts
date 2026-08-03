@@ -57,24 +57,10 @@ import type {
   StateResponse,
 } from "../protocol/wire.ts";
 import { sanitizeBlocked, sanitizeProgress } from "../core/progress.ts";
-import {
-  CHROME_BUNDLE,
-  CHROME_CSS,
-  CLIENT_BUNDLE,
-  FAVICON_SVG,
-} from "./client-bundle.generated.ts";
-import { readDevAsset } from "./dev-assets.ts";
-import { renderInjected } from "./inject.ts";
-import {
-  LiveSocket,
-  sseSubscriber,
-  UPGRADED,
-  wantsUpgrade,
-  type Subscriber,
-  type Upgrade,
-} from "./live.ts";
+import { serveBundleAsset } from "./assets.ts";
+import { createChannel, wantsUpgrade, type Subscriber, type Upgrade } from "./live.ts";
 import { resolveAsset, validateHeaders } from "./security.ts";
-import { renderViewer, sseMaxBackoffFromEnv } from "./viewer.ts";
+import { artifactDocumentResponse, viewerResponse } from "./viewer.ts";
 
 /**
  * One session's complete server behavior - routes, event fan-out, artifact
@@ -189,53 +175,6 @@ const BROWSER_PROBES = new Set([
   "/robots.txt",
 ]);
 
-/**
- * The stand-in document served in the surface iframe when there is no artifact
- * to serve, in the two states that can mean.
- *
- * It heals itself. The 404 that brought a reader here is very often momentary -
- * a session is created a beat before its first version is committed, and a page
- * that asked in that gap used to sit on this screen until someone reloaded by
- * hand. Nothing else can fix that from outside: there is no overlay in this
- * document, so the chrome's live-swap has nothing to talk to. So the page keeps
- * asking, backing off as it goes, and reloads the moment the artifact answers.
- */
-const missingArtifactDoc = (opened: boolean): string => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>${opened ? "Artifact missing" : "Waiting for the artifact"}</title></head>
-<body style="font-family:ui-monospace,monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#4c566a;background:#eceff4">
-<div style="max-width:420px;text-align:center;font-size:13px;line-height:1.6">
-${
-  opened
-    ? `<p style="font-weight:600">This session's artifact file is missing.</p>
-<p>Nothing is served for it right now - the file may have been moved or deleted. Reopening it (<code>lucid open</code> on the artifact) rebuilds this view, and this page comes back on its own when the file does.</p>`
-    : `<p style="font-weight:600">Waiting for this session's first version.</p>
-<p>The session is open but nothing has been committed to it yet. This page shows the artifact as soon as it lands - there is nothing to do.</p>`
-}
-</div>
-<script>
-(() => {
-  // Reload, rather than fetch-then-reload: this frame is sandboxed WITHOUT
-  // allow-same-origin (D-020), so it is an opaque origin - a fetch back to its
-  // own URL is cross-origin and would be refused, while navigating itself is
-  // not. A reload that finds the artifact simply renders it, overlay and all.
-  //
-  // The backoff rides in window.name because it must survive the reload, and
-  // the opaque origin has no storage to keep it in: sessionStorage throws
-  // there, and the URL is the artifact's own (a retry counter left in its hash
-  // would outlive the wait). Nothing else reads the frame's name.
-  const KEY = "lucid-retry:";
-  const n = window.name.startsWith(KEY) ? Number(window.name.slice(KEY.length)) || 0 : 0;
-  window.name = KEY + (n + 1);
-  const wait = Math.min(Math.round(700 * 1.4 ** n), 15000);
-  // A hidden tab waits rather than reloading: the answer is only wanted by
-  // someone looking at it, and a forgotten tab must not reload all day.
-  const go = () =>
-    document.visibilityState === "hidden" ? setTimeout(go, 2000) : location.reload();
-  setTimeout(go, wait);
-})();
-</script>
-</body></html>`;
-
 const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response =>
   new Response(JSON.stringify(body), {
     status,
@@ -316,12 +255,9 @@ export const createSessionHost = (
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const base = options.base ?? "";
 
-  /** Everyone watching this session, over either wire (see live.ts). */
-  const subscribers = new Set<Subscriber>();
   /** Which subscribers are agents blocked in `wait` (their waker connects with
    *  ?role=agent). Presence for the viewer: "is anyone listening right now". */
   const agentSubscribers = new Set<Subscriber>();
-  const encoder = new TextEncoder();
   let stopped = false;
   let lastActivity = Date.now();
 
@@ -329,18 +265,31 @@ export const createSessionHost = (
     lastActivity = Date.now();
   };
 
-  /** Fan one frame out. A send that throws is a peer that is gone: drop it,
-   *  which is the only way an abandoned stream leaves the set. */
-  const broadcastFrame = (event: string | null, data: string): void => {
-    for (const sub of subscribers) {
-      try {
-        sub.send(event, data);
-      } catch {
-        subscribers.delete(sub);
-        if (agentSubscribers.delete(sub)) queueMicrotask(broadcastListeners);
+  /**
+   * Everyone watching this session, over either wire (live.ts owns the set,
+   * both wires and the drop-on-throw rule). The join value is "is this an
+   * agent", and both hooks are what arriving and leaving IMPLY here: the
+   * agent-presence count, and healing a suspended log.
+   */
+  const channel = createChannel<boolean>({
+    onJoin: (sub, isAgent) => {
+      if (isAgent) {
+        agentSubscribers.add(sub);
+        broadcastListeners();
       }
-    }
-  };
+      // A subscriber arriving at a suspended log is the session coming back to
+      // life: heal the recorded status, or every consumer of the fold (wait,
+      // the watcher's version gate, the panel) keeps acting on "suspended"
+      // while a human is sitting right there watching.
+      void resumeIfSuspended();
+    },
+    // A peer the fan-out dropped left too, so the count cannot outlive it.
+    onLeave: (sub) => {
+      if (agentSubscribers.delete(sub)) broadcastListeners();
+    },
+  });
+
+  const broadcastFrame = channel.send;
 
   const broadcast = (event: LogEvent): void => {
     broadcastFrame(null, JSON.stringify(event));
@@ -383,66 +332,6 @@ export const createSessionHost = (
   };
 
   // ---- request handling -----------------------------------------------------
-
-  /**
-   * Take a subscriber onto this session, over either wire; the returned
-   * release takes it back off. Both wires arrive HERE so neither can forget
-   * what arriving implies: the agent-presence count, and healing a suspended
-   * log.
-   */
-  const subscribe = (sub: Subscriber, isAgent: boolean): (() => void) => {
-    // This host may have been torn down since the request was accepted. An
-    // upgrade is decided in `fetch` but handed over on `open`, and the idle
-    // sweep can evict in that gap - it sees no subscribers precisely BECAUSE
-    // this one has not landed yet. Joining a stopped host would leave a socket
-    // that is live to the browser and attached to nothing: no frames, and no
-    // teardown either, since the set it would be closed from is already clear.
-    // So it is turned away and told to come back, which remounts.
-    if (stopped) {
-      try {
-        sub.close();
-      } catch {
-        // the peer left first; nothing to turn away
-      }
-      return () => {};
-    }
-    subscribers.add(sub);
-    if (isAgent) {
-      agentSubscribers.add(sub);
-      broadcastListeners();
-    }
-    // A subscriber arriving at a suspended log is the session coming back to
-    // life: heal the recorded status, or every consumer of the fold (wait, the
-    // watcher's version gate, the panel) keeps acting on "suspended" while a
-    // human is sitting right there watching.
-    void resumeIfSuspended();
-    return () => {
-      subscribers.delete(sub);
-      if (agentSubscribers.delete(sub)) broadcastListeners();
-    };
-  };
-
-  const handleEvents = (isAgent: boolean): Response => {
-    // Assigned synchronously in `start` before any frame is enqueued; the `!`
-    // marks that definite assignment for the `cancel` reader below.
-    let leave!: () => void;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(encoder.encode(": connected\n\n"));
-        leave = subscribe(sseSubscriber(controller), isAgent);
-      },
-      cancel() {
-        leave();
-      },
-    });
-    return new Response(stream, {
-      headers: {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-store",
-        connection: "keep-alive",
-      },
-    });
-  };
 
   const handleAnnotation = async (req: Request): Promise<Response> => {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
@@ -1090,16 +979,7 @@ export const createSessionHost = (
     // (opaque origin -> Origin: null). Serving it BEFORE the Host/Origin gate
     // (with a CORS allow) lets the overlay mount; the control routes below still
     // reject null/cross-origin callers, so artifact scripts cannot reach them.
-    if (pathname === "/__lucid/client.js") {
-      const headers: Record<string, string> = {
-        "content-type": "text/javascript; charset=utf-8",
-        "access-control-allow-origin": req.headers.get("origin") ?? "*",
-        "access-control-allow-credentials": "true",
-        ...noStore,
-      };
-      if (req.headers.get("origin") !== null) headers.vary = "Origin";
-      return new Response((await readDevAsset("client.js")) ?? CLIENT_BUNDLE, { headers });
-    }
+    if (pathname === "/__lucid/client.js") return serveBundleAsset("client.js", req);
 
     const headerCheck = validateHeaders(req, options.getPort());
     if (!headerCheck.ok) {
@@ -1117,45 +997,28 @@ export const createSessionHost = (
       });
     }
     if (pathname === "/__lucid/viewer") {
-      return new Response(
-        renderViewer({
-          session: paths.artifactPath,
-          name: basename(paths.artifactPath),
-          port: options.getPort(),
-          version: await currentVersion(),
-          base,
-          ...((backoff) => (backoff === undefined ? {} : { sseMaxBackoffMs: backoff }))(
-            sseMaxBackoffFromEnv(),
-          ),
-        }),
-        { headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
-      );
+      return viewerResponse({
+        session: paths.artifactPath,
+        name: basename(paths.artifactPath),
+        port: options.getPort(),
+        version: await currentVersion(),
+        base,
+      });
     }
     // The chrome's own bundle + stylesheet. Unlike the overlay these stay
     // behind the Host/Origin gate: they are same-origin requests from Lucid's
     // viewer page, and nothing in the sandboxed artifact should reach them.
-    if (pathname === "/__lucid/chrome.js") {
-      return new Response((await readDevAsset("chrome.js")) ?? CHROME_BUNDLE, {
-        headers: { "content-type": "text/javascript; charset=utf-8", ...noStore },
-      });
-    }
-    if (pathname === "/__lucid/chrome.css") {
-      return new Response((await readDevAsset("chrome.css")) ?? CHROME_CSS, {
-        headers: { "content-type": "text/css; charset=utf-8", ...noStore },
-      });
-    }
+    if (pathname === "/__lucid/chrome.js") return serveBundleAsset("chrome.js", req);
+    if (pathname === "/__lucid/chrome.css") return serveBundleAsset("chrome.css", req);
     if (pathname === "/__lucid/events") {
       const isAgent = url.searchParams.get("role") === "agent";
       // The browser upgrades (its six-per-origin HTTP pool is the whole reason
       // live.ts exists); `lucid wait`'s subscriber keeps the SSE wire. The
       // Host/Origin gate above has already run, which matters MORE here: a
       // WebSocket handshake is not subject to CORS at all.
-      if (wantsUpgrade(req)) {
-        return options.upgrade?.(req, new LiveSocket((sub) => subscribe(sub, isAgent))) === true
-          ? UPGRADED
-          : json({ error: "websocket upgrade refused" }, 400);
-      }
-      return handleEvents(isAgent);
+      return wantsUpgrade(req)
+        ? channel.handleUpgrade(req, options.upgrade, isAgent)
+        : channel.sseResponse(isAgent);
     }
     if (pathname === "/__lucid/artifact") {
       const html = await readFile(paths.currentHtml, "utf8").catch(() => "");
@@ -1313,36 +1176,14 @@ export const createSessionHost = (
     // ---- browser auto-probes: serve the viewer's own icon, never warn ----
     // These are requested by the browser/crawler, not referenced by the
     // artifact, so a 404 here is not a missing artifact asset (no warning).
-    if (pathname === "/favicon.ico") {
-      return new Response(FAVICON_SVG, {
-        headers: { "content-type": "image/svg+xml", "cache-control": "max-age=86400" },
-      });
-    }
+    if (pathname === "/favicon.ico") return serveBundleAsset("favicon.ico", req);
     if (BROWSER_PROBES.has(pathname)) {
       return new Response(null, { status: 204 });
     }
 
     // ---- artifact document route (fixed; D-054) ----
     if (pathname === "/") {
-      const html = await readFile(paths.currentHtml, "utf8").catch(() => null);
-      if (html === null) {
-        // This renders INSIDE the surface iframe - raw JSON there reads as a
-        // broken app. Say what is actually wrong, as a document.
-        //
-        // WHICH wrong thing depends on the log: a session whose first version
-        // has not been committed yet has nothing to serve for a second or two
-        // during creation, and calling that a moved-or-deleted file is a lie
-        // told at the one moment the human is most likely to be looking.
-        const opened = (await sessionState(paths)).status !== "none";
-        return new Response(missingArtifactDoc(opened), {
-          status: 404,
-          headers: { "content-type": "text/html; charset=utf-8", ...noStore },
-        });
-      }
-      const injected = renderInjected(html, base, new URL(req.url).origin);
-      return new Response(injected.body, {
-        headers: { "content-type": "text/html; charset=utf-8", ...noStore, ...injected.headers },
-      });
+      return artifactDocumentResponse(paths, base, new URL(req.url).origin);
     }
 
     // ---- static asset route ----
@@ -1442,7 +1283,7 @@ export const createSessionHost = (
   let lastPresence = "";
   const presenceTimer = setInterval(() => {
     void (async () => {
-      if (subscribers.size === 0) return; // nobody is looking
+      if (channel.size() === 0) return; // nobody is looking
       try {
         const state = await sessionState(paths);
         const target = await artifactAttendant(paths, state.sessionHistory);
@@ -1474,7 +1315,7 @@ export const createSessionHost = (
    * and a mount nobody watches on a closed log has no reason to live.
    */
   const suspend = async (): Promise<boolean> => {
-    if (subscribers.size > 0) return false;
+    if (channel.size() > 0) return false;
     const appended = await appendIfStatus(paths, "active", [{ t: "session_suspended" }]);
     if (appended.length > 0) {
       // Broadcast like serverAppend would: a subscriber that squeezed in
@@ -1484,7 +1325,7 @@ export const createSessionHost = (
       touch();
       return true;
     }
-    return subscribers.size === 0;
+    return channel.size() === 0;
   };
 
   /**
@@ -1533,14 +1374,7 @@ export const createSessionHost = (
     if (watcher) watcher.close();
     if (debounce) clearTimeout(debounce);
     clearInterval(pollTimer);
-    for (const sub of subscribers) {
-      try {
-        sub.close();
-      } catch {
-        // already closed
-      }
-    }
-    subscribers.clear();
+    channel.stop();
     agentSubscribers.clear();
   };
 
@@ -1553,7 +1387,7 @@ export const createSessionHost = (
     // `wait` idled out at 30 minutes and was suspended mid-watch. The idle
     // timers (daemon and dedicated server) both read this, so neither needs
     // its own notion of "someone is here".
-    lastActivityAt: () => (subscribers.size > 0 ? Date.now() : lastActivity),
+    lastActivityAt: () => (channel.size() > 0 ? Date.now() : lastActivity),
     agentsListening: () => agentSubscribers.size,
     warn: broadcastWarning,
   };
