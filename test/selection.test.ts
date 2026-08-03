@@ -113,6 +113,18 @@ describe("registry v2 parsing", () => {
     await expect(loadRegistry(regPath)).rejects.toThrow(/knows no such flags/);
   });
 
+  test("a registry keyed the way the CLI names itself gets the same flags", async () => {
+    // `claude-code` and `claude` are ONE family (core/harness.ts), so a
+    // registry that keys the harness `claude` loads its models rather than
+    // failing with "knows no such flags for it". Pinned here because the
+    // family test is what grants it: narrowing `harnessKind` back to
+    // `claude-code` alone would restore the load-time rejection, and this is
+    // the surface where a user would meet it.
+    await write({ spawn: ["claude", "{prompt}"], models: [{ id: "opus-5" }] }, "claude");
+    const recipe = (await loadRegistry(regPath))?.harnesses.claude;
+    expect(recipe?.models).toEqual([{ id: "opus-5" }]);
+  });
+
   test("models, labels, per-model efforts and the defaults round-trip", async () => {
     await write({
       spawn: ["codex", "exec", "{prompt}"],

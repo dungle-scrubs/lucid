@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { deliver } from "../core/deliver.ts";
+import { normalizeHarness } from "../core/harness.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import {
   detectAuthFailure,
@@ -9,7 +10,6 @@ import {
 } from "./limits.ts";
 import {
   buildArgv,
-  normalizeHarness,
   requireSessionIdentity,
   spawnedSessionId,
   type SpawnRecipe,
