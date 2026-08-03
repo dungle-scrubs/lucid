@@ -12,7 +12,7 @@ import type {
 } from "./fold.ts";
 import { sessionState } from "./log.ts";
 import type { SessionPaths } from "./paths.ts";
-import { assemblePayload, type PayloadStatus, type WaitPayload } from "./payload.ts";
+import { assemblePayload, type WaitOutcome, type WaitPayload } from "./payload.ts";
 
 export interface WaitOptions {
   readonly since?: string;
@@ -116,7 +116,7 @@ const createWaker = (port: number, base = ""): Waker => {
 const buildFromState = (
   paths: SessionPaths,
   state: FoldedState,
-  status: PayloadStatus,
+  status: WaitOutcome,
   annotations: readonly AnnotationRecord[],
   messages: readonly MessageRecord[],
   reverts: readonly RevertRecord[] = [],
@@ -183,7 +183,7 @@ export const runWait = async (
       );
     }
     const live = await discoverLiveServer(paths);
-    const status: PayloadStatus = !live ? "suspended" : hasContent ? "feedback" : "waiting";
+    const status: WaitOutcome = !live ? "suspended" : hasContent ? "feedback" : "waiting";
     return buildFromState(
       paths,
       initial,

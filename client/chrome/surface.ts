@@ -49,6 +49,10 @@ export interface Surface {
   readonly pushHighlights: () => void;
   readonly applyDeferredSwapIfReady: () => void;
   readonly bootstrap: () => Promise<void>;
+  /** A lifecycle frame just moved this session's status. Bootstraps in flight
+   *  are older than that news by definition and stop carrying a lifecycle of
+   *  their own (see `lifecycleSeq`). */
+  readonly noteLifecycle: () => void;
   /** Live reload, deferred until the human's draft is committed (D-055). */
   readonly onNewVersion: (version: number) => Promise<void>;
   readonly hasUnsentDraft: () => boolean;
@@ -103,6 +107,18 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
    * alone rather than half-applying.
    */
   let bootstrapSeq = 0;
+  /**
+   * How many lifecycle frames have landed. `bootstrapSeq` orders bootstraps
+   * against each other; this orders a bootstrap against the LIVE stream, which
+   * is a different race and used not to exist - frames were the only writer of
+   * `status`, and this snapshot now carries one too.
+   *
+   * A content event fires a bootstrap; while it is in flight `session_ended`
+   * arrives and the tab goes to "ended"; the response, computed before that
+   * append, still says "active" and would put a dead session back on screen
+   * as a live one - reopen withheld, a send offered against nothing.
+   */
+  let lifecycleSeq = 0;
 
   const finiteInset = (value: number): number => (Number.isFinite(value) ? Math.max(0, value) : 0);
   const outlineSlotRect = (): DOMRect | null => outlineSlotEl?.getBoundingClientRect() ?? null;
@@ -205,8 +221,13 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     return s.queue.length > 0 || (s.pendingTarget !== null && s.composerNote.trim().length > 0);
   };
 
+  const noteLifecycle = (): void => {
+    lifecycleSeq++;
+  };
+
   const bootstrap = async (): Promise<void> => {
     const mine = ++bootstrapSeq;
+    const lifecycleAtRequest = lifecycleSeq;
     const res = await transport.api("/__lucid/state").catch(() => null);
     if (!res || mine !== bootstrapSeq) return;
     const payload = (await res.json().catch(() => null)) as StateResponse | null;
@@ -232,6 +253,16 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
         // of the fold - delivery state, the working window - is about the
         // conversation, not the frame, and must not wait on the draft.
         ...(pendingSwapHtml === null ? { version: payload.version } : {}),
+        // The server's own lifecycle, not a status carried since the page
+        // loaded: a session suspended - or healed - while this tab was away is
+        // reported by the very request that heals it. The fallback is for a
+        // session hosted by an OLDER dedicated server, which the hub proxies
+        // and which reports no lifecycle at all.
+        //
+        // Dropped entirely when a lifecycle frame landed after this request
+        // went out: the stream is then the newer source, and this snapshot
+        // would roll the tab back to the status the server held before it.
+        ...(lifecycleSeq === lifecycleAtRequest ? { status: payload.lifecycle ?? s.status } : {}),
         reviewResolved: payload.reviewResolved,
         verdicts: [...(payload.verdicts ?? [])],
         cleared: payload.cleared ?? null,
@@ -373,6 +404,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     pushHighlights,
     applyDeferredSwapIfReady,
     bootstrap,
+    noteLifecycle,
     onNewVersion,
     hasUnsentDraft,
     dispose,

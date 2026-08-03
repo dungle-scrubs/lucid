@@ -1,6 +1,12 @@
 import type { LogEvent } from "../../src/core/events.ts";
 import { hubFetch } from "./request.ts";
-import type { ContextUsage, SelectionResponse } from "../../src/protocol/wire.ts";
+import {
+  DEFAULT_FRAME,
+  dispatchFrame,
+  type FrameHandlers,
+  type SessionFrame,
+} from "../../src/protocol/frames.ts";
+import { lifecycleStatusOf, type SelectionResponse } from "../../src/protocol/wire.ts";
 import { createActions, type SessionActions } from "./actions.ts";
 import { createPastes, type Pastes } from "./pastes.ts";
 import {
@@ -31,6 +37,11 @@ export interface SessionHandle {
   readonly actions: SessionActions;
   readonly pastes: Pastes;
   readonly notify: Notify;
+  /** Decode one frame off the live channel and apply it, exactly as the open
+   *  stream does. Exported like the hub's `onHubFrame` and for the same reason:
+   *  this is the seam where a session's wire becomes its state, and what it
+   *  makes of a frame is worth pinning without a socket. */
+  readonly onFrame: (event: string, data: string) => void;
   /** Open this session's live stream (idempotent). Called when the handle
    *  enters the shell roster - the stream belongs to the handle's lifetime,
    *  NOT to whether its view is on screen, so a background tab keeps folding
@@ -55,6 +66,20 @@ export const createSession = (config: SessionConfig): SessionHandle => {
   const set = store.setState;
 
   const onLogEvent = (ev: LogEvent): void => {
+    // Where the session IS, through the one table that says what a lifecycle
+    // event means (src/protocol/wire.ts). The chrome used to keep a list of
+    // its own here, and the entry it lacked was `session_resumed`: a session
+    // healed by this very tab reconnecting stayed "suspended" on screen until
+    // a reload, with the composer, the working line and the revise notice
+    // switched off behind it.
+    const lifecycle = lifecycleStatusOf(ev.t);
+    if (lifecycle !== null) {
+      // Tell the surface first: a bootstrap already in flight carries the
+      // lifecycle the server held BEFORE this frame, and must not put it back.
+      surface.noteLifecycle();
+      set({ status: lifecycle });
+      return;
+    }
     switch (ev.t) {
       // Every content event re-reads the folded state rather than patching it
       // locally. The log is the source of truth and the fold does real work
@@ -101,12 +126,6 @@ export const createSession = (config: SessionConfig): SessionHandle => {
       case "record_cleared":
         void surface.bootstrap();
         break;
-      case "session_ended":
-        set({ status: "ended" });
-        break;
-      case "session_suspended":
-        set({ status: "suspended" });
-        break;
       default:
         break;
     }
@@ -138,54 +157,41 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     if (body) applySelection(body);
   };
 
-  /** How a frame off the live channel reaches this session's state. Keyed by
-   *  the event name the server broadcasts (see live.ts); "message" is the
-   *  default frame, which carries a log event. */
+  /**
+   * How a frame off the live channel reaches this session's state. The default
+   * frame carries a log event; the rest are the synthetic ones the server has
+   * no log event for.
+   *
+   * One handler per frame the server can send, keyed by the frame union's own
+   * names (src/protocol/frames.ts) - so a frame renamed or added on the server
+   * stops this file compiling instead of being dropped in silence, and each
+   * payload arrives typed rather than re-declared here.
+   */
+  const frameHandlers: FrameHandlers<SessionFrame> = {
+    [DEFAULT_FRAME]: (ev) => onLogEvent(ev),
+    listeners: ({ agents }) => {
+      // An agent arriving flips the selection pickers to a readout of what
+      // THAT session runs, and its stamp only rides the folded state.
+      // Without this re-read the row would report the PREVIOUS attendant's
+      // model until some unrelated content event happened to land.
+      const arriving = agents > 0 && store.getState().agentsListening === 0;
+      set({ agentsListening: agents });
+      if (arriving) void surface.bootstrap();
+    },
+    // Presence: the harness conversation opened or closed in a terminal. No
+    // log event accompanies that, so it arrives as its own frame - and it
+    // changes the panel's whole mode, so it must not wait for one.
+    presence: (attendantPresence) => set({ attendantPresence }),
+    warning: (w) => notify.pushWarning(w.code, w.message),
+    context: (contextUsage) => set({ contextUsage }),
+    // Another window (or another tab on this session) changed the pick:
+    // every viewer of the artifact shows the same sticky selection.
+    selection: (r) => applySelection(r),
+  };
+
   const onFrame = (type: string, data: string): void => {
     try {
-      switch (type) {
-        case "message":
-          onLogEvent(JSON.parse(data) as LogEvent);
-          break;
-        case "listeners": {
-          const d = JSON.parse(data) as { agents: number };
-          // An agent arriving flips the selection pickers to a readout of what
-          // THAT session runs, and its stamp only rides the folded state.
-          // Without this re-read the row would report the PREVIOUS attendant's
-          // model until some unrelated content event happened to land.
-          const arriving = d.agents > 0 && store.getState().agentsListening === 0;
-          set({ agentsListening: d.agents });
-          if (arriving) void surface.bootstrap();
-          break;
-        }
-        // Presence: the harness conversation opened or closed in a terminal. No
-        // log event accompanies that, so it arrives as its own frame - and it
-        // changes the panel's whole mode, so it must not wait for one.
-        case "presence":
-          set({
-            attendantPresence: JSON.parse(data) as {
-              interactive: boolean;
-              status?: string;
-              cwd?: string;
-            } | null,
-          });
-          break;
-        case "warning": {
-          const w = JSON.parse(data) as { code: string; message: string };
-          notify.pushWarning(w.code, w.message);
-          break;
-        }
-        case "context":
-          set({ contextUsage: JSON.parse(data) as ContextUsage });
-          break;
-        // Another window (or another tab on this session) changed the pick:
-        // every viewer of the artifact shows the same sticky selection.
-        case "selection":
-          applySelection(JSON.parse(data) as SelectionResponse);
-          break;
-        default:
-          break;
-      }
+      dispatchFrame(frameHandlers, type, data);
     } catch {
       /* a frame we cannot parse is not worth tearing the stream down for */
     }
@@ -273,6 +279,7 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     actions,
     pastes,
     notify,
+    onFrame,
     connect,
     disconnect,
     connected: () => stream !== null,

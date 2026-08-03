@@ -17,8 +17,11 @@
  * itself, which makes this the only policy.
  */
 
+import { DEFAULT_FRAME, RECONNECT_FRAME } from "../../src/protocol/frames.ts";
+
 /** What a caller does with the channel. `type` is the frame's event name, or
- *  "message" for the default frame - SSE's own vocabulary, unchanged. */
+ *  "message" for the default frame - the frame vocabulary both sides share
+ *  (src/protocol/frames.ts), which the caller's own decoder is typed against. */
 export interface StreamHandlers {
   readonly onFrame: (type: string, data: string) => void;
   /** A connection opened. Fires on the FIRST open too, so anything a caller
@@ -55,14 +58,6 @@ const MAX_BACKOFF_MS = 15_000;
  *  and so clears the backoff. Shorter than any real session, longer than an
  *  open-then-immediately-dropped socket. */
 const STABLE_MS = 5_000;
-
-/**
- * The server asking us to hang up and come back (see live.ts). It cannot close
- * the socket itself - doing so wedges Bun's own shutdown - so every close is
- * client-initiated, and this is how the server requests one. Reconnecting is
- * the point: the hub re-decides which server owns the session on the way back.
- */
-const RECONNECT_FRAME = "reconnect";
 
 /** Same-origin ws:// URL for a path the page was served from. */
 const socketUrl = (path: string): string => {
@@ -108,13 +103,16 @@ export const openStream = (
       lastFrameAt = Date.now();
       try {
         const frame = JSON.parse(e.data) as { event: string | null; data: string };
+        // The server asking us to hang up and come back: it cannot close the
+        // socket itself (see RECONNECT_FRAME), so every close is
+        // client-initiated. Hanging up here routes through `onclose` below, so
+        // the reconnect is the same one a dropped socket gets - backoff, state,
+        // and all.
         if (frame.event === RECONNECT_FRAME) {
-          // Hanging up here routes through `onclose` below, so the reconnect
-          // is the same one a dropped socket gets - backoff, state, and all.
           ws.close();
           return;
         }
-        handlers.onFrame(frame.event ?? "message", frame.data);
+        handlers.onFrame(frame.event ?? DEFAULT_FRAME, frame.data);
       } catch {
         /* a frame we cannot parse is not worth tearing the stream down for */
       }

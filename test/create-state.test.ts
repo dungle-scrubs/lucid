@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { noteCreateFailed, noteCreateProgress, forgetCreate } from "../client/chrome/hub.ts";
+import {
+  forgetCreate,
+  noteCreateFailed,
+  noteCreateProgress,
+  onHubFrame,
+  useHub,
+} from "../client/chrome/hub.ts";
 
 /**
  * The create dialog's state transitions (plan 07, M2.1 - adversarial review of
@@ -11,7 +17,7 @@ import { noteCreateFailed, noteCreateProgress, forgetCreate } from "../client/ch
  */
 
 const frame = (elapsedMs = 2000) => ({ trace: "abcdef0123456789", elapsedMs, at: 1000 });
-const failure = { artifact: "/p/.lucid/x.html", tail: "the old failure tail" };
+const failure = { artifact: "/p/.lucid/x.html", code: 1, tail: "the old failure tail" };
 
 describe("a heartbeat invalidates a stale failure for the SAME artifact", () => {
   test("a retry of a previously failed artifact is not reported as failed", () => {
@@ -37,6 +43,34 @@ describe("a failure invalidates the heartbeat for that artifact", () => {
     const after = noteCreateFailed(before, failure);
     expect(after.createProgress["/p/.lucid/x.html"]).toBeUndefined();
     expect(after.createProgress["/p/.lucid/y.html"]).toBeDefined();
+  });
+});
+
+describe("the create-failed frame, decoded", () => {
+  /**
+   * The hub has always shipped the dead turn's exit code; the decoder
+   * destructured every field EXCEPT that one, so it was dropped on arrival and
+   * the dialog could only say "the turn failed". The frame union is what the
+   * decoder reads now, so every field the hub sends survives the wire.
+   */
+  test("the exit code survives the wire, beside the tail", () => {
+    onHubFrame(
+      "create-failed",
+      JSON.stringify({ artifact: "/p/.lucid/x.html", code: 143, tail: "killed" }),
+    );
+    expect(useHub.getState().createFailed).toEqual({
+      artifact: "/p/.lucid/x.html",
+      code: 143,
+      tail: "killed",
+    });
+  });
+
+  test("a turn that never started reports why instead of a code", () => {
+    onHubFrame(
+      "create-failed",
+      JSON.stringify({ artifact: "/p/.lucid/y.html", code: "spawn-error", tail: "" }),
+    );
+    expect(useHub.getState().createFailed?.code).toBe("spawn-error");
   });
 });
 

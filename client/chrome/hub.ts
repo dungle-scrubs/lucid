@@ -1,5 +1,19 @@
 import { create } from "zustand";
 import { hubFetch, SCAN_TIMEOUT_MS } from "./request.ts";
+import {
+  DEFAULT_FRAME,
+  dispatchFrame,
+  type CreateFailed,
+  type FrameHandlers,
+  type HubFrame,
+} from "../../src/protocol/frames.ts";
+import type {
+  HubAttention,
+  HubIdentity,
+  HubRootsResponse,
+  HubSession,
+  HubSessionsResponse,
+} from "../../src/protocol/hub.ts";
 import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
 import { sessionLabel } from "./naming.ts";
@@ -21,23 +35,10 @@ const shellConfig = (): ShellConfig | undefined =>
  * the connected-stream cap.
  */
 
-/** A hub listing row, as GET /hub/sessions reports it. */
-export interface HubSession {
-  readonly artifact: string;
-  readonly name: string;
-  /** The artifact's own `<title>`, when it has one. What a tab, the palette
-   *  and the pick screen show: "Units that got away" says what a session
-   *  holds, "test2.html" says where it lives. */
-  readonly title?: string;
-  readonly lastSeen: string;
-  readonly id: string;
-  readonly hosted: boolean;
-  /** Project root path - the grouping the shell displays sessions under
-   *  (a worktree resolves to its MAIN repo). */
-  readonly project: string;
-  /** Present when the session lives in a git worktree: that checkout's root. */
-  readonly worktree?: string;
-}
+/** The hub's own shapes, re-exported for this module's readers: a listing row
+ *  and one session's attention signals are the daemon's contract
+ *  (src/protocol/hub.ts), not a shape the shell gets to describe for itself. */
+export type { HubAttention, HubSession } from "../../src/protocol/hub.ts";
 
 /**
  * Every root `POST /hub/create` would accept: the grouping project of each
@@ -54,15 +55,6 @@ export const createRoots = (sessions: readonly HubSession[]): string[] => {
   }
   return [...roots].sort();
 };
-
-/** One session's attention signals, as the hub's `event: attention` frame
- *  carries them (keyed by session id; src/core/attention.ts is the source). */
-export interface HubAttention {
-  readonly openQuestions: number;
-  readonly working: boolean;
-  readonly resolved: boolean;
-  readonly lastEventSeq: number;
-}
 
 interface HubState {
   sessions: readonly HubSession[];
@@ -98,18 +90,9 @@ interface HubState {
    *  from here, or present with neither list, simply gets no pickers. */
   harnessInfo: readonly HarnessInfo[];
   /** The last create turn that DIED before its artifact surfaced, with the
-   *  log tail that says why. Keyed state, not a toast: the create dialog is
-   *  what must stop saying "authoring…". */
-  createFailed: {
-    readonly artifact: string;
-    readonly tail: string;
-    /** The harness's own usage-limit line, when that is what killed the
-     *  turn - the dialog names the wall instead of showing a bare tail. */
-    readonly usageLimit?: string;
-    /** Which auth wall the turn died on, when it died on one. Additive: an
-     *  older shell ignores it and still renders the tail. */
-    readonly authFailure?: string;
-  } | null;
+   *  exit code and log tail that say why. Keyed state, not a toast: the create
+   *  dialog is what must stop saying "authoring…". */
+  createFailed: CreateFailed | null;
   /** The last heartbeat from each LIVE create turn (M2.1), keyed by artifact:
    *  proof of life, so the dialog reports progress instead of inferring
    *  failure from a clock. `at` is this window's receipt time - what "has the
@@ -385,17 +368,9 @@ let bundleStamp: string | null = null;
  */
 const refreshIdentity = (): void => {
   void hubFetch("/hub/identity")
-    .then((r) =>
-      r.ok
-        ? (r.json() as Promise<{
-            attend?: boolean;
-            roots?: string[];
-            harnesses?: string[];
-            defaultHarness?: string;
-            harnessInfo?: HarnessInfo[];
-          }>)
-        : null,
-    )
+    // Every field optional: a hub older than one of them simply reports
+    // nothing there, and the defaults below stand in.
+    .then((r) => (r.ok ? (r.json() as Promise<Partial<HubIdentity>>) : null))
     .then((who) => {
       if (who)
         useHub.setState({
@@ -411,11 +386,10 @@ const refreshIdentity = (): void => {
     });
 };
 
-/** What `POST /hub/roots` answers: the folder added, the whole scanned set,
- *  and how many sessions that folder turned out to hold. */
-export interface AddedRoot {
-  readonly root: string;
-  readonly roots: readonly string[];
+/** What `POST /hub/roots` answers, as a caller of `addRoot` reads it: the hub
+ *  omits the count when its scan outran the budget, and this states the zero
+ *  the caller would otherwise have to invent. */
+export interface AddedRoot extends HubRootsResponse {
   readonly found: number;
 }
 
@@ -466,98 +440,79 @@ export const addRoot = async (
   return { added: { root: body.root, roots: body.roots ?? [], found: body.found ?? 0 } };
 };
 
-/** One frame off the hub's listing channel. "message" is the full snapshot;
- *  everything else is a named side-channel the shell reacts to. */
-const onHubFrame = (type: string, payload: string): void => {
-  try {
-    switch (type) {
-      case "message": {
-        const data = JSON.parse(payload) as { sessions: HubSession[]; bundle?: string };
-        // Dev mode only: the hub stamps each snapshot with its bundle version.
-        // A moved stamp means the watcher rebuilt the UI - reload to run it.
-        if (data.bundle !== undefined) {
-          if (bundleStamp !== null && bundleStamp !== data.bundle) {
-            window.location.reload();
-            return;
-          }
-          bundleStamp = data.bundle;
-        }
-        useHub.setState({ sessions: data.sessions, loaded: true });
-        break;
+/**
+ * What each frame off the hub's listing channel does. The default frame is the
+ * full snapshot; everything else is a named side-channel the shell reacts to.
+ *
+ * One handler per frame the hub can send, keyed by the frame union's own names
+ * (src/protocol/frames.ts): renaming a frame - or adding one - stops this file
+ * compiling, where the switch it replaces simply stopped matching and dropped
+ * the news in silence.
+ */
+const hubFrameHandlers: FrameHandlers<HubFrame> = {
+  [DEFAULT_FRAME]: (listing) => {
+    // Dev mode only: the hub stamps each snapshot with its bundle version.
+    // A moved stamp means the watcher rebuilt the UI - reload to run it.
+    if (listing.bundle !== undefined) {
+      if (bundleStamp !== null && bundleStamp !== listing.bundle) {
+        window.location.reload();
+        return;
       }
-      // The hub's own per-artifact attention fold (plan 03, M3.1): keyed by
-      // session id, deduped server-side, independent of any tab's stream.
-      case "attention":
-        applyAttentionFrame(JSON.parse(payload) as Record<string, HubAttention>);
-        break;
-      // `lucid open` ran in a terminal: the daemon asks live windows to surface
-      // the session as a tab so the CLI never has to pop a browser next to a
-      // shell that is already up. The listing snapshot may not carry the row
-      // yet (notify is async), so ask the hub directly.
-      case "open-tab": {
-        const { id } = JSON.parse(payload) as { id: string };
-        void (async () => {
-          try {
-            // `fresh` because the row we are looking for is the one that was
-            // just created: the hub's cached listing predates it by definition,
-            // and a miss here is a tab that silently never opens. The listing
-            // unions a scan of every root - same walk, same budget.
-            const listed = (await hubFetch("/hub/sessions?fresh=1", {
-              timeoutMs: SCAN_TIMEOUT_MS,
-            }).then((r) => (r.ok ? (r.json() as Promise<{ sessions: HubSession[] }>) : null))) as {
-              sessions: HubSession[];
-            } | null;
-            const row = listed?.sessions.find((s) => s.id === id);
-            if (row) await openTab(row);
-          } catch {
-            /* the next snapshot still lists it; the human can open it by hand */
-          }
-        })();
-        break;
-      }
-      // A create turn exited without producing its artifact: stop the dialog's
-      // "authoring…" wait NOW and say why (the log tail rides along).
-      case "create-failed": {
-        const { artifact, tail, usageLimit, authFailure } = JSON.parse(payload) as {
-          artifact: string;
-          tail: string;
-          usageLimit?: string;
-          authFailure?: string;
-        };
-        useHub.setState((prev) =>
-          noteCreateFailed(prev, {
-            artifact,
-            tail,
-            ...(usageLimit ? { usageLimit } : {}),
-            ...(authFailure ? { authFailure } : {}),
-          }),
-        );
-        break;
-      }
-      // A create turn is STILL RUNNING (M2.1). The dialog reports this rather
-      // than inferring health from a clock; `at` is stamped on receipt because
-      // the question the dialog asks is "did the HUB go quiet", which the hub's
-      // own elapsed number cannot answer.
-      case "create-progress": {
-        const { artifact, trace, elapsedMs, label } = JSON.parse(payload) as {
-          artifact: string;
-          trace: string;
-          elapsedMs: number;
-          label?: string;
-        };
-        useHub.setState((prev) =>
-          noteCreateProgress(prev, artifact, {
-            trace,
-            elapsedMs,
-            at: Date.now(),
-            ...(typeof label === "string" && label !== "" ? { label } : {}),
-          }),
-        );
-        break;
-      }
-      default:
-        break;
+      bundleStamp = listing.bundle;
     }
+    useHub.setState({ sessions: listing.sessions, loaded: true });
+  },
+  // The hub's own per-artifact attention fold (plan 03, M3.1): keyed by
+  // session id, deduped server-side, independent of any tab's stream.
+  attention: (map) => applyAttentionFrame(map),
+  // The hub stating it is still here. Nothing to apply: its ARRIVAL is the
+  // whole content, and the stream measures silence against it (stream.ts).
+  tick: () => {},
+  // `lucid open` ran in a terminal: the daemon asks live windows to surface
+  // the session as a tab so the CLI never has to pop a browser next to a
+  // shell that is already up. The listing snapshot may not carry the row
+  // yet (notify is async), so ask the hub directly.
+  "open-tab": ({ id }) => {
+    void (async () => {
+      try {
+        // `fresh` because the row we are looking for is the one that was
+        // just created: the hub's cached listing predates it by definition,
+        // and a miss here is a tab that silently never opens. The listing
+        // unions a scan of every root - same walk, same budget.
+        const listed = await hubFetch("/hub/sessions?fresh=1", {
+          timeoutMs: SCAN_TIMEOUT_MS,
+        }).then((r) => (r.ok ? (r.json() as Promise<HubSessionsResponse>) : null));
+        const row = listed?.sessions.find((s) => s.id === id);
+        if (row) await openTab(row);
+      } catch {
+        /* the next snapshot still lists it; the human can open it by hand */
+      }
+    })();
+  },
+  // A create turn exited without producing its artifact: stop the dialog's
+  // "authoring…" wait NOW and say why (the exit code and log tail ride along).
+  "create-failed": (failed) => useHub.setState((prev) => noteCreateFailed(prev, failed)),
+  // A create turn is STILL RUNNING (M2.1). The dialog reports this rather
+  // than inferring health from a clock; `at` is stamped on receipt because
+  // the question the dialog asks is "did the HUB go quiet", which the hub's
+  // own elapsed number cannot answer.
+  "create-progress": ({ artifact, trace, elapsedMs, label }) =>
+    useHub.setState((prev) =>
+      noteCreateProgress(prev, artifact, {
+        trace,
+        elapsedMs,
+        at: Date.now(),
+        ...(label ? { label } : {}),
+      }),
+    ),
+};
+
+/** Decode one frame and apply it. Exported for the tests: this is the seam
+ *  where the hub's wire becomes shell state, and what it keeps of a frame is
+ *  worth pinning. */
+export const onHubFrame = (type: string, payload: string): void => {
+  try {
+    dispatchFrame(hubFrameHandlers, type, payload);
   } catch {
     /* a frame we cannot parse is not worth tearing the stream down for */
   }

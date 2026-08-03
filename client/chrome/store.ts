@@ -8,6 +8,7 @@ import type {
   ContextUsage,
   HarnessInfo,
   SelectionState,
+  SessionStatus,
 } from "../../src/protocol/wire.ts";
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
 import type { OutlineHealthRecord } from "./artifact-outline-session.ts";
@@ -401,7 +402,11 @@ export interface SessionState {
   warnings: WarningItem[];
   /** Neutral, transient confirmations (e.g. a fork was recorded). */
   notices: { id: string; message: string }[];
-  status: string;
+  /** Where this session is in its lifecycle, from the server: the state
+   *  response's `lifecycle` on every bootstrap, and each lifecycle frame after
+   *  it. Everything that asks "can work happen here" reads this, so a stale
+   *  "suspended" is a tab with its affordances switched off. */
+  status: SessionStatus;
   /** Open "agent is working" window from the fold: set by the agent's ack on
    *  taking delivery, closed by its next output (version, reply, question). */
   agentWorking: AgentWorking | null;

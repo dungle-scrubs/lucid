@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, stat } from "node:fs/promises";
-import { attentionOf, type Attention } from "../core/attention.ts";
+import { attentionOf } from "../core/attention.ts";
 import {
   ARTIFACT_DIR,
   canonicalArtifactPath,
@@ -47,6 +47,16 @@ import {
   selectionArgs,
   writeSelection,
 } from "../launch/selection.ts";
+import { DEFAULT_FRAME, type HubFrame, type HubListing } from "../protocol/frames.ts";
+import type {
+  HubAttention,
+  HubCreateAccepted,
+  HubIdentity,
+  HubOpenResult,
+  HubRootsResponse,
+  HubSession,
+  HubSessionsResponse,
+} from "../protocol/hub.ts";
 import type { HarnessInfo } from "../protocol/wire.ts";
 import { createAttendant, type Attendant } from "./attend.ts";
 import {
@@ -205,25 +215,6 @@ const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response 
     status,
     headers: { "content-type": "application/json; charset=utf-8", ...headers },
   });
-
-/** A hub-listed session as the shell consumes it: the registry pointer plus
- *  its opaque mount id, its project, and whether a dedicated server is
- *  currently live. */
-export interface HubSession extends RegistryEntry {
-  readonly id: string;
-  /** The artifact's own `<title>`, when it has one: what the shell puts on a
-   *  tab. Absent for an artifact with no title (the filename stands in). */
-  readonly title?: string;
-  /** True when the daemon itself hosts it right now (stream + appends). */
-  readonly hosted: boolean;
-  /** The session's project root (nearest .git, else the artifact's own
-   *  directory; a worktree resolves to its MAIN repo). A tab is a SESSION;
-   *  the project is a grouping - this is what the shell groups by. */
-  readonly project: string;
-  /** Present when the session lives in a git worktree: that checkout's
-   *  root, shown as a qualifier under its main project. */
-  readonly worktree?: string;
-}
 
 /**
  * Start the hub daemon. Foreground callers keep the returned handle and await
@@ -647,7 +638,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    * sit longer on "Looking for sessions…" than it ever did before this cache
    * existed.
    */
-  const snapshot = async (mode: "cached" | "after-change" = "cached"): Promise<string> => {
+  const snapshot = async (mode: "cached" | "after-change" = "cached"): Promise<HubListing> => {
     // The bundle stamp rides every snapshot: the watcher's file mtime in dev
     // mode, the embedded build hash in production. Either way, when a shell
     // reconnects to a hub running NEWER UI than it is, the stamp differs and
@@ -656,7 +647,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const stamp = devBundleStamp() ?? CLIENT_BUNDLE_HASH;
     const sessions =
       mode === "after-change" ? await sessionListing.fresh() : await sessionListing.cached();
-    return JSON.stringify({ sessions, bundle: stamp });
+    return { sessions, bundle: stamp };
   };
 
   /**
@@ -667,13 +658,12 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    * frames a window that did not would get - a fresh shell paints the listing
    * and its working badges without waiting for the next poll to find a change.
    */
-  const channel = createChannel({
-    onJoin: (sub) => {
+  const channel = createChannel<HubFrame>({
+    onJoin: (_sub, _join, send) => {
       void (async () => {
         try {
-          const snap = await snapshot();
-          sub.send(null, snap);
-          sub.send("attention", attentionSnapshot());
+          send({ event: DEFAULT_FRAME, data: await snapshot() });
+          send({ event: "attention", data: attentionSnapshot() });
         } catch {
           // best-effort priming; the poll will catch up
         }
@@ -689,8 +679,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    *  listing costs one `stat` per artifact. A session with no log yet is simply
    *  absent; any error (permission, corrupt committed line) is surfaced once
    *  rather than silently masquerading as "no log yet". */
-  const attentionSnapshot = (): string => {
-    const map: Record<string, Attention> = {};
+  const attentionSnapshot = (): Record<string, HubAttention> => {
+    const map: Record<string, HubAttention> = {};
     for (const [id, artifact] of idToArtifact) {
       try {
         const state = sessionStateSync(sessionPaths(artifact));
@@ -701,7 +691,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         // The id has no attention this pass; the badge just clears.
       }
     }
-    return JSON.stringify(map);
+    return map;
   };
 
   // Re-broadcast the current listing whenever it changes. Gated on having
@@ -736,7 +726,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const notify = async (mode: "cached" | "after-change" = "cached"): Promise<void> => {
     if (channel.size() === 0) return;
     ticks += 1;
-    if (ticks % TICK_EVERY === 0) broadcast("tick", "");
+    if (ticks % TICK_EVERY === 0) broadcast({ event: "tick", data: null });
     if (notifying) {
       if (mode === "after-change") notifyAgain = true;
       return;
@@ -745,15 +735,19 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     try {
       // Listing and attention are deduped SEPARATELY: a `working` flip changes
       // only the attention snapshot, so the listing frame is not re-sent (R3).
+      // Compared as their serialized form, which is what "the same news" means
+      // for a frame - the objects are rebuilt every pass.
       const snap = await snapshot(mode);
-      if (snap !== lastSnapshot) {
-        lastSnapshot = snap;
-        broadcast(null, snap);
+      const snapJson = JSON.stringify(snap);
+      if (snapJson !== lastSnapshot) {
+        lastSnapshot = snapJson;
+        broadcast({ event: DEFAULT_FRAME, data: snap });
       }
       const att = attentionSnapshot();
-      if (att !== lastAttentionSnapshot) {
-        lastAttentionSnapshot = att;
-        broadcast("attention", att);
+      const attJson = JSON.stringify(att);
+      if (attJson !== lastAttentionSnapshot) {
+        lastAttentionSnapshot = attJson;
+        broadcast({ event: "attention", data: att });
       }
     } catch (err) {
       // A listing that throws must not take the hub down: every caller here
@@ -837,14 +831,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // reads `shells` to decide whether a window took it - if one did, it
     // skips the default browser entirely (opening in Arc next to a live
     // shell window was the bug).
-    broadcast("open-tab", JSON.stringify({ id }));
-    return json({
+    broadcast({ event: "open-tab", data: { id } });
+    const opened: HubOpenResult = {
       ok: true,
       id,
       base: `/s/${id}`,
       shell: `http://127.0.0.1:${port}/?s=${id}`,
       shells: channel.size(),
-    });
+    };
+    return json(opened);
   };
 
   /**
@@ -1101,15 +1096,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           try {
             const label = await lastPhaseLabel();
             if (ended) return;
-            broadcast(
-              "create-progress",
-              JSON.stringify({
+            broadcast({
+              event: "create-progress",
+              data: {
                 artifact,
                 trace: observation.trace,
                 elapsedMs: Date.now() - startedAt,
                 ...(label !== undefined ? { label } : {}),
-              }),
-            );
+              },
+            });
           } finally {
             reading = false;
           }
@@ -1135,16 +1130,16 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         // dialog owns the wording, and the harness's own line still arrives
         // in `tail`.
         const failure = classifyTurnFailure(raw);
-        broadcast(
-          "create-failed",
-          JSON.stringify({
+        broadcast({
+          event: "create-failed",
+          data: {
             artifact,
             code,
             tail,
             ...(failure.usageLimit !== null ? { usageLimit: failure.usageLimit } : {}),
             ...(failure.authFailure !== null ? { authFailure: failure.authFailure } : {}),
-          }),
-        );
+          },
+        });
       };
       void spawnIdentity
         .recordAssigned(paths)
@@ -1190,7 +1185,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         });
       handedOff = true;
 
-      return json({ ok: true, artifact }, 202);
+      const accepted: HubCreateAccepted = { ok: true, artifact };
+      return json(accepted, 202);
     } finally {
       if (!handedOff) creating.delete(artifact);
     }
@@ -1305,15 +1301,12 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // The EFFECTIVE set, not just the persisted additions: this is what the
     // shell displays as "looking in", and answering with the additions alone
     // made it forget the defaults (`~/dev`, the scratchpads) it still scans.
-    return json(
-      {
-        root: chosen.dir,
-        roots: await scanRootSet(),
-        ...(counted !== undefined ? { found: counted } : {}),
-      },
-      200,
-      noStore,
-    );
+    const added: HubRootsResponse = {
+      root: chosen.dir,
+      roots: await scanRootSet(),
+      ...(counted !== undefined ? { found: counted } : {}),
+    };
+    return json(added, 200, noStore);
   };
 
   /**
@@ -1432,30 +1425,27 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // `roots` names the folders being scanned, so an empty shell can say
       // WHERE it looked instead of just "no reviews yet" - the difference
       // between a dead end and a correctable guess.
-      return json(
-        {
-          lucid: "hub",
-          port,
-          shells: channel.size(),
-          attend,
-          roots: await scanRootSet(),
-          harnesses,
-          harnessInfo,
-          ...(registry?.default !== undefined ? { defaultHarness: registry.default } : {}),
-          // The debug surface (M1.1 observability): the shared session-state
-          // fold cache's hit/miss/entries, readable with
-          // `curl <hub>/hub/identity`.
-          debug: { sessionStateCache: sessionStateCacheStats() },
-          // The hub's OWN view of its log (M3.2). `lucid status` runs in a
-          // different process and can resolve a different LUCID_HUB_LOG - or
-          // miss an explicitly injected path entirely - so asking beats
-          // re-deriving: the writer is the only process that knows where its
-          // evidence actually goes.
-          log: sinkStatus(opts.hubLogPath),
-        },
-        200,
-        noStore,
-      );
+      const identity: HubIdentity = {
+        lucid: "hub",
+        port,
+        shells: channel.size(),
+        attend,
+        roots: await scanRootSet(),
+        harnesses,
+        harnessInfo,
+        ...(registry?.default !== undefined ? { defaultHarness: registry.default } : {}),
+        // The debug surface (M1.1 observability): the shared session-state
+        // fold cache's hit/miss/entries, readable with
+        // `curl <hub>/hub/identity`.
+        debug: { sessionStateCache: sessionStateCacheStats() },
+        // The hub's OWN view of its log (M3.2). `lucid status` runs in a
+        // different process and can resolve a different LUCID_HUB_LOG - or
+        // miss an explicitly injected path entirely - so asking beats
+        // re-deriving: the writer is the only process that knows where its
+        // evidence actually goes.
+        log: sinkStatus(opts.hubLogPath),
+      };
+      return json(identity, 200, noStore);
     }
     if (pathname === "/hub/sessions" && req.method === "GET") {
       // `?fresh=1` is for a caller that has just been told something changed
@@ -1464,7 +1454,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       const sessions = await (url.searchParams.get("fresh") === "1"
         ? sessionListing.fresh()
         : sessionListing.cached());
-      return json({ sessions }, 200, noStore);
+      const listing: HubSessionsResponse = { sessions };
+      return json(listing, 200, noStore);
     }
     if (pathname === "/hub/open" && req.method === "POST") {
       return handleHubOpen(req);
@@ -1549,7 +1540,9 @@ export const parseHubPort = (raw: string | undefined): number | undefined => {
   return n >= 1 && n <= 65535 ? n : undefined;
 };
 
-/** What a live hub reports about itself. */
+/** What a live hub reports about itself, as the CLI uses it: the slice of
+ *  `HubIdentity` (protocol/hub.ts) the terminal has decisions to make about,
+ *  with `port` being the one that ANSWERED rather than the one it claims. */
 export interface HubInfo {
   readonly port: number;
   /** Connected shell windows (listing-stream subscribers). */
@@ -1575,21 +1568,13 @@ export const hubInfo = async (port = HUB_PORT): Promise<HubInfo | undefined> => 
     });
     clearTimeout(timer);
     if (!probe.ok) return undefined;
-    const who = (await probe.json()) as {
-      lucid?: unknown;
-      shells?: unknown;
-      attend?: unknown;
-      log?: unknown;
-    };
+    // The identity contract (protocol/hub.ts), read defensively: whatever
+    // answers this port may be older than these fields, or not a hub at all.
+    const who = (await probe.json()) as Partial<HubIdentity>;
     if (who.lucid !== "hub") return undefined;
     // The hub's own log view rides along when it reports one; an older hub
     // reports none and the caller falls back to deriving its own.
-    const log =
-      who.log !== null &&
-      typeof who.log === "object" &&
-      typeof (who.log as SinkStatus).path === "string"
-        ? (who.log as SinkStatus)
-        : undefined;
+    const log = typeof who.log?.path === "string" ? who.log : undefined;
     return {
       port,
       shells: typeof who.shells === "number" ? who.shells : 0,
@@ -1604,17 +1589,6 @@ export const hubInfo = async (port = HUB_PORT): Promise<HubInfo | undefined> => 
 /** True when a hub daemon answers its identity probe on `port`. */
 export const hubAlive = async (port = HUB_PORT): Promise<boolean> =>
   (await hubInfo(port)) !== undefined;
-
-/** What `POST /hub/open` answers: where the session now lives on the hub. */
-export interface HubOpenResult {
-  readonly ok: true;
-  readonly id: string;
-  readonly base: string;
-  readonly shell: string;
-  /** Connected shell windows at open time. 0 means nobody is looking - the
-   *  CLI falls back to opening a browser. */
-  readonly shells?: number;
-}
 
 /**
  * Ask a running hub daemon to surface a session (register + mount + tab).

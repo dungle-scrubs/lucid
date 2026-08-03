@@ -1,5 +1,6 @@
 import type { Anchor } from "../anchors/anchor.ts";
 import type { Warning } from "../errors.ts";
+import type { SessionStatus } from "../core/fold.ts";
 import type { ItemAnswer, QuestionItem } from "../core/question-contract.ts";
 
 /**
@@ -7,14 +8,64 @@ import type { ItemAnswer, QuestionItem } from "../core/question-contract.ts";
  * boundary - the `lucid wait` payload on stdout, and the viewer's
  * `/__lucid/state`, `/__lucid/sessions`, and `/__lucid/diff` responses.
  *
- * Types only, no runtime imports, so BOTH sides load it: server modules
- * implement these shapes, the chrome bundle `import type`s them. Before this
- * module each side hand-mirrored the other and the wire was what actually
- * bound them; now a field added here is a field on both sides, or the
- * compiler objects.
+ * No runtime IMPORTS, so BOTH sides load it: server modules implement these
+ * shapes, the chrome bundle `import type`s them. Before this module each side
+ * hand-mirrored the other and the wire was what actually bound them; now a
+ * field added here is a field on both sides, or the compiler objects.
+ *
+ * The one piece of behaviour here is the lifecycle table below - the meaning of
+ * a status this module already spells, which both the fold and the chrome read.
+ *
+ * The hub's own shapes are `./hub.ts` and the live frames `./frames.ts`; this
+ * module is one SESSION's contract.
  */
 
-export type PayloadStatus = "feedback" | "ended" | "suspended" | "waiting";
+/**
+ * Where a session is in its lifecycle, as the fold derives it from the log.
+ * Re-exported here because it crosses the wire (`StateResponse.lifecycle`, a
+ * listed session's `status`) and the chrome must not re-spell it.
+ */
+export type { SessionStatus } from "../core/fold.ts";
+
+/**
+ * What each lifecycle event does to a session's status.
+ *
+ * One table, read by both the fold that rebuilds a status from the log
+ * (src/core/fold.ts) and the chrome that updates a tab's from the frame that
+ * just landed. They were two lists, and the chrome's was missing
+ * `session_resumed` - so a session healed by a watcher reconnecting stayed
+ * "suspended" in the tab until the page was reloaded, with every affordance
+ * that reads the status switched off behind it.
+ *
+ * It lives beside `SessionStatus` rather than beside the frame union: a status
+ * folded out of a PERSISTED log has nothing to do with live frames, and the
+ * fold should not have to import frame vocabulary to derive one.
+ */
+export const LIFECYCLE_STATUS = {
+  session_opened: "active",
+  session_resumed: "active",
+  session_suspended: "suspended",
+  session_ended: "ended",
+} as const satisfies Readonly<Record<string, SessionStatus>>;
+
+/**
+ * The status a lifecycle event puts a session in, or null when the event is
+ * not one of them.
+ *
+ * The one gate: both readers ask this rather than testing membership against a
+ * list of their own, so neither can know an event the other does not.
+ */
+export const lifecycleStatusOf = (t: string): SessionStatus | null =>
+  (LIFECYCLE_STATUS as Readonly<Record<string, SessionStatus>>)[t] ?? null;
+
+/**
+ * What a `wait` call is reporting - the OUTCOME of the wait, not the session's
+ * lifecycle: `feedback` (here is work), `waiting` (nothing yet), plus the two
+ * ways a wait ends because the session did. A caller asking "is this session
+ * alive" wants `SessionStatus`; these two were one name once, and the panel
+ * read a wait outcome as a lifecycle.
+ */
+export type WaitOutcome = "feedback" | "ended" | "suspended" | "waiting";
 
 /** Open "agent is working" window (ack received, no output yet). */
 export interface AgentWorking {
@@ -252,7 +303,7 @@ export interface PayloadQuestion {
 export interface WaitPayload {
   readonly session: string;
   readonly version: number;
-  readonly status: PayloadStatus;
+  readonly status: WaitOutcome;
   readonly nextCursor: string;
   readonly reviewResolved: boolean;
   /** Every approve/reopen in this segment, each with its own moment, so the
@@ -356,7 +407,8 @@ export interface SelectionResponse {
 export interface SessionSummary {
   readonly session: string;
   readonly name: string;
-  readonly status: "active" | "suspended" | "ended";
+  /** A listed session has been opened, so it is never "none". */
+  readonly status: Exclude<SessionStatus, "none">;
   readonly version: number;
   readonly segment: number;
   readonly annotations: number;
@@ -427,6 +479,15 @@ export interface AttendantPresence {
 
 /** `/__lucid/state` response: the full folded payload plus viewer presence. */
 export interface StateResponse extends WaitPayload {
+  /**
+   * Where the session is in its lifecycle, as the log records it.
+   *
+   * Distinct from `status` above, which answers what a WAIT would report. The
+   * viewer needs the lifecycle - a suspended session healed by this very
+   * request cannot be told apart from a live one by a wait outcome, and the
+   * tab kept every affordance switched off until the page was reloaded.
+   */
+  readonly lifecycle: SessionStatus;
   /** Agents currently blocked in `wait` on this session. */
   readonly agentsListening: number;
   readonly lastAttendant?: AttendantRef;
