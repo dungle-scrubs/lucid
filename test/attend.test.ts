@@ -1461,7 +1461,7 @@ await Bun.write(artifact, "<!doctype html><html><head><title>d</title></head><bo
     // whole flow shipped dead: the project needs a `.git` for the placement
     // rule to be live here at all, or this asserts nothing.
     await mkdir(join(proj, ".git"), { recursive: true });
-    const { canonicalArtifactLocation } = await import("../src/core/paths.ts");
+    const { canonicalArtifactLocation } = await import("../src/core/project.ts");
     expect(canonicalArtifactLocation(body.artifact)).toEqual({ ok: true });
 
     const marker = await readMarker(createMarker);
@@ -2339,4 +2339,234 @@ if (process.env.LUCID_HARNESS === "codex") {
     const marker = await readMarker(createMarker, 2_000);
     expect(marker.harness).toBe("codex");
   }, 15_000);
+});
+
+/**
+ * Nearly every artifact ever rendered lives in an agent scratchpad while the
+ * conversation that wrote it ran in the project checkout. "Has this artifact
+ * moved projects?" therefore has to DECODE the scratchpad path before it
+ * compares - the one question `projectOf` answers.
+ *
+ * Comparing the raw folder walk instead made every such artifact look moved,
+ * and a moved artifact gets a fresh handoff: the human's feedback reached a
+ * stranger with no memory of the review, while the hub's own listing grouped
+ * that same artifact under the decoded checkout.
+ */
+describe("a scratchpad artifact resumes in the project its path encodes", () => {
+  let dir: string;
+  let repo: string;
+  let harnessesPath: string;
+  let resumeMarker: string;
+  let spawnMarker: string;
+  let switchMarker: string;
+  const logs: string[] = [];
+
+  /** Flatten a real path the way Claude Code does (`/` and `.` both become
+   *  `-`), so the fixture states the input the way it actually arrives. */
+  const flatten = (path: string): string => path.replaceAll("/", "-").replaceAll(".", "-");
+
+  /**
+   * A review in the scratchpad of an agent working in `agentCwd`, with that
+   * same cwd on the record.
+   *
+   * The agent's cwd is the PARAMETER because it is as often a package inside
+   * the checkout as the checkout root itself, and the two spellings took
+   * different paths through the engine: comparing a normalized prior cwd
+   * against a raw one made every agent working below its own repo root look
+   * like it had moved projects.
+   */
+  const reviewFrom = async (agentCwd: string): Promise<SessionPaths> => {
+    const scratchpad = join(
+      dir,
+      "claude-501",
+      flatten(agentCwd),
+      "40c9c345-b638-4286-bfce-796d9e6fad98",
+      "scratchpad",
+    );
+    await mkdir(scratchpad, { recursive: true });
+    const artifact = join(scratchpad, "plan.html");
+    await writeFile(artifact, DOC);
+    const paths = sessionPaths(artifact);
+    await openSession(paths, {
+      attendant: { harness: "stub", sessionId: "sess-1", cwd: agentCwd },
+    });
+    await mergeAttendantSidecar(paths, {
+      harness: "stub",
+      sessionId: "sess-1",
+      sessionIdAuthority: "declared",
+      nextCursor: "evt_00001",
+      at: new Date().toISOString(),
+    });
+    return paths;
+  };
+
+  /** Drive the engine until one of the three stubs has run, or give up. */
+  const settle = async (paths: SessionPaths): Promise<void> => {
+    const attendant = createAttendant({
+      paths,
+      agentsListening: () => 0,
+      harnessesPath,
+      debounceMs: 10,
+      log: (m) => logs.push(m),
+    });
+    try {
+      const ran = async (): Promise<boolean> =>
+        (await Bun.file(resumeMarker).exists()) ||
+        (await Bun.file(spawnMarker).exists()) ||
+        (await Bun.file(switchMarker).exists());
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline && !(await ran())) {
+        await attendant.tick();
+        await sleep(60);
+      }
+    } finally {
+      attendant.stop();
+    }
+  };
+
+  beforeEach(async () => {
+    logs.length = 0;
+    dir = realpathSync(await mkdtemp(join(tmpdir(), "lucid-attend-scratch-")));
+    repo = join(dir, "dev", "proj");
+    await mkdir(join(repo, ".git"), { recursive: true });
+    resetPresenceCache();
+    resetSessionCwdCache();
+
+    harnessesPath = join(dir, "harnesses.json");
+    resumeMarker = join(dir, "resume-marker.json");
+    spawnMarker = join(dir, "spawn-marker.json");
+    switchMarker = join(dir, "switch-marker.json");
+    const resumeStub = join(dir, "stub-resume.ts");
+    const spawnStub = join(dir, "stub-spawn.ts");
+    const switchStub = join(dir, "stub-switch.ts");
+    await writeStub(resumeStub, resumeMarker);
+    await writeStub(spawnStub, spawnMarker);
+    await writeStub(switchStub, switchMarker);
+    // One stub per recipe: which marker appears IS the verdict - resume, fresh
+    // handoff to the same harness, or handoff to the one the human picked -
+    // with no need to read the engine's own narration.
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "stub",
+        harnesses: {
+          stub: {
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [process.execPath, "run", spawnStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+            resume: [
+              process.execPath,
+              "run",
+              resumeStub,
+              "--sid",
+              "{id}",
+              "{artifact}",
+              "{prompt}",
+            ],
+          },
+          other: {
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [process.execPath, "run", switchStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+          },
+        },
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    applyUnitEnv();
+    resetPresenceCache();
+    resetSessionCwdCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("delivers by resuming the recorded session, not by handing off to a stranger", async () => {
+    // The harness ran in the CHECKOUT - which is exactly what its scratchpad
+    // path encodes.
+    const paths = await reviewFrom(repo);
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-scratchpad",
+      version: 1,
+      target: elementTarget,
+      note: "this belongs to the session that wrote the artifact",
+    });
+
+    await settle(paths);
+
+    const marker = await readMarker(resumeMarker);
+    expect(marker.sessionId).toBe("sess-1");
+    // The established session's own directory (D10), which the scratchpad
+    // path names and the scratchpad itself is not.
+    expect(marker.cwd).toBe(repo);
+    expect(await Bun.file(spawnMarker).exists()).toBe(false);
+  }, 40_000);
+
+  test("an agent working inside its checkout has not moved projects", async () => {
+    // The common shape: the conversation ran in one package of a repo, so its
+    // cwd is BELOW the checkout root. Both sides of "did this move?" have to
+    // be normalized the same way, or the package dir never equals the root it
+    // sits in and every one of these reviews gets handed to a stranger.
+    const pkg = join(repo, "packages", "app");
+    await mkdir(pkg, { recursive: true });
+    const paths = await reviewFrom(pkg);
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-package",
+      version: 1,
+      target: elementTarget,
+      note: "written from a package inside the repo",
+    });
+
+    await settle(paths);
+
+    const marker = await readMarker(resumeMarker);
+    expect(marker.sessionId).toBe("sess-1");
+    expect(marker.cwd).toBe(pkg);
+    expect(await Bun.file(spawnMarker).exists()).toBe(false);
+  }, 40_000);
+
+  test("a decoded checkout that is gone never becomes the turn's cwd", async () => {
+    // The decode names the WORK even when the directory is gone (an ephemeral
+    // worktree is deleted once its work lands, and the review outlives it) -
+    // right for a listing heading, fatal as a cwd. Same fixture, with the
+    // encoded checkout removed from under it.
+    const paths = await reviewFrom(repo);
+    await rm(repo, { recursive: true, force: true });
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-gone",
+      version: 1,
+      target: elementTarget,
+      note: "the checkout this was written in no longer exists",
+    });
+
+    await settle(paths);
+
+    const marker = await readMarker(resumeMarker);
+    expect(marker.cwd).toBe(paths.artifactDir);
+  }, 40_000);
+
+  test("a fresh harness starts where it can still write the artifact", async () => {
+    // A harness switch is a handoff whatever the projects say, and a handoff
+    // is the one turn that does not inherit a cwd. It gets the checkout the
+    // artifact SITS in - here the scratchpad - because a sandboxed harness can
+    // only write below its own cwd, and the decoded project it BELONGS to is a
+    // directory the artifact is not in.
+    const paths = await reviewFrom(repo);
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "other" }));
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-switch",
+      version: 1,
+      target: elementTarget,
+      note: "attend this with the harness I picked",
+    });
+
+    await settle(paths);
+
+    const marker = await readMarker(switchMarker);
+    expect(marker.harness).toBe("other");
+    expect(marker.cwd).toBe(paths.artifactDir);
+    expect(await Bun.file(resumeMarker).exists()).toBe(false);
+  }, 40_000);
 });

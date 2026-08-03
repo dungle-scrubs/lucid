@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { parseHTML } from "linkedom";
 import { marked } from "marked";
-import { ARTIFACT_DIR, canonicalArtifactPath, projectRootOf } from "../core/paths.ts";
+import { ARTIFACT_DIR, canonicalArtifactPath } from "../core/paths.ts";
+import { enclosingCheckout } from "../core/project.ts";
 
 /**
  * Planner -> Lucid bridge (render half). Turns a planner living document
@@ -79,7 +80,7 @@ export const planArtifactPath = (doc: string, out?: string): string => {
   // would mint two review sessions for one file.
   const docPath = canonicalArtifactPath(doc);
   const stem = basename(docPath).replace(/\.md$/i, "");
-  const root = projectRootOf(dirname(docPath));
+  const root = enclosingCheckout(dirname(docPath));
   if (root === null) return resolve(dirname(docPath), `${stem}.lucid.html`);
   return resolve(
     root,

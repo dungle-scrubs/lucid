@@ -3,7 +3,8 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalArtifactLocation, sessionPaths } from "../src/core/paths.ts";
+import { sessionPaths } from "../src/core/paths.ts";
+import { canonicalArtifactLocation } from "../src/core/project.ts";
 
 /**
  * Artifacts live at `<project>/.lucid/<name>.html` (plan 05, M3.2, D-011).

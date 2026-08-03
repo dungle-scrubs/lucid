@@ -26,8 +26,7 @@ import {
 } from "./discovery.ts";
 import { escapeHtml } from "../core/escape.ts";
 import { renderViewer, sseMaxBackoffFromEnv } from "./viewer.ts";
-import { scratchpadProject } from "../core/scratchpad.ts";
-import { projectRoot } from "../core/sessions.ts";
+import { projectOf } from "../core/project.ts";
 import { swr } from "../core/swr.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
 import { classifyTurnFailure, readRunOutput, runOutputStart } from "../launch/turn.ts";
@@ -346,44 +345,17 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    *  per tick. */
   const projectCache = new Map<string, { project: string; worktree?: string }>();
 
-  /**
-   * A session's project, worktree-aware: a git WORKTREE's `.git` is a file
-   * pointing at `<main>/.git/worktrees/<name>`, and the drawer groups
-   * worktrees under their MAIN repo even though they live in other
-   * directories. `project` is always the grouping root; `worktree` names the
-   * checkout when it differs.
-   */
-  const groupingFor = async (root: string): Promise<{ project: string; worktree?: string }> => {
-    try {
-      const gitPath = join(root, ".git");
-      if ((await stat(gitPath)).isFile()) {
-        const raw = await readFile(gitPath, "utf8");
-        const m = /^gitdir:\s*(.+)$/m.exec(raw);
-        if (m?.[1]) {
-          const gitdir = resolvePath(root, m[1].trim());
-          const wt = /^(.*)[/]\.git[/]worktrees[/][^/]+[/]?$/.exec(gitdir);
-          if (wt?.[1]) return { project: wt[1], worktree: root };
-        }
-      }
-    } catch {
-      /* plain .git directory, or unreadable: the root is the project */
-    }
-    return { project: root };
-  };
-
+  /** A session's project, from the one owner of that question
+   *  (`core/project.ts`): `project` is the grouping root - a worktree resolved
+   *  to its main repo, a scratchpad decoded to the checkout it names - and
+   *  `worktree` names the checkout when it differs. */
   const resolveProject = async (
     artifact: string,
   ): Promise<{ project: string; worktree?: string }> => {
     const cached = projectCache.get(artifact);
     if (cached !== undefined) return cached;
-    // An artifact in an agent's scratchpad belongs to the project that agent
-    // was WORKING ON, not to the scratchpad - which is one session's workspace
-    // and would label every such row "scratchpad". The decoded cwd then goes
-    // through the same worktree resolution as any checkout, because a cwd is
-    // routinely a worktree.
-    const spProject = await scratchpadProject(dirname(artifact));
-    const root = spProject ?? (await projectRoot(sessionPaths(artifact)));
-    const resolved = await groupingFor(root);
+    const { project, worktree } = await projectOf(sessionPaths(artifact));
+    const resolved = { project, ...(worktree !== undefined ? { worktree } : {}) };
     projectCache.set(artifact, resolved);
     return resolved;
   };

@@ -5,7 +5,8 @@ import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver, promotePendingBindings } from "../core/deliver.ts";
 import { foldLog } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
-import { ARTIFACT_DIR, canonicalArtifactPath, projectRootOf, sessionPaths } from "../core/paths.ts";
+import { ARTIFACT_DIR, canonicalArtifactPath, sessionPaths } from "../core/paths.ts";
+import { enclosingCheckout } from "../core/project.ts";
 import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
 import { themeReadiness, themeWarning } from "../core/theme.ts";
 import { registerSession } from "../core/registry.ts";
@@ -847,7 +848,7 @@ export const runPlanRender = async (
   // into a file meant to be committed and read on another machine, where an
   // absolute /Users/<someone>/ path compares equal to nothing.
   const abs = canonicalArtifactPath(doc);
-  const sourceRoot = projectRootOf(dirname(abs));
+  const sourceRoot = enclosingCheckout(dirname(abs));
   const source = sourceRoot === null ? abs : relative(sourceRoot, abs);
   const html = renderPlanDoc(markdown, {
     source,
