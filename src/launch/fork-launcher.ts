@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { openBrowser, spawnServer, waitForServer } from "../cli/self.ts";
 import {
@@ -8,11 +8,12 @@ import {
   type Attendant,
 } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
-import { deliver, promotePendingBindings } from "../core/deliver.ts";
+import { promotePendingBindings } from "../core/deliver.ts";
 import { foldLog, type ForkRecord } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
 import { sessionPaths, type SessionPaths } from "../core/paths.ts";
 import type { WaitPayload } from "../core/payload.ts";
+import { harnessHasLocalStore, harnessTranscriptPath } from "../core/presence.ts";
 import { openSession } from "../core/session.ts";
 import { runWait } from "../core/wait.ts";
 import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
@@ -28,8 +29,8 @@ import {
   type SpawnRecipe,
 } from "./recipes.ts";
 import { safeForkId, writeForkSeed } from "./seed.ts";
-import { classifySessionFailure, mintLaunchId } from "./session-identity.ts";
-import { discoveryPersistence, prepareSpawnIdentity, runSpawn } from "./spawn.ts";
+import { prepareSpawnIdentity, runSpawn } from "./spawn.ts";
+import { DEFAULT_TURN_IDLE_MS, planTurn, runTurn } from "./turn.ts";
 
 /**
  * The fork launcher (Phase 2). An opt-in, foreground process the human runs
@@ -57,6 +58,9 @@ export interface LaunchOptions {
   readonly openBrowser?: boolean;
   /** Stop the loop cooperatively. */
   readonly signal?: AbortSignal;
+  /** How long a resume turn may write nothing before it is killed as wedged
+   *  (tests inject a short one; the default is minutes). */
+  readonly stallIdleMs?: number;
   /** Activity sink (human-readable lines). Defaults to stdout. */
   readonly log?: (message: string) => void;
   /** Override how a child viewer is ensured live (seam for tests, which cannot
@@ -361,96 +365,82 @@ export const attendChild = async (
     // What this turn takes delivery of (D20) - the batch just read, not
     // whatever has landed by the time the ack appends.
     const covers = parseCursor(payload.nextCursor);
-    // Named so the terminator below can close THIS turn (D-013): an ack whose
-    // turn nobody can name is a working window nobody can close.
-    const reviseTurnId = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-    await deliver(child, {
-      t: "agent_ack",
-      id: crypto.randomUUID(),
-      turnId: reviseTurnId,
-      // No intent, same reason as the hub's ack: an order to revise is not an
-      // outcome, and the turn declares what it is actually doing.
-      ...(covers !== undefined ? { covers } : {}),
-      // The CHILD session's identity (D18): the launcher acts on its behalf.
-      attendant: { harness: harnessName, sessionId, cwd: child.artifactDir },
-    }).catch(() => {});
-    const argv = buildArgv(
-      recipe.resume,
-      {
-        id: sessionId,
-        artifact: child.artifactPath,
-        cwd: child.artifactDir,
-        prompt,
-      },
-      recipe.tools,
-    );
-    log(`${child.name}: applying feedback via resume`);
     // Every resume turn is its OWN launch: fresh correlation, the recipe's
-    // declared strategy, and guarded discovery persistence - a resume that
-    // announces the SAME thread re-binds under this launch; one that names a
-    // stranger is refused (HSI005), never adopted.
-    const reviseLaunchId = mintLaunchId();
-    // Where THIS run's output starts: the log is opened in append mode, so
-    // classifying the whole file would let an earlier turn's not-found banner
-    // durably quarantine a live session (the hub slices for the same reason).
-    const reviseLog = join(child.sessionDir, "revise.out.log");
-    const outputFrom = await stat(reviseLog).then(
-      (st) => st.size,
-      () => 0,
-    );
-    const allowRotation =
-      recipe.sessionIdentity?.source === "stdout-jsonl" &&
-      recipe.sessionIdentity.allowRotation === true;
-    const result = await runSpawn(argv, child.artifactDir, reviseLog, {
+    // declared strategy, guarded discovery persistence, and the artifact's own
+    // sticky model/effort. Planned and run by the turn owner, because a child
+    // driven here and an artifact attended by the hub must not disagree about
+    // what a harness said (plan 03, D-012) - and a fork child that ignored the
+    // selection its human had picked was exactly that disagreement.
+    const planned = await planTurn({
+      mode: "resume",
+      paths: child,
       harness: harnessName,
+      recipe,
+      registryFile: registryPath(),
       sessionId,
-      launchId: reviseLaunchId,
-      ...(recipe.sessionIdentity ? { strategy: recipe.sessionIdentity } : {}),
-      onIdentityDiscovered: discoveryPersistence(child, harnessName, reviseLaunchId, {
-        requestedSessionId: sessionId,
-        allowRotation,
-      }),
+      cwd: child.artifactDir,
+      prompt,
     });
-    const code = result.code;
-    // The same three identity rules the hub's attend engine applies, because
-    // a child driven here and an artifact attended there must not disagree
-    // about what a harness said (plan 03, D-012).
-    const announced = "identity" in result ? result.identity?.sessionId : undefined;
-    /** The turn is over, whatever it produced: the claim this loop made must
-     *  not outlive it. Without a terminator the batch sits marked delivered
-     *  with nothing to show for it, which is what the hub's own turn-ended
-     *  append exists to prevent. */
-    const endTurn = async (reason: "failed", code_: string): Promise<void> => {
-      await deliver(child, {
-        t: "agent_turn_ended",
-        turnId: reviseTurnId,
-        reason,
-        code: code_,
-        attendant: { harness: harnessName, sessionId, cwd: child.artifactDir },
-      }).catch(() => {});
-    };
-    if (announced && announced !== sessionId && !allowRotation) {
+    if (planned.status === "refused") {
+      log(`${child.name}: ${planned.reason} - stopping attend`);
+      return;
+    }
+    // A stale pick DEGRADES rather than stalling delivery, so it is something
+    // to SAY: the turn runs on the harness's own defaults, and a child driven
+    // at the wrong model with nothing in the launcher log is worse than one
+    // that never carried a pick at all. This log is the launcher's only voice
+    // - there is no panel warning down here.
+    if (planned.selectionIssue !== undefined) log(`${child.name}: ${planned.selectionIssue}`);
+    // One store walk, two answers, the same pair the hub's engine reads. The
+    // transcript is the one signal a buffered-stdout CLI still moves during a
+    // long turn: the out-log of a `claude -p` resume sits at zero bytes through
+    // minutes of real work, and a watchdog measuring only that kills a healthy
+    // turn. Its ABSENCE, where Lucid knows the harness's store, is a pre-flight
+    // refusal - the conversation cannot be resumed from this machine, so the
+    // spawn would die as an unexplained "Execution error" AND run unwatched on
+    // the way. A harness Lucid has no store adapter for corroborates nothing
+    // and is driven as before.
+    const knowsStore = harnessHasLocalStore(harnessName);
+    const transcript = knowsStore ? await harnessTranscriptPath(harnessName, sessionId) : undefined;
+    if (knowsStore && transcript === undefined) {
+      // Stand down without advancing the cursor, so the feedback stays the
+      // human's: there is no second candidate to try down here, which is the
+      // stance this loop already takes on a not-found verdict.
+      log(`${child.name}: no local "${harnessName}" transcript for ${sessionId} - stopping attend`);
+      return;
+    }
+    const outcome = await runTurn(planned, {
+      // Where THIS run's output starts is the owner's problem now: the log is
+      // opened in append mode, so classifying the whole file would let an
+      // earlier turn's not-found banner durably quarantine a live session.
+      outLog: join(child.sessionDir, "revise.out.log"),
+      ...(covers !== undefined ? { covers } : {}),
+      // A wedged child holds this artifact for as long as the launcher lives,
+      // and nothing down here would ever notice. Bounded on SILENCE, never on
+      // duration.
+      deadline: {
+        idleMs: opts.stallIdleMs ?? DEFAULT_TURN_IDLE_MS,
+        activityPaths: transcript !== undefined ? [transcript] : [],
+      },
+      onDelivered: () => log(`${child.name}: applying feedback via resume`),
+    });
+    const code = outcome.code;
+    if (outcome.identity?.status === "mismatch") {
       // HSI005: a different conversation answered. Do not bind, do not
       // invalidate, do not advance - the feedback stays the human's.
-      await endTurn("failed", "hsi005_session_mismatch");
       log(`${child.name}: resume announced a different session (HSI005); stopping this batch`);
       return;
     }
-    if (code !== 0) {
-      // THIS run's output only, sliced like the hub's.
-      const runOutput = (await readFile(reviseLog, "utf8").catch(() => "")).slice(outputFrom);
-      if (classifySessionFailure(harnessName, runOutput) === "HSI004") {
-        // A verdict, not a flake: quarantine the id durably and stop driving
-        // this child - there is no second candidate to try down here.
-        await recordSessionInvalidation(child, harnessName, sessionId).catch(() => {});
-        await endTurn("failed", "hsi004_session_not_found");
-        log(`${child.name}: harness says session ${sessionId} does not exist here (HSI004)`);
-        return;
-      }
+    if (outcome.sessionNotFound) {
+      // A verdict, not a flake: quarantine the id durably and stop driving
+      // this child - there is no second candidate to try down here.
+      await recordSessionInvalidation(child, harnessName, sessionId).catch(() => {});
+      log(`${child.name}: harness says session ${sessionId} does not exist here (HSI004)`);
+      return;
     }
-    if (announced && announced !== sessionId && allowRotation) {
+    if (outcome.identity?.status === "rotated") {
       // An allowed rotation: the loop follows the harness to its new thread.
-      sessionId = announced;
+      sessionId = outcome.identity.identity.sessionId;
     }
     // Consume the batch (advance the cursor) only on a clean turn, so a failed
     // resume is retried rather than silently dropping the feedback. Bounded, so a
