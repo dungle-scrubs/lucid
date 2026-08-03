@@ -474,26 +474,72 @@ export const spawnedSessionId = (harness: string, output: string): string | unde
   return undefined;
 };
 
-/** The recipe for a harness: the named one if listed, else the registry
- *  default. Returns the resolved name alongside so callers can log which ran. */
-export const resolveRecipe = (
-  registry: HarnessRegistry,
-  harness?: string,
-): { readonly name: string; readonly recipe: SpawnRecipe } | undefined => {
+/** The registry's own key for a harness, spelled either way: `claude-code` on
+ *  an artifact IS a registry keyed `claude_code`. Undefined when the registry
+ *  does not list that harness at all. */
+const registryKey = (registry: HarnessRegistry, harness: string): string | undefined => {
   // hasOwn, not truthiness: a registry object that still carries Object.prototype
   // would otherwise resolve "constructor" or "toString" as a harness.
-  let name = harness !== undefined && Object.hasOwn(registry.harnesses, harness) ? harness : "";
-  if (!name && harness !== undefined) {
-    // Exact miss: try the same harness spelled the other way before falling
-    // back to the default, which would resolve to a DIFFERENT agent.
-    const wanted = normalizeHarness(harness);
-    name = Object.keys(registry.harnesses).find((key) => normalizeHarness(key) === wanted) ?? "";
-  }
-  if (!name) name = registry.default ?? "";
+  if (Object.hasOwn(registry.harnesses, harness)) return harness;
+  const wanted = normalizeHarness(harness);
+  return Object.keys(registry.harnesses).find((key) => normalizeHarness(key) === wanted);
+};
+
+const recipeAt = (
+  registry: HarnessRegistry,
+  name: string,
+): { readonly name: string; readonly recipe: SpawnRecipe } | undefined => {
   if (!name || !Object.hasOwn(registry.harnesses, name)) return undefined;
   const recipe = registry.harnesses[name];
   return recipe ? { name, recipe } : undefined;
 };
+
+/**
+ * The recipe for the harness a caller NAMED, and never another one: a harness
+ * the registry does not list resolves to undefined rather than to the default,
+ * which is a DIFFERENT agent.
+ *
+ * This is the question almost every caller has. Spawning or resuming under the
+ * default when harness X was asked for appends to the wrong harness's
+ * transcript. The harness is required rather than optional on purpose: a caller
+ * holding no harness at all is asking a different question, and answers it with
+ * `defaultRecipe`, so the default can never become what an unlisted harness
+ * quietly decays into.
+ */
+export const resolveExactRecipe = (
+  registry: HarnessRegistry,
+  harness: string,
+): { readonly name: string; readonly recipe: SpawnRecipe } | undefined =>
+  recipeAt(registry, registryKey(registry, harness) ?? "");
+
+/** The registry's own default recipe: the answer when there is no harness to
+ *  name - a create request that named none, an artifact no agent has stamped
+ *  yet. Naming one and getting this instead is what `resolveExactRecipe`
+ *  exists to prevent, so it has to be asked for. */
+export const defaultRecipe = (
+  registry: HarnessRegistry,
+): { readonly name: string; readonly recipe: SpawnRecipe } | undefined =>
+  recipeAt(registry, registry.default ?? "");
+
+/**
+ * The recipe for a harness: the named one if listed, else the registry default.
+ * Returns the resolved name alongside so callers can log which ran.
+ *
+ * Only the fork launcher wants this. A fork starts a NEW child session from a
+ * text seed, so an unlisted harness landing on the default costs a different
+ * agent, never a corrupted transcript - and the launcher writes its manual
+ * command (D-064) only when the registry answers nothing at all, default
+ * included. Every other caller must not silently get a different agent, and
+ * wants `resolveExactRecipe`.
+ */
+export const resolveRecipe = (
+  registry: HarnessRegistry,
+  harness?: string,
+): { readonly name: string; readonly recipe: SpawnRecipe } | undefined =>
+  recipeAt(
+    registry,
+    (harness !== undefined ? registryKey(registry, harness) : undefined) ?? registry.default ?? "",
+  );
 
 /** Substitute `{var}` placeholders in an argv template (a recipe's `spawn` or
  *  `resume`). Unknown `{tokens}` are left verbatim; a declared var with no value
