@@ -28,23 +28,14 @@ import {
 } from "../core/presence.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
 import { revisePrompt } from "../launch/prompts.ts";
-import { discoveryPersistence, runSpawn } from "../launch/spawn.ts";
+import { DEFAULT_TURN_IDLE_MS, planTurn, runTurn, type TurnOutcome } from "../launch/turn.ts";
 import {
-  classifyObservedIdentity,
-  classifySessionFailure,
-  mintLaunchId,
-  type SpawnResult,
-} from "../launch/session-identity.ts";
-import { classifyTurnFailure } from "../launch/turn.ts";
-import {
-  buildArgv,
   loadRegistry,
   normalizeHarness,
+  registryPath as harnessRegistryPath,
   resolveExactRecipe,
-  spawnedSessionId,
-  type SpawnRecipe,
 } from "../launch/recipes.ts";
-import { insertSelectionArgs, readSelection, selectionArgs } from "../launch/selection.ts";
+import { readSelection } from "../launch/selection.ts";
 
 /**
  * The attend engine (D15/D19): delivery is Lucid's job. When feedback sits
@@ -98,11 +89,6 @@ const ATTEND_COOLOFF_MS = 5 * 60 * 1000;
  * its claim - only silence expires.
  */
 const DEFAULT_WORKING_GRACE_MS = 10 * 60 * 1000;
-/** How long a spawned turn may write NOTHING before the hub stops waiting on
- *  it. Silence is measured across every signal the turn has - its out-log,
- *  the artifact's own record, and the harness transcript - so this only fires
- *  on a process that is producing nothing anywhere. */
-const DEFAULT_STALL_IDLE_MS = 8 * 60 * 1000;
 
 /** How old an open working window must be before the startup sweep may close
  *  it as orphaned. A child the PREVIOUS hub spawned moments before dying
@@ -482,48 +468,6 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   };
 
   /**
-   * The artifact's sticky selection as argv, or nothing when it no longer
-   * validates. A stale pick (the registry dropped the model, the artifact
-   * moved to another harness) DEGRADES: the turn runs on the CLI's own
-   * defaults and the human is told why, because a stalled delivery is a worse
-   * failure than a turn at the wrong effort.
-   */
-  const applicableSelection = async (
-    harnessName: string,
-    recipe: SpawnRecipe,
-  ): Promise<{ args: readonly string[]; model?: string; effort?: string }> => {
-    const selection = await readSelection(paths);
-    if (!selection) {
-      // Cleared: the next pick is a fresh condition, so it warns even when it
-      // repeats the message this mount already said.
-      saidSelectionInvalid = "";
-      return { args: [] };
-    }
-    const composed =
-      selection.harness !== undefined &&
-      normalizeHarness(selection.harness) !== normalizeHarness(harnessName)
-        ? {
-            error: `the saved pick was made for harness "${selection.harness}", but this artifact resumes under "${harnessName}"`,
-          }
-        : selectionArgs(harnessName, recipe, selection);
-    if ("error" in composed) {
-      const message = `Model/effort selection ignored: ${composed.error}. This turn runs on the harness's own defaults.`;
-      log(`attend ${paths.name}: ${message}`);
-      if (saidSelectionInvalid !== message) {
-        saidSelectionInvalid = message;
-        options.warn?.("SELECTION_INVALID", message);
-      }
-      return { args: [] };
-    }
-    saidSelectionInvalid = "";
-    return {
-      args: composed,
-      ...(selection.model ? { model: selection.model } : {}),
-      ...(selection.effort ? { effort: selection.effort } : {}),
-    };
-  };
-
-  /**
    * The harness conversation this artifact's turns belong to: which harness,
    * which session id, and where it ran.
    *
@@ -836,17 +780,6 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // starts from the artifact's current project, so a sandboxed target can
     // write the artifact after it moved between projects.
     const cwd = startsFresh ? projectCwd : priorCwd;
-    const strategy = resolved.recipe.sessionIdentity;
-    // A fresh handoff to a DISCOVERED harness assigns nothing - the harness
-    // mints its own id and announces it on stdout; a pre-minted UUID here is
-    // exactly the synthetic identity that poisoned resume. Caller-assigned
-    // (and legacy) handoffs keep minting; a resume always names the recorded
-    // session.
-    const sessionId = startsFresh
-      ? strategy?.source === "stdout-jsonl"
-        ? undefined
-        : crypto.randomUUID()
-      : resumeTargetId;
     const prompt = startsFresh
       ? [
           "You are continuing an existing Lucid review in a new harness session.",
@@ -857,26 +790,39 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
           revision,
         ].join("\n")
       : revision;
-    // The artifact's sticky model/effort: read before EVERY resume, so a
-    // change takes effect on the next turn without remounting the session.
-    // Re-validated every time too - the registry is a file a human edits, and
-    // a pick it no longer offers must not reach the CLI as a dead flag.
-    const applied = await applicableSelection(resolved.name, resolved.recipe);
-    const argv = insertSelectionArgs(
-      resolved.name,
-      buildArgv(
-        recipeTemplate,
-        {
-          id: sessionId ?? "",
-          artifact: paths.artifactPath,
-          cwd,
-          prompt,
-        },
-        resolved.recipe.tools,
-      ),
-      applied.args,
-      recipeTemplate,
-    );
+    // What this turn actually runs as, from the one owner of that question
+    // (src/launch/turn.ts): which template, under which identity, with the
+    // artifact's sticky model/effort woven in. A HANDOFF is bound by the same
+    // policy the create paths hold - a recipe declaring no identity strategy
+    // is refused (HSI001) rather than handed a minted UUID nothing can resume.
+    const planned = await planTurn({
+      mode: startsFresh ? "handoff" : "resume",
+      paths,
+      harness: resolved.name,
+      recipe: resolved.recipe,
+      registryFile: options.harnessesPath ?? harnessRegistryPath(),
+      ...(resumeTargetId !== undefined ? { sessionId: resumeTargetId } : {}),
+      cwd,
+      prompt,
+    });
+    if (planned.status === "refused") {
+      unattendable(planned.reason);
+      return;
+    }
+    // A stale pick DEGRADES: the turn runs on the CLI's own defaults and the
+    // human is told why, because a stalled delivery is a worse failure than a
+    // turn at the wrong effort. Warned once per standing reason - a NEW reason
+    // still speaks, and a cleared pick makes the next one fresh again.
+    if (planned.selectionIssue !== undefined) {
+      log(`attend ${paths.name}: ${planned.selectionIssue}`);
+      if (saidSelectionInvalid !== planned.selectionIssue) {
+        saidSelectionInvalid = planned.selectionIssue;
+        options.warn?.("SELECTION_INVALID", planned.selectionIssue);
+      }
+    } else {
+      saidSelectionInvalid = "";
+    }
+    const { sessionId, turnId } = planned;
     await mkdir(paths.sessionDir, { recursive: true });
     // Last look before the process exists: everything above awaited, and an
     // interactive attendant that connected meanwhile owns this batch. The
@@ -887,13 +833,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // session on both) must take turns, or two `--resume` processes append
     // one transcript concurrently. No await sits between the check and the
     // claim, so the check is atomic; the loser leaves its batch for the next
-    // poll, where the freed id is picked up.
-    // The turn this delivery IS (plan 08, D-013). Minted before the ack that
-    // OPENS its window, so the terminator appended after the process exits
-    // closes the same turn. The child inherits it via LUCID_TURN_ID, so the
-    // turn's own acks join it too - a turn nobody can name is one nobody can
-    // end. Minted before the claim below too: the turn id is the claim TOKEN.
-    const turnId = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    // poll, where the freed id is picked up. The turn id the owner minted is
+    // the claim TOKEN, so a release can only ever free this drive's own claim.
     if (sessionId !== undefined) {
       if (sessionsInFlight.has(sessionId)) {
         trace(() => `${paths.name}: session ${sessionId} is mid-resume elsewhere; waiting`);
@@ -901,74 +842,17 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       }
       sessionsInFlight.set(sessionId, turnId);
     }
-    const launchId = mintLaunchId();
-    const allowRotation = strategy?.source === "stdout-jsonl" && strategy.allowRotation === true;
-    let outputFrom = 0;
-    let result: SpawnResult;
+    // Record the delivery before making it (D20): the panel says "delivered"
+    // for the whole headless turn instead of "recorded", and a second watcher
+    // reading the log sees the batch is taken. The owner appends the ack, the
+    // terminator, and everything between.
+    ownClaimSeq = target;
+    let outcome: TurnOutcome;
     try {
-      // Record the delivery before making it (D20): the panel says "delivered"
-      // for the whole headless turn instead of "recorded", and a second watcher
-      // reading the log sees the batch is taken.
-      ownClaimSeq = target;
-      await deliver(paths, {
-        t: "agent_ack",
-        id: crypto.randomUUID(),
-        // NO intent. Not because the hub is blind - it is the party ORDERING a
-        // revision, in this function, and it refuses to spawn at all when the
-        // batch gives `revisePrompt` nothing to act on. It is because an order
-        // is not an outcome: the turn is what decides whether an edit actually
-        // follows, and "hey" produces a prompt the agent correctly declines. So
-        // the ack states the delivery it made and nothing about the output;
-        // `revisePrompt` tells the turn to declare that itself (`lucid intent`),
-        // and until it does the viewer says "Agent responding…", which is true
-        // of every running turn.
+      outcome = await runTurn(planned, {
+        outLog: paths.attendLog,
         covers: target,
-        turnId,
-        // The artifact's own session (D18): the hub acts on its behalf, and the
-        // events the turn writes must not be attributed to the hub.
-        // A handoff is not a session until its spawn succeeds or the child writes
-        // its own provenance. Stamping the target here made a pre-session failure
-        // look resumable on retry, so handoff delivery remains unattributed until
-        // the process establishes that session.
-        ...(!startsFresh ? { attendant: { harness: resolved.name, sessionId, cwd } } : {}),
-      }).catch(() => {
-        /* presence is advisory; a failed ack must not cancel the delivery */
-      });
-      log(
-        `attend ${paths.name}: delivering feedback via "${resolved.name}" ${startsFresh ? "handoff" : "resume"}`,
-      );
-      // Where this run's output will start in the shared attend log, so a
-      // silent-turn relay reads THIS turn's words and never an earlier run's.
-      outputFrom = await stat(paths.attendLog).then(
-        (s) => s.size,
-        () => 0,
-      );
-      result = await runSpawn(
-        argv,
-        cwd,
-        paths.attendLog,
-        {
-          harness: resolved.name,
-          ...(sessionId ? { sessionId } : {}),
-          turnId,
-          launchId,
-          ...(strategy ? { strategy } : {}),
-          // Persistence while the turn is LIVE, through the one guarded callback:
-          // a resume that announces a STRANGER is refused (HSI005), never bound.
-          onIdentityDiscovered: discoveryPersistence(
-            paths,
-            resolved.name,
-            launchId,
-            !startsFresh && sessionId
-              ? { requestedSessionId: sessionId, allowRotation }
-              : undefined,
-          ),
-          ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
-          // Only what the argv actually carries: a dropped stale pick must not
-          // stamp the child as running a model it was never given.
-          ...(applied.model !== undefined ? { model: applied.model } : {}),
-          ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
-        },
+        ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
         // A wedged child holds this artifact: the engine reads a live child as a
         // delivery in flight, so every later note queues behind it in silence.
         // Bounded on SILENCE, never on duration - a turn writing anything at all
@@ -985,103 +869,47 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
         // alive forever - the original 53-minute wedge, reborn. A fresh
         // handoff has no transcript to watch, so the record is the best
         // signal it has (its own `lucid open`/`progress` calls land there).
-        {
-          idleMs: options.stallIdleMs ?? DEFAULT_STALL_IDLE_MS,
+        deadline: {
+          idleMs: options.stallIdleMs ?? DEFAULT_TURN_IDLE_MS,
           activityPaths: startsFresh
             ? [paths.logPath]
             : transcript !== undefined
               ? [transcript]
               : [],
         },
-      );
+        onDelivered: () =>
+          log(
+            `attend ${paths.name}: delivering feedback via "${resolved.name}" ${startsFresh ? "handoff" : "resume"}`,
+          ),
+        // The claim ends with the PROCESS, not with this function: everything
+        // after the child exits is classification of something that no longer
+        // runs. Token match, so a claim another drive holds is never released.
+        onSpawnSettled: () => {
+          if (sessionId !== undefined && sessionsInFlight.get(sessionId) === turnId) {
+            sessionsInFlight.delete(sessionId);
+          }
+        },
+      });
     } finally {
-      // The claim ends with the process, not the function: everything after
-      // this point is classification of a child that no longer runs. Token
-      // match, so a claim some other drive holds is never released here.
+      // Belt and braces for a failure BEFORE the child existed: a claim this
+      // drive never released would silence every later turn on that session.
       if (sessionId !== undefined && sessionsInFlight.get(sessionId) === turnId) {
         sessionsInFlight.delete(sessionId);
       }
     }
-    const code = result.code;
-    if (result.status === "identity-missing") {
+    const code = outcome.code;
+    if (outcome.result.status === "identity-missing") {
       // Same HSI002 parity as the create paths: the turn ran clean but
       // announced nothing, so whatever it did, THIS launch is not resumable.
       log(`attend ${paths.name}: turn announced no session identity (HSI002)`);
     }
-    // Inspect THIS run before recording how it ended. The attend log appends
-    // every attempt, so scanning the whole file could make an unrelated later
-    // crash inherit an earlier turn's usage wall.
-    const runOutput = (await readFile(paths.attendLog, "utf8").catch(() => "")).slice(outputFrom);
-    // Why it died, through the one classifier the create paths share: a usage
-    // wall, an auth wall, or neither. An auth-walled turn used to end as a
-    // bare "failed", so the record said nothing about the one failure that a
-    // detached hub causes and no amount of logging in again can fix.
-    const failure = code === 0 ? null : classifyTurnFailure(runOutput);
-    const limit = failure?.usageLimit ?? null;
-    // Identity established by this turn. Fresh handoff: what the harness
-    // ANNOUNCED wins; the legacy whole-output scan covers recipes that
-    // predate declarations (retired with the registry migration); a clean
-    // caller-assigned handoff established the id it was given. Resume: the
-    // REQUESTED session stands - an announcement of the same id confirms it,
-    // an allowed rotation adopts the new one, and a refused mismatch keeps
-    // the requested id with the observed stranger left unbound (HSI005; the
-    // recovery milestone surfaces it).
-    const observedId = "identity" in result ? result.identity?.sessionId : undefined;
-    const resumeOutcome =
-      !startsFresh && sessionId && observedId
-        ? classifyObservedIdentity(
-            sessionId,
-            { authority: "observed", harness: resolved.name, sessionId: observedId },
-            allowRotation,
-          )
-        : undefined;
-    const establishedSessionId = startsFresh
-      ? (observedId ??
-        spawnedSessionId(resolved.name, runOutput) ??
-        (code === 0 ? sessionId : undefined))
-      : resumeOutcome?.status === "rotated"
-        ? observedId
-        : sessionId;
-    // Authority is a claim about HOW the id is known, so it never exceeds the
-    // evidence: observed only for an announcement that was not refused,
-    // assigned only for a caller-assigned handoff that ran clean - an id
-    // recovered by scanning output text has no authority at all.
-    const establishedAuthority =
-      observedId !== undefined && resumeOutcome?.status !== "mismatch"
-        ? "observed"
-        : startsFresh && code === 0 && strategy?.source === "caller-assigned"
-          ? "assigned"
-          : undefined;
-    // The turn stopped, whatever it produced. The hub holds the child, so it
-    // is the authoritative witness - and without this a turn that read the
-    // feedback and produced nothing left its window open forever (finding #1).
-    // Advisory: it moves no cursor and wakes no waiter.
-    await deliver(paths, {
-      t: "agent_turn_ended",
-      turnId,
-      reason: code === 0 ? "done" : (failure?.reason ?? "failed"),
-      // Event codes use the log's identifier charset; wall kinds use hyphens
-      // on the warning wire. Both remain identifiers, never harness prose.
-      ...(failure?.code !== undefined ? { code: failure.code } : {}),
-      ...(establishedSessionId
-        ? {
-            attendant: {
-              harness: resolved.name,
-              sessionId: establishedSessionId,
-              cwd,
-              launchId,
-              ...(establishedAuthority && strategy
-                ? { sessionIdAuthority: establishedAuthority }
-                : {}),
-            },
-          }
-        : {}),
-    }).catch(() => {
-      // The turn is over regardless; a failed append is not worth retrying
-      // into a loop. The stale state still covers the viewer.
-    });
+    // THIS run's output only. The attend log appends every attempt, so
+    // scanning the whole file could make an unrelated later crash inherit an
+    // earlier turn's usage wall.
+    const runOutput = outcome.output;
+    const limit = outcome.failure?.usageLimit ?? null;
 
-    if (resumeOutcome?.status === "mismatch") {
+    if (outcome.identity?.status === "mismatch") {
       // HSI005: the harness answered with a DIFFERENT conversation. Binding it
       // was already refused in discovery; here the batch stops cold - no
       // invalidation (the requested id may be fine elsewhere), no fallback (a
@@ -1104,7 +932,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       deliveredUpTo = target;
       firstPendingAt = undefined;
       fails = 0;
-      await reportSilentTurn(target, outputFrom);
+      await reportSilentTurn(target, outcome.outputFrom);
       return;
     }
     // A resume the parent had to KILL wrote nothing anywhere - not to its
@@ -1116,12 +944,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // down with the standing warning. Said out loud both times: silently
     // abandoning the bound session is the one thing the human has asked this
     // engine never to do.
-    if (
-      result.status === "process-failed" &&
-      result.stalled === true &&
-      !startsFresh &&
-      sessionId
-    ) {
+    if (outcome.stalled && !startsFresh && sessionId) {
       ruledOutForBatch.set(sessionId, Date.now());
       options.warn?.(
         "ATTEND_RESUME_STALLED",
@@ -1137,11 +960,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // this machine - durably, across restarts - and the transient retry
     // ladder is bypassed. The next tick tries the one permitted fallback;
     // exhaustion is announced at selection time, above.
-    const notFound =
-      !startsFresh && sessionId && limit === null
-        ? classifySessionFailure(resolved.name, runOutput)
-        : null;
-    if (notFound === "HSI004") {
+    if (outcome.sessionNotFound) {
       // Retired for this batch as well as quarantined on disk: the durable
       // record stops the id coming back after a restart, and this set is what
       // bounds the batch to one weaker candidate before standing down.

@@ -770,6 +770,63 @@ describe("hub attend mode", () => {
     }
   }, 20_000);
 
+  test("a handoff to an identity-free recipe is refused, not handed a minted UUID", async () => {
+    // The create paths refuse an identity-free recipe before any process
+    // exists (HSI001): an unattended session Lucid cannot resume is a session
+    // it should not start. A HANDOFF starts one too - and this path minted a
+    // UUID for any non-discovered strategy, identity-free recipes included,
+    // which is exactly the synthetic identity that poisoned resume.
+    const handoffStub = join(dir, "stub-handoff.ts");
+    const handoffMarker = join(dir, "handoff-marker.json");
+    await writeStub(handoffStub, handoffMarker);
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "stub",
+        harnesses: {
+          stub: {
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [process.execPath, "run", handoffStub, "--sid", "{id}", "{artifact}"],
+            resume: [process.execPath, "run", handoffStub, "--sid", "{id}", "{artifact}"],
+          },
+          // Loads for diagnosis, refuses unattended use.
+          legacy: { spawn: [process.execPath, "run", handoffStub, "{artifact}"] },
+        },
+      }),
+    );
+    // The switch is what makes this a handoff rather than a resume.
+    await writeFile(paths.selectionPath, JSON.stringify({ harness: "legacy" }));
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-handoff",
+      version: 1,
+      target: elementTarget,
+      note: "this must not start a session nothing can resume",
+    });
+
+    const attendant = createAttendant({
+      paths,
+      agentsListening: () => 0,
+      harnessesPath,
+      debounceMs: 10,
+      log: (m) => logs.push(m),
+    });
+    try {
+      const said = () => logs.some((l) => l.includes("declares no session identity strategy"));
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && !said()) {
+        await attendant.tick();
+        await sleep(60);
+      }
+      expect(said()).toBe(true);
+      // Give a wrongly-spawned turn time to run before asserting it never did.
+      await sleep(300);
+      expect(await Bun.file(handoffMarker).exists()).toBe(false);
+    } finally {
+      attendant.stop();
+    }
+  }, 15_000);
+
   test("an auth-walled turn names the wall in its record, not a bare failure", async () => {
     // A `lucid hub --attend` daemon runs detached from any login session, so
     // it cannot read credentials an interactive `claude login` put in the
@@ -2199,8 +2256,13 @@ if (process.env.LUCID_HARNESS === "codex") {
             resume: [limited, "{prompt}"],
           },
           codex: {
-            spawn: [codex, "{id}", "{artifact}", "{prompt}"],
-            resume: [codex, "{id}", "{artifact}", "{prompt}"],
+            // A declared identity strategy, because the harness switch below
+            // is a HANDOFF: a recipe that declares none would have Lucid mint
+            // an id nothing can resume, and unattended launch refuses that
+            // (HSI001) before any process exists.
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [codex, "--sid", "{id}", "{artifact}", "{prompt}"],
+            resume: [codex, "--sid", "{id}", "{artifact}", "{prompt}"],
           },
         },
       }),
@@ -2244,8 +2306,13 @@ if (process.env.LUCID_HARNESS === "codex") {
             resume: [failed, "{prompt}"],
           },
           codex: {
-            spawn: [codex, "{id}", "{artifact}", "{prompt}"],
-            resume: [codex, "{id}", "{artifact}", "{prompt}"],
+            // A declared identity strategy, because the harness switch below
+            // is a HANDOFF: a recipe that declares none would have Lucid mint
+            // an id nothing can resume, and unattended launch refuses that
+            // (HSI001) before any process exists.
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+            spawn: [codex, "--sid", "{id}", "{artifact}", "{prompt}"],
+            resume: [codex, "--sid", "{id}", "{artifact}", "{prompt}"],
           },
         },
       }),

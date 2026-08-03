@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { foldLog, type ForkRecord } from "../src/core/fold.ts";
@@ -7,7 +7,12 @@ import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import type { WaitPayload } from "../src/protocol/wire.ts";
-import { attendedByAnother, childArtifactPath, handleForks } from "../src/launch/fork-launcher.ts";
+import {
+  attendChild,
+  attendedByAnother,
+  childArtifactPath,
+  handleForks,
+} from "../src/launch/fork-launcher.ts";
 import { createArtifactPrompt, createPrompt, revisePrompt } from "../src/launch/prompts.ts";
 import {
   buildArgv,
@@ -16,6 +21,7 @@ import {
   requireSessionIdentity,
   resolveExactRecipe,
   resolveRecipe,
+  type SpawnRecipe,
 } from "../src/launch/recipes.ts";
 import type { SessionIdentityRecipe } from "../src/launch/session-identity.ts";
 import { forkDirFor, writeForkSeed } from "../src/launch/seed.ts";
@@ -679,4 +685,174 @@ await Bun.write(artifactPath, \`<!doctype html><html><head><title>x</title></hea
       handleForks(parent, registry, { openBrowser: false, openChild, log: () => {} }),
     ).rejects.toThrow();
   });
+});
+
+describe("the launcher's Shape-C resume runs through the turn owner", () => {
+  /**
+   * The fork launcher and the hub's attend engine drive the same turn, and for
+   * a long time they drove it differently: the launcher passed no stall
+   * deadline (so a wedged child held its artifact for the launcher's whole
+   * life), built its resume argv with a bare buildArgv (so a fork child
+   * silently ignored the model its human had picked), and open-coded the
+   * HSI005 test instead of asking the classifier. One owner answers all three
+   * now, so these are properties of `attendChild` rather than of a copy.
+   */
+  let dir: string;
+  let child: SessionPaths;
+  let marker: string;
+  let resumeStub: string;
+  const servers: { paths: SessionPaths; done: Promise<void> }[] = [];
+  const logs: string[] = [];
+
+  /** Named "claude-code" because the selection adapter's flag spellings are
+   *  per-harness knowledge, and this fixture is about the flags arriving. */
+  const HARNESS = "claude-code";
+  const SESSION = "the-recorded-session";
+
+  /** A DISCOVERED recipe, whose resume announces `thread_id` on stdout the way
+   *  a real one does, or a caller-assigned one, which announces nothing. */
+  const recipe = (identity: "announced" | "assigned"): SpawnRecipe => ({
+    sessionIdentity:
+      identity === "announced"
+        ? {
+            event: "thread.started",
+            field: "thread_id",
+            requiredArgument: "--json",
+            source: "stdout-jsonl",
+          }
+        : { argument: "--sid", source: "caller-assigned" },
+    spawn: [resumeStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+    resume:
+      identity === "announced"
+        ? [resumeStub, "--json", "{id}", "{artifact}", "{prompt}"]
+        : [resumeStub, "--sid", "{id}", "{artifact}", "{prompt}"],
+    models: [{ id: "opus-5" }],
+    efforts: ["high"],
+  });
+
+  const writeResumeStub = async (body: string): Promise<void> => {
+    await writeFile(resumeStub, `#!/usr/bin/env bun\n${body}\n`);
+    await chmod(resumeStub, 0o755);
+  };
+
+  /** The note that drives a batch. It has to land AFTER the loop is blocked in
+   *  `wait`: the loop starts from the log's current high seq, because a fresh
+   *  child has no prior feedback to re-apply. */
+  const annotate = (): Promise<unknown> =>
+    appendEvent(child.logPath, {
+      t: "annotation",
+      id: "a-child",
+      version: 1,
+      target: elementTarget("Hello"),
+      note: "apply this to the forked child",
+    });
+
+  const endChildSession = async (): Promise<void> => {
+    const live = await discoverLiveServer(child);
+    if (!live) return;
+    await fetch(`http://127.0.0.1:${live.port}/__lucid/end`, {
+      method: "POST",
+      headers: { host: `127.0.0.1:${live.port}` },
+    }).catch(() => {});
+  };
+
+  const until = async (predicate: () => boolean, timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return predicate();
+  };
+
+  beforeEach(async () => {
+    logs.length = 0;
+    dir = await mkdtemp(join(tmpdir(), "lucid-attend-child-"));
+    child = sessionPaths(join(dir, "child.html"));
+    marker = join(dir, "resume-marker.json");
+    resumeStub = join(dir, "resume-stub");
+    await writeFile(child.artifactPath, DOC);
+    ensureSessionDirs(child);
+    await openSession(child);
+    // The loop blocks in `wait`, which reports a session with no live server as
+    // suspended and stops. A real in-process server is the seam the fork tests
+    // above already use.
+    servers.push({ paths: child, done: runServer(child, [0], { idleMs: 0 }) });
+    for (let i = 0; i < 200 && !(await readServerDescriptor(child)); i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    // The sticky pick every resume turn must carry.
+    await writeFile(child.selectionPath, JSON.stringify({ harness: HARNESS, model: "opus-5" }));
+  });
+
+  afterEach(async () => {
+    for (const s of servers) {
+      await endChildSession();
+      await s.done.catch(() => {});
+    }
+    servers.length = 0;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("a fork resume carries the artifact's sticky selection and closes its own turn", async () => {
+    // The argv was built with a bare buildArgv, so `selection.json` - the pick
+    // the human made in the child's own viewer - reached the hub's resumes and
+    // never the launcher's. And the turn's window was only closed on the two
+    // refusal paths, so an ordinary resume left an ack nothing ever answered.
+    await writeResumeStub(
+      `await Bun.write(${JSON.stringify(marker)}, JSON.stringify({ argv: process.argv.slice(2) }));
+console.log(JSON.stringify({ type: "thread.started", thread_id: "a-stranger-thread" }));`,
+    );
+
+    const loop = attendChild(
+      child,
+      SESSION,
+      recipe("announced"),
+      { log: (m) => logs.push(m) },
+      HARNESS,
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    await annotate();
+    await loop;
+
+    const seen = JSON.parse(await readFile(marker, "utf8")) as { argv: string[] };
+    expect(seen.argv.slice(0, 2)).toEqual(["--model", "opus-5"]);
+    const events = (await readEvents(child.logPath)).events;
+    const ack = events.find((e) => e.t === "agent_ack") as { turnId?: string } | undefined;
+    const ended = events.find((e) => e.t === "agent_turn_ended") as
+      | { turnId?: string; reason?: string; code?: string }
+      | undefined;
+    expect(ack?.turnId).toBeDefined();
+    // The window the ack opened is closed by a terminator naming the SAME turn.
+    expect(ended?.turnId).toBe(ack?.turnId ?? "");
+    // Judged by the shared classifier: the stub answered from a conversation
+    // nobody asked for, so the turn failed however cleanly it exited.
+    expect(ended?.reason).toBe("failed");
+    expect(ended?.code).toBe("hsi005_session_mismatch");
+    expect(logs.some((l) => l.includes("HSI005"))).toBe(true);
+  }, 30_000);
+
+  test("a wedged fork resume is killed rather than held for the launcher's lifetime", async () => {
+    // No deadline reached runSpawn from here, so the watchdog - written for
+    // exactly this - protected only the hub. A child that writes nothing held
+    // its artifact until the launcher itself died, and the loop never got as
+    // far as calling the turn a failure.
+    await writeResumeStub("await Bun.sleep(600_000);");
+
+    const loop = attendChild(
+      child,
+      SESSION,
+      recipe("assigned"),
+      { log: (m) => logs.push(m), stallIdleMs: 800 },
+      HARNESS,
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    await annotate();
+    const moved = await until(() => logs.some((l) => l.includes("will retry the batch")), 20_000);
+    expect(moved).toBe(true);
+    // Ending the session is how this loop stops; without it the launcher keeps
+    // holding its listening presence, which is the whole point of Shape C.
+    await endChildSession();
+    await loop;
+  }, 40_000);
 });

@@ -91,6 +91,13 @@ export const normalizeHarness = (name: string): string =>
  *  accepts exactly what this mints. */
 export const mintLaunchId = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
 
+/** A fresh turn id (plan 08, D-013). Beside `mintLaunchId` because a turn and
+ *  its launch are the two correlations one driven turn carries, and the same
+ *  literal open-coded at two call sites is a shape that can drift while both
+ *  copies keep working. */
+export const mintTurnId = (): string =>
+  `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
 /** One decoded identity announcement. */
 export interface SessionIdentityEvent {
   readonly identity: NativeSessionIdentity;
