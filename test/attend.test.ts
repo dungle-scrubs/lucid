@@ -644,6 +644,56 @@ describe("hub attend mode", () => {
     // per-test budget is not enough on a cold bun.
   }, 20_000);
 
+  test("a recorded harness the registry lacks stands the engine down, not the default", async () => {
+    // The registry is configured and has a default - just not this artifact's
+    // harness. Resuming session id sess-1 under the default would re-enter a
+    // DIFFERENT agent's conversation, so the engine says so and stands down.
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "other",
+        harnesses: {
+          other: {
+            spawn: [process.execPath, "--version"],
+            resume: [process.execPath, "--version"],
+          },
+        },
+      }),
+    );
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-unlisted",
+      version: 1,
+      target: elementTarget,
+      note: "nobody configured here can answer this",
+    });
+
+    const attendant = createAttendant({
+      paths,
+      agentsListening: () => 0,
+      harnessesPath,
+      debounceMs: 10,
+      log: (m) => logs.push(m),
+    });
+    try {
+      // Well inside the per-test budget below, so a regression fails on the
+      // assertion - which prints the lines the engine DID write - rather than
+      // as a bare timeout naming neither the missing line nor the harness.
+      const deadline = Date.now() + 5_000;
+      const stoodDown = () => logs.some((l) => l.includes('no spawn recipe for harness "stub"'));
+      while (Date.now() < deadline && !stoodDown()) {
+        await attendant.tick();
+        await sleep(60);
+      }
+      expect(logs.join("\n")).toContain('no spawn recipe for harness "stub"');
+      expect(logs.some((l) => l.includes("delivering feedback"))).toBe(false);
+    } finally {
+      attendant.stop();
+    }
+    // Nothing spawns here (that is the point), but the loop's own deadline
+    // needs room inside the budget - the default 5s is exactly the deadline.
+  }, 15_000);
+
   test("a usage-limited turn ends in chat and stands down after one attempt", async () => {
     // A harness prints its wall on the same line as whatever it was working
     // on. Both consumers of a detection are RETAINED records - the hub log and
