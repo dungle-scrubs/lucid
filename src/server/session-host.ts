@@ -39,9 +39,9 @@ import {
 } from "../core/session.ts";
 import { escapeHtml } from "../core/escape.ts";
 import {
+  defaultRecipe,
   loadRegistry,
-  normalizeHarness,
-  resolveRecipe,
+  resolveExactRecipe,
   type SpawnRecipe,
 } from "../launch/recipes.ts";
 import {
@@ -996,15 +996,10 @@ export const createSessionHost = (
     const state = foldLog((await readEvents(paths.logPath)).events);
     const recorded = [...state.sessionHistory].reverse().find((r) => r.harness)?.harness;
     const wanted = selection?.harness ?? recorded;
-    const found = resolveRecipe(registry, wanted);
-    // Normalized: a registry keyed `claude_code` IS the `claude-code` an
-    // artifact records. Comparing raw meant a fresh artifact stamped by an
-    // agent had no vocabulary at all - no model picker, no effort picker -
-    // purely because of a separator.
-    return found &&
-      (wanted === undefined || normalizeHarness(found.name) === normalizeHarness(wanted))
-      ? found
-      : undefined;
+    // Nothing selected and nothing recorded is not an unlisted harness: the
+    // artifact has no harness at all yet, and the default's vocabulary is the
+    // right one to offer it.
+    return wanted === undefined ? defaultRecipe(registry) : resolveExactRecipe(registry, wanted);
   };
 
   const harnessInfo = (name: string, recipe: SpawnRecipe) => ({
@@ -1064,11 +1059,7 @@ export const createSessionHost = (
     let resolved = current;
     if (selection?.harness) {
       const registry = await loadRegistry(options.harnessesPath).catch(() => null);
-      const candidate = registry ? resolveRecipe(registry, selection.harness) : undefined;
-      resolved =
-        candidate && normalizeHarness(candidate.name) === normalizeHarness(selection.harness)
-          ? candidate
-          : undefined;
+      resolved = registry ? resolveExactRecipe(registry, selection.harness) : undefined;
     }
     if (selection) {
       if (!resolved) {

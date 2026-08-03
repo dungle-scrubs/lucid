@@ -15,8 +15,10 @@ import {
 } from "../src/launch/launcher.ts";
 import {
   buildArgv,
+  defaultRecipe,
   loadRegistry,
   requireSessionIdentity,
+  resolveExactRecipe,
   resolveRecipe,
 } from "../src/launch/recipes.ts";
 import type { SessionIdentityRecipe } from "../src/launch/session-identity.ts";
@@ -182,6 +184,37 @@ describe("recipes registry", () => {
     expect(resolveRecipe(reg, "Claude-Code")?.name).toBe("claude_code");
     const argv = buildArgv(resolved?.recipe.spawn ?? [], { id: "abc", prompt: "do it" });
     expect(argv).toEqual(["claude", "-p", "--session-id", "abc", "do it"]);
+  });
+
+  test("an exact resolve answers the harness asked for or nothing at all", async () => {
+    await writeFile(
+      regPath,
+      JSON.stringify({
+        default: "claude_code",
+        harnesses: {
+          claude_code: { spawn: ["claude", "-p", "{prompt}"] },
+          codex: { spawn: ["codex", "exec", "{prompt}"] },
+        },
+      }),
+    );
+    const reg = await loadRegistry(regPath);
+    expect(reg).not.toBeNull();
+    if (!reg) return;
+    // The whole point: a harness this registry does not list is unanswerable,
+    // never quietly the default. Spawning or resuming under a DIFFERENT agent
+    // appends to the wrong transcript.
+    expect(resolveExactRecipe(reg, "unlisted")).toBeUndefined();
+    expect(resolveRecipe(reg, "unlisted")?.name).toBe("claude_code");
+    expect(resolveExactRecipe(reg, "codex")?.name).toBe("codex");
+    // Spelling is not identity: `claude-code` on an artifact IS `claude_code`
+    // in the registry, so exactness does not mean byte-equal.
+    expect(resolveExactRecipe(reg, "claude-code")?.name).toBe("claude_code");
+    expect(resolveExactRecipe(reg, "Claude-Code")?.name).toBe("claude_code");
+    // Having no harness to name is a different question, asked separately, so
+    // that no unlisted harness can arrive at the default by falling through.
+    expect(defaultRecipe(reg)?.name).toBe("claude_code");
+    // An inherited key is not a harness here either.
+    expect(resolveExactRecipe(reg, "constructor")).toBeUndefined();
   });
 
   test("`tools` is an editable grant the argv references, never a silent empty one", async () => {

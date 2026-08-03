@@ -35,10 +35,12 @@ import { readEvents } from "../core/log.ts";
 import { prepareSpawnIdentity, runSpawn } from "../launch/launcher.ts";
 import {
   buildArgv,
+  defaultRecipe,
+  type HarnessRegistry,
   loadRegistry,
-  normalizeHarness,
   registryPath as harnessRegistryPath,
-  resolveRecipe,
+  resolveExactRecipe,
+  type SpawnRecipe,
 } from "../launch/recipes.ts";
 import {
   insertSelectionArgs,
@@ -138,6 +140,16 @@ const CREATE_PROGRESS_MS = 2000;
 
 /** Upper bound on a create request's prompt (chars). */
 const MAX_CREATE_PROMPT = 4000;
+
+/** The recipe a create request asks for: exactly the harness it named, or the
+ *  registry default when it named none. The two are separate questions - a
+ *  named harness that resolved to the default would author with a different
+ *  agent than the caller asked for. */
+const createRecipe = (
+  registry: HarnessRegistry,
+  harness?: string,
+): { readonly name: string; readonly recipe: SpawnRecipe } | undefined =>
+  harness === undefined ? defaultRecipe(registry) : resolveExactRecipe(registry, harness);
 
 /** How long a proxied session's dedicated server has to ANSWER its event
  *  stream before the hub gives up and refuses the upgrade. Generous: the same
@@ -1050,13 +1062,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // it. Resolved early only to ATTACH - the full resolution below still
     // owns refusing an unknown one and building its argv.
     const earlyRegistry = await loadRegistry(opts.harnessesPath);
-    const earlyRecipe = earlyRegistry ? resolveRecipe(earlyRegistry, harness) : undefined;
-    if (
-      earlyRecipe &&
-      (harness === undefined || normalizeHarness(earlyRecipe.name) === normalizeHarness(harness))
-    ) {
-      observation.attach({ harness: earlyRecipe.name });
-    }
+    const earlyRecipe = earlyRegistry ? createRecipe(earlyRegistry, harness) : undefined;
+    if (earlyRecipe) observation.attach({ harness: earlyRecipe.name });
 
     if (!CREATE_NAME.test(name)) {
       return json({ error: "name must be a plain .html filename" }, 400);
@@ -1101,13 +1108,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     let handedOff = false;
     try {
       const registry = await loadRegistry(opts.harnessesPath);
-      const resolved = registry ? resolveRecipe(registry, harness) : undefined;
-      // An explicitly named harness must exist: falling back to the default
-      // would silently author with a different agent than the one asked for.
-      if (
-        !resolved ||
-        (harness !== undefined && normalizeHarness(resolved.name) !== normalizeHarness(harness))
-      ) {
+      // Exact: falling back to the default would silently author with a
+      // different agent than the one asked for.
+      const resolved = registry ? createRecipe(registry, harness) : undefined;
+      if (!resolved) {
         return json({ error: `no spawn recipe for harness "${harness ?? "(default)"}"` }, 400);
       }
 
