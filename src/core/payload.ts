@@ -10,7 +10,7 @@ import type {
   PayloadFork,
   PayloadMessage,
   PayloadQuestion,
-  PayloadStatus,
+  WaitOutcome,
   WaitPayload,
 } from "../protocol/wire.ts";
 import { summarizeAnswer } from "./question-contract.ts";
@@ -36,7 +36,7 @@ export type {
   PayloadMessage,
   PayloadQuestion,
   PayloadRevert,
-  PayloadStatus,
+  WaitOutcome,
   WaitPayload,
 } from "../protocol/wire.ts";
 
@@ -203,7 +203,7 @@ const confidenceOf = (match: AnchorMatch | null): { confidence?: "low" } =>
 export interface BuildPayloadOptions {
   readonly session: string;
   readonly state: FoldedState;
-  readonly status: PayloadStatus;
+  readonly status: WaitOutcome;
   /** Current artifact HTML (for anchor carry-forward). */
   readonly currentHtml: string;
   /** Map a snapshot relative path (e.g. `versions/s1/v2.html`) to an abs path. */
@@ -348,7 +348,7 @@ export interface PayloadSlices {
 export const assemblePayload = async (
   paths: SessionPaths,
   state: FoldedState,
-  status: PayloadStatus,
+  status: WaitOutcome,
   slices: PayloadSlices,
   extraWarnings?: readonly Warning[],
 ): Promise<WaitPayload> => {

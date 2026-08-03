@@ -1,9 +1,10 @@
 import type { Anchor } from "../anchors/anchor.ts";
-import type {
-  AgentProgress,
-  AgentWorking,
-  QuestionOption,
-  SessionHistoryRecord,
+import {
+  lifecycleStatusOf,
+  type AgentProgress,
+  type AgentWorking,
+  type QuestionOption,
+  type SessionHistoryRecord,
 } from "../protocol/wire.ts";
 import { maxSeq, type LogEvent, type PromptImage, type SessionIdAuthority } from "./events.ts";
 import type { ItemAnswer, QuestionItem } from "./question-contract.ts";
@@ -178,13 +179,6 @@ export interface FoldedState {
   readonly segmentStartSeq: number;
 }
 
-const LIFECYCLE = new Set([
-  "session_opened",
-  "session_resumed",
-  "session_suspended",
-  "session_ended",
-]);
-
 /**
  * Which events may return a blocked `wait` (`lastNonAckSeq`, read by
  * `runWait`). Stated as a SET rather than as "everything that is not an
@@ -215,20 +209,6 @@ const WAKES_WAIT: ReadonlySet<LogEvent["t"]> = new Set<LogEvent["t"]>([
   "review_resolved",
   "review_reopened",
 ]);
-
-const statusFromLifecycle = (t: string): SessionStatus => {
-  switch (t) {
-    case "session_opened":
-    case "session_resumed":
-      return "active";
-    case "session_suspended":
-      return "suspended";
-    case "session_ended":
-      return "ended";
-    default:
-      return "none";
-  }
-};
 
 /** The newest `record_cleared` in the segment, with how much it hid. Null when
  *  the record has never been cleared. */
@@ -358,9 +338,15 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     };
   }
 
-  // Latest lifecycle event anywhere -> status.
+  // Latest lifecycle event anywhere -> status. Which events those ARE, and
+  // what each means, is the shared table's answer (src/protocol/wire.ts):
+  // the chrome updates a tab's status from the same one, so neither side can
+  // know a lifecycle event the other does not.
   let status: SessionStatus = "none";
-  for (const e of events) if (LIFECYCLE.has(e.t)) status = statusFromLifecycle(e.t);
+  for (const e of events) {
+    const lifecycle = lifecycleStatusOf(e.t);
+    if (lifecycle !== null) status = lifecycle;
+  }
 
   // Current segment begins at the last session_opened. NOTE the two scan scopes
   // are intentionally different (D-056): status (above) is the latest lifecycle

@@ -3,7 +3,12 @@ import { readFile } from "node:fs/promises";
 import { parseHTML } from "linkedom";
 import { basename, join } from "node:path";
 import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
-import { harnessSessionId, interactiveResumeCommand, presenceFor } from "../core/presence.ts";
+import {
+  harnessSessionId,
+  type HarnessPresence,
+  interactiveResumeCommand,
+  presenceFor,
+} from "../core/presence.ts";
 import { readSettingsCached } from "../core/settings.ts";
 import { artifactAttendant, readLastAttendant } from "../core/attendant.ts";
 import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
@@ -50,7 +55,9 @@ import {
   selectionArgs,
   writeSelection,
 } from "../launch/selection.ts";
+import { DEFAULT_FRAME, type SessionFrame } from "../protocol/frames.ts";
 import type {
+  AttendantPresence,
   ContextUsage,
   SelectionResponse,
   SessionsResponse,
@@ -271,7 +278,7 @@ export const createSessionHost = (
    * agent", and both hooks are what arriving and leaving IMPLY here: the
    * agent-presence count, and healing a suspended log.
    */
-  const channel = createChannel<boolean>({
+  const channel = createChannel<SessionFrame, boolean>({
     onJoin: (sub, isAgent) => {
       if (isAgent) {
         agentSubscribers.add(sub);
@@ -292,19 +299,19 @@ export const createSessionHost = (
   const broadcastFrame = channel.send;
 
   const broadcast = (event: LogEvent): void => {
-    broadcastFrame(null, JSON.stringify(event));
+    broadcastFrame({ event: DEFAULT_FRAME, data: event });
   };
 
   /** Synthetic frame (like `warning`): the count of agents currently blocked
    *  in wait. Sent whenever it changes, so the composer can say "listening". */
   const broadcastListeners = (): void => {
-    broadcastFrame("listeners", JSON.stringify({ agents: agentSubscribers.size }));
+    broadcastFrame({ event: "listeners", data: { agents: agentSubscribers.size } });
   };
 
   // Surface denied/missing assets to subscribers as a synthetic event so the
   // chrome can show them (D-054). Encoded as an agent-less warning frame.
   const broadcastWarning = (code: string, message: string): void => {
-    broadcastFrame("warning", JSON.stringify({ code, message }));
+    broadcastFrame({ event: "warning", data: { code, message } });
   };
 
   const serverAppend = async (inputs: readonly EventInput[]): Promise<readonly LogEvent[]> => {
@@ -322,14 +329,29 @@ export const createSessionHost = (
   /** Synthetic frame (like `listeners`): the latest reported context usage, so
    *  the header ring updates live without a full state re-fetch. */
   const broadcastContext = (usage: ContextUsage): void => {
-    broadcastFrame("context", JSON.stringify(usage));
+    broadcastFrame({ event: "context", data: usage });
   };
 
   /** Synthetic frame: the artifact's sticky model/effort just changed. Two
    *  windows can be open on one session, and the picker is shared state. */
   const broadcastSelection = (response: SelectionResponse): void => {
-    broadcastFrame("selection", JSON.stringify(response));
+    broadcastFrame({ event: "selection", data: response });
   };
+
+  /**
+   * The wire's view of a live harness conversation: the presence sweep's record
+   * narrowed to the three facts that cross the boundary. One projection,
+   * because the state route and the presence frame answer the same question -
+   * spelled twice, they were free to disagree about it.
+   */
+  const attendantPresenceOf = (live: HarnessPresence | undefined): AttendantPresence | null =>
+    live
+      ? {
+          interactive: live.interactive,
+          ...(live.status ? { status: live.status } : {}),
+          ...(live.cwd ? { cwd: live.cwd } : {}),
+        }
+      : null;
 
   // ---- request handling -----------------------------------------------------
 
@@ -1075,19 +1097,17 @@ export const createSessionHost = (
               yolo: settings.resumeYolo,
             })
           : undefined);
+      const attendantPresence = attendantPresenceOf(presence);
       const response: StateResponse = {
         ...payload,
+        // The LIFECYCLE, beside the wait outcome `payload.status` carries. The
+        // viewer drives every "is this session live" affordance off this: a
+        // session healed by a watcher reconnecting is active again, and no
+        // wait outcome can say so.
+        lifecycle: state.status,
         agentsListening: agentSubscribers.size,
         resumable,
-        ...(presence
-          ? {
-              attendantPresence: {
-                interactive: presence.interactive,
-                ...(presence.status ? { status: presence.status } : {}),
-                ...(presence.cwd ? { cwd: presence.cwd } : {}),
-              },
-            }
-          : {}),
+        ...(attendantPresence ? { attendantPresence } : {}),
         // The sidecar when there is one (it carries the resume command and the
         // attending session's model/effort); otherwise the harness the LOG
         // records, so a fresh artifact still NAMES its agent. Without this the
@@ -1287,17 +1307,13 @@ export const createSessionHost = (
       try {
         const state = await sessionState(paths);
         const target = await artifactAttendant(paths, state.sessionHistory);
-        const live = await presenceFor(target, paths.artifactDir);
-        const frame = live
-          ? JSON.stringify({
-              interactive: live.interactive,
-              ...(live.status ? { status: live.status } : {}),
-              ...(live.cwd ? { cwd: live.cwd } : {}),
-            })
-          : "null";
+        const presence = attendantPresenceOf(await presenceFor(target, paths.artifactDir));
+        // Deduped on the serialized form: the projection is rebuilt every
+        // sweep, so only its content can say whether anything changed.
+        const frame = JSON.stringify(presence);
         if (frame === lastPresence) return;
         lastPresence = frame;
-        broadcastFrame("presence", frame);
+        broadcastFrame({ event: "presence", data: presence });
       } catch {
         /* a presence sweep that fails is not worth tearing the stream down */
       }

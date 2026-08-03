@@ -28,12 +28,18 @@
 
 import type { ServerWebSocket, WebSocketHandler } from "bun";
 import { ServerError } from "../errors.ts";
+import { encodeFrame, type LiveFrame, RECONNECT_FRAME } from "../protocol/frames.ts";
 import { type LineSink, observeRequests, type RequestObservation } from "./observe.ts";
 
 /**
  * One watcher of a channel, whatever it is wired over. `send` may THROW when
  * the peer is gone (an SSE controller does); every broadcaster catches that
  * and drops the subscriber, which is how a closed stream leaves the set.
+ *
+ * The WIRE's own vocabulary - a name and an already-encoded string - because
+ * this is where a relayed frame passes through opaquely (`pumpSse`). What a
+ * broadcaster may actually send is the typed frame union a channel takes
+ * (src/protocol/frames.ts).
  *
  * `close` means "this channel is finished" - NOT "close the socket". On SSE it
  * ends the response body, which is the same thing. On a WebSocket it asks the
@@ -44,23 +50,6 @@ export interface Subscriber {
   readonly send: (event: string | null, data: string) => void;
   readonly close: () => void;
 }
-
-/**
- * The frame that asks a window to drop this connection and reconnect.
- *
- * It exists because of a Bun bug (reproduced on 1.3.14): once the SERVER has
- * closed a WebSocket - `ws.close()` or `ws.terminate()`, before or after the
- * client's own close, and even after the `close` handler has fired on both
- * ends - `server.stop()` never resolves. A hub that closed one socket could
- * therefore never shut down.
- *
- * So the server never closes a live socket. It says "come back" and the CLIENT
- * hangs up, which is the one direction that is safe; the client's reconnect
- * loop (stream.ts) then applies its usual backoff. Teardown needs nothing
- * beyond that: `server.stop(true)` closes the transport, the client sees the
- * drop, and it retries until the hub is back.
- */
-export const RECONNECT_FRAME = "reconnect";
 
 const encoder = new TextEncoder();
 
@@ -237,15 +226,18 @@ export const upgradeOrRefuse = (
  * on, exactly as it does for one that released itself. Bookkeeping that rides
  * on leaving (an agent-presence count) would otherwise survive the peer.
  */
-export interface ChannelOptions<J> {
-  readonly onJoin?: (sub: Subscriber, join: J) => void;
+export interface ChannelOptions<F extends LiveFrame, J> {
+  /** `send` writes one frame to THIS watcher alone - how a channel primes an
+   *  arrival with what it would otherwise wait for the next change to learn. */
+  readonly onJoin?: (sub: Subscriber, join: J, send: (frame: F) => void) => void;
   readonly onLeave?: (sub: Subscriber) => void;
 }
 
 /** One fan-out set and the two wires reaching it. */
-export interface Channel<J> {
-  /** Fan one frame out to every watcher. */
-  readonly send: (event: string | null, data: string) => void;
+export interface Channel<F extends LiveFrame, J = void> {
+  /** Fan one frame out to every watcher. `F` is this channel's whole frame
+   *  vocabulary, so a broadcaster cannot invent a name or a payload. */
+  readonly send: (frame: F) => void;
   /** Take a watcher on; the returned release takes it back off. */
   readonly subscribe: (sub: Subscriber, join: J) => () => void;
   /** The SSE wire: a response whose body is this channel. */
@@ -264,7 +256,9 @@ export interface Channel<J> {
  * onto it. A broadcaster writes one frame and neither wire knows the other
  * exists (see this module's header).
  */
-export const createChannel = <J = void>(options: ChannelOptions<J> = {}): Channel<J> => {
+export const createChannel = <F extends LiveFrame, J = void>(
+  options: ChannelOptions<F, J> = {},
+): Channel<F, J> => {
   const subscribers = new Set<Subscriber>();
   let stopped = false;
 
@@ -276,11 +270,12 @@ export const createChannel = <J = void>(options: ChannelOptions<J> = {}): Channe
   // an abandoned stream leaves the set. Dropped AFTER the loop, because
   // `onLeave` commonly broadcasts (an agent-presence count) and a fan-out
   // reaching back into the one in flight is how frames interleave.
-  const send = (event: string | null, data: string): void => {
+  const send = (frame: F): void => {
+    const wire = encodeFrame(frame);
     const gone: Subscriber[] = [];
     for (const sub of subscribers) {
       try {
-        sub.send(event, data);
+        sub.send(wire.event, wire.data);
       } catch {
         gone.push(sub);
       }
@@ -306,7 +301,10 @@ export const createChannel = <J = void>(options: ChannelOptions<J> = {}): Channe
       return () => {};
     }
     subscribers.add(sub);
-    options.onJoin?.(sub, join);
+    options.onJoin?.(sub, join, (frame) => {
+      const wire = encodeFrame(frame);
+      sub.send(wire.event, wire.data);
+    });
     return () => drop(sub);
   };
 

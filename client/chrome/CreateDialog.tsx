@@ -78,6 +78,11 @@ const persistCreateRoot = (root: string): void => {
   }
 };
 
+/** How a dead create turn ended, in one phrase: a number is the child's exit
+ *  code, a string is Lucid's own reason for there being no code at all. */
+const exitNote = (code: number | string): string =>
+  typeof code === "number" ? `exit code ${code}` : code;
+
 /**
  * Its own component so every open starts from a clean form: the parent mounts
  * it only while the dialog is showing, which is what resets the draft.
@@ -754,7 +759,12 @@ const CreateDialogBody = () => {
                     ? `The ${harness.trim() || defaultHarness || "default"} harness is over its usage limit - it cannot author anything right now.`
                     : createFailed.authFailure
                       ? `The ${harness.trim() || defaultHarness || "default"} harness could not authenticate.`
-                      : `The authoring turn failed before it produced ${name}.`}
+                      : // How the turn died, in the terms the log speaks: an
+                        // exit code to grep the harness's own docs for, or
+                        // `spawn-error` when nothing ever ran - which is a
+                        // different problem (a recipe naming a binary that is
+                        // not there) than a turn that started and failed.
+                        `The authoring turn failed before it produced ${name} (${exitNote(createFailed.code)}).`}
                 </span>
                 {createFailed.usageLimit ? (
                   <span data-test="create-usage-limit" className="text-[11px] text-amber-300">
