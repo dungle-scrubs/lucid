@@ -17,13 +17,13 @@ import { foldLog, type FoldedState } from "./fold.ts";
 import type { SessionPaths } from "./paths.ts";
 import {
   ARTIFACT_DIR,
-  canonicalArtifactLocation,
   canonicalArtifactPath,
   sessionName,
   sessionPaths,
   snapshotPath,
   snapshotRelPath,
 } from "./paths.ts";
+import { canonicalArtifactLocation } from "./project.ts";
 import { hashContent, validateStructure, writeSnapshot } from "./version.ts";
 
 /**

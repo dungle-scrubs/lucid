@@ -1,5 +1,5 @@
 import { mkdir, stat } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { tracer } from "../core/verbose.ts";
 import {
   artifactAttendant,
@@ -12,8 +12,8 @@ import { deliver } from "../core/deliver.ts";
 import type { LogEvent, LogEventType } from "../core/events.ts";
 import { foldLog, type FoldedState } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
-import { ARTIFACT_DIR, projectRootOf } from "../core/paths.ts";
 import type { SessionPaths } from "../core/paths.ts";
+import { artifactCheckout, checkoutOf, projectOf } from "../core/project.ts";
 import { assemblePayload } from "../core/payload.ts";
 import {
   harnessHasLocalStore,
@@ -360,13 +360,6 @@ const usableCwd = async (recorded: string | undefined, fallback: string): Promis
   return ok ? recorded : fallback;
 };
 
-/** A fresh harness owns the artifact, not the source harness's old checkout.
- * Canonical artifacts live under `<project>/.lucid/`, so the directory above
- * `.lucid` is the fallback when no enclosing checkout exists. */
-const artifactProjectCwd = (paths: SessionPaths): string =>
-  projectRootOf(paths.artifactDir) ??
-  (basename(paths.artifactDir) === ARTIFACT_DIR ? dirname(paths.artifactDir) : paths.artifactDir);
-
 /**
  * One artifact's delivery watcher. Created per mount, driven by the daemon's
  * timer.
@@ -673,15 +666,31 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       selection?.harness !== undefined &&
       normalizeHarness(selection.harness) !== normalizeHarness(record.harness);
     const priorCwd = await usableCwd(record.cwd, paths.artifactDir);
-    const priorProjectCwd = projectRootOf(priorCwd) ?? priorCwd;
-    const projectCwd = artifactProjectCwd(paths);
+    // A fresh harness owns the artifact, not the source harness's old checkout,
+    // and it may be sandboxed to its cwd - so it starts in the checkout the
+    // artifact SITS in, the one directory guaranteed both to exist and to
+    // contain the file the turn is asked to rewrite.
+    const artifactCwd = artifactCheckout(paths);
+    // The checkout the artifact BELONGS to, from the one owner of that
+    // question. Through `projectOf` because the same artifact must not be
+    // grouped under one project by the hub and treated as belonging to another
+    // here: a scratchpad artifact belongs to the checkout its path encodes,
+    // which is the very cwd its conversation ran in.
+    //
+    // Checked, because a decoded checkout is a NAME, not a live directory: an
+    // ephemeral worktree is deleted once its work lands while the review
+    // outlives it, and naming the work is right for a listing heading but
+    // fatal as a comparand - a dead checkout would say "moved" about an
+    // artifact that never went anywhere.
+    const artifactProject = await usableCwd((await projectOf(paths)).checkout, artifactCwd);
     // Fresh when the harness switches, the artifact moved projects, or no
     // PROVEN resumable session exists - a handoff resumes nothing, so it
-    // needs no candidate.
+    // needs no candidate. Both sides of "moved" are normalized the same way:
+    // an agent working in `<repo>/packages/app` has not left `<repo>`.
     const startsFresh =
       switchesHarness ||
       record.sessionId === undefined ||
-      resolve(priorProjectCwd) !== resolve(projectCwd);
+      resolve(checkoutOf(priorCwd)) !== resolve(checkoutOf(artifactProject));
     const wantedHarness = switchesHarness ? selection.harness : record.harness;
     // Exact, unlike a fork: resuming session id X means re-entering ONE
     // harness's conversation, so the registry default is not a stand-in for
@@ -783,9 +792,9 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     }
 
     // A resume stays in the established session's cwd (D10). A fresh handoff
-    // starts from the artifact's current project, so a sandboxed target can
-    // write the artifact after it moved between projects.
-    const cwd = startsFresh ? projectCwd : priorCwd;
+    // starts from the artifact's own checkout, so a sandboxed target can write
+    // the artifact after it moved between projects.
+    const cwd = startsFresh ? artifactCwd : priorCwd;
     const prompt = startsFresh
       ? [
           "You are continuing an existing Lucid review in a new harness session.",

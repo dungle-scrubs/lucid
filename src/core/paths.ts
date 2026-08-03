@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 /**
@@ -110,57 +110,6 @@ export const canonicalArtifactPath = (input: string): string => {
  * internally consistent, wrong place, found in the wild.
  */
 export const ARTIFACT_DIR = ".lucid";
-
-/**
- * The project an artifact belongs to: the nearest enclosing directory holding
- * a `.git`, or null when there is none.
- *
- * The NEAREST, not the outermost: a package inside a monorepo keeps its own
- * `.lucid/`, which is where someone working in that package will look.
- */
-export const projectRootOf = (dir: string): string | null => {
-  let current = dir;
-  for (;;) {
-    if (existsSync(join(current, ".git"))) return current;
-    const parent = dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
-};
-
-/**
- * Is this artifact where artifacts go (plan 05, M3.2, D-011)?
- *
- * Judged against the artifact's own project root, NOT against `sessionPaths` -
- * the record-beside-artifact rule is correct and unchanged; this is the
- * separate question of where the ARTIFACT itself belongs.
- *
- * A path outside any project is ok, and that absence IS the escape hatch
- * (D-015): an agent scratchpad has no root to be canonical against, and D-022's
- * ephemeral records already live there. There is no opt-out flag.
- */
-export const canonicalArtifactLocation = (
-  artifactPath: string,
-): { ok: true } | { ok: false; canonical: string } => {
-  const abs = canonicalArtifactPath(artifactPath);
-  const root = projectRootOf(dirname(abs));
-  if (root === null) return { ok: true };
-  const canonical = join(root, ARTIFACT_DIR, basename(abs));
-  if (abs === canonical) return { ok: true };
-  // Sameness is the filesystem's to decide, not the string's. APFS is
-  // case-insensitive, so a project whose folder is really named `.Lucid`
-  // produced a demand nothing could satisfy: the canonical path already WAS
-  // the file, `mkdir .lucid` failed EEXIST, and querying the lowercase
-  // spelling realpath'd straight back to `.Lucid`. Compared on the DIRECTORY,
-  // because the basenames are equal by construction above and the artifact
-  // may not exist yet - `open` is often about to create it.
-  try {
-    if (realpathSync(dirname(abs)) === realpathSync(dirname(canonical))) return { ok: true };
-  } catch {
-    /* the canonical folder does not exist yet: a genuine move is needed */
-  }
-  return { ok: false, canonical };
-};
 
 /** Compute the full session layout for an artifact path. */
 export const sessionPaths = (input: string): SessionPaths => {
