@@ -36,6 +36,14 @@ import { discoveryPersistence, runSpawn, type SpawnDeadline } from "./spawn.ts";
  * argv. This module owns the parts that must not differ by call site; the
  * drivers keep the parts that are genuinely theirs (which batch to take, when
  * to stand down, what to tell the human).
+ *
+ * Layering, because the paragraph above implies more isolation than the
+ * imports hold: the ack and the terminator go through `core/deliver`, which
+ * POSTs to a live server and so reaches `server/discovery` (and
+ * `server/observe` behind it). Those two are leaves - nothing under them
+ * imports back - which is what leaves `server/attend` and `server/daemon` free
+ * to consume this module. A new `src/server` import added here has to keep
+ * that property, or the loop closes.
  */
 
 /**

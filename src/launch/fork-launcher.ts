@@ -385,12 +385,30 @@ export const attendChild = async (
       log(`${child.name}: ${planned.reason} - stopping attend`);
       return;
     }
-    // The one signal a buffered-stdout CLI still moves during a long turn: the
-    // out-log of a `claude -p` resume sits at zero bytes through minutes of
-    // real work, and a watchdog measuring only that kills a healthy turn.
-    const transcript = harnessHasLocalStore(harnessName)
-      ? await harnessTranscriptPath(harnessName, sessionId)
-      : undefined;
+    // A stale pick DEGRADES rather than stalling delivery, so it is something
+    // to SAY: the turn runs on the harness's own defaults, and a child driven
+    // at the wrong model with nothing in the launcher log is worse than one
+    // that never carried a pick at all. This log is the launcher's only voice
+    // - there is no panel warning down here.
+    if (planned.selectionIssue !== undefined) log(`${child.name}: ${planned.selectionIssue}`);
+    // One store walk, two answers, the same pair the hub's engine reads. The
+    // transcript is the one signal a buffered-stdout CLI still moves during a
+    // long turn: the out-log of a `claude -p` resume sits at zero bytes through
+    // minutes of real work, and a watchdog measuring only that kills a healthy
+    // turn. Its ABSENCE, where Lucid knows the harness's store, is a pre-flight
+    // refusal - the conversation cannot be resumed from this machine, so the
+    // spawn would die as an unexplained "Execution error" AND run unwatched on
+    // the way. A harness Lucid has no store adapter for corroborates nothing
+    // and is driven as before.
+    const knowsStore = harnessHasLocalStore(harnessName);
+    const transcript = knowsStore ? await harnessTranscriptPath(harnessName, sessionId) : undefined;
+    if (knowsStore && transcript === undefined) {
+      // Stand down without advancing the cursor, so the feedback stays the
+      // human's: there is no second candidate to try down here, which is the
+      // stance this loop already takes on a not-found verdict.
+      log(`${child.name}: no local "${harnessName}" transcript for ${sessionId} - stopping attend`);
+      return;
+    }
     const outcome = await runTurn(planned, {
       // Where THIS run's output starts is the owner's problem now: the log is
       // opened in append mode, so classifying the whole file would let an

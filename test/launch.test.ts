@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { foldLog, type ForkRecord } from "../src/core/fold.ts";
@@ -27,6 +27,7 @@ import type { SessionIdentityRecipe } from "../src/launch/session-identity.ts";
 import { forkDirFor, writeForkSeed } from "../src/launch/seed.ts";
 import { discoverLiveServer, readServerDescriptor } from "../src/server/discovery.ts";
 import { runServer } from "../src/server/server.ts";
+import { applyUnitEnv } from "./unit-env.ts";
 
 const STUB = resolve(import.meta.dir, "launch-stub.ts");
 const DOC =
@@ -701,6 +702,7 @@ describe("the launcher's Shape-C resume runs through the turn owner", () => {
   let child: SessionPaths;
   let marker: string;
   let resumeStub: string;
+  let store: string;
   const servers: { paths: SessionPaths; done: Promise<void> }[] = [];
   const logs: string[] = [];
 
@@ -771,6 +773,14 @@ describe("the launcher's Shape-C resume runs through the turn owner", () => {
     child = sessionPaths(join(dir, "child.html"));
     marker = join(dir, "resume-marker.json");
     resumeStub = join(dir, "resume-stub");
+    // The harness store the resume pre-flight reads, and the activity signal
+    // the stall watchdog reads while the turn runs - one walk answers both.
+    // `LUCID_CLAUDE_PROJECTS` is already contained by the preload, so a test
+    // that wants the fixture conversation to EXIST has to put it there.
+    store = join(dir, "claude-projects");
+    await mkdir(join(store, "child-store"), { recursive: true });
+    await writeFile(join(store, "child-store", `${SESSION}.jsonl`), "");
+    process.env.LUCID_CLAUDE_PROJECTS = store;
     await writeFile(child.artifactPath, DOC);
     ensureSessionDirs(child);
     await openSession(child);
@@ -791,6 +801,9 @@ describe("the launcher's Shape-C resume runs through the turn owner", () => {
       await s.done.catch(() => {});
     }
     servers.length = 0;
+    // Put the containment back rather than deleting it: the borrowed value
+    // points into a directory this teardown removes.
+    applyUnitEnv();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -830,6 +843,99 @@ console.log(JSON.stringify({ type: "thread.started", thread_id: "a-stranger-thre
     expect(ended?.reason).toBe("failed");
     expect(ended?.code).toBe("hsi005_session_mismatch");
     expect(logs.some((l) => l.includes("HSI005"))).toBe(true);
+  }, 30_000);
+
+  test("a clean fork resume closes its own turn and stamps what it established", async () => {
+    // The refusal paths above are the ones that always had a terminator. The
+    // ORDINARY turn - the overwhelmingly common one - had none: the ack opened
+    // a window nothing ever closed, so the panel reported a finished turn as
+    // the live one and the next batch queued behind a delivery that was over.
+    await writeResumeStub(
+      `console.log(JSON.stringify({ type: "thread.started", thread_id: ${JSON.stringify(SESSION)} }));`,
+    );
+
+    const loop = attendChild(
+      child,
+      SESSION,
+      recipe("announced"),
+      { log: (m) => logs.push(m) },
+      HARNESS,
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    await annotate();
+    interface Terminator {
+      readonly turnId?: string;
+      readonly reason?: string;
+      readonly code?: string;
+      readonly attendant?: {
+        readonly harness?: string;
+        readonly sessionId?: string;
+        readonly launchId?: string;
+        readonly sessionIdAuthority?: string;
+      };
+    }
+    const terminator = async (): Promise<Terminator | undefined> =>
+      (await readEvents(child.logPath)).events.find((e) => e.t === "agent_turn_ended") as
+        | Terminator
+        | undefined;
+    let ended: Terminator | undefined;
+    const deadline = Date.now() + 20_000;
+    while (!ended && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      ended = await terminator();
+    }
+    // A clean turn consumes its batch and blocks in `wait` for the next one:
+    // ending the session is how this loop stops.
+    await endChildSession();
+    await loop;
+
+    const ack = (await readEvents(child.logPath)).events.find((e) => e.t === "agent_ack") as
+      | { turnId?: string }
+      | undefined;
+    expect(ack?.turnId).toBeDefined();
+    expect(ended?.turnId).toBe(ack?.turnId ?? "");
+    expect(ended?.reason).toBe("done");
+    expect(ended?.code).toBeUndefined();
+    // What the turn ESTABLISHED, with authority that matches the evidence: the
+    // harness announced the very id that was asked for, so the stamp says the
+    // id was observed rather than merely recorded.
+    expect(ended?.attendant?.harness).toBe(HARNESS);
+    expect(ended?.attendant?.sessionId).toBe(SESSION);
+    expect(ended?.attendant?.sessionIdAuthority).toBe("observed");
+    expect(typeof ended?.attendant?.launchId).toBe("string");
+  }, 30_000);
+
+  test("a resume with no local transcript is refused before a process exists", async () => {
+    // The hub's engine pre-flights this and the launcher did not: it spawned a
+    // `--resume` whose conversation this machine does not hold, then measured
+    // it against the only signal left (a zero-byte out-log) and burned the
+    // batch three attempts later. The store walk that feeds the watchdog
+    // answers the question before there is anything to watch.
+    await writeResumeStub(`await Bun.write(${JSON.stringify(marker)}, "spawned");`);
+    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
+
+    const loop = attendChild(
+      child,
+      SESSION,
+      recipe("assigned"),
+      { log: (m) => logs.push(m) },
+      HARNESS,
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    await annotate();
+    await loop;
+
+    expect(logs.some((l) => l.includes("no local") && l.includes(SESSION))).toBe(true);
+    expect(
+      await readFile(marker, "utf8").then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+    // The batch stays the human's: with no turn to run, nothing takes delivery
+    // of it and no window is opened that no terminator will close.
+    const events = (await readEvents(child.logPath)).events;
+    expect(events.some((e) => e.t === "agent_ack")).toBe(false);
   }, 30_000);
 
   test("a wedged fork resume is killed rather than held for the launcher's lifetime", async () => {
