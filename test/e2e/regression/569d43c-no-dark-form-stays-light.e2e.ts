@@ -14,7 +14,7 @@ import { makeCli, overlaySettled, surfaceOf, type Cli } from "../helpers.ts";
  * The revert conflicts on this tree - the fix was reimplemented in `617f7db`,
  * where `canRenderDark()` reads the resolved cascade with Lucid's own token
  * block un-matched (D-031, D-032) - so the mutation is a named edit (D-046):
- * make `canRenderDark()` in `client/overlay/overlay.ts` return `true`
+ * make `canRenderDark()` in `client/overlay/artifact-theme.ts` return `true`
  * unconditionally, which is what the original defect amounted to.
  */
 

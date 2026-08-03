@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { THEME_TOKENS, themeReadiness, themeWarning } from "../src/core/theme.ts";
+import { THEME_TOKENS } from "../src/core/palette.ts";
+import { themeReadiness, themeWarning } from "../src/core/theme.ts";
 
 /**
  * The viewer's light/dark choice reaches an artifact only through the standard

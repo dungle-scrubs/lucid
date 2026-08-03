@@ -12,16 +12,7 @@
  * colors (a chart series, a brand mark), and Lucid does not get to veto that.
  */
 
-/** The tokens Lucid remaps. An artifact routing color through these follows the
- *  viewer's choice with no further work. */
-export const THEME_TOKENS = [
-  "--paper",
-  "--ink",
-  "--ink-muted",
-  "--rule",
-  "--accent",
-  "--accent-wash",
-] as const;
+import { THEME_TOKENS } from "./palette.ts";
 
 export interface ThemeReadiness {
   /** The artifact remaps tokens for dark, so it has an author-tuned dark form. */

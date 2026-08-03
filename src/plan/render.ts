@@ -236,6 +236,16 @@ const applyQuestionIds = (document: Document): void => {
 const STYLE = `
   /* Self-contained by doctrine: an artifact must render identically offline
      from disk, so system font stacks only - never a CDN import. */
+
+  /* The plan speaks its OWN colour vocabulary, and the only token Lucid remaps
+     (src/core/palette.ts) that it declares is --ink - whose value here is
+     already the palette's, in both forms, which test/plan.test.ts pins.
+     Deliberate: Lucid injects a :root[data-lucid-theme=...] block, and that
+     selector outranks this one, so any of the six given a value of its own here
+     would be overwritten in the viewer and the same document would read one way
+     from disk and another inside Lucid. The reader's light/dark choice already
+     reaches every colour below - through the dark block underneath, which
+     artifact-theme.ts retunes to the choice instead of the OS. */
   :root {
     --ink:#211d15; --soft:#4b4334; --surface:#faf6ec; --line:#e6dbc3; --brass:#bd9a4e; --brass-deep:#9f8038; --sage:#61714b; --amber:#c8862a;
     --code-bg:#efe8d8; --pre-bg:#0e0d0b; --pre-fg:#f2ecdc; --q-bg:rgba(200,134,42,0.08); --hover:rgba(189,154,78,0.05);
