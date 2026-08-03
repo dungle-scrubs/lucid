@@ -454,7 +454,6 @@ export const runSpawn = async (
     const stalled = watchForStall(proc, logFile, deadline);
     await proc.exited;
     stalled.stop();
-    const wasStalled = stalled.fired();
     // The callback's work is bounded elsewhere too (sidecar locks time out),
     // but its HTTP leg is not - and a wedged hub must not wedge every future
     // turn of this session behind an await that cannot settle.
@@ -463,6 +462,11 @@ export const runSpawn = async (
     }
     // A signal-killed child has no exit code; it is anything but clean.
     const code = proc.exitCode ?? (proc.signalCode !== null ? 1 : 0);
+    // A stall needs EVIDENCE the kill took effect, not just that the timer
+    // fired: a child that flushed and exited 0 in the same beat the watchdog
+    // armed was a completed turn, and reporting it stalled would discard work
+    // that actually landed.
+    const wasStalled = stalled.fired() && code !== 0;
     if (identity?.strategy) {
       const classified = classifySpawnResult(code, identity.strategy, observed);
       // A killed child is a failed turn whatever the classifier made of its

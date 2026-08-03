@@ -250,6 +250,22 @@ export const resetPresenceCache = (): void => {
   cached = undefined;
 };
 
+/**
+ * Whether this machine PUBLISHES presence at all. An empty `livePresence` map
+ * means two very different things - "nothing is running" and "there is no
+ * sessions directory to read" - and a caller about to treat ABSENCE as
+ * evidence (the orphan sweep) must only do so where presence would actually
+ * show. A missing or unreadable store proves nothing about any process.
+ */
+export const presenceStoreReadable = async (dir?: string): Promise<boolean> => {
+  try {
+    await readdir(claudeSessionsDir(dir));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** Where Claude Code files conversation transcripts, one directory per cwd. */
 export const claudeProjectsDir = (dir?: string): string => {
   if (dir) return dir;
