@@ -3,15 +3,14 @@ import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
 import { cliRequestId } from "../server/observe.ts";
 import { parseCursor, sliceAfterCursor } from "./cursor.ts";
 import { REQUEST_ID_HEADER } from "./request-id.ts";
-import {
-  foldLog,
-  type AnnotationRecord,
-  type FoldedState,
-  type ForkRecord,
-  type MessageRecord,
-  type RevertRecord,
+import type {
+  AnnotationRecord,
+  FoldedState,
+  ForkRecord,
+  MessageRecord,
+  RevertRecord,
 } from "./fold.ts";
-import { readEvents } from "./log.ts";
+import { sessionState } from "./log.ts";
 import type { SessionPaths } from "./paths.ts";
 import { assemblePayload, type PayloadStatus, type WaitPayload } from "./payload.ts";
 
@@ -152,7 +151,7 @@ export const runWait = async (
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const heartbeatMs = options.pollMs ?? HEARTBEAT_MS;
 
-  const initial = foldLog((await readEvents(paths.logPath)).events);
+  const initial = await sessionState(paths);
   if (initial.status === "none") {
     throw new NotFoundError({
       message: `No Lucid session for ${paths.artifactPath}`,
@@ -207,7 +206,7 @@ export const runWait = async (
 
   try {
     for (;;) {
-      const state = foldLog((await readEvents(paths.logPath)).events);
+      const state = await sessionState(paths);
 
       if (state.status === "ended") return buildFromState(paths, state, "ended", [], []);
       if (state.status === "suspended") {

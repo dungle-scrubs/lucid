@@ -272,8 +272,7 @@ describe("both layouts present: the canonical wins, the legacy is untouched (pla
 
   test("the canonical log is chosen even though the legacy one is older and alphabetically first", async () => {
     const { openSession } = await import("../src/core/session.ts");
-    const { foldLog } = await import("../src/core/fold.ts");
-    const { readEvents } = await import("../src/core/log.ts");
+    const { sessionState } = await import("../src/core/log.ts");
     const dir = await tmp();
     const artifact = join(dir, "plan.html");
     await writeFile(artifact, "<!doctype html><html><body><h1>plan</h1></body></html>");
@@ -285,7 +284,7 @@ describe("both layouts present: the canonical wins, the legacy is untouched (pla
 
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     // v1 of a fresh record - never the legacy hash carried forward.
     expect(state.version).toBe(1);
     expect(paths.logPath.includes(".lucid")).toBe(false);

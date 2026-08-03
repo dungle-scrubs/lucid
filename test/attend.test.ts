@@ -4,13 +4,13 @@ import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/events.ts";
-import { foldLog } from "../src/core/fold.ts";
+import type { FoldedState } from "../src/core/fold.ts";
 import {
   mergeAttendantSidecar,
   readAttendantSidecars,
   readLastAttendant,
 } from "../src/core/attendant.ts";
-import { appendEvent, readEvents } from "../src/core/log.ts";
+import { appendEvent, readEvents, sessionState } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
 import type { HarnessInfo, SelectionResponse } from "../src/protocol/wire.ts";
@@ -335,11 +335,11 @@ describe("session host presence", () => {
       // The idle owner's check-to-append gap: with a subscriber connected the
       // suspend must refuse, or it closes the stream somebody just opened.
       expect(await host.suspend()).toBe(false);
-      let state = foldLog((await readEvents(paths.logPath)).events);
+      let state = await sessionState(paths);
       expect(state.status).toBe("active");
       await res.body?.cancel();
       expect(await host.suspend()).toBe(true);
-      state = foldLog((await readEvents(paths.logPath)).events);
+      state = await sessionState(paths);
       expect(state.status).toBe("suspended");
       // Already suspended: nothing to append, but evicting an unwatched mount
       // on a closed log is still right.
@@ -354,7 +354,7 @@ describe("session host presence", () => {
     // stream reconnected and remounted, and nothing ever appended
     // session_resumed - so wait reported "paused" and the watcher refused
     // versions at a session a human was actively watching.
-    await appendEvent(paths.logPath, { t: "session_suspended" });
+    await appendEvent(paths, { t: "session_suspended" });
     // A revision that landed while the log wrongly said suspended.
     const revised =
       '<!doctype html><html><head><title>t</title></head><body><h1 data-lucid-id="h">Hello again</h1></body></html>';
@@ -517,7 +517,7 @@ describe("hub attend mode", () => {
     // ack covering feedback nothing acted on. In-process that batch is
     // retried; across a restart only the ack survived, and the message sat
     // marked "delivered" forever. A fresh watcher must notice and re-drive it.
-    const annotation = await appendEvent(paths.logPath, {
+    const annotation = await appendEvent(paths, {
       t: "annotation",
       id: "a-stranded",
       version: 1,
@@ -526,7 +526,7 @@ describe("hub attend mode", () => {
     });
     // The claim, with no agent output after it: exactly what a crashed turn
     // leaves behind.
-    await appendEvent(paths.logPath, { t: "agent_ack", id: "ack-dead", covers: annotation.seq });
+    await appendEvent(paths, { t: "agent_ack", id: "ack-dead", covers: annotation.seq });
 
     const attendant = createAttendant({
       paths,
@@ -559,7 +559,7 @@ describe("hub attend mode", () => {
     // lands on the current mark, the rollback cannot fire, and the feedback is
     // pinned at "delivered" behind an indicator that never clears. The rollback
     // has to target the last batch some turn actually ANSWERED.
-    const annotation = await appendEvent(paths.logPath, {
+    const annotation = await appendEvent(paths, {
       t: "annotation",
       id: "a-retried",
       version: 1,
@@ -567,7 +567,7 @@ describe("hub attend mode", () => {
       note: "three dead turns must not swallow this",
     });
     for (const id of ["ack-dead-1", "ack-dead-2", "ack-dead-3"]) {
-      await appendEvent(paths.logPath, { t: "agent_ack", id, covers: annotation.seq });
+      await appendEvent(paths, { t: "agent_ack", id, covers: annotation.seq });
     }
 
     const attendant = createAttendant({
@@ -612,7 +612,7 @@ describe("hub attend mode", () => {
         },
       }),
     );
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-quiet",
       version: 1,
@@ -660,7 +660,7 @@ describe("hub attend mode", () => {
         },
       }),
     );
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-unlisted",
       version: 1,
@@ -716,7 +716,7 @@ describe("hub attend mode", () => {
         },
       }),
     );
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-walled",
       version: 1,
@@ -796,7 +796,7 @@ describe("hub attend mode", () => {
     );
     // The switch is what makes this a handoff rather than a resume.
     await writeFile(paths.selectionPath, JSON.stringify({ harness: "legacy" }));
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-handoff",
       version: 1,
@@ -851,7 +851,7 @@ describe("hub attend mode", () => {
         },
       }),
     );
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-auth",
       version: 1,
@@ -891,7 +891,7 @@ describe("hub attend mode", () => {
     const hub = await startDaemon(true);
     await mount(hub);
 
-    const annotation = await appendEvent(paths.logPath, {
+    const annotation = await appendEvent(paths, {
       t: "annotation",
       id: "a1",
       version: 1,
@@ -936,14 +936,14 @@ describe("hub attend mode", () => {
     const hub = await startDaemon(true, 400);
     await mount(hub);
 
-    const annotation = await appendEvent(paths.logPath, {
+    const annotation = await appendEvent(paths, {
       t: "annotation",
       id: "a1",
       version: 1,
       target: elementTarget,
       note: "an interactive agent is taking this",
     });
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "agent_ack",
       id: "ack-1",
       covers: annotation.seq,
@@ -961,7 +961,7 @@ describe("hub attend mode", () => {
       headers: { host: `127.0.0.1:${hub.port}` },
     });
     await sleep(200);
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a1",
       version: 1,
@@ -1522,11 +1522,11 @@ if (process.env.LUCID_HARNESS === "codex") {
   const selectionUrl = (): string => `/s/${sessionId(paths.artifactPath)}/__lucid/selection`;
 
   const waitForLatestSession = async (
-    predicate: (session: ReturnType<typeof foldLog>["sessionHistory"][number]) => boolean,
-  ): Promise<ReturnType<typeof foldLog>["sessionHistory"][number]> => {
+    predicate: (session: FoldedState["sessionHistory"][number]) => boolean,
+  ): Promise<FoldedState["sessionHistory"][number]> => {
     const deadline = Date.now() + 2_000;
     while (Date.now() < deadline) {
-      const latest = foldLog((await readEvents(paths.logPath)).events).sessionHistory.at(-1);
+      const latest = (await sessionState(paths)).sessionHistory.at(-1);
       if (latest && predicate(latest)) return latest;
       await Bun.sleep(10);
     }
@@ -1646,7 +1646,7 @@ if (process.env.LUCID_HARNESS === "codex") {
   };
 
   const annotate = (note: string): Promise<LogEvent> =>
-    appendEvent(paths.logPath, {
+    appendEvent(paths, {
       t: "annotation",
       id: "a1",
       version: 1,
@@ -1862,7 +1862,7 @@ if (process.env.LUCID_HARNESS === "codex") {
   test("switching harness starts a fresh session with the full Lucid record", async () => {
     const hub = await startDaemon();
     await mount(hub);
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "agent_reply",
       id: "prior-reply",
       text: "The earlier answer that the next harness must inherit.",
@@ -1908,7 +1908,7 @@ if (process.env.LUCID_HARNESS === "codex") {
       "{}\n",
     );
     process.env.LUCID_CODEX_SESSIONS = codexStore;
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a2",
       version: 1,
@@ -2034,7 +2034,7 @@ if (process.env.LUCID_HARNESS === "codex") {
     }
     expect(invalidated).toContain("dead-thread");
     // And the human's feedback is still theirs: nothing advanced past it.
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     expect(state.annotations.length).toBeGreaterThan(0);
   }, 20_000);
 
@@ -2076,7 +2076,7 @@ if (process.env.LUCID_HARNESS === "codex") {
       "{}\n",
     );
     process.env.LUCID_CODEX_SESSIONS = codexStore;
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "harness_session_bound",
       id: "hsb:abc123def4567890:thread-a",
       launchId: "abc123def4567890",
@@ -2120,7 +2120,7 @@ if (process.env.LUCID_HARNESS === "codex") {
     }
     expect([...dead].sort()).toEqual(["thread-a", "thread-b"]);
     // The feedback is still the human's: nothing consumed it.
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     expect(state.annotations.length).toBeGreaterThan(0);
   }, 20_000);
 
@@ -2483,7 +2483,7 @@ describe("a scratchpad artifact resumes in the project its path encodes", () => 
     // The harness ran in the CHECKOUT - which is exactly what its scratchpad
     // path encodes.
     const paths = await reviewFrom(repo);
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-scratchpad",
       version: 1,
@@ -2509,7 +2509,7 @@ describe("a scratchpad artifact resumes in the project its path encodes", () => 
     const pkg = join(repo, "packages", "app");
     await mkdir(pkg, { recursive: true });
     const paths = await reviewFrom(pkg);
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-package",
       version: 1,
@@ -2532,7 +2532,7 @@ describe("a scratchpad artifact resumes in the project its path encodes", () => 
     // encoded checkout removed from under it.
     const paths = await reviewFrom(repo);
     await rm(repo, { recursive: true, force: true });
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-gone",
       version: 1,
@@ -2554,7 +2554,7 @@ describe("a scratchpad artifact resumes in the project its path encodes", () => 
     // directory the artifact is not in.
     const paths = await reviewFrom(repo);
     await writeFile(paths.selectionPath, JSON.stringify({ harness: "other" }));
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-switch",
       version: 1,

@@ -784,10 +784,10 @@ describe("hub daemon", () => {
     }
 
     const identity = (await (await get(daemon.port, "/hub/identity")).json()) as {
-      debug?: { attentionCache?: { hits: number; misses: number; entries: number } };
+      debug?: { sessionStateCache?: { hits: number; misses: number; entries: number } };
     };
-    expect(identity.debug?.attentionCache).toBeDefined();
-    expect(identity.debug?.attentionCache?.misses).toBeGreaterThanOrEqual(1);
+    expect(identity.debug?.sessionStateCache).toBeDefined();
+    expect(identity.debug?.sessionStateCache?.misses).toBeGreaterThanOrEqual(1);
     await reader!.cancel().catch(() => {});
   });
 });

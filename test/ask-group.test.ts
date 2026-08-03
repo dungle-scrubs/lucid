@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_GROUP_CHARS, decodeGroupText } from "../src/cli/ask-input.ts";
 import { runAsk } from "../src/cli/run.ts";
-import { foldLog } from "../src/core/fold.ts";
-import { readEvents } from "../src/core/log.ts";
+import { readEvents, sessionState } from "../src/core/log.ts";
 import { sessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 
@@ -93,7 +92,7 @@ describe("what `lucid ask` needs before it will ask anything", () => {
   test("--multi with nothing to pick from does not claim a multi-select", async () => {
     const paths = await openArtifact();
     await runAsk(paths.artifactPath, "What should we do?", { multi: true });
-    const asked = foldLog((await readEvents(paths.logPath)).events).questions[0];
+    const asked = (await sessionState(paths)).questions[0];
     // The question must EXIST before its missing fields mean anything -
     // `asked?.multi` is undefined just as readily when nothing was appended at
     // all, which would make the two assertions below hold for the wrong reason.
@@ -110,7 +109,7 @@ describe("what `lucid ask` needs before it will ask anything", () => {
       multi: true,
       options: ["Postgres", "SQLite"],
     });
-    const withChoices = foldLog((await readEvents(paths.logPath)).events).questions[1];
+    const withChoices = (await sessionState(paths)).questions[1];
     expect(withChoices?.multi).toBe(true);
   });
 });

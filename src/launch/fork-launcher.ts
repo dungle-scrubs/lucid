@@ -9,8 +9,8 @@ import {
 } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { promotePendingBindings } from "../core/deliver.ts";
-import { foldLog, type ForkRecord } from "../core/fold.ts";
-import { readEvents } from "../core/log.ts";
+import type { ForkRecord } from "../core/fold.ts";
+import { sessionState } from "../core/log.ts";
 import { sessionPaths, type SessionPaths } from "../core/paths.ts";
 import type { WaitPayload } from "../core/payload.ts";
 import { harnessHasLocalStore, harnessTranscriptPath } from "../core/presence.ts";
@@ -287,7 +287,7 @@ export const handleForks = async (
   opts: LaunchOptions = {},
 ): Promise<CreatedChild[]> => {
   const log = opts.log ?? stdoutSink;
-  const state = foldLog((await readEvents(parent.logPath)).events);
+  const state = await sessionState(parent);
   const handled = await loadHandled(parent);
   const fresh = state.forks.filter((f) => !handled.has(f.id));
   if (fresh.length === 0) return [];
@@ -342,7 +342,7 @@ export const attendChild = async (
   // harness announced, so later turns resume what actually exists.
   let sessionId = initialSessionId;
   // Start from now: a fresh child has no prior feedback to re-apply.
-  let cursor = renderCursor(foldLog((await readEvents(child.logPath)).events).highSeq);
+  let cursor = renderCursor((await sessionState(child)).highSeq);
   let fails = 0;
   for (;;) {
     if (opts.signal?.aborted) return;
@@ -500,7 +500,7 @@ export const runLaunch = async (
   log(`launcher watching ${parent.name} for forks (Ctrl-C to stop)`);
   for (;;) {
     if (opts.signal?.aborted) return;
-    const state = foldLog((await readEvents(parent.logPath)).events);
+    const state = await sessionState(parent);
     if (state.status === "ended") {
       log(`${parent.name}: session ended, launcher stopping`);
       return;

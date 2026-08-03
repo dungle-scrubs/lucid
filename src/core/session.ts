@@ -11,7 +11,7 @@ import {
 import { readFile, rm } from "node:fs/promises";
 import { ArtifactError, ValidationError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
-import { appendEvent, appendEventsIf, readEvents } from "./log.ts";
+import { appendEvent, appendEventsIf, appendIfStatus, sessionState } from "./log.ts";
 import type { AttendantStamp, LogEvent } from "./events.ts";
 import { foldLog, type FoldedState } from "./fold.ts";
 import type { SessionPaths } from "./paths.ts";
@@ -393,10 +393,10 @@ export const openSession = async (
   // directory used to be made first, so a dangling symlink or an unreadable
   // file exited with a typed error and still left a `<stem>/` folder holding a
   // lone `.gitignore` beside the artifact - litter from an open that never
-  // happened, and named exactly like a real record. `readEvents` tolerates a
+  // happened, and named exactly like a real record. `sessionState` tolerates a
   // missing directory, so reading the log this early costs nothing.
   const warnings: Warning[] = [];
-  const before = foldLog((await readEvents(paths.logPath)).events);
+  const before = await sessionState(paths);
   // Record availability BEFORE the artifact read: both refuse, and when both
   // would, the collision is the more specific answer (a `.md` colliding with a
   // `.html` fails structural validation too, which is true and unhelpful).
@@ -427,7 +427,7 @@ export const openSession = async (
     // the fold. The loser now finds the segment open and falls through to the
     // state the winner left, which is what every later opener already does.
     const [event] = await appendEventsIf(
-      paths.logPath,
+      paths,
       (existing) => {
         const now = foldLog(existing);
         if (now.status !== "none" && now.status !== "ended") return false;
@@ -463,7 +463,7 @@ export const openSession = async (
       if (structure.ok) {
         const nextVersion = before.version + 1;
         const commit = commitVersionBytes(paths, html, before.segment, nextVersion);
-        await appendEvent(paths.logPath, {
+        await appendEvent(paths, {
           t: "version",
           version: nextVersion,
           hash: commit.hash,
@@ -488,7 +488,7 @@ export const openSession = async (
       atomicWrite(paths.currentHtml, html);
     }
     if (before.status === "suspended") {
-      await appendEvent(paths.logPath, {
+      await appendEvent(paths, {
         t: "session_resumed",
         segment: before.segment,
         ...(opts?.attendant ? { attendant: opts.attendant } : {}),
@@ -496,7 +496,7 @@ export const openSession = async (
     }
   }
 
-  const state = foldLog((await readEvents(paths.logPath)).events);
+  const state = await sessionState(paths);
   return { state, cursor: state.highSeq, warnings, startedSegment };
 };
 
@@ -524,7 +524,7 @@ export const commitAgainstSnapshot = async (
       },
     };
   }
-  const before = foldLog((await readEvents(paths.logPath)).events);
+  const before = await sessionState(paths);
   if (before.status !== "active") {
     return {
       warning: {
@@ -543,11 +543,9 @@ export const commitAgainstSnapshot = async (
   }
   const nextVersion = before.version + 1;
   const commit = commitVersionBytes(paths, html, before.segment, nextVersion);
-  const events = await appendEventsIf(
-    paths.logPath,
-    (existing) => foldLog(existing).status === "active",
-    [{ t: "version", version: nextVersion, hash: commit.hash, path: commit.path }],
-  );
+  const events = await appendIfStatus(paths, "active", [
+    { t: "version", version: nextVersion, hash: commit.hash, path: commit.path },
+  ]);
   return events.length > 0 ? { committed: events[0] } : {};
 };
 
@@ -558,7 +556,7 @@ export const commitAgainstSnapshot = async (
  * event rather than a synthetic one) or a warning.
  *
  * The status check and the version append run atomically under the exclusive
- * log lock (D-049) via `appendEventsIf`, so a concurrent
+ * log lock (D-049) via `appendIfStatus`, so a concurrent
  * `session_suspended`/`session_ended` cannot land a `version` event in a
  * just-closed segment.
  */
@@ -581,9 +579,9 @@ export const commitWatchedChange = async (
     return {}; // no real change
   }
   // The version number and segment are derived from the current fold; the
-  // status gate is re-checked atomically inside the lock by appendEventsIf so a
+  // status gate is re-checked atomically inside the lock by appendIfStatus so a
   // concurrent suspend/end cannot let this version land in a closed segment.
-  const before = foldLog((await readEvents(paths.logPath)).events);
+  const before = await sessionState(paths);
   // Refuse BEFORE writing bytes on a session that is already not active.
   // commitVersionBytes overwrites current.html, and doing that ahead of a
   // refused append made the change permanently uncommittable: every later
@@ -603,11 +601,9 @@ export const commitWatchedChange = async (
   }
   const nextVersion = before.version + 1;
   const commit = commitVersionBytes(paths, html, before.segment, nextVersion);
-  const events = await appendEventsIf(
-    paths.logPath,
-    (existing) => foldLog(existing).status === "active",
-    [{ t: "version", version: nextVersion, hash: commit.hash, path: commit.path }],
-  );
+  const events = await appendIfStatus(paths, "active", [
+    { t: "version", version: nextVersion, hash: commit.hash, path: commit.path },
+  ]);
   if (events.length === 0) {
     // The race the guard exists for: a suspend/end landed between the bytes
     // and the append. Put current.html back to the pre-change baseline so the
