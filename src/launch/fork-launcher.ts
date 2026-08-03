@@ -1,6 +1,6 @@
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { openBrowser, spawnServer, waitForServer } from "../cli/self.ts";
+import { ensureServer, type EnsureServerOptions, openBrowser } from "../cli/self.ts";
 import {
   mergeAttendantSidecar,
   readLastAttendant,
@@ -14,9 +14,10 @@ import { readEvents } from "../core/log.ts";
 import { sessionPaths, type SessionPaths } from "../core/paths.ts";
 import type { WaitPayload } from "../core/payload.ts";
 import { harnessHasLocalStore, harnessTranscriptPath } from "../core/presence.ts";
+import { registerSession } from "../core/registry.ts";
 import { openSession } from "../core/session.ts";
 import { runWait } from "../core/wait.ts";
-import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
+import { discoverLiveServer } from "../server/discovery.ts";
 import { stdoutSink } from "../server/observe.ts";
 import { resolveView, wantsBrowserWindow } from "../server/view.ts";
 import { createPrompt, revisePrompt } from "./prompts.ts";
@@ -129,24 +130,50 @@ const fileExists = async (path: string): Promise<boolean> => {
   }
 };
 
-/** Ensure a child artifact has a live viewer (the recipe's agent should have run
- *  `lucid open`; this is the fallback when it did not). No stdout print - the
- *  launcher owns its own output stream. */
-const ensureChildOpen = async (childPaths: SessionPaths, browser: boolean): Promise<boolean> => {
-  if (await discoverLiveServer(childPaths)) return true;
-  if (!(await fileExists(childPaths.artifactPath))) return false;
-  await openSession(childPaths);
-  await removeServerDescriptor(childPaths);
-  spawnServer(childPaths);
-  const identity = await waitForServer(childPaths, 8000);
-  // The view governs every launch, not only `open`'s (plan 06): a fork spawned
-  // from inside a chat app's pane must not pop a window over the human's
-  // conversation. The URL is already the solo one here - a fork's child gets
-  // its own dedicated server - so only the launch is in question.
-  if (identity && wantsBrowserWindow(browser, resolveView(process.env))) {
-    openBrowser(`http://127.0.0.1:${identity.port}/__lucid/viewer`);
+/**
+ * Ensure a child artifact has a live viewer (the recipe's agent should have run
+ * `lucid open`; this is the fallback when it did not). No stdout print - the
+ * launcher owns its own output stream.
+ *
+ * Starting the server is `ensureServer`'s job, not this function's: it holds
+ * the descriptor lock, and a second read-then-spawn down here would be the
+ * duplicate-appender race that lock exists to prevent. The windows are real -
+ * a detached server still booting after the child's own `lucid open` was
+ * killed with its turn, or another process opening the same deterministic
+ * child path. What stays here is what is genuinely the launcher's: an
+ * unauthored artifact means the agent never wrote one, and the launch decision.
+ */
+export const ensureChildOpen = async (
+  childPaths: SessionPaths,
+  browser: boolean,
+  options: EnsureServerOptions = {},
+): Promise<boolean> => {
+  if (!(await discoverLiveServer(childPaths))) {
+    if (!(await fileExists(childPaths.artifactPath))) return false;
+    await openSession(childPaths);
+    const identity = await ensureServer(childPaths, options);
+    if (!identity) return false;
+    // The view governs every launch, not only `open`'s (plan 06): a fork spawned
+    // from inside a chat app's pane must not pop a window over the human's
+    // conversation. The URL is already the solo one here - a fork's child gets
+    // its own dedicated server - so only the launch is in question.
+    //
+    // Unconditional inside this branch, deliberately: two launchers racing on
+    // one child adopt the single server the lock allowed and each pop a window.
+    // Launching only from the caller that actually spawned would dedupe that,
+    // and would lose the window in the normal case this fallback exists for -
+    // the child's own `lucid open` started a server and was killed with its
+    // turn before it ever reached its own launch, so nobody would open one.
+    // A second window onto one artifact is the cheaper failure.
+    if (wantsBrowserWindow(browser, resolveView(process.env))) {
+      openBrowser(`http://127.0.0.1:${identity.port}/__lucid/viewer`);
+    }
   }
-  return identity !== undefined;
+  // The same pointer `open` writes, so a fork child is discoverable like any
+  // other session. Advisory there and advisory here: a registry failure must
+  // never fail the child's open.
+  await registerSession(childPaths.artifactPath).catch(() => {});
+  return true;
 };
 
 const substitutions = (v: {

@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
-import { ensureSessionDirs } from "../src/core/session.ts";
+import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import { ensureServer } from "../src/cli/self.ts";
 import { writeServerDescriptor } from "../src/server/discovery.ts";
 
@@ -128,5 +129,35 @@ describe("two simultaneous opens start one server (finding #16)", () => {
     expect(spawned).toBe(1);
     const ports = new Set(results.map((r) => r?.port));
     expect(ports.size).toBe(1);
+  });
+});
+
+/**
+ * The other half of the same race: serializing who may START a server says
+ * nothing about who may OPEN the session, and `open` does both. Two callers
+ * that read an unopened log before either appended both wrote
+ * `session_opened`, and a second one restarts the segment - so anything the
+ * first opener's server had already committed dropped out of the fold.
+ */
+describe("two simultaneous opens open the session once", () => {
+  test("the second opener finds the segment already open", async () => {
+    const [a, b] = await Promise.all([openSession(paths), openSession(paths)]);
+
+    const { events } = await readEvents(paths.logPath);
+    expect(events.filter((e) => e.t === "session_opened")).toHaveLength(1);
+    // Exactly one caller may claim it started the segment; the other resumed
+    // what was already there.
+    expect([a.startedSegment, b.startedSegment].filter(Boolean)).toHaveLength(1);
+    // Both still see the open session they asked for.
+    expect(a.state.status).toBe("active");
+    expect(b.state.status).toBe("active");
+  });
+
+  test("ten racing opens still append one session_opened", async () => {
+    const results = await Promise.all(Array.from({ length: 10 }, () => openSession(paths)));
+
+    const { events } = await readEvents(paths.logPath);
+    expect(events.filter((e) => e.t === "session_opened")).toHaveLength(1);
+    expect(results.filter((r) => r.startedSegment)).toHaveLength(1);
   });
 });
