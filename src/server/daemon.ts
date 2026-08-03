@@ -32,7 +32,8 @@ import { swr } from "../core/swr.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
 import { detectAuthFailure, detectUsageLimit } from "../launch/limits.ts";
 import { readEvents } from "../core/log.ts";
-import { prepareSpawnIdentity, runSpawn } from "../launch/launcher.ts";
+import { createArtifactPrompt } from "../launch/prompts.ts";
+import { prepareSpawnIdentity, runSpawn } from "../launch/spawn.ts";
 import {
   buildArgv,
   defaultRecipe,
@@ -49,7 +50,7 @@ import {
   writeSelection,
 } from "../launch/selection.ts";
 import type { HarnessInfo } from "../protocol/wire.ts";
-import { createArtifactPrompt, createAttendant, type Attendant } from "./attend.ts";
+import { createAttendant, type Attendant } from "./attend.ts";
 import {
   cliRequestId,
   observeRequests,
@@ -1163,7 +1164,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // turn ends, so a retry while it runs is refused rather than doubled.
       const outLog = paths.createLog;
       // Where THIS attempt's output starts. The log is opened in append mode
-      // (launcher.ts), so a second failed create on the same artifact would
+      // (spawn.ts), so a second failed create on the same artifact would
       // otherwise tail both attempts concatenated with no separator - the
       // previous turn's evidence presented as this one's (07#17). Same fix
       // shape the attend path already uses for a silent turn's relay.

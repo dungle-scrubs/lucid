@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSpawn } from "../src/launch/launcher.ts";
+import { runSpawn } from "../src/launch/spawn.ts";
 import type {
   NativeSessionIdentity,
   StdoutJsonlSessionIdentity,

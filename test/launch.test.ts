@@ -7,12 +7,8 @@ import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import type { WaitPayload } from "../src/protocol/wire.ts";
-import {
-  attendedByAnother,
-  childArtifactPath,
-  handleForks,
-  revisePrompt,
-} from "../src/launch/launcher.ts";
+import { attendedByAnother, childArtifactPath, handleForks } from "../src/launch/fork-launcher.ts";
+import { createArtifactPrompt, createPrompt, revisePrompt } from "../src/launch/prompts.ts";
 import {
   buildArgv,
   defaultRecipe,
@@ -72,6 +68,46 @@ describe("revisePrompt tells the turn to declare its intent (finding #18)", () =
     const prompt = revisePrompt(payload, "/tmp/My Plan.html");
     expect(prompt).toContain("lucid intent '/tmp/My Plan.html' revise");
     expect(prompt).toContain("lucid progress '/tmp/My Plan.html' --label");
+  });
+});
+
+describe("the prompt protocol is one wording across every builder", () => {
+  const artifact = "/tmp/My Plan.html";
+  const payload = {
+    status: "feedback",
+    annotations: [],
+    messages: [{ role: "human", text: "tighten the second paragraph" }],
+    nextCursor: "evt_00001",
+  } as never;
+
+  test("an authoring turn is told to open the artifact, and to write only it", () => {
+    // Three builders, one protocol. A clause that drifts in one of them tells
+    // a fork-launcher turn something a hub turn is never told, and nothing
+    // notices until an artifact is authored and never put in front of anyone.
+    const open = "Then open it for review by running:\n  lucid open '/tmp/My Plan.html'";
+    const only = "Write only /tmp/My Plan.html; do not modify other files.";
+    for (const prompt of [
+      createPrompt("/tmp/seed.json", artifact),
+      createArtifactPrompt(artifact, "a plan for the migration"),
+    ]) {
+      expect(prompt).toContain(open);
+      expect(prompt).toContain(only);
+    }
+  });
+
+  test("a driven turn narrates its phases through the same command", () => {
+    // The examples differ per builder (authoring and revising are different
+    // work); the instruction and the command must not.
+    const narration =
+      "As you work, report each phase as you enter it: `lucid progress '/tmp/My Plan.html' --label \"<what you are doing, in a few words>\"` - for example ";
+    const tail = ". The human watches these one-liners while they wait.";
+    for (const prompt of [
+      createArtifactPrompt(artifact, "a plan for the migration"),
+      revisePrompt(payload, artifact),
+    ]) {
+      expect(prompt).toContain(narration);
+      expect(prompt).toContain(tail);
+    }
   });
 });
 

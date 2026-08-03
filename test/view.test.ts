@@ -193,7 +193,10 @@ describe("wantsBrowserWindow (plan 06, review LOW-2)", () => {
 
   test("the launcher routes through it rather than reimplementing the check", async () => {
     const { readFileSync } = await import("node:fs");
-    const launcher = readFileSync(new URL("../src/launch/launcher.ts", import.meta.url), "utf8");
+    const launcher = readFileSync(
+      new URL("../src/launch/fork-launcher.ts", import.meta.url),
+      "utf8",
+    );
     expect(launcher).toContain("wantsBrowserWindow(");
     expect(launcher).not.toContain('!== "solo"');
   });

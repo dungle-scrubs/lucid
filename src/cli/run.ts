@@ -27,7 +27,7 @@ import {
   validateGroup,
 } from "../core/question-contract.ts";
 import { ArtifactError, NotFoundError, ServerError, ValidationError } from "../errors.ts";
-import { runLaunch } from "../launch/launcher.ts";
+import { runLaunch } from "../launch/fork-launcher.ts";
 import { loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload, parseWaitPayloadInput } from "../plan/ingest.ts";
 import { planArtifactPath, renderPlanDoc, renderedSourceOf } from "../plan/render.ts";

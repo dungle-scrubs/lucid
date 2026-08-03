@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSpawn } from "../src/launch/launcher.ts";
+import { runSpawn } from "../src/launch/spawn.ts";
 
 /**
  * A spawned turn that goes silent must be killed, not waited on forever.
