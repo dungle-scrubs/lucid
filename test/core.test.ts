@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import type { DomElementLike, DomRootLike } from "../src/anchors/dom.ts";
 import {
-  anchorResolves,
+  anchorMatch,
   captureElementAnchor,
   computeFingerprint,
   resolveElementAnchor,
 } from "../src/anchors/dom.ts";
-import type { ElementAnchor, RangeAnchor } from "../src/anchors/anchor.ts";
-import { parseAnchor } from "../src/anchors/anchor.ts";
+import type { Anchor, ElementAnchor, RangeAnchor } from "../src/anchors/anchor.ts";
+import { anchorText, parseAnchor } from "../src/anchors/anchor.ts";
 import { parseCursor, renderCursor } from "../src/core/cursor.ts";
 import { foldLog } from "../src/core/fold.ts";
 import { sanitizeProgress } from "../src/core/progress.ts";
@@ -81,10 +81,10 @@ describe("anchors/dom", () => {
     expect(anchor.kind).toBe("element");
     // Re-render with same content resolves.
     const reRender = rootOf("<body><article><ol><li>one</li><li>two</li></ol></article></body>");
-    expect(anchorResolves(anchor, reRender)).toBe(true);
+    expect(anchorMatch(anchor, reRender) !== null).toBe(true);
     // Content removed -> does not resolve.
     const changed = rootOf("<body><article><ol><li>one</li></ol></article></body>");
-    expect(anchorResolves(anchor, changed)).toBe(false);
+    expect(anchorMatch(anchor, changed) !== null).toBe(false);
   });
 
   test("resolves lucidId only when unique", () => {
@@ -96,12 +96,12 @@ describe("anchors/dom", () => {
       snippet: "<div>x</div>",
     };
     const unique = rootOf('<body><div data-lucid-id="step-1">x</div></body>');
-    expect(anchorResolves(anchor, unique)).toBe(true);
+    expect(anchorMatch(anchor, unique) !== null).toBe(true);
     const dup = rootOf(
       '<body><div data-lucid-id="step-1">x</div><div data-lucid-id="step-1">y</div></body>',
     );
     // non-unique lucidId is skipped, fingerprint won't match -> false
-    expect(anchorResolves(anchor, dup)).toBe(false);
+    expect(anchorMatch(anchor, dup) !== null).toBe(false);
   });
 
   test("identical-text siblings get distinct fingerprints and resolve to the right one", () => {
@@ -114,7 +114,7 @@ describe("anchors/dom", () => {
     // An anchor captured on the third <li> resolves on an identical re-render.
     const anchor = captureElementAnchor(third);
     const reRender = rootOf("<body><ul><li>same</li><li>same</li><li>same</li></ul></body>");
-    expect(anchorResolves(anchor, reRender)).toBe(true);
+    expect(anchorMatch(anchor, reRender) !== null).toBe(true);
   });
 
   test("identical cells across table rows resolve to the clicked one, not the first", () => {
@@ -172,9 +172,9 @@ describe("anchors/dom", () => {
       snippet: "events table",
     };
     const root = rootOf("<body><p>Backfill from the events table nightly please</p></body>");
-    expect(anchorResolves(anchor, root)).toBe(true);
+    expect(anchorMatch(anchor, root) !== null).toBe(true);
     const noMatch = rootOf("<body><p>nothing here</p></body>");
-    expect(anchorResolves(anchor, noMatch)).toBe(false);
+    expect(anchorMatch(anchor, noMatch) !== null).toBe(false);
   });
 });
 
@@ -192,6 +192,95 @@ describe("parseAnchor", () => {
     expect("error" in parseAnchor({ kind: "element" })).toBe(true);
     expect("error" in parseAnchor(null)).toBe(true);
     expect("error" in parseAnchor({ kind: "bogus" })).toBe(true);
+  });
+});
+
+/**
+ * One rule for turning an anchor into words (#12). Five surfaces wrote their
+ * own - and the markup strip the chrome documented never reached the three the
+ * AGENT reads, so a spawned turn was handed outerHTML clipped at 100 chars.
+ */
+describe("anchorText", () => {
+  const element = (snippet: string): Anchor => ({
+    kind: "element",
+    fingerprint: "f",
+    domPath: "p",
+    snippet,
+  });
+
+  test("a range says what was selected; an element says what it shows", () => {
+    const range: Anchor = {
+      kind: "range",
+      quote: { exact: "zero  downtime", prefix: "", suffix: "" },
+      position: { start: 0, end: 14 },
+      snippet: "ignored",
+    };
+    expect(anchorText(range)).toBe("zero downtime");
+    expect(anchorText(element('<li class="a">  Backfill <b>from</b> the archive </li>'))).toBe(
+      "Backfill from the archive",
+    );
+  });
+
+  test("script and style bodies are not text - they are dropped, not untagged", () => {
+    // A tag strip alone splices the stylesheet into the excerpt, which is the
+    // one thing the DOM-free path could get wrong against the browser's parser.
+    const snippet = "<div><style>p{color:red}</style>Ship it<script>alert(1)</script></div>";
+    expect(anchorText(element(snippet))).toBe("Ship it");
+  });
+
+  test("maxChars clips without framing; the caller adds its own ellipsis", () => {
+    expect(anchorText(element(`<p>${"x".repeat(200)}</p>`), { maxChars: 100 })).toBe(
+      "x".repeat(100),
+    );
+  });
+
+  test("keepLines keeps the region's own shape, for a surface that quotes it", () => {
+    const range: Anchor = {
+      kind: "range",
+      quote: { exact: "first line\n\n\nsecond line  ", prefix: "", suffix: "" },
+      position: { start: 0, end: 26 },
+      snippet: "",
+    };
+    expect(anchorText(range, { keepLines: true })).toBe("first line\n\nsecond line");
+    expect(anchorText(range)).toBe("first line second line");
+  });
+
+  test("a quoted region keeps its indentation - the shape is what was selected", () => {
+    // Folding a line's own runs of space flattens an indented code block or an
+    // aligned table on the one surface that reproduces the region verbatim.
+    const range: Anchor = {
+      kind: "range",
+      quote: { exact: "function f() {\n  return 1;\n}", prefix: "", suffix: "" },
+      position: { start: 0, end: 28 },
+      snippet: "",
+    };
+    expect(anchorText(range, { keepLines: true })).toBe("function f() {\n  return 1;\n}");
+  });
+
+  test("a stripped element still folds per line: its spaces came from the tags", () => {
+    const snippet = "<ul>\n  <li>alpha</li>\n  <li>beta</li>\n</ul>";
+    expect(anchorText(element(snippet), { keepLines: true })).toBe("alpha\nbeta");
+  });
+
+  test("an element with no visible text keeps its markup rather than saying nothing", () => {
+    expect(anchorText(element('<img src="chart.png">'))).toBe('<img src="chart.png">');
+  });
+
+  test("textOnly says nothing instead, for a caller with its own word for it", () => {
+    // The drawer's chip is one line wide and calls a wordless pin a "pinned
+    // region" - the markup fallback made that branch dead and put a tag, cut
+    // mid-attribute, in the chip.
+    expect(anchorText(element('<img src="chart.png">'), { textOnly: true })).toBe("");
+    expect(anchorText(element("<p>Ship it</p>"), { textOnly: true })).toBe("Ship it");
+  });
+
+  test("an attribute holding a `>` does not leak its tail into the excerpt", () => {
+    expect(anchorText(element('<div title="a > b">Ship it</div>'))).toBe("Ship it");
+  });
+
+  test("the strip is injectable, because the browser has a real parser", () => {
+    const stripHtml = (html: string): string => `parsed:${html}`;
+    expect(anchorText(element("<p>x</p>"), { stripHtml })).toBe("parsed:<p>x</p>");
   });
 });
 

@@ -1,4 +1,4 @@
-import type { Anchor } from "../anchors/anchor.ts";
+import { type Anchor, anchorText } from "../anchors/anchor.ts";
 import type { WaitPayload } from "../core/payload.ts";
 import { ArtifactError } from "../errors.ts";
 
@@ -61,11 +61,7 @@ const refOf = (target: Anchor): string | undefined => {
   return undefined;
 };
 
-const snippetOf = (target: Anchor): string =>
-  (target.kind === "range" ? target.quote.exact : target.snippet)
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
+const snippetOf = (target: Anchor): string => anchorText(target, { maxChars: 120 });
 
 const esc = (s: string): string => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 

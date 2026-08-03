@@ -1,4 +1,4 @@
-import type { Anchor } from "../anchors/anchor.ts";
+import { type Anchor, anchorText } from "../anchors/anchor.ts";
 import { shellArg } from "../core/escape.ts";
 import type { PayloadImage, WaitPayload } from "../core/payload.ts";
 
@@ -113,8 +113,7 @@ export const revisePrompt = (payload: WaitPayload, artifact: string): string | n
   // One clipped location per anchor. A multi-target annotation lists every
   // spot its note covers; dropping the tail would apply the note to only the
   // first of the places the human pointed at.
-  const clip = (t: Anchor): string =>
-    (t.kind === "range" ? t.quote.exact : t.snippet).replace(/\s+/g, " ").trim().slice(0, 100);
+  const clip = (t: Anchor): string => anchorText(t, { maxChars: 100 });
   for (const a of payload.annotations) {
     const where = (a.targets ?? [a.target]).map(clip).join("; ");
     lines.push(`- ${withImages(a.note, a.images)} (at: ${where})`);

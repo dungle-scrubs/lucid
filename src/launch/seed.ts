@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Anchor } from "../anchors/anchor.ts";
+import { type Anchor, anchorText } from "../anchors/anchor.ts";
 import type { ForkRecord } from "../core/fold.ts";
 import { pastedRelPath, type SessionPaths } from "../core/paths.ts";
 
@@ -12,8 +12,9 @@ import { pastedRelPath, type SessionPaths } from "../core/paths.ts";
  * session dir (`forks/<id>/seed.md`) so it travels with the review record.
  */
 
-const regionText = (target: Anchor): string =>
-  (target.kind === "range" ? target.quote.exact : target.snippet).trim();
+/** The region as the human saw it, block-shaped: the seed quotes it, so its
+ *  own line breaks are structure the spawned agent reads. */
+const regionText = (target: Anchor): string => anchorText(target, { keepLines: true });
 
 /**
  * Collapse a fork id to a safe, non-empty path component. The server already

@@ -1,6 +1,6 @@
 import type { DataMessagePartComponent } from "@assistant-ui/react";
 import { summarizeItemAnswer } from "../../src/core/question-contract.ts";
-import { TargetSnippet } from "./AnnotationPart.tsx";
+import { TargetSnippet } from "./TargetSnippet.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
 import { groupOf } from "./question-draft.ts";

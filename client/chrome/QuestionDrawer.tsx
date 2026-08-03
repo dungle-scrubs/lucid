@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { type Anchor, anchorText } from "../../src/anchors/anchor.ts";
+import { stripHtmlWithDom } from "./anchor-text.ts";
 import type {
   QuestionChoice,
   QuestionGroup,
@@ -41,13 +43,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
  * inert `<pre>`, an HTML wireframe renders in a script-less sandboxed iframe.
  */
 
-/** Short, human excerpt of a pinned region for the chip - the anchor's snippet
- *  is outerHTML, so strip tags and clip. */
-const anchorLabel = (snippet: string): string => {
-  const text = snippet
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+/** Short, human excerpt of a pinned region for the chip. The chip is one line
+ *  wide, so the clip is tight and says so; a pin on something wordless (an
+ *  image, a chart, a rule) names itself rather than showing its markup, which
+ *  is why the excerpt is asked for as text ONLY. */
+const anchorLabel = (anchor: Anchor): string => {
+  const text = anchorText(anchor, { stripHtml: stripHtmlWithDom, textOnly: true });
   return text.length > 48 ? `${text.slice(0, 48)}…` : text || "pinned region";
 };
 
@@ -542,7 +543,7 @@ const AnswerAttachments = ({ q }: { readonly q: AgentQuestion }) => {
           className="inline-flex items-center gap-1 border border-accent/50 bg-accent/10 px-2 py-px text-[11px] text-fg"
         >
           <span className="text-accent-bright">◎</span>
-          {anchorLabel(anchor.snippet)}
+          {anchorLabel(anchor)}
           <button
             type="button"
             aria-label="Remove pinned region"

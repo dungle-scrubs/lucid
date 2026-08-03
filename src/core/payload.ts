@@ -181,7 +181,7 @@ const resolveAnnotation = async (
   // Carry forward: does the anchor still attach to the current version? A
   // multi-target record stays live while ANY spot survives - the overlay
   // simply paints no mark for the spots that were edited away.
-  // Short-circuits on the first EXACT hit, like the `.some(anchorResolves)`
+  // Short-circuits on the first EXACT hit, like the `.some(...)` predicate
   // this replaced. Mapping every target instead cost a full
   // `querySelectorAll("*")` + fingerprint pass per missing target on this hot
   // path (`/__lucid/state`, which the viewer polls, and every `lucid wait`) -

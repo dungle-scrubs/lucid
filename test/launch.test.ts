@@ -158,9 +158,12 @@ describe("revisePrompt locations", () => {
       ],
     };
     const prompt = revisePrompt(payload, "/tmp/plan.html");
-    expect(prompt).toContain(
-      `- align these (at: <li>alpha</li>; <li>beta</li>; ${long.slice(0, 100)})`,
-    );
+    // The snippet is outerHTML; what the human pointed at is its VISIBLE text
+    // (#12). Handing the markup over clipped at 100 chars gave the agent a tag
+    // cut mid-attribute and no words - the failure the chrome already fixed for
+    // the human and this surface never got.
+    expect(prompt).toContain(`- align these (at: alpha; beta; ${"x".repeat(100)})`);
+    expect(prompt).not.toContain("<li>");
     expect(prompt).not.toContain("x".repeat(101));
   });
 
@@ -185,11 +188,9 @@ describe("revisePrompt locations", () => {
       ],
     };
     const prompt = revisePrompt(payload, "/tmp/plan.html");
-    expect(prompt).toContain(
-      '- answer to "Which sections?": these (pinned: <h2>Intro</h2>; <h2>Rollout</h2>)',
-    );
+    expect(prompt).toContain('- answer to "Which sections?": these (pinned: Intro; Rollout)');
     // A pin with no words is still a whole answer, not a dropped line.
-    expect(prompt).toContain('- answer to "And where does the note go?": (pinned: <h2>Risks</h2>)');
+    expect(prompt).toContain('- answer to "And where does the note go?": (pinned: Risks)');
   });
 });
 
@@ -494,6 +495,42 @@ describe("fork seed", () => {
     expect(body).toContain("turn this into an implementation plan");
     expect(body).toContain("plan.html (v1)");
     expect(body).toContain("> Backfill from the archive");
+  });
+
+  test("an element region is quoted as its visible text, not as its markup", async () => {
+    // The seed is the spawned agent's whole context (#12). An outerHTML region
+    // handed over raw made the blockquote markup soup: every tag, no sentence.
+    const fork: ForkRecord = {
+      id: "fk2",
+      seq: 3,
+      version: 1,
+      target: elementTarget('<li class="row"><b>Backfill</b> from the archive</li>'),
+      note: "plan it",
+      at: "2026-01-01T00:00:00Z",
+    };
+    const { seedPath } = await writeForkSeed(paths, fork);
+    const body = await readFile(seedPath, "utf8");
+    expect(body).toContain("> Backfill from the archive");
+    expect(body).not.toContain("<li");
+  });
+
+  test("a multi-line selection keeps its lines, because the seed quotes them", async () => {
+    const fork: ForkRecord = {
+      id: "fk3",
+      seq: 4,
+      version: 1,
+      target: {
+        kind: "range",
+        quote: { exact: "first line\nsecond line", prefix: "", suffix: "" },
+        position: { start: 0, end: 22 },
+        snippet: "first line\nsecond line",
+      },
+      note: "plan it",
+      at: "2026-01-01T00:00:00Z",
+    };
+    const { seedPath } = await writeForkSeed(paths, fork);
+    const body = await readFile(seedPath, "utf8");
+    expect(body).toContain("> first line\n> second line");
   });
 });
 

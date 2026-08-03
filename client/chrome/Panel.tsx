@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { QUICK_REPLIES } from "./actions.ts";
 import { DECISION_REPLIES } from "../shared/decision.ts";
-import { TargetSnippet } from "./AnnotationPart.tsx";
+import { TargetSnippet } from "./TargetSnippet.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
 import { effortLadder, withCurrent } from "./selection.ts";
