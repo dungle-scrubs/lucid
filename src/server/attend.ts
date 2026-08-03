@@ -35,7 +35,7 @@ import {
   mintLaunchId,
   type SpawnResult,
 } from "../launch/session-identity.ts";
-import { detectUsageLimit } from "../launch/limits.ts";
+import { classifyTurnFailure } from "../launch/turn.ts";
 import {
   buildArgv,
   loadRegistry,
@@ -1012,7 +1012,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // every attempt, so scanning the whole file could make an unrelated later
     // crash inherit an earlier turn's usage wall.
     const runOutput = (await readFile(paths.attendLog, "utf8").catch(() => "")).slice(outputFrom);
-    const limit = code === 0 ? null : detectUsageLimit(runOutput);
+    // Why it died, through the one classifier the create paths share: a usage
+    // wall, an auth wall, or neither. An auth-walled turn used to end as a
+    // bare "failed", so the record said nothing about the one failure that a
+    // detached hub causes and no amount of logging in again can fix.
+    const failure = code === 0 ? null : classifyTurnFailure(runOutput);
+    const limit = failure?.usageLimit ?? null;
     // Identity established by this turn. Fresh handoff: what the harness
     // ANNOUNCED wins; the legacy whole-output scan covers recipes that
     // predate declarations (retired with the registry migration); a clean
@@ -1054,10 +1059,10 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     await deliver(paths, {
       t: "agent_turn_ended",
       turnId,
-      reason: code === 0 ? "done" : limit !== null ? "usage_limit" : "failed",
-      // Event codes use the log's identifier charset; limit kinds use hyphens
+      reason: code === 0 ? "done" : (failure?.reason ?? "failed"),
+      // Event codes use the log's identifier charset; wall kinds use hyphens
       // on the warning wire. Both remain identifiers, never harness prose.
-      ...(limit !== null ? { code: limit.replaceAll("-", "_") } : {}),
+      ...(failure?.code !== undefined ? { code: failure.code } : {}),
       ...(establishedSessionId
         ? {
             attendant: {

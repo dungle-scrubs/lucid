@@ -30,7 +30,7 @@ import { scratchpadProject } from "../core/scratchpad.ts";
 import { projectRoot } from "../core/sessions.ts";
 import { swr } from "../core/swr.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
-import { detectAuthFailure, detectUsageLimit } from "../launch/limits.ts";
+import { classifyTurnFailure } from "../launch/turn.ts";
 import { readEvents } from "../core/log.ts";
 import { createArtifactPrompt } from "../launch/prompts.ts";
 import { prepareSpawnIdentity, runSpawn } from "../launch/spawn.ts";
@@ -1252,23 +1252,24 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         // THIS attempt only.
         const raw = whole.slice(outputFrom);
         const tail = raw.trim().split("\n").slice(-3).join("\n").slice(-500);
+        // Why the turn died, through the one classifier every driver shares.
         // A usage wall is the one failure the human can do nothing about in
         // Lucid - name it as such rather than leaving them to read the tail.
-        const usageLimit = detectUsageLimit(raw);
-        // A detached hub cannot read the macOS Keychain, so a turn can die on
-        // auth while the human is correctly logged in interactively. Showing
-        // the raw tail alone sends them to re-check a login that was never the
-        // problem (plan 08 M22). The KIND rides the event; the dialog owns the
-        // wording, and the harness's own line still arrives in `tail`.
-        const authFailure = detectAuthFailure(raw);
+        // And a detached hub cannot read the macOS Keychain, so a turn can die
+        // on auth while the human is correctly logged in interactively:
+        // showing the raw tail alone sends them to re-check a login that was
+        // never the problem (plan 08 M22). The KINDs ride the event; the
+        // dialog owns the wording, and the harness's own line still arrives
+        // in `tail`.
+        const failure = classifyTurnFailure(raw);
         broadcast(
           "create-failed",
           JSON.stringify({
             artifact,
             code,
             tail,
-            ...(usageLimit !== null ? { usageLimit } : {}),
-            ...(authFailure !== null ? { authFailure } : {}),
+            ...(failure.usageLimit !== null ? { usageLimit: failure.usageLimit } : {}),
+            ...(failure.authFailure !== null ? { authFailure: failure.authFailure } : {}),
           }),
         );
       };

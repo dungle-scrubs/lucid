@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { TURN_END_CODE, TURN_END_REASONS } from "../src/core/events.ts";
 import { detectAuthFailure, detectUsageLimit } from "../src/launch/limits.ts";
+import { classifyTurnFailure } from "../src/launch/turn.ts";
 
 describe("detectUsageLimit", () => {
   test("names codex's wall from its own last words", () => {
@@ -78,5 +80,60 @@ describe("detectAuthFailure", () => {
     // A usage wall is a different wall - it must not read as an auth problem,
     // because the remedy is the opposite (wait vs re-auth).
     expect(detectAuthFailure("You've hit your usage limit")).toBeNull();
+  });
+});
+
+describe("classifyTurnFailure", () => {
+  test("an auth-walled turn is recorded as one, not as a bare failure", () => {
+    // The divergence this closes: the create path detected auth walls and the
+    // attend path did not, so an artifact whose delivery died on the detached
+    // hub's missing credentials ended with `reason: "failed"` and no code at
+    // all - the one failure that no amount of logging in again can fix, with
+    // nothing in the record to say so.
+    const failure = classifyTurnFailure("Failed to authenticate: OAuth session expired");
+    expect(failure.authFailure).toBe("expired");
+    expect(failure.reason).toBe("failed");
+    expect(failure.code).toBe("auth_expired");
+  });
+
+  test("a usage wall outranks an auth wall in the record", () => {
+    // A harness over its budget will not authenticate its way back in, so the
+    // wall the human can do nothing about is the one the turn record names -
+    // while both kinds stay available to the create dialog, which reports
+    // them as separate facts with separate remedies.
+    const failure = classifyTurnFailure(
+      ["Not logged in. Please run /login", "You've hit your weekly limit · resets 2am"].join("\n"),
+    );
+    expect(failure.reason).toBe("usage_limit");
+    expect(failure.code).toBe("weekly_limit");
+    expect(failure.usageLimit).toBe("weekly-limit");
+    expect(failure.authFailure).toBe("not-logged-in");
+  });
+
+  test("output naming no wall carries no code", () => {
+    const failure = classifyTurnFailure("Error: ENOENT no such file");
+    expect(failure).toEqual({ usageLimit: null, authFailure: null, reason: "failed" });
+  });
+
+  test("every verdict fits the log's own reason set and code charset", () => {
+    // The verdict goes straight into `agent_turn_ended`, whose reasons are a
+    // closed set and whose code is refused rather than truncated. A kind that
+    // maps to something the event layer rejects would silently drop the
+    // terminator - the exact append that closes a working window.
+    for (const output of [
+      "You've hit your usage limit",
+      "You've hit your session limit",
+      "You've hit your weekly limit",
+      "insufficient credits",
+      "RESOURCE_EXHAUSTED",
+      "Not logged in. Please run /login",
+      "OAuth session expired",
+      "Invalid API key provided",
+      "nothing recognisable at all",
+    ]) {
+      const failure = classifyTurnFailure(output);
+      expect(TURN_END_REASONS.has(failure.reason)).toBe(true);
+      if (failure.code !== undefined) expect(TURN_END_CODE.test(failure.code)).toBe(true);
+    }
   });
 });

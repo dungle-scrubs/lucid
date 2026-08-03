@@ -770,6 +770,66 @@ describe("hub attend mode", () => {
     }
   }, 20_000);
 
+  test("an auth-walled turn names the wall in its record, not a bare failure", async () => {
+    // A `lucid hub --attend` daemon runs detached from any login session, so
+    // it cannot read credentials an interactive `claude login` put in the
+    // Keychain: the turn dies on auth while the human is, correctly, logged
+    // in. The create path already said which wall that was; the attend path
+    // ended with a bare `failed` and no code, so the record said nothing
+    // about the one failure logging in again cannot fix.
+    const authStub = join(dir, "stub-auth.ts");
+    await writeFile(
+      authStub,
+      'console.error("Failed to authenticate: OAuth session expired");\nprocess.exit(1);\n',
+    );
+    await writeFile(
+      harnessesPath,
+      JSON.stringify({
+        default: "stub",
+        harnesses: {
+          stub: {
+            spawn: [process.execPath, "run", authStub],
+            resume: [process.execPath, "run", authStub],
+          },
+        },
+      }),
+    );
+    await appendEvent(paths.logPath, {
+      t: "annotation",
+      id: "a-auth",
+      version: 1,
+      target: elementTarget,
+      note: "this must not die as an anonymous failure",
+    });
+
+    const attendant = createAttendant({
+      paths,
+      agentsListening: () => 0,
+      harnessesPath,
+      debounceMs: 10,
+      log: (m) => logs.push(m),
+    });
+    try {
+      const deadline = Date.now() + 10_000;
+      let ended: LogEvent | undefined;
+      while (Date.now() < deadline && ended === undefined) {
+        await attendant.tick();
+        await sleep(120);
+        ended = (await readEvents(paths.logPath)).events.find((e) => e.t === "agent_turn_ended");
+      }
+      if (ended === undefined) {
+        throw new Error(
+          `no turn end\nlogs=${JSON.stringify(logs)}\noutput=${await readFile(paths.attendLog, "utf8").catch(() => "<missing>")}`,
+        );
+      }
+      // Still `failed` - the reason set is closed and an auth wall is not a
+      // usage wall - but the code now says WHICH wall it was.
+      expect(ended).toMatchObject({ reason: "failed", code: "auth_expired" });
+    } finally {
+      attendant.stop();
+    }
+  }, 20_000);
+
   test("delivers an undelivered batch by resuming the artifact's own session", async () => {
     const hub = await startDaemon(true);
     await mount(hub);
