@@ -487,3 +487,56 @@ test("a tab whose session is gone stops knocking, and says why", async ({ page }
   await page.waitForTimeout(5_000);
   await expect(on(page).sessionGone()).toBeVisible();
 });
+
+/**
+ * The review drawer runs the full height of the window, beside the tab strip
+ * rather than beneath it - and its toggle sits in that strip, level with the
+ * tabs it lines up with.
+ *
+ * The drawer used to start below a full-width strip. Geometry is the contract:
+ * the drawer's top edge meets the strip's, the strip ends where the drawer
+ * begins (it would otherwise sit under it and lose those clicks), and the
+ * toggle rides the strip.
+ */
+test("the review drawer runs top to bottom beside the tab strip", async ({ page }) => {
+  hub = await startHub();
+  const opened = await openIntoHub(hub, PLAN_V1);
+  clis.push(opened.cli);
+  await page.goto(opened.shellUrl);
+  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
+
+  const strip = on(page).shellTabbar();
+  const toggle = on(page).panelToggle();
+  const drawer = page.locator('[data-slot="sidebar-container"]');
+  await expect(strip).toBeVisible();
+  await expect(toggle).toBeVisible();
+  await expect(drawer).toBeVisible();
+
+  const stripBox = await strip.boundingBox();
+  const drawerBox = await drawer.boundingBox();
+  const toggleBox = await toggle.boundingBox();
+  expect(stripBox).not.toBeNull();
+  expect(drawerBox).not.toBeNull();
+  expect(toggleBox).not.toBeNull();
+  if (stripBox === null || drawerBox === null || toggleBox === null) return;
+
+  // Top to bottom: the drawer starts level with the strip, not under it.
+  expect(Math.abs(drawerBox.y - stripBox.y)).toBeLessThanOrEqual(1);
+  expect(drawerBox.height).toBeGreaterThan(page.viewportSize()!.height * 0.9);
+
+  // The strip stops where the drawer starts - no overlap in either direction.
+  expect(stripBox.x + stripBox.width).toBeLessThanOrEqual(drawerBox.x + 1);
+
+  // The toggle is IN the strip, vertically within it.
+  expect(toggleBox.y).toBeGreaterThanOrEqual(stripBox.y - 1);
+  expect(toggleBox.y + toggleBox.height).toBeLessThanOrEqual(stripBox.y + stripBox.height + 1);
+
+  // And it still works: closing the drawer lets the strip take the full width.
+  await toggle.click();
+  await expect
+    .poll(async () => {
+      const box = await strip.boundingBox();
+      return box === null ? 0 : Math.round(box.width);
+    })
+    .toBeGreaterThan(Math.round(stripBox.width) + 100);
+});
