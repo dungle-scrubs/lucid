@@ -168,8 +168,11 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     mutation: {
       kind: "edit",
       file: "client/chrome/actions.ts",
-      find: 'if (get().status === "ended") {',
-      replace: "if (false) {",
+      // Anchored to the branch it describes, not just the condition: the
+      // ended-session guard is a shape other actions share, and a bare
+      // condition stopped identifying one site the moment a second grew.
+      find: 'if (get().status === "ended") {\n      warn(REOPEN_ENDED_MSG);',
+      replace: "if (false) {\n      warn(REOPEN_ENDED_MSG);",
     },
   },
   {

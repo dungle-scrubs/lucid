@@ -10,6 +10,7 @@ import { useMemo, type ReactNode } from "react";
 import { useSession, useSessionHandle } from "./context.tsx";
 import { deliveryState } from "./Delivery.tsx";
 import { buildTimeline } from "./store.ts";
+import { parseSlashCommand } from "./commands.ts";
 import type { TimelineItem } from "./types.ts";
 
 /**
@@ -75,6 +76,22 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
             id: `qa-${item.question.id}`,
             createdAt: new Date(item.at),
             content: [{ type: "data-qa", data: { id: item.question.id } }],
+          } as ThreadMessageLike;
+        }
+        if (item.kind === "cleared") {
+          // Keyed by the boundary's seq: a reload rebuilds the same id, and a
+          // second clear is a different entry rather than a mutation of this
+          // one.
+          return {
+            role: "user",
+            id: `cleared-${item.cleared.seq}`,
+            createdAt: new Date(item.at),
+            content: [
+              {
+                type: "data-cleared",
+                data: { at: item.at, hiddenCount: item.cleared.hiddenCount },
+              },
+            ],
           } as ThreadMessageLike;
         }
         if (item.kind === "verdict") {
@@ -179,9 +196,10 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
   const sending = useSession((s) => s.sending);
   const questions = useSession((s) => s.questions);
   const verdicts = useSession((s) => s.verdicts);
+  const cleared = useSession((s) => s.cleared);
   const timeline = useMemo(
-    () => buildTimeline(annotations, messages, queue, questions, verdicts),
-    [annotations, messages, queue, questions, verdicts],
+    () => buildTimeline(annotations, messages, queue, questions, verdicts, cleared),
+    [annotations, messages, queue, questions, verdicts, cleared],
   );
 
   /**
@@ -209,6 +227,20 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
       return meta ? [{ id: a.id, name: meta.name, file: meta.file }] : [];
     });
     if (text.length === 0 && images.length === 0) return;
+    // A slash command is text the viewer ACTS on rather than sends. Checked
+    // against the EXPANDED text and only when nothing is attached: a command
+    // typed alongside an image is a caption, not an instruction, and running
+    // it would drop the image on the floor. The parser refuses everything it
+    // is not certain about (a path, a sentence, a typo), so an unrecognized
+    // slash reaches the agent verbatim.
+    const command = images.length === 0 ? parseSlashCommand(text) : null;
+    if (command) {
+      await command.run({ clearRecord: actions.clearRecord });
+      // The command consumed the text, so its placeholders are spent - the
+      // same retirement an ordinary send performs.
+      pastes.consumePastes(raw);
+      return;
+    }
     actions.enqueueMessage(text, images);
     // Both are safe to retire now: the outbox holds the expanded text, and the
     // uploads it references are already on disk under their stored names. The

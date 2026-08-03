@@ -614,6 +614,23 @@ export const createActions = (ctx: ActionsCtx) => {
   const REOPEN_ENDED_MSG =
     "This session has ended - reopening needs the agent to run `lucid open` again.";
 
+  /**
+   * Clear the record the viewer shows. Nothing is deleted: the append is a
+   * boundary the fold reads, and the entry it leaves behind says how much is
+   * being held back, so an emptied panel is never a mystery.
+   */
+  const clearRecord = async (): Promise<void> => {
+    if (get().status === "ended") {
+      warn("This session has ended - there is nothing left to clear.");
+      return;
+    }
+    try {
+      await api("/__lucid/clear", {});
+    } catch {
+      warn("Clear didn't send - try again.");
+    }
+  };
+
   const reopenReview = async (): Promise<void> => {
     // An ended session has no server to receive the reopen - the POST can only
     // fail, and "try again" would be a lie. Say what the way back actually is.
@@ -1086,6 +1103,7 @@ export const createActions = (ctx: ActionsCtx) => {
     toggleTargets,
     toggleFocusAll,
     toggleFocus,
+    clearRecord,
     reopenReview,
     loadSessions,
     switchToSession,

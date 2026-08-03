@@ -9,6 +9,7 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import { AnnotationPart } from "./AnnotationPart.tsx";
+import { ClearedPart } from "./ClearedPart.tsx";
 import { useSession, useSessionHandle } from "./context.tsx";
 import { DeliveryLabel } from "./Delivery.tsx";
 import { visibleEl } from "./dom.ts";
@@ -689,6 +690,8 @@ export const Thread = () => {
   useAssistantDataUI({ name: "qa", render: QaPart });
   // Approving and reopening are entries in the record, at their own moment.
   useAssistantDataUI({ name: "verdict", render: VerdictPart });
+  // The boundary a `/clear` leaves behind, so an emptied panel says so.
+  useAssistantDataUI({ name: "cleared", render: ClearedPart });
   return (
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
       <ThreadPrimitive.Viewport

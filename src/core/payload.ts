@@ -297,6 +297,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
     nextCursor: renderCursor(opts.nextSeq),
     reviewResolved: opts.state.reviewResolved,
     ...(opts.state.verdicts.length > 0 ? { verdicts: opts.state.verdicts } : {}),
+    ...(opts.state.cleared ? { cleared: opts.state.cleared } : {}),
     ...(opts.state.agentWorking ? { agentWorking: opts.state.agentWorking } : {}),
     ...(opts.state.lastTurnEnd ? { lastTurnEnd: opts.state.lastTurnEnd } : {}),
     ...(opts.state.sessionHistory.length > 0 ? { sessionHistory: opts.state.sessionHistory } : {}),

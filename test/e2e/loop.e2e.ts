@@ -3265,6 +3265,66 @@ test("a lucid: permalink in an agent reply scrolls instead of opening a window",
 });
 
 /**
+ * `/clear` is consumed by the composer and empties the record.
+ *
+ * A boundary, not a delete: the log keeps every event, the fold derives the
+ * record from what follows, and the entry left behind says how much is being
+ * held back - an emptied panel that says nothing is a viewer nobody can
+ * reason about.
+ */
+test("/clear empties the record, says what it kept, and survives a reload", async ({ page }) => {
+  cli = await makeCli(PLAN_V1);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
+
+  const input = page.locator(`${hook("message-input")}:visible`);
+  await input.fill("first thing I said");
+  await input.press("Enter");
+  await cli.run([
+    "wait",
+    cli.artifact,
+    "--reply",
+    "and the agent answered",
+    "--timeout",
+    waitTimeoutSeconds(1),
+  ]);
+  await expect(page.locator('[data-role="human"]')).toHaveCount(1);
+  await expect(page.locator('[data-role="agent"]')).toHaveCount(1);
+
+  // A slash-led PATH is a message. This is the case the parser exists for, and
+  // it must reach the agent rather than being eaten as a command.
+  await input.fill("/Users/kevin/dev/lucid");
+  await input.press("Enter");
+  await expect(page.locator('[data-role="human"]')).toHaveCount(2);
+  await expect(page.locator('[data-role="human"]').last()).toContainText("/Users/kevin/dev/lucid");
+
+  await input.fill("/clear");
+  await input.press("Enter");
+
+  // The record empties, and the boundary says what it is holding.
+  await expect(page.locator('[data-role="human"]')).toHaveCount(0);
+  await expect(page.locator('[data-role="agent"]')).toHaveCount(0);
+  const cleared = on(page).cleared();
+  await expect(cleared).toBeVisible();
+  await expect(cleared).toContainText("earlier entries kept in the log");
+  // The command itself never became a message.
+  await expect(page.locator("body")).not.toContainText("/clear");
+
+  // It is in the LOG, not just the client: a reload rebuilds the same view.
+  await page.reload();
+  await expect(surfaceOf(page).locator("h1")).toContainText("Database migration plan");
+  await expect(on(page).cleared()).toBeVisible();
+  await expect(page.locator('[data-role="human"]')).toHaveCount(0);
+
+  // And the session keeps working: what follows the boundary is the record.
+  await input.fill("after the clear");
+  await input.press("Enter");
+  await expect(page.locator('[data-role="human"]')).toHaveCount(1);
+  await expect(on(page).cleared()).toBeVisible();
+});
+
+/**
  * The rail is the HOVER ZONE, and it belongs under the panel, never over it.
  *
  * Painted on top it swallowed clicks along the panel's right edge - two

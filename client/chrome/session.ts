@@ -94,6 +94,13 @@ export const createSession = (config: SessionConfig): SessionHandle => {
         }));
         break;
       }
+      // A clear rewrites what the record IS, so the fold is the only honest
+      // source: re-read it rather than patching state here. The bootstrap also
+      // brings back the boundary entry with its hidden count, which this
+      // handler has no way to compute.
+      case "record_cleared":
+        void surface.bootstrap();
+        break;
       case "session_ended":
         set({ status: "ended" });
         break;

@@ -1303,6 +1303,12 @@ export const createSessionHost = (
       await serverAppend([{ t: "review_resolved" }]);
       return json({ ok: true });
     }
+    // Clearing is a boundary the fold understands, not a delete: the log keeps
+    // every event and the viewer derives its record from what follows.
+    if (pathname === "/__lucid/clear" && req.method === "POST") {
+      await serverAppend([{ t: "record_cleared" }]);
+      return json({ ok: true });
+    }
     if (pathname === "/__lucid/reopen" && req.method === "POST") {
       await serverAppend([{ t: "review_reopened" }]);
       return json({ ok: true });
