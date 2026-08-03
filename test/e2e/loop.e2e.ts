@@ -702,8 +702,12 @@ test("reopen with nobody listening says feedback is record-only", async ({ page 
 
   await on(page).reopen().click();
   await expect(on(page).resolvedBar()).toHaveCount(0);
-  const advisory = page.getByText("no agent is listening right now");
+  // The advisory rides the reopening ITSELF, in the record at its own moment.
+  // It used to be a notice pinned to the bottom of the thread, which outlived
+  // that moment and rendered below every message sent afterwards.
+  const advisory = on(page).verdictRecordOnly();
   await expect(advisory).toBeVisible();
+  await expect(on(page).verdict().last()).toHaveAttribute("data-resolved", "false");
 
   // And it sits ABOVE the live status line, never under it: an advisory about
   // what just happened, rendered below "something is happening now", reads as
@@ -715,12 +719,17 @@ test("reopen with nobody listening says feedback is record-only", async ({ page 
   await input.press("Enter");
   const working = on(page).awaitingAck();
   await expect(working).toBeVisible();
+  // The message sent AFTER the reopening renders below it - the ordering a
+  // bottom-pinned notice could never produce, whatever the live slot says.
   const advisoryBox = await advisory.boundingBox();
+  const messageBox = await page.locator('[data-role="human"]').last().boundingBox();
   const workingBox = await working.boundingBox();
   expect(advisoryBox).not.toBeNull();
+  expect(messageBox).not.toBeNull();
   expect(workingBox).not.toBeNull();
-  if (advisoryBox === null || workingBox === null) return;
-  expect(advisoryBox.y).toBeLessThan(workingBox.y);
+  if (advisoryBox === null || messageBox === null || workingBox === null) return;
+  expect(advisoryBox.y).toBeLessThan(messageBox.y);
+  expect(messageBox.y).toBeLessThan(workingBox.y);
 });
 
 test("reopen on an ended session explains the way back instead of failing", async ({ page }) => {

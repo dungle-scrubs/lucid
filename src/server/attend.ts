@@ -92,6 +92,10 @@ const ATTEND_COOLOFF_MS = 5 * 60 * 1000;
  * its claim - only silence expires.
  */
 const DEFAULT_WORKING_GRACE_MS = 10 * 60 * 1000;
+/** How long a spawned turn may write NOTHING before the hub stops waiting on
+ *  it. Generous: a turn that is thinking still reports progress, and one that
+ *  has produced no byte for this long has stopped being a turn. */
+const DEFAULT_STALL_IDLE_MS = 8 * 60 * 1000;
 
 /** Seqs of human feedback nobody has taken delivery of yet. */
 export const pendingHumanSeqs = (
@@ -295,6 +299,9 @@ export interface AttendantOptions {
   readonly debounceMs?: number;
   /** How long an unrefreshed working window keeps the hub out (tests). */
   readonly workingGraceMs?: number;
+  /** How long a spawned turn may write nothing before it is killed as wedged
+   *  (tests inject a short one; the default is minutes). */
+  readonly stallIdleMs?: number;
   readonly log: (message: string) => void;
   /** Push a warning frame to the session's own subscribers - how a stalled
    *  delivery says WHY in the viewer, not only in the hub's stdout. */
@@ -841,26 +848,36 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     );
     const launchId = mintLaunchId();
     const allowRotation = strategy?.source === "stdout-jsonl" && strategy.allowRotation === true;
-    const result = await runSpawn(argv, cwd, paths.attendLog, {
-      harness: resolved.name,
-      ...(sessionId ? { sessionId } : {}),
-      turnId,
-      launchId,
-      ...(strategy ? { strategy } : {}),
-      // Persistence while the turn is LIVE, through the one guarded callback:
-      // a resume that announces a STRANGER is refused (HSI005), never bound.
-      onIdentityDiscovered: discoveryPersistence(
-        paths,
-        resolved.name,
+    const result = await runSpawn(
+      argv,
+      cwd,
+      paths.attendLog,
+      {
+        harness: resolved.name,
+        ...(sessionId ? { sessionId } : {}),
+        turnId,
         launchId,
-        !startsFresh && sessionId ? { requestedSessionId: sessionId, allowRotation } : undefined,
-      ),
-      ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
-      // Only what the argv actually carries: a dropped stale pick must not
-      // stamp the child as running a model it was never given.
-      ...(applied.model !== undefined ? { model: applied.model } : {}),
-      ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
-    });
+        ...(strategy ? { strategy } : {}),
+        // Persistence while the turn is LIVE, through the one guarded callback:
+        // a resume that announces a STRANGER is refused (HSI005), never bound.
+        onIdentityDiscovered: discoveryPersistence(
+          paths,
+          resolved.name,
+          launchId,
+          !startsFresh && sessionId ? { requestedSessionId: sessionId, allowRotation } : undefined,
+        ),
+        ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
+        // Only what the argv actually carries: a dropped stale pick must not
+        // stamp the child as running a model it was never given.
+        ...(applied.model !== undefined ? { model: applied.model } : {}),
+        ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
+      },
+      // A wedged child holds this artifact: the engine reads a live child as a
+      // delivery in flight, so every later note queues behind it in silence.
+      // Bounded on SILENCE, never on duration - a turn writing anything at all
+      // is working, however long it takes.
+      { idleMs: options.stallIdleMs ?? DEFAULT_STALL_IDLE_MS },
+    );
     const code = result.code;
     if (result.status === "identity-missing") {
       // Same HSI002 parity as the create paths: the turn ran clean but

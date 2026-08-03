@@ -102,7 +102,10 @@ export const LucidRuntimeProvider = ({ children }: { readonly children: ReactNod
             id: `verdict-${item.verdict.seq}`,
             createdAt: new Date(item.at),
             content: [
-              { type: "data-verdict", data: { resolved: item.verdict.resolved, at: item.at } },
+              {
+                type: "data-verdict",
+                data: { at: item.at, resolved: item.verdict.resolved, seq: item.verdict.seq },
+              },
             ],
           } as ThreadMessageLike;
         }

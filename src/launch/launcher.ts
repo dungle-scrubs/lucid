@@ -1,5 +1,5 @@
 import { stdoutSink } from "../server/observe.ts";
-import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, statSync, writeSync } from "node:fs";
 import {
   classifyObservedIdentity,
   classifySessionFailure,
@@ -252,6 +252,71 @@ export interface SpawnIdentity {
   readonly onIdentityDiscovered?: (identity: NativeSessionIdentity) => void | Promise<void>;
 }
 
+/**
+ * How long a spawned turn may produce NOTHING before it is treated as wedged.
+ *
+ * A turn has no natural deadline - real work runs for minutes - so this bounds
+ * silence, not duration. A child writing progress, prose or errors is alive
+ * whatever its clock says; one that has written nothing at all for this long
+ * is not coming back, and the artifact it holds cannot start another turn
+ * until it stops.
+ */
+export interface SpawnDeadline {
+  /** Milliseconds of NO output before the child is killed. */
+  readonly idleMs: number;
+}
+
+/**
+ * Kill a child that has gone silent for `idleMs`.
+ *
+ * Silence is measured off the OUT-LOG, not the parent's stdout tap: a
+ * caller-assigned harness writes straight to the log fd, so the parent never
+ * sees a chunk and has nothing else to measure. The file's size is the one
+ * signal both arrangements share.
+ *
+ * This exists because a wedged child holds its artifact forever. `runSpawn`
+ * awaited `proc.exited` with no bound, and the attend engine treats a live
+ * child as a delivery in flight - so one hung process silently queued every
+ * later piece of feedback behind it, with the panel still reporting an older
+ * turn as though it were the live one. Measured on a real session: 53 minutes,
+ * no output, six pieces of feedback undelivered.
+ */
+const watchForStall = (
+  proc: { readonly kill: (signal?: number) => void },
+  logFile: string,
+  deadline: SpawnDeadline | undefined,
+): { readonly stop: () => void } => {
+  if (!deadline || deadline.idleMs <= 0) return { stop: () => {} };
+  const sizeOf = (): number => {
+    try {
+      return statSync(logFile).size;
+    } catch {
+      return -1;
+    }
+  };
+  let lastSize = sizeOf();
+  let lastChangeAt = Date.now();
+  // Checked several times per window rather than once at the end: the point is
+  // to notice silence promptly, not to add a second timeout of its own.
+  const every = Math.max(1_000, Math.floor(deadline.idleMs / 4));
+  const timer = setInterval(() => {
+    const size = sizeOf();
+    if (size !== lastSize) {
+      lastSize = size;
+      lastChangeAt = Date.now();
+      return;
+    }
+    if (Date.now() - lastChangeAt < deadline.idleMs) return;
+    clearInterval(timer);
+    // SIGTERM, as a human would: the child gets its chance to flush and exit,
+    // and the exit classification below reports the turn as failed either way.
+    proc.kill();
+  }, every);
+  // The interval must not hold the process open when nothing else is pending.
+  (timer as unknown as { unref?: () => void }).unref?.();
+  return { stop: () => clearInterval(timer) };
+};
+
 /** Run a recipe argv to completion, typed. A spawn that cannot even start
  *  (missing executable -> synchronous throw) is `spawn-failed` rather than a
  *  throw, so one bad recipe never crashes the caller. Shared by the fork
@@ -262,6 +327,7 @@ export const runSpawn = async (
   cwd: string,
   logFile: string,
   identity?: SpawnIdentity,
+  deadline?: SpawnDeadline,
 ): Promise<SpawnResult> => {
   const discovered = identity?.strategy?.source === "stdout-jsonl";
   // The child is its OWN harness session: inheriting the launcher's
@@ -366,7 +432,9 @@ export const runSpawn = async (
         proc.kill();
       }
     }
+    const stalled = watchForStall(proc, logFile, deadline);
     await proc.exited;
+    stalled.stop();
     // The callback's work is bounded elsewhere too (sidecar locks time out),
     // but its HTTP leg is not - and a wedged hub must not wedge every future
     // turn of this session behind an await that cannot settle.

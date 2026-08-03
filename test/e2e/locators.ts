@@ -210,6 +210,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   unsentMessage: (): Locator => root.locator(hook("unsent-message")),
   unsentMessages: (): Locator => root.locator(hook("unsent-messages")),
   verdict: (): Locator => root.locator(hook("verdict")),
+  verdictRecordOnly: (): Locator => root.locator(hook("verdict-record-only")),
   version: (): Locator => root.locator(hook("version")),
   versionView: (): Locator => root.locator(hook("version-view")),
   versionViewExit: (): Locator => root.locator(hook("version-view-exit")),
