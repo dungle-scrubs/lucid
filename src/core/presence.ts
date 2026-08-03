@@ -1,8 +1,9 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { isUsableSessionId } from "../launch/session-identity.ts";
+import { harnessKind } from "./harness.ts";
 import { decodeFlattenedPath } from "./scratchpad.ts";
+import { isUsableSessionId } from "./session-id.ts";
 
 /**
  * Is the harness conversation behind an artifact OPEN right now, in a terminal
@@ -38,10 +39,8 @@ export interface HarnessPresence {
 }
 
 /** Harnesses whose live sessions Lucid can see. */
-export const PRESENCE_HARNESSES = ["claude-code", "claude_code", "claude"] as const;
-
 export const harnessSupportsPresence = (harness: string): boolean =>
-  (PRESENCE_HARNESSES as readonly string[]).includes(harness.trim().toLowerCase());
+  harnessKind(harness) === "claude";
 
 /** Where Claude Code publishes its running sessions. Injectable for tests. */
 export const claudeSessionsDir = (dir?: string): string => {
@@ -353,9 +352,9 @@ const UUID_EVERYWHERE = new RegExp(UUID.source, "gi");
  * has no parser for yields nothing - never a guess.
  */
 export const parseHarnessResumeCommand = (harness: string, command: string): string | undefined => {
-  const kind = harness.trim().toLowerCase().replace(/_/g, "-");
+  const kind = harnessKind(harness);
   const anchored =
-    kind === "claude-code" || kind === "claude"
+    kind === "claude"
       ? new RegExp(String.raw`--resume\s+(${UUID.source})(?:\s|$)`, "i").exec(command)
       : kind === "codex"
         ? new RegExp(String.raw`\bresume\s+(${UUID.source})(?:\s|$)`, "i").exec(command)
@@ -410,8 +409,8 @@ const codexStoreHas = async (sessionId: string, dir?: string): Promise<boolean> 
  * harness Lucid simply has no store adapter for.
  */
 export const harnessHasLocalStore = (harness: string): boolean => {
-  const kind = harness.trim().toLowerCase().replace(/_/g, "-");
-  return kind === "claude-code" || kind === "claude" || kind === "codex";
+  const kind = harnessKind(harness);
+  return kind === "claude" || kind === "codex";
 };
 
 /**
@@ -431,8 +430,8 @@ export const harnessTranscriptPath = async (
   opts: { readonly claudeProjectsDir?: string; readonly codexSessionsDir?: string } = {},
 ): Promise<string | undefined> => {
   if (!isUsableSessionId(sessionId)) return undefined;
-  const kind = harness.trim().toLowerCase().replace(/_/g, "-");
-  if (kind === "claude-code" || kind === "claude") {
+  const kind = harnessKind(harness);
+  if (kind === "claude") {
     const root = claudeProjectsDir(opts.claudeProjectsDir);
     const name = await findSessionDir(root, sessionId);
     return name === undefined ? undefined : join(root, name, `${sessionId}.jsonl`);
@@ -460,8 +459,8 @@ export const harnessStoreHas = async (
   // way out of the store and answer "corroborated" for a file that has
   // nothing to do with any harness.
   if (!isUsableSessionId(sessionId)) return false;
-  const kind = harness.trim().toLowerCase().replace(/_/g, "-");
-  if (kind === "claude-code" || kind === "claude") {
+  const kind = harnessKind(harness);
+  if (kind === "claude") {
     return (
       // Existence, NOT decodability: the question is whether this machine
       // holds the conversation, and a transcript filed under a directory whose
@@ -546,13 +545,13 @@ export const interactiveResumeCommand = (
   sessionId: string,
   opts: { readonly yolo?: boolean } = {},
 ): string | undefined => {
-  const h = harness.trim().toLowerCase().replace(/_/g, "-");
+  const h = harnessKind(harness);
   // Each harness's own flag name, verified against its --help. Settings default
   // this ON (see LucidSettings.resumeYolo): the command drops you back into a
   // conversation about your own artifact, and re-approving every tool call is
   // what it exists to spare you.
   const yolo = opts.yolo === true;
-  if (h === "claude-code" || h === "claude") {
+  if (h === "claude") {
     return `claude --resume ${sessionId}${yolo ? " --dangerously-skip-permissions" : ""}`;
   }
   if (h === "codex") {

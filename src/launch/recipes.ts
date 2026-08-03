@@ -2,9 +2,8 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { hasControlCharacters } from "../core/events.ts";
+import { harnessKind, normalizeHarness } from "../core/harness.ts";
 import { IdentityDeclarationError, ValidationError } from "../errors.ts";
-import { canonicalHarness } from "./selection.ts";
-import { normalizeHarness } from "./session-identity.ts";
 import type { SessionIdentityRecipe } from "./session-identity.ts";
 
 /**
@@ -129,10 +128,11 @@ const parseSelectionFields = (
     throw new ValidationError({ message, detail: { path, harness: name } });
   };
   // Same discipline, one step earlier: the adapter knows model/effort flags for
-  // a fixed set of harnesses, and a declaration on any other one can only ever
-  // render a picker whose every pick is refused at spawn.
+  // a fixed set of harness families (`core/harness.ts` owns the test), and a
+  // declaration on any other one can only ever render a picker whose every pick
+  // is refused at spawn.
   if (
-    canonicalHarness(name) === undefined &&
+    harnessKind(name) === undefined &&
     (value.models !== undefined ||
       value.efforts !== undefined ||
       value.defaultModel !== undefined ||
@@ -441,10 +441,6 @@ export const loadRegistry = async (path = registryPath()): Promise<HarnessRegist
   }
   return parseRegistry(raw, path);
 };
-
-/** Spelling-equivalence lives with the identity domain; re-exported here for
- *  the registry's existing callers. */
-export { normalizeHarness } from "./session-identity.ts";
 
 /**
  * Recover the session identity a harness minted during spawn. Most recipes

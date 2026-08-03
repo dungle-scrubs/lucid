@@ -11,6 +11,7 @@ import {
 import { deliver } from "../core/deliver.ts";
 import type { LogEvent, LogEventType } from "../core/events.ts";
 import { foldLog, type FoldedState } from "../core/fold.ts";
+import { normalizeHarness } from "../core/harness.ts";
 import { readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { artifactCheckout, checkoutOf, projectOf } from "../core/project.ts";
@@ -37,7 +38,6 @@ import {
 } from "../launch/turn.ts";
 import {
   loadRegistry,
-  normalizeHarness,
   registryPath as harnessRegistryPath,
   resolveExactRecipe,
 } from "../launch/recipes.ts";

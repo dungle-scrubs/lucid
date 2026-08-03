@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { harnessKind } from "../core/harness.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import type { SpawnRecipe } from "./recipes.ts";
 
@@ -30,18 +31,6 @@ export interface ArtifactSelection extends Selection {
   readonly harness?: string;
 }
 
-/** Registry harness names the adapter knows flags for, normalized. */
-type KnownHarness = "claude-code" | "codex" | "pi";
-
-/** Normalize a registry harness name for flag lookup: the docs' example spells
- *  it `claude_code`, the seeded registry `claude-code` - one harness. Exported
- *  so the registry parser can refuse a model/effort declaration on a harness
- *  this adapter has no flags for. */
-export const canonicalHarness = (name: string): KnownHarness | undefined => {
-  const n = name.toLowerCase().replace(/_/g, "-");
-  return n === "claude-code" || n === "codex" || n === "pi" ? n : undefined;
-};
-
 /** "default" = no explicit pick (skillval's discipline): emit nothing. */
 const explicit = (value: string | undefined): string | undefined =>
   value === undefined || value === "default" || value.trim() === "" ? undefined : value;
@@ -60,7 +49,7 @@ export const selectionArgs = (
   const model = explicit(sel.model);
   const effort = explicit(sel.effort);
   if (model === undefined && effort === undefined) return [];
-  const kind = canonicalHarness(harnessName);
+  const kind = harnessKind(harnessName);
   if (kind === undefined) {
     return { error: `no model/effort flags are known for harness "${harnessName}"` };
   }
@@ -93,7 +82,7 @@ export const selectionArgs = (
     }
   }
   switch (kind) {
-    case "claude-code":
+    case "claude":
       return [
         ...(model !== undefined ? ["--model", model] : []),
         ...(effort !== undefined ? ["--effort", effort] : []),
@@ -133,7 +122,7 @@ export const insertSelectionArgs = (
 ): string[] => {
   if (args.length === 0) return [...argv];
   let at = 1;
-  if (canonicalHarness(harnessName) === "codex") {
+  if (harnessKind(harnessName) === "codex") {
     // Last, not first: a recipe fronted by a wrapper (`direnv exec . codex
     // exec ...`) has the wrapper's own `exec` ahead of the harness's.
     const exec = template.lastIndexOf("exec");

@@ -1,4 +1,6 @@
 import { hasControlCharacters } from "../core/events.ts";
+import { normalizeHarness } from "../core/harness.ts";
+import { isUsableSessionId } from "../core/session-id.ts";
 
 /**
  * Native harness session identity: the types, the bounded stdout-JSONL
@@ -75,17 +77,6 @@ export interface NativeSessionIdentity {
   readonly sessionId: string;
 }
 
-/**
- * One harness, one identity, however it is spelled. A registry key of
- * `claude_code` and an artifact stamped `claude-code` are the same harness -
- * and treating them as different meant a recorded session could never be
- * resumed on a machine whose registry used the other separator. Lives here
- * because spelling-equivalence IS an identity question; `recipes.ts`
- * re-exports it for its callers.
- */
-export const normalizeHarness = (name: string): string =>
-  name.trim().toLowerCase().replace(/_/g, "-");
-
 /** A fresh launch id: 16 hex chars, the same well-formed shape request ids
  *  use (WELL_FORMED_ID), so the stamp normalizer's validate-or-drop rule
  *  accepts exactly what this mints. */
@@ -115,28 +106,6 @@ export type SessionIdentityDiagnostics = Readonly<
 /** A JSONL line may not exceed this - buffered OR arriving whole - before it
  *  is discarded as hostile rather than parsed. */
 const LINE_MAX = 65_536;
-/** A native session id longer than this is not an id Lucid will ever place
- *  into a resume argv. Matches the sidecar/stamp bound (`sanitizeAttendant`
- *  cleans `sessionId` to 128) so the decoder cannot admit an id the record
- *  layer would truncate into a DIFFERENT id. */
-export const SESSION_ID_MAX = 128;
-
-/**
- * The shape an id must have before Lucid will put it in a command line.
- *
- * A discovered id comes from the harness's own stdout, which is the least
- * trusted input in the whole flow: it is read from a subprocess, believed,
- * stored, and later substituted into `resume` argv. Bounding length and
- * stripping control characters is not enough - an id of `--dangerously-skip-
- * permissions` is printable, short, and would be handed to the CLI as a FLAG.
- * So an id is an opaque token: letters, digits, and the few separators real
- * harnesses use, never leading with a dash.
- */
-const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/;
-
-/** True when this id may be believed and, later, placed into resume argv. */
-export const isUsableSessionId = (value: string): boolean =>
-  value.length > 0 && value.length <= SESSION_ID_MAX && SESSION_ID_SHAPE.test(value);
 
 /**
  * Incremental bounded decoder for stdout-JSONL identity discovery.
