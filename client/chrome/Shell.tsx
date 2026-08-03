@@ -5,6 +5,7 @@ import { matchScore, openSplit } from "./list.ts";
 import { SessionView } from "./Chrome.tsx";
 import { Command } from "cmdk";
 import { CreateDialog } from "./CreateDialog.tsx";
+import { PanelToggle } from "./Header.tsx";
 import { SessionListGroups } from "./SessionList.tsx";
 import {
   activateTab,
@@ -499,8 +500,13 @@ const FADE_KIND_COLOR: Record<string, string> = {
  * extends past that edge (D-013) - a fade over nothing would claim hidden tabs
  * that do not exist.
  */
+/** The narrowest the tab strip may become when the drawer takes its room. */
+const MIN_TAB_STRIP_PX = 240;
+
 const TabStrip = () => {
   const sessionKeys = useShell((s) => s.sessionKeys);
+  const sidebarOpen = useShell((s) => s.sidebarOpen);
+  const chromeWidth = useShell((s) => s.chromeWidth);
   const activeKey = useShell((s) => s.activeKey);
   const sessions = useHub((s) => s.sessions);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -570,7 +576,21 @@ const TabStrip = () => {
   return (
     <div
       data-test="shell-tabbar"
-      className="relative flex h-[46px] flex-none items-end border-b border-ink-600 bg-ink-900"
+      // Ends where the drawer begins. The drawer runs the full height of the
+      // window now, so a full-width strip would sit UNDER it and lose its
+      // right-hand clicks to it. Same transition as the sidebar's own slide,
+      // so the two edges move together rather than one chasing the other.
+      //
+      // Clamped: on a window narrower than the drawer, yielding its full width
+      // would leave the strip nothing at all and no tab could ever scroll into
+      // view. At that size the drawer covers the strip whichever way this
+      // goes, so the strip keeps a usable run and stops ceding room.
+      style={{
+        marginRight: sidebarOpen
+          ? `min(${chromeWidth}px, max(0px, 100vw - ${MIN_TAB_STRIP_PX}px))`
+          : 0,
+      }}
+      className="relative flex h-[46px] flex-none items-end border-b border-ink-600 bg-ink-900 transition-[margin] duration-200 ease-out"
     >
       <div
         ref={scrollRef}
@@ -678,6 +698,12 @@ const TabStrip = () => {
           ) : null}
         </div>
       ) : null}
+      {/* Level with the tabs, and holding the same edge as the drawer it opens
+          - the control and the thing it controls line up. It sits OUTSIDE the
+          scrolling tab row so a long strip cannot carry it off-screen. */}
+      <div className="flex flex-none items-center self-stretch pr-1.5 pb-1.5 pl-1">
+        <PanelToggle />
+      </div>
     </div>
   );
 };

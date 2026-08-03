@@ -3381,6 +3381,41 @@ test("the outline does not blink out while the artifact scrolls", async ({ page 
 });
 
 /**
+ * An in-artifact `#id` link scrolls the artifact, and annotating still works.
+ *
+ * It holds only because the overlay steps aside for anchors (D-028) - nothing
+ * pinned that, so a change to the click path could have killed every
+ * cross-reference in every artifact with no test objecting. CONTRACT.md
+ * documents the rules; this is the one that proves them.
+ */
+test("a link inside the artifact jumps to its target and does not annotate", async ({ page }) => {
+  await page.setViewportSize({ width: 1_180, height: 760 });
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>html,body,main{margin:0;font-family:system-ui}h1,h2,p{padding:0 24px}[id]{scroll-margin-top:72px}</style></head><body><main><h1>Cross-referenced plan</h1><p><a id="jump" href="#risks">see the risks</a></p><h2>Context</h2><p style="height:1200px">A</p><h2 id="risks" data-lucid-id="risks">Risks</h2><p style="height:600px">C</p></main></body></html>`,
+    "Cross-referenced plan",
+  );
+  const surface = surfaceOf(page);
+  const target = surface.locator("#risks");
+  await expect(target).not.toBeInViewport();
+
+  await surface.locator("#jump").click();
+
+  // It navigated inside the artifact...
+  await expect(target).toBeInViewport();
+  // ...and started NO annotation: the composer would be open on a picked
+  // target if the overlay had swallowed the click.
+  await expect(on(page).annotationNote()).toHaveCount(0);
+  // The id space is shared: the same token addresses the outline entry.
+  await expect(on(page).artifactOutlineRail()).toBeVisible();
+
+  // And the artifact is still annotatable - stepping aside for anchors does
+  // not mean stepping aside for everything.
+  await surface.locator("h2#risks").click();
+  await expect(on(page).annotationNote()).toBeVisible();
+});
+
+/**
  * The rail is the HOVER ZONE, and it belongs under the panel, never over it.
  *
  * Painted on top it swallowed clicks along the panel's right edge - two

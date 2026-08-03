@@ -65,7 +65,7 @@ const ThemeToggle = () => {
   );
 };
 
-const PanelToggle = () => {
+export const PanelToggle = () => {
   const open = useShell((s) => s.sidebarOpen);
   return (
     <Tooltip>
@@ -373,7 +373,7 @@ const VersionPicker = () => {
   );
 };
 
-export const Header = () => {
+export const Header = ({ shell = false }: { readonly shell?: boolean }) => {
   const { enterDiff, toggleTargets, toggleFocusAll } = useActions();
   const name = useSessionHandle().config.name;
   const version = useSession((s) => s.version);
@@ -461,9 +461,11 @@ export const Header = () => {
         <VersionPicker />
         <ApproveControls />
         {/* Beside the panel it controls: the panel lives on the RIGHT (D9),
-            so its toggle holds the header's right edge, not the left. */}
+            so its toggle holds the header's right edge, not the left. Under the
+            shell it moves to the tab row instead, where it lines up with the
+            tabs and with the top of the drawer it opens. */}
         <ThemeToggle />
-        <PanelToggle />
+        {shell ? null : <PanelToggle />}
       </div>
     </header>
   );

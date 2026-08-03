@@ -520,6 +520,10 @@ export const SessionView = ({
         style={
           {
             "--sidebar-width": `${chromeWidth}px`,
+            // Full-bleed under the shell: the drawer runs top to bottom beside
+            // the tab strip, rather than starting below it. The strip keeps
+            // clear of it by ending where the drawer begins (Shell.tsx).
+            ...(shell ? { "--lucid-shell-top": "0px" } : {}),
             // A drag sets the width every pointermove; animating it would trail
             // the hand. Open/close keeps the 200ms slide.
             ...(resizing ? { "--sidebar-tx": "0ms" } : {}),
@@ -528,7 +532,7 @@ export const SessionView = ({
         className="h-full min-h-0"
       >
         <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
-          <Header />
+          <Header shell={shell} />
           <SurfaceRegion active={active} session={session} attachSurface={attachSurface} />
         </SidebarInset>
         {/* The window-splitter pattern: a separator carries the role, and arrow
