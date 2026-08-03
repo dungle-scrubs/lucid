@@ -71,7 +71,7 @@ export interface OutlineRuntimeElement {
 
 export interface ArtifactOutlineGeometry<ElementType extends OutlineRuntimeElement> {
   readonly allElements: () => readonly ElementType[];
-  readonly completeTraversal?: (deadlineMs: number) => boolean;
+  readonly completeTraversal: (deadlineMs: number) => boolean;
   readonly headingCandidates: () => readonly ElementType[];
   readonly isSettled: () => boolean;
   readonly parentElement: (element: ElementType) => ElementType | null;
@@ -79,9 +79,12 @@ export interface ArtifactOutlineGeometry<ElementType extends OutlineRuntimeEleme
     readonly after: string;
     readonly before: string;
   };
-  readonly rect?: (element: ElementType) => OutlineRuntimeRect;
-  readonly proofRealmTrusted?: () => boolean;
-  readonly styleRealmTrusted?: () => boolean;
+  readonly rect: (element: ElementType) => OutlineRuntimeRect;
+  /** The two trust seams are required like every other member here. Optional,
+   *  an absent one read as TRUSTED, so a bootstrap that renamed or dropped one
+   *  lost the guard and said nothing. */
+  readonly proofRealmTrusted: () => boolean;
+  readonly styleRealmTrusted: () => boolean;
   readonly viewport: () => {
     readonly clientWidth: number;
     readonly height: number;
@@ -109,10 +112,15 @@ export interface ArtifactOutlineDebugInfo {
 }
 
 interface RuntimeDependencies<ElementType extends OutlineRuntimeElement> {
-  readonly createMap?: <Key, Value>() => OutlineRuntimeMap<Key, Value>;
-  readonly createWeakMap?: <Key extends object, Value>() => OutlineRuntimeWeakMap<Key, Value>;
+  /** Collections built from intrinsics captured before the artifact ran. There
+   *  is no fallback to a raw `new Map()`: those are the poisonable ones the
+   *  pre-artifact bootstrap exists to avoid. */
+  readonly createMap: <Key, Value>() => OutlineRuntimeMap<Key, Value>;
+  readonly createWeakMap: <Key extends object, Value>() => OutlineRuntimeWeakMap<Key, Value>;
   readonly geometry: ArtifactOutlineGeometry<ElementType>;
   readonly now: () => number;
+  /** The one optional seam: a notification that the proof realm was rejected,
+   *  not a safety input the runtime reads a verdict from. */
   readonly onProofRealmRejected?: () => void;
   readonly publish: (publication: OutlineRuntimePublication) => void;
   readonly scheduleFrame: (task: () => void) => () => void;
@@ -216,16 +224,8 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
 
   constructor(dependencies: RuntimeDependencies<ElementType>) {
     this.#dependencies = dependencies;
-    this.#elementsByKey = this.#createMap();
-    this.#elementKeys = this.#createWeakMap();
-  }
-
-  #createMap<Key, Value>(): OutlineRuntimeMap<Key, Value> {
-    return this.#dependencies.createMap?.<Key, Value>() ?? new Map<Key, Value>();
-  }
-
-  #createWeakMap<Key extends object, Value>(): OutlineRuntimeWeakMap<Key, Value> {
-    return this.#dependencies.createWeakMap?.<Key, Value>() ?? new WeakMap<Key, Value>();
+    this.#elementsByKey = dependencies.createMap<string, ElementType>();
+    this.#elementKeys = dependencies.createWeakMap<object, string>();
   }
 
   requestLayout(request: OutlineLayoutRequest): void {
@@ -294,7 +294,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#generation += 1;
     this.#keyEpoch += 1;
     this.#nextElementKey = 0;
-    this.#elementKeys = this.#createWeakMap();
+    this.#elementKeys = this.#dependencies.createWeakMap<object, string>();
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#elementsByKey.clear();
     this.invalidate("revision");
@@ -353,7 +353,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   }
 
   #rejectIfProofRealmUntrusted(): boolean {
-    if (this.#dependencies.geometry.proofRealmTrusted?.() !== false) return false;
+    if (this.#dependencies.geometry.proofRealmTrusted()) return false;
     this.#rejectUntrustedProofRealm();
     return true;
   }
@@ -398,7 +398,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       this.#lastActiveSampleAt = now;
       const positions = this.#projection.headings.flatMap((heading) => {
         const element = this.#elementsByKey.get(heading.key);
-        const rect = element ? (this.#dependencies.geometry.rect?.(element) ?? element.rect) : null;
+        const rect = element ? this.#dependencies.geometry.rect(element) : null;
         return element?.connected && rect ? [{ key: heading.key, top: rect.top }] : [];
       });
       const next = activeOutlineKey(positions);
@@ -554,7 +554,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     if (!this.#consume(work)) {
       return { clearancePx: 0, complete: false, reason: "work-budget-exhausted" };
     }
-    if (this.#dependencies.geometry.styleRealmTrusted?.() === false) {
+    if (!this.#dependencies.geometry.styleRealmTrusted()) {
       return { clearancePx: 0, complete: false, reason: "untrusted-style-realm" };
     }
     const settled = this.#dependencies.geometry.isSettled();
@@ -663,7 +663,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       startedAt: this.#dependencies.now(),
     };
     const deadlineMs = work.startedAt + ARTIFACT_OUTLINE_POLICY.proofTimeBudgetMs;
-    if (this.#dependencies.geometry.completeTraversal?.(deadlineMs) === false) {
+    if (!this.#dependencies.geometry.completeTraversal(deadlineMs)) {
       this.#deferBudget(request, work, "item-budget-exhausted");
       return;
     }

@@ -60,7 +60,14 @@ const append = (parent: FakeElement, child: FakeElement): FakeElement => {
   return child;
 };
 
-const geometry = (
+/**
+ * A COMPLETE geometry over `roots`, so a test names only what it is about.
+ *
+ * Every seam here is required of a real caller - an absent trust check used to
+ * read as trusted - and a test that filled in nine members by hand would be
+ * one `as` cast away from re-opening exactly that.
+ */
+const testGeometry = (
   roots: readonly FakeElement[],
   options: {
     readonly completeTraversal?: boolean;
@@ -87,6 +94,7 @@ const geometry = (
     isSettled: () => options.settled ?? true,
     parentElement: (element) => element.parent,
     pseudoContent: options.pseudoContent ?? (() => ({ after: "none", before: "none" })),
+    rect: (element) => element.rect,
     proofRealmTrusted: () => options.proofRealmTrusted ?? true,
     styleRealmTrusted: () => options.styleRealmTrusted ?? true,
     viewport: () => ({
@@ -142,7 +150,9 @@ const harness = (
   const publications: OutlineRuntimePublication[] = [];
   const scheduler = new ManualScheduler();
   const runtime = new ArtifactOutlineRuntime({
-    geometry: options.geometry ?? geometry(roots),
+    createMap: () => new Map(),
+    createWeakMap: () => new WeakMap(),
+    geometry: options.geometry ?? testGeometry(roots),
     now: options.now ?? (() => 0),
     publish: (publication) => publications.push(publication),
     scheduleFrame: scheduler.scheduleFrame,
@@ -347,6 +357,7 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
     ];
     let current: FakeElement[] = [];
     const dynamicGeometry: ArtifactOutlineGeometry<FakeElement> = {
+      ...testGeometry([]),
       allElements: () => current,
       completeTraversal: () => {
         const main = node("main", { tagName: "MAIN" });
@@ -357,11 +368,6 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
         return true;
       },
       headingCandidates: () => current.filter(({ tagName }) => tagName === "H2"),
-      isSettled: () => true,
-      parentElement: (element) => element.parent,
-      pseudoContent: () => ({ after: "none", before: "none" }),
-      styleRealmTrusted: () => true,
-      viewport: () => ({ clientWidth: 1_600, height: 900, width: 1_600 }),
     };
     let now = 0;
     const { publications, runtime, scheduler } = harness([], {
@@ -489,7 +495,7 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
     append(main, node("One"));
     append(main, node("Two"));
     const { publications, runtime, scheduler } = harness([main], {
-      geometry: geometry([main], { styleRealmTrusted: false }),
+      geometry: testGeometry([main], { styleRealmTrusted: false }),
     });
     runtime.requestLayout(request);
     scheduler.flushQuiet();
@@ -504,7 +510,7 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
     append(main, node("One"));
     append(main, node("Two"));
     const { publications, runtime, scheduler } = harness([main], {
-      geometry: geometry([main], { proofRealmTrusted: false }),
+      geometry: testGeometry([main], { proofRealmTrusted: false }),
     });
     runtime.requestLayout(request);
     scheduler.flushQuiet();
@@ -513,6 +519,23 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
       proofComplete: false,
       proofReason: "untrusted-proof-realm",
     });
+  });
+
+  test("a bootstrap that drops the proof trust seam fails loudly, not open", () => {
+    // The fail-open this closes: an optional `proofRealmTrusted` was absent on
+    // the seam and `?.() !== false` read the absence as TRUSTED, so a bootstrap
+    // that renamed or dropped it lost the guard silently. Only an untyped
+    // caller - the JS object literal in src/server/inject.ts - can get here.
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    const dropped = { ...testGeometry([main]), proofRealmTrusted: undefined };
+    const { publications, runtime } = harness([main], {
+      geometry: dropped as unknown as ArtifactOutlineGeometry<FakeElement>,
+    });
+
+    expect(() => runtime.requestLayout(request)).toThrow();
+    expect(publications).toEqual([]);
   });
 
   test("nested scrolling, overflow, shadows, clipping, pseudo-content, and unsettled layout fail closed", () => {
@@ -577,7 +600,7 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
         tagName: "ASIDE",
         ...fixture.element,
       });
-      const custom = geometry([main, hazard], {
+      const custom = testGeometry([main, hazard], {
         pseudoContent: () => ({ after: fixture.pseudo ?? "none", before: "none" }),
         settled: fixture.settled,
       });
@@ -621,7 +644,7 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
     const main = node("main", { tagName: "MAIN" });
     append(main, node("One"));
     append(main, node("Two"));
-    expect(complete([main], geometry([main], { completeTraversal: false }))).toMatchObject({
+    expect(complete([main], testGeometry([main], { completeTraversal: false }))).toMatchObject({
       availability: "absent",
       headings: [],
       health: { code: "AO-004", reason: "item-budget-exhausted" },
@@ -648,7 +671,7 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     let trusted = true;
     let now = 0;
     const guardedGeometry = {
-      ...geometry([main]),
+      ...testGeometry([main]),
       proofRealmTrusted: () => trusted,
     };
 
@@ -744,7 +767,7 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     const main = node("main", { tagName: "MAIN" });
     append(main, node("One"));
     append(main, node("Two"));
-    const base = geometry([main]);
+    const base = testGeometry([main]);
     let traversals = 0;
     let now = 0;
     const result = harness([main], {
@@ -780,7 +803,7 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     append(main, node("Two"));
     let now = 0;
     const alwaysExhausted = {
-      ...geometry([main]),
+      ...testGeometry([main]),
       completeTraversal: () => false,
     };
     const result = harness([main], { geometry: alwaysExhausted, now: () => now });
