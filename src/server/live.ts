@@ -18,9 +18,17 @@
  * Both wires carry the SAME frame vocabulary - a named event and a JSON string,
  * SSE's own - so a broadcaster writes one frame and neither wire knows the
  * other exists.
+ *
+ * The channel itself lives here too, not just the frame format: `createChannel`
+ * owns the subscriber set, the drop-on-throw rule, the stopped-guard and both
+ * wires onto it, and `serveLoopback` owns the Bun server the two wires need
+ * underneath them. A hub and a per-session server differ in what they
+ * BROADCAST, never in how a watcher joins or leaves.
  */
 
 import type { ServerWebSocket, WebSocketHandler } from "bun";
+import { ServerError } from "../errors.ts";
+import { type LineSink, observeRequests, type RequestObservation } from "./observe.ts";
 
 /**
  * One watcher of a channel, whatever it is wired over. `send` may THROW when
@@ -198,3 +206,208 @@ export const wasUpgraded = (res: Response): boolean => res === UPGRADED;
 
 /** How a route asks its owning Bun server to take the connection over. */
 export type Upgrade = (req: Request, socket: LiveSocket) => boolean;
+
+/**
+ * Hand a request to the owning Bun server as a WebSocket, carrying the join to
+ * run when it opens - or refuse it. Refusing is a useful answer: the socket
+ * never opens, so the client backs off and reconnects, which re-runs whatever
+ * decision produced this route in the first place.
+ */
+export const upgradeOrRefuse = (
+  req: Request,
+  upgrade: Upgrade | undefined,
+  join: (sub: Subscriber) => () => void,
+): Response =>
+  upgrade?.(req, new LiveSocket(join)) === true
+    ? UPGRADED
+    : new Response(JSON.stringify({ error: "websocket upgrade refused" }), {
+        status: 400,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+
+/**
+ * What a channel does when a watcher arrives or leaves.
+ *
+ * `J` is whatever the join needs to be decided WITH - the session channel
+ * separates agents from windows by it. The subscriber itself is built inside
+ * the channel (an SSE controller, a socket), so this is the only way that
+ * decision can reach a hook.
+ *
+ * A dropped peer IS a leave: `onLeave` runs for a subscriber the fan-out threw
+ * on, exactly as it does for one that released itself. Bookkeeping that rides
+ * on leaving (an agent-presence count) would otherwise survive the peer.
+ */
+export interface ChannelOptions<J> {
+  readonly onJoin?: (sub: Subscriber, join: J) => void;
+  readonly onLeave?: (sub: Subscriber) => void;
+}
+
+/** One fan-out set and the two wires reaching it. */
+export interface Channel<J> {
+  /** Fan one frame out to every watcher. */
+  readonly send: (event: string | null, data: string) => void;
+  /** Take a watcher on; the returned release takes it back off. */
+  readonly subscribe: (sub: Subscriber, join: J) => () => void;
+  /** The SSE wire: a response whose body is this channel. */
+  readonly sseResponse: (join: J) => Response;
+  /** The WebSocket wire: upgrade the request onto this channel, or refuse. */
+  readonly handleUpgrade: (req: Request, upgrade: Upgrade | undefined, join: J) => Response;
+  /** How many watchers are connected right now. */
+  readonly size: () => number;
+  /** Close every wire and refuse later joins. Hooks do not run: this is
+   *  teardown, not a watcher leaving. Idempotent. */
+  readonly stop: () => void;
+}
+
+/**
+ * A live channel: the subscriber set, the drop-on-throw rule, and both wires
+ * onto it. A broadcaster writes one frame and neither wire knows the other
+ * exists (see this module's header).
+ */
+export const createChannel = <J = void>(options: ChannelOptions<J> = {}): Channel<J> => {
+  const subscribers = new Set<Subscriber>();
+  let stopped = false;
+
+  const drop = (sub: Subscriber): void => {
+    if (subscribers.delete(sub)) options.onLeave?.(sub);
+  };
+
+  // A send that throws is a peer that is gone: drop it, which is the only way
+  // an abandoned stream leaves the set. Dropped AFTER the loop, because
+  // `onLeave` commonly broadcasts (an agent-presence count) and a fan-out
+  // reaching back into the one in flight is how frames interleave.
+  const send = (event: string | null, data: string): void => {
+    const gone: Subscriber[] = [];
+    for (const sub of subscribers) {
+      try {
+        sub.send(event, data);
+      } catch {
+        gone.push(sub);
+      }
+    }
+    for (const sub of gone) drop(sub);
+  };
+
+  const subscribe = (sub: Subscriber, join: J): (() => void) => {
+    // This channel may have been torn down since the request was accepted. An
+    // upgrade is decided in `fetch` but handed over on `open`, and the owner
+    // can stop in that gap - a session host's idle sweep sees no subscribers
+    // precisely BECAUSE this one has not landed yet. Joining a stopped channel
+    // would leave a socket that is live to the browser and attached to
+    // nothing: no frames, and no teardown either, since the set it would be
+    // closed from is already clear. So it is turned away and told to come
+    // back, which remounts.
+    if (stopped) {
+      try {
+        sub.close();
+      } catch {
+        // the peer left first; nothing to turn away
+      }
+      return () => {};
+    }
+    subscribers.add(sub);
+    options.onJoin?.(sub, join);
+    return () => drop(sub);
+  };
+
+  const sseResponse = (join: J): Response => {
+    // Assigned synchronously in `start` before any frame is enqueued; the `!`
+    // marks that definite assignment for the `cancel` reader below.
+    let leave!: () => void;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(": connected\n\n"));
+        leave = subscribe(sseSubscriber(controller), join);
+      },
+      cancel() {
+        leave();
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+      },
+    });
+  };
+
+  return {
+    send,
+    subscribe,
+    sseResponse,
+    handleUpgrade: (req, upgrade, join) =>
+      upgradeOrRefuse(req, upgrade, (sub) => subscribe(sub, join)),
+    size: () => subscribers.size,
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      for (const sub of subscribers) {
+        try {
+          sub.close();
+        } catch {
+          // already closed
+        }
+      }
+      subscribers.clear();
+    },
+  };
+};
+
+export interface LoopbackOptions {
+  /** Ports to try, in order. The first that binds wins. */
+  readonly ports: readonly number[];
+  /** What this server calls itself in the 500 an escaping throw becomes. */
+  readonly name: string;
+  /** The one funnel every route passes through. */
+  readonly handler: (req: Request, observation: RequestObservation) => Promise<Response>;
+  /** Where the wide event per request goes (observe.ts). */
+  readonly sink: LineSink;
+}
+
+/**
+ * Bind a loopback Bun server around one request funnel: the wide-event wrap,
+ * the WebSocket handler both servers install, and the `UPGRADED` translation
+ * Bun's `fetch` needs.
+ *
+ * Loopback only, and never an idle timeout: a live channel is a response that
+ * is meant to stay open for as long as someone is watching.
+ */
+export const serveLoopback = (options: LoopbackOptions): ReturnType<typeof Bun.serve> => {
+  // The wide event is made HERE, at the one funnel every route passes
+  // through (D-004) - no route can forget to log. Built once, not per request.
+  const observed = observeRequests({ sink: options.sink }, options.handler);
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  let lastErr: unknown;
+  for (const candidate of options.ports) {
+    try {
+      server = Bun.serve({
+        port: candidate,
+        hostname: "127.0.0.1",
+        idleTimeout: 0,
+        websocket: liveWebSocket,
+        async fetch(req) {
+          try {
+            const res = await observed(req);
+            // The connection is already a WebSocket; Bun wants no Response.
+            return wasUpgraded(res) ? undefined : res;
+          } catch (err) {
+            return new Response(
+              JSON.stringify({ error: `${options.name} error: ${(err as Error).message}` }),
+              { status: 500, headers: { "content-type": "application/json; charset=utf-8" } },
+            );
+          }
+        },
+      });
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!server) {
+    throw new ServerError({
+      message: `could not bind any port in [${options.ports.join(", ")}]: ${(lastErr as Error)?.message ?? "unknown"}`,
+    });
+  }
+  return server;
+};

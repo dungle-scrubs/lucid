@@ -87,6 +87,30 @@ is a different problem with a different fix.
   The exact test reproduced 7 failures during an interrupted 20-run baseline,
   then passed 20/20 after the fix.
 
+### F-3 - the active tab is not yet in view when the assertion reads it
+
+- **Test:** `test/e2e/grouped-strip.e2e.ts` :: `an off-screen question marks the
+  fade on its side (D-023)`
+- **First observed:** the PR H (live-channel/assets refactor) gate run.
+  `--project=chromium`: 260 passed, 1 flaky, 1 skipped, 12.6m. The
+  `regression` project ran clean beside it (37 passed, 1.2m). Failed once,
+  passed on retry.
+- **Failure:**
+
+  ```
+  Error: expect(received).toBe(expected) // Object.is equality
+  Expected: true / Received: false
+    > 190 |   expect(await activeTabInView(page)).toBe(true);
+  ```
+
+- **Rate:** unmeasured (see above).
+- **What is known:** the assertion is the first thing after
+  `page.keyboard.press(chord("1"))`, with nothing awaited in between. The
+  sibling test at :156, which makes the same `activeTabInView` assertion on the
+  same activation path, awaits the active tab's TEXT first - so it has a settle
+  point this one does not. That is a difference in the tests, not in the
+  product, and it is where a measurement pass should start.
+
 ## Not a flake: the orphan the teardown reports
 
 Every full run ends with the global teardown reporting survivors, and the M6.1

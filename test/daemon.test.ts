@@ -280,6 +280,54 @@ describe("hub daemon", () => {
   });
 
   /**
+   * The missing artifact, on the PROXIED path, is still a document.
+   *
+   * `/s/<id>/` renders inside the surface iframe, and the hub answers it
+   * itself even when a dedicated server owns the session (the overlay
+   * bootstrap has to resolve to the mount). It used to answer that one with
+   * `{"error":"artifact not available"}` while the hosted path rendered the
+   * self-healing stand-in - raw JSON in the iframe reads as a broken app, and
+   * a session whose first version has not landed yet never healed itself.
+   */
+  test("a PROXIED session with no artifact yet gets the stand-in document, not JSON", async () => {
+    const scanned = await seedSession("proj", "proxied");
+    const paths = sessionPaths(scanned);
+
+    let innerPort = 0;
+    const inner = Bun.serve({
+      port: 0,
+      fetch: (): Response =>
+        Response.json({ lucid: true, session: scanned, port: innerPort, version: 1 }),
+    });
+    innerPort = inner.port ?? 0;
+    await writeFile(
+      paths.serverJson,
+      JSON.stringify({ port: inner.port, pid: process.pid, startedAt: new Date(0).toISOString() }),
+    );
+
+    try {
+      daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+      const id = sessionId(scanned);
+      // The session really is PROXIED and not mounted: a mount would answer
+      // identity with the hub's own port, and then this test would be pinning
+      // the hosted path it is not about.
+      const who = (await (await get(daemon.port, `/s/${id}/__lucid/identity`)).json()) as {
+        port: number;
+      };
+      expect(who.port).toBe(innerPort);
+
+      const res = await get(daemon.port, `/s/${id}/`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("text/html");
+      const html = await res.text();
+      expect(html).toContain("This session's artifact file is missing.");
+      expect(html).not.toContain("artifact not available");
+    } finally {
+      inner.stop(true);
+    }
+  });
+
+  /**
    * The one place the two wires meet.
    *
    * A session owned by a DEDICATED server is proxied, and a WebSocket

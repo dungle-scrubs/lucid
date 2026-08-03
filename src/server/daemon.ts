@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
-import { lstat, mkdir, open, readFile, stat } from "node:fs/promises";
+import { lstat, mkdir, open, stat } from "node:fs/promises";
 import { attentionOf, type Attention } from "../core/attention.ts";
 import {
   ARTIFACT_DIR,
@@ -24,8 +24,7 @@ import {
   readServerDescriptor,
   writeServerDescriptor,
 } from "./discovery.ts";
-import { escapeHtml } from "../core/escape.ts";
-import { renderViewer, sseMaxBackoffFromEnv } from "./viewer.ts";
+import { artifactDocumentResponse, shellResponse, viewerResponse } from "./viewer.ts";
 import { projectOf } from "../core/project.ts";
 import { swr } from "../core/swr.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
@@ -52,7 +51,6 @@ import type { HarnessInfo } from "../protocol/wire.ts";
 import { createAttendant, type Attendant } from "./attend.ts";
 import {
   cliRequestId,
-  observeRequests,
   sinkStatus,
   type SinkStatus,
   REQUEST_ID_HEADER,
@@ -60,24 +58,18 @@ import {
   type RequestObservation,
 } from "./observe.ts";
 import { setNarrationSink, warnUnknownSubsystems } from "../core/verbose.ts";
+import { serveBundleAsset } from "./assets.ts";
+import { CLIENT_BUNDLE_HASH } from "./client-bundle.generated.ts";
+import { devBundleStamp } from "./dev-assets.ts";
 import {
-  CHROME_BUNDLE,
-  CHROME_CSS,
-  CLIENT_BUNDLE,
-  CLIENT_BUNDLE_HASH,
-  FAVICON_SVG,
-} from "./client-bundle.generated.ts";
-import { devBundleStamp, readDevAsset } from "./dev-assets.ts";
-import { renderInjected } from "./inject.ts";
-import {
-  liveWebSocket,
-  LiveSocket,
+  createChannel,
   pumpSse,
-  sseSubscriber,
-  UPGRADED,
+  serveLoopback,
+  upgradeOrRefuse,
   wantsUpgrade,
   wasUpgraded,
   type Subscriber,
+  type Upgrade,
 } from "./live.ts";
 import { hubPort, portBase } from "./ports.ts";
 import { validateHeaders } from "./security.ts";
@@ -233,33 +225,6 @@ export interface HubSession extends RegistryEntry {
   readonly worktree?: string;
 }
 
-/** The shell page: boots the chrome bundle in shell mode. The client fetches
- *  `/hub/sessions` and tails `/hub/events` itself - this page only carries the
- *  mode flag and the optional initially-active session id (?s=<id>). */
-const renderShellPage = (): string => `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="icon" type="image/svg+xml" href="/favicon.ico" />
-<title>${escapeHtml("Lucid")}</title>
-<link rel="stylesheet" href="/__lucid/chrome.css" />
-</head>
-<body>
-<script>window.__LUCID_SHELL__ = { mode: "shell"${(() => {
-  const backoff = sseMaxBackoffFromEnv();
-  const rawCap = Number(process.env.LUCID_STREAM_CAP);
-  const cap = Number.isInteger(rawCap) && rawCap > 0 ? rawCap : undefined;
-  return (
-    (backoff === undefined ? "" : `, sseMaxBackoffMs: ${backoff}`) +
-    (cap === undefined ? "" : `, streamCap: ${cap}`)
-  );
-})()} };</script>
-<div id="lucid-root"></div>
-<script type="module" src="/__lucid/chrome.js"></script>
-</body>
-</html>`;
-
 /**
  * Start the hub daemon. Foreground callers keep the returned handle and await
  * their own shutdown; tests pass `port: 0` and call `stop()`.
@@ -291,17 +256,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const restoreNarration = setNarrationSink(log);
   warnUnknownSubsystems();
 
-  /** Every shell window watching the listing, over either wire (live.ts). */
-  const subscribers = new Set<Subscriber>();
   /** Live create-turn heartbeats (M2.1), owned so `stop()` can end them: a
    *  detached child outlives the hub, and its interval would otherwise keep
    *  firing at nobody for the rest of that turn. */
   const heartbeats = new Set<ReturnType<typeof setInterval>>();
-  const encoder = new TextEncoder();
   /** The bound server, once it exists. Only the process that bound the port can
    *  upgrade a request to a WebSocket, and the routes that need to do so are
    *  defined before `Bun.serve` returns - so they read it through here. */
   let bound: ReturnType<typeof Bun.serve> | undefined;
+  const upgrade: Upgrade = (req, socket) => bound?.upgrade(req, { data: socket }) === true;
   let port = 0; // assigned once bound (below)
   let stopped = false;
   let notifying = false;
@@ -460,7 +423,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // Only the process that bound the port can upgrade, and every mount
       // shares this one. The socket's join closes over THIS host, so the
       // channel-agnostic handler needs to know nothing about mounts.
-      upgrade: (req, socket) => bound?.upgrade(req, { data: socket }) === true,
+      upgrade,
     });
     const idleTimer = setInterval(
       () => {
@@ -596,12 +559,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       //   /s/<id>/__lucid/client.js, not the hub root);
       // - the overlay bundle itself (served at the router, pre-resolution).
       if (subPath === "/" && req.method === "GET") {
-        const html = await readFile(paths.currentHtml, "utf8").catch(() => null);
-        if (html === null) return json({ error: "artifact not available" }, 404);
-        const injected = renderInjected(html, `/s/${id}`, new URL(req.url).origin);
-        return new Response(injected.body, {
-          headers: { "content-type": "text/html; charset=utf-8", ...noStore, ...injected.headers },
-        });
+        return artifactDocumentResponse(paths, `/s/${id}`, new URL(req.url).origin);
       }
       // ...and the review page, for exactly the same reason. Proxied, the
       // dedicated server renders it for base "" - so every URL on the page
@@ -616,19 +574,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // back). The version comes off the live server's own identity, which the
       // handshake above already fetched.
       if (subPath === "/__lucid/viewer" && req.method === "GET") {
-        return new Response(
-          renderViewer({
-            session: paths.artifactPath,
-            name: basename(paths.artifactPath),
-            port,
-            version: live.version,
-            base: `/s/${id}`,
-            ...((backoff) => (backoff === undefined ? {} : { sseMaxBackoffMs: backoff }))(
-              sseMaxBackoffFromEnv(),
-            ),
-          }),
-          { headers: { "content-type": "text/html; charset=utf-8", ...noStore } },
-        );
+        return viewerResponse({
+          session: paths.artifactPath,
+          name: basename(paths.artifactPath),
+          port,
+          version: live.version,
+          base: `/s/${id}`,
+        });
       }
       const url = new URL(req.url);
       // A WebSocket handshake cannot be forwarded by fetch, and the window
@@ -665,13 +617,9 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           return json({ error: "the session's server did not answer its stream" }, 502);
         }
         const body = stream;
-        if (
-          bound?.upgrade(req, { data: new LiveSocket((sub) => relayDedicated(body, ctl, sub)) })
-        ) {
-          return UPGRADED;
-        }
-        ctl.abort(); // nothing will ever read it now
-        return json({ error: "websocket upgrade refused" }, 400);
+        const upgraded = upgradeOrRefuse(req, upgrade, (sub) => relayDedicated(body, ctl, sub));
+        if (!wasUpgraded(upgraded)) ctl.abort(); // nothing will ever read it now
+        return upgraded;
       }
       const init: RequestInit = {
         method: req.method,
@@ -711,17 +659,30 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     return JSON.stringify({ sessions, bundle: stamp });
   };
 
-  /** Fan one frame out to every shell window. A send that throws is a window
-   *  that is gone: drop it, which is how a closed stream leaves the set. */
-  const broadcast = (event: string | null, data: string): void => {
-    for (const sub of subscribers) {
-      try {
-        sub.send(event, data);
-      } catch {
-        subscribers.delete(sub);
-      }
-    }
-  };
+  /**
+   * Every shell window watching the listing, over either wire (live.ts owns
+   * the set, both wires and the drop-on-throw rule).
+   *
+   * Priming is the join hook so a window that upgraded gets the same first two
+   * frames a window that did not would get - a fresh shell paints the listing
+   * and its working badges without waiting for the next poll to find a change.
+   */
+  const channel = createChannel({
+    onJoin: (sub) => {
+      void (async () => {
+        try {
+          const snap = await snapshot();
+          sub.send(null, snap);
+          sub.send("attention", attentionSnapshot());
+        } catch {
+          // best-effort priming; the poll will catch up
+        }
+      })();
+    },
+  });
+
+  /** Fan one frame out to every shell window. */
+  const broadcast = channel.send;
 
   /** The attention map every known session keys by its id. A per-session log
    *  read is skipped by the shared fold cache when nothing changed, so an idle
@@ -773,7 +734,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   let ticks = 0;
 
   const notify = async (mode: "cached" | "after-change" = "cached"): Promise<void> => {
-    if (subscribers.size === 0) return;
+    if (channel.size() === 0) return;
     ticks += 1;
     if (ticks % TICK_EVERY === 0) broadcast("tick", "");
     if (notifying) {
@@ -805,61 +766,6 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       notifyAgain = false;
       await notify("after-change");
     }
-  };
-
-  /**
-   * Take a shell window onto the listing, over either wire; the returned
-   * release takes it back off. Priming happens HERE so a window that upgraded
-   * gets the same first two frames a window that did not would get - a fresh
-   * shell paints the listing and its working badges without waiting for the
-   * next poll to find a change.
-   */
-  const subscribe = (sub: Subscriber): (() => void) => {
-    // Same gap the session host guards: the upgrade is decided in `fetch` and
-    // handed over on `open`, and the hub can be stopping in between.
-    if (stopped) {
-      try {
-        sub.close();
-      } catch {
-        // the window left first; nothing to turn away
-      }
-      return () => {};
-    }
-    subscribers.add(sub);
-    void (async () => {
-      try {
-        const snap = await snapshot();
-        sub.send(null, snap);
-        sub.send("attention", attentionSnapshot());
-      } catch {
-        // best-effort priming; the poll will catch up
-      }
-    })();
-    return () => {
-      subscribers.delete(sub);
-    };
-  };
-
-  const handleEvents = (): Response => {
-    // Assigned synchronously in `start` before any frame is enqueued; the `!`
-    // marks that definite assignment for the `cancel` reader below.
-    let leave!: () => void;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(encoder.encode(": connected\n\n"));
-        leave = subscribe(sseSubscriber(controller));
-      },
-      cancel() {
-        leave();
-      },
-    });
-    return new Response(stream, {
-      headers: {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-store",
-        connection: "keep-alive",
-      },
-    });
   };
 
   /**
@@ -937,7 +843,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       id,
       base: `/s/${id}`,
       shell: `http://127.0.0.1:${port}/?s=${id}`,
-      shells: subscribers.size,
+      shells: channel.size(),
     });
   };
 
@@ -1472,14 +1378,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // for every session, so it is served here at the router - reaching it
     // must never resolve ids, scan the registry, or mount anything.
     if (sessionMatch && sessionMatch[2] === "/__lucid/client.js") {
-      const headers: Record<string, string> = {
-        "content-type": "text/javascript; charset=utf-8",
-        "access-control-allow-origin": req.headers.get("origin") ?? "*",
-        "access-control-allow-credentials": "true",
-        ...noStore,
-      };
-      if (req.headers.get("origin") !== null) headers.vary = "Origin";
-      return new Response((await readDevAsset("client.js")) ?? CLIENT_BUNDLE, { headers });
+      return serveBundleAsset("client.js", req);
     }
 
     // EVERYTHING else - hub routes and session mounts alike - sits behind
@@ -1537,7 +1436,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         {
           lucid: "hub",
           port,
-          shells: subscribers.size,
+          shells: channel.size(),
           attend,
           roots: await scanRootSet(),
           harnesses,
@@ -1583,56 +1482,27 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // A shell window upgrades; anything else still gets SSE. The Host/Origin
       // gate above has already run, which matters MORE here: a WebSocket
       // handshake is not subject to CORS at all.
-      if (wantsUpgrade(req)) {
-        return bound?.upgrade(req, { data: new LiveSocket(subscribe) }) === true
-          ? UPGRADED
-          : json({ error: "websocket upgrade refused" }, 400);
-      }
-      return handleEvents();
+      return wantsUpgrade(req) ? channel.handleUpgrade(req, upgrade) : channel.sseResponse();
     }
     // The shell's own bundle + stylesheet, same generated artifacts every
     // session mount serves - the chrome is one bundle in two modes.
-    if (pathname === "/__lucid/chrome.js") {
-      return new Response((await readDevAsset("chrome.js")) ?? CHROME_BUNDLE, {
-        headers: { "content-type": "text/javascript; charset=utf-8", ...noStore },
-      });
-    }
-    if (pathname === "/__lucid/chrome.css") {
-      return new Response((await readDevAsset("chrome.css")) ?? CHROME_CSS, {
-        headers: { "content-type": "text/css; charset=utf-8", ...noStore },
-      });
-    }
-    if (pathname === "/favicon.ico") {
-      return new Response(FAVICON_SVG, {
-        headers: { "content-type": "image/svg+xml", "cache-control": "max-age=86400" },
-      });
-    }
-    if (pathname === "/") {
-      return new Response(renderShellPage(), {
-        headers: { "content-type": "text/html; charset=utf-8", ...noStore },
-      });
-    }
+    if (pathname === "/__lucid/chrome.js") return serveBundleAsset("chrome.js", req);
+    if (pathname === "/__lucid/chrome.css") return serveBundleAsset("chrome.css", req);
+    if (pathname === "/favicon.ico") return serveBundleAsset("favicon.ico", req);
+    if (pathname === "/") return shellResponse();
     return json({ error: "not found" }, 404);
   };
 
-  // The wide event is made HERE, at the one funnel every route passes
-  // through (D-004) - no route can forget to log. Built once, not per request.
-  const observed = observeRequests({ sink: log }, handle);
-
-  const server = Bun.serve({
-    port: requestedPort,
-    hostname: "127.0.0.1",
-    idleTimeout: 0,
-    websocket: liveWebSocket,
-    async fetch(req) {
-      try {
-        const res = await observed(req);
-        // The connection is already a WebSocket; Bun wants no Response.
-        return wasUpgraded(res) ? undefined : res;
-      } catch (err) {
-        return json({ error: `daemon error: ${(err as Error).message}` }, 500);
-      }
-    },
+  // One requested port, so a busy one is a failure rather than a slide onto
+  // another: a hub is found by its port. Binding through the shared owner also
+  // means that failure now leaves as a typed `ServerError` (SERVER_ERROR),
+  // where the bare `Bun.serve` let a raw `EADDRINUSE` out - the dedicated
+  // server's behaviour, and the documented closed set of error codes.
+  const server = serveLoopback({
+    ports: [requestedPort],
+    name: "daemon",
+    handler: handle,
+    sink: log,
   });
   bound = server;
   port = server.port ?? 0;
@@ -1653,15 +1523,15 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     clearInterval(timer);
     for (const beat of heartbeats) clearInterval(beat);
     heartbeats.clear();
+    // Before the eviction loop, not after: the guard that turns joins away
+    // lives in the channel now, and evicting mounts awaits. A window landing
+    // inside that await would otherwise be taken on and PRIMED - a listing
+    // walk plus an attention fold per session - against a hub that is going
+    // away. Nothing broadcasts during eviction, so closing first costs the
+    // windows still here nothing; the server closing them itself is what is
+    // unsafe (RECONNECT_FRAME), and `stop` does not do that.
+    channel.stop();
     for (const id of [...mounts.keys()]) await evict(id);
-    for (const sub of subscribers) {
-      try {
-        sub.close();
-      } catch {
-        // already closed
-      }
-    }
-    subscribers.clear();
     await server.stop(true);
   };
 

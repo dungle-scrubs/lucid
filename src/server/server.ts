@@ -1,8 +1,7 @@
 import type { SessionPaths } from "../core/paths.ts";
-import { ServerError } from "../errors.ts";
 import { removeServerDescriptor, writeServerDescriptor } from "./discovery.ts";
-import { createLogSink, observeRequests } from "./observe.ts";
-import { liveWebSocket, wasUpgraded } from "./live.ts";
+import { createLogSink } from "./observe.ts";
+import { serveLoopback } from "./live.ts";
 import { portBase, sessionPortPool } from "./ports.ts";
 import { createSessionHost } from "./session-host.ts";
 
@@ -83,51 +82,24 @@ export const runServer = async (
   // a dedicated server serves exactly ONE artifact, so its identity is a
   // property of the server, not of the request. Without it the records were
   // anonymous - a record is defined as carrying which artifact it is about.
-  const observed = observeRequests(
-    { sink: createLogSink({ path: paths.requestLog, mirror: () => {} }) },
-    async (req, observation) => {
-      // Attached here, not per route: a dedicated server serves exactly ONE
-      // artifact, so its identity is a property of the server.
-      observation.attach({ artifact: paths.artifactPath });
-      return host.handle(req);
-    },
-  );
-
-  let server: ReturnType<typeof Bun.serve> | undefined;
-  let lastErr: unknown;
-  for (const candidate of requestedPorts) {
-    try {
-      server = Bun.serve({
-        port: candidate,
-        hostname: "127.0.0.1",
-        idleTimeout: 0,
-        websocket: liveWebSocket,
-        async fetch(req) {
-          try {
-            const res = await observed(req);
-            // The connection is already a WebSocket; Bun wants no Response.
-            return wasUpgraded(res) ? undefined : res;
-          } catch (err) {
-            return new Response(
-              JSON.stringify({ error: `server error: ${(err as Error).message}` }),
-              { status: 500, headers: { "content-type": "application/json; charset=utf-8" } },
-            );
-          }
-        },
-      });
-      bound = server;
-      break;
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  if (!server) {
-    host.stop();
-    throw new ServerError({
-      message: `could not bind any port in [${requestedPorts.join(", ")}]: ${(lastErr as Error)?.message ?? "unknown"}`,
+  let boundServer: ReturnType<typeof Bun.serve>;
+  try {
+    boundServer = serveLoopback({
+      ports: requestedPorts,
+      name: "server",
+      sink: createLogSink({ path: paths.requestLog, mirror: () => {} }),
+      handler: async (req, observation) => {
+        // Attached here, not per route: a dedicated server serves exactly ONE
+        // artifact, so its identity is a property of the server.
+        observation.attach({ artifact: paths.artifactPath });
+        return host.handle(req);
+      },
     });
+  } catch (err) {
+    host.stop();
+    throw err;
   }
-  const boundServer = server;
+  bound = boundServer;
   port = boundServer.port ?? 0;
 
   // One line naming what was bound and why it was available.

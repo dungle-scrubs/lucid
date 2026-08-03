@@ -10,7 +10,12 @@ import type {
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
 
 export interface Config {
-  readonly mode: string;
+  /** The literal, not `string`: it is what discriminates this config from
+   *  `ShellConfig` below, and the boot page picks the page it writes off that
+   *  discriminant. Widened to `string` it stopped narrowing, and the server
+   *  reached for a cast that would have sent a chrome payload out under the
+   *  shell's global name without a type error anywhere. */
+  readonly mode: "chrome";
   readonly session: string;
   readonly name: string;
   readonly port: number;
