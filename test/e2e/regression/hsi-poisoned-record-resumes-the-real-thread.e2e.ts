@@ -103,6 +103,14 @@ test("a poisoned record resumes the harness's real thread, never the synthetic i
       }),
     ].join("\n")}\n`,
   );
+  // The real thread exists in this machine's Codex store - pre-flight refuses
+  // a store-absent id before any process runs, and this test is about which
+  // id reaches argv, not about the refusal.
+  await mkdir(join(dir, "codex-sessions", "2026", "08", "01"), { recursive: true });
+  await writeFile(
+    join(dir, "codex-sessions", "2026", "08", "01", `rollout-2026-08-01T10-00-00-${real}.jsonl`),
+    "{}\n",
+  );
   // THE TRUTH: the machine-local sidecar, where the harness's own thread was
   // recorded with explicit authority when it announced itself.
   await writeFile(
@@ -185,6 +193,16 @@ test("a dead session says so in the viewer, and the feedback stays recorded", as
     }),
   );
 
+  // The dead thread HAS a rollout file, so pre-flight lets the spawn run and
+  // the verdict comes from the harness's own mouth (HSI004) - the durable
+  // quarantine this test pins. A store-absent id is refused before any
+  // process runs, which is a different, batch-scoped mechanism with its own
+  // tests.
+  await mkdir(join(dir, "codex-sessions", "2026", "08", "01"), { recursive: true });
+  await writeFile(
+    join(dir, "codex-sessions", "2026", "08", "01", `rollout-2026-08-01T10-00-00-${dead}.jsonl`),
+    "{}\n",
+  );
   // A real project root, so the artifact's project and the session's recorded
   // cwd agree - otherwise the engine reads the artifact as MOVED and starts a
   // fresh handoff, which resumes nothing and could never reach a verdict.
