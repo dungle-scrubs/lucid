@@ -30,7 +30,7 @@ import { scratchpadProject } from "../core/scratchpad.ts";
 import { projectRoot } from "../core/sessions.ts";
 import { swr } from "../core/swr.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
-import { classifyTurnFailure } from "../launch/turn.ts";
+import { classifyTurnFailure, readRunOutput, runOutputStart } from "../launch/turn.ts";
 import { readEvents } from "../core/log.ts";
 import { createArtifactPrompt } from "../launch/prompts.ts";
 import { prepareSpawnIdentity, runSpawn } from "../launch/spawn.ts";
@@ -1163,15 +1163,12 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // surfaces as a tab on its own `lucid open`. The claim is held until the
       // turn ends, so a retry while it runs is refused rather than doubled.
       const outLog = paths.createLog;
-      // Where THIS attempt's output starts. The log is opened in append mode
-      // (spawn.ts), so a second failed create on the same artifact would
-      // otherwise tail both attempts concatenated with no separator - the
-      // previous turn's evidence presented as this one's (07#17). Same fix
-      // shape the attend path already uses for a silent turn's relay.
-      const outputFrom = await stat(outLog).then(
-        (st) => st.size,
-        () => 0,
-      );
+      // Where THIS attempt's output starts, through the one owner of that
+      // question: the log is opened in append mode (spawn.ts), so a second
+      // failed create on the same artifact would otherwise tail both attempts
+      // concatenated with no separator - the previous turn's evidence
+      // presented as this one's (07#17).
+      const outputFrom = await runOutputStart(outLog);
       // A dead create turn is knowable the moment the child exits - waiting
       // out the dialog's own patience to report "check the log" turned a
       // seconds-fast failure (a harness over its usage limit) into two
@@ -1248,9 +1245,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       heartbeats.add(heartbeat);
 
       const reportFailure = async (code: number | string): Promise<void> => {
-        const whole = await readFile(outLog, "utf8").catch(() => "");
         // THIS attempt only.
-        const raw = whole.slice(outputFrom);
+        const raw = await readRunOutput(outLog, outputFrom);
         const tail = raw.trim().split("\n").slice(-3).join("\n").slice(-500);
         // Why the turn died, through the one classifier every driver shares.
         // A usage wall is the one failure the human can do nothing about in

@@ -99,6 +99,28 @@ export const classifyTurnFailure = (output: string): TurnFailure => {
  */
 export const DEFAULT_TURN_IDLE_MS = 8 * 60 * 1000;
 
+/**
+ * Where a run's output will start in an out-log every attempt appends to.
+ *
+ * Captured BEFORE the process exists, because the alternative - reading the
+ * whole file afterwards - reports an earlier attempt's evidence as this one's:
+ * a not-found banner that durably quarantines a live session, a usage wall
+ * inherited by an unrelated later crash, a second create attempt whose dialog
+ * tails the first one's error with no separator. A log that does not exist yet
+ * starts at zero.
+ */
+export const runOutputStart = (outLog: string): Promise<number> =>
+  stat(outLog).then(
+    (s) => s.size,
+    () => 0,
+  );
+
+/** THIS run's bytes from that out-log. An unreadable log is empty output: the
+ *  turn's exit code is the story, and a missing file must not throw inside the
+ *  classification of a turn that has already ended. */
+export const readRunOutput = async (outLog: string, from: number): Promise<string> =>
+  (await readFile(outLog, "utf8").catch(() => "")).slice(from);
+
 /** Which template a turn runs. A RESUME re-enters a recorded conversation; a
  *  HANDOFF gives the artifact to a session that does not exist yet - the same
  *  sequence, minus an id to hold the harness to. */
@@ -365,12 +387,7 @@ export const runTurn = async (planned: PlannedTurn, drive: TurnDrive): Promise<T
     /* presence is advisory; a failed ack must not cancel the delivery */
   });
   drive.onDelivered?.();
-  // Where THIS run's output starts in the shared log, captured before the
-  // process can write a byte.
-  const outputFrom = await stat(drive.outLog).then(
-    (s) => s.size,
-    () => 0,
-  );
+  const outputFrom = await runOutputStart(drive.outLog);
   let result: SpawnResult;
   try {
     result = await runSpawn(
@@ -406,7 +423,7 @@ export const runTurn = async (planned: PlannedTurn, drive: TurnDrive): Promise<T
     drive.onSpawnSettled?.();
   }
   const code = result.code;
-  const output = (await readFile(drive.outLog, "utf8").catch(() => "")).slice(outputFrom);
+  const output = await readRunOutput(drive.outLog, outputFrom);
   const observed = "identity" in result ? result.identity : undefined;
   // The mismatch policy, from the classifier both drivers now share rather
   // than from an open-coded comparison that only happened to agree with it.

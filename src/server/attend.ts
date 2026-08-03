@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { tracer } from "../core/verbose.ts";
 import {
@@ -28,7 +28,13 @@ import {
 } from "../core/presence.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
 import { revisePrompt } from "../launch/prompts.ts";
-import { DEFAULT_TURN_IDLE_MS, planTurn, runTurn, type TurnOutcome } from "../launch/turn.ts";
+import {
+  DEFAULT_TURN_IDLE_MS,
+  planTurn,
+  readRunOutput,
+  runTurn,
+  type TurnOutcome,
+} from "../launch/turn.ts";
 import {
   loadRegistry,
   normalizeHarness,
@@ -613,7 +619,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // THIS run's bytes only: the attend log accumulates runs, and scanning the
     // whole file let a run with no recognizable footer relay an EARLIER run's
     // final message - plus everything after it - as this turn's words.
-    const output = (await readFile(paths.attendLog, "utf8").catch(() => "")).slice(outputFrom);
+    const output = await readRunOutput(paths.attendLog, outputFrom);
     // The harness's final message when the output framing is known (codex),
     // else the narration-filtered tail - see relayableReply for why a raw
     // byte slice of the log is not something to put in the human's transcript.
