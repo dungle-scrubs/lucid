@@ -1,12 +1,12 @@
 import { Glob } from "bun";
-import { basename, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 import type { SessionSummary } from "../protocol/wire.ts";
 import { discoverLiveServer, readServerDescriptor } from "../server/discovery.ts";
 import { selectOpenUrl, type View } from "../server/view.ts";
 import { artifactCheckout } from "./project.ts";
 import { readLastAttendant } from "./attendant.ts";
-import { foldLog } from "./fold.ts";
-import { readEvents } from "./log.ts";
+import { sessionState } from "./log.ts";
 import { canonicalArtifactPath, sessionPaths } from "./paths.ts";
 import type { SessionPaths } from "./paths.ts";
 
@@ -50,12 +50,21 @@ export const listSessions = async (
     const artifactDir = resolve(scanRoot, ...parts.slice(0, -2));
 
     try {
-      // The log the GLOB found, not the new-layout path recomputed from the
+      // The record the GLOB found, not the new-layout path recomputed from the
       // artifact dir: for a legacy `.lucid/<stem>/` row those differ, the
-      // recomputed file does not exist, `readEvents` answers `{events: []}`
-      // on ENOENT, and the fold's `none` dropped every legacy session from
-      // the listing while its log sat right where the glob had seen it.
-      const state = foldLog((await readEvents(resolve(scanRoot, rel))).events);
+      // recomputed file does not exist, a missing log reads as `{events: []}`,
+      // and the fold's `none` dropped every legacy session from the listing
+      // while its log sat right where the glob had seen it. It is passed as the
+      // record dir rather than patched over `logPath` so the whole struct
+      // agrees with itself (`core/paths.ts` has the why), and realpath'd
+      // because `sessionPaths` canonicalizes everything else: `/tmp/x` and
+      // `/private/tmp/x` are two keys for one log in the shared fold cache,
+      // which would then hold - and re-fold - the same session twice per poll.
+      const found: SessionPaths = sessionPaths(
+        resolve(artifactDir, `${stem}.html`),
+        dirname(realpathSync(resolve(scanRoot, rel))),
+      );
+      const state = await sessionState(found);
       if (state.status === "none") continue;
 
       // CANONICAL, like every other identity surface (plan 05, M1.1): the scan

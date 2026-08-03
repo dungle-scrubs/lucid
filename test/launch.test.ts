@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { foldLog, type ForkRecord } from "../src/core/fold.ts";
-import { appendEvent, readEvents } from "../src/core/log.ts";
+import { appendEvent, readEvents, sessionState } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { readRegistry } from "../src/core/registry.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
@@ -563,7 +563,7 @@ describe("launcher handleForks (integration, stub harness)", () => {
   });
 
   test("a fork event spawns the recipe, authors the child, and opens it", async () => {
-    await appendEvent(parent.logPath, {
+    await appendEvent(parent, {
       t: "fork",
       id: "fork-1",
       version: 1,
@@ -645,7 +645,7 @@ await Bun.write(artifactPath, \`<!doctype html><html><head><title>x</title></hea
         },
       }),
     );
-    await appendEvent(parent.logPath, {
+    await appendEvent(parent, {
       t: "fork",
       id: "fork-assigned",
       version: 1,
@@ -671,12 +671,12 @@ await Bun.write(artifactPath, \`<!doctype html><html><head><title>x</title></hea
     expect(created[0]?.childSessionId).toBe(seen.argvSid ?? "");
     // And the assigned binding is durable in the child's log.
     const childPaths2 = sessionPaths(created[0]?.childArtifact ?? "");
-    const bound = foldLog((await readEvents(childPaths2.logPath)).events).bindings;
+    const bound = (await sessionState(childPaths2)).bindings;
     expect(bound[0]).toMatchObject({ authority: "assigned", sessionId: seen.argvSid });
   });
 
   test("a corrupt handled.json throws rather than silently re-spawning every fork", async () => {
-    await appendEvent(parent.logPath, {
+    await appendEvent(parent, {
       t: "fork",
       id: "fork-2",
       version: 1,
@@ -844,7 +844,7 @@ describe("the launcher's Shape-C resume runs through the turn owner", () => {
    *  `wait`: the loop starts from the log's current high seq, because a fresh
    *  child has no prior feedback to re-apply. */
   const annotate = (): Promise<unknown> =>
-    appendEvent(child.logPath, {
+    appendEvent(child, {
       t: "annotation",
       id: "a-child",
       version: 1,

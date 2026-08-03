@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, readFile, stat } from "node:fs/promises";
-import { createAttentionCache } from "../core/attention.ts";
+import { attentionOf, type Attention } from "../core/attention.ts";
 import {
   ARTIFACT_DIR,
   canonicalArtifactPath,
@@ -30,7 +30,7 @@ import { projectOf } from "../core/project.ts";
 import { swr } from "../core/swr.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
 import { classifyTurnFailure, readRunOutput, runOutputStart } from "../launch/turn.ts";
-import { readEvents } from "../core/log.ts";
+import { readEvents, sessionStateCacheStats, sessionStateSync } from "../core/log.ts";
 import { createArtifactPrompt } from "../launch/prompts.ts";
 import { prepareSpawnIdentity, runSpawn } from "../launch/spawn.ts";
 import {
@@ -312,7 +312,6 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   // an agent working (a `working` flip) never rebroadcasts the listing (R3,
   // D-016). The cache keeps an idle artifact at one stat per poll (M1.1).
   let lastAttentionSnapshot = "";
-  const attentionCache = createAttentionCache();
 
   // ---- session mounts -------------------------------------------------------
 
@@ -725,20 +724,20 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   };
 
   /** The attention map every known session keys by its id. A per-session log
-   *  read is skipped by the cache when nothing changed, so an idle listing
-   *  costs one `stat` per artifact. A not-yet-created log (ENOENT) is simply
-   *  absent; any OTHER error (permission, corrupt committed line) is surfaced
-   *  once rather than silently masquerading as "no log yet". */
+   *  read is skipped by the shared fold cache when nothing changed, so an idle
+   *  listing costs one `stat` per artifact. A session with no log yet is simply
+   *  absent; any error (permission, corrupt committed line) is surfaced once
+   *  rather than silently masquerading as "no log yet". */
   const attentionSnapshot = (): string => {
-    const map: Record<string, ReturnType<typeof attentionCache.get>> = {};
+    const map: Record<string, Attention> = {};
     for (const [id, artifact] of idToArtifact) {
       try {
-        map[id] = attentionCache.get(sessionPaths(artifact).logPath);
+        const state = sessionStateSync(sessionPaths(artifact));
+        if (state.status === "none") continue; // nothing opened here; no badge
+        map[id] = attentionOf(state);
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-          log(`[hub] attention read failed for ${artifact}: ${(err as Error).message}`);
-        }
-        // Either way the id has no attention this pass; the badge just clears.
+        log(`[hub] attention read failed for ${artifact}: ${(err as Error).message}`);
+        // The id has no attention this pass; the badge just clears.
       }
     }
     return JSON.stringify(map);
@@ -1544,9 +1543,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           harnesses,
           harnessInfo,
           ...(registry?.default !== undefined ? { defaultHarness: registry.default } : {}),
-          // The debug surface (M1.1 observability): the attention fold cache's
-          // hit/miss/entries, readable with `curl <hub>/hub/identity`.
-          debug: { attentionCache: attentionCache.stats() },
+          // The debug surface (M1.1 observability): the shared session-state
+          // fold cache's hit/miss/entries, readable with
+          // `curl <hub>/hub/identity`.
+          debug: { sessionStateCache: sessionStateCacheStats() },
           // The hub's OWN view of its log (M3.2). `lucid status` runs in a
           // different process and can resolve a different LUCID_HUB_LOG - or
           // miss an explicitly injected path entirely - so asking beats

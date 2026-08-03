@@ -5,9 +5,8 @@ import type {
   QuestionOption,
   SessionHistoryRecord,
 } from "../protocol/wire.ts";
-import type { LogEvent, PromptImage, SessionIdAuthority } from "./events.ts";
+import { maxSeq, type LogEvent, type PromptImage, type SessionIdAuthority } from "./events.ts";
 import type { ItemAnswer, QuestionItem } from "./question-contract.ts";
-import { maxSeq } from "./log.ts";
 
 export type SessionStatus = "none" | "active" | "suspended" | "ended";
 
@@ -321,6 +320,10 @@ const deriveSessionHistory = (events: readonly LogEvent[]): SessionHistoryRecord
  * lifecycle event across the whole log (D-049); current version, reviewResolved,
  * the live annotation set, and the conversation derive from the latest segment
  * only (D-056). Earlier segments are read-only history.
+ *
+ * @internal The pure fold, over events a caller already holds. Reading a
+ * session's state goes through `sessionState` (src/core/log.ts) - the one seam
+ * that owns the read, the torn-tail tolerance and the fold cache.
  */
 export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   const highSeq = maxSeq(events);

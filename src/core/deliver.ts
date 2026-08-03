@@ -61,7 +61,7 @@ export interface BindingAppendResult {
  * event themselves and each enforced a different subset of its invariants.
  */
 export const appendSessionBindings = async (
-  logPath: string,
+  paths: SessionPaths,
   bindings: readonly BindingInput[],
 ): Promise<BindingAppendResult> => {
   const inputs: EventInput[] = [];
@@ -79,7 +79,7 @@ export const appendSessionBindings = async (
   let opened = false;
   const existing = new Set<string>();
   const appended = await appendEventsIf(
-    logPath,
+    paths,
     (events) => {
       opened = events.some((e) => e.t === "session_opened");
       for (const e of events) if (hasId(e)) existing.add(e.id);
@@ -117,12 +117,12 @@ export const deliver = async (paths: SessionPaths, input: EventInput): Promise<D
     // Through the one binding writer, so the offline fallback carries the
     // same after-open guard and derived id as every other producer. A refusal
     // is visible to the caller rather than a silent skip.
-    const result = await appendSessionBindings(paths.logPath, [
+    const result = await appendSessionBindings(paths, [
       { launchId: input.launchId, attendant: input.attendant, turnId: input.turnId },
     ]);
     return { live: false, ...(result.opened ? {} : { refused: true }) };
   }
-  await appendEvent(paths.logPath, input);
+  await appendEvent(paths, input);
   return { live: false };
 };
 
@@ -163,7 +163,7 @@ export const promotePendingBindings = async (paths: SessionPaths): Promise<reado
         continue; // the server died; the binding stays owed
       }
     } else {
-      const result = await appendSessionBindings(paths.logPath, [{ launchId, attendant: stamp }]);
+      const result = await appendSessionBindings(paths, [{ launchId, attendant: stamp }]);
       if (!result.opened) continue; // not opened yet: still owed
       promoted.push(...result.fresh);
     }

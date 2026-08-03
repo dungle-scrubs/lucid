@@ -8,7 +8,7 @@ import { readSettingsCached } from "../core/settings.ts";
 import { artifactAttendant, readLastAttendant } from "../core/attendant.ts";
 import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
-import { foldLog, versionRef } from "../core/fold.ts";
+import { versionRef } from "../core/fold.ts";
 import {
   sanitizeAttendant,
   TURN_END_CODE,
@@ -27,7 +27,7 @@ import {
   validateGroup,
 } from "../core/question-contract.ts";
 import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/events.ts";
-import { appendEvents, appendEventsIf, readEvents } from "../core/log.ts";
+import { appendEvents, appendIfStatus, sessionState } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
 import { assemblePayload } from "../core/payload.ts";
@@ -359,14 +359,14 @@ export const createSessionHost = (
   };
 
   const serverAppend = async (inputs: readonly EventInput[]): Promise<readonly LogEvent[]> => {
-    const events = await appendEvents(paths.logPath, inputs);
+    const events = await appendEvents(paths, inputs);
     for (const e of events) broadcast(e);
     touch();
     return events;
   };
 
   const currentVersion = async (): Promise<number> => {
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     return state.version;
   };
 
@@ -670,7 +670,7 @@ export const createSessionHost = (
     let legacyText = text;
     let grouped = false;
     if (decided) {
-      const state = foldLog((await readEvents(paths.logPath)).events);
+      const state = await sessionState(paths);
       const asked = state.questions.find((q) => q.id === body.questionId);
       const group = asked?.group ?? [];
       if (group.length > 0) {
@@ -818,7 +818,7 @@ export const createSessionHost = (
 
   /** Diff the current artifact against a base version (RFC §8). */
   const handleDiff = async (url: URL): Promise<Response> => {
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const baseVersion = Number.parseInt(url.searchParams.get("base") ?? "", 10);
     const ref = versionRef(state, Number.isFinite(baseVersion) ? baseVersion : state.version - 1);
     const currentHtml = await readFile(paths.currentHtml, "utf8").catch(() => "");
@@ -839,7 +839,7 @@ export const createSessionHost = (
    *  The current version is served live from `/__lucid/artifact`; this is only
    *  ever a prior snapshot, looked up by its version ref within the segment. */
   const handleVersion = async (url: URL): Promise<Response> => {
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const v = Number.parseInt(url.searchParams.get("v") ?? "", 10);
     const ref = versionRef(state, v);
     if (!ref || !Number.isFinite(v)) return json({ error: "unknown version" }, 404);
@@ -911,7 +911,7 @@ export const createSessionHost = (
       typeof body.turnId === "string" && body.turnId.length > 0
         ? body.turnId.slice(0, 128)
         : undefined;
-    const result = await appendSessionBindings(paths.logPath, [
+    const result = await appendSessionBindings(paths, [
       { launchId, attendant, ...(turnId ? { turnId } : {}) },
     ]);
     if (!result.opened) return json({ error: "session not opened" }, 409);
@@ -993,7 +993,7 @@ export const createSessionHost = (
     const registry = await loadRegistry(options.harnessesPath).catch(() => null);
     if (!registry) return undefined;
     const selection = await readSelection(paths);
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const recorded = [...state.sessionHistory].reverse().find((r) => r.harness)?.harness;
     const wanted = selection?.harness ?? recorded;
     // Nothing selected and nothing recorded is not an unlisted harness: the
@@ -1164,7 +1164,7 @@ export const createSessionHost = (
       });
     }
     if (pathname === "/__lucid/state") {
-      const state = foldLog((await readEvents(paths.logPath)).events);
+      const state = await sessionState(paths);
       const payload = await assemblePayload(
         paths,
         state,
@@ -1333,7 +1333,7 @@ export const createSessionHost = (
         // has not been committed yet has nothing to serve for a second or two
         // during creation, and calling that a moved-or-deleted file is a lie
         // told at the one moment the human is most likely to be looking.
-        const opened = foldLog((await readEvents(paths.logPath)).events).status !== "none";
+        const opened = (await sessionState(paths)).status !== "none";
         return new Response(missingArtifactDoc(opened), {
           status: 404,
           headers: { "content-type": "text/html; charset=utf-8", ...noStore },
@@ -1444,7 +1444,7 @@ export const createSessionHost = (
     void (async () => {
       if (subscribers.size === 0) return; // nobody is looking
       try {
-        const state = foldLog((await readEvents(paths.logPath)).events);
+        const state = await sessionState(paths);
         const target = await artifactAttendant(paths, state.sessionHistory);
         const live = await presenceFor(target, paths.artifactDir);
         const frame = live
@@ -1475,11 +1475,7 @@ export const createSessionHost = (
    */
   const suspend = async (): Promise<boolean> => {
     if (subscribers.size > 0) return false;
-    const appended = await appendEventsIf(
-      paths.logPath,
-      (existing) => foldLog(existing).status === "active",
-      [{ t: "session_suspended" }],
-    );
+    const appended = await appendIfStatus(paths, "active", [{ t: "session_suspended" }]);
     if (appended.length > 0) {
       // Broadcast like serverAppend would: a subscriber that squeezed in
       // after the size check above still learns of the suspend before the
@@ -1507,13 +1503,11 @@ export const createSessionHost = (
    */
   const resumeIfSuspended = async (): Promise<void> => {
     try {
-      const state = foldLog((await readEvents(paths.logPath)).events);
+      const state = await sessionState(paths);
       if (state.status !== "suspended") return;
-      const appended = await appendEventsIf(
-        paths.logPath,
-        (existing) => foldLog(existing).status === "suspended",
-        [{ t: "session_resumed", segment: state.segment }],
-      );
+      const appended = await appendIfStatus(paths, "suspended", [
+        { t: "session_resumed", segment: state.segment },
+      ]);
       if (appended.length === 0) return;
       for (const e of appended) broadcast(e);
       touch();

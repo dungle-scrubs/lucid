@@ -3,8 +3,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { writeJsonFile } from "./atomic-json.ts";
-import { foldLog } from "./fold.ts";
-import { readEvents } from "./log.ts";
+import { sessionState } from "./log.ts";
 import { canonicalArtifactPath, sessionPaths } from "./paths.ts";
 import { agentScratchpadRoots } from "./scratchpad.ts";
 
@@ -145,7 +144,7 @@ const resolveArtifactPath = async (artifactDir: string, stem: string): Promise<s
   // one session twice.
   const probe = sessionPaths(resolve(artifactDir, `${stem}.html`));
   try {
-    const state = foldLog((await readEvents(probe.logPath)).events);
+    const state = await sessionState(probe);
     if (state.artifact) return canonicalArtifactPath(resolve(artifactDir, state.artifact));
   } catch {
     // unreadable/corrupt log: fall back to the slug-derived name

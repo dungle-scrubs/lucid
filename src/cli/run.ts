@@ -3,8 +3,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { mergeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
 import { deliver, promotePendingBindings } from "../core/deliver.ts";
-import { foldLog } from "../core/fold.ts";
-import { readEvents } from "../core/log.ts";
+import { sessionState } from "../core/log.ts";
 import { ARTIFACT_DIR, canonicalArtifactPath, sessionPaths } from "../core/paths.ts";
 import { enclosingCheckout } from "../core/project.ts";
 import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
@@ -524,7 +523,7 @@ export const runAsk = async (
   opts: { ref?: string; options?: readonly string[]; multi?: boolean; group?: string } = {},
 ): Promise<void> => {
   const paths = sessionPaths(file);
-  const state = foldLog((await readEvents(paths.logPath)).events);
+  const state = await sessionState(paths);
   if (state.status === "none") {
     throw new NotFoundError({
       message: `No Lucid session for ${paths.artifactPath}`,
@@ -599,7 +598,7 @@ export const runAsk = async (
 /** `lucid end <file>` - terminal end of the session. */
 export const runEnd = async (file: string): Promise<void> => {
   const paths = sessionPaths(file);
-  const state = foldLog((await readEvents(paths.logPath)).events);
+  const state = await sessionState(paths);
   if (state.status === "none") {
     throw new NotFoundError({
       message: `No Lucid session for ${paths.artifactPath}`,
@@ -627,7 +626,7 @@ export interface LaunchCliOptions {
  */
 export const runLaunchCli = async (file: string, options: LaunchCliOptions = {}): Promise<void> => {
   const paths = sessionPaths(file);
-  const state = foldLog((await readEvents(paths.logPath)).events);
+  const state = await sessionState(paths);
   if (state.status === "none") {
     throw new NotFoundError({
       message: `No Lucid session for ${paths.artifactPath}`,

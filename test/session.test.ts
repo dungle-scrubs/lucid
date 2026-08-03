@@ -16,7 +16,7 @@ import { captureElementAnchor } from "../src/anchors/dom.ts";
 import type { DomElementLike, DomRootLike } from "../src/anchors/dom.ts";
 import type { Anchor } from "../src/anchors/anchor.ts";
 import { foldLog } from "../src/core/fold.ts";
-import { appendEvent, appendEvents, readEvents } from "../src/core/log.ts";
+import { appendEvent, appendEvents, readEvents, sessionState } from "../src/core/log.ts";
 import { assemblePayload, buildWaitPayload } from "../src/core/payload.ts";
 import { cursorSidecarPath, sessionPaths, snapshotPath } from "../src/core/paths.ts";
 import { commitWatchedChange, ensureSessionDirs, openSession } from "../src/core/session.ts";
@@ -45,7 +45,7 @@ describe("log append", () => {
   test("assigns monotonic seq and dedupes by id", async () => {
     const paths = sessionPaths(artifact);
     await Bun.write(paths.logPath, "");
-    const a = await appendEvent(paths.logPath, {
+    const a = await appendEvent(paths, {
       t: "annotation",
       id: "id-1",
       version: 1,
@@ -54,7 +54,7 @@ describe("log append", () => {
     });
     expect(a.seq).toBe(1);
     // duplicate id -> returns existing, no new seq
-    const dup = await appendEvent(paths.logPath, {
+    const dup = await appendEvent(paths, {
       t: "annotation",
       id: "id-1",
       version: 1,
@@ -62,7 +62,7 @@ describe("log append", () => {
       note: "first again",
     });
     expect(dup.seq).toBe(1);
-    const b = await appendEvent(paths.logPath, {
+    const b = await appendEvent(paths, {
       t: "prompt",
       id: "id-2",
       refs: [],
@@ -96,7 +96,7 @@ describe("log append", () => {
     await Bun.write(paths.logPath, "");
     await Promise.all(
       Array.from({ length: 20 }, (_, i) =>
-        appendEvent(paths.logPath, { t: "agent_reply", id: `r${i}`, text: `m${i}` }),
+        appendEvent(paths, { t: "agent_reply", id: `r${i}`, text: `m${i}` }),
       ),
     );
     const { events } = await readEvents(paths.logPath);
@@ -127,7 +127,7 @@ describe("working window over a recorded log", () => {
     // A turn takes the batch and produces nothing - the shape that left the
     // viewer saying "agent picked up your feedback Nm ago - no response yet"
     // for the life of the session (plan 08 finding #1).
-    await appendEvents(paths.logPath, [
+    await appendEvents(paths, [
       {
         t: "annotation",
         id: "a-1",
@@ -139,12 +139,12 @@ describe("working window over a recorded log", () => {
     ]);
 
     // Live: nothing has closed it, and nothing should.
-    const live = foldLog((await readEvents(paths.logPath)).events);
+    const live = await sessionState(paths);
     expect(live.agentWorking).not.toBeNull();
 
     // Ended: the session is over, so no turn is running.
-    await appendEvent(paths.logPath, { t: "session_ended" });
-    const ended = foldLog((await readEvents(paths.logPath)).events);
+    await appendEvent(paths, { t: "session_ended" });
+    const ended = await sessionState(paths);
     expect(ended.agentWorking).toBeNull();
 
     // The close must not have been bought by advancing output accounting -
@@ -163,7 +163,7 @@ describe("working window over a recorded log", () => {
   test("closing a window without output leaves delivery accounting alone", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvents(paths.logPath, [
+    await appendEvents(paths, [
       {
         t: "annotation",
         id: "a-1",
@@ -173,9 +173,9 @@ describe("working window over a recorded log", () => {
       },
       { t: "agent_ack", id: "ack-1", covers: 2 },
     ]);
-    await appendEvent(paths.logPath, { t: "session_ended" });
+    await appendEvent(paths, { t: "session_ended" });
 
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const payload = await assemblePayload(paths, state, "ended", {
       annotations: state.annotations,
       messages: state.messages,
@@ -198,7 +198,7 @@ describe("working window over a recorded log", () => {
     // never marks anything answered at all.
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvents(paths.logPath, [
+    await appendEvents(paths, [
       {
         t: "annotation",
         id: "a-1",
@@ -210,7 +210,7 @@ describe("working window over a recorded log", () => {
       { t: "agent_reply", id: "r-1", text: "rethought it" },
     ]);
 
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const payload = await assemblePayload(paths, state, "feedback", {
       annotations: state.annotations,
       messages: state.messages,
@@ -235,7 +235,7 @@ describe("openSession lifecycle", () => {
   test("end then reopen starts segment 2 with non-colliding snapshot (D-045/D-050)", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, { t: "session_ended" });
+    await appendEvent(paths, { t: "session_ended" });
     const r2 = await openSession(paths);
     expect(r2.startedSegment).toBe(true);
     expect(r2.state.segment).toBe(2);
@@ -251,7 +251,7 @@ describe("openSession lifecycle", () => {
   test("resume on suspended reconciles a file changed while suspended (D-061)", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, { t: "session_suspended" });
+    await appendEvent(paths, { t: "session_suspended" });
     // user edits the file while suspended (watcher stopped)
     await writeFile(artifact, V2);
     const r = await openSession(paths);
@@ -268,7 +268,7 @@ describe("openSession lifecycle", () => {
     // a change mints a spurious version on every open, forever (D-012).
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, { t: "session_suspended" });
+    await appendEvent(paths, { t: "session_suspended" });
     // Simulate the pull: the whole run/ dir (current.html, lock, ...) is gone,
     // but the artifact and the committed versions/ snapshots remain unchanged.
     await rm(paths.runDir, { recursive: true, force: true });
@@ -299,14 +299,14 @@ describe("commitWatchedChange", () => {
     const r = await commitWatchedChange(paths);
     expect(r.committed).toBeUndefined();
     expect(r.warning?.code).toBe("STRUCTURE_INVALID");
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     expect(state.version).toBe(1); // unchanged
   });
 
   test("refuses a change on a suspended session WITHOUT clobbering the baseline", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, { t: "session_suspended" });
+    await appendEvent(paths, { t: "session_suspended" });
     await writeFile(artifact, V2);
     const r = await commitWatchedChange(paths);
     expect(r.committed).toBeUndefined();
@@ -317,7 +317,7 @@ describe("commitWatchedChange", () => {
     expect(await readFile(paths.currentHtml, "utf8")).toBe(V1);
     expect(existsSync(snapshotPath(paths, 1, 2))).toBe(false);
     // Once the session resumes, the same change commits as v2.
-    await appendEvent(paths.logPath, { t: "session_resumed", segment: 1 });
+    await appendEvent(paths, { t: "session_resumed", segment: 1 });
     const again = await commitWatchedChange(paths);
     expect(again.committed && "version" in again.committed ? again.committed.version : 0).toBe(2);
   });
@@ -335,7 +335,7 @@ describe("buildWaitPayload resolution", () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
     // annotation on v1 targeting <li>two</li>
-    await appendEvents(paths.logPath, [
+    await appendEvents(paths, [
       {
         t: "annotation",
         id: "a-keep",
@@ -362,7 +362,7 @@ describe("buildWaitPayload resolution", () => {
         note: "orphan",
       },
     ]);
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const payload = await buildWaitPayload({
       session: paths.artifactPath,
       state,
@@ -388,7 +388,7 @@ describe("buildWaitPayload resolution", () => {
   test("a positional-only resolution is resolved AND carries confidence: low", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-guess",
       version: 1,
@@ -402,7 +402,7 @@ describe("buildWaitPayload resolution", () => {
       },
       note: "positional",
     });
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const payload = await buildWaitPayload({
       session: paths.artifactPath,
       state,
@@ -421,7 +421,7 @@ describe("buildWaitPayload resolution", () => {
   test("an EXACT resolution carries no confidence field at all (an older reader is unaffected)", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-exact",
       version: 1,
@@ -431,7 +431,7 @@ describe("buildWaitPayload resolution", () => {
       target: exactAnchorForTwo(),
       note: "exact",
     });
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const payload = await buildWaitPayload({
       session: paths.artifactPath,
       state,
@@ -450,7 +450,7 @@ describe("buildWaitPayload resolution", () => {
   test("a MISS is resolved: false and never a low-confidence maybe", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-miss",
       version: 1,
@@ -462,7 +462,7 @@ describe("buildWaitPayload resolution", () => {
       },
       note: "miss",
     });
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const payload = await buildWaitPayload({
       session: paths.artifactPath,
       state,
@@ -482,7 +482,7 @@ describe("buildWaitPayload resolution", () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
     // Annotate v1 against <li>two</li>, then revise to v2.
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "annotation",
       id: "a-v1",
       version: 1,
@@ -499,7 +499,7 @@ describe("buildWaitPayload resolution", () => {
     // Destroy the v1 snapshot so the authored version can't be verified.
     await rm(snapshotPath(paths, 1, 1), { force: true });
 
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     expect(state.version).toBe(2);
     const payload = await buildWaitPayload({
       session: paths.artifactPath,
@@ -531,7 +531,7 @@ describe("buildWaitPayload resolution", () => {
       domPath: "article:nth-child(1)>ol:nth-child(1)>li:nth-child(2)",
       snippet: "<li>two</li>",
     };
-    await appendEvents(paths.logPath, [
+    await appendEvents(paths, [
       {
         t: "annotation",
         id: "a-multi",
@@ -549,7 +549,7 @@ describe("buildWaitPayload resolution", () => {
         note: "nothing left",
       },
     ]);
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const payload = await buildWaitPayload({
       session: paths.artifactPath,
       state,
@@ -573,7 +573,7 @@ describe("buildWaitPayload resolution", () => {
 
 describe("per-item delivery state (D20)", () => {
   const payloadOf = async (paths: ReturnType<typeof sessionPaths>) => {
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     return buildWaitPayload({
       session: paths.artifactPath,
       state,
@@ -589,7 +589,7 @@ describe("per-item delivery state (D20)", () => {
   test("recorded -> delivered -> answered, per item, from the log alone", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvents(paths.logPath, [
+    await appendEvents(paths, [
       { t: "prompt", id: "m-1", refs: [], text: "first" },
       {
         t: "annotation",
@@ -613,8 +613,8 @@ describe("per-item delivery state (D20)", () => {
     expect(recorded.annotations[0]?.delivered).toBeUndefined();
 
     // An ack delivers the range it CLAIMS - the cursor its taker had read.
-    const beforeAck = foldLog((await readEvents(paths.logPath)).events);
-    await appendEvent(paths.logPath, {
+    const beforeAck = await sessionState(paths);
+    await appendEvent(paths, {
       t: "agent_ack",
       id: "ack-1",
       covers: beforeAck.highSeq,
@@ -625,8 +625,8 @@ describe("per-item delivery state (D20)", () => {
     expect(delivered.messages[0]?.answered).toBeUndefined();
 
     // Agent output answers what came BEFORE it, and nothing after.
-    await appendEvent(paths.logPath, { t: "agent_reply", id: "r-1", text: "on it" });
-    await appendEvent(paths.logPath, { t: "prompt", id: "m-2", refs: [], text: "second" });
+    await appendEvent(paths, { t: "agent_reply", id: "r-1", text: "on it" });
+    await appendEvent(paths, { t: "prompt", id: "m-2", refs: [], text: "second" });
     const answered = await payloadOf(paths);
     expect(answered.messages[0]?.answered).toBe(true);
     expect(answered.annotations[0]?.answered).toBe(true);
@@ -642,16 +642,16 @@ describe("per-item delivery state (D20)", () => {
   test("the fold's delivery cursors only advance, unlike the working window", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, { t: "prompt", id: "m-1", refs: [], text: "hi" });
-    const read = foldLog((await readEvents(paths.logPath)).events);
-    await appendEvent(paths.logPath, { t: "agent_ack", id: "ack-1", covers: read.highSeq });
-    const acked = foldLog((await readEvents(paths.logPath)).events);
+    await appendEvent(paths, { t: "prompt", id: "m-1", refs: [], text: "hi" });
+    const read = await sessionState(paths);
+    await appendEvent(paths, { t: "agent_ack", id: "ack-1", covers: read.highSeq });
+    const acked = await sessionState(paths);
     expect(acked.deliveredThroughSeq).toBe(read.highSeq);
     expect(acked.lastAgentOutputSeq).toBe(0);
     expect(acked.agentWorking).not.toBeNull();
 
-    await appendEvent(paths.logPath, { t: "agent_reply", id: "r-1", text: "done" });
-    const replied = foldLog((await readEvents(paths.logPath)).events);
+    await appendEvent(paths, { t: "agent_reply", id: "r-1", text: "done" });
+    const replied = await sessionState(paths);
     // The output CLOSES the working window but does not clear the delivery
     // cursor: the message stays delivered as well as answered.
     expect(replied.agentWorking).toBeNull();
@@ -662,12 +662,12 @@ describe("per-item delivery state (D20)", () => {
   test("an ack delivers what it read, not what landed while it was appending", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, { t: "prompt", id: "m-1", refs: [], text: "read this" });
+    await appendEvent(paths, { t: "prompt", id: "m-1", refs: [], text: "read this" });
     // The cursor the waiter is holding when its payload returns.
-    const read = foldLog((await readEvents(paths.logPath)).events);
+    const read = await sessionState(paths);
     // The human keeps typing while the agent's ack is in flight.
-    await appendEvent(paths.logPath, { t: "prompt", id: "m-2", refs: [], text: "and this" });
-    await appendEvent(paths.logPath, { t: "agent_ack", id: "ack-1", covers: read.highSeq });
+    await appendEvent(paths, { t: "prompt", id: "m-2", refs: [], text: "and this" });
+    await appendEvent(paths, { t: "agent_ack", id: "ack-1", covers: read.highSeq });
 
     const payload = await payloadOf(paths);
     const first = payload.messages.find((m) => m.text === "read this");
@@ -677,7 +677,7 @@ describe("per-item delivery state (D20)", () => {
 
     // Output now lands. It answers the batch that was taken - and says nothing
     // about the message nobody has taken yet.
-    await appendEvent(paths.logPath, { t: "agent_reply", id: "r-1", text: "done" });
+    await appendEvent(paths, { t: "agent_reply", id: "r-1", text: "done" });
     const after = await payloadOf(paths);
     expect(after.messages.find((m) => m.text === "read this")?.answered).toBe(true);
     expect(after.messages.find((m) => m.text === "and this")?.answered).toBeUndefined();
@@ -686,15 +686,15 @@ describe("per-item delivery state (D20)", () => {
   test("a presence-only re-ack (intent, progress) delivers nothing", async () => {
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    await appendEvent(paths.logPath, { t: "prompt", id: "m-1", refs: [], text: "look at this" });
+    await appendEvent(paths, { t: "prompt", id: "m-1", refs: [], text: "look at this" });
     // What `lucid intent` and `lucid progress` write: presence, no claim.
-    await appendEvent(paths.logPath, { t: "agent_ack", id: "ack-1", intent: "revise" });
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, { t: "agent_ack", id: "ack-1", intent: "revise" });
+    await appendEvent(paths, {
       t: "agent_ack",
       id: "ack-2",
       progress: { total: 3, done: 1 },
     });
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     expect(state.deliveredThroughSeq).toBe(0);
     expect(state.agentWorking).not.toBeNull();
     const payload = await payloadOf(paths);
@@ -718,7 +718,7 @@ describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
     });
     await Bun.write(paths.logPath, `${good}\n{"t":"version","seq":2`);
     // The next append must re-read, drop the torn tail, and continue monotonic.
-    const ev = await appendEvent(paths.logPath, {
+    const ev = await appendEvent(paths, {
       t: "agent_reply",
       id: "r1",
       text: "after crash",
@@ -739,7 +739,7 @@ describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
     // Appenders: 40 identified events under the lock in parallel.
     await Promise.all(
       Array.from({ length: total }, (_, i) =>
-        appendEvent(paths.logPath, { t: "agent_reply", id: `r${i}`, text: `m${i}` }),
+        appendEvent(paths, { t: "agent_reply", id: `r${i}`, text: `m${i}` }),
       ),
     );
     const { events } = await readEvents(paths.logPath);
@@ -767,7 +767,7 @@ describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
     const paths = sessionPaths(artifact);
     // Segment 1: session_opened (seq 1), an annotation (seq 2), ended (seq 3).
     await openSession(paths);
-    const a1 = await appendEvent(paths.logPath, {
+    const a1 = await appendEvent(paths, {
       t: "annotation",
       id: "seg1-1",
       version: 1,
@@ -775,7 +775,7 @@ describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
       note: "first",
     });
     expect(a1.seq).toBe(2);
-    await appendEvent(paths.logPath, { t: "session_ended" });
+    await appendEvent(paths, { t: "session_ended" });
     const beforeReopen = await readEvents(paths.logPath);
     expect(beforeReopen.events.map((e) => e.seq)).toEqual([1, 2, 3]);
     const persistedCursor = 2; // the agent advanced past seq 2
@@ -802,7 +802,7 @@ describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
     // the CLI writes directly under the lock when no server is live.
     const paths = sessionPaths(artifact);
     await openSession(paths);
-    const first = await appendEvent(paths.logPath, {
+    const first = await appendEvent(paths, {
       t: "prompt",
       id: "msg-1",
       refs: [],
@@ -812,7 +812,7 @@ describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
 
     // Simulate the CLI re-issuing the same idempotent id after a restart
     // (at-least-once delivery => the same message may be POSTed twice).
-    const deduped = await appendEvent(paths.logPath, {
+    const deduped = await appendEvent(paths, {
       t: "prompt",
       id: "msg-1",
       refs: [],
@@ -821,7 +821,7 @@ describe("cursor delivery (at-least-once, no gaps, no duplicates)", () => {
     expect(deduped.seq).toBe(2); // returns the existing event, no new seq
 
     // A new, distinct event continues the monotonic seq.
-    const next = await appendEvent(paths.logPath, {
+    const next = await appendEvent(paths, {
       t: "prompt",
       id: "msg-2",
       refs: [],

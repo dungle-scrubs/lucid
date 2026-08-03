@@ -155,7 +155,7 @@ describe("attend recovery", () => {
   };
 
   const annotate = async (target: SessionPaths, note: string): Promise<LogEvent> =>
-    appendEvent(target.logPath, {
+    appendEvent(target, {
       t: "annotation",
       id: crypto.randomUUID(),
       version: 1,
@@ -249,7 +249,7 @@ await Bun.write(${JSON.stringify(marker)}, JSON.stringify({ done: true }));
     );
     await writeRegistry(stub);
     const note = await annotate(paths, "orphaned batch");
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "agent_ack",
       id: crypto.randomUUID(),
       covers: note.seq,
@@ -403,7 +403,7 @@ process.exit(1);
     await writeFile(stub, `await Bun.write(${JSON.stringify(marker)}, "ran");\n`);
     await writeRegistry(stub);
     const note = await annotate(paths, "held by a turn we cannot see");
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "agent_ack",
       id: crypto.randomUUID(),
       covers: note.seq,
@@ -447,7 +447,7 @@ process.exit(1);
     await writeFile(stub, `await Bun.write(${JSON.stringify(marker)}, "ran");\n`);
     await writeRegistry(stub);
     const a1 = await annotate(paths, "the orphan's batch");
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "agent_ack",
       id: crypto.randomUUID(),
       covers: a1.seq,
@@ -455,7 +455,7 @@ process.exit(1);
       attendant: { harness: "claude-code", sessionId: SESS, cwd: paths.artifactDir },
     });
     const a2 = await annotate(paths, "the live turn's batch");
-    await appendEvent(paths.logPath, {
+    await appendEvent(paths, {
       t: "agent_ack",
       id: crypto.randomUUID(),
       covers: a2.seq,

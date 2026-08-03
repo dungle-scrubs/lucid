@@ -528,6 +528,10 @@ const IDENTIFIED = new Set<string>(IDENTIFIED_TYPES);
 
 export const hasId = (event: LogEvent): event is IdentifiedEvent => IDENTIFIED.has(event.t);
 
+/** Highest `seq` among events, or 0 for an empty log. */
+export const maxSeq = (events: readonly LogEvent[]): number =>
+  events.reduce((m, e) => (e.seq > m ? e.seq : m), 0);
+
 /** Body to append: a LogEvent without the writer-assigned `seq`/`at`.
  *  Distributes over the union, so a new event type is covered automatically. */
 export type EventInput = {

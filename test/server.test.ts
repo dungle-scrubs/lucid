@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { mergeAttendantSidecar } from "../src/core/attendant.ts";
 import { readContextSidecar } from "../src/core/context.ts";
 import { runContext } from "../src/cli/run.ts";
-import { foldLog } from "../src/core/fold.ts";
-import { readEvents } from "../src/core/log.ts";
+import { readEvents, sessionState } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import { runWait } from "../src/core/wait.ts";
@@ -576,7 +575,7 @@ describe("server routes + security", () => {
       attendant: { harness: "", sessionId: 42 },
     });
 
-    const state = foldLog((await readEvents(paths.logPath)).events);
+    const state = await sessionState(paths);
     const hist = state.sessionHistory.filter((h) => h.sessionId === "sess-9");
     expect(hist).toHaveLength(1);
     expect(hist[0]?.harness).toBe("claude_code");
@@ -603,14 +602,14 @@ describe("server routes + security", () => {
       });
 
     await post("/__lucid/ack", { id: "ack-1" });
-    let state = foldLog((await readEvents(paths.logPath)).events);
+    let state = await sessionState(paths);
     expect(state.agentWorking).toBeTruthy();
     expect(state.agentWorking?.intent).toBeUndefined();
 
     // A re-ack declares intent without restarting the window's clock.
     const since = state.agentWorking?.since;
     await post("/__lucid/ack", { id: "ack-2", intent: "revise" });
-    state = foldLog((await readEvents(paths.logPath)).events);
+    state = await sessionState(paths);
     expect(state.agentWorking?.intent).toBe("revise");
     expect(state.agentWorking?.since).toBe(since!);
 
@@ -624,7 +623,7 @@ describe("server routes + security", () => {
 
     // Any agent output closes the window.
     await post("/__lucid/reply", { id: "r-1", text: "done" });
-    state = foldLog((await readEvents(paths.logPath)).events);
+    state = await sessionState(paths);
     expect(state.agentWorking).toBeNull();
   });
 
@@ -642,7 +641,7 @@ describe("server routes + security", () => {
       id: "p-1",
       progress: { label: "auditing 7 screens", total: 7, done: 0 },
     });
-    let state = foldLog((await readEvents(paths.logPath)).events);
+    let state = await sessionState(paths);
     expect(state.agentWorking?.progress).toEqual({
       label: "auditing 7 screens",
       total: 7,
@@ -655,13 +654,13 @@ describe("server routes + security", () => {
       id: "p-2",
       progress: { label: "auditing 7 screens", total: 7, done: 3 },
     });
-    state = foldLog((await readEvents(paths.logPath)).events);
+    state = await sessionState(paths);
     expect(state.agentWorking?.progress?.done).toBe(3);
     expect(state.agentWorking?.since).toBe(since!);
 
     // Garbage counts are dropped, not trusted into the window.
     await post("/__lucid/ack", { id: "p-3", progress: { total: -4, done: Number.NaN } });
-    state = foldLog((await readEvents(paths.logPath)).events);
+    state = await sessionState(paths);
     // No usable fields -> the ack carries no progress, so the prior one stands.
     expect(state.agentWorking?.progress?.done).toBe(3);
   });

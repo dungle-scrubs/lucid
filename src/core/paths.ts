@@ -111,12 +111,21 @@ export const canonicalArtifactPath = (input: string): string => {
  */
 export const ARTIFACT_DIR = ".lucid";
 
-/** Compute the full session layout for an artifact path. */
-export const sessionPaths = (input: string): SessionPaths => {
+/**
+ * Compute the full session layout for an artifact path.
+ *
+ * @param recordDir Where the record itself lives, when the caller found it
+ * before it knew the artifact (the listing scan globs for `log.ndjson`). Every
+ * record-rooted field derives from it, so the struct stays self-consistent:
+ * `appendEvents` takes its lock under `runDir` while writing `logPath`, and a
+ * struct that mixed a found log with a computed `run/` would let two writers to
+ * one log take two different locks.
+ */
+export const sessionPaths = (input: string, recordDir?: string): SessionPaths => {
   const artifactPath = canonicalArtifactPath(input);
   const artifactDir = dirname(artifactPath);
   const name = sessionName(artifactPath);
-  const sessionDir = resolve(artifactDir, name);
+  const sessionDir = recordDir === undefined ? resolve(artifactDir, name) : resolve(recordDir);
   const runDir = resolve(sessionDir, "run");
   return {
     artifactPath,
