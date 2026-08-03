@@ -83,7 +83,7 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   // is derived from the Playwright slot, which is the isolation.
   LUCID_PORT_BASE: "per-suite",
 
-  // Written for children by `src/launch/launcher.ts` - and read straight back
+  // Written for children by `src/launch/spawn.ts` - and read straight back
   // off the environment by `attendantStamp` (src/cli/run.ts:63-69), which is
   // what makes an inherited one dangerous rather than merely untidy. The Lucid
   // skill exports LUCID_HARNESS and LUCID_SESSION_ID into the agent's shell, so

@@ -5,10 +5,11 @@ artifacts. When you select a region in a review and click **Fork**, Lucid record
 a `fork` event (it never spawns anything itself). Something has to act on that
 request; the launcher is the something.
 
-It is the one Lucid component permitted to spawn agents - a deliberate,
-human-initiated exception to D-064 (the review server still only appends to a
-log). It stays agent-agnostic by running a **recipe the harness declares**, never
-a launch command compiled into Lucid.
+Spawning agents at all is a deliberate, human-initiated exception to D-064 (the
+review server still only appends to a log); the launcher is one of the two
+opt-ins that hold it, the other being a hub started with `--attend`. It stays
+agent-agnostic by running a **recipe the harness declares**, never a launch
+command compiled into Lucid.
 
 ## The harness registry
 

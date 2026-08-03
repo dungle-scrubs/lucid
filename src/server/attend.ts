@@ -9,7 +9,6 @@ import {
   type ResumeCandidate,
 } from "../core/attendant.ts";
 import { deliver } from "../core/deliver.ts";
-import { shellArg } from "../core/escape.ts";
 import type { LogEvent, LogEventType } from "../core/events.ts";
 import { foldLog, type FoldedState } from "../core/fold.ts";
 import { readEvents } from "../core/log.ts";
@@ -28,7 +27,8 @@ import {
   presenceStoreReadable,
 } from "../core/presence.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
-import { discoveryPersistence, revisePrompt, runSpawn } from "../launch/launcher.ts";
+import { revisePrompt } from "../launch/prompts.ts";
+import { discoveryPersistence, runSpawn } from "../launch/spawn.ts";
 import {
   classifyObservedIdentity,
   classifySessionFailure,
@@ -1444,49 +1444,3 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     },
   };
 };
-
-/** The create-from-nothing instruction (D3/D16): author the artifact, then put
- *  it in front of the human. The human's request rides as data, and every value
- *  reaches the harness as argv - nothing is ever shell-interpolated. The one
- *  command line inside the prompt is quoted for the shell the AGENT will run it
- *  in, which is the only shell in this path. */
-export const createArtifactPrompt = (artifact: string, request: string, title?: string): string =>
-  [
-    "You are authoring a new Lucid artifact for human review.",
-    `Write a single self-contained HTML document to exactly ${artifact}.`,
-    // The human named the document; the shell shows that name on its tab by
-    // reading the artifact's own <title>, so the agent must not retitle it.
-    ...(title
-      ? [`Its <title> must be exactly: ${title}`, "Use that as the document's heading too."]
-      : []),
-    "It must answer this request from the human:",
-    request,
-    // The one flow Lucid itself commissions a document in, so it says the
-    // house rules outright rather than trusting the skill to trigger: an
-    // artifact is read as paper, and a SCREEN is reviewed as a wireframe
-    // (labelled regions, hatched placeholders) until someone asks for a
-    // finished design.
-    "Follow the lucid-design skill if it is available. Otherwise: a warm cream",
-    "ground with near-black type, one accent, and no external requests. Every",
-    "picture - diagram, flow, chart, timeline, screen - is built from real",
-    "elements or inline SVG, never ASCII or box-drawing characters, so a",
-    "reviewer can annotate one part of it. A mockup of a screen is a WIREFRAME",
-    "(labelled regions, hatched placeholders carrying their spec), not finished",
-    "visual design, unless the request asks for a specific design.",
-    // Prose is half of what gets marked up, so the writing bar is stated here
-    // beside the visual one rather than left to the skill. Orwell's rules,
-    // compressed: a reviewer pays attention for every word before the claim.
-    "Write to Orwell's six rules: no figure of speech you are used to seeing in",
-    "print; no long word where a short one will do; cut every word that can go;",
-    "active voice over passive; an everyday English word over a jargon or",
-    "foreign one; and break any of these sooner than write something barbarous.",
-    // The same narration channel a revise turn uses (revisePrompt): only the
-    // turn knows its phase, and the create dialog is otherwise a bare clock
-    // for however many minutes authoring takes. Works before `lucid open` -
-    // the CLI appends straight to the log when no server answers, and the
-    // hub's heartbeat reads the newest label from there.
-    `As you work, report each phase as you enter it: \`lucid progress ${shellArg(artifact)} --label "<what you are doing, in a few words>"\` - for example "planning the sections", "writing the comparison table", "final read-through". The human watches these one-liners while they wait.`,
-    "Then open it for review by running:",
-    `  lucid open ${shellArg(artifact)}`,
-    `Write only ${artifact}; do not modify other files.`,
-  ].join("\n");

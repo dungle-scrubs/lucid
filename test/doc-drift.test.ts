@@ -211,7 +211,7 @@ describe("CONTEXT.md keeps one word to one meaning (plan 06)", () => {
 describe("the turn's declared intent is instructed, not assumed (finding #18)", () => {
   const skill = readFileSync(join(REPO, "skills/lucid/SKILL.md"), "utf8");
   const attendSrc = readFileSync(join(REPO, "src/server/attend.ts"), "utf8");
-  const launcherSrc = readFileSync(join(REPO, "src/launch/launcher.ts"), "utf8");
+  const launcherSrc = readFileSync(join(REPO, "src/launch/fork-launcher.ts"), "utf8");
 
   test("no spawner claims an intent before the turn has read anything", () => {
     // The hub and the launcher both write a delivery ack before the turn
@@ -229,11 +229,11 @@ describe("the turn's declared intent is instructed, not assumed (finding #18)", 
     // main and made this vacuous. And the prompt too, since that is the only
     // text a hub-driven turn ever reads.
     expect(skill).toContain("lucid intent <file> revise");
-    const launcher = readFileSync(join(REPO, "src/launch/launcher.ts"), "utf8");
+    const prompts = readFileSync(join(REPO, "src/launch/prompts.ts"), "utf8");
     // A regex, not a string: `${shellArg(artifact)}` inside a plain string
     // reads as a botched template literal and the linter says so, correctly.
     // shellArg, not bare artifact - a path with spaces must survive the shell.
-    expect(launcher).toMatch(/lucid intent \$\{shellArg\(artifact\)\} revise/);
+    expect(prompts).toMatch(/lucid intent \$\{shellArg\(artifact\)\} revise/);
   });
 });
 

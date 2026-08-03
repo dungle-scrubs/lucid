@@ -3386,7 +3386,7 @@
           "status": "covered",
           "testFile": "test/e2e/launcher.e2e.ts",
           "testName": "a restarted launcher does not re-spawn a fork it already handled",
-          "mutation": "src/launch/launcher.ts: in handleForks, stop filtering by the handled set (`const fresh = state.forks.filter((f) => !handled.has(f.id))` -> `const fresh = state.forks`) - 63 recorded spawn turns instead of 2, both fork ids repeated dozens of times. The vacuity that killed the M5.6 attempt (D-072) is closed by evidence the launcher ACTED: a real fork made from the viewer, read back from the log, the stub marker gaining exactly one line naming the child, handled.json containing the id - and a SECOND fork made before the restart, so the restarted launcher has genuine work and 'the marker did not grow for A' cannot mean 'it crashed on start'.",
+          "mutation": "src/launch/fork-launcher.ts: in handleForks, stop filtering by the handled set (`const fresh = state.forks.filter((f) => !handled.has(f.id))` -> `const fresh = state.forks`) - 63 recorded spawn turns instead of 2, both fork ids repeated dozens of times. The vacuity that killed the M5.6 attempt (D-072) is closed by evidence the launcher ACTED: a real fork made from the viewer, read back from the log, the stub marker gaining exactly one line naming the child, handled.json containing the id - and a SECOND fork made before the restart, so the restarted launcher has genuine work and 'the marker did not grow for A' cannot mean 'it crashed on start'.",
           "builtCapability": "M5.6"
         },
         {
@@ -3402,7 +3402,7 @@
           "status": "covered",
           "testFile": "test/e2e/launcher.e2e.ts",
           "testName": "the launcher yields a child a human is attending and drives no resume turn",
-          "mutation": "src/launch/launcher.ts: in attendChild, delete the single-attendant guard at the top of the loop (the readLastAttendant check and its yielding return) - the launcher blocks in runWait on the child instead of yielding. The attendant is recorded the way the PRODUCT records one (lucid wait --harness inside the create turn writing cursor.claude-code.json), not hand-forged - ensureSessionDirs refuses a planted sidecar, which is why the faithful path is the only path. The yield is asserted BEFORE any feedback exists, which is the guard's actual contract; the second guard still fires under the mutation, so a bare no-resume-turn assertion would not have caught it.",
+          "mutation": "src/launch/fork-launcher.ts: in attendChild, delete the single-attendant guard at the top of the loop (the readLastAttendant check and its yielding return) - the launcher blocks in runWait on the child instead of yielding. The attendant is recorded the way the PRODUCT records one (lucid wait --harness inside the create turn writing cursor.claude-code.json), not hand-forged - ensureSessionDirs refuses a planted sidecar, which is why the faithful path is the only path. The yield is asserted BEFORE any feedback exists, which is the guard's actual contract; the second guard still fires under the mutation, so a bare no-resume-turn assertion would not have caught it.",
           "builtCapability": "M5.6"
         },
         {
@@ -3447,7 +3447,7 @@
           "status": "covered",
           "testFile": "test/e2e/launcher.e2e.ts",
           "testName": "SIGINT stops the launcher without orphaning a child or the parent session",
-          "mutation": "src/launch/launcher.ts: ignore the abort signal in the attend loop (drop the `opts.signal?.aborted` early return) - the launcher keeps running after SIGINT and a human cannot stop it without hunting its pid",
+          "mutation": "src/launch/fork-launcher.ts: ignore the abort signal in the attend loop (drop the `opts.signal?.aborted` early return) - the launcher keeps running after SIGINT and a human cannot stop it without hunting its pid",
           "builtCapability": "M5.6"
         },
         {

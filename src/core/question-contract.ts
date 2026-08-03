@@ -440,7 +440,7 @@ export interface AnswerIssue {
 
 /**
  * What the answer carries BESIDE its items. A pinned artifact region or an
- * attached image is whole feedback on its own (`src/launch/launcher.ts`), so it
+ * attached image is whole feedback on its own (`src/launch/prompts.ts`), so it
  * answers a free-text question that has no typed words - but only when the
  * group asks ONE question: attachments belong to the answer, not to an item,
  * so with several questions there is nothing to say which one they settle.
