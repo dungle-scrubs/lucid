@@ -21,6 +21,7 @@ import type {
   OutboxMessage,
   PastedImage,
   QueuedAnnotation,
+  RecordCleared,
   ReviewVerdict,
   SessionSummary,
   TimelineItem,
@@ -347,6 +348,8 @@ export interface SessionState {
   /** Approve/reopen events with their own times, so the record can show WHEN
    *  the review was settled rather than only that it is. */
   verdicts: ReviewVerdict[];
+  /** The newest clear boundary, or null. The record above it is not shown. */
+  cleared: RecordCleared | null;
   pendingTarget: Anchor | null;
   /** Every spot of the in-flight draft, in pick order. INVARIANT:
    *  `pendingTarget === pendingTargets[0] ?? null` - the single field stays
@@ -559,6 +562,7 @@ export const createSessionStore = (config: SessionConfig, storage: SessionStorag
     version: config.version,
     reviewResolved: false,
     verdicts: [],
+    cleared: null,
     pendingTarget: null,
     pendingTargets: [],
     composerNote: "",
@@ -744,6 +748,7 @@ export const buildTimeline = (
   queue: readonly QueuedAnnotation[],
   questions: readonly AgentQuestion[] = [],
   verdicts: readonly ReviewVerdict[] = [],
+  cleared: RecordCleared | null = null,
 ): TimelineItem[] => {
   let located = 0;
   const sentIds = new Set(annotations.map((a) => a.id));
@@ -797,6 +802,9 @@ export const buildTimeline = (
     // the record and a reopening only as a notice pinned under the composer,
     // below messages that came after it.
     ...verdicts.map((verdict) => ({ kind: "verdict" as const, at: verdict.at, verdict })),
+    // The boundary sorts like everything else, which puts it first in a record
+    // derived from what follows it.
+    ...(cleared ? [{ kind: "cleared" as const, at: cleared.at, cleared }] : []),
   ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 };
 

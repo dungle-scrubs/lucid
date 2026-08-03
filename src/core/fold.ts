@@ -114,6 +114,9 @@ export interface FoldedState {
    *  approval nowhere and a reopening only at the bottom, out of sequence with
    *  the messages either side of it. */
   readonly verdicts: readonly ReviewVerdictRecord[];
+  /** The newest clear boundary in the segment, or null. Everything above is
+   *  derived from what FOLLOWS it. */
+  readonly cleared: RecordClearedMark | null;
   /** Live annotations of the current segment, in log order (D-056). */
   readonly annotations: readonly AnnotationRecord[];
   /** Fork requests of the current segment, in log order. Consumed by the
@@ -220,6 +223,15 @@ const statusFromLifecycle = (t: string): SessionStatus => {
   }
 };
 
+/** The newest `record_cleared` in the segment, with how much it hid. Null when
+ *  the record has never been cleared. */
+export interface RecordClearedMark {
+  readonly at: string;
+  /** Entries the viewer is no longer showing - all of them still in the log. */
+  readonly hiddenCount: number;
+  readonly seq: number;
+}
+
 /** One approve/reopen, projected from `review_resolved`/`review_reopened`. */
 export interface ReviewVerdictRecord {
   readonly at: string;
@@ -316,6 +328,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       reviewResolved: false,
       reviewToggleSeq: 0,
       verdicts: [],
+      cleared: null,
       annotations: [],
       forks: [],
       messages: [],
@@ -363,6 +376,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
   let reviewResolved = false;
   let reviewToggleSeq = 0;
   const verdicts: ReviewVerdictRecord[] = [];
+  let cleared: RecordClearedMark | null = null;
 
   if (opened && opened.t === "session_opened") {
     segment = opened.segment;
@@ -480,6 +494,32 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
             ...(e.images && e.images.length > 0 ? { answerImages: e.images } : {}),
           });
         }
+        break;
+      }
+      // A clear is a BOUNDARY inside the segment: the record the viewer shows
+      // starts again after it, while the log keeps everything. Same shape as a
+      // segment reset, one level down - and the count of what it hid is kept,
+      // because a record that empties without saying so is the kind of silence
+      // that makes a viewer impossible to reason about.
+      case "record_cleared": {
+        const hidden: number =
+          annotations.length +
+          forks.length +
+          messages.length +
+          reverts.length +
+          questionOrder.length +
+          verdicts.length +
+          (cleared?.hiddenCount ?? 0);
+        annotations.length = 0;
+        forks.length = 0;
+        messages.length = 0;
+        reverts.length = 0;
+        questionMap.clear();
+        questionOrder.length = 0;
+        verdicts.length = 0;
+        reviewResolved = false;
+        reviewToggleSeq = 0;
+        cleared = { at: e.at, hiddenCount: hidden, seq: e.seq };
         break;
       }
       case "review_resolved":
@@ -623,6 +663,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     reviewResolved,
     reviewToggleSeq,
     verdicts,
+    cleared,
     annotations,
     forks,
     messages,

@@ -168,7 +168,22 @@ export type TimelineItem =
       readonly at: string;
       readonly verdict: ReviewVerdict;
     }
+  | {
+      /** The boundary a `/clear` left behind, at the moment it happened. It is
+       *  the first entry in a cleared record, and the only thing saying the
+       *  earlier work still exists. */
+      readonly kind: "cleared";
+      readonly at: string;
+      readonly cleared: RecordCleared;
+    }
   | { readonly kind: "message"; readonly at: string; readonly message: ConversationMessage };
+
+/** The newest clear boundary: when it happened and how much it hid. */
+export interface RecordCleared {
+  readonly at: string;
+  readonly hiddenCount: number;
+  readonly seq: number;
+}
 
 /** One `review_resolved`/`review_reopened` event, kept with its own time so it
  *  can sit in the record where it belongs. `seq` is the log's own ordering and

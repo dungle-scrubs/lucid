@@ -64,6 +64,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   cancelEdit: (): Locator => root.locator(hook("cancel-edit")),
   cancelPicks: (): Locator => root.locator(hook("cancel-picks")),
   choice: (): Locator => root.locator(hook("choice")),
+  cleared: (): Locator => root.locator(hook("cleared")),
   contextRing: (): Locator => root.locator(hook("context-ring")),
   copyUnsent: (): Locator => root.locator(hook("copy-unsent")),
   createAddProject: (): Locator => root.locator(hook("create-add-project")),

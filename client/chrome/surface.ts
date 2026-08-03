@@ -234,6 +234,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
         ...(pendingSwapHtml === null ? { version: payload.version } : {}),
         reviewResolved: payload.reviewResolved,
         verdicts: [...(payload.verdicts ?? [])],
+        cleared: payload.cleared ?? null,
         annotations: [...payload.annotations],
         messages: [...payload.messages],
         questions: [...(payload.questions ?? [])],

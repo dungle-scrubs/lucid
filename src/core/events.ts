@@ -424,6 +424,23 @@ export interface ReviewReopenedEvent extends BaseEvent {
   readonly t: "review_reopened";
 }
 
+/**
+ * The human cleared the review record from the viewer.
+ *
+ * A boundary, not a deletion: the log keeps every event: the fold simply
+ * derives the conversation, annotations, questions and verdicts from what
+ * follows the newest one of these. Earlier work stays on disk, readable by
+ * anything that reads the log, and the viewer says how much it is holding
+ * back rather than emptying silently.
+ *
+ * Deliberately NOT in `WAKES_WAIT`: clearing the viewer is not feedback, and
+ * an agent blocked in `wait` has nothing to act on. It sees the emptied record
+ * the next time real feedback wakes it.
+ */
+export interface RecordClearedEvent extends BaseEvent {
+  readonly t: "record_cleared";
+}
+
 export interface SessionSuspendedEvent extends BaseEvent {
   readonly t: "session_suspended";
 }
@@ -481,6 +498,7 @@ export type LogEvent =
   | QuestionAnsweredEvent
   | ReviewResolvedEvent
   | ReviewReopenedEvent
+  | RecordClearedEvent
   | SessionSuspendedEvent
   | SessionResumedEvent
   | SessionEndedEvent

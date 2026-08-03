@@ -170,6 +170,19 @@ export interface PayloadVerdict {
   readonly seq: number;
 }
 
+/**
+ * The newest clear boundary, when the record has one.
+ *
+ * Present so a reader can tell "nothing has happened yet" from "everything so
+ * far was cleared" - the same distinction the viewer draws for the human.
+ */
+export interface PayloadCleared {
+  readonly at: string;
+  /** Entries hidden by the clear; all of them are still in the log. */
+  readonly hiddenCount: number;
+  readonly seq: number;
+}
+
 export interface PayloadRevert {
   readonly target: Anchor;
   readonly targetVersion: number;
@@ -246,6 +259,8 @@ export interface WaitPayload {
    *  viewer can place them in the record instead of showing only the latest
    *  state. Omitted when the review has never been settled. */
   readonly verdicts?: readonly PayloadVerdict[];
+  /** The newest clear boundary; omitted when the record has never been cleared. */
+  readonly cleared?: PayloadCleared;
   readonly annotations: readonly PayloadAnnotation[];
   /** Fork requests to act on (spin off a new artifact); omitted when none. */
   readonly forks?: readonly PayloadFork[];
