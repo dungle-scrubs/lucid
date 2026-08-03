@@ -716,6 +716,29 @@ export const deliveredWaiting = (p: AwaitPresence): { text: string; transient: b
 };
 
 /**
+ * What this session holds that the server has not taken.
+ *
+ * The three kinds of unsent work, counted in ONE place. Five gates asked this
+ * question and re-derived the answer inline, and the copies disagreed: approve
+ * counted the outbox, the deferred version swap and the session switch did
+ * not, so an undelivered message blocked one gate and passed the other two.
+ * Membership belongs to the owner; a gate only decides what to do about it.
+ */
+export interface UnsentWork {
+  readonly queued: number;
+  readonly hasDraft: boolean;
+  readonly undelivered: number;
+}
+
+export const unsentWork = (
+  s: Pick<SessionState, "queue" | "pendingTarget" | "composerNote" | "outbox">,
+): UnsentWork => ({
+  queued: s.queue.length,
+  hasDraft: hasComposerDraft(s),
+  undelivered: s.outbox.length,
+});
+
+/**
  * Why Approve is refused, or null when it is not.
  *
  * ONE definition, because this sentence appears twice - the button's tooltip
@@ -730,11 +753,7 @@ export const deliveredWaiting = (p: AwaitPresence): { text: string; transient: b
  * their own, and a draft has no card anywhere, so this is the only surface
  * that can speak for it.
  */
-export const approveBlockedReason = (work: {
-  readonly queued: number;
-  readonly hasDraft: boolean;
-  readonly undelivered: number;
-}): string | null => {
+export const approveBlockedReason = (work: UnsentWork): string | null => {
   if (work.undelivered > 0) {
     const s = work.undelivered > 1 ? "s" : "";
     return `Retry or discard your ${work.undelivered} undelivered message${s} first`;
@@ -744,6 +763,71 @@ export const approveBlockedReason = (work: {
     return `Send or remove your ${work.queued} queued annotation${s} first`;
   }
   if (work.hasDraft) return "Queue or discard your draft annotation first";
+  return null;
+};
+
+/**
+ * Does unsent work hold the deferred version swap (D-055)?
+ *
+ * The swap is deferred because a new artifact invalidates the anchors unsent
+ * work is written against - which is true of a queued annotation, of a draft,
+ * and of a message the server never took, so all three hold it. The undelivered
+ * message is the addition: it used to be the one kind of unsent work a swap
+ * walked over.
+ */
+export const blocksVersionSwap = (work: UnsentWork): boolean =>
+  work.queued > 0 || work.hasDraft || work.undelivered > 0;
+
+/**
+ * The same refusal in the banner's voice: what to do to SEE the newer version.
+ *
+ * Never offers a discard for work discarding cannot touch - the queue is only
+ * cleared by sending or removing card by card, and the outbox by retrying or
+ * discarding its own card - so each clause names the act that actually frees
+ * the swap. Ordered like `approveBlockedReason`, by what is most easily lost.
+ */
+export const versionSwapBlockedReason = (work: UnsentWork): string | null => {
+  if (work.undelivered > 0) {
+    const s = work.undelivered > 1 ? "s" : "";
+    return `retry or discard your ${work.undelivered} undelivered message${s} to see it`;
+  }
+  if (work.queued > 0) {
+    const s = work.queued > 1 ? "s" : "";
+    const queued = `send your ${work.queued} queued annotation${s} to see it`;
+    return work.hasDraft ? `${queued}, or discard your draft` : queued;
+  }
+  if (work.hasDraft) return "send or discard your draft";
+  return null;
+};
+
+/**
+ * The same refusal in the session switch's voice: what would be left behind,
+ * and what to do about it before leaving.
+ *
+ * A third voice rather than a suffix on `approveBlockedReason`: those clauses
+ * end in "first", and appending the switch's consequence to them produced
+ * "Retry or discard your 1 undelivered message first - a switch would leave it
+ * behind", which asks for the act before naming what it is before. The
+ * membership is shared; only the sentence differs. Ordered like the other two,
+ * by what is most easily lost.
+ */
+export const sessionSwitchBlockedReason = (work: UnsentWork): string | null => {
+  const leftBehind = (subject: string, act: string): string =>
+    `${subject} would be left behind - ${act} before switching.`;
+  if (work.undelivered > 0) {
+    const s = work.undelivered > 1 ? "s" : "";
+    const them = work.undelivered > 1 ? "them" : "it";
+    return leftBehind(
+      `Your ${work.undelivered} undelivered message${s}`,
+      `retry or discard ${them}`,
+    );
+  }
+  if (work.queued > 0) {
+    const s = work.queued > 1 ? "s" : "";
+    const them = work.queued > 1 ? "them" : "it";
+    return leftBehind(`Your ${work.queued} queued annotation${s}`, `send or remove ${them}`);
+  }
+  if (work.hasDraft) return leftBehind("Your draft annotation", "queue or discard it");
   return null;
 };
 

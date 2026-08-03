@@ -1,5 +1,4 @@
 import type { LogEvent } from "../../src/core/events.ts";
-import { hubFetch } from "./request.ts";
 import {
   DEFAULT_FRAME,
   dispatchFrame,
@@ -61,9 +60,38 @@ export const createSession = (config: SessionConfig): SessionHandle => {
   const notify = createNotify(store);
   const surface = createSurface(store, transport);
   const pastes = createPastes();
-  const actions = createActions({ store, transport, surface, pastes, storage, notify });
 
   const set = store.setState;
+
+  /**
+   * The sticky model/effort AND the vocabulary it is picked in. This route is
+   * the ONE source of both, even though the value also rides `/__lucid/state`:
+   * the vocabulary is only here (a server with no harness recipe answers
+   * without `info`, which is what leaves the pickers off), so folding the
+   * value in from a second place would only add a race in which a bootstrap
+   * fired before a pick lands after it.
+   *
+   * One applier for all three arrivals - the read below, the broadcast frame,
+   * and the answer to a write - so the response shape is mapped into state
+   * once. The write used to map it a second time, in the picker component.
+   */
+  const applySelection = (r: SelectionResponse): void => {
+    set({
+      selection: r.selection,
+      selectionHarnesses: r.harnesses ?? [],
+      selectionInfo: r.info ?? null,
+    });
+  };
+
+  const actions = createActions({
+    store,
+    transport,
+    surface,
+    pastes,
+    storage,
+    notify,
+    applySelection,
+  });
 
   const onLogEvent = (ev: LogEvent): void => {
     // Where the session IS, through the one table that says what a lifecycle
@@ -131,29 +159,11 @@ export const createSession = (config: SessionConfig): SessionHandle => {
     }
   };
 
-  /**
-   * The sticky model/effort AND the vocabulary it is picked in. This route is
-   * the ONE source of both, even though the value also rides `/__lucid/state`:
-   * the vocabulary is only here (a server with no harness recipe answers
-   * without `info`, which is what leaves the pickers off), so folding the
-   * value in from a second place would only add a race in which a bootstrap
-   * fired before a pick lands after it.
-   */
-  const applySelection = (r: SelectionResponse): void => {
-    set({
-      selection: r.selection,
-      selectionHarnesses: r.harnesses ?? [],
-      selectionInfo: r.info ?? null,
-    });
-  };
-
   /** Read once per (re)connect: a registry edited while this tab was open would
    *  otherwise keep offering the vocabulary it started with. A server that
    *  predates the route answers 404 and the pickers stay off. */
   const loadSelection = async (): Promise<void> => {
-    const res = await hubFetch(`${config.base}/__lucid/selection`).catch(() => null);
-    if (!res?.ok) return;
-    const body = (await res.json().catch(() => null)) as SelectionResponse | null;
+    const body = await transport.get<SelectionResponse>("/__lucid/selection");
     if (body) applySelection(body);
   };
 
@@ -206,12 +216,8 @@ export const createSession = (config: SessionConfig): SessionHandle => {
    * retrying is for.
    */
   const checkGone = async (): Promise<void> => {
-    try {
-      const res = await hubFetch(`${config.base}/__lucid/identity`, { cache: "no-store" });
-      if (res.status !== 404) return;
-    } catch {
-      return; // unreachable, not gone
-    }
+    // null is "nothing answered" - unreachable, not gone.
+    if ((await transport.probe("/__lucid/identity")) !== 404) return;
     set({ gone: true, live: false });
     disconnect();
   };

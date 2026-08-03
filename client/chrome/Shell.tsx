@@ -168,14 +168,13 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
       // POSTs, and a stale retry landing after a newer rename must lose, not
       // roll it back. Only sent when the current DOCUMENT title is known -
       // a filename fallback label is not the title and would always mismatch.
-      const res = await handle.transport.api("/__lucid/rename", {
+      // The SERVER's spelling (trimmed, bounded), so the optimistic label is
+      // exactly what the next sessions push will confirm - no settle flicker.
+      const out = await handle.transport.post<{ title?: string }>("/__lucid/rename", {
         title,
         ...(row?.title !== undefined ? { replaces: row.title } : {}),
       });
-      // The SERVER's spelling (trimmed, bounded), so the optimistic label is
-      // exactly what the next sessions push will confirm - no settle flicker.
-      const out = (await res.json()) as { title?: string };
-      renameSession(sessionKey, out.title ?? title);
+      renameSession(sessionKey, out?.title ?? title);
     } catch {
       handle.notify.warn("Couldn't rename - see the session's server.");
     }

@@ -4,6 +4,13 @@
  * server, "/s/<id>" once the daemon hosts many sessions on one origin. Nothing
  * in the chrome may fetch a control route with a bare absolute path, or it
  * would read another session's data the moment two share an origin.
+ *
+ * The base and the request ladder itself are PRIVATE. Both used to be reachable
+ * and both were reached: a caller holding the base rebuilt the URL and fetched
+ * around the ladder, which spent a human's submission on one unretried attempt
+ * and re-implemented the server's error wording beside it. What is exported is
+ * one verb per kind of answer a route can give, so opting out of the retries,
+ * the deadlines or the 4xx-is-a-verdict rule is not a thing a call site can do.
  */
 
 import { hubFetch } from "./request.ts";
@@ -17,15 +24,34 @@ export interface UploadedAsset {
 }
 
 export interface Transport {
-  /** URL prefix for every route of this session ("" or "/s/<id>"). */
-  readonly base: string;
-  /** GET (no body) or POST (JSON body) a control route, with retry on POST. */
-  readonly api: (path: string, body?: unknown) => Promise<Response>;
+  /** GET a control route and parse its JSON, or null when there is nothing to
+   *  read: a 404 from a server that predates the route, an unreachable server,
+   *  a body that will not parse. Tolerant rather than throwing, because every
+   *  reader of a GET here has a value it keeps instead. */
+  readonly get: <T>(path: string) => Promise<T | null>;
+  /** GET a route whose body is a document (an artifact snapshot), null on the
+   *  same terms as `get`. */
+  readonly getText: (path: string) => Promise<string | null>;
+  /** POST a JSON body and return the route's parsed answer, or null when a
+   *  success carries nothing to read: an empty body (a route POSTed purely for
+   *  effect) or one that will not parse. Retries a blip, refuses a verdict, and
+   *  throws carrying the server's own words so the caller can keep the human's
+   *  input and say what happened. Nullable because it really is: typing it `T`
+   *  let a caller read a field off a 200 with an empty body. */
+  readonly post: <T>(path: string, body: unknown) => Promise<T | null>;
+  /** The status a route answers with, or null when nothing answered - for the
+   *  checks that read a status and no body. Never cached: the question is
+   *  always about right now. */
+  readonly probe: (path: string) => Promise<number | null>;
   /** Upload a blob to the session's pasted store. Throws on failure so each
    *  caller keeps its own recovery. */
   readonly uploadAsset: (file: File) => Promise<UploadedAsset>;
   /** The URL an already-stored pasted image is served from. */
   readonly assetUrl: (file: string) => string;
+  /** Is a hub hosting this session (base "/s/<id>"), or is this a standalone
+   *  per-session viewer (base "")? The one thing the base was read for besides
+   *  rebuilding URLs. */
+  readonly hubHosted: boolean;
 }
 
 /**
@@ -105,6 +131,29 @@ export const createTransport = (base: string): Transport => {
     throw lastErr ?? new Error(`request to ${base}${path} failed`);
   };
 
+  const get = <T>(path: string): Promise<T | null> =>
+    api(path)
+      .then((res) => res.json() as Promise<T>)
+      .catch(() => null);
+
+  const getText = (path: string): Promise<string | null> =>
+    api(path)
+      .then((res) => res.text())
+      .catch(() => null);
+
+  const post = async <T>(path: string, body: unknown): Promise<T | null> => {
+    // `{}` for a route that is POSTed purely for effect: `api` reads "has a
+    // body" as "is a POST", so an absent one would quietly turn a mutation
+    // into a GET of the same address.
+    const res = await api(path, body ?? {});
+    return (await res.json().catch(() => null)) as T | null;
+  };
+
+  const probe = (path: string): Promise<number | null> =>
+    hubFetch(`${base}${path}`, { cache: "no-store", timeoutMs: REQUEST_TIMEOUT_MS })
+      .then((res) => res.status)
+      .catch(() => null);
+
   /**
    * The one implementation of the upload protocol (content-type +
    * x-lucid-filename headers, raw body) - the annotation composer and the
@@ -122,9 +171,12 @@ export const createTransport = (base: string): Transport => {
   };
 
   return {
-    base,
-    api,
+    get,
+    getText,
+    post,
+    probe,
     uploadAsset,
     assetUrl: (file: string) => `${base}/__lucid/asset/${file}`,
+    hubHosted: base !== "",
   };
 };

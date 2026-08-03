@@ -350,15 +350,26 @@ it per item. The gap before it - the send has left the browser, no ack has
 landed - is client-local, because the log has nothing to show during it.
 _Avoid_: sent, received, acknowledged.
 
+### Unsent work
+What the browser holds and the server has not taken. Three members, one
+membership: a **queued annotation**, a composer **draft** (a selection with text
+typed on it - a bare selection is not work), and an **undelivered message** (a
+submission the server never took, still held in the browser to retry or
+discard). Every gate that must not walk over it reads the same membership -
+Approve, the deferred version swap, and a session switch - so "unsent" cannot
+mean one thing at one gate and something else at the next.
+_Avoid_: pending, in-flight, dirty.
+
 ### Response channels
 In a turn the agent may **mutate the artifact** (producing a new version,
 live-reloaded into the surface), **reply in the conversation log** without
 changing the artifact (e.g. answering a question), or both. Artifact updates
 are feedback-driven, not every-turn. On a new version the viewer live-reloads by
 swapping only the artifact subtree and re-running anchors; the swap is deferred
-**only** while a committed-but-unsent composer card exists (a bare selection does
-not defer), and while deferred the viewer shows a non-blocking newer-version
-indicator so staleness is bounded and the draft is never lost (D-042, D-055).
+while the session holds **unsent work** of any kind (a bare selection does not
+defer), because a new artifact invalidates the anchors that work is written
+against; while deferred the viewer shows a non-blocking newer-version indicator
+so staleness is bounded and nothing unsent is lost (D-042, D-055).
 
 ### The contract
 What an agent must do to use Lucid: emit a free-form HTML artifact to a file
