@@ -3325,6 +3325,62 @@ test("/clear empties the record, says what it kept, and survives a reload", asyn
 });
 
 /**
+ * Regression: the outline stays put while the artifact scrolls.
+ *
+ * Every scroll event invalidated the projection AND published the withdrawal,
+ * so the whole outline unmounted for the length of the scroll and remounted a
+ * second or more later. On a real artifact that measured as nine appearances
+ * and disappearances across four seconds, the rail at an identical position
+ * every time it returned - it was never moving, only vanishing.
+ *
+ * Scrolling a document does not change which headings it has. Only the active
+ * one changes, and that has its own throttled channel.
+ */
+test("the outline does not blink out while the artifact scrolls", async ({ page }) => {
+  await page.setViewportSize({ width: 1_180, height: 900 });
+  const sections = Array.from(
+    { length: 12 },
+    (_, i) =>
+      `<h2>Section ${i}</h2>${Array.from({ length: 40 }, (_, j) => `<p>Para ${i}.${j} with some words in it.</p>`).join("")}`,
+  ).join("");
+  await openViewer(
+    page,
+    `<!doctype html><html><head><style>html,body,main{margin:0;width:100%;font-family:system-ui}h1,h2,p{padding:0 24px}</style></head><body><main><h1>Plan</h1>${sections}</main></body></html>`,
+    "Plan",
+  );
+
+  const rail = on(page).artifactOutlineRail();
+  await expect(rail).toBeVisible();
+
+  const frame = page.locator('iframe[title="artifact surface"]');
+  const box = await frame.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+  await page.mouse.move(box.x + 200, box.y + 400);
+
+  // Sample presence across a real scroll, the way a recording of the bug does.
+  let disappearances = 0;
+  let present = true;
+  for (let i = 0; i < 40; i++) {
+    await page.mouse.wheel(0, 250);
+    const now = (await rail.count()) > 0;
+    if (present && !now) disappearances += 1;
+    present = now;
+  }
+  expect(disappearances).toBe(0);
+  await expect(rail).toBeVisible();
+
+  // And the outline is LIVE, not merely retained: its sections are intact and
+  // still jump, so nothing was traded away for the stability.
+  await rail.hover();
+  await expect(on(page).artifactOutlineItem().first()).toBeVisible();
+  await on(page).artifactOutlineItem().nth(2).click();
+  await expect(
+    surfaceOf(page).getByRole("heading", { exact: true, level: 2, name: "Section 2" }),
+  ).toBeInViewport();
+});
+
+/**
  * The rail is the HOVER ZONE, and it belongs under the panel, never over it.
  *
  * Painted on top it swallowed clicks along the panel's right edge - two
@@ -3385,11 +3441,33 @@ test("the outline panel owns its own right edge, and the rail stays reachable", 
   );
   expect(onRail).toBe("artifact-outline-rail");
 
-  // The zone REACHES: a 16px strip is hard to point at, so the outline opens
-  // on approach. Well below the tab's own box is still the rail's to answer.
+  // The zone REACHES: an 18px strip is hard to point at, so the outline opens
+  // on approach. Measured against the tab rather than described, because the
+  // whole point is a hit area much larger than what is drawn.
+  const reach = await rail.evaluate((element) => {
+    // The zone is the ::before box, so it is read from the computed style
+    // rather than from a rect: it is deliberately invisible and has no
+    // separate node to measure.
+    const style = getComputedStyle(element, "::before");
+    return {
+      down: Number.parseFloat(style.bottom) * -1,
+      left: Number.parseFloat(style.left) * -1,
+      right: Number.parseFloat(style.right) * -1,
+      up: Number.parseFloat(style.top) * -1,
+    };
+  });
+  // Four tab-heights above and below, a tab and a half to the left...
+  expect(reach.up).toBeGreaterThanOrEqual(120);
+  expect(reach.down).toBeGreaterThanOrEqual(120);
+  expect(reach.left).toBeGreaterThanOrEqual(24);
+  // ...and NOT to the right, where the artifact's own scrollbar lives: a hover
+  // zone over the scrollbar-safe inset would take the drags meant for it.
+  expect(reach.right).toBeLessThanOrEqual(0);
+
+  // And it behaves: a pointer well below the tab still opens the outline.
   await page.mouse.move(0, 0);
   await expect(panel).toBeHidden();
-  await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + railBox.height + 16);
+  await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + railBox.height + 100);
   await expect(panel).toBeVisible();
 });
 
@@ -3690,14 +3768,24 @@ test("a tall pinned outline scrolls internally while the artifact scrollbar rema
         element.scrollTop += 1;
       }, 20);
     });
-  await expect(outline).toHaveCount(0);
+  // Continuous scrolling no longer takes the outline down with it. #116 failed
+  // closed here by withdrawing the projection, which sounds right and is not:
+  // the placement proof is what guards the panel, and it is recomputed on every
+  // scroll either way. Withdrawing as well removed the whole outline for the
+  // length of every scroll and brought it back a second later. The proof still
+  // holds for this artifact - a narrow column beside a clear gutter - so the
+  // panel stays; when clearance is genuinely lost the reducer steps it back to
+  // the rail, which `gutter loss preserves focused navigation` covers.
+  await expect(outline).toHaveCount(1);
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
   await surfaceOf(page)
     .locator("html")
     .evaluate((element) => {
       const view = element.ownerDocument.defaultView as Window & { __outlineScrollTimer?: number };
       if (view.__outlineScrollTimer !== undefined) view.clearInterval(view.__outlineScrollTimer);
     });
-  await expect(outline).toHaveCount(1);
+  // ...and it is still there, and still pinned, once the scrolling stops.
+  await expect(outline).toHaveAttribute("data-mode", "pinned");
 });
 
 test("gutter loss preserves focused navigation as a latched transient interaction", async ({

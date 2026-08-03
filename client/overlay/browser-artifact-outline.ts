@@ -327,8 +327,12 @@ export class BrowserArtifactOutlineController {
       this.#capabilities.onDocumentLoad(invalidate),
       this.#capabilities.onFontsSettled(invalidate),
       this.#capabilities.onWindowResize(invalidate),
+      // Scrolling cannot change which headings a document has - only which one
+      // is active, and where the pinned panel may sit. So the proof yields (the
+      // panel steps back to the rail) and the projection stays up, instead of
+      // the whole outline unmounting for the length of the scroll.
       this.#capabilities.onWindowScroll(() => {
-        this.#runtime.invalidate("root-scroll");
+        this.#runtime.invalidateGeometry("root-scroll");
       }),
     );
   }
