@@ -264,6 +264,16 @@ export interface SpawnIdentity {
 export interface SpawnDeadline {
   /** Milliseconds of NO output before the child is killed. */
   readonly idleMs: number;
+  /**
+   * Files beyond the out-log whose growth also counts as the child being
+   * alive. Without these the watchdog killed every healthy `claude -p` turn
+   * longer than the window: that CLI buffers stdout until the turn ENDS, so
+   * its out-log sits at zero bytes through minutes of real work - while its
+   * session transcript (and the artifact's own record, which the turn's
+   * `lucid` calls append to) move on every step. A path that does not exist
+   * yet simply counts as unchanged until it appears.
+   */
+  readonly activityPaths?: readonly string[];
 }
 
 /**
@@ -285,17 +295,25 @@ const watchForStall = (
   proc: { readonly kill: (signal?: number) => void },
   logFile: string,
   deadline: SpawnDeadline | undefined,
-): { readonly stop: () => void } => {
-  if (!deadline || deadline.idleMs <= 0) return { stop: () => {} };
-  const sizeOf = (): number => {
+): { readonly fired: () => boolean; readonly stop: () => void } => {
+  if (!deadline || deadline.idleMs <= 0) return { fired: () => false, stop: () => {} };
+  // One stamp across every signal: the out-log's size plus each activity
+  // file's size and mtime. Any change on any of them is life. A missing file
+  // stamps as a constant, so a transcript that appears later registers as
+  // change the moment it does.
+  const stampOf = (path: string): string => {
     try {
-      return statSync(logFile).size;
+      const s = statSync(path);
+      return `${s.size}:${s.mtimeMs}`;
     } catch {
-      return -1;
+      return "-";
     }
   };
+  const activity = deadline.activityPaths ?? [];
+  const sizeOf = (): string => [logFile, ...activity].map(stampOf).join("|");
   let lastSize = sizeOf();
   let lastChangeAt = Date.now();
+  let fired = false;
   // Checked several times per window rather than once at the end: the point is
   // to notice silence promptly, not to add a second timeout of its own.
   const every = Math.max(1_000, Math.floor(deadline.idleMs / 4));
@@ -308,13 +326,14 @@ const watchForStall = (
     }
     if (Date.now() - lastChangeAt < deadline.idleMs) return;
     clearInterval(timer);
+    fired = true;
     // SIGTERM, as a human would: the child gets its chance to flush and exit,
     // and the exit classification below reports the turn as failed either way.
     proc.kill();
   }, every);
   // The interval must not hold the process open when nothing else is pending.
   (timer as unknown as { unref?: () => void }).unref?.();
-  return { stop: () => clearInterval(timer) };
+  return { fired: () => fired, stop: () => clearInterval(timer) };
 };
 
 /** Run a recipe argv to completion, typed. A spawn that cannot even start
@@ -435,6 +454,7 @@ export const runSpawn = async (
     const stalled = watchForStall(proc, logFile, deadline);
     await proc.exited;
     stalled.stop();
+    const wasStalled = stalled.fired();
     // The callback's work is bounded elsewhere too (sidecar locks time out),
     // but its HTTP leg is not - and a wedged hub must not wedge every future
     // turn of this session behind an await that cannot settle.
@@ -443,7 +463,21 @@ export const runSpawn = async (
     }
     // A signal-killed child has no exit code; it is anything but clean.
     const code = proc.exitCode ?? (proc.signalCode !== null ? 1 : 0);
-    if (identity?.strategy) return classifySpawnResult(code, identity.strategy, observed);
+    if (identity?.strategy) {
+      const classified = classifySpawnResult(code, identity.strategy, observed);
+      // A killed child is a failed turn whatever the classifier made of its
+      // (absent) output, and the stall is the part worth reporting: it says
+      // the SESSION is unusable here, not that the feedback was bad.
+      if (!wasStalled) return classified;
+      return {
+        code: classified.code || 1,
+        ...("identity" in classified && classified.identity
+          ? { identity: classified.identity }
+          : {}),
+        stalled: true,
+        status: "process-failed",
+      };
+    }
     // Legacy recipe: no declaration, no discovery - a clean exit is complete
     // (nothing was promised), a bad one is a process failure.
     return code === 0 ? { code: 0, status: "completed" } : { code, status: "process-failed" };
