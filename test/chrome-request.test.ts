@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 /**
  * The chrome's one fetch seam (plan 07, M1.3). Every browser request carries
@@ -40,6 +40,109 @@ describe("no client module calls fetch except the request helper", () => {
       .filter((p) => !p.endsWith(`/${OWNER}`))
       .filter((p) => BARE_FETCH.test(readFileSync(p, "utf8")));
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * The session transport is the other half of the same rule.
+ *
+ * `request.ts` owns the header and the deadline; `transport.ts` owns the
+ * SESSION - the base every control route hangs off, the POST retry ladder, the
+ * 30s budget, the 4xx-is-a-verdict rule, and the server's own words on a
+ * failure. A session-scoped hubFetch anywhere else opts out of all of that
+ * silently: the pickers did exactly that and spent a human's pick on one
+ * unretried attempt, and two reads fetched `${base}/__lucid/...` by hand.
+ *
+ * Two rules, and the first has no exemptions: a `/__lucid/` path with no base
+ * in front of it is the original defect - the moment two sessions share an
+ * origin it reads whichever one the page happens to be.
+ *
+ * Both rules read the URL a call site writes, so a call site that writes no URL
+ * - `hubFetch(url)` over a variable built two lines up - would slip past both
+ * saying nothing. A literal first argument is therefore a rule of its own, not
+ * a convenience the guard quietly depends on.
+ */
+describe("no client module fetches a session route around the transport", () => {
+  const TRANSPORT = "transport.ts";
+
+  /** Every hubFetch call's first argument as written: the literal, or null
+   *  where the call site named something the guard cannot follow. */
+  const hubFetchUrls = (source: string): (string | null)[] =>
+    [...source.matchAll(/hubFetch\(\s*/g)].map((m) => {
+      const rest = source.slice((m.index ?? 0) + m[0].length);
+      return /^(`[^`]*`|"[^"]*"|'[^']*')/.exec(rest)?.[0] ?? null;
+    });
+
+  /** The one call that legitimately predates a transport: the shell asks a
+   *  mount who it is in order to BUILD the session (and its transport) from
+   *  the answer. Base-prefixed, so it is addressed to that mount alone.
+   *
+   *  Keyed by the CALL, not by its file: a file-wide exemption also covers the
+   *  next session-scoped fetch someone adds to that file, which is the bypass
+   *  this guard exists to catch. */
+  const EXEMPT = new Map([
+    ["hub.ts:/__lucid/identity", "identifies a mount before its session exists"],
+  ]);
+
+  const sessionFetches = (): { path: string; url: string }[] => {
+    const out: { path: string; url: string }[] = [];
+    for (const path of clientSources()) {
+      if (path.endsWith(`/${TRANSPORT}`)) continue;
+      for (const url of hubFetchUrls(readFileSync(path, "utf8"))) {
+        if (url?.includes("__lucid")) out.push({ path, url });
+      }
+    }
+    return out;
+  };
+
+  /** The route a URL literal addresses: quoting off, and the base
+   *  interpolation in front of it off, so an exemption names a route rather
+   *  than one spelling of it. */
+  const routeOf = (url: string): string => url.slice(1, -1).replace(/^\$\{[^}]*\}/, "");
+
+  const exemptKey = ({ path, url }: { path: string; url: string }): string =>
+    `${basename(path)}:${routeOf(url)}`;
+
+  test("every hubFetch call site writes its URL as a literal - a variable hides which session it addresses", () => {
+    const opaque: string[] = [];
+    for (const path of clientSources()) {
+      hubFetchUrls(readFileSync(path, "utf8")).forEach((url, i) => {
+        if (url === null) opaque.push(`${path}: call ${i + 1}`);
+      });
+    }
+    expect(opaque).toEqual([]);
+  });
+
+  test("a bare /__lucid path is never fetched outside the transport - it would read whichever session shares the origin", () => {
+    const bare = sessionFetches()
+      .filter(({ url }) => !url.slice(1).startsWith("${"))
+      .map(({ path, url }) => `${path}: ${url}`);
+    expect(bare).toEqual([]);
+  });
+
+  test("a base-prefixed session route is the transport's, not a call site's", () => {
+    const offenders = sessionFetches()
+      .filter((f) => !EXEMPT.has(exemptKey(f)))
+      .map(({ path, url }) => `${path}: ${url}`);
+    expect(offenders).toEqual([]);
+  });
+
+  test("an exemption covers one call and no more", () => {
+    const fetches = sessionFetches();
+    for (const key of EXEMPT.keys()) {
+      const covered = fetches.filter((f) => exemptKey(f) === key);
+      expect(covered.length, `exemption ${key} covers ${covered.length} calls`).toBe(1);
+    }
+  });
+
+  test("the transport exposes verbs, not the raw request - `api` and `base` are private", () => {
+    const contract = readFileSync(join(CLIENT, "chrome", TRANSPORT), "utf8");
+    const face = /export interface Transport \{[\s\S]*?\n\}/.exec(contract)?.[0] ?? "";
+    expect(face, "could not find the Transport interface").not.toBe("");
+    // Re-exporting either is how the bypasses were built: `base` lets a caller
+    // rebuild the URL, `api` lets it choose its own error handling.
+    expect(face).not.toContain("readonly api:");
+    expect(face).not.toContain("readonly base:");
   });
 });
 

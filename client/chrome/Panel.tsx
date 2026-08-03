@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { hubFetch } from "./request.ts";
-import type { SelectionResponse } from "../../src/protocol/wire.ts";
 import { QUICK_REPLIES } from "./actions.ts";
 import { DECISION_REPLIES } from "../shared/decision.ts";
 import { TargetSnippet } from "./AnnotationPart.tsx";
@@ -502,7 +500,7 @@ const SelectionPicker = ({
  * writable through it rather than flickering.
  */
 export const SelectionPickers = () => {
-  const { transport, store, notify } = useSessionHandle();
+  const { setSelection } = useActions();
   const info = useSession((s) => s.selectionInfo);
   const harnesses = useSession((s) => s.selectionHarnesses);
   const selection = useSession((s) => s.selection);
@@ -542,37 +540,13 @@ export const SelectionPickers = () => {
   const harness = selection.harness ?? attendant?.harness ?? info.name;
   const inherited = `inherited from ${attendant?.harness ?? info.name}`;
 
-  /** A POST replaces the whole selection, so both fields ride every write. */
+  /** The write, and the disabled state it holds the row in while it is in
+   *  flight. What the pick means, how it is sent and what a refusal says all
+   *  belong to the action. */
   const commit = async (targetHarness: string, model: string, effort: string): Promise<void> => {
     setBusy(true);
-    const res = await hubFetch(`${transport.base}/__lucid/selection`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ harness: targetHarness, model, effort }),
-    }).catch(() => null);
+    await setSelection({ harness: targetHarness, model, effort });
     setBusy(false);
-    if (!res) {
-      notify.warn("Couldn't reach the server - the selection is unchanged.");
-      return;
-    }
-    const body = (await res.json().catch(() => null)) as
-      | (Partial<SelectionResponse> & { error?: string })
-      | null;
-    // The adapter's own words: a pick the recipe refuses is named here rather
-    // than dying later as an agent turn on a flag the CLI never took.
-    if (!res.ok || !body?.selection) {
-      notify.warn(
-        typeof body?.error === "string"
-          ? body.error
-          : `The server refused the selection (${res.status}).`,
-      );
-      return;
-    }
-    store.setState({
-      selection: body.selection,
-      selectionHarnesses: body.harnesses ?? [],
-      selectionInfo: body.info ?? null,
-    });
   };
 
   // A model change re-picks the ladder, so an effort the new model does not

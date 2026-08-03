@@ -419,10 +419,10 @@ const ConnectionLine = () => {
   const live = useSession((s) => s.live);
   const streamRetries = useSession((s) => s.streamRetries);
   const hubConnected = useHub((s) => s.connected);
-  // A standalone per-session viewer has NO hub - its transport base is "",
-  // where the shell's is "/s/<id>". Reporting a hub that was never there would
-  // put a permanent "reconnecting" under every standalone composer.
-  const hubHosted = useSessionHandle().transport.base !== "";
+  // A standalone per-session viewer has NO hub - only the shell's sessions are
+  // hub-hosted. Reporting a hub that was never there would put a permanent
+  // "reconnecting" under every standalone composer.
+  const hubHosted = useSessionHandle().transport.hubHosted;
   // The session stream is the one that carries a turn, so it is named first;
   // the hub only matters here when the session itself is healthy.
   const what = !live ? "the live connection" : hubHosted && !hubConnected ? "the hub" : null;

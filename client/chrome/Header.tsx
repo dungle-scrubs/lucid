@@ -1,5 +1,5 @@
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
-import { approveBlockedReason } from "./store.ts";
+import { approveBlockedReason, unsentWork } from "./store.ts";
 import { setArtifactTheme, setSidebarOpen, useShell } from "./shell.ts";
 import { useTheme } from "./theme.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
@@ -232,17 +232,14 @@ const ContextRing = () => {
 const ApproveControls = () => {
   const { approveReview, reopenReview } = useActions();
   const resolved = useSession((s) => s.reviewResolved);
-  const queueLen = useSession((s) => s.queue.length);
+  const queue = useSession((s) => s.queue);
   const pendingTarget = useSession((s) => s.pendingTarget);
   const composerNote = useSession((s) => s.composerNote);
-  // A message the server never took is unsent work too - approving over it
-  // would strand it behind a stop the agent has already acted on.
-  const undelivered = useSession((s) => s.outbox.length);
-  const reason = approveBlockedReason({
-    queued: queueLen,
-    hasDraft: pendingTarget !== null && composerNote.trim().length > 0,
-    undelivered,
-  });
+  // Selected as slices and handed to the owner, never counted here: what is
+  // unsent - including a message the server never took - is the store's
+  // definition, and the tooltip must refuse on exactly what the click does.
+  const outbox = useSession((s) => s.outbox);
+  const reason = approveBlockedReason(unsentWork({ queue, pendingTarget, composerNote, outbox }));
   const blocked = reason !== null;
 
   if (resolved) {

@@ -9,8 +9,16 @@ import {
   legacyAnswerFields,
 } from "./question-draft.ts";
 import type { Notify, SessionStorage, SessionStore } from "./store.ts";
-import { approveBlockedReason, hasComposerDraft, toWireImages, uuid } from "./store.ts";
+import {
+  approveBlockedReason,
+  hasComposerDraft,
+  sessionSwitchBlockedReason,
+  toWireImages,
+  unsentWork,
+  uuid,
+} from "./store.ts";
 import type { DecisionReply } from "../shared/decision.ts";
+import type { SelectionResponse, SelectionState } from "../../src/protocol/wire.ts";
 import type { Surface } from "./surface.ts";
 import type { Transport, UploadedAsset } from "./transport.ts";
 import type {
@@ -35,6 +43,9 @@ export interface ActionsCtx {
   readonly pastes: Pastes;
   readonly storage: SessionStorage;
   readonly notify: Notify;
+  /** The session's one mapping of a selection response into state, shared with
+   *  the bootstrap read and the broadcast frame (see session.ts). */
+  readonly applySelection: (r: SelectionResponse) => void;
 }
 
 /** The common annotation asks, offered as one-tap chips on a fresh pick so they
@@ -49,10 +60,9 @@ const DEFAULT_FORK_DIRECTIVE = "Spin this selection off into its own artifact.";
 export type SessionActions = ReturnType<typeof createActions>;
 
 export const createActions = (ctx: ActionsCtx) => {
-  const { store, transport, surface, pastes, storage, notify } = ctx;
+  const { store, transport, surface, pastes, storage, notify, applySelection } = ctx;
   const get = store.getState;
   const set = store.setState;
-  const { api } = transport;
   const { warn, notice, pushWarning } = notify;
   const { expandPastes, consumePastes } = pastes;
   const { applyDeferredSwapIfReady, pushHighlights, toOverlay } = surface;
@@ -211,7 +221,7 @@ export const createActions = (ctx: ActionsCtx) => {
     const id = s.forkId ?? uuid();
     set({ forking: true, forkId: id });
     try {
-      await api("/__lucid/fork", {
+      await transport.post("/__lucid/fork", {
         id,
         version: s.version,
         target,
@@ -358,7 +368,7 @@ export const createActions = (ctx: ActionsCtx) => {
     set({ sending: true }); // freeze the queue: an item edited mid-flight would send its old note
     try {
       for (const q of get().queue) {
-        await api("/__lucid/annotation", {
+        await transport.post("/__lucid/annotation", {
           id: q.id,
           version: get().version,
           target: q.target,
@@ -440,9 +450,13 @@ export const createActions = (ctx: ActionsCtx) => {
     set((s) => ({ outbox: [...s.outbox, message] }));
   };
 
+  /** The ONE exit from the outbox, whether the message landed or the human gave
+   *  up on it - so it is also where a deferred version swap held by an
+   *  undelivered message is released. */
   const discardOutboxMessage = (id: string): void => {
     storage.forgetOutboxMessage(id);
     set((s) => ({ outbox: s.outbox.filter((m) => m.id !== id) }));
+    applyDeferredSwapIfReady();
   };
 
   /** Surface every entry still held, not just the one that failed. The rest are
@@ -474,9 +488,7 @@ export const createActions = (ctx: ActionsCtx) => {
    * ordinary outage, and it should take the ordinary retry path.
    */
   const anotherSessionAnswers = async (): Promise<boolean> => {
-    const identity = await api("/__lucid/identity")
-      .then((r) => r.json() as Promise<{ session?: unknown }>)
-      .catch(() => null);
+    const identity = await transport.get<{ session?: unknown }>("/__lucid/identity");
     return identity !== null && identity.session !== get().session;
   };
 
@@ -507,7 +519,7 @@ export const createActions = (ctx: ActionsCtx) => {
         try {
           // Ids are client-minted and deduped server-side, so re-sending one
           // that actually landed (a lost response) appends nothing.
-          await api("/__lucid/message", {
+          await transport.post("/__lucid/message", {
             id: m.id,
             text: m.text,
             refs: [],
@@ -558,21 +570,16 @@ export const createActions = (ctx: ActionsCtx) => {
     // re-reads behind.
     const s = get();
     if (s.reviewResolved) return;
-    // The outbox counts: a message the server never took is unsent feedback in
-    // exactly the sense this guard exists for. The reason is the SAME sentence
-    // the button's tooltip shows - one definition, so a click cannot say less
-    // than a hover.
-    const reason = approveBlockedReason({
-      queued: s.queue.length,
-      hasDraft: s.pendingTarget !== null && s.composerNote.trim().length > 0,
-      undelivered: s.outbox.length,
-    });
+    // Both the membership and the sentence come from the store: what counts as
+    // unsent work is one definition, and the reason is the SAME sentence the
+    // button's tooltip shows, so a click cannot say less than a hover.
+    const reason = approveBlockedReason(unsentWork(s));
     if (reason !== null) {
       warn(`${reason} - the agent stops reading once you approve.`);
       return;
     }
     try {
-      await api("/__lucid/resolve", {});
+      await transport.post("/__lucid/resolve", {});
     } catch {
       warn("Approve didn't send - try again.");
     }
@@ -625,7 +632,7 @@ export const createActions = (ctx: ActionsCtx) => {
       return;
     }
     try {
-      await api("/__lucid/clear", {});
+      await transport.post("/__lucid/clear", {});
     } catch {
       warn("Clear didn't send - try again.");
     }
@@ -639,7 +646,7 @@ export const createActions = (ctx: ActionsCtx) => {
       return;
     }
     try {
-      await api("/__lucid/reopen", {});
+      await transport.post("/__lucid/reopen", {});
       // No notice. The reopening is an entry in the record at its own moment,
       // and it carries this fact itself when nobody is listening - a toast for
       // it was pinned to the bottom of the thread, where it outlived its moment
@@ -655,14 +662,13 @@ export const createActions = (ctx: ActionsCtx) => {
 
   const loadSessions = async (): Promise<void> => {
     set({ sessionsLoading: true });
-    try {
-      const res = await api("/__lucid/sessions");
-      const data = (await res.json()) as { sessions: SessionSummary[] };
-      set({ sessions: data.sessions, sessionsLoading: false });
-    } catch {
+    const data = await transport.get<{ sessions: SessionSummary[] }>("/__lucid/sessions");
+    if (!data) {
       set({ sessions: [], sessionsLoading: false });
       warn("Couldn't list this project's sessions.");
+      return;
     }
+    set({ sessions: data.sessions, sessionsLoading: false });
   };
 
   /**
@@ -671,17 +677,51 @@ export const createActions = (ctx: ActionsCtx) => {
    * since the new session has its own stream, its own folded state and its own
    * origin.
    *
-   * The queue lives in this tab's memory, so leaving with unsent work would
-   * silently eat it. Refuse instead, and say why.
+   * Unsent work does not travel: the queue, the outbox and the composer draft
+   * are persisted under THIS session's key, so navigating away leaves them
+   * where nobody is looking rather than losing them. Refuse instead, and name
+   * what is being left - the same membership Approve refuses on, in the
+   * store's sentence for this gate, because "unsent" cannot mean two things.
    */
   const switchToSession = (s: SessionSummary): void => {
-    const st = get();
-    if (st.queue.length > 0 || (st.pendingTarget !== null && st.composerNote.trim().length > 0)) {
-      warn("Send or discard your unsent feedback before switching sessions.");
+    const reason = sessionSwitchBlockedReason(unsentWork(get()));
+    if (reason !== null) {
+      warn(reason);
       return;
     }
     if (!s.viewer) return;
     window.location.href = s.viewer;
+  };
+
+  // ---- sticky selection -----------------------------------------------------
+
+  /**
+   * Write the artifact's sticky harness/model/effort - a POST replaces the
+   * whole selection, so all three fields ride every write.
+   *
+   * A mutation like any other, on the transport's retry ladder: the pickers
+   * used to fetch this one by hand, and a pick lost to a server blip left them
+   * showing a value the artifact does not have. The answer lands through the
+   * session's own applier - the same one the bootstrap read and the broadcast
+   * frame use - so one response shape has one mapping into state.
+   */
+  const setSelection = async (pick: SelectionState): Promise<void> => {
+    try {
+      const body = await transport.post<SelectionResponse>("/__lucid/selection", pick);
+      // A body with no selection in it is a server that did not do what was
+      // asked; applying it would blank the pickers on an answer that isn't one.
+      if (!body?.selection) {
+        warn("The server refused the selection - it is unchanged.");
+        return;
+      }
+      applySelection(body);
+    } catch (e) {
+      // The adapter's own words: a pick the recipe refuses is named here rather
+      // than dying later as an agent turn on a flag the CLI never took.
+      const reason = e instanceof Error ? e.message : "";
+      const why = reason === "" ? "" : ` (${reason})`;
+      warn(`The selection didn't take${why} - it is unchanged.`);
+    }
   };
 
   // ---- agent questions ------------------------------------------------------
@@ -864,7 +904,7 @@ export const createActions = (ctx: ActionsCtx) => {
     const legacy = grouped ? null : legacyAnswerFields(group, draft);
     answerSending.add(q.id);
     try {
-      await api("/__lucid/answer", {
+      await transport.post("/__lucid/answer", {
         id: uuid(),
         questionId: q.id,
         text: legacy?.text ?? "",
@@ -893,7 +933,12 @@ export const createActions = (ctx: ActionsCtx) => {
     if (answerSending.has(q.id)) return;
     answerSending.add(q.id);
     try {
-      await api("/__lucid/answer", { id: uuid(), questionId: q.id, text: "", skipped: true });
+      await transport.post("/__lucid/answer", {
+        id: uuid(),
+        questionId: q.id,
+        text: "",
+        skipped: true,
+      });
       // Revoke any already-staged image URLs; a still-in-flight upload sees the
       // cleared counter and revokes its own.
       for (const img of get().answerImages[q.id] ?? []) URL.revokeObjectURL(img.url);
@@ -913,7 +958,7 @@ export const createActions = (ctx: ActionsCtx) => {
     if (answerSending.has(q.id)) return;
     answerSending.add(q.id);
     try {
-      await api("/__lucid/answer", {
+      await transport.post("/__lucid/answer", {
         id: uuid(),
         questionId: q.id,
         text: (note ?? "").trim(),
@@ -981,17 +1026,16 @@ export const createActions = (ctx: ActionsCtx) => {
   const enterDiff = async (base?: number): Promise<void> => {
     const diffBase = base ?? get().diffBase;
     if (get().viewingVersion !== null) set({ viewingVersion: null }); // diff and history view are exclusive surfaces
-    try {
-      const res = await api(`/__lucid/diff?base=${diffBase}`);
-      const data = (await res.json()) as DiffData;
-      set({ diffData: data, diffBase, diffMode: true, diffIndex: 0 });
-      toOverlay({ source: "lucid-chrome", type: "diff-show", html: data.mergedHtml });
-      if (data.hunks.length > 0) requestAnimationFrame(() => gotoHunk(0));
-    } catch {
-      // The bare catch here used to swallow a dead server whole, so the button
-      // looked inert. Say what likely broke instead.
+    const data = await transport.get<DiffData>(`/__lucid/diff?base=${diffBase}`);
+    if (data === null) {
+      // A dead server used to be swallowed whole here, so the button looked
+      // inert. Say what likely broke instead.
       warn("Couldn't load the changes - is the Lucid server still running?");
+      return;
     }
+    set({ diffData: data, diffBase, diffMode: true, diffIndex: 0 });
+    toOverlay({ source: "lucid-chrome", type: "diff-show", html: data.mergedHtml });
+    if (data.hunks.length > 0) requestAnimationFrame(() => gotoHunk(0));
   };
 
   /**
@@ -1004,9 +1048,7 @@ export const createActions = (ctx: ActionsCtx) => {
   const viewVersion = async (v: number): Promise<void> => {
     if (v >= get().version) return exitVersionView(); // "current" in the picker means leave history
     if (get().diffMode) await exitDiff();
-    const html = await api(`/__lucid/version?v=${v}`)
-      .then((r) => r.text())
-      .catch(() => null);
+    const html = await transport.getText(`/__lucid/version?v=${v}`);
     if (html === null) {
       warn("Couldn't load that version's snapshot.");
       return;
@@ -1024,18 +1066,14 @@ export const createActions = (ctx: ActionsCtx) => {
   const exitVersionView = async (): Promise<void> => {
     if (get().viewingVersion === null) return;
     set({ viewingVersion: null });
-    const html = await api("/__lucid/artifact")
-      .then((r) => r.text())
-      .catch(() => null);
+    const html = await transport.getText("/__lucid/artifact");
     if (html !== null) toOverlay({ source: "lucid-chrome", type: "swap", html });
     pushHighlights();
   };
 
   const exitDiff = async (): Promise<void> => {
     set({ diffMode: false, revertWhy: "" });
-    const html = await api("/__lucid/artifact")
-      .then((r) => r.text())
-      .catch(() => null);
+    const html = await transport.getText("/__lucid/artifact");
     if (html !== null) toOverlay({ source: "lucid-chrome", type: "swap", html });
     pushHighlights();
   };
@@ -1061,7 +1099,7 @@ export const createActions = (ctx: ActionsCtx) => {
     const why = s.revertWhy.trim() || `Undo this change - restore to v${s.diffBase}.`;
     if (!hunk) return;
     try {
-      await api("/__lucid/revert", {
+      await transport.post("/__lucid/revert", {
         id: uuid(),
         target: hunk.anchor,
         targetVersion: s.diffBase,
@@ -1101,6 +1139,7 @@ export const createActions = (ctx: ActionsCtx) => {
     reopenReview,
     loadSessions,
     switchToSession,
+    setSelection,
     updateQuestionDraft,
     dismissQuestionDrawer,
     raiseQuestionDrawer,

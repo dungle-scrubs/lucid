@@ -7,7 +7,7 @@ import {
   discardPendingOutlineChannel,
   subscribeOutlineChannels,
 } from "./outline-channel.ts";
-import { annotationFocused, type SessionStore } from "./store.ts";
+import { annotationFocused, blocksVersionSwap, type SessionStore, unsentWork } from "./store.ts";
 import { currentTheme } from "./theme.ts";
 import type { Transport } from "./transport.ts";
 
@@ -53,9 +53,9 @@ export interface Surface {
    *  are older than that news by definition and stop carrying a lifecycle of
    *  their own (see `lifecycleSeq`). */
   readonly noteLifecycle: () => void;
-  /** Live reload, deferred until the human's draft is committed (D-055). */
+  /** Live reload, deferred until the human's unsent work is gone (D-055): a
+   *  new artifact invalidates the anchors that work is written against. */
   readonly onNewVersion: (version: number) => Promise<void>;
-  readonly hasUnsentDraft: () => boolean;
   /** Release the private outline channel and its module-level subscription. */
   readonly dispose: () => void;
 }
@@ -216,10 +216,10 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     outline.requestLayout(true);
   };
 
-  const hasUnsentDraft = (): boolean => {
-    const s = get();
-    return s.queue.length > 0 || (s.pendingTarget !== null && s.composerNote.trim().length > 0);
-  };
+  /** Does this session hold work the swap must wait for? The membership is the
+   *  store's (D-055 + the outbox, which is unsent work in exactly the same
+   *  sense); this only asks. */
+  const swapBlocked = (): boolean => blocksVersionSwap(unsentWork(get()));
 
   const noteLifecycle = (): void => {
     lifecycleSeq++;
@@ -228,12 +228,10 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   const bootstrap = async (): Promise<void> => {
     const mine = ++bootstrapSeq;
     const lifecycleAtRequest = lifecycleSeq;
-    const res = await transport.api("/__lucid/state").catch(() => null);
-    if (!res || mine !== bootstrapSeq) return;
-    const payload = (await res.json().catch(() => null)) as StateResponse | null;
-    // Re-check AFTER the body read too: an older request can pass the first
-    // guard, stall while parsing, and land over a newer snapshot that
-    // completed meanwhile. A malformed body applies nothing.
+    const payload = await transport.get<StateResponse>("/__lucid/state");
+    // Guarded AFTER the body is parsed, not merely after the response arrives:
+    // an older request can stall in the parse and land over a newer snapshot
+    // that completed meanwhile. A malformed body applies nothing.
     if (!payload || mine !== bootstrapSeq) return;
     set((s) => {
       // Staged answer state is keyed by question id, and a question can be
@@ -309,18 +307,15 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
 
   const applyDeferredSwapIfReady = (): void => {
     const s = get();
-    if (pendingSwapHtml !== null && s.newerVersion !== null && !hasUnsentDraft()) {
+    if (pendingSwapHtml !== null && s.newerVersion !== null && !swapBlocked()) {
       applySwap(pendingSwapHtml, s.newerVersion);
     }
   };
 
   const onNewVersion = async (version: number): Promise<void> => {
-    const html = await transport
-      .api("/__lucid/artifact")
-      .then((r) => r.text())
-      .catch(() => null);
+    const html = await transport.getText("/__lucid/artifact");
     if (html === null) return;
-    if (hasUnsentDraft()) {
+    if (swapBlocked()) {
       pendingSwapHtml = html;
       set({ newerVersion: version });
       // The frame waits for the draft; the record does not. Without this the
@@ -406,7 +401,6 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     bootstrap,
     noteLifecycle,
     onNewVersion,
-    hasUnsentDraft,
     dispose,
   };
 };

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
+import { unsentWork, versionSwapBlockedReason } from "./store.ts";
 import type { DiffHunk } from "./types.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 import { workingClock } from "./working.ts";
@@ -196,27 +197,26 @@ export const VersionViewBanner = () => {
 export const NewerVersionBanner = () => {
   const { discardPending } = useActions();
   const newerVersion = useSession((s) => s.newerVersion);
-  const queueLen = useSession((s) => s.queue.length);
+  const queue = useSession((s) => s.queue);
   const pendingTarget = useSession((s) => s.pendingTarget);
   const composerNote = useSession((s) => s.composerNote);
+  const outbox = useSession((s) => s.outbox);
   if (newerVersion === null) return null;
 
-  const hasComposerDraft = pendingTarget !== null && composerNote.trim().length > 0;
-  const queued = `send your ${queueLen} queued annotation${queueLen > 1 ? "s" : ""} to see it`;
-  const blocker =
-    queueLen > 0 && hasComposerDraft
-      ? `${queued}, or discard your draft`
-      : queueLen > 0
-        ? queued
-        : "send or discard your draft";
+  // Both the membership and the sentence belong to the store: this banner
+  // named a blocker of its own, and it disagreed with the gate that actually
+  // holds the swap - an undelivered message held it while the banner blamed a
+  // draft that was not there.
+  const work = unsentWork({ queue, pendingTarget, composerNote, outbox });
+  const blocker = versionSwapBlockedReason(work);
 
   return (
     <div
       data-test="newer-version"
       className="absolute top-3 left-1/2 z-5 flex -translate-x-1/2 items-center gap-2 bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-on-accent shadow-[0_4px_14px_rgba(0,0,0,0.3)]"
     >
-      Newer version (v{newerVersion}) available · {blocker}
-      {hasComposerDraft ? (
+      Newer version (v{newerVersion}) available{blocker === null ? "" : ` · ${blocker}`}
+      {work.hasDraft ? (
         <button
           type="button"
           data-test="discard-draft"
