@@ -4,6 +4,7 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAssistantDataUI,
+  useAttachment,
   useMessage,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
@@ -15,7 +16,7 @@ import { DeliveryLabel } from "./Delivery.tsx";
 import { visibleEl } from "./dom.ts";
 import { useHub } from "./hub.ts";
 import { FoldedText } from "./FoldedText.tsx";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Notices,
   PendingComposer,
@@ -121,13 +122,30 @@ const AssistantMessage = () => (
   </div>
 );
 
+/** The staged image itself. assistant-ui's `unstable_Thumb` is not a
+ *  thumbnail: it renders the file EXTENSION as text (".png"), which overflows
+ *  its 22px box into the name beside it - a name that already ends in that
+ *  extension. The pending attachment still carries the pasted File, so show
+ *  the actual image instead. */
+const ComposerAttachmentPreview = () => {
+  const file = useAttachment((a) => ("file" in a ? a.file : undefined));
+  const url = useMemo(() => (file === undefined ? undefined : URL.createObjectURL(file)), [file]);
+  useEffect(() => {
+    return () => {
+      if (url !== undefined) URL.revokeObjectURL(url);
+    };
+  }, [url]);
+  if (url === undefined) return null;
+  return <img src={url} alt="" className="size-[22px] object-cover" />;
+};
+
 /** A staged paste, before the message carrying it is sent. */
 const ComposerAttachment = () => (
   <AttachmentPrimitive.Root
     data-test="image-chip"
     className="inline-flex items-center gap-1.5 border border-ink-600 bg-ink-800 py-[3px] pr-[6px] pl-[3px]"
   >
-    <AttachmentPrimitive.unstable_Thumb className="size-[22px] object-cover" />
+    <ComposerAttachmentPreview />
     <span className="max-w-[150px] truncate text-[11px] text-cream-300">
       <AttachmentPrimitive.Name />
     </span>
