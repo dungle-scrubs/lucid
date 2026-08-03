@@ -150,6 +150,14 @@ export interface FoldedState {
    *  declared intent and moves `heardAt`; the window's `since` stays the first
    *  ack's time. */
   readonly agentWorking: AgentWorking | null;
+  /** EVERY still-open turn, named: what a startup sweep needs to close the
+   *  windows a dead hub's children left behind, which `agentWorking` (the
+   *  oldest, anonymous) cannot do. */
+  readonly openTurns: readonly {
+    readonly turnId: string;
+    readonly since: string;
+    readonly heardAt: string;
+  }[];
   /**
    * The last turn to END without any agent output following it, if any.
    *
@@ -341,6 +349,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       deliveredThroughSeq: 0,
       lastAgentOutputSeq: 0,
       agentWorking: null,
+      openTurns: [],
       lastTurnEnd: null,
       segmentStartSeq: 0,
     };
@@ -676,6 +685,11 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
     deliveredThroughSeq,
     lastAgentOutputSeq,
     agentWorking,
+    openTurns: [...openTurns.entries()].map(([turnId, t]) => ({
+      turnId,
+      since: t.since,
+      heardAt: t.heardAt,
+    })),
     lastTurnEnd,
     segmentStartSeq,
   };

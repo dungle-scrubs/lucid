@@ -250,6 +250,22 @@ export const resetPresenceCache = (): void => {
   cached = undefined;
 };
 
+/**
+ * Whether this machine PUBLISHES presence at all. An empty `livePresence` map
+ * means two very different things - "nothing is running" and "there is no
+ * sessions directory to read" - and a caller about to treat ABSENCE as
+ * evidence (the orphan sweep) must only do so where presence would actually
+ * show. A missing or unreadable store proves nothing about any process.
+ */
+export const presenceStoreReadable = async (dir?: string): Promise<boolean> => {
+  try {
+    await readdir(claudeSessionsDir(dir));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** Where Claude Code files conversation transcripts, one directory per cwd. */
 export const claudeProjectsDir = (dir?: string): string => {
   if (dir) return dir;
@@ -358,10 +374,11 @@ export const codexSessionsDir = (dir?: string): string => {
   return join(homedir(), ".codex", "sessions");
 };
 
-/** True when a rollout file naming this thread id exists in the local Codex
- *  store: `<store>/YYYY/MM/DD/rollout-<stamp>-<threadId>.jsonl`. A bounded
- *  three-level walk over date directories; any read failure is "not here". */
-const codexStoreHas = async (sessionId: string, dir?: string): Promise<boolean> => {
+/** The rollout file naming this thread id in the local Codex store
+ *  (`<store>/YYYY/MM/DD/rollout-<stamp>-<threadId>.jsonl`), or undefined. A
+ *  bounded three-level walk over date directories; any read failure is "not
+ *  here". */
+const codexRolloutPath = async (sessionId: string, dir?: string): Promise<string | undefined> => {
   const root = codexSessionsDir(dir);
   const needle = `-${sessionId}.jsonl`;
   try {
@@ -371,14 +388,57 @@ const codexStoreHas = async (sessionId: string, dir?: string): Promise<boolean> 
         const monthDir = join(yearDir, month);
         for (const day of await readdir(monthDir).catch(() => [])) {
           const names = await readdir(join(monthDir, day)).catch(() => []);
-          if (names.some((name) => name.endsWith(needle))) return true;
+          const hit = names.find((name) => name.endsWith(needle));
+          if (hit !== undefined) return join(monthDir, day, hit);
         }
       }
     }
   } catch {
-    return false;
+    return undefined;
   }
-  return false;
+  return undefined;
+};
+
+const codexStoreHas = async (sessionId: string, dir?: string): Promise<boolean> =>
+  (await codexRolloutPath(sessionId, dir)) !== undefined;
+
+/**
+ * True when Lucid knows where this harness FILES its conversations on disk -
+ * the precondition for asking `harnessStoreHas` a question whose "no" means
+ * anything. An unknown harness corroborates nothing, and a pre-flight check
+ * that read that as "the session is gone" would refuse every resume of a
+ * harness Lucid simply has no store adapter for.
+ */
+export const harnessHasLocalStore = (harness: string): boolean => {
+  const kind = harness.trim().toLowerCase().replace(/_/g, "-");
+  return kind === "claude-code" || kind === "claude" || kind === "codex";
+};
+
+/**
+ * The transcript file the harness APPENDS while this session runs, or
+ * undefined when the store has none (or the harness is unknown).
+ *
+ * This is the one liveness signal a buffered-stdout harness still gives:
+ * `claude -p` writes stdout only when the turn ENDS, so a healthy
+ * multi-minute turn shows zero bytes of output the whole way - but its
+ * transcript at `<projects>/<flattened-cwd>/<id>.jsonl` grows on every API
+ * event. A watchdog that measures only stdout reads that turn as wedged and
+ * kills it mid-work, which is exactly what happened to live deliveries.
+ */
+export const harnessTranscriptPath = async (
+  harness: string,
+  sessionId: string,
+  opts: { readonly claudeProjectsDir?: string; readonly codexSessionsDir?: string } = {},
+): Promise<string | undefined> => {
+  if (!isUsableSessionId(sessionId)) return undefined;
+  const kind = harness.trim().toLowerCase().replace(/_/g, "-");
+  if (kind === "claude-code" || kind === "claude") {
+    const root = claudeProjectsDir(opts.claudeProjectsDir);
+    const name = await findSessionDir(root, sessionId);
+    return name === undefined ? undefined : join(root, name, `${sessionId}.jsonl`);
+  }
+  if (kind === "codex") return codexRolloutPath(sessionId, opts.codexSessionsDir);
+  return undefined;
 };
 
 /**

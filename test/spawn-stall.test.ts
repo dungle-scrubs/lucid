@@ -66,4 +66,44 @@ describe("a wedged turn", () => {
     const result = await runSpawn([exe], dir, join(dir, "out.log"));
     expect(result.status).toBe("completed");
   }, 20_000);
+
+  test("activity on a watched file counts as life, even with a silent out-log", async () => {
+    // The shape of every healthy `claude -p` turn: stdout is buffered until
+    // the turn ends, so the out-log sits at zero bytes through minutes of
+    // real work - while the session transcript grows on every step. The
+    // watchdog must read that transcript as life, or it kills the turn
+    // mid-work (it did: exit 143, seconds after the turn had already
+    // replied through a side channel).
+    const transcript = join(dir, "transcript.jsonl");
+    await writeFile(transcript, "");
+    const exe = await script(
+      "buffered",
+      `i=0\nwhile [ $i -lt 16 ]; do echo tick >> ${transcript}; sleep 0.15; i=$((i+1)); done\nexit 0`,
+    );
+    const result = await runSpawn([exe], dir, join(dir, "out.log"), undefined, {
+      idleMs: 600,
+      activityPaths: [transcript],
+    });
+    expect(result.status).toBe("completed");
+    expect(result.code).toBe(0);
+  }, 40_000);
+
+  test("a stall is reported as stalled, distinct from a child that failed on its own", async () => {
+    const exe = await script("wedged", "sleep 600");
+    const result = await runSpawn(
+      [exe],
+      dir,
+      join(dir, "out.log"),
+      // A declared identity strategy, so the classifier runs and the stalled
+      // flag has somewhere to live.
+      {
+        harness: "stub",
+        sessionId: "s-1",
+        strategy: { source: "caller-assigned", argument: "--sid" },
+      },
+      { idleMs: 800 },
+    );
+    expect(result.status).toBe("process-failed");
+    expect(result.status === "process-failed" && result.stalled).toBe(true);
+  }, 40_000);
 });

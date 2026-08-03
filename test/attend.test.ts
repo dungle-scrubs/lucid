@@ -1377,7 +1377,15 @@ if (process.env.LUCID_HARNESS === "codex") {
     // added to their OWN shell (`~/.lucid/roots.json`), on top of this tree.
     process.env.LUCID_ROOTS = join(dir, "roots.json");
     process.env.LUCID_CLAUDE_SESSIONS = join(dir, "no-claude-sessions");
-    process.env.LUCID_CLAUDE_PROJECTS = join(dir, "no-claude-projects");
+    // A store that HOLDS the fixture conversation: driveTurn pre-flights the
+    // local transcript before any resume, so a machine whose store lacks the
+    // session refuses the spawn - which is its own test, not this suite's
+    // premise. The directory name is deliberately not flattened-path-shaped
+    // (existence answers pre-flight; cwd recovery falls back to the record).
+    const claudeStore = join(dir, "claude-projects");
+    await mkdir(join(claudeStore, "store-a"), { recursive: true });
+    await writeFile(join(claudeStore, "store-a", "sess-1.jsonl"), "");
+    process.env.LUCID_CLAUDE_PROJECTS = claudeStore;
     resetPresenceCache();
     resetSessionCwdCache();
     harnessesPath = join(dir, "harnesses.json");
@@ -1718,6 +1726,21 @@ if (process.env.LUCID_HARNESS === "codex") {
       sessionId: "codex-thread-from-output",
     });
 
+    // The announced thread must exist in the local Codex store before the
+    // engine will resume it - pre-flight refuses a store-absent id.
+    const codexStore = join(dir, "codex-switch-store");
+    await mkdir(join(codexStore, "2026", "08", "01"), { recursive: true });
+    await writeFile(
+      join(
+        codexStore,
+        "2026",
+        "08",
+        "01",
+        "rollout-2026-08-01T10-00-00-codex-thread-from-output.jsonl",
+      ),
+      "{}\n",
+    );
+    process.env.LUCID_CODEX_SESSIONS = codexStore;
     await appendEvent(paths.logPath, {
       t: "annotation",
       id: "a2",
@@ -1749,6 +1772,21 @@ if (process.env.LUCID_HARNESS === "codex") {
       nextCursor: "evt_00001",
       at: new Date().toISOString(),
     });
+    // The real thread is in the local store (pre-flight); the synthetic one
+    // never is, which is one more reason it cannot reach argv.
+    const codexStore = join(dir, "codex-poisoned-store");
+    await mkdir(join(codexStore, "2026", "08", "01"), { recursive: true });
+    await writeFile(
+      join(
+        codexStore,
+        "2026",
+        "08",
+        "01",
+        "rollout-2026-08-01T10-00-00-0199-real-codex-thread.jsonl",
+      ),
+      "{}\n",
+    );
+    process.env.LUCID_CODEX_SESSIONS = codexStore;
     await writeFile(paths.selectionPath, JSON.stringify({ harness: "codex" }));
 
     const hub = await startDaemon();
@@ -1784,6 +1822,17 @@ if (process.env.LUCID_HARNESS === "codex") {
       nextCursor: "evt_00001",
       at: new Date().toISOString(),
     });
+    // The local store HOLDS the thread, so pre-flight lets the spawn run and
+    // the verdict comes from the harness's own mouth - the HSI004 path this
+    // test exists to pin. (A store-absent id is refused before any process
+    // runs, which is a different, batch-scoped mechanism.)
+    const codexStore = join(dir, "codex-store");
+    await mkdir(join(codexStore, "2026", "08", "01"), { recursive: true });
+    await writeFile(
+      join(codexStore, "2026", "08", "01", "rollout-2026-08-01T10-00-00-dead-thread.jsonl"),
+      "{}\n",
+    );
+    process.env.LUCID_CODEX_SESSIONS = codexStore;
     await writeFile(
       harnessesPath,
       JSON.stringify({
@@ -1851,6 +1900,12 @@ if (process.env.LUCID_HARNESS === "codex") {
     await mkdir(join(codexStore, "2026", "08", "01"), { recursive: true });
     await writeFile(
       join(codexStore, "2026", "08", "01", "rollout-2026-08-01T10-00-00-thread-a.jsonl"),
+      "{}\n",
+    );
+    // thread-b too: BOTH candidates must pass pre-flight so both verdicts
+    // come from the harness (HSI004) and the exhaustion path is reached.
+    await writeFile(
+      join(codexStore, "2026", "08", "01", "rollout-2026-08-01T11-00-00-thread-b.jsonl"),
       "{}\n",
     );
     process.env.LUCID_CODEX_SESSIONS = codexStore;

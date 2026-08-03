@@ -17,10 +17,15 @@ import { ARTIFACT_DIR, projectRootOf } from "../core/paths.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { assemblePayload } from "../core/payload.ts";
 import {
+  harnessHasLocalStore,
   harnessSessionCwd,
   harnessSessionId,
   harnessStoreHas,
+  harnessSupportsPresence,
+  harnessTranscriptPath,
+  livePresenceCached,
   presenceFor,
+  presenceStoreReadable,
 } from "../core/presence.ts";
 import { scratchpadProject } from "../core/scratchpad.ts";
 import { discoveryPersistence, revisePrompt, runSpawn } from "../launch/launcher.ts";
@@ -28,6 +33,7 @@ import {
   classifyObservedIdentity,
   classifySessionFailure,
   mintLaunchId,
+  type SpawnResult,
 } from "../launch/session-identity.ts";
 import { detectUsageLimit } from "../launch/limits.ts";
 import {
@@ -93,9 +99,32 @@ const ATTEND_COOLOFF_MS = 5 * 60 * 1000;
  */
 const DEFAULT_WORKING_GRACE_MS = 10 * 60 * 1000;
 /** How long a spawned turn may write NOTHING before the hub stops waiting on
- *  it. Generous: a turn that is thinking still reports progress, and one that
- *  has produced no byte for this long has stopped being a turn. */
+ *  it. Silence is measured across every signal the turn has - its out-log,
+ *  the artifact's own record, and the harness transcript - so this only fires
+ *  on a process that is producing nothing anywhere. */
 const DEFAULT_STALL_IDLE_MS = 8 * 60 * 1000;
+
+/** How old an open working window must be before the startup sweep may close
+ *  it as orphaned. A child the PREVIOUS hub spawned moments before dying
+ *  needs time to register its presence file; a genuinely orphaned window is
+ *  minutes old, not seconds. */
+const DEFAULT_ORPHAN_MIN_AGE_MS = 30_000;
+
+/** Native session ids with a resume IN FLIGHT anywhere in this process,
+ *  mapped to the claiming TURN. Two artifacts can legitimately share one
+ *  harness session (an agent that split a document declares its session on
+ *  both halves) - but two concurrent `--resume` processes on one session are
+ *  two writers appending a single transcript. Each drive claims the id for
+ *  the duration of its spawn; any other claimant's batch simply waits for
+ *  the next poll. Keyed by turn id, never artifact name: a remounted
+ *  attendant for the SAME artifact must queue behind the child its evicted
+ *  predecessor left running, and two artifacts can share a filename. */
+const sessionsInFlight = new Map<string, string>();
+
+/** Tests only: a leaked claim in one test must not silence the next. */
+export const resetSessionsInFlight = (): void => {
+  sessionsInFlight.clear();
+};
 
 /** Seqs of human feedback nobody has taken delivery of yet. */
 export const pendingHumanSeqs = (
@@ -302,6 +331,12 @@ export interface AttendantOptions {
   /** How long a spawned turn may write nothing before it is killed as wedged
    *  (tests inject a short one; the default is minutes). */
   readonly stallIdleMs?: number;
+  /** How long attendance pauses after repeated or structural failures (tests
+   *  inject a short one; the default is minutes). */
+  readonly cooloffMs?: number;
+  /** How old an open working window must be before the startup sweep may
+   *  close it as orphaned (tests inject; the default is seconds). */
+  readonly orphanMinAgeMs?: number;
   readonly log: (message: string) => void;
   /** Push a warning frame to the session's own subscribers - how a stalled
    *  delivery says WHY in the viewer, not only in the hub's stdout. */
@@ -359,6 +394,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   const trace = options.trace ?? tracer("attend");
   const debounceMs = options.debounceMs ?? DEFAULT_ATTEND_DEBOUNCE_MS;
   const workingGraceMs = options.workingGraceMs ?? DEFAULT_WORKING_GRACE_MS;
+  const cooloffMs = options.cooloffMs ?? ATTEND_COOLOFF_MS;
+  const orphanMinAgeMs = options.orphanMinAgeMs ?? DEFAULT_ORPHAN_MIN_AGE_MS;
 
   let deliveredUpTo: number | undefined;
   let firstPendingAt: number | undefined;
@@ -383,6 +420,9 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   /** Once-per-mount diagnostics: a missing recipe is a standing condition, not
    *  a per-poll event, so it must not fill the hub's output. */
   let saidUnattendable = false;
+  /** The orphan sweep has run for this mount. Once: orphans are what a DEAD
+   *  hub leaves behind, so they can only exist when a watcher starts. */
+  let sweptOrphans = false;
   /** The last selection-rejection already warned about, so a standing stale
    *  pick warns once instead of on every turn - but a NEW reason still does. */
   let saidSelectionInvalid = "";
@@ -397,9 +437,24 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
    *  and turn-ended events raise highSeq on every attempt, so keying on it
    *  wiped the set each pass and the fallback could never be reached. The
    *  boundary moves only when a turn actually delivers - exactly when a new
-   *  batch begins. */
-  let ruledOutForBatch = new Set<string>();
+   *  batch begins.
+   *
+   *  Time-bounded as well as batch-bounded (id -> ruled out at). A batch with
+   *  ONE candidate never delivers, so its boundary never moves - and a
+   *  rule-out that only a delivery could clear would be permanent there. The
+   *  verdicts behind these entries are not all final either: a pre-flight
+   *  "no transcript" can be a transient store-read failure, a stall a
+   *  transient wedge. An entry older than the cooloff expires and the verdict
+   *  is re-tested; only the on-disk HSI004 quarantine is durable. */
+  let ruledOutForBatch = new Map<string, number>();
   let ruledOutBatchFrom = -1;
+  const ruledOut = (id: string): boolean => {
+    const at = ruledOutForBatch.get(id);
+    if (at === undefined) return false;
+    if (Date.now() - at < cooloffMs) return true;
+    ruledOutForBatch.delete(id);
+    return false;
+  };
 
   const pauseFor = (ms: number, harness?: string): void => {
     pausedUntil = Date.now() + ms;
@@ -409,7 +464,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   const unattendable = (reason: string): void => {
     // Back off as well as saying so: without a pause this verdict is re-derived
     // (and the registry re-read) on every poll for as long as the mount lives.
-    pauseFor(ATTEND_COOLOFF_MS);
+    pauseFor(cooloffMs);
     if (saidUnattendable) return;
     saidUnattendable = true;
     log(`attend ${paths.name}: ${reason} - not attending this artifact`);
@@ -422,8 +477,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     log(`attend ${paths.name}: ${message} (attempt ${fails})`);
     if (fails < MAX_ATTEND_FAILS) return;
     fails = 0;
-    pauseFor(ATTEND_COOLOFF_MS);
-    log(`attend ${paths.name}: pausing attendance for ${ATTEND_COOLOFF_MS / 60000} minutes`);
+    pauseFor(cooloffMs);
+    log(`attend ${paths.name}: pausing attendance for ${cooloffMs / 60000} minutes`);
   };
 
   /**
@@ -702,7 +757,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const target = state.highSeq;
     if (deliveredFrom !== ruledOutBatchFrom) {
       ruledOutBatchFrom = deliveredFrom;
-      ruledOutForBatch = new Set<string>();
+      ruledOutForBatch = new Map<string, number>();
     }
     // The id THIS attempt resumes: the primary, or - after a not-found
     // quarantined it - the one permitted fallback. Both spent means the
@@ -711,12 +766,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const resumeTargetId = startsFresh
       ? undefined
       : [record.sessionId, record.fallback?.sessionId].find(
-          (id): id is string => id !== undefined && !ruledOutForBatch.has(id),
+          (id): id is string => id !== undefined && !ruledOut(id),
         );
     if (record.exhausted === true) {
       // Say it, then stand down: the recorded sessions are gone, and the
       // human decides whether to switch harness or attend it themselves.
-      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
+      pauseFor(cooloffMs, resolved.name);
       options.warn?.(
         "HARNESS_SESSION_UNAVAILABLE",
         "The recorded harness session no longer exists on this machine; feedback stays recorded until a session is re-established.",
@@ -725,12 +780,43 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       return;
     }
     if (!startsFresh && resumeTargetId === undefined) {
-      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
+      pauseFor(cooloffMs, resolved.name);
       options.warn?.(
         "HARNESS_SESSION_UNAVAILABLE",
         "The recorded harness session cannot be resumed on this machine; feedback stays recorded until a session is re-established.",
       );
       log(`attend ${paths.name}: no resumable session candidate remains for this batch`);
+      return;
+    }
+    // Pre-flight (the check the two-word error used to stand in for): the
+    // transcript this resume needs either exists in the harness's local store
+    // or the spawn is refused HERE, with the reason named, before a process
+    // exists. A tier-one candidate is this machine's own sidecar record and
+    // was never store-corroborated - which is exactly how a declared id whose
+    // conversation lives elsewhere reached `--resume` argv and died as
+    // "Execution error". The verdict expires with the cooloff (see ruledOut):
+    // a "no" can be a transient store-read failure, and must not strand a
+    // single-candidate artifact forever. ONE store walk serves two needs -
+    // the path found here is also the activity signal the stall watchdog
+    // reads while the turn runs.
+    const transcript =
+      !startsFresh && resumeTargetId !== undefined && harnessHasLocalStore(resolved.name)
+        ? await harnessTranscriptPath(resolved.name, resumeTargetId)
+        : undefined;
+    if (
+      !startsFresh &&
+      resumeTargetId !== undefined &&
+      harnessHasLocalStore(resolved.name) &&
+      transcript === undefined
+    ) {
+      ruledOutForBatch.set(resumeTargetId, Date.now());
+      options.warn?.(
+        "HARNESS_SESSION_UNAVAILABLE",
+        `Session ${resumeTargetId} has no local transcript for "${resolved.name}", so it cannot be resumed from this machine; trying the next candidate, if any.`,
+      );
+      log(
+        `attend ${paths.name}: pre-flight refused resume of ${resumeTargetId} - no local "${resolved.name}" transcript`,
+      );
       return;
     }
     const payload = await assemblePayload(paths, state, "feedback", {
@@ -803,81 +889,126 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // interactive attendant that connected meanwhile owns this batch. The
     // cursor stays put, so the human's feedback is theirs to take.
     if (options.agentsListening() > 0) return;
-    // Record the delivery before making it (D20): the panel says "delivered"
-    // for the whole headless turn instead of "recorded", and a second watcher
-    // reading the log sees the batch is taken.
-    ownClaimSeq = target;
+    // One resume per native session at a time, PROCESS-wide: two artifacts
+    // that share a session (an agent that split a document declares its
+    // session on both) must take turns, or two `--resume` processes append
+    // one transcript concurrently. No await sits between the check and the
+    // claim, so the check is atomic; the loser leaves its batch for the next
+    // poll, where the freed id is picked up.
     // The turn this delivery IS (plan 08, D-013). Minted before the ack that
     // OPENS its window, so the terminator appended after the process exits
     // closes the same turn. The child inherits it via LUCID_TURN_ID, so the
     // turn's own acks join it too - a turn nobody can name is one nobody can
-    // end.
+    // end. Minted before the claim below too: the turn id is the claim TOKEN.
     const turnId = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-    await deliver(paths, {
-      t: "agent_ack",
-      id: crypto.randomUUID(),
-      // NO intent. Not because the hub is blind - it is the party ORDERING a
-      // revision, in this function, and it refuses to spawn at all when the
-      // batch gives `revisePrompt` nothing to act on. It is because an order
-      // is not an outcome: the turn is what decides whether an edit actually
-      // follows, and "hey" produces a prompt the agent correctly declines. So
-      // the ack states the delivery it made and nothing about the output;
-      // `revisePrompt` tells the turn to declare that itself (`lucid intent`),
-      // and until it does the viewer says "Agent responding…", which is true
-      // of every running turn.
-      covers: target,
-      turnId,
-      // The artifact's own session (D18): the hub acts on its behalf, and the
-      // events the turn writes must not be attributed to the hub.
-      // A handoff is not a session until its spawn succeeds or the child writes
-      // its own provenance. Stamping the target here made a pre-session failure
-      // look resumable on retry, so handoff delivery remains unattributed until
-      // the process establishes that session.
-      ...(!startsFresh ? { attendant: { harness: resolved.name, sessionId, cwd } } : {}),
-    }).catch(() => {
-      /* presence is advisory; a failed ack must not cancel the delivery */
-    });
-    log(
-      `attend ${paths.name}: delivering feedback via "${resolved.name}" ${startsFresh ? "handoff" : "resume"}`,
-    );
-    // Where this run's output will start in the shared attend log, so a
-    // silent-turn relay reads THIS turn's words and never an earlier run's.
-    const outputFrom = await stat(paths.attendLog).then(
-      (s) => s.size,
-      () => 0,
-    );
+    if (sessionId !== undefined) {
+      if (sessionsInFlight.has(sessionId)) {
+        trace(() => `${paths.name}: session ${sessionId} is mid-resume elsewhere; waiting`);
+        return;
+      }
+      sessionsInFlight.set(sessionId, turnId);
+    }
     const launchId = mintLaunchId();
     const allowRotation = strategy?.source === "stdout-jsonl" && strategy.allowRotation === true;
-    const result = await runSpawn(
-      argv,
-      cwd,
-      paths.attendLog,
-      {
-        harness: resolved.name,
-        ...(sessionId ? { sessionId } : {}),
+    let outputFrom = 0;
+    let result: SpawnResult;
+    try {
+      // Record the delivery before making it (D20): the panel says "delivered"
+      // for the whole headless turn instead of "recorded", and a second watcher
+      // reading the log sees the batch is taken.
+      ownClaimSeq = target;
+      await deliver(paths, {
+        t: "agent_ack",
+        id: crypto.randomUUID(),
+        // NO intent. Not because the hub is blind - it is the party ORDERING a
+        // revision, in this function, and it refuses to spawn at all when the
+        // batch gives `revisePrompt` nothing to act on. It is because an order
+        // is not an outcome: the turn is what decides whether an edit actually
+        // follows, and "hey" produces a prompt the agent correctly declines. So
+        // the ack states the delivery it made and nothing about the output;
+        // `revisePrompt` tells the turn to declare that itself (`lucid intent`),
+        // and until it does the viewer says "Agent responding…", which is true
+        // of every running turn.
+        covers: target,
         turnId,
-        launchId,
-        ...(strategy ? { strategy } : {}),
-        // Persistence while the turn is LIVE, through the one guarded callback:
-        // a resume that announces a STRANGER is refused (HSI005), never bound.
-        onIdentityDiscovered: discoveryPersistence(
-          paths,
-          resolved.name,
+        // The artifact's own session (D18): the hub acts on its behalf, and the
+        // events the turn writes must not be attributed to the hub.
+        // A handoff is not a session until its spawn succeeds or the child writes
+        // its own provenance. Stamping the target here made a pre-session failure
+        // look resumable on retry, so handoff delivery remains unattributed until
+        // the process establishes that session.
+        ...(!startsFresh ? { attendant: { harness: resolved.name, sessionId, cwd } } : {}),
+      }).catch(() => {
+        /* presence is advisory; a failed ack must not cancel the delivery */
+      });
+      log(
+        `attend ${paths.name}: delivering feedback via "${resolved.name}" ${startsFresh ? "handoff" : "resume"}`,
+      );
+      // Where this run's output will start in the shared attend log, so a
+      // silent-turn relay reads THIS turn's words and never an earlier run's.
+      outputFrom = await stat(paths.attendLog).then(
+        (s) => s.size,
+        () => 0,
+      );
+      result = await runSpawn(
+        argv,
+        cwd,
+        paths.attendLog,
+        {
+          harness: resolved.name,
+          ...(sessionId ? { sessionId } : {}),
+          turnId,
           launchId,
-          !startsFresh && sessionId ? { requestedSessionId: sessionId, allowRotation } : undefined,
-        ),
-        ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
-        // Only what the argv actually carries: a dropped stale pick must not
-        // stamp the child as running a model it was never given.
-        ...(applied.model !== undefined ? { model: applied.model } : {}),
-        ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
-      },
-      // A wedged child holds this artifact: the engine reads a live child as a
-      // delivery in flight, so every later note queues behind it in silence.
-      // Bounded on SILENCE, never on duration - a turn writing anything at all
-      // is working, however long it takes.
-      { idleMs: options.stallIdleMs ?? DEFAULT_STALL_IDLE_MS },
-    );
+          ...(strategy ? { strategy } : {}),
+          // Persistence while the turn is LIVE, through the one guarded callback:
+          // a resume that announces a STRANGER is refused (HSI005), never bound.
+          onIdentityDiscovered: discoveryPersistence(
+            paths,
+            resolved.name,
+            launchId,
+            !startsFresh && sessionId
+              ? { requestedSessionId: sessionId, allowRotation }
+              : undefined,
+          ),
+          ...(options.hubPort !== undefined ? { hubPort: options.hubPort } : {}),
+          // Only what the argv actually carries: a dropped stale pick must not
+          // stamp the child as running a model it was never given.
+          ...(applied.model !== undefined ? { model: applied.model } : {}),
+          ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
+        },
+        // A wedged child holds this artifact: the engine reads a live child as a
+        // delivery in flight, so every later note queues behind it in silence.
+        // Bounded on SILENCE, never on duration - a turn writing anything at all
+        // is working, however long it takes.
+        //
+        // What counts as alive, beyond the out-log: a RESUME watches the
+        // harness transcript (resolved by pre-flight) - the one signal a
+        // buffered-stdout CLI (`claude -p`) still moves during a long turn;
+        // measuring the out-log alone killed every healthy claude-code turn
+        // longer than the idle window, one of them seconds after it had
+        // already replied. The artifact's own record is deliberately NOT
+        // watched for a resume: anyone can append there, and a human
+        // annotating while they wait would keep a genuinely wedged child
+        // alive forever - the original 53-minute wedge, reborn. A fresh
+        // handoff has no transcript to watch, so the record is the best
+        // signal it has (its own `lucid open`/`progress` calls land there).
+        {
+          idleMs: options.stallIdleMs ?? DEFAULT_STALL_IDLE_MS,
+          activityPaths: startsFresh
+            ? [paths.logPath]
+            : transcript !== undefined
+              ? [transcript]
+              : [],
+        },
+      );
+    } finally {
+      // The claim ends with the process, not the function: everything after
+      // this point is classification of a child that no longer runs. Token
+      // match, so a claim some other drive holds is never released here.
+      if (sessionId !== undefined && sessionsInFlight.get(sessionId) === turnId) {
+        sessionsInFlight.delete(sessionId);
+      }
+    }
     const code = result.code;
     if (result.status === "identity-missing") {
       // Same HSI002 parity as the create paths: the turn ran clean but
@@ -959,7 +1090,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       // second candidate cannot fix a harness that rotates), no cursor
       // advance (the feedback stays the human's, undelivered), whatever the
       // exit code claims.
-      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
+      pauseFor(cooloffMs, resolved.name);
       options.warn?.(
         "HARNESS_SESSION_MISMATCH",
         "The harness resumed a different conversation than the one recorded; delivery stopped so feedback cannot land in a stranger's session.",
@@ -978,6 +1109,31 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       await reportSilentTurn(target, outputFrom);
       return;
     }
+    // A resume the parent had to KILL wrote nothing anywhere - not to its
+    // out-log, not to the artifact's record, not to the harness transcript -
+    // for the whole idle window: a wedged harness process, not bad feedback.
+    // Resuming the same id again in this batch would likely wedge again, so
+    // it is retired FOR THE BATCH (never durably - the conversation itself
+    // may be fine) and the ladder falls to the fallback candidate or stands
+    // down with the standing warning. Said out loud both times: silently
+    // abandoning the bound session is the one thing the human has asked this
+    // engine never to do.
+    if (
+      result.status === "process-failed" &&
+      result.stalled === true &&
+      !startsFresh &&
+      sessionId
+    ) {
+      ruledOutForBatch.set(sessionId, Date.now());
+      options.warn?.(
+        "ATTEND_RESUME_STALLED",
+        `The resume of session ${sessionId} produced nothing and was stopped; it will not be retried for this batch.`,
+      );
+      log(
+        `attend ${paths.name}: resume of ${sessionId} wrote nothing and was stopped; not resuming it again for this batch`,
+      );
+      return;
+    }
     // A native-session-not-found is a VERDICT, not a flake (HSI004): the
     // adapter's own classifier recognized it, so the id is quarantined on
     // this machine - durably, across restarts - and the transient retry
@@ -991,7 +1147,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       // Retired for this batch as well as quarantined on disk: the durable
       // record stops the id coming back after a restart, and this set is what
       // bounds the batch to one weaker candidate before standing down.
-      ruledOutForBatch.add(sessionId as string);
+      ruledOutForBatch.set(sessionId as string, Date.now());
       await recordSessionInvalidation(paths, resolved.name, sessionId as string).catch(() => {});
       log(
         `attend ${paths.name}: harness says session ${sessionId} does not exist here (HSI004); quarantined`,
@@ -1004,7 +1160,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // why. Name it in the viewer and stand down for the cool-off at once.
     if (limit !== null) {
       fails = 0;
-      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
+      pauseFor(cooloffMs, resolved.name);
       // The turn-ended event above is durable chat state. Do not also broadcast
       // a transient warning below the conversation: two treatments of the same
       // wall made the one useful explanation look like two failures.
@@ -1013,13 +1169,19 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     }
     if (fails >= MAX_ATTEND_FAILS) {
       fails = 0;
-      pauseFor(ATTEND_COOLOFF_MS, resolved.name);
+      pauseFor(cooloffMs, resolved.name);
       log(
-        `attend ${paths.name}: resume failed ${MAX_ATTEND_FAILS}x (exit ${code}); pausing attendance for ${ATTEND_COOLOFF_MS / 60000} minutes - see ${paths.attendLog}`,
+        `attend ${paths.name}: resume failed ${MAX_ATTEND_FAILS}x (exit ${code}); pausing attendance for ${cooloffMs / 60000} minutes - see ${paths.attendLog}`,
       );
+      // The harness's OWN last words ride the warning - "Execution error"
+      // beats a bare failure count, and the human reading this panel is the
+      // same human the turn's output belongs to. Bounded and
+      // narration-stripped; the retained hub log above still carries only the
+      // pointer (R1).
+      const lastWords = relayableTail(runOutput).slice(-160).replace(/\s+/g, " ");
       options.warn?.(
         "ATTEND_DELIVERY_FAILED",
-        `Delivery failed ${MAX_ATTEND_FAILS}x and is paused - see .lucid/${paths.name}/attend.out.log`,
+        `Delivery failed ${MAX_ATTEND_FAILS}x (exit ${code}${lastWords ? `: "${lastWords}"` : ""}); paused for ${cooloffMs / 60000} minutes, then retried - see .lucid/${paths.name}/attend.out.log`,
       );
       return;
     }
@@ -1066,6 +1228,75 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     if (state.status === "ended") {
       stopped = true;
       return;
+    }
+    // Startup sweep: close working windows whose owner is provably gone. A
+    // hub killed mid-turn writes no terminator, so `agentWorking` survives it
+    // - the panel reports an ancient ack as if it were live, and this engine
+    // waits a full working-grace on a process that no longer exists. Only
+    // windows whose harness publishes presence are judged, and only when this
+    // machine's presence store is actually readable - an empty map from a
+    // missing store proves nothing about any process, and absence is only
+    // evidence where presence would show. A floor age keeps the sweep off
+    // children a dying hub spawned moments earlier (their presence file may
+    // not exist yet); a window skipped for age is revisited next tick rather
+    // than latched past. The terminator names the turn, so an unrelated open
+    // turn is untouched.
+    if (!sweptOrphans && (await presenceStoreReadable())) {
+      let closed = false;
+      let closedClaimMax = 0;
+      let skippedForAge = false;
+      for (const open of state.openTurns) {
+        if (now - Date.parse(open.heardAt) < orphanMinAgeMs) {
+          skippedForAge = true;
+          continue;
+        }
+        const acks = events.filter(
+          (e): e is LogEvent & { readonly attendant?: { harness?: string; sessionId?: string } } =>
+            e.t === "agent_ack" && (e as { turnId?: string }).turnId === open.turnId,
+        );
+        const owner = [...acks].reverse().find((a) => a.attendant)?.attendant;
+        if (!owner?.harness || !owner.sessionId || !harnessSupportsPresence(owner.harness)) {
+          continue;
+        }
+        if ((await livePresenceCached()).get(owner.sessionId) !== undefined) {
+          continue;
+        }
+        await deliver(paths, {
+          t: "agent_turn_ended",
+          turnId: open.turnId,
+          reason: "failed",
+          code: "orphaned",
+          attendant: { harness: owner.harness, sessionId: owner.sessionId },
+        }).catch(() => {
+          /* advisory; the grace-based staleness still covers a failed append */
+        });
+        log(
+          `attend ${paths.name}: turn ${open.turnId} was orphaned by a restart (no live "${owner.harness}" process holds ${owner.sessionId}); closed its window`,
+        );
+        closed = true;
+        for (const a of acks) {
+          const covers = (a as { covers?: number }).covers;
+          if (typeof covers === "number") closedClaimMax = Math.max(closedClaimMax, covers);
+        }
+      }
+      if (!skippedForAge) sweptOrphans = true;
+      if (closed) {
+        // The orphan's ack was a delivery CLAIM nothing honoured. Closing the
+        // window alone would leave that claim as the delivered mark, and this
+        // watcher's first pass would adopt it - the batch marked delivered
+        // forever, one step worse than the stale panel this sweep fixes. Roll
+        // back to the last batch some turn actually ANSWERED, and disown the
+        // SWEPT turns' claims - only theirs, so a surviving live turn's claim
+        // is still adopted normally and its batch is never re-driven under
+        // it. Reset the log stamp before returning: the terminator append is
+        // best-effort, and a failed one must not leave the cheap gate
+        // believing nothing changed. Then re-read - the fold in hand predates
+        // the terminators.
+        deliveredUpTo = answeredMark(events);
+        ownClaimSeq = closedClaimMax;
+        lastLogStamp = "";
+        return;
+      }
     }
     // First pass: adopt the log's OWN delivered cursor - the last batch an
     // agent acked - not the current high seq.

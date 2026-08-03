@@ -245,6 +245,11 @@ export type SpawnResult =
   | {
       readonly code: number;
       readonly identity?: NativeSessionIdentity;
+      /** The parent killed it for producing nothing, rather than the child
+       *  exiting on its own. A resume that stalls despite every activity
+       *  signal being watched is a wedged harness process, not bad feedback -
+       *  so the caller retires the attempt, never the human's batch. */
+      readonly stalled?: true;
       readonly status: "process-failed";
     }
   | { readonly code: 127; readonly status: "spawn-failed" };
