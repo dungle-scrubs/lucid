@@ -664,14 +664,14 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     };
     const deadlineMs = work.startedAt + ARTIFACT_OUTLINE_POLICY.proofTimeBudgetMs;
     if (this.#dependencies.geometry.completeTraversal?.(deadlineMs) === false) {
-      this.#publishUnavailable(request, work, "item-budget-exhausted");
+      this.#deferBudget(request, work, "item-budget-exhausted");
       return;
     }
     const eligible: ElementType[] = [];
     for (const candidate of this.#dependencies.geometry.headingCandidates()) {
       const verdict = this.#eligible(candidate, work);
       if (verdict === "budget") {
-        this.#publishUnavailable(request, work, "work-budget-exhausted");
+        this.#deferBudget(request, work, "work-budget-exhausted");
         return;
       }
       if (!verdict) continue;
@@ -770,6 +770,78 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     if (!proof.complete && proof.reason === "work-budget-exhausted") {
       this.#scheduleBudgetRetry();
     }
+  }
+
+  /**
+   * A budget miss when a projection ALREADY exists is a stale proof, not a
+   * vanished outline.
+   *
+   * The traversal runs under an 8ms deadline, and the frames where it is most
+   * likely to be missed are exactly the busy ones - scrolling a long artifact.
+   * Publishing "absent" there unmounts the rail and mounts it again a beat
+   * later, so the outline blinks in and out of the page for the whole scroll
+   * (measured: nine transitions in four seconds, the rail at an identical
+   * position each time it returned - it was never moving, only disappearing).
+   *
+   * The headings from the last complete traversal are still the headings; only
+   * the geometry proof is unknown. So they are republished as they were, with
+   * the proof marked incomplete - which keeps the outline transient rather than
+   * pinned, and schedules the retry that will settle it. Structural
+   * invalidation (a revision, a disconnected heading, a new layout request)
+   * still tears the projection down through its own paths; this is only for
+   * running out of time.
+   *
+   * With no projection to retain there is nothing to keep, and this falls back
+   * to publishing absent.
+   */
+  #deferBudget(request: OutlineLayoutRequest, work: WorkState, reason: string): void {
+    const projection = this.#projection;
+    if (projection.kind !== "complete") {
+      this.#publishUnavailable(request, work, reason);
+      return;
+    }
+    // Carry the retained projection onto the CURRENT generation: the chrome
+    // echoes a snapshot's generation back on activation, and a projection left
+    // on the old one would answer every jump with `stale-generation`.
+    this.#projection = { ...projection, generation: this.#generation };
+    const proof = { clearancePx: 0, complete: false, reason };
+    this.#health = health("AO-004", this.#generation, reason);
+    this.#inspected = work.inspected;
+    this.#examinedTextCodeUnits = work.examinedTextCodeUnits;
+    this.#examinedTextNodes = work.examinedTextNodes;
+    this.#lastDurationMs = this.#dependencies.now() - work.startedAt;
+    this.#proofDiagnostic = proof;
+    this.#publishSnapshot({
+      activeKey: this.#activeKey,
+      availability: "complete",
+      generation: this.#generation,
+      headings: projection.headings,
+      health: this.#health,
+      proof,
+      requestGeneration: request.generation,
+      type: "snapshot",
+    });
+    this.#scheduleBudgetRetry();
+  }
+
+  /**
+   * Recompute for a change that leaves the headings intact.
+   *
+   * Withdrawing on scroll failed closed, which sounds right and is not: the
+   * placement proof is what guards the pinned panel, and it is RECOMPUTED here
+   * either way. Publishing the withdrawal as well took the whole outline down
+   * for the length of every scroll and brought it back a second later
+   * (measured on a real artifact: nine appearances and disappearances across
+   * four seconds, the rail at an identical position each time it returned - it
+   * was never moving, only vanishing).
+   *
+   * So the projection stays up while the recompute runs. If the clearance no
+   * longer holds, that recompute publishes an incomplete proof and the reducer
+   * steps the panel back to the rail, exactly as before - the guard is the
+   * proof, not the teardown.
+   */
+  invalidateGeometry(reason: string): void {
+    this.invalidate(reason, false);
   }
 
   #publishUnavailable(

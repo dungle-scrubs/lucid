@@ -41,7 +41,7 @@ const RAIL_PANEL_GAP_PX = 4;
  * the crispness tests pin to a device pixel) is untouched.
  */
 const RAIL_HOVER_REACH =
-  "before:absolute before:-inset-y-8 before:-left-4 before:right-0 before:content-['']";
+  "before:absolute before:-inset-y-32 before:-left-7 before:right-0 before:content-['']";
 
 /** Measured placement of the resting rail inside its slot. */
 interface RailGeometry {
