@@ -27,7 +27,7 @@ const execFileAsync = promisify(execFile);
  * capture.ts` imports `src/anchors/dom.ts`, and that anchor-resolution code is
  * compiled into the overlay bundle - the code `selection.e2e.ts` and the
  * multi-target suite spend most of their time driving. A gate watching only
- * `client/` would let you fix `resolveRangeAnchor`, run the suite against the
+ * `client/` would let you fix `resolveRangeOffsets`, run the suite against the
  * old resolver, and get a green result about code that is not in the commit:
  * exactly the failure this gate exists to prevent, on the best-covered path.
  *

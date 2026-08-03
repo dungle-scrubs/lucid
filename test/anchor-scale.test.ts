@@ -3,12 +3,13 @@ import { parseHTML } from "linkedom";
 import {
   captureElementAnchor,
   anchorMatch,
-  anchorResolves,
+  rangeTextNode,
   resolveElementAnchor,
   resolveElementMatch,
+  resolveRangeOffsets,
 } from "../src/anchors/dom.ts";
 import type { DomElementLike, DomRootLike } from "../src/anchors/dom.ts";
-import type { Anchor } from "../src/anchors/anchor.ts";
+import type { Anchor, RangeAnchor } from "../src/anchors/anchor.ts";
 
 /**
  * Sibling fan-out is the trigger, not bytes (plan 04, M1.2, #46 / D-065):
@@ -142,17 +143,53 @@ describe("anchorMatch: confidence for BOTH anchor kinds (plan 05, M2.1, D-007)",
     const after = root(`<body><ol><li>alpha</li><li>something else entirely</li></ol></body>`);
     expect(anchorMatch(anchor, after)).toBe(resolveElementMatch(anchor, after)?.match ?? null);
   });
+});
 
-  test("R1: anchorResolves agrees with anchorMatch everywhere - the tag is additive", () => {
-    const src = root(`<body><ol><li>alpha</li><li>beta</li></ol></body>`);
-    const anchor = captureElementAnchor(src.querySelectorAll("li")[1] as DomElementLike);
-    for (const html of [
-      `<body><ol><li>alpha</li><li>beta</li></ol></body>`,
-      `<body><ol><li>alpha</li><li>changed</li></ol></body>`,
-      `<body><p>nothing alike</p></body>`,
-    ]) {
-      const after = root(html);
-      expect(anchorResolves(anchor, after)).toBe(anchorMatch(anchor, after) !== null);
-    }
+/**
+ * The resolver KEEPS what it located (#11). It ran the quote walk and threw the
+ * offsets away, so the browser re-ran the identical algorithm to get them -
+ * twice over the whole document text, per range mark, per reposition - and
+ * against a different text source, which is the divergence below.
+ */
+describe("resolveRangeOffsets", () => {
+  const root = (html: string): DomRootLike => parseHTML(html).document as unknown as DomRootLike;
+
+  const anchor: RangeAnchor = {
+    kind: "range",
+    quote: { exact: "target text", prefix: "before the ", suffix: " after" },
+    position: { start: 11, end: 22 },
+    snippet: "target text",
+  };
+
+  test("returns the offsets the quote walk found, not just its confidence", () => {
+    const src = root(`<body><p>xx before the target text after</p></body>`);
+    expect(resolveRangeOffsets(anchor, src)).toEqual({ start: 14, end: 25, match: "exact" });
+    expect(rangeTextNode(src).textContent?.slice(14, 25)).toBe("target text");
+  });
+
+  test("the positional fallback reports the anchor's own offsets", () => {
+    const after = root(`<body><p>ZZZZZZZZZZZtarget textZZZZZZ</p></body>`);
+    expect(resolveRangeOffsets(anchor, after)).toEqual({ start: 11, end: 22, match: "positional" });
+  });
+
+  test("a miss is null, so no caller can build a range out of one", () => {
+    expect(resolveRangeOffsets(anchor, root(`<body><p>nothing alike</p></body>`))).toBeNull();
+  });
+
+  /**
+   * The body-empty divergence: the resolver falls back body -> documentElement,
+   * the browser's copy of the walk read `document.body.textContent` only. Such
+   * a document resolved on the server and painted nothing in the overlay.
+   * `rangeTextNode` is the shared answer to WHICH text - and, in the browser,
+   * which node to walk for the live Range.
+   */
+  test("offsets are measured against the same node when the body is empty", () => {
+    const src = root(
+      `<html><head><title>before the target text after</title></head><body></body></html>`,
+    );
+    const located = resolveRangeOffsets(anchor, src);
+    expect(located?.match).toBe("exact");
+    const text = rangeTextNode(src).textContent ?? "";
+    expect(text.slice(located?.start ?? 0, located?.end ?? 0)).toBe("target text");
   });
 });

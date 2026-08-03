@@ -4,8 +4,9 @@ import {
   captureElementAnchor,
   type DomElementLike,
   type DomRootLike,
+  rangeTextNode,
   resolveElementAnchor,
-  resolveRangeAnchor,
+  resolveRangeOffsets,
 } from "../../src/anchors/dom.ts";
 
 const CONTEXT_LEN = 32;
@@ -113,44 +114,24 @@ export const captureSelectionDecision = (): ElementAnchor | undefined => {
 export const resolveElementInDocument = (anchor: ElementAnchor): Element | null =>
   resolveElementAnchor(anchor, document as unknown as DomRootLike) as unknown as Element | null;
 
-/** Resolve a range anchor to a live Range in the current document, or null. */
+/**
+ * Resolve a range anchor to a live Range in the current document, or null.
+ *
+ * The locating is `resolveRangeOffsets`' - one scan of the document text,
+ * against the same node the server measured the offsets in (#11). Only the
+ * offsets -> Range walk stays here: it needs the browser's Range API, which
+ * the shared resolver cannot have.
+ */
 export const resolveRangeInDocument = (anchor: RangeAnchor): Range | null => {
-  if (!resolveRangeAnchor(anchor, document as unknown as DomRootLike)) return null;
-  const fullText = document.body.textContent ?? "";
-  // Locate exact occurrence honoring prefix/suffix context.
-  const { exact, prefix, suffix } = anchor.quote;
-  let from = 0;
-  let charStart = -1;
-  for (;;) {
-    const idx = fullText.indexOf(exact, from);
-    if (idx === -1) break;
-    const before = fullText.slice(Math.max(0, idx - prefix.length), idx);
-    const after = fullText.slice(idx + exact.length, idx + exact.length + suffix.length);
-    if (
-      (prefix.length === 0 || before.endsWith(prefix)) &&
-      (suffix.length === 0 || after.startsWith(suffix))
-    ) {
-      charStart = idx;
-      break;
-    }
-    from = idx + 1;
-  }
-  if (charStart === -1) {
-    if (
-      anchor.position.start >= 0 &&
-      fullText.slice(anchor.position.start, anchor.position.end) === exact
-    ) {
-      charStart = anchor.position.start;
-    } else {
-      return null;
-    }
-  }
-  return rangeFromBodyOffsets(charStart, charStart + exact.length);
+  const root = document as unknown as DomRootLike;
+  const located = resolveRangeOffsets(anchor, root);
+  if (!located) return null;
+  return rangeFromTextOffsets(rangeTextNode(root) as unknown as Node, located.start, located.end);
 };
 
-/** Build a DOM Range from character offsets into document.body.textContent. */
-const rangeFromBodyOffsets = (start: number, end: number): Range | null => {
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+/** Build a DOM Range from character offsets into `textRoot`'s textContent. */
+const rangeFromTextOffsets = (textRoot: Node, start: number, end: number): Range | null => {
+  const walker = document.createTreeWalker(textRoot, NodeFilter.SHOW_TEXT);
   let total = 0;
   let startNode: Text | null = null;
   let startOffset = 0;

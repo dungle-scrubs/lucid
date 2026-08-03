@@ -110,4 +110,13 @@ describe("ingestPayload", () => {
     ).toBe(true);
     expect(r.commands.some((c) => c.includes("add-finding") && c.includes("D-014"))).toBe(true);
   });
+
+  test("the snippet a command carries is the target's visible text, not its markup", () => {
+    // `--topic "<li>Windows?</li>"` put a tag in the ledger (#12). An element
+    // snippet is outerHTML; what the human pointed at is what it shows.
+    const r = ingestPayload(payload(), "lucid");
+    const q = r.items.find((i) => i.ref === "Q-1");
+    expect(q?.snippet).toBe("Windows?");
+    expect(r.commands.some((c) => c.includes("<li>"))).toBe(false);
+  });
 });

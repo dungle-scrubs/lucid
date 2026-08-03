@@ -1,4 +1,4 @@
-import type { Anchor, ElementAnchor, RangeAnchor } from "./anchor.ts";
+import type { Anchor, ElementAnchor, RangeAnchor, RangePosition } from "./anchor.ts";
 import { tracer } from "../core/verbose.ts";
 
 /**
@@ -23,8 +23,12 @@ export interface DomElementLike {
 export interface DomRootLike {
   querySelector(selector: string): DomElementLike | null;
   querySelectorAll(selector: string): ArrayLike<DomElementLike>;
-  readonly body?: { readonly textContent: string | null } | null;
-  readonly documentElement?: { readonly textContent: string | null } | null;
+  // Typed as elements rather than as bare `{ textContent }` holders because
+  // `rangeTextNode` HANDS one back: the browser walks the node it returns, and
+  // a return type narrowed to the one field this file reads would let any
+  // object at all pass for a node.
+  readonly body?: DomElementLike | null;
+  readonly documentElement?: DomElementLike | null;
   readonly textContent?: string | null;
 }
 
@@ -268,26 +272,46 @@ export const resolveElementAnchor = (
 
 const cssEscape = (s: string): string => s.replace(/["\\]/g, "\\$&");
 
-const rootText = (root: DomRootLike): string => {
-  const body = root.body?.textContent;
-  if (body && body.length > 0) return body;
-  const docEl = root.documentElement?.textContent;
-  if (docEl && docEl.length > 0) return docEl;
-  return root.textContent ?? "";
+/**
+ * WHICH node's text a range anchor's offsets are measured against: the body
+ * when it has text, else documentElement, else the root itself. Exported
+ * because the browser has to WALK that node to build a live Range, and picking
+ * it there by a second rule is how a document with an empty body resolved on
+ * the server and painted nothing in the overlay.
+ */
+export const rangeTextNode = (root: DomRootLike): DomElementLike | DomRootLike => {
+  const body = root.body;
+  if (body && (body.textContent ?? "").length > 0) return body;
+  const docEl = root.documentElement;
+  if (docEl && (docEl.textContent ?? "").length > 0) return docEl;
+  return root;
 };
 
+const rootText = (root: DomRootLike): string => rangeTextNode(root).textContent ?? "";
+
+/** Where a range anchor landed, and how sure that is. */
+export interface ResolvedRange extends RangePosition {
+  readonly match: AnchorMatch;
+}
+
 /**
- * Resolve a range anchor and say HOW it matched (plan 05, M2.1, D-007): quote
- * (exact text in prefix/suffix context) first, then character position
- * (D-047).
+ * Locate a range anchor in a root and say HOW it matched (plan 05, M2.1,
+ * D-007): quote (exact text in prefix/suffix context) first, then character
+ * position (D-047). The offsets are into `rangeTextNode(root).textContent`.
  *
- * The two are not equally trustworthy. The quote's prefix and suffix are what
- * tie the text to the spot the human pointed at; when only the offsets line up,
- * that context is gone and the same string now sits among different words. It
- * still resolves - and reporting that without qualification is exactly the lie
- * #47 is about - so the offset path is `positional`.
+ * The two paths are not equally trustworthy. The quote's prefix and suffix are
+ * what tie the text to the spot the human pointed at; when only the offsets
+ * line up, that context is gone and the same string now sits among different
+ * words. It still resolves - and reporting that without qualification is
+ * exactly the lie #47 is about - so the offset path is `positional`.
+ *
+ * Returning the offsets is what keeps the browser from re-running this walk to
+ * get them (#11): one scan of the document text per range, not two.
  */
-export const resolveRangeMatch = (anchor: RangeAnchor, root: DomRootLike): AnchorMatch | null => {
+export const resolveRangeOffsets = (
+  anchor: RangeAnchor,
+  root: DomRootLike,
+): ResolvedRange | null => {
   const text = rootText(root);
   const { exact, prefix, suffix } = anchor.quote;
 
@@ -300,21 +324,22 @@ export const resolveRangeMatch = (anchor: RangeAnchor, root: DomRootLike): Ancho
       const after = text.slice(idx + exact.length, idx + exact.length + suffix.length);
       const prefixOk = prefix.length === 0 || before.endsWith(prefix);
       const suffixOk = suffix.length === 0 || after.startsWith(suffix);
-      if (prefixOk && suffixOk) return "exact";
+      if (prefixOk && suffixOk) return { start: idx, end: idx + exact.length, match: "exact" };
       from = idx + 1;
     }
   }
 
   const { start, end } = anchor.position;
   if (start >= 0 && end <= text.length && start < end) {
-    if (text.slice(start, end) === exact) return "positional";
+    if (text.slice(start, end) === exact) return { start, end, match: "positional" };
   }
   return null;
 };
 
-/** Does this range anchor re-attach at all? The confidence-blind predicate. */
-export const resolveRangeAnchor = (anchor: RangeAnchor, root: DomRootLike): boolean =>
-  resolveRangeMatch(anchor, root) !== null;
+/** How sure a range anchor's re-attachment is, for callers that need nothing
+ *  but the confidence. */
+export const resolveRangeMatch = (anchor: RangeAnchor, root: DomRootLike): AnchorMatch | null =>
+  resolveRangeOffsets(anchor, root)?.match ?? null;
 
 /**
  * How sure is this anchor's re-attachment, for either kind? `null` when it does
@@ -324,7 +349,3 @@ export const anchorMatch = (anchor: Anchor, root: DomRootLike): AnchorMatch | nu
   anchor.kind === "element"
     ? (resolveElementMatch(anchor, root)?.match ?? null)
     : resolveRangeMatch(anchor, root);
-
-/** Does this anchor re-attach to the given root? */
-export const anchorResolves = (anchor: Anchor, root: DomRootLike): boolean =>
-  anchorMatch(anchor, root) !== null;
