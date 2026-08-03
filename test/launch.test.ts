@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { foldLog, type ForkRecord } from "../src/core/fold.ts";
 import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
+import { readRegistry } from "../src/core/registry.ts";
 import { ensureSessionDirs, openSession } from "../src/core/session.ts";
 import type { WaitPayload } from "../src/protocol/wire.ts";
 import {
   attendChild,
   attendedByAnother,
   childArtifactPath,
+  ensureChildOpen,
   handleForks,
 } from "../src/launch/fork-launcher.ts";
 import { createArtifactPrompt, createPrompt, revisePrompt } from "../src/launch/prompts.ts";
@@ -25,7 +27,11 @@ import {
 } from "../src/launch/recipes.ts";
 import type { SessionIdentityRecipe } from "../src/launch/session-identity.ts";
 import { forkDirFor, writeForkSeed } from "../src/launch/seed.ts";
-import { discoverLiveServer, readServerDescriptor } from "../src/server/discovery.ts";
+import {
+  discoverLiveServer,
+  readServerDescriptor,
+  writeServerDescriptor,
+} from "../src/server/discovery.ts";
 import { runServer } from "../src/server/server.ts";
 import { applyUnitEnv } from "./unit-env.ts";
 
@@ -685,6 +691,103 @@ await Bun.write(artifactPath, \`<!doctype html><html><head><title>x</title></hea
     await expect(
       handleForks(parent, registry, { openBrowser: false, openChild, log: () => {} }),
     ).rejects.toThrow();
+  });
+});
+
+describe("the launcher opens a child through the locked owner (finding #16)", () => {
+  /**
+   * `ensureChildOpen` used to rerun discover -> remove -> spawn -> wait itself,
+   * with the two lower-level functions imported instead of the composed one -
+   * so the descriptor lock `ensureServer` holds simply did not apply to a fork
+   * child. Two openers of one deterministic child path (or a detached server
+   * still booting after the child's own `lucid open` died with its turn) both
+   * spawned, leaving two servers appending to one log. It also never wrote the
+   * registry pointer `open` writes, so a forked artifact was invisible to
+   * anything that discovers sessions.
+   */
+  let dir: string;
+  let child: SessionPaths;
+  let regFile: string;
+  let stubs: Array<ReturnType<typeof Bun.serve>>;
+
+  /** Stand-in for `spawnServer`: answers the handshake and publishes its
+   *  descriptor as `__serve` does, but in-process so starts can be counted. */
+  const startStub = async (): Promise<void> => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (): Response =>
+        Response.json({ lucid: true, session: child.artifactPath, port: server.port, version: 1 }),
+    });
+    stubs.push(server);
+    const port = server.port;
+    if (port === undefined) throw new Error("stub did not bind");
+    await writeServerDescriptor(child, {
+      port,
+      pid: process.pid,
+      session: child.artifactPath,
+      startedAt: new Date().toISOString(),
+    });
+  };
+
+  beforeEach(async () => {
+    dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-child-open-")));
+    child = sessionPaths(join(dir, "review-fork-1.html"));
+    await writeFile(child.artifactPath, DOC);
+    ensureSessionDirs(child);
+    regFile = join(dir, "registry.json");
+    process.env.LUCID_REGISTRY = regFile;
+    stubs = [];
+  });
+
+  afterEach(async () => {
+    for (const s of stubs) s.stop(true);
+    applyUnitEnv();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("two openers of one child start one server", async () => {
+    let spawned = 0;
+    const spawn = (): void => {
+      spawned++;
+      // Not awaited: the real spawn returns before the server is up, which is
+      // the window the race lives in.
+      void startStub();
+    };
+
+    const [a, b] = await Promise.all([
+      ensureChildOpen(child, false, { spawn, waitMs: 4000 }),
+      ensureChildOpen(child, false, { spawn, waitMs: 4000 }),
+    ]);
+
+    expect(a).toBe(true);
+    expect(b).toBe(true);
+    expect(spawned).toBe(1);
+    expect(stubs).toHaveLength(1);
+  });
+
+  test("the child lands in the registry, like any session `open` opened", async () => {
+    const opened = await ensureChildOpen(child, false, {
+      spawn: () => void startStub(),
+      waitMs: 4000,
+    });
+    expect(opened).toBe(true);
+    expect((await readRegistry(regFile)).map((e) => e.artifact)).toEqual([child.artifactPath]);
+  });
+
+  test("an unauthored child is still a failure, and starts nothing", async () => {
+    await rm(child.artifactPath);
+    let spawned = 0;
+    expect(
+      await ensureChildOpen(child, false, {
+        spawn: () => {
+          spawned++;
+        },
+        waitMs: 500,
+      }),
+    ).toBe(false);
+    expect(spawned).toBe(0);
+    expect(await readRegistry(regFile)).toEqual([]);
   });
 });
 

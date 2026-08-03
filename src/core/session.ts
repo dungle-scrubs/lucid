@@ -418,16 +418,38 @@ export const openSession = async (
   if (opening) {
     const segment = before.status === "none" ? 1 : before.segment + 1;
     const commit = commitVersionBytes(paths, html, segment, 1);
-    await appendEvent(paths.logPath, {
-      t: "session_opened",
-      segment,
-      artifact: basename(paths.artifactPath),
-      version: 1,
-      hash: commit.hash,
-      path: commit.path,
-      ...(opts?.attendant ? { attendant: opts.attendant } : {}),
-    });
-    startedSegment = true;
+    // Deciding to open and appending the open are ONE step (D-049), because
+    // the decision was made from a read outside the lock. Two processes
+    // opening one artifact at the same instant - two agents, or a launcher and
+    // the child's own `lucid open` - both read an unopened log and both
+    // appended `session_opened`. A second one starts the segment over, so
+    // whatever the first opener's server had already committed dropped out of
+    // the fold. The loser now finds the segment open and falls through to the
+    // state the winner left, which is what every later opener already does.
+    const [event] = await appendEventsIf(
+      paths.logPath,
+      (existing) => {
+        const now = foldLog(existing);
+        if (now.status !== "none" && now.status !== "ended") return false;
+        // The segment this call committed bytes for must still be the next
+        // one: a lifecycle event that landed under us moves that number, and
+        // an open recorded against somebody else's snapshot is worse than one
+        // that stands down.
+        return (now.status === "none" ? 1 : now.segment + 1) === segment;
+      },
+      [
+        {
+          t: "session_opened",
+          segment,
+          artifact: basename(paths.artifactPath),
+          version: 1,
+          hash: commit.hash,
+          path: commit.path,
+          ...(opts?.attendant ? { attendant: opts.attendant } : {}),
+        },
+      ],
+    );
+    startedSegment = event !== undefined;
   } else {
     // ACTIVE or SUSPENDED: reconcile the artifact against the newest committed
     // SNAPSHOT (D-061, and plan 02 MB.3/D-012). NOT current.html: that is
