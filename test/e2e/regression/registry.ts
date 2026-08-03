@@ -117,9 +117,10 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     testName: "an artifact with no dark form is not relabelled dark",
     mutation: {
       kind: "edit",
-      file: "client/overlay/overlay.ts",
-      find: "  private canRenderDark(): boolean {",
-      replace: "  private canRenderDark(): boolean {\n    return true;",
+      file: "client/overlay/artifact-theme.ts",
+      find: "  const canRenderDark = (): boolean => cascadeDeclaresTokens() || carriesOwnDarkForm();",
+      replace:
+        "  const canRenderDark = (): boolean => cascadeDeclaresTokens() || carriesOwnDarkForm() || true;",
     },
   },
   {
@@ -130,10 +131,10 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     testName: "light sections and code stay light through every artifact update",
     mutation: {
       kind: "edit",
-      file: "client/overlay/overlay.ts",
-      find: "  private reapplyTheme(): void {",
+      file: "client/overlay/artifact-theme.ts",
+      find: "  return { apply, reapply: () => apply(requestedTheme) };",
       replace:
-        "  private reapplyTheme(): void {\n    return; // mutation: swapped styles keep following the OS",
+        "  return { apply, reapply: () => void requestedTheme }; // mutation: swapped styles keep following the OS",
     },
   },
   {

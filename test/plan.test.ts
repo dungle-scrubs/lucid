@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { THEME_PALETTE, THEME_TOKENS, type ThemeName } from "../src/core/palette.ts";
 import type { WaitPayload } from "../src/core/payload.ts";
 import { ingestPayload } from "../src/plan/ingest.ts";
 import { renderPlanDoc } from "../src/plan/render.ts";
@@ -34,6 +35,53 @@ describe("renderPlanDoc", () => {
     expect(html).toContain('data-lucid-id="Q-1"');
     expect(html).toContain('data-lucid-id="Q-2"');
     expect(html).toContain("data-lucid-question");
+  });
+});
+
+/**
+ * A rendered plan is read in two places: straight off disk, and inside the
+ * viewer, which injects `:root[data-lucid-theme="…"]` for the six tokens it
+ * remaps (src/core/palette.ts). That selector outranks the plan's own `:root`,
+ * so any of the six the plan declares with a value of its own would be
+ * OVERWRITTEN in the viewer - one document, two appearances, with nothing red.
+ *
+ * So the rule is a value one, not a naming one: declare whichever of the six
+ * you like, as long as you declare the palette's value for it. The plan
+ * declares exactly one, `--ink`, and its value is the palette's in both forms.
+ */
+describe("a rendered plan reads the same from disk as it does in the viewer", () => {
+  /** `:root { … }` at the top, and the one inside the dark media block. */
+  const blocks = (): Record<ThemeName, string> => {
+    const css = (/<style>([\s\S]*?)<\/style>/.exec(renderPlanDoc("# Plan")) ?? [])[1] ?? "";
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const roots = [...bare.matchAll(/:root\s*\{([^}]*)\}/g)].map((m) => m[1] ?? "");
+    return { dark: roots[1] ?? "", light: roots[0] ?? "" };
+  };
+
+  /** Colour values differ only in the spacing an author happened to type. */
+  const same = (a: string, b: string): boolean => a.replace(/\s+/g, "") === b.replace(/\s+/g, "");
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`every remapped token the ${theme} block declares carries the palette's value`, () => {
+      const block = blocks()[theme];
+      expect(block, `no ${theme} :root block in the rendered plan`).not.toBe("");
+      for (const token of THEME_TOKENS) {
+        const declared = new RegExp(`${token}\\s*:\\s*([^;]+);`).exec(block)?.[1]?.trim();
+        if (declared === undefined) continue;
+        const wanted = THEME_PALETTE[theme][token];
+        expect(
+          same(declared, wanted),
+          `${theme} ${token} is ${declared}, but the viewer remaps it to ${wanted} - ` +
+            "the plan would look different in Lucid than it does from disk",
+        ).toBe(true);
+      }
+    });
+  }
+
+  test("the plan declares --ink, so an artifact viewer can see it routes colour", () => {
+    // Not decoration: `cascadeDeclaresTokens` in client/overlay/artifact-theme.ts
+    // asks the resolved cascade whether ANY of the six is declared.
+    expect(blocks().light).toContain("--ink:");
   });
 });
 

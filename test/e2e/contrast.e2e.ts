@@ -198,6 +198,40 @@ test("an artifact whose dark form is its own media block follows every toggle", 
   await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(33, 29, 21)");
 });
 
+// An artifact that routes its colour through the tokens Lucid remaps but never
+// mentions --paper or --ink, and ships no dark block of its own: its whole dark
+// form is Lucid's remap.
+const REMAPPED_ONLY = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><title>Remapped</title>
+<style>
+  :root { --accent:#7b6228; --ink-muted:#5e6773; --rule:rgba(33,29,21,.12); }
+  body { background: var(--paper); color: var(--ink); font-family: system-ui; margin: 40px; }
+  h2 { color: var(--accent); border-bottom: 1px solid var(--rule); }
+  p { color: var(--ink-muted); }
+</style></head>
+<body><h2 data-lucid-id="h">Where to go deeper</h2>
+<p data-lucid-id="p">follow one publish end to end.</p></body></html>`;
+
+test("an artifact whose dark form IS Lucid's remap follows the toggle", async ({ page }) => {
+  // The capability probe asked whether --paper or --ink resolved, and this
+  // document declares neither: it takes both from Lucid and routes the rest of
+  // its colour through --accent, --rule and --ink-muted. Two of the six is not
+  // the question - any of them means the remap reaches this document.
+  cli = await makeCli(REMAPPED_ONLY);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  const surface = surfaceOf(page);
+  await expect(surface.locator("h2")).toBeVisible();
+  // Its colours really do come from Lucid's light block, or the assertion below
+  // would be measuring a document with no ground at all.
+  await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(250, 246, 236)");
+
+  await on(page).themeToggle().click();
+  await expect(surface.locator("html")).toHaveAttribute("data-lucid-theme", "dark");
+  await expect(surface.locator("body")).toHaveCSS("background-color", "rgb(33, 29, 21)");
+  await expect(surface.locator("p")).toHaveCSS("color", "rgb(168, 157, 132)");
+});
+
 // Tokens in a LINKED sheet - the ordinary shape for anything bigger than a
 // one-page document, and the case that cannot be answered by reading rules.
 const LINKED = `<!doctype html>
