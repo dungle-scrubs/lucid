@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { WORKING_STALE_MS, workingClock } from "../client/chrome/working.ts";
+import { WORKING_GRACE_MS, workingClock } from "../client/chrome/working.ts";
 import { sanitizeBlocked } from "../src/core/progress.ts";
 
 /**
@@ -22,17 +22,17 @@ describe("the working clock", () => {
   test("goes stale on silence, not on duration", () => {
     // Delivered two minutes ago, silent since the first ack: the turn's process
     // died early, and no amount of waiting will produce the update it promised.
-    const dead = workingClock({ since, heardAt: since }, at(WORKING_STALE_MS + 1));
+    const dead = workingClock({ since, heardAt: since }, at(WORKING_GRACE_MS + 1));
     expect(dead.stale).toBe(true);
     // The boundary itself is stale - the threshold is "this long with nothing".
-    expect(workingClock({ since, heardAt: since }, at(WORKING_STALE_MS)).stale).toBe(true);
-    expect(workingClock({ since, heardAt: since }, at(WORKING_STALE_MS - 1)).stale).toBe(false);
+    expect(workingClock({ since, heardAt: since }, at(WORKING_GRACE_MS)).stale).toBe(true);
+    expect(workingClock({ since, heardAt: since }, at(WORKING_GRACE_MS - 1)).stale).toBe(false);
   });
 
   test("falls back to `since` when the server is too old to report heardAt", () => {
     // Reproduces the previous behaviour exactly rather than calling every turn
     // fresh - an omitted field must not read as "just heard from".
-    expect(workingClock({ since }, at(WORKING_STALE_MS + 1)).stale).toBe(true);
+    expect(workingClock({ since }, at(WORKING_GRACE_MS + 1)).stale).toBe(true);
     expect(workingClock({ since }, at(60_000)).stale).toBe(false);
   });
 

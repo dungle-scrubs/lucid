@@ -10,7 +10,7 @@ import {
 } from "../core/attendant.ts";
 import { deliver } from "../core/deliver.ts";
 import type { LogEvent, LogEventType } from "../core/events.ts";
-import { foldLog, type FoldedState } from "../core/fold.ts";
+import { foldLog, type FoldedState, WORKING_GRACE_MS } from "../core/fold.ts";
 import { normalizeHarness } from "../core/harness.ts";
 import { readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
@@ -93,8 +93,13 @@ const ATTEND_COOLOFF_MS = 5 * 60 * 1000;
  * died would otherwise silence the hub forever. Every re-ack (`lucid intent`,
  * `lucid progress`) refreshes it, so a long fan-out that keeps reporting keeps
  * its claim - only silence expires.
+ *
+ * The NUMBER is shared with the viewer via `WORKING_GRACE_MS` (core/fold.ts,
+ * plan 04 M1.3); injectable here through `options.workingGraceMs` so the stub
+ * harness shrinks it. The PREDICATE is not shared: this one measures from the
+ * newest ack of ANY turn over the whole log, while the viewer measures from
+ * the oldest open turn's `heardAt`. Merging them re-breaks #132/#133.
  */
-const DEFAULT_WORKING_GRACE_MS = 10 * 60 * 1000;
 
 /** How old an open working window must be before the startup sweep may close
  *  it as orphaned. A child the PREVIOUS hub spawned moments before dying
@@ -378,7 +383,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   // gated by, the always-on boundary records.
   const trace = options.trace ?? tracer("attend");
   const debounceMs = options.debounceMs ?? DEFAULT_ATTEND_DEBOUNCE_MS;
-  const workingGraceMs = options.workingGraceMs ?? DEFAULT_WORKING_GRACE_MS;
+  const workingGraceMs = options.workingGraceMs ?? WORKING_GRACE_MS;
   const cooloffMs = options.cooloffMs ?? ATTEND_COOLOFF_MS;
   const orphanMinAgeMs = options.orphanMinAgeMs ?? DEFAULT_ORPHAN_MIN_AGE_MS;
 
