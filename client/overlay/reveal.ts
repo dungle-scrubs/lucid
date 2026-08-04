@@ -25,16 +25,14 @@ export interface RevealInvalidation extends Omit<OutlineActivationHealth, "reaso
 
 export interface EmphasisEnvironment {
   readonly clearEmphasis: () => void;
-  readonly ensureStyles: () => void;
   readonly markEmphasis?: (element: Element | null) => void;
 }
 
 export interface RevealEnvironment extends EmphasisEnvironment {
-  readonly invalidate: (record: RevealInvalidation) => void;
+  readonly invalidate?: (record: RevealInvalidation) => void;
 }
 
 export const emphasizeElement = (element: Element, environment: EmphasisEnvironment): void => {
-  environment.ensureStyles();
   environment.clearEmphasis();
   environment.markEmphasis?.(element);
 };
@@ -46,7 +44,7 @@ export const revealElement = (
   generation = 0,
 ): boolean => {
   if (!element.isConnected) {
-    environment.invalidate({
+    environment.invalidate?.({
       code: "AO-002",
       generation,
       occurrenceCount: 1,
@@ -87,12 +85,12 @@ export const revealOutlineActivation = (
 ): boolean => {
   const resolution = resolveOutlineActivation(projection, activation);
   if (!resolution.accepted) {
-    environment.invalidate(resolution.health);
+    environment.invalidate?.(resolution.health);
     return false;
   }
   const element = elementByKey(resolution.key);
   if (element === null) {
-    environment.invalidate({
+    environment.invalidate?.({
       code: "AO-002",
       generation: projection.generation,
       occurrenceCount: 1,

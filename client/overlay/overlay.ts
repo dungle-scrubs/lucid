@@ -492,7 +492,6 @@ export class LucidOverlay extends LitElement {
     this.#ownedRoot = hostHandle.overlayRoot();
     this.#outlineController = new BrowserArtifactOutlineController(port, outlineCapabilities, {
       clearEmphasis: this.clearSectionEmphasis,
-      ensureStyles: () => undefined,
       markEmphasis: this.markSectionEmphasis,
     });
   }
@@ -624,12 +623,7 @@ export class LucidOverlay extends LitElement {
       window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "normal",
       {
         clearEmphasis: this.clearSectionEmphasis,
-        ensureStyles: () => undefined,
         markEmphasis: this.markSectionEmphasis,
-        // Permalink resolution queries the live document immediately above.
-        // Outline activation supplies the generation-correlated invalidation
-        // callback when its runtime is wired in M2.3.
-        invalidate: () => {},
       },
     );
     return revealed;
@@ -654,7 +648,6 @@ export class LucidOverlay extends LitElement {
     if (!target) return;
     emphasizeElement(target, {
       clearEmphasis: this.clearSectionEmphasis,
-      ensureStyles: () => undefined,
       markEmphasis: this.markSectionEmphasis,
     });
   }
