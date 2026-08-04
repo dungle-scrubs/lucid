@@ -18,9 +18,16 @@ import {
   type QueuedAnchorLike,
 } from "../shared/protocol.ts";
 import { type ArtifactTheme, createArtifactTheme } from "./artifact-theme.ts";
-import { emphasizeElement, revealElement as revealOutlineElement } from "./reveal.ts";
 import { BADGE_STEP_PX, computeMarkers, type Marker, type Rect } from "./markers.ts";
 import { sanitizeRenderSnapshot, type OverlayRenderSnapshot } from "./render-snapshot.ts";
+import {
+  addedSectionsInView,
+  enumerateSectionIds,
+  type SectionDocument,
+  pulseSection as pulseSectionIn,
+  revealSection as revealSectionIn,
+} from "./sections.ts";
+import { swapArtifactBody } from "./artifact-swap.ts";
 import {
   BrowserArtifactOutlineController,
   type TrustedOutlineCapabilities,
@@ -507,22 +514,28 @@ export class LucidOverlay extends LitElement {
   /** Scroll the artifact to a section by its `data-lucid-id` and flash it. The
    *  chat permalink's landing; a no-op if the id is gone (the chip that sent it
    *  should already have degraded to plain text from the published id set). */
-  private revealSection(lucidId: string): void {
-    const target = this.sectionById(lucidId);
-    if (!target) return;
-    this.revealElement(target);
+  /** The artifact document as a section seam: every [data-lucid-id] element
+   *  with its id and rect, plus the viewport. sections.ts owns enumeration, the
+   *  viewport test, reveal and pulse over this; the overlay only builds it. */
+  #sectionDocument(): SectionDocument {
+    return {
+      sections: () =>
+        Array.from(document.querySelectorAll("[data-lucid-id]")).map((element) => ({
+          element,
+          id: element.getAttribute("data-lucid-id") ?? "",
+          rect: element.getBoundingClientRect(),
+        })),
+      viewport: () => ({ height: window.innerHeight, width: window.innerWidth }),
+    };
   }
 
-  private revealElement(target: Element): boolean {
-    const revealed = revealOutlineElement(
-      target,
+  private revealSection(lucidId: string): void {
+    revealSectionIn(
+      this.#sectionDocument(),
+      lucidId,
       window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "normal",
-      {
-        clearEmphasis: this.clearSectionEmphasis,
-        markEmphasis: this.markSectionEmphasis,
-      },
+      { clearEmphasis: this.clearSectionEmphasis, markEmphasis: this.markSectionEmphasis },
     );
-    return revealed;
   }
 
   private readonly clearSectionEmphasis = (): void => {
@@ -540,54 +553,23 @@ export class LucidOverlay extends LitElement {
    *  update-location rule: if the new material is already under the reader's
    *  eyes, moving the page would destroy rather than improve orientation. */
   private pulseSection(lucidId: string): void {
-    const target = this.sectionById(lucidId);
-    if (!target) return;
-    emphasizeElement(target, {
+    pulseSectionIn(this.#sectionDocument(), lucidId, {
       clearEmphasis: this.clearSectionEmphasis,
       markEmphasis: this.markSectionEmphasis,
     });
-  }
-
-  /** Match by attribute value rather than building a selector: an id with a
-   *  quote or control char could make querySelector throw instead of missing. */
-  private sectionById(lucidId: string): Element | undefined {
-    return Array.from(document.querySelectorAll("[data-lucid-id]")).find(
-      (el) => el.getAttribute("data-lucid-id") === lucidId,
-    );
-  }
-
-  private sectionIsInViewport(el: Element): boolean {
-    const rect = el.getBoundingClientRect();
-    return (
-      rect.bottom > 0 &&
-      rect.right > 0 &&
-      rect.top < window.innerHeight &&
-      rect.left < window.innerWidth
-    );
   }
 
   /** Report every `data-lucid-id` in the artifact so the chrome can tell a live
    *  section permalink from a dead one without reaching into this opaque-origin
    *  DOM. Published on load and after every swap. */
   private publishSectionIds(addedIds?: ReadonlySet<string>): void {
-    const elements = Array.from(document.querySelectorAll("[data-lucid-id]"));
-    const ids = elements
-      .map((el) => el.getAttribute("data-lucid-id"))
-      .filter((id): id is string => id !== null && id !== "");
-    const uniqueIds = Array.from(new Set(ids));
-    const added =
-      addedIds === undefined
-        ? undefined
-        : uniqueIds.flatMap((id) => {
-            if (!addedIds.has(id)) return [];
-            const el = elements.find((candidate) => candidate.getAttribute("data-lucid-id") === id);
-            return el ? [{ id, inViewport: this.sectionIsInViewport(el) }] : [];
-          });
+    const document = this.#sectionDocument();
+    const ids = enumerateSectionIds(document);
     post({
       source: "lucid-overlay",
       type: "section-ids",
-      ids: uniqueIds,
-      ...(added !== undefined ? { added } : {}),
+      ids,
+      ...(addedIds === undefined ? {} : { added: addedSectionsInView(document, addedIds) }),
     });
   }
 
@@ -857,54 +839,22 @@ export class LucidOverlay extends LitElement {
     this.removeDiffStyles();
     this.clearSectionEmphasis();
     this.#outlineController?.revise();
-    const parsed = new DOMParser().parseFromString(htmlText, "text/html");
-    const previousIds = new Set(
-      Array.from(document.querySelectorAll("[data-lucid-id]"))
-        .map((el) => el.getAttribute("data-lucid-id"))
-        .filter((id): id is string => id !== null && id !== ""),
-    );
-    const host = this.#ownedRoot;
-    // Remove current artifact body nodes (everything except our host + scripts).
+    // The body/head swap lives behind artifact-swap.ts, which operates on this
+    // untrusted realm's document and preserves the overlay-owned nodes named
+    // here (the host + this element). Client.js scripts are kept automatically.
     const keep = new Set<Node>();
-    if (host) keep.add(host);
+    if (this.#ownedRoot) keep.add(this.#ownedRoot);
     keep.add(this);
-    for (const s of document.body.querySelectorAll("script[src='/__lucid/client.js']")) keep.add(s);
-    Array.from(document.body.childNodes).forEach((n) => {
-      if (!keep.has(n)) document.body.removeChild(n);
-    });
-    // Insert new artifact body nodes before the host.
-    const ref = host ?? null;
-    Array.from(parsed.body.childNodes).forEach((n) => {
-      if (n instanceof Element && n.getAttribute("data-lucid-ignore") === "true") return;
-      if (n instanceof HTMLScriptElement && n.src.includes("/__lucid/client.js")) return;
-      document.body.insertBefore(document.importNode(n, true), ref);
-    });
-    // Sync artifact <style> and <link rel="stylesheet"> tags from the new head.
-    // Both are tagged so a later swap removes them; without carrying <link>s an
-    // artifact that loads its CSS via <head> <link> would flash unstyled after a
-    // version swap.
-    for (const s of document.head.querySelectorAll("[data-lucid-artifact-style]")) s.remove();
-    parsed.head.querySelectorAll("style").forEach((s) => {
-      const clone = document.importNode(s, true);
-      clone.setAttribute("data-lucid-artifact-style", "true");
-      document.head.appendChild(clone);
-    });
-    parsed.head.querySelectorAll('link[rel="stylesheet"]').forEach((s) => {
-      const clone = document.importNode(s, true);
-      clone.setAttribute("data-lucid-artifact-style", "true");
-      clone.addEventListener("load", () => this.#theme.reapply(), { once: true });
-      document.head.appendChild(clone);
+    const { addedIds } = swapArtifactBody(document, htmlText, {
+      keep,
+      onLinkedSheetLoad: () => this.#theme.reapply(),
+      ref: this.#ownedRoot,
     });
     // New inline sheets are ready now. Linked sheets re-run this on load above,
     // so a dark-capable artifact is not pinned light by an early capability check.
     this.#theme.reapply();
     this.scheduleReposition();
-    const currentIds = new Set(
-      Array.from(document.querySelectorAll("[data-lucid-id]"))
-        .map((el) => el.getAttribute("data-lucid-id"))
-        .filter((id): id is string => id !== null && id !== ""),
-    );
-    this.publishSectionIds(new Set([...currentIds].filter((id) => !previousIds.has(id))));
+    this.publishSectionIds(addedIds);
     if (outlineRevision !== undefined) {
       this.#outlineController?.revisionComplete(outlineRevision);
     }
