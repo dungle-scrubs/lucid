@@ -1,4 +1,5 @@
 import { visibleEl } from "./dom.ts";
+import type { Anchor } from "../shared/capture.ts";
 import type { Pastes } from "./pastes.ts";
 import {
   buildItems,
@@ -10,6 +11,8 @@ import {
 } from "./question-draft.ts";
 import type { Notify, SessionStorage, SessionStore } from "./store.ts";
 import {
+  MAX_PICK_TARGETS,
+  toggleAnchor,
   approveBlockedReason,
   hasComposerDraft,
   sessionSwitchBlockedReason,
@@ -35,6 +38,91 @@ import type {
  *  components so the flow (and its ordering rules) reads in one place - and
  *  out of module scope so two open sessions can never share a queue, an
  *  outbox drain, or a fork guard. */
+
+/** MAX_PICK_TARGETS ties to MAX_RENDERED_MARKER_RECTS (markers.ts): a draft at
+ *  the cap paints one marker per target, and the render budget is what keeps
+ *  a hostile highlight payload from turning one Lit update into an unbounded
+ *  DOM allocation. The pick cap is the application-level guard that keeps the
+ *  draft well under the render budget; see M3.1's budget tests. */
+export interface PickState {
+  readonly viewingVersion: number | null;
+  readonly answerPickFor: string | null;
+  readonly questions: readonly { readonly id: string; readonly answered: boolean }[];
+  readonly answerAnchorLists: Readonly<Record<string, readonly Anchor[]>>;
+  readonly answerAnchors: Readonly<Record<string, Anchor>>;
+  readonly pendingTargets: readonly Anchor[];
+  readonly pendingTarget: Anchor | null;
+  readonly pendingDecision: Anchor | null;
+  readonly forkId: string | null;
+  readonly questionDrawerDismissed: readonly string[];
+}
+
+export type PickResult =
+  | { readonly kind: "drop" }
+  | { readonly kind: "cap" }
+  | { readonly kind: "discard-pending" }
+  | { readonly kind: "apply"; readonly patch: Record<string, unknown> };
+
+/** Resolve a pick (the overlay's target-picked message) into a state patch or a
+ *  signal, with no DOM and no store. The rules: a pick while viewing a
+ *  historical version is dropped (its DOM is not the live artifact); an armed
+ *  or shift-held pin wins over composing; cmd toggles into a collection; the
+ *  cap refuses over-budget; toggling the last spot off discards the draft.
+ *  This is the pure half of applyOverlayMessage - the adapter lives there. */
+export const resolvePick = (
+  state: PickState,
+  msg: {
+    readonly anchor: Anchor;
+    readonly modifiers?: { readonly meta: boolean; readonly shift: boolean };
+    readonly decision?: Anchor;
+  },
+): PickResult => {
+  if (state.viewingVersion !== null) return { kind: "drop" };
+
+  const meta = msg.modifiers?.meta ?? false;
+  const shift = msg.modifiers?.shift ?? false;
+  const pinFor =
+    state.answerPickFor ?? (shift ? (state.questions.find((q) => !q.answered)?.id ?? null) : null);
+
+  if (pinFor !== null) {
+    const cur = state.answerAnchorLists[pinFor] ?? [];
+    const next = meta && shift ? toggleAnchor(cur, msg.anchor) : [msg.anchor];
+    if (next === cur && cur.length >= MAX_PICK_TARGETS) return { kind: "cap" };
+    const anchors = { ...state.answerAnchors };
+    const lists = { ...state.answerAnchorLists };
+    const first = next[0];
+    if (first === undefined) {
+      delete anchors[pinFor];
+      delete lists[pinFor];
+    } else {
+      anchors[pinFor] = first;
+      lists[pinFor] = next;
+    }
+    return {
+      kind: "apply",
+      patch: {
+        answerAnchors: anchors,
+        answerAnchorLists: lists,
+        answerPickFor: null,
+        questionDrawerDismissed: [],
+      },
+    };
+  }
+
+  const cur = state.pendingTargets;
+  const next = meta ? toggleAnchor(cur, msg.anchor) : [msg.anchor];
+  if (next === cur && cur.length >= MAX_PICK_TARGETS) return { kind: "cap" };
+  if (next.length === 0) return { kind: "discard-pending" };
+  return {
+    kind: "apply",
+    patch: {
+      forkId: null,
+      pendingDecision: msg.decision ?? null,
+      pendingTarget: next[0] ?? null,
+      pendingTargets: next,
+    },
+  };
+};
 
 export interface ActionsCtx {
   readonly store: SessionStore;
@@ -1118,10 +1206,30 @@ export const createActions = (ctx: ActionsCtx) => {
     }
   };
 
+  const applyOverlayMessage = (msg: {
+    readonly anchor: Anchor;
+    readonly modifiers?: { readonly meta: boolean; readonly shift: boolean };
+    readonly decision?: Anchor;
+  }): void => {
+    const result = resolvePick(ctx.store.getState(), msg);
+    if (result.kind === "drop") return;
+    if (result.kind === "cap") {
+      ctx.notify.notice(`Up to ${MAX_PICK_TARGETS} spots per note - that pick was not added.`);
+      return;
+    }
+    if (result.kind === "discard-pending") {
+      discardPending();
+      return;
+    }
+    ctx.store.setState(result.patch);
+    surface.pushHighlights();
+  };
+
   return {
     addToQueue,
     queueQuickReply,
     forkPending,
+    applyOverlayMessage,
     discardPending,
     removePendingTarget,
     setComposerNote,

@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Anchor } from "../../src/anchors/anchor.ts";
 import { validateOverlayMessage, type OverlayValidationRecord } from "../shared/protocol.ts";
 import { SessionProvider, useSession } from "./context.tsx";
-import {
-  MAX_PICK_TARGETS,
-  selectOutlineGeneration,
-  selectOutlineHealthCode,
-  toggleAnchor,
-} from "./store.ts";
+import { selectOutlineGeneration, selectOutlineHealthCode } from "./store.ts";
 import { Header } from "./Header.tsx";
 import { QuestionDrawer, useQuestionDrawer } from "./QuestionDrawer.tsx";
 import { LucidRuntimeProvider } from "./runtime.tsx";
@@ -73,18 +67,9 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
     // the ACTIVE session may own the window: N sets of keyboard/postMessage
     // listeners would all fire on one gesture.
     if (!active) return;
-    const { store, surface, actions, notify } = session;
+    const { store, surface, actions } = session;
     const get = store.getState;
     const set = store.setState;
-
-    // The cmd-collect cap mirrors the server's (it rejects longer lists), so
-    // the ninth pick is refused HERE, where the human can still see why,
-    // rather than at send time. toggleAnchor returns the list untouched (same
-    // reference) only in that case.
-    const droppedAtCap = (cur: readonly Anchor[], next: readonly Anchor[]): boolean =>
-      next === cur && cur.length >= MAX_PICK_TARGETS;
-    const capNotice = (): void =>
-      notify.notice(`Up to ${MAX_PICK_TARGETS} spots per note - that pick was not added.`);
 
     const onMessage = (e: MessageEvent): void => {
       const msg = validateOverlayMessage(e.data, (record: OverlayValidationRecord) => {
@@ -108,78 +93,7 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
         surface.markOverlayReady();
         surface.pushHighlights();
       } else if (msg.type === "target-picked") {
-        // A historical snapshot is read-only: its DOM is not the live artifact,
-        // so an anchor captured against it would point at nothing on return.
-        if (get().viewingVersion !== null) return;
-        const meta = msg.modifiers?.meta ?? false;
-        const shift = msg.modifiers?.shift ?? false;
-        // Pinning a region onto an answer wins over starting a new annotation:
-        // an armed pick mode ("Pin a spot"), or shift held while a question is
-        // outstanding - the same pin without arming first. Shift+cmd collects
-        // several pins (a repeat pick removes its spot); otherwise the pick
-        // replaces. Shift with NO outstanding question falls through to the
-        // composer below - never a dead gesture.
-        const s0 = get();
-        const pinFor =
-          s0.answerPickFor ?? (shift ? (s0.questions.find((q) => !q.answered)?.id ?? null) : null);
-        if (pinFor !== null) {
-          const cur = s0.answerAnchorLists[pinFor] ?? [];
-          const next = meta && shift ? toggleAnchor(cur, msg.anchor) : [msg.anchor];
-          if (droppedAtCap(cur, next)) {
-            capNotice();
-            return;
-          }
-          set((s) => {
-            const anchors = { ...s.answerAnchors };
-            const lists = { ...s.answerAnchorLists };
-            const first = next[0];
-            if (first === undefined) {
-              delete anchors[pinFor];
-              delete lists[pinFor];
-            } else {
-              anchors[pinFor] = first;
-              lists[pinFor] = next;
-            }
-            return {
-              answerAnchors: anchors,
-              answerAnchorLists: lists,
-              answerPickFor: null,
-              // A shift-pin lands on the drawer's question even while the
-              // drawer is lowered, so raise it: the gesture must produce a
-              // visible chip, not a silent attachment.
-              questionDrawerDismissed: [],
-            };
-          });
-          return;
-        }
-        // Cmd collects: several picks accumulate into ONE draft whose note
-        // covers them all (a repeat pick removes its spot - the multi-select
-        // toggle). A plain pick replaces, as ever. Either way this is a new
-        // fork candidate: drop any stable fork id held for the prior pick.
-        const cur = s0.pendingTargets;
-        const next = meta ? toggleAnchor(cur, msg.anchor) : [msg.anchor];
-        if (droppedAtCap(cur, next)) {
-          capNotice();
-          return;
-        }
-        // Toggling the LAST spot off ends the draft, same as the chip path:
-        // a bare set would unmount the composer but keep its note and images,
-        // resurrecting them (and their un-revoked object URLs) on the next pick.
-        if (next.length === 0) {
-          actions.discardPending();
-          return;
-        }
-        set({
-          pendingTargets: next,
-          pendingTarget: next[0] ?? null,
-          // The decision this pick belongs to, or none. On a cmd-collect the
-          // LATEST pick decides: that is the one the human just pointed at,
-          // and offering Agree for a decision they collected three picks ago
-          // would answer something they have moved on from.
-          pendingDecision: msg.decision ?? null,
-          forkId: null,
-        });
-        surface.pushHighlights();
+        actions.applyOverlayMessage(msg);
       } else if (msg.type === "annotation-hover") {
         set({ hoveredId: msg.id });
       } else if (msg.type === "content-width") {
