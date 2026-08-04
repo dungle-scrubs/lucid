@@ -1,7 +1,6 @@
 import {
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -10,20 +9,17 @@ import {
 } from "react";
 import {
   ARTIFACT_OUTLINE_POLICY,
-  reduceOutlinePresentation,
-  type OutlinePresentationEvent,
+  createOutlinePresentation,
+  type OutlinePresentationInput,
   type OutlinePresentationMode,
-  type OutlinePresentationState,
+  type OutlinePresentationSendResult,
+  type OutlinePresentationTimer,
   type OutlineSnapshot,
 } from "../shared/artifact-outline.ts";
 import { useSession, useSessionHandle } from "./context.tsx";
 import { selectOutlinePending, selectOutlineSnapshot } from "./store.ts";
 import { Button } from "./ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible.tsx";
-
-const HOVER_INTENT_MS = 120;
-const HOVER_LEAVE_MS = 180;
-const PENDING_FOCUS_HOLD_MS = 500;
 
 /** The resting rail's height (`h-16`) and the margin the panel keeps from the
  *  slot's edges. Named because the centering math below positions both. */
@@ -88,18 +84,6 @@ const ListIcon = () => (
   </svg>
 );
 
-const initialMode = (snapshot: OutlineSnapshot | null): OutlinePresentationState => {
-  if (snapshot === null) return { mode: "ABSENT" };
-  return reduceOutlinePresentation(
-    { mode: "ABSENT" },
-    {
-      headingCount: snapshot.headings.length,
-      proof: snapshot.proof,
-      type: "projection",
-    },
-  ).state;
-};
-
 const prefersReducedMotion = (): boolean =>
   typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -157,27 +141,129 @@ const OutlinePanel = ({ mode, onActivate, snapshot }: OutlinePanelProps) => (
   </div>
 );
 
+interface OutlineView {
+  readonly mode: OutlinePresentationMode;
+  readonly snapshot: OutlineSnapshot | null;
+}
+
+/**
+ * The outline's chrome adapter. The interaction machine
+ * ({@link createOutlinePresentation}, DOM- and clock-free) owns the modes,
+ * timers, pointer/focus/touch ordering, and which snapshot is rendered; this
+ * component is the thin realm-touching half. It feeds the machine DOM events,
+ * applies the effects the machine returns (focus handoffs, timer arms and
+ * cancels), and renders the mode and snapshot the machine settles on.
+ *
+ * Every effect is applied synchronously in the same task as the `send` that
+ * produced it - a deferred focus-rail is exactly the window in which Escape's
+ * close could be re-opened by its own focus, so the adapter does not defer it.
+ */
 export const ArtifactOutline = () => {
   const sourceSnapshot = useSession(selectOutlineSnapshot);
   const projectionPending = useSession(selectOutlinePending);
   const { surface } = useSessionHandle();
-  const [renderedSnapshot, setRenderedSnapshot] = useState(sourceSnapshot);
-  const [presentation, setPresentation] = useState(() => initialMode(sourceSnapshot));
-  const presentationRef = useRef(presentation);
+
+  const machineRef = useRef<ReturnType<typeof createOutlinePresentation> | null>(null);
+  if (machineRef.current === null) machineRef.current = createOutlinePresentation();
+  const machine = machineRef.current;
+
+  // The machine's authoritative state, mirrored into React for rendering. It
+  // is primed synchronously from the initial snapshot so the first paint is
+  // already projected (no ABSENT flash when a snapshot is present at mount).
+  const [view, setView] = useState<OutlineView>(() => {
+    if (sourceSnapshot === null) return { mode: "ABSENT", snapshot: null };
+    const result = machine.send(
+      {
+        focusInside: false,
+        focusedKey: null,
+        focusedRail: false,
+        snapshot: sourceSnapshot,
+        type: "snapshot-arrived",
+      },
+      0,
+    );
+    return { mode: result.mode, snapshot: result.snapshot };
+  });
+
+  // The three hysteresis timers the machine arms as `schedule` effects. One
+  // owner (this map) replaces the three named refs; the machine decides what
+  // arms and what cancels.
+  const timers = useRef<Record<OutlinePresentationTimer, ReturnType<typeof setTimeout> | null>>({
+    hover: null,
+    leave: null,
+    pending: null,
+  });
   const rootRef = useRef<HTMLDivElement | null>(null);
   const railRef = useRef<HTMLButtonElement | null>(null);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pointerFocusingRail = useRef(false);
-  const suppressRailFocusOpen = useRef(false);
-  const touchOpeningRail = useRef(false);
-  const touchOpeningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const snapshot =
-    sourceSnapshot?.generation === renderedSnapshot?.generation ? sourceSnapshot : renderedSnapshot;
-  const snapshotRef = useRef(snapshot);
-  snapshotRef.current = snapshot;
+  const focusSurface = useCallback((): void => {
+    rootRef.current?.closest<HTMLElement>('[data-test="surface-region"]')?.focus();
+  }, []);
+
+  const clearTimer = useCallback((timer: OutlinePresentationTimer): void => {
+    const handle = timers.current[timer];
+    if (handle !== null) {
+      clearTimeout(handle);
+      timers.current[timer] = null;
+    }
+  }, []);
+
+  // sendRef lets a scheduled timer feed its event back through the latest send
+  // without send having to reference itself in its own dependency array.
+  const sendRef = useRef<(event: OutlinePresentationInput) => OutlinePresentationSendResult>(
+    () => ({ mode: "ABSENT", snapshot: null, effects: [] }),
+  );
+
+  const armTimer = useCallback(
+    (timer: OutlinePresentationTimer, ms: number, event: OutlinePresentationInput): void => {
+      clearTimer(timer);
+      timers.current[timer] = setTimeout(() => {
+        timers.current[timer] = null;
+        // The pending hold's focus is only known at fire time, so the adapter
+        // refreshes it from the DOM when that one timer fires.
+        sendRef.current(
+          event.type === "pending-expired"
+            ? {
+                focusInside: rootRef.current?.contains(document.activeElement) === true,
+                type: "pending-expired",
+              }
+            : event,
+        );
+      }, ms);
+    },
+    [clearTimer],
+  );
+
+  const send = useCallback(
+    (event: OutlinePresentationInput): OutlinePresentationSendResult => {
+      const result = machine.send(event, Date.now());
+      // Effects are applied synchronously, in the same task as the state
+      // change. focus-surface must land before the focused control unmounts
+      // (a snapshot handoff or removal). focus-rail may re-enter send through
+      // its own onFocus; that re-entry is a suppressed no-op (the machine marks
+      // the focus it caused), so applying inline is safe and keeps the close and
+      // its focus in the same task - no window for the panel to re-open.
+      for (const effect of result.effects) {
+        if (effect.kind === "focus-surface") {
+          focusSurface();
+        } else if (effect.kind === "focus-rail") {
+          railRef.current?.focus();
+        } else if (effect.kind === "schedule") {
+          armTimer(effect.timer, effect.ms, effect.event);
+        } else if (effect.kind === "cancel") {
+          clearTimer(effect.timer);
+        }
+      }
+      setView((prev) =>
+        prev.mode === result.mode && prev.snapshot === result.snapshot
+          ? prev
+          : { mode: result.mode, snapshot: result.snapshot },
+      );
+      return result;
+    },
+    [armTimer, clearTimer, focusSurface, machine],
+  );
+  sendRef.current = send;
 
   // Where the resting rail sits: vertically centered in the slot, rounded so
   // its PAGE position lands on a whole CSS pixel. Measured rather than
@@ -194,12 +280,12 @@ export const ArtifactOutline = () => {
   // room above the rail's centre and the room below it.
   const [railGeometry, setRailGeometry] = useState<RailGeometry | null>(null);
   const railTop = railGeometry?.top ?? null;
-  const transientNow = presentation.mode !== "PINNED" && presentation.mode !== "ABSENT";
+  const transientNow = view.mode !== "PINNED" && view.mode !== "ABSENT";
   useLayoutEffect(() => {
     // The root only RENDERS once a snapshot exists: a mode flip that lands
     // before the snapshot finds no element, so the snapshot is a real input -
     // its arrival is what makes the first measurement possible.
-    if (!transientNow || snapshot === null) return undefined;
+    if (!transientNow || view.snapshot === null) return undefined;
     const root = rootRef.current;
     if (!root) return undefined;
     const measure = (): void => {
@@ -224,192 +310,57 @@ export const ArtifactOutline = () => {
     const region = root.closest('[data-test="surface-region"]');
     if (region) observer.observe(region);
     return () => observer.disconnect();
-  }, [transientNow, snapshot]);
+  }, [transientNow, view.snapshot]);
 
-  const focusSurface = useCallback((): void => {
-    rootRef.current?.closest<HTMLElement>('[data-test="surface-region"]')?.focus();
-  }, []);
-
-  const transition = useCallback(
-    (
-      event: OutlinePresentationEvent,
-      basis: OutlinePresentationState = presentationRef.current,
-    ): OutlinePresentationMode => {
-      const previous = presentationRef.current;
-      const result = reduceOutlinePresentation(basis, event);
-      if (result.effects?.includes("focus-surface")) focusSurface();
-      const next = result.state;
-      const previousOrigin =
-        previous.mode === "TRANSIENT_LATCHED" ? previous.latchOrigin : undefined;
-      const nextOrigin = next.mode === "TRANSIENT_LATCHED" ? next.latchOrigin : undefined;
-      presentationRef.current = next;
-      if (previous.mode !== next.mode || previousOrigin !== nextOrigin) {
-        setPresentation(next);
-      }
-      return next.mode;
-    },
-    [focusSurface],
-  );
-
+  // The snapshot lifecycle: the store's snapshot arriving or withdrawing is
+  // the one place a projection event is built. focusInside (and which control
+  // holds it) travel as the event's payload, never as component state.
   useLayoutEffect(() => {
-    const focusedElement = document.activeElement;
-    const focusInside = rootRef.current?.contains(focusedElement) === true;
+    const focused = document.activeElement;
+    const focusInside = rootRef.current?.contains(focused) === true;
     if (sourceSnapshot === null) {
-      if (projectionPending) {
-        // Geometry is no longer proved. A focused pinned control becomes a
-        // transient latch immediately so focus and section identity survive
-        // the short reproof, but stale geometry never remains painted as
-        // pinned. Without focus, fail closed and remove the projection now.
-        if (focusInside && renderedSnapshot !== null && snapshotRef.current !== null) {
-          transition({
-            focusInside: true,
-            headingCount: renderedSnapshot.headings.length,
-            proof: { clearancePx: 0, complete: false },
-            type: "projection",
-          });
-          if (pendingTimer.current === null) {
-            pendingTimer.current = setTimeout(() => {
-              pendingTimer.current = null;
-              const stillFocused = rootRef.current?.contains(document.activeElement) === true;
-              transition({
-                focusInside: stillFocused,
-                preserveHysteresis: true,
-                type: "invalidate",
-              });
-              setRenderedSnapshot(null);
-            }, PENDING_FOCUS_HOLD_MS);
-          }
-        } else {
-          transition({
-            focusInside: false,
-            preserveHysteresis: true,
-            type: "invalidate",
-          });
-          setRenderedSnapshot(null);
-        }
-        return;
-      }
-      if (pendingTimer.current !== null) clearTimeout(pendingTimer.current);
-      pendingTimer.current = null;
-      transition({ focusInside, type: "invalidate" });
-      setRenderedSnapshot(null);
+      send({ focusInside, pending: projectionPending, type: "snapshot-withdrawn" });
       return;
     }
-    if (sourceSnapshot.generation === renderedSnapshot?.generation) return;
-    if (pendingTimer.current !== null) clearTimeout(pendingTimer.current);
-    pendingTimer.current = null;
-    const focusedOutlineKey =
-      focusedElement instanceof HTMLElement ? focusedElement.dataset.outlineKey : undefined;
-    const stableFocusedItem =
-      focusedOutlineKey !== undefined &&
-      sourceSnapshot.headings.some(({ key }) => key === focusedOutlineKey);
-    const projectionBasis = presentationRef.current;
-    const projectionEvent: OutlinePresentationEvent = {
+    const focusedKey = focused instanceof HTMLElement ? (focused.dataset.outlineKey ?? null) : null;
+    send({
       focusInside,
-      headingCount: sourceSnapshot.headings.length,
-      proof: sourceSnapshot.proof,
-      type: "projection",
-    };
-    const projectedPresentation = reduceOutlinePresentation(projectionBasis, projectionEvent).state;
-    const stableFocusedRail =
-      focusedElement === railRef.current && projectedPresentation.mode !== "PINNED";
-    const generationHandoff = focusInside && !stableFocusedItem && !stableFocusedRail;
-    if (generationHandoff) focusSurface();
-    setRenderedSnapshot(sourceSnapshot);
-    transition(
-      { ...projectionEvent, focusInside: generationHandoff ? false : focusInside },
-      projectionBasis,
-    );
-  }, [focusSurface, projectionPending, renderedSnapshot, sourceSnapshot, transition]);
-
-  const clearHoverTimer = useCallback((): void => {
-    if (hoverTimer.current !== null) clearTimeout(hoverTimer.current);
-    hoverTimer.current = null;
-  }, []);
-  const clearLeaveTimer = useCallback((): void => {
-    if (leaveTimer.current !== null) clearTimeout(leaveTimer.current);
-    leaveTimer.current = null;
-  }, []);
-  const finishInteraction = useCallback((): OutlinePresentationMode => {
-    const current = snapshotRef.current;
-    if (current === null || projectionPending) return transition({ type: "dismiss" });
-    return transition({
-      headingCount: current.headings.length,
-      proof: current.proof,
-      type: "interaction-finished",
+      focusedKey,
+      focusedRail: focused === railRef.current,
+      snapshot: sourceSnapshot,
+      type: "snapshot-arrived",
     });
-  }, [projectionPending, transition]);
+  }, [projectionPending, send, sourceSnapshot]);
 
   useEffect(
     () => () => {
-      clearHoverTimer();
-      clearLeaveTimer();
-      if (pendingTimer.current !== null) clearTimeout(pendingTimer.current);
-      if (touchOpeningTimer.current !== null) clearTimeout(touchOpeningTimer.current);
+      for (const handle of Object.values(timers.current)) {
+        if (handle !== null) clearTimeout(handle);
+      }
     },
-    [clearHoverTimer, clearLeaveTimer],
+    [],
   );
 
   useEffect(() => {
-    if (presentation.mode !== "TRANSIENT_LATCHED") return;
+    if (view.mode !== "TRANSIENT_LATCHED") return;
     const onPointerDown = (event: PointerEvent): void => {
       if (rootRef.current?.contains(event.target as Node)) return;
-      finishInteraction();
+      send({ type: "outside-press" });
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [finishInteraction, presentation.mode]);
+  }, [send, view.mode]);
 
-  if (snapshot === null || presentation.mode === "ABSENT") return null;
+  if (view.snapshot === null || view.mode === "ABSENT") return null;
+  const snapshot = view.snapshot;
 
-  const transient = presentation.mode !== "PINNED";
-  const open = presentation.mode === "PINNED" || presentation.mode !== "TRANSIENT_CLOSED";
+  const transient = view.mode !== "PINNED";
+  const open = view.mode === "PINNED" || view.mode !== "TRANSIENT_CLOSED";
 
   const activate = (key: string, event: ReactMouseEvent<HTMLButtonElement>): void => {
     const motion = prefersReducedMotion() ? "reduced" : "normal";
     if (!surface.activateOutline(key, motion)) return;
-    if (!transient) return;
-    finishInteraction();
-    if (event.detail === 0) {
-      suppressRailFocusOpen.current = true;
-      queueMicrotask(() => railRef.current?.focus());
-    }
-  };
-
-  const onPointerEnter = (_event: ReactPointerEvent<HTMLDivElement>): void => {
-    clearLeaveTimer();
-    if (presentationRef.current.mode !== "TRANSIENT_CLOSED") return;
-    clearHoverTimer();
-    hoverTimer.current = setTimeout(() => {
-      hoverTimer.current = null;
-      transition({ type: "hover-intent" });
-    }, HOVER_INTENT_MS);
-  };
-
-  const onPointerLeave = (_event: ReactPointerEvent<HTMLDivElement>): void => {
-    clearHoverTimer();
-    if (presentationRef.current.mode !== "TRANSIENT_HOVER") return;
-    clearLeaveTimer();
-    leaveTimer.current = setTimeout(() => {
-      leaveTimer.current = null;
-      transition({ type: "pointer-leave" });
-    }, HOVER_LEAVE_MS);
-  };
-
-  const onBlur = (event: ReactFocusEvent<HTMLDivElement>): void => {
-    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) {
-      return;
-    }
-    if (pendingTimer.current !== null) {
-      clearTimeout(pendingTimer.current);
-      pendingTimer.current = null;
-      if (sourceSnapshot === null) {
-        transition({ focusInside: false, preserveHysteresis: true, type: "invalidate" });
-        setRenderedSnapshot(null);
-        return;
-      }
-    }
-    if (presentationRef.current.mode === "TRANSIENT_LATCHED") finishInteraction();
+    send({ keyboard: event.detail === 0, type: "pick" });
   };
 
   return (
@@ -417,32 +368,33 @@ export const ArtifactOutline = () => {
       ref={rootRef}
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!transient) return;
-        if (!nextOpen && touchOpeningRail.current) return;
-        if (nextOpen || presentationRef.current.mode === "TRANSIENT_HOVER") {
-          transition({ type: "latch" });
-        } else {
-          const railFocused = document.activeElement === railRef.current;
-          const nextMode = finishInteraction();
-          if (railFocused && nextMode === "PINNED") queueMicrotask(focusSurface);
+        const result = send({ open: nextOpen, type: "collapsible-change" });
+        // Closing a latched panel that re-pins while the rail held focus hands
+        // focus to the surface (pinned has no rail). The machine owns the mode;
+        // this one focus move is the DOM concern it cannot decide alone.
+        if (!nextOpen && result.mode === "PINNED" && document.activeElement === railRef.current) {
+          focusSurface();
         }
       }}
-      onPointerEnter={onPointerEnter}
-      onPointerLeave={onPointerLeave}
-      onBlur={onBlur}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape" || !transient || !open) return;
-        event.preventDefault();
-        const nextMode = finishInteraction();
-        if (nextMode === "PINNED") {
-          focusSurface();
-        } else {
-          suppressRailFocusOpen.current = true;
-          queueMicrotask(() => railRef.current?.focus());
+      onPointerEnter={() => send({ type: "pointer-enter" })}
+      onPointerLeave={() => send({ type: "pointer-exit" })}
+      onBlur={(event: ReactFocusEvent<HTMLDivElement>) => {
+        if (
+          event.relatedTarget instanceof Node &&
+          event.currentTarget.contains(event.relatedTarget)
+        ) {
+          return;
         }
+        send({ type: "blur" });
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        if (view.mode !== "TRANSIENT_HOVER" && view.mode !== "TRANSIENT_LATCHED") return;
+        event.preventDefault();
+        send({ type: "escape" });
       }}
       data-test="artifact-outline"
-      data-mode={presentation.mode.toLowerCase()}
+      data-mode={view.mode.toLowerCase()}
       // Transient mode floats the rail at the slot's vertical CENTER, like a
       // side tab, with the panel opening below it. Both are absolutely
       // positioned so opening NEVER moves the rail: a trigger that jumps when
@@ -456,21 +408,7 @@ export const ArtifactOutline = () => {
       {transient ? (
         <CollapsibleTrigger
           ref={railRef}
-          onTouchEnd={() => {
-            if (
-              presentationRef.current.mode !== "TRANSIENT_CLOSED" &&
-              presentationRef.current.mode !== "TRANSIENT_HOVER"
-            ) {
-              return;
-            }
-            touchOpeningRail.current = true;
-            transition({ type: "latch" });
-            if (touchOpeningTimer.current !== null) clearTimeout(touchOpeningTimer.current);
-            touchOpeningTimer.current = setTimeout(() => {
-              touchOpeningTimer.current = null;
-              touchOpeningRail.current = false;
-            }, 0);
-          }}
+          onTouchEnd={() => send({ type: "rail-touch" })}
           render={
             <Button
               type="button"
@@ -478,26 +416,10 @@ export const ArtifactOutline = () => {
               size="icon-xs"
               aria-label={open ? "Close artifact outline" : "Open artifact outline"}
               data-test="artifact-outline-rail"
-              onPointerDown={() => {
-                pointerFocusingRail.current = true;
-              }}
-              onPointerUp={() => {
-                pointerFocusingRail.current = false;
-              }}
-              onPointerCancel={() => {
-                pointerFocusingRail.current = false;
-              }}
-              onFocus={() => {
-                if (suppressRailFocusOpen.current) {
-                  suppressRailFocusOpen.current = false;
-                  return;
-                }
-                if (pointerFocusingRail.current) {
-                  pointerFocusingRail.current = false;
-                  return;
-                }
-                transition({ type: "latch" });
-              }}
+              onPointerDown={() => send({ type: "rail-pointer-down" })}
+              onPointerUp={() => send({ type: "rail-pointer-up" })}
+              onPointerCancel={() => send({ type: "rail-pointer-up" })}
+              onFocus={() => send({ type: "rail-focus" })}
               style={{
                 top: railTop ?? `calc(50% - ${RAIL_HEIGHT_PX / 2}px)`,
                 width: `${ARTIFACT_OUTLINE_POLICY.railInsetPx}px`,
@@ -560,7 +482,7 @@ export const ArtifactOutline = () => {
             : "pointer-events-auto h-full w-full"
         }`}
       >
-        <OutlinePanel mode={presentation.mode} snapshot={snapshot} onActivate={activate} />
+        <OutlinePanel mode={view.mode} snapshot={snapshot} onActivate={activate} />
       </CollapsibleContent>
     </Collapsible>
   );
