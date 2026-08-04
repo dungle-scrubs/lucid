@@ -417,7 +417,8 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     });
   const gotoHunk = (hunkId: string): void =>
     toOverlay({ hunkId, source: "lucid-chrome", type: "diff-goto" });
-  const requestSections = (): void => requestSections();
+  const requestSections = (): void =>
+    toOverlay({ source: "lucid-chrome", type: "request-section-ids" });
   const measure = (): void => toOverlay({ source: "lucid-chrome", type: "measure-content" });
   const setTheme = (theme: "dark" | "light"): void =>
     toOverlay({ source: "lucid-chrome", theme, type: "theme" });
