@@ -195,6 +195,7 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   tabGroup: (): Locator => root.locator(hook("tab-group")),
   tabMenu: (): Locator => root.locator(hook("tab-menu")),
   tabMenuClose: (): Locator => root.locator(hook("tab-menu-close")),
+  activeTabBridge: (): Locator => root.locator(hook("active-tab-bridge")),
   tabMenuRename: (): Locator => root.locator(hook("tab-menu-rename")),
   tabRename: (): Locator => root.locator(hook("tab-rename")),
   tabSessions: (): Locator => root.locator(hook("tab-sessions")),

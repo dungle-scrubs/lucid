@@ -379,7 +379,7 @@ export const Header = ({ shell = false }: { readonly shell?: boolean }) => {
   const diffMode = useSession((s) => s.diffMode);
 
   return (
-    <header className="relative flex items-center justify-between gap-2 border-b border-ink-600 pl-4 pr-2 py-[10px]">
+    <header className="relative flex items-center justify-between gap-2 border-b border-ink-600 bg-chrome-surface pl-4 pr-2 py-[10px]">
       {/* min-w-0 lets a long artifact name truncate instead of shoving the
           controls out of the header; the controls themselves never shrink. */}
       <div className="min-w-0 flex-1 text-[13px] font-semibold text-fg-strong">
