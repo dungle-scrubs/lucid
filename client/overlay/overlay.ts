@@ -20,6 +20,13 @@ import {
 import { type ArtifactTheme, createArtifactTheme } from "./artifact-theme.ts";
 import { emphasizeElement, revealElement as revealOutlineElement } from "./reveal.ts";
 import {
+  BADGE_STEP_PX,
+  computeMarkers,
+  MAX_MARKER_RECTS,
+  type Marker,
+  type Rect,
+} from "./markers.ts";
+import {
   BrowserArtifactOutlineController,
   type TrustedOutlineCapabilities,
   type TrustedOutlinePort,
@@ -61,33 +68,6 @@ const dropStyle = (id: string): void => {
 const INTERACTIVE =
   "a, button, input, select, textarea, label, [contenteditable], [role=button], summary";
 
-interface Rect {
-  readonly left: number;
-  readonly top: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-type MarkerState = "committed" | "queued" | "pending" | "decision";
-
-/** Id prefix of the in-flight (pending) composer anchor markers - one per
- *  collected spot, suffixed by position. */
-const PENDING_ID = "__lucid_pending";
-
-interface Marker {
-  readonly id: string;
-  /** Lifecycle state of the annotation this marker anchors; drives its style. */
-  readonly state: MarkerState;
-  /** 1-based number shared with the left-panel card; 0 = no badge (a pending
-   *  spot, or a multi-target item's secondary spots). */
-  readonly index: number;
-  readonly rects: readonly Rect[];
-  /** How many earlier badges land on this same corner. Annotating one element
-   *  twice would otherwise stack badges exactly and hide all but the last, so
-   *  each is stepped right into a cascade. */
-  readonly stackIndex: number;
-}
-
 interface OverlayRenderSnapshot {
   readonly focusedId: string | null;
   readonly hoverRect: Rect | null;
@@ -95,17 +75,6 @@ interface OverlayRenderSnapshot {
   readonly sectionPulse: number;
   readonly sectionRect: Rect | null;
 }
-
-/** Horizontal step per cascaded badge - less than the badge width, so they
- *  overlap and read as a stack rather than a row. */
-const BADGE_STEP_PX = 13;
-
-/**
- * A hostile highlight payload must not turn one Lit update into an unbounded
- * DOM allocation. The snapshot is complete or absent: crossing the global
- * budget drops every marker instead of painting a misleading partial set.
- */
-const MAX_RENDERED_MARKER_RECTS = 512;
 
 /**
  * Merge a range's client rects into one box per visual line. `getClientRects()`
@@ -273,7 +242,7 @@ export class LucidOverlay extends LitElement {
           const captured = rect(rawRects[rectIndex]);
           if (captured === null) continue;
           renderedRectCount += 1;
-          if (renderedRectCount > MAX_RENDERED_MARKER_RECTS) {
+          if (renderedRectCount > MAX_MARKER_RECTS) {
             markerBudgetExceeded = true;
             break;
           }
@@ -902,78 +871,32 @@ export class LucidOverlay extends LitElement {
       this.hoverRect = null;
       return;
     }
-    const markers: Omit<Marker, "stackIndex">[] = [];
-    // Decisions FIRST, so review marks paint over them: a decision outline is
-    // the ground the marks sit on, not a mark competing with them. Drawn at
-    // rest and read straight off the live DOM (no anchor round-trip needed -
-    // the document itself declares these), because the whole problem it solves
-    // is that a recommendation's boundary is invisible until something draws
-    // it, and you cannot aim at what you cannot see.
-    for (const el of document.querySelectorAll(`[${DECISION_ATTR}]`)) {
-      const rects = [el.getBoundingClientRect()];
-      if (rects.length > 0) {
-        markers.push({ id: `decision_${markers.length}`, state: "decision", index: 0, rects });
-      }
-    }
-    // A multi-spot item paints one marker PER target, all sharing the item's
-    // id (so focus lights every spot), but only ONE carries the number - the
-    // badge names the item, and numbering every spot would fake N items. The
-    // badge goes to the first spot that still RESOLVES, not positionally to
-    // targets[0]: a spot edited away drops out (the intended any-survives
-    // degradation), and the item must keep its badge - it is the click-to-jump
-    // handle and the card's number on the surface.
-    const pushAll = (
-      id: string,
-      state: MarkerState,
-      index: number,
-      targets: readonly Anchor[],
-    ): void => {
-      let badged = false;
-      for (const t of targets) {
-        const rects = this.rectsFor(t);
-        if (rects.length === 0) continue;
-        markers.push({ id, state, index: badged ? 0 : index, rects });
-        badged = true;
-      }
-    };
-    let n = 0;
-    for (const a of this.committed) {
-      if (!a.resolved) continue; // orphaned annotations have no live anchor to paint
-      n += 1; // per annotation, never per target: the badge matches the card's number
-      // Quiet sent marks skip the paint but NEVER the count - the number
-      // belongs to the record, and hiding #1 must not renumber #2's badge off
-      // its own card. A focused mark paints while hidden: hovering the card
-      // (or revealing from it) is the human asking to see this one, briefly.
-      if (!this.paintsCommitted(a.id)) continue;
-      pushAll(a.id, "committed", n, a.targets ?? [a.target]);
-    }
-    this.queuedAnchors.forEach((q, i) => {
-      // CONTINUES the committed count, exactly as the panel's timeline does
-      // (store.ts buildTimeline): a queued note is the next number, not a
-      // second number 1. Restarting from `i + 1` put a queued mark wearing
-      // "1" on the artifact while its own card correctly read "2".
-      pushAll(q.id, "queued", n + i + 1, q.targets ?? [q.target]);
-    });
-    this.pendingAnchors.forEach((t, i) => {
-      const rects = this.rectsFor(t);
-      if (rects.length > 0)
-        markers.push({ id: `${PENDING_ID}_${i}`, state: "pending", index: 0, rects });
-    });
-    // Two annotations on one element resolve to the same rect, so their badges
-    // would sit exactly on top of each other. Count the earlier ones per corner
-    // and let render step each into a cascade.
-    const perCorner = new Map<string, number>();
-    this.markers = markers.map((m) => {
-      const r = m.rects[0];
-      // Only badge-bearing markers join the cascade: an unnumbered secondary
-      // spot draws no badge, so counting it would float a later badge off its
-      // corner for a neighbour nobody can see.
-      if (!r || m.index === 0) return { ...m, stackIndex: 0 };
-      const corner = `${Math.round(r.left)}:${Math.round(r.top)}`;
-      const stackIndex = perCorner.get(corner) ?? 0;
-      perCorner.set(corner, stackIndex + 1);
-      return { ...m, stackIndex };
-    });
+    // Decisions, committed, queued and pending resolve to rects here - the only
+    // DOM touch in this method. Numbering, the badge-on-first-resolving-target
+    // rule, the corner cascade and the rect budget all live behind
+    // computeMarkers in markers.ts, so the marker surface is unit-testable.
+    const decisions = Array.from(document.querySelectorAll(`[${DECISION_ATTR}]`)).map((element) => [
+      element.getBoundingClientRect(),
+    ]);
+    const committed = this.committed
+      .filter((annotation) => annotation.resolved) // orphaned annotations have no live anchor to paint
+      .map((annotation) => ({
+        id: annotation.id,
+        // Quiet sent marks skip the paint but NEVER the count - the number
+        // belongs to the record, and hiding #1 must not renumber #2's badge.
+        paints: this.paintsCommitted(annotation.id),
+        targets: (annotation.targets ?? [annotation.target]).map((target) => this.rectsFor(target)),
+      }));
+    const queued = this.queuedAnchors.map((queuedAnchor) => ({
+      id: queuedAnchor.id,
+      // Queued continues the committed count exactly as the panel's timeline
+      // does (store.ts buildTimeline): a queued note is the next number.
+      targets: (queuedAnchor.targets ?? [queuedAnchor.target]).map((target) =>
+        this.rectsFor(target),
+      ),
+    }));
+    const pending = this.pendingAnchors.map((target) => this.rectsFor(target));
+    this.markers = computeMarkers({ committed, decisions, pending, queued });
   }
 
   /** The widest real child of the body - what the chrome would measure itself

@@ -449,9 +449,9 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     testName: "a queued card takes the NEXT number, on its card and on its mark alike",
     mutation: {
       kind: "edit",
-      file: "client/overlay/overlay.ts",
-      find: '      pushAll(q.id, "queued", n + i + 1, q.targets ?? [q.target]);',
-      replace: '      pushAll(q.id, "queued", i + 1, q.targets ?? [q.target]);',
+      file: "client/overlay/markers.ts",
+      find: '    pushAll(queued.id, "queued", number + index + 1, queued.targets);',
+      replace: '    pushAll(queued.id, "queued", index + 1, queued.targets);',
     },
   },
   {
