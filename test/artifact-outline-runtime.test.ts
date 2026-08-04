@@ -305,7 +305,6 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
         "reduced",
         {
           clearEmphasis: () => undefined,
-          ensureStyles: () => undefined,
           invalidate: ({ reason }) => invalidations.push(reason),
         },
       ),

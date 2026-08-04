@@ -38,12 +38,11 @@ describe("outline element reveal", () => {
     expect(
       revealElement(target.element, "normal", {
         clearEmphasis: () => effects.push("clear"),
-        ensureStyles: () => effects.push("styles"),
         invalidate: () => effects.push("invalid"),
         markEmphasis: () => effects.push("mark"),
       }),
     ).toBe(true);
-    expect(effects).toEqual(["styles", "clear", "mark"]);
+    expect(effects).toEqual(["clear", "mark"]);
     // Top-aligned, not centred: the heading is the top of what the reader came
     // for, so the section opens below it rather than being cut in half. The
     // 72px inset keeps it clear of the edge so an eyebrow above it survives.
@@ -56,7 +55,6 @@ describe("outline element reveal", () => {
     const emphasized: Element[] = [];
     revealElement(target.element, "reduced", {
       clearEmphasis: () => {},
-      ensureStyles: () => {},
       invalidate: () => {},
       markEmphasis: (element) => {
         if (element) emphasized.push(element);
@@ -73,7 +71,6 @@ describe("outline element reveal", () => {
     expect(
       revealElement(target.element, "normal", {
         clearEmphasis: () => {},
-        ensureStyles: () => {},
         invalidate: (record) => health.push(record),
       }),
     ).toBe(false);
@@ -95,7 +92,7 @@ describe("outline element reveal", () => {
         { generation: 7, key: "two" },
         (key) => (key === "two" ? target.element : null),
         "normal",
-        { clearEmphasis: () => {}, ensureStyles: () => {}, invalidate: () => {} },
+        { clearEmphasis: () => {} },
       ),
     ).toBe(true);
     expect(target.scrolls).toHaveLength(1);
@@ -116,7 +113,6 @@ describe("outline element reveal", () => {
         "normal",
         {
           clearEmphasis: () => {},
-          ensureStyles: () => {},
           invalidate: (record) => health.push(record),
         },
       ),

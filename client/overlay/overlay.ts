@@ -18,7 +18,16 @@ import {
   type QueuedAnchorLike,
 } from "../shared/protocol.ts";
 import { type ArtifactTheme, createArtifactTheme } from "./artifact-theme.ts";
-import { emphasizeElement, revealElement as revealOutlineElement } from "./reveal.ts";
+import { BADGE_STEP_PX, computeMarkers, type Marker, type Rect } from "./markers.ts";
+import { sanitizeRenderSnapshot, type OverlayRenderSnapshot } from "./render-snapshot.ts";
+import {
+  addedSectionsInView,
+  enumerateSectionIds,
+  type SectionDocument,
+  pulseSection as pulseSectionIn,
+  revealSection as revealSectionIn,
+} from "./sections.ts";
+import { swapArtifactBody } from "./artifact-swap.ts";
 import {
   BrowserArtifactOutlineController,
   type TrustedOutlineCapabilities,
@@ -60,52 +69,6 @@ const dropStyle = (id: string): void => {
 
 const INTERACTIVE =
   "a, button, input, select, textarea, label, [contenteditable], [role=button], summary";
-
-interface Rect {
-  readonly left: number;
-  readonly top: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-type MarkerState = "committed" | "queued" | "pending" | "decision";
-
-/** Id prefix of the in-flight (pending) composer anchor markers - one per
- *  collected spot, suffixed by position. */
-const PENDING_ID = "__lucid_pending";
-
-interface Marker {
-  readonly id: string;
-  /** Lifecycle state of the annotation this marker anchors; drives its style. */
-  readonly state: MarkerState;
-  /** 1-based number shared with the left-panel card; 0 = no badge (a pending
-   *  spot, or a multi-target item's secondary spots). */
-  readonly index: number;
-  readonly rects: readonly Rect[];
-  /** How many earlier badges land on this same corner. Annotating one element
-   *  twice would otherwise stack badges exactly and hide all but the last, so
-   *  each is stepped right into a cascade. */
-  readonly stackIndex: number;
-}
-
-interface OverlayRenderSnapshot {
-  readonly focusedId: string | null;
-  readonly hoverRect: Rect | null;
-  readonly markers: readonly Marker[];
-  readonly sectionPulse: number;
-  readonly sectionRect: Rect | null;
-}
-
-/** Horizontal step per cascaded badge - less than the badge width, so they
- *  overlap and read as a stack rather than a row. */
-const BADGE_STEP_PX = 13;
-
-/**
- * A hostile highlight payload must not turn one Lit update into an unbounded
- * DOM allocation. The snapshot is complete or absent: crossing the global
- * budget drops every marker instead of painting a misleading partial set.
- */
-const MAX_RENDERED_MARKER_RECTS = 512;
 
 /**
  * Merge a range's client rects into one box per visual line. `getClientRects()`
@@ -234,76 +197,16 @@ export class LucidOverlay extends LitElement {
   }
 
   #captureRenderSnapshot(): OverlayRenderSnapshot {
-    const number = (value: unknown): number =>
-      typeof value === "number" && Number.isFinite(value) ? value : 0;
-    const rect = (value: unknown): Rect | null => {
-      if (typeof value !== "object" || value === null) return null;
-      const candidate = value as Partial<Rect>;
-      return {
-        height: number(candidate.height),
-        left: number(candidate.left),
-        top: number(candidate.top),
-        width: number(candidate.width),
-      };
-    };
-    try {
-      const rawMarkers = Array.isArray(this.markers) ? this.markers : [];
-      const markers: Marker[] = [];
-      let renderedRectCount = 0;
-      let markerBudgetExceeded = false;
-      for (
-        let markerIndex = 0;
-        markerIndex < Math.min(rawMarkers.length, 2_000);
-        markerIndex += 1
-      ) {
-        const candidate = rawMarkers[markerIndex] as Partial<Marker> | undefined;
-        if (typeof candidate !== "object" || candidate === null) continue;
-        const state = candidate.state;
-        if (
-          state !== "committed" &&
-          state !== "queued" &&
-          state !== "pending" &&
-          state !== "decision"
-        ) {
-          continue;
-        }
-        const rawRects = Array.isArray(candidate.rects) ? candidate.rects : [];
-        const rects: Rect[] = [];
-        for (let rectIndex = 0; rectIndex < Math.min(rawRects.length, 64); rectIndex += 1) {
-          const captured = rect(rawRects[rectIndex]);
-          if (captured === null) continue;
-          renderedRectCount += 1;
-          if (renderedRectCount > MAX_RENDERED_MARKER_RECTS) {
-            markerBudgetExceeded = true;
-            break;
-          }
-          rects.push(captured);
-        }
-        if (markerBudgetExceeded) break;
-        markers.push({
-          id: typeof candidate.id === "string" ? candidate.id.slice(0, 256) : "",
-          index: Math.trunc(number(candidate.index)),
-          rects,
-          stackIndex: Math.trunc(number(candidate.stackIndex)),
-          state,
-        });
-      }
-      return {
-        focusedId: typeof this.focusedId === "string" ? this.focusedId.slice(0, 256) : null,
-        hoverRect: rect(this.hoverRect),
-        markers: markerBudgetExceeded ? [] : markers,
-        sectionPulse: Math.trunc(number(this.sectionPulse)),
-        sectionRect: rect(this.sectionRect),
-      };
-    } catch {
-      return {
-        focusedId: null,
-        hoverRect: null,
-        markers: [],
-        sectionPulse: 0,
-        sectionRect: null,
-      };
-    }
+    // All sanitization lives in render-snapshot.ts (pure over values); this
+    // just hands the overlay's reactive fields - untrusted, same realm as the
+    // artifact - across the seam.
+    return sanitizeRenderSnapshot({
+      focusedId: this.focusedId,
+      hoverRect: this.hoverRect,
+      markers: this.markers,
+      sectionPulse: this.sectionPulse,
+      sectionRect: this.sectionRect,
+    });
   }
 
   static styles = css`
@@ -492,7 +395,6 @@ export class LucidOverlay extends LitElement {
     this.#ownedRoot = hostHandle.overlayRoot();
     this.#outlineController = new BrowserArtifactOutlineController(port, outlineCapabilities, {
       clearEmphasis: this.clearSectionEmphasis,
-      ensureStyles: () => undefined,
       markEmphasis: this.markSectionEmphasis,
     });
   }
@@ -612,27 +514,28 @@ export class LucidOverlay extends LitElement {
   /** Scroll the artifact to a section by its `data-lucid-id` and flash it. The
    *  chat permalink's landing; a no-op if the id is gone (the chip that sent it
    *  should already have degraded to plain text from the published id set). */
-  private revealSection(lucidId: string): void {
-    const target = this.sectionById(lucidId);
-    if (!target) return;
-    this.revealElement(target);
+  /** The artifact document as a section seam: every [data-lucid-id] element
+   *  with its id and rect, plus the viewport. sections.ts owns enumeration, the
+   *  viewport test, reveal and pulse over this; the overlay only builds it. */
+  #sectionDocument(): SectionDocument {
+    return {
+      sections: () =>
+        Array.from(document.querySelectorAll("[data-lucid-id]")).map((element) => ({
+          element,
+          id: element.getAttribute("data-lucid-id") ?? "",
+          rect: element.getBoundingClientRect(),
+        })),
+      viewport: () => ({ height: window.innerHeight, width: window.innerWidth }),
+    };
   }
 
-  private revealElement(target: Element): boolean {
-    const revealed = revealOutlineElement(
-      target,
+  private revealSection(lucidId: string): void {
+    revealSectionIn(
+      this.#sectionDocument(),
+      lucidId,
       window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "normal",
-      {
-        clearEmphasis: this.clearSectionEmphasis,
-        ensureStyles: () => undefined,
-        markEmphasis: this.markSectionEmphasis,
-        // Permalink resolution queries the live document immediately above.
-        // Outline activation supplies the generation-correlated invalidation
-        // callback when its runtime is wired in M2.3.
-        invalidate: () => {},
-      },
+      { clearEmphasis: this.clearSectionEmphasis, markEmphasis: this.markSectionEmphasis },
     );
-    return revealed;
   }
 
   private readonly clearSectionEmphasis = (): void => {
@@ -650,55 +553,23 @@ export class LucidOverlay extends LitElement {
    *  update-location rule: if the new material is already under the reader's
    *  eyes, moving the page would destroy rather than improve orientation. */
   private pulseSection(lucidId: string): void {
-    const target = this.sectionById(lucidId);
-    if (!target) return;
-    emphasizeElement(target, {
+    pulseSectionIn(this.#sectionDocument(), lucidId, {
       clearEmphasis: this.clearSectionEmphasis,
-      ensureStyles: () => undefined,
       markEmphasis: this.markSectionEmphasis,
     });
-  }
-
-  /** Match by attribute value rather than building a selector: an id with a
-   *  quote or control char could make querySelector throw instead of missing. */
-  private sectionById(lucidId: string): Element | undefined {
-    return Array.from(document.querySelectorAll("[data-lucid-id]")).find(
-      (el) => el.getAttribute("data-lucid-id") === lucidId,
-    );
-  }
-
-  private sectionIsInViewport(el: Element): boolean {
-    const rect = el.getBoundingClientRect();
-    return (
-      rect.bottom > 0 &&
-      rect.right > 0 &&
-      rect.top < window.innerHeight &&
-      rect.left < window.innerWidth
-    );
   }
 
   /** Report every `data-lucid-id` in the artifact so the chrome can tell a live
    *  section permalink from a dead one without reaching into this opaque-origin
    *  DOM. Published on load and after every swap. */
   private publishSectionIds(addedIds?: ReadonlySet<string>): void {
-    const elements = Array.from(document.querySelectorAll("[data-lucid-id]"));
-    const ids = elements
-      .map((el) => el.getAttribute("data-lucid-id"))
-      .filter((id): id is string => id !== null && id !== "");
-    const uniqueIds = Array.from(new Set(ids));
-    const added =
-      addedIds === undefined
-        ? undefined
-        : uniqueIds.flatMap((id) => {
-            if (!addedIds.has(id)) return [];
-            const el = elements.find((candidate) => candidate.getAttribute("data-lucid-id") === id);
-            return el ? [{ id, inViewport: this.sectionIsInViewport(el) }] : [];
-          });
+    const sections = this.#sectionDocument();
+    const ids = enumerateSectionIds(sections);
     post({
       source: "lucid-overlay",
       type: "section-ids",
-      ids: uniqueIds,
-      ...(added !== undefined ? { added } : {}),
+      ids,
+      ...(addedIds === undefined ? {} : { added: addedSectionsInView(sections, addedIds) }),
     });
   }
 
@@ -909,78 +780,32 @@ export class LucidOverlay extends LitElement {
       this.hoverRect = null;
       return;
     }
-    const markers: Omit<Marker, "stackIndex">[] = [];
-    // Decisions FIRST, so review marks paint over them: a decision outline is
-    // the ground the marks sit on, not a mark competing with them. Drawn at
-    // rest and read straight off the live DOM (no anchor round-trip needed -
-    // the document itself declares these), because the whole problem it solves
-    // is that a recommendation's boundary is invisible until something draws
-    // it, and you cannot aim at what you cannot see.
-    for (const el of document.querySelectorAll(`[${DECISION_ATTR}]`)) {
-      const rects = [el.getBoundingClientRect()];
-      if (rects.length > 0) {
-        markers.push({ id: `decision_${markers.length}`, state: "decision", index: 0, rects });
-      }
-    }
-    // A multi-spot item paints one marker PER target, all sharing the item's
-    // id (so focus lights every spot), but only ONE carries the number - the
-    // badge names the item, and numbering every spot would fake N items. The
-    // badge goes to the first spot that still RESOLVES, not positionally to
-    // targets[0]: a spot edited away drops out (the intended any-survives
-    // degradation), and the item must keep its badge - it is the click-to-jump
-    // handle and the card's number on the surface.
-    const pushAll = (
-      id: string,
-      state: MarkerState,
-      index: number,
-      targets: readonly Anchor[],
-    ): void => {
-      let badged = false;
-      for (const t of targets) {
-        const rects = this.rectsFor(t);
-        if (rects.length === 0) continue;
-        markers.push({ id, state, index: badged ? 0 : index, rects });
-        badged = true;
-      }
-    };
-    let n = 0;
-    for (const a of this.committed) {
-      if (!a.resolved) continue; // orphaned annotations have no live anchor to paint
-      n += 1; // per annotation, never per target: the badge matches the card's number
-      // Quiet sent marks skip the paint but NEVER the count - the number
-      // belongs to the record, and hiding #1 must not renumber #2's badge off
-      // its own card. A focused mark paints while hidden: hovering the card
-      // (or revealing from it) is the human asking to see this one, briefly.
-      if (!this.paintsCommitted(a.id)) continue;
-      pushAll(a.id, "committed", n, a.targets ?? [a.target]);
-    }
-    this.queuedAnchors.forEach((q, i) => {
-      // CONTINUES the committed count, exactly as the panel's timeline does
-      // (store.ts buildTimeline): a queued note is the next number, not a
-      // second number 1. Restarting from `i + 1` put a queued mark wearing
-      // "1" on the artifact while its own card correctly read "2".
-      pushAll(q.id, "queued", n + i + 1, q.targets ?? [q.target]);
-    });
-    this.pendingAnchors.forEach((t, i) => {
-      const rects = this.rectsFor(t);
-      if (rects.length > 0)
-        markers.push({ id: `${PENDING_ID}_${i}`, state: "pending", index: 0, rects });
-    });
-    // Two annotations on one element resolve to the same rect, so their badges
-    // would sit exactly on top of each other. Count the earlier ones per corner
-    // and let render step each into a cascade.
-    const perCorner = new Map<string, number>();
-    this.markers = markers.map((m) => {
-      const r = m.rects[0];
-      // Only badge-bearing markers join the cascade: an unnumbered secondary
-      // spot draws no badge, so counting it would float a later badge off its
-      // corner for a neighbour nobody can see.
-      if (!r || m.index === 0) return { ...m, stackIndex: 0 };
-      const corner = `${Math.round(r.left)}:${Math.round(r.top)}`;
-      const stackIndex = perCorner.get(corner) ?? 0;
-      perCorner.set(corner, stackIndex + 1);
-      return { ...m, stackIndex };
-    });
+    // Decisions, committed, queued and pending resolve to rects here - the only
+    // DOM touch in this method. Numbering, the badge-on-first-resolving-target
+    // rule, the corner cascade and the rect budget all live behind
+    // computeMarkers in markers.ts, so the marker surface is unit-testable.
+    const decisions = Array.from(document.querySelectorAll(`[${DECISION_ATTR}]`)).map((element) => [
+      element.getBoundingClientRect(),
+    ]);
+    const committed = this.committed
+      .filter((annotation) => annotation.resolved) // orphaned annotations have no live anchor to paint
+      .map((annotation) => ({
+        id: annotation.id,
+        // Quiet sent marks skip the paint but NEVER the count - the number
+        // belongs to the record, and hiding #1 must not renumber #2's badge.
+        paints: this.paintsCommitted(annotation.id),
+        targets: (annotation.targets ?? [annotation.target]).map((target) => this.rectsFor(target)),
+      }));
+    const queued = this.queuedAnchors.map((queuedAnchor) => ({
+      id: queuedAnchor.id,
+      // Queued continues the committed count exactly as the panel's timeline
+      // does (store.ts buildTimeline): a queued note is the next number.
+      targets: (queuedAnchor.targets ?? [queuedAnchor.target]).map((target) =>
+        this.rectsFor(target),
+      ),
+    }));
+    const pending = this.pendingAnchors.map((target) => this.rectsFor(target));
+    this.markers = computeMarkers({ committed, decisions, pending, queued });
   }
 
   /** The widest real child of the body - what the chrome would measure itself
@@ -1014,54 +839,22 @@ export class LucidOverlay extends LitElement {
     this.removeDiffStyles();
     this.clearSectionEmphasis();
     this.#outlineController?.revise();
-    const parsed = new DOMParser().parseFromString(htmlText, "text/html");
-    const previousIds = new Set(
-      Array.from(document.querySelectorAll("[data-lucid-id]"))
-        .map((el) => el.getAttribute("data-lucid-id"))
-        .filter((id): id is string => id !== null && id !== ""),
-    );
-    const host = this.#ownedRoot;
-    // Remove current artifact body nodes (everything except our host + scripts).
+    // The body/head swap lives behind artifact-swap.ts, which operates on this
+    // untrusted realm's document and preserves the overlay-owned nodes named
+    // here (the host + this element). Client.js scripts are kept automatically.
     const keep = new Set<Node>();
-    if (host) keep.add(host);
+    if (this.#ownedRoot) keep.add(this.#ownedRoot);
     keep.add(this);
-    for (const s of document.body.querySelectorAll("script[src='/__lucid/client.js']")) keep.add(s);
-    Array.from(document.body.childNodes).forEach((n) => {
-      if (!keep.has(n)) document.body.removeChild(n);
-    });
-    // Insert new artifact body nodes before the host.
-    const ref = host ?? null;
-    Array.from(parsed.body.childNodes).forEach((n) => {
-      if (n instanceof Element && n.getAttribute("data-lucid-ignore") === "true") return;
-      if (n instanceof HTMLScriptElement && n.src.includes("/__lucid/client.js")) return;
-      document.body.insertBefore(document.importNode(n, true), ref);
-    });
-    // Sync artifact <style> and <link rel="stylesheet"> tags from the new head.
-    // Both are tagged so a later swap removes them; without carrying <link>s an
-    // artifact that loads its CSS via <head> <link> would flash unstyled after a
-    // version swap.
-    for (const s of document.head.querySelectorAll("[data-lucid-artifact-style]")) s.remove();
-    parsed.head.querySelectorAll("style").forEach((s) => {
-      const clone = document.importNode(s, true);
-      clone.setAttribute("data-lucid-artifact-style", "true");
-      document.head.appendChild(clone);
-    });
-    parsed.head.querySelectorAll('link[rel="stylesheet"]').forEach((s) => {
-      const clone = document.importNode(s, true);
-      clone.setAttribute("data-lucid-artifact-style", "true");
-      clone.addEventListener("load", () => this.#theme.reapply(), { once: true });
-      document.head.appendChild(clone);
+    const { addedIds } = swapArtifactBody(document, htmlText, {
+      keep,
+      onLinkedSheetLoad: () => this.#theme.reapply(),
+      ref: this.#ownedRoot,
     });
     // New inline sheets are ready now. Linked sheets re-run this on load above,
     // so a dark-capable artifact is not pinned light by an early capability check.
     this.#theme.reapply();
     this.scheduleReposition();
-    const currentIds = new Set(
-      Array.from(document.querySelectorAll("[data-lucid-id]"))
-        .map((el) => el.getAttribute("data-lucid-id"))
-        .filter((id): id is string => id !== null && id !== ""),
-    );
-    this.publishSectionIds(new Set([...currentIds].filter((id) => !previousIds.has(id))));
+    this.publishSectionIds(addedIds);
     if (outlineRevision !== undefined) {
       this.#outlineController?.revisionComplete(outlineRevision);
     }

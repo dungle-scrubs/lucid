@@ -122,7 +122,6 @@ describe("BrowserArtifactOutlineController lifecycle", () => {
     const harness = capabilitiesHarness();
     const controller = new BrowserArtifactOutlineController(port, harness.capabilities, {
       clearEmphasis: () => undefined,
-      ensureStyles: () => undefined,
     });
     port.receive({
       type: "outline-layout-request",
@@ -144,7 +143,6 @@ describe("BrowserArtifactOutlineController lifecycle", () => {
     const harness = capabilitiesHarness();
     const controller = new BrowserArtifactOutlineController(port, harness.capabilities, {
       clearEmphasis: () => undefined,
-      ensureStyles: () => undefined,
     });
     port.receive({
       type: "outline-layout-request",
@@ -165,7 +163,6 @@ describe("BrowserArtifactOutlineController lifecycle", () => {
     const harness = capabilitiesHarness();
     const controller = new BrowserArtifactOutlineController(port, harness.capabilities, {
       clearEmphasis: () => undefined,
-      ensureStyles: () => undefined,
     });
 
     expect(controller.debugInfo()).toMatchObject({ dormant: true, connected: true });
