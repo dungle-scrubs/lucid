@@ -11,57 +11,72 @@ import {
 
 const CONTEXT_LEN = 32;
 
-/** Character offset of (node, offset) within document.body.textContent. */
-const offsetInBody = (node: Node, nodeOffset: number): number => {
-  const body = document.body;
-  // Text node: offset is a character offset.
-  if (node.nodeType === Node.TEXT_NODE) {
-    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-    let total = 0;
-    let current = walker.nextNode();
-    while (current) {
-      if (current === node) return total + nodeOffset;
-      total += current.textContent?.length ?? 0;
-      current = walker.nextNode();
-    }
-    return total;
-  }
-  // Element node: offset is a child index. Walk text up to (not including) the
-  // child at that index, so the position lands at the start of that subtree.
-  if (node.nodeType === Node.ELEMENT_NODE && body.contains(node)) {
-    const child = node.childNodes[nodeOffset];
-    if (!child) return textLengthOf(node);
-    return textLengthBefore(child);
-  }
-  return 0;
-};
+// Stable DOM spec values, as locals rather than the `Node`/`NodeFilter` globals,
+// so the offset helpers are unit-testable in a runtime with no DOM (bun:test).
+const TEXT_NODE = 3;
+const ELEMENT_NODE = 1;
+const SHOW_TEXT = 4;
 
-/** Total character length of all text descendants of a node. */
-const textLengthOf = (node: Node): number => {
-  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
-  let total = 0;
+/** Walk every text node under `root`, in document order. `ownerDocument` is
+ *  the node's own document in a browser and the linkedom document in a unit
+ *  test, so this helper is testable with no global DOM. */
+const walkTextNodes = function* (root: Node): Generator<Node> {
+  const owner = (root.ownerDocument ??
+    (typeof document !== "undefined" ? document : null)) as Document | null;
+  if (!owner) return;
+  const walker = owner.createTreeWalker(root, SHOW_TEXT);
   let current = walker.nextNode();
   while (current) {
-    total += current.textContent?.length ?? 0;
+    yield current;
     current = walker.nextNode();
   }
+};
+
+/** Total character length of all text descendants of `node`. */
+const textLengthOf = (node: Node): number => {
+  let total = 0;
+  for (const text of walkTextNodes(node)) total += text.textContent?.length ?? 0;
   return total;
 };
 
-/** Character offset of `target` within document.body.textContent. */
-const textLengthBefore = (target: Node): number => {
-  const body = document.body;
-  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+/** Character offset of `target` within `textRoot`'s text. `textRoot` is
+ *  whichever node `rangeTextNode` picked - never a hardcoded `document.body`
+ *  (plan 04, M1.2): the rule for WHICH node's text the offsets are measured
+ *  against has one owner, and resolve already reads it. */
+const textLengthBefore = (textRoot: Node, target: Node): number => {
   let total = 0;
-  let current = walker.nextNode();
-  while (current) {
+  for (const current of walkTextNodes(textRoot)) {
     if (current === target) return total;
     // `target` may be an element whose first text node is `current`'s successor.
     if (target.contains(current) === false && current.contains(target)) return total;
     total += current.textContent?.length ?? 0;
-    current = walker.nextNode();
   }
   return total;
+};
+
+/** Character offset of (container, offset) within `textRoot`'s text - the one
+ *  measure both capture and resolve use (M1.2). `textRoot` is the node
+ *  `rangeTextNode` chose, so capture never re-derives the root by a second
+ *  rule. Exported so the capture/resolve agreement is unit-testable without a
+ *  browser Selection. */
+export const offsetWithin = (textRoot: Node, container: Node, offset: number): number => {
+  // Text node: offset is a character offset into this node.
+  if (container.nodeType === TEXT_NODE) {
+    let total = 0;
+    for (const current of walkTextNodes(textRoot)) {
+      if (current === container) return total + offset;
+      total += current.textContent?.length ?? 0;
+    }
+    return total;
+  }
+  // Element node: offset is a child index. Land at the start of that subtree:
+  // the position is the text length before the child at that index.
+  if (container.nodeType === ELEMENT_NODE && textRoot.contains(container)) {
+    const child = (container as Element).childNodes[offset];
+    if (!child) return textLengthOf(container);
+    return textLengthBefore(textRoot, child);
+  }
+  return 0;
 };
 
 /** Capture a range anchor from the current selection, or undefined if none. */
@@ -72,8 +87,13 @@ export const captureRangeAnchor = (): RangeAnchor | undefined => {
   const exact = selection.toString();
   if (exact.trim().length === 0) return undefined;
 
-  const fullText = document.body.textContent ?? "";
-  const start = offsetInBody(range.startContainer, range.startOffset);
+  // Offsets are measured against whichever node `rangeTextNode` picks - the
+  // same node resolve scans - never a hardcoded document.body (M1.2). An empty
+  // body with text in documentElement otherwise captured offsets resolve could
+  // not match.
+  const textRoot = rangeTextNode(document as unknown as DomRootLike) as unknown as Node;
+  const fullText = textRoot.textContent ?? "";
+  const start = offsetWithin(textRoot, range.startContainer, range.startOffset);
   const end = start + exact.length;
   const prefix = fullText.slice(Math.max(0, start - CONTEXT_LEN), start);
   const suffix = fullText.slice(end, end + CONTEXT_LEN);
