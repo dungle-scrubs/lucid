@@ -563,13 +563,13 @@ export class LucidOverlay extends LitElement {
    *  section permalink from a dead one without reaching into this opaque-origin
    *  DOM. Published on load and after every swap. */
   private publishSectionIds(addedIds?: ReadonlySet<string>): void {
-    const document = this.#sectionDocument();
-    const ids = enumerateSectionIds(document);
+    const sections = this.#sectionDocument();
+    const ids = enumerateSectionIds(sections);
     post({
       source: "lucid-overlay",
       type: "section-ids",
       ids,
-      ...(addedIds === undefined ? {} : { added: addedSectionsInView(document, addedIds) }),
+      ...(addedIds === undefined ? {} : { added: addedSectionsInView(sections, addedIds) }),
     });
   }
 
