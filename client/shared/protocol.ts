@@ -346,7 +346,6 @@ export type ChromeMessage =
       readonly type: "theme";
       readonly theme: "light" | "dark";
     };
-
 export const isOverlayMessage = (data: unknown): data is OverlayMessage =>
   typeof data === "object" &&
   data !== null &&
@@ -356,3 +355,107 @@ export const isChromeMessage = (data: unknown): data is ChromeMessage =>
   typeof data === "object" &&
   data !== null &&
   (data as { source?: unknown }).source === "lucid-chrome";
+
+/** The bound on section-ids the overlay may report. Deliberately larger than the
+ *  private port's 64-heading cap (headings are a subset of sections): a plan
+ *  artifact carries hundreds of data-lucid-ids, and discarding the tail would
+ *  silently break every section permalink past the cut. */
+export const MAX_OVERLAY_SECTION_IDS = 512;
+
+export type OverlayValidationRecord =
+  | { readonly kind: "refusal"; readonly type: string; readonly field: string }
+  | {
+      readonly kind: "truncation";
+      readonly type: string;
+      readonly field: string;
+      readonly original: number;
+      readonly kept: number;
+    };
+
+/** Validate a public-channel overlay message (the artifact shares the overlay's
+ *  JS realm, so inbound data is untrusted). Returns the typed message, or null
+ *  when the shape or a field's bounds are wrong; `onRecord` receives a refusal
+ *  or truncation record for observability. */
+export const validateOverlayMessage = (
+  data: unknown,
+  onRecord?: (record: OverlayValidationRecord) => void,
+): OverlayMessage | null => {
+  if (!isRecord(data) || data.source !== "lucid-overlay") return null;
+  const type = data.type;
+  const refuse = (field: string): null => {
+    onRecord?.({ field, kind: "refusal", type: String(type) });
+    return null;
+  };
+
+  switch (type) {
+    case "ready":
+      return { source: "lucid-overlay", type: "ready" };
+    case "target-picked": {
+      if (!isRecord(data.anchor)) return refuse("anchor");
+      return {
+        source: "lucid-overlay",
+        type: "target-picked",
+        anchor: data.anchor as unknown as Anchor,
+      };
+    }
+    case "annotation-hover":
+      if (data.id !== null && typeof data.id !== "string") return refuse("id");
+      return {
+        source: "lucid-overlay",
+        type: "annotation-hover",
+        id: data.id as string | null,
+      };
+    case "annotation-activate":
+      if (typeof data.id !== "string") return refuse("id");
+      return { source: "lucid-overlay", type: "annotation-activate", id: data.id };
+    case "selection-cleared":
+      return { source: "lucid-overlay", type: "selection-cleared" };
+    case "content-width": {
+      const width = data.width;
+      if (typeof width !== "number" || !Number.isFinite(width) || width <= 0)
+        return refuse("width");
+      return { source: "lucid-overlay", type: "content-width", width };
+    }
+    case "pong":
+      if (typeof data.nonce !== "string") return refuse("nonce");
+      return { source: "lucid-overlay", type: "pong", nonce: data.nonce };
+    case "section-ids": {
+      if (!Array.isArray(data.ids)) return refuse("ids");
+      const ids = data.ids.filter((id): id is string => typeof id === "string");
+      if (ids.length > MAX_OVERLAY_SECTION_IDS) {
+        onRecord?.({
+          field: "ids",
+          kind: "truncation",
+          kept: MAX_OVERLAY_SECTION_IDS,
+          original: ids.length,
+          type: "section-ids",
+        });
+        return {
+          source: "lucid-overlay",
+          type: "section-ids",
+          ids: ids.slice(0, MAX_OVERLAY_SECTION_IDS),
+          ...(Array.isArray(data.added)
+            ? {
+                added: data.added as readonly {
+                  readonly id: string;
+                  readonly inViewport: boolean;
+                }[],
+              }
+            : {}),
+        };
+      }
+      return {
+        source: "lucid-overlay",
+        type: "section-ids",
+        ids,
+        ...(Array.isArray(data.added)
+          ? {
+              added: data.added as readonly { readonly id: string; readonly inViewport: boolean }[],
+            }
+          : {}),
+      };
+    }
+    default:
+      return null;
+  }
+};

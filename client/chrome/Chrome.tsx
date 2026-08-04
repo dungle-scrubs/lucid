@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Anchor } from "../../src/anchors/anchor.ts";
-import { isOverlayMessage } from "../shared/protocol.ts";
+import { validateOverlayMessage, type OverlayValidationRecord } from "../shared/protocol.ts";
 import { SessionProvider, useSession } from "./context.tsx";
 import {
   MAX_PICK_TARGETS,
@@ -87,12 +87,23 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
       notify.notice(`Up to ${MAX_PICK_TARGETS} spots per note - that pick was not added.`);
 
     const onMessage = (e: MessageEvent): void => {
-      if (!isOverlayMessage(e.data)) return;
+      const msg = validateOverlayMessage(e.data, (record: OverlayValidationRecord) => {
+        // Refusals and truncations are observability, not errors: the hostile
+        // realm can send any shape, and a refused message simply does not
+        // reach the layout math below.
+        if (record.kind === "refusal") {
+          console.warn(`[overlay] refused ${record.type}.${record.field}`);
+        } else {
+          console.warn(
+            `[overlay] truncated ${record.type}.${record.field} (${record.original} -> ${record.kept})`,
+          );
+        }
+      });
+      if (msg === null) return;
       // Only this session's own iframe may speak for the surface: any frame
       // can forge an overlay-shaped payload, and under tabs a stale surface
       // must not mutate the active session's state.
       if (!surface.ownsSource(e.source)) return;
-      const msg = e.data;
       if (msg.type === "ready") {
         surface.markOverlayReady();
         surface.pushHighlights();
