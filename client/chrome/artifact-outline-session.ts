@@ -1,6 +1,5 @@
 import {
   ARTIFACT_OUTLINE_POLICY,
-  createOutlineRateGate,
   type OutlineLayoutMeasurement,
   type OutlineMotionPreference,
   type OutlineSnapshot,
@@ -46,7 +45,6 @@ export interface ChromeArtifactOutline {
 interface ChromeArtifactOutlineOptions {
   readonly getState: () => OutlineStateView;
   readonly measureLayout: () => OutlineLayoutMeasurement | null;
-  readonly now?: () => number;
   readonly setState: (patch: OutlineStatePatch) => void;
 }
 
@@ -66,8 +64,6 @@ const normalizeLayout = (layout: OutlineLayoutMeasurement): OutlineLayoutMeasure
 export const createChromeArtifactOutline = (
   options: ChromeArtifactOutlineOptions,
 ): ChromeArtifactOutline => {
-  const now = options.now ?? (() => performance.now());
-  let rateGate = createOutlineRateGate();
   let active = false;
   let port: OutlinePort | null = null;
   let requestGeneration = 0;
@@ -117,7 +113,6 @@ export const createChromeArtifactOutline = (
     if (!force && nextLayoutKey === lastLayoutKey) return false;
     lastLayoutKey = nextLayoutKey;
     requestGeneration += 1;
-    rateGate = createOutlineRateGate();
     markProjectionPending();
     port.postMessage({
       ...layout,
@@ -141,12 +136,13 @@ export const createChromeArtifactOutline = (
       return;
     }
     if (!active || !layoutAvailable || pendingRevision !== null) return;
+    // Generation ordering is one ledger (latestProjectionGeneration) with one
+    // refusal point: any publication older than the latest accepted one is
+    // stale, whatever its type. The snapshot's request-match and the active
+    // key's currency are separate concerns, checked in their own branches.
+    if (message.generation < latestProjectionGeneration) return;
     if (message.type === "outline-snapshot") {
-      if (
-        message.requestGeneration !== requestGeneration ||
-        message.generation < latestProjectionGeneration ||
-        !rateGate.accept("snapshot", now())
-      ) {
+      if (message.requestGeneration !== requestGeneration) {
         return;
       }
       latestProjectionGeneration = message.generation;
@@ -160,20 +156,18 @@ export const createChromeArtifactOutline = (
 
     if (message.type === "outline-active") {
       const snapshot = options.getState().outlineSnapshot;
-      if (
-        snapshot === null ||
-        message.generation !== snapshot.generation ||
-        (message.key !== null &&
-          !snapshot.headings.some((heading) => heading.key === message.key)) ||
-        !rateGate.accept("active-key", now())
-      ) {
+      // The producer derives its active key from its own projection headings, so
+      // a current-generation active key is already a member of this snapshot;
+      // the currency match is the only remaining guard.
+      if (snapshot === null || message.generation !== snapshot.generation) {
         return;
       }
       options.setState({ outlineSnapshot: { ...snapshot, activeKey: message.key } });
       return;
     }
 
-    if (message.generation < latestProjectionGeneration) return;
+    // outline-invalidated: the only generation-bearing publication that does
+    // not need to match the current snapshot, only to advance the ledger.
     latestProjectionGeneration = message.generation;
     options.setState({
       outlineHealth: message.health,
@@ -204,7 +198,6 @@ export const createChromeArtifactOutline = (
     latestProjectionGeneration = 0;
     lastLayoutKey = null;
     pendingRevision = null;
-    rateGate = createOutlineRateGate();
     clearProjection();
   };
 

@@ -4,10 +4,7 @@
  * projection policy, visible parent control, or legacy annotation transport.
  */
 
-import {
-  ARTIFACT_OUTLINE_POLICY,
-  type OutlineRuntimePublication,
-} from "../shared/artifact-outline.ts";
+import { ARTIFACT_OUTLINE_POLICY } from "../shared/artifact-outline.ts";
 import { type OutlinePrivateOutbound, validateOutlinePrivateInbound } from "../shared/protocol.ts";
 import {
   type ArtifactOutlineDebugInfo,
@@ -211,14 +208,6 @@ const snapshotGeometry = (
   };
 };
 
-const toOutbound = (publication: OutlineRuntimePublication): OutlinePrivateOutbound => {
-  if (publication.type === "snapshot") {
-    return { ...publication, type: "outline-snapshot" };
-  }
-  if (publication.type === "active") return { ...publication, type: "outline-active" };
-  return { ...publication, type: "outline-invalidated" };
-};
-
 export class BrowserArtifactOutlineController {
   readonly #capabilities: TrustedOutlineCapabilities;
   readonly #emphasis: EmphasisEnvironment;
@@ -310,7 +299,7 @@ export class BrowserArtifactOutlineController {
       geometry,
       now: this.#capabilities.now,
       onProofRealmRejected: () => this.#stopObservers(),
-      publish: (publication) => this.#post(toOutbound(publication)),
+      publish: (publication) => this.#post(publication),
       scheduleFrame: this.#capabilities.scheduleFrame,
       scheduleQuiet: this.#capabilities.scheduleQuiet,
     });

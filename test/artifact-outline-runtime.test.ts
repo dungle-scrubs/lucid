@@ -5,7 +5,10 @@ import {
   type OutlineRuntimeElement,
 } from "../client/overlay/artifact-outline-runtime.ts";
 import type { OutlineRuntimePublication } from "../client/shared/artifact-outline.ts";
-import { validateOutlineSnapshot } from "../client/shared/artifact-outline.ts";
+import {
+  ARTIFACT_OUTLINE_POLICY,
+  validateOutlineSnapshot,
+} from "../client/shared/artifact-outline.ts";
 
 interface FakeElement extends OutlineRuntimeElement {
   readonly children: FakeElement[];
@@ -173,7 +176,7 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
 
     expect(publications).toHaveLength(1);
     expect(publications[0]).toMatchObject({
-      type: "snapshot",
+      type: "outline-snapshot",
       availability: "complete",
       headings: [{ label: "First section" }, { label: "Second section" }],
     });
@@ -287,11 +290,14 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
     runtime.requestLayout(request);
     scheduler.flushQuiet();
     const first = publications[0];
-    expect(first?.type).toBe("snapshot");
-    if (first?.type !== "snapshot") throw new Error("snapshot missing");
+    expect(first?.type).toBe("outline-snapshot");
+    if (first?.type !== "outline-snapshot") throw new Error("snapshot missing");
 
     runtime.revise();
-    expect(publications.map(({ type }) => type)).toEqual(["snapshot", "invalidated"]);
+    expect(publications.map(({ type }) => type)).toEqual([
+      "outline-snapshot",
+      "outline-invalidated",
+    ]);
     const invalidations: string[] = [];
     expect(
       runtime.activate(
@@ -308,8 +314,8 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
     now = 250;
     scheduler.flushQuiet();
     const second = publications.at(-1);
-    expect(second?.type).toBe("snapshot");
-    if (second?.type !== "snapshot") throw new Error("replacement snapshot missing");
+    expect(second?.type).toBe("outline-snapshot");
+    if (second?.type !== "outline-snapshot") throw new Error("replacement snapshot missing");
     expect(second.generation).toBeGreaterThan(first.generation);
     expect(second.headings.map(({ key }) => key)).not.toEqual(first.headings.map(({ key }) => key));
   });
@@ -322,8 +328,8 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
     runtime.requestLayout(request);
     scheduler.flushQuiet();
     const snapshot = publications[0];
-    expect(snapshot?.type).toBe("snapshot");
-    if (snapshot?.type !== "snapshot") throw new Error("snapshot missing");
+    expect(snapshot?.type).toBe("outline-snapshot");
+    if (snapshot?.type !== "outline-snapshot") throw new Error("snapshot missing");
 
     runtime.invalidateWithHealth({
       code: "AO-002",
@@ -341,7 +347,7 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
           occurrenceCount: 1,
           reason: "disconnected-heading",
         },
-        type: "invalidated",
+        type: "outline-invalidated",
       },
     ]);
     expect(runtime.debugInfo()).toMatchObject({ healthCode: "AO-002", headingCount: 0 });
@@ -377,8 +383,8 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
     runtime.requestLayout(request);
     scheduler.flushQuiet();
     const first = publications.at(-1);
-    expect(first?.type).toBe("snapshot");
-    if (first?.type !== "snapshot") throw new Error("snapshot missing");
+    expect(first?.type).toBe("outline-snapshot");
+    if (first?.type !== "outline-snapshot") throw new Error("snapshot missing");
     const firstKeys = Object.fromEntries(first.headings.map(({ key, label }) => [label, key]));
 
     headingOrder = [
@@ -390,8 +396,8 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
     now = 250;
     scheduler.flushQuiet();
     const second = publications.at(-1);
-    expect(second?.type).toBe("snapshot");
-    if (second?.type !== "snapshot") throw new Error("replacement snapshot missing");
+    expect(second?.type).toBe("outline-snapshot");
+    if (second?.type !== "outline-snapshot") throw new Error("replacement snapshot missing");
     expect(second.generation).toBeGreaterThan(first.generation);
     const secondKeys = Object.fromEntries(second.headings.map(({ key, label }) => [label, key]));
     expect(secondKeys.One).toBe(firstKeys.One);
@@ -410,8 +416,8 @@ describe("ArtifactOutlineRuntime eligibility and complete extraction", () => {
     now = 500;
     scheduler.flushQuiet();
     const third = publications.at(-1);
-    expect(third?.type).toBe("snapshot");
-    if (third?.type !== "snapshot") throw new Error("second replacement snapshot missing");
+    expect(third?.type).toBe("outline-snapshot");
+    if (third?.type !== "outline-snapshot") throw new Error("second replacement snapshot missing");
     expect(Object.fromEntries(third.headings.map(({ key, label }) => [label, key]))).toEqual({
       Three: threeKey,
       Two: twoKey,
@@ -707,7 +713,7 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     expect(snapshot.scheduler.quietTasks).not.toHaveLength(0);
     trusted = false;
     snapshot.scheduler.flushQuiet();
-    expect(snapshot.publications.filter(({ type }) => type === "snapshot")).toHaveLength(1);
+    expect(snapshot.publications.filter(({ type }) => type === "outline-snapshot")).toHaveLength(1);
     expect(snapshot.runtime.debugInfo()).toMatchObject({
       proofReason: "untrusted-proof-realm",
     });
@@ -727,7 +733,10 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
       safeInsets: { ...request.safeInsets, right: 40 },
     });
 
-    expect(publications.map(({ type }) => type)).toEqual(["snapshot", "invalidated"]);
+    expect(publications.map(({ type }) => type)).toEqual([
+      "outline-snapshot",
+      "outline-invalidated",
+    ]);
     expect(runtime.debugInfo()).toMatchObject({ headingCount: 0, proofComplete: false });
   });
 
@@ -859,7 +868,10 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     scheduler.flushQuiet();
     expect(runtime.debugInfo()).toMatchObject({ headingCount: 2, pendingQuietTask: false });
     expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(5);
-    expect(publications.at(-1)).toMatchObject({ availability: "complete", type: "snapshot" });
+    expect(publications.at(-1)).toMatchObject({
+      availability: "complete",
+      type: "outline-snapshot",
+    });
   });
 
   test("sustained layout requests bound projection work and retain one trailing rebuild", () => {
@@ -883,12 +895,17 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
 
     expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(4);
     expect(runtime.debugInfo()).toMatchObject({ headingCount: 0, pendingQuietTask: true });
-    expect(publications.filter(({ type }) => type === "invalidated").length).toBeLessThanOrEqual(4);
+    expect(
+      publications.filter(({ type }) => type === "outline-invalidated").length,
+    ).toBeLessThanOrEqual(4);
     now += 250;
     scheduler.flushQuiet();
     expect(runtime.debugInfo()).toMatchObject({ headingCount: 2, pendingQuietTask: false });
     expect(runtime.debugInfo().taskCount).toBeLessThanOrEqual(5);
-    expect(publications.at(-1)).toMatchObject({ availability: "complete", type: "snapshot" });
+    expect(publications.at(-1)).toMatchObject({
+      availability: "complete",
+      type: "outline-snapshot",
+    });
   });
 
   test("active tracking is animation-frame bounded and debugInfo contains no labels", () => {
@@ -914,7 +931,9 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     runtime.trackActive();
     expect(scheduler.frameTasks).toHaveLength(1);
     for (const task of scheduler.frameTasks.splice(0)) task();
-    expect(publications.filter(({ type }) => type === "active").length).toBeLessThanOrEqual(1);
+    expect(publications.filter(({ type }) => type === "outline-active").length).toBeLessThanOrEqual(
+      1,
+    );
     expect(JSON.stringify(runtime.debugInfo())).not.toContain("Sensitive");
   });
 
@@ -942,7 +961,7 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
       now = Math.min(now + 100, 999);
     }
 
-    expect(publications.filter(({ type }) => type === "active")).toHaveLength(10);
+    expect(publications.filter(({ type }) => type === "outline-active")).toHaveLength(10);
   });
 
   test("unchanged samples do not suppress a later active heading change", () => {
@@ -971,7 +990,7 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     runtime.trackActive();
     for (const task of scheduler.frameTasks.splice(0)) task();
 
-    expect(publications.filter(({ type }) => type === "active")).toHaveLength(1);
+    expect(publications.filter(({ type }) => type === "outline-active")).toHaveLength(1);
   });
 
   test("a change inside the sampling interval publishes from the trailing sample", () => {
@@ -997,11 +1016,81 @@ describe("ArtifactOutlineRuntime scheduling, cancellation, and diagnostics", () 
     };
     runtime.trackActive();
     for (const task of scheduler.frameTasks.splice(0)) task();
-    expect(publications.filter(({ type }) => type === "active")).toEqual([]);
+    expect(publications.filter(({ type }) => type === "outline-active")).toEqual([]);
 
     now = 100;
     scheduler.flushQuiet();
     for (const task of scheduler.frameTasks.splice(0)) task();
-    expect(publications.filter(({ type }) => type === "active")).toHaveLength(1);
+    expect(publications.filter(({ type }) => type === "outline-active")).toHaveLength(1);
+  });
+
+  test("the producer bounds snapshot publication to its own per-second rate, with no consumer gate", () => {
+    // The chrome session used to re-rate-gate snapshots it received. Removing
+    // that consumer gate is safe only if the producer (this runtime) already
+    // bounds publication on its own. A burst of projections well inside the
+    // snapshot interval defers every one past the first - the consumer never
+    // sees an over-rate publication to gate.
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("One"));
+    append(main, node("Two"));
+    let now = 0;
+    const { publications, runtime, scheduler } = harness([main], { now: () => now });
+    runtime.requestLayout(request);
+    scheduler.flushQuiet();
+    const baseline = publications.filter(
+      (publication) => publication.type === "outline-snapshot",
+    ).length;
+    expect(baseline).toBe(1);
+    const interval = 1_000 / ARTIFACT_OUTLINE_POLICY.maxSnapshotsPerSecond;
+    for (let index = 0; index < 6; index += 1) {
+      now += Math.floor(interval / 5);
+      runtime.invalidate(`burst-${index}`);
+      scheduler.flushQuiet();
+    }
+    // Six rapid invalidates inside a sub-second window publish far fewer than
+    // six snapshots - the producer coalesces to its snapshot interval, so it
+    // never feeds the consumer an over-rate burst to gate.
+    expect(
+      publications.filter((publication) => publication.type === "outline-snapshot").length,
+    ).toBeLessThan(baseline + ARTIFACT_OUTLINE_POLICY.maxSnapshotsPerSecond);
+  });
+
+  test("the producer publishes only active keys that belong to its own projection headings", () => {
+    // The chrome session used to re-check an inbound active key against the
+    // snapshot's headings. Removing that re-check is safe only because the
+    // producer derives its active key from its own projection (activeOutlineKey
+    // over the heading positions), so a published key is always one of the
+    // projection's heading keys - the consumer never has to re-derive that.
+    const main = node("main", { tagName: "MAIN" });
+    append(main, node("First", { rect: { bottom: 20, left: 100, right: 700, top: 0 } }));
+    const second = append(
+      main,
+      node("Second", { rect: { bottom: 140, left: 100, right: 700, top: 120 } }),
+    );
+    let now = 0;
+    const { publications, runtime, scheduler } = harness([main], { now: () => now });
+    runtime.requestLayout(request);
+    scheduler.flushQuiet();
+    const snapshot = publications.find((publication) => publication.type === "outline-snapshot");
+    const headingKeys = new Set(
+      snapshot && snapshot.type === "outline-snapshot"
+        ? snapshot.headings.map(({ key }) => key)
+        : [],
+    );
+    for (let index = 0; index < 10; index += 1) {
+      (second as { rect: OutlineRuntimeElement["rect"] }).rect = {
+        bottom: index % 2 === 0 ? 20 : 140,
+        left: 100,
+        right: 700,
+        top: index % 2 === 0 ? 0 : 120,
+      };
+      runtime.trackActive();
+      for (const task of scheduler.frameTasks.splice(0)) task();
+      now += 100;
+    }
+    for (const publication of publications.filter(({ type }) => type === "outline-active")) {
+      if (publication.type !== "outline-active") continue;
+      expect(publication.key === null || headingKeys.has(publication.key)).toBe(true);
+    }
   });
 });

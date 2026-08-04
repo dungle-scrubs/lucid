@@ -10,7 +10,6 @@ import {
   type OutlineMotionPreference,
   type OutlineRuntimePublication,
   type OutlineSnapshot,
-  type OutlineSnapshotPublication,
   validateOutlineSnapshot,
 } from "./artifact-outline.ts";
 
@@ -62,13 +61,7 @@ export type OutlinePrivateInbound =
     });
 
 export type OutlinePrivateOutbound =
-  | (Omit<OutlineSnapshotPublication, "type"> & { readonly type: "outline-snapshot" })
-  | (Omit<Extract<OutlineRuntimePublication, { readonly type: "active" }>, "type"> & {
-      readonly type: "outline-active";
-    })
-  | (Omit<Extract<OutlineRuntimePublication, { readonly type: "invalidated" }>, "type"> & {
-      readonly type: "outline-invalidated";
-    })
+  | OutlineRuntimePublication
   | { readonly type: "outline-frame-detaching" }
   | { readonly type: "outline-revision-complete"; readonly revision: number };
 
