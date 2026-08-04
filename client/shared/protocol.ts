@@ -254,7 +254,6 @@ export type OverlayMessage =
       readonly id: string | null;
     }
   | { readonly source: "lucid-overlay"; readonly type: "annotation-activate"; readonly id: string }
-  | { readonly source: "lucid-overlay"; readonly type: "selection-cleared" }
   /** Widest real child of the artifact body, measured inside the iframe. The
    *  chrome cannot measure it: the surface runs on an opaque origin (D-020), so
    *  `iframe.contentDocument` is null from the parent. */
@@ -413,8 +412,6 @@ export const validateOverlayMessage = (
     case "annotation-activate":
       if (typeof data.id !== "string") return refuse("id");
       return { source: "lucid-overlay", type: "annotation-activate", id: data.id };
-    case "selection-cleared":
-      return { source: "lucid-overlay", type: "selection-cleared" };
     case "content-width": {
       const width = data.width;
       if (typeof width !== "number" || !Number.isFinite(width) || width <= 0)

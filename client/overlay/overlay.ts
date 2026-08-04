@@ -747,8 +747,6 @@ export class LucidOverlay extends LitElement {
       post({ source: "lucid-overlay", type: "pong", nonce: msg.nonce });
     } else if (msg.type === "theme") {
       this.#theme.apply(msg.theme);
-    } else if (msg.type === "clear-pending") {
-      this.focusedId = null;
     }
   };
 
