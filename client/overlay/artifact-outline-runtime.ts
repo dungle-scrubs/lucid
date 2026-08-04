@@ -276,7 +276,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       this.#dependencies.publish({
         generation: record.generation,
         health: record,
-        type: "invalidated",
+        type: "outline-invalidated",
       });
     }
     this.invalidate(record.reason ?? "activation-invalidated", false);
@@ -326,7 +326,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
     this.#dependencies.publish({
       generation: this.#generation,
       health: this.#health,
-      type: "invalidated",
+      type: "outline-invalidated",
     });
     this.#projection = { generation: this.#generation, kind: "absent" };
     this.#elementsByKey.clear();
@@ -405,7 +405,11 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       if (next === this.#activeKey) return;
       if (!this.#rateGate.accept("active-key", now)) return;
       this.#activeKey = next;
-      this.#dependencies.publish({ generation: this.#generation, key: next, type: "active" });
+      this.#dependencies.publish({
+        generation: this.#generation,
+        key: next,
+        type: "outline-active",
+      });
     });
   }
 
@@ -765,7 +769,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       ...(this.#health ? { health: this.#health } : {}),
       proof,
       requestGeneration: request.generation,
-      type: "snapshot",
+      type: "outline-snapshot",
     });
     if (!proof.complete && proof.reason === "work-budget-exhausted") {
       this.#scheduleBudgetRetry();
@@ -819,7 +823,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       health: this.#health,
       proof,
       requestGeneration: request.generation,
-      type: "snapshot",
+      type: "outline-snapshot",
     });
     this.#scheduleBudgetRetry();
   }
@@ -867,7 +871,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
       health: record,
       proof: { clearancePx: 0, complete: false, reason },
       requestGeneration: request.generation,
-      type: "snapshot",
+      type: "outline-snapshot",
     });
     if (record.code === "AO-004") this.#scheduleBudgetRetry();
   }

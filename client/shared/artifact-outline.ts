@@ -120,7 +120,7 @@ export interface OutlineSnapshotProof extends OutlineProof {
 }
 
 export interface OutlineSnapshotPublication {
-  readonly type: "snapshot";
+  readonly type: "outline-snapshot";
   readonly requestGeneration: number;
   readonly generation: number;
   readonly availability: "absent" | "complete";
@@ -133,12 +133,12 @@ export interface OutlineSnapshotPublication {
 export type OutlineRuntimePublication =
   | OutlineSnapshotPublication
   | {
-      readonly type: "active";
+      readonly type: "outline-active";
       readonly generation: number;
       readonly key: string | null;
     }
   | {
-      readonly type: "invalidated";
+      readonly type: "outline-invalidated";
       readonly generation: number;
       readonly health: OutlineHealth;
     };

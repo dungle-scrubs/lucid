@@ -32,7 +32,6 @@ class FakePort implements OutlinePort {
 }
 
 const setup = () => {
-  let now = 100;
   const patches: OutlineStatePatch[] = [];
   let layout: OutlineLayoutMeasurement | null = {
     preferredWidth: 240,
@@ -46,7 +45,6 @@ const setup = () => {
   const controller = createChromeArtifactOutline({
     getState: () => state,
     measureLayout: () => layout,
-    now: () => now,
     setState: (patch) => {
       state = { ...state, ...patch };
       patches.push(patch);
@@ -55,9 +53,6 @@ const setup = () => {
   controller.setLayoutAvailable(true);
   controller.setActive(true);
   return {
-    advance: (ms: number) => {
-      now += ms;
-    },
     controller,
     loseLayout: () => {
       layout = null;
@@ -149,29 +144,32 @@ describe("active-session artifact outline bridge", () => {
     });
   });
 
-  test("bounds publication rate and routes activation only to the current projection", () => {
-    const { advance, controller, patches } = setup();
+  test("accepts every current-generation snapshot and routes activation only to the current projection", () => {
+    // The producer (overlay runtime) bounds publication rate on its own - see
+    // artifact-outline-runtime's producer-rate test - so the chrome session no
+    // longer re-rate-gates: it accepts every current-generation snapshot and
+    // refuses only stale generations and activations that do not match the
+    // rendered projection.
+    const { controller, patches } = setup();
     const port = new FakePort();
     controller.acceptPort(port);
     port.receive(completeSnapshot(1));
     for (let index = 0; index < 5; index += 1) {
-      advance(1);
       port.receive(completeSnapshot(1, 8 + index));
     }
-    expect(patches.filter(({ outlineSnapshot }) => outlineSnapshot != null)).toHaveLength(4);
+    expect(patches.filter(({ outlineSnapshot }) => outlineSnapshot != null)).toHaveLength(6);
 
     expect(controller.activate("missing", "normal")).toBe(false);
     expect(controller.activate("h-2", "reduced")).toBe(true);
     expect(port.sent.at(-1)).toEqual({
       type: "outline-activate",
-      generation: 10,
+      generation: 12,
       key: "h-2",
       motion: "reduced",
     });
 
-    advance(1_001);
     const patchCount = patches.length;
-    port.receive(completeSnapshot(1, 9));
+    port.receive(completeSnapshot(1, 9)); // stale generation < 12
     expect(patches).toHaveLength(patchCount);
   });
 
