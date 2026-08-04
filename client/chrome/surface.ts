@@ -46,6 +46,10 @@ export interface Surface {
    *  session's state. */
   readonly ownsSource: (source: MessageEventSource | null) => boolean;
   readonly toOverlay: (message: ChromeMessage) => void;
+  /** Arm the outline revision barrier and return its number. Every
+   *  DOM-replacing message (swap, diff-show) must carry one so the outline
+   *  re-proofs against the new document. */
+  readonly prepareRevision: () => number;
   readonly pushHighlights: () => void;
   readonly applyDeferredSwapIfReady: () => void;
   readonly bootstrap: () => Promise<void>;
@@ -396,6 +400,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     ownsSource,
     outlineSlotRect,
     toOverlay,
+    prepareRevision: outline.prepareRevision,
     pushHighlights,
     applyDeferredSwapIfReady,
     bootstrap,

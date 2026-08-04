@@ -721,7 +721,7 @@ export class LucidOverlay extends LitElement {
     } else if (msg.type === "swap") {
       this.swapArtifact(msg.html, msg.revision);
     } else if (msg.type === "diff-show") {
-      this.swapArtifact(msg.html);
+      this.swapArtifact(msg.html, msg.revision);
       this.injectDiffStyles();
     } else if (msg.type === "diff-goto") {
       this.gotoHunk(msg.hunkId);

@@ -317,7 +317,12 @@ export type ChromeMessage =
   | { readonly source: "lucid-chrome"; readonly type: "reveal-section"; readonly lucidId: string }
   | { readonly source: "lucid-chrome"; readonly type: "pulse-section"; readonly lucidId: string }
   | { readonly source: "lucid-chrome"; readonly type: "request-section-ids" }
-  | { readonly source: "lucid-chrome"; readonly type: "diff-show"; readonly html: string }
+  | {
+      readonly source: "lucid-chrome";
+      readonly type: "diff-show";
+      readonly html: string;
+      readonly revision?: number;
+    }
   | { readonly source: "lucid-chrome"; readonly type: "diff-goto"; readonly hunkId: string }
   | { readonly source: "lucid-chrome"; readonly type: "clear-pending" }
   /** Ask the overlay to measure the artifact's content width. */

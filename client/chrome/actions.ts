@@ -65,7 +65,7 @@ export const createActions = (ctx: ActionsCtx) => {
   const set = store.setState;
   const { warn, notice, pushWarning } = notify;
   const { expandPastes, consumePastes } = pastes;
-  const { applyDeferredSwapIfReady, pushHighlights, toOverlay } = surface;
+  const { applyDeferredSwapIfReady, prepareRevision, pushHighlights, toOverlay } = surface;
 
   const persistOutbox = (message: OutboxMessage): void =>
     storage.persistOutboxMessage(message, () =>
@@ -1034,7 +1034,12 @@ export const createActions = (ctx: ActionsCtx) => {
       return;
     }
     set({ diffData: data, diffBase, diffMode: true, diffIndex: 0 });
-    toOverlay({ source: "lucid-chrome", type: "diff-show", html: data.mergedHtml });
+    toOverlay({
+      source: "lucid-chrome",
+      type: "diff-show",
+      html: data.mergedHtml,
+      revision: prepareRevision(),
+    });
     if (data.hunks.length > 0) requestAnimationFrame(() => gotoHunk(0));
   };
 
