@@ -65,7 +65,14 @@ export const createActions = (ctx: ActionsCtx) => {
   const set = store.setState;
   const { warn, notice, pushWarning } = notify;
   const { expandPastes, consumePastes } = pastes;
-  const { applyDeferredSwapIfReady, prepareRevision, pushHighlights, toOverlay } = surface;
+  const {
+    applyDeferredSwapIfReady,
+    emphasize: surfaceEmphasize,
+    gotoHunk: surfaceGotoHunk,
+    pushHighlights,
+    revealSection: surfaceRevealSection,
+    showHtml,
+  } = surface;
 
   const persistOutbox = (message: OutboxMessage): void =>
     storage.persistOutboxMessage(message, () =>
@@ -615,7 +622,7 @@ export const createActions = (ctx: ActionsCtx) => {
     set({ focusedId: unfocus ? null : id, focusAll: false });
     storage.persistFocusAll(false);
     pushHighlights();
-    if (!unfocus) toOverlay({ source: "lucid-chrome", type: "reveal-annotation", id });
+    if (!unfocus) surfaceEmphasize(id, true);
   };
 
   const REOPEN_ENDED_MSG =
@@ -974,13 +981,13 @@ export const createActions = (ctx: ActionsCtx) => {
   };
 
   const focusQuestionRef = (ref?: string): void => {
-    if (ref) toOverlay({ source: "lucid-chrome", type: "focus-annotation", id: ref });
+    if (ref) surfaceEmphasize(ref, false);
   };
 
   /** Scroll the artifact to a section by its `data-lucid-id`. The landing for a
    *  chat section permalink (`lucid:section/<id>`). */
   const revealSection = (lucidId: string): void => {
-    toOverlay({ source: "lucid-chrome", type: "reveal-section", lucidId });
+    surfaceRevealSection(lucidId, false);
   };
 
   /** Emphasize an update already in view, once per version. The store guard is
@@ -990,7 +997,7 @@ export const createActions = (ctx: ActionsCtx) => {
     const seen = get().emphasizedSectionIds;
     if (seen.has(lucidId)) return;
     set({ emphasizedSectionIds: new Set([...seen, lucidId]) });
-    toOverlay({ source: "lucid-chrome", type: "pulse-section", lucidId });
+    surfaceRevealSection(lucidId, true);
   };
 
   // ---- hover + lightbox -----------------------------------------------------
@@ -1034,12 +1041,7 @@ export const createActions = (ctx: ActionsCtx) => {
       return;
     }
     set({ diffData: data, diffBase, diffMode: true, diffIndex: 0 });
-    toOverlay({
-      source: "lucid-chrome",
-      type: "diff-show",
-      html: data.mergedHtml,
-      revision: prepareRevision(),
-    });
+    showHtml(data.mergedHtml, { mode: "diff-show" });
     if (data.hunks.length > 0) requestAnimationFrame(() => gotoHunk(0));
   };
 
@@ -1064,7 +1066,7 @@ export const createActions = (ctx: ActionsCtx) => {
     // pushHighlights owns that rule (it reads viewingVersion), so the toggles
     // that stay clickable during history view cannot undo this clear.
     pushHighlights();
-    toOverlay({ source: "lucid-chrome", type: "swap", html });
+    showHtml(html);
   };
 
   /** Return the surface to the live current artifact and restore its marks. */
@@ -1072,14 +1074,14 @@ export const createActions = (ctx: ActionsCtx) => {
     if (get().viewingVersion === null) return;
     set({ viewingVersion: null });
     const html = await transport.getText("/__lucid/artifact");
-    if (html !== null) toOverlay({ source: "lucid-chrome", type: "swap", html });
+    if (html !== null) showHtml(html);
     pushHighlights();
   };
 
   const exitDiff = async (): Promise<void> => {
     set({ diffMode: false, revertWhy: "" });
     const html = await transport.getText("/__lucid/artifact");
-    if (html !== null) toOverlay({ source: "lucid-chrome", type: "swap", html });
+    if (html !== null) showHtml(html);
     pushHighlights();
   };
 
@@ -1089,7 +1091,7 @@ export const createActions = (ctx: ActionsCtx) => {
     const i = ((index % hunks.length) + hunks.length) % hunks.length;
     set({ diffIndex: i });
     const hunk = hunks[i];
-    if (hunk) toOverlay({ source: "lucid-chrome", type: "diff-goto", hunkId: hunk.id });
+    if (hunk) surfaceGotoHunk(hunk.id);
   };
 
   const setRevertWhy = (why: string): void => set({ revertWhy: why });

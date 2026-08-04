@@ -70,7 +70,7 @@ const readStoredSidebarOpen = (): boolean => {
 export const setArtifactTheme = (theme: ArtifactTheme): void => {
   storeTheme(theme);
   for (const key of useShell.getState().sessionKeys) {
-    getSession(key)?.surface.toOverlay({ source: "lucid-chrome", type: "theme", theme });
+    getSession(key)?.surface.setTheme(theme);
   }
 };
 

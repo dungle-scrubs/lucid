@@ -216,14 +216,14 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
     // The chrome's own cards ask the overlay to light up their mark.
     const onFocusAnnotation = (e: Event): void => {
       const id = (e as CustomEvent<string>).detail;
-      surface.toOverlay({ source: "lucid-chrome", type: "focus-annotation", id });
+      surface.emphasize(id, false);
     };
     window.addEventListener("lucid:focus-annotation", onFocusAnnotation);
 
     // Enter on a focused card: light the mark AND scroll the surface to it.
     const onRevealAnnotation = (e: Event): void => {
       const id = (e as CustomEvent<string>).detail;
-      surface.toOverlay({ source: "lucid-chrome", type: "reveal-annotation", id });
+      surface.emphasize(id, true);
     };
     window.addEventListener("lucid:reveal-annotation", onRevealAnnotation);
 
