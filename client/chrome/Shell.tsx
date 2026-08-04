@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useStore } from "zustand";
 import { attentionStateOf, isUnseen } from "./attention.ts";
+import { bridgeBox } from "./bridge-box.ts";
 import { matchScore, openSplit } from "./list.ts";
 import { SessionView } from "./Chrome.tsx";
 import { Command } from "cmdk";
@@ -197,7 +198,7 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
             // the project eyebrow is wider than the tabs under it.
             className={`group flex min-w-0 max-w-[220px] flex-auto items-center border-l border-ink-600 pl-2 text-[12px] first:border-l-0 ${
               active
-                ? "bg-ink-800 text-fg-strong shadow-[inset_0_2px_0_var(--color-accent)]"
+                ? "bg-chrome-surface text-fg-strong shadow-[inset_0_2px_0_var(--color-accent)]"
                 : "text-fg-muted hover:bg-ink-850 hover:text-fg"
             }`}
           />
@@ -499,6 +500,135 @@ const FADE_KIND_COLOR: Record<string, string> = {
  * extends past that edge (D-013) - a fade over nothing would claim hidden tabs
  * that do not exist.
  */
+/** One edge fade, present only while content actually overflows that edge. */
+interface Fades {
+  readonly left: boolean;
+  readonly right: boolean;
+}
+
+/** Attention dots hidden past an edge (D-023): the fade on that side wears a
+ *  marker in the HIDDEN DOT'S OWN KIND. Null = nothing hidden on that side. */
+interface HiddenAttention {
+  readonly left: string | null;
+  readonly right: string | null;
+}
+
+/** The active tab's bridge box, in the strip's own coordinate frame. Null
+ *  when no tab is active. */
+type Bridge = { readonly left: number; readonly width: number; readonly top: number } | null;
+
+/** Read whether each edge fade should show. -1 on the right: fractional scroll
+ *  widths round, so a strip that fits must read as fitting. */
+const readFades = (el: HTMLElement): Fades => ({
+  left: el.scrollLeft > 0,
+  right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
+});
+
+/** Read which side hides an attention dot, and of what kind. A tab wearing a
+ *  dot whose box sits fully outside the visible window hides on that side; when
+ *  several kinds hide on one side the marker wears the most urgent (the
+ *  resolver's own order). Compared as RECTS in viewport coordinates -
+ *  `offsetLeft` was measured from the nearest positioned ancestor, which is the
+ *  group frame now that a project's tabs live inside one, so every tab reported
+ *  a position a few pixels from its own group's left edge and no tab ever read
+ *  as off-screen. A rect is a rect wherever the element sits. */
+const ATTENTION_RANK: Record<string, number> = { question: 3, working: 2, unseen: 1 };
+const readHiddenAttention = (el: HTMLElement): HiddenAttention => {
+  let attnLeft: string | null = null;
+  let attnRight: string | null = null;
+  const view = el.getBoundingClientRect();
+  for (const dot of el.querySelectorAll('[data-test="tab-attention"]')) {
+    const tab = dot.closest('[data-test="shell-tab"]') as HTMLElement | null;
+    if (!tab) continue;
+    const kind = dot.getAttribute("data-kind") ?? "unseen";
+    const box = tab.getBoundingClientRect();
+    if (box.right < view.left) {
+      if ((ATTENTION_RANK[kind] ?? 0) > (ATTENTION_RANK[attnLeft ?? ""] ?? 0)) attnLeft = kind;
+    } else if (box.left > view.right) {
+      if ((ATTENTION_RANK[kind] ?? 0) > (ATTENTION_RANK[attnRight ?? ""] ?? 0)) attnRight = kind;
+    }
+  }
+  return { left: attnLeft, right: attnRight };
+};
+
+/** Read the active tab's bridge box via the pure `bridgeBox` geometry. The
+ *  bridge lives on the OUTER strip, not in the scroll row: the row clips at its
+ *  padding box (overflow-x), so nothing inside it can reach down to the header. */
+const readBridge = (el: HTMLElement, strip: HTMLElement | null): Bridge => {
+  const active = el.querySelector('[data-test="shell-tab"][data-active="true"]');
+  if (!active || !strip) return null;
+  return bridgeBox(
+    active.getBoundingClientRect(),
+    strip.getBoundingClientRect(),
+    active.previousElementSibling === null,
+  );
+};
+
+/** All three geometry facts the strip derives from the scroller - edge fades,
+ *  hidden attention, and the active tab's bridge - behind one hook, so the
+ *  component renders and the readers measure. Re-measures on every way the
+ *  active tab moves WITHOUT a scroll: `childList` (a tab opens or closes),
+ *  `data-active` (activation with no scroll), `characterData` (a tab renamed in
+ *  place), and `document.fonts.ready` (font settling widens labels with no DOM
+ *  mutation at all - the overlay's own bag carries `onFontsSettled` for the
+ *  same failure mode). */
+const useTabStripGeometry = (
+  scrollRef: RefObject<HTMLDivElement | null>,
+  stripRef: RefObject<HTMLDivElement | null>,
+): { fades: Fades; hiddenAttn: HiddenAttention; bridge: Bridge } => {
+  const [fades, setFades] = useState<Fades>({ left: false, right: false });
+  const [hiddenAttn, setHiddenAttn] = useState<HiddenAttention>({ left: null, right: null });
+  const [bridge, setBridge] = useState<Bridge>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = (): void => {
+      const f = readFades(el);
+      setFades((prev) => (prev.left === f.left && prev.right === f.right ? prev : f));
+      const a = readHiddenAttention(el);
+      setHiddenAttn((prev) => (prev.left === a.left && prev.right === a.right ? prev : a));
+      const b = readBridge(el, stripRef.current);
+      setBridge((prev) =>
+        prev !== null &&
+        b !== null &&
+        prev.left === b.left &&
+        prev.width === b.width &&
+        prev.top === b.top
+          ? prev
+          : b,
+      );
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    const mo = new MutationObserver(measure);
+    mo.observe(el, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-active"],
+      characterData: true,
+    });
+    // Font settling widens labels with no DOM mutation, so none of the observers
+    // above catches it. Re-measure once the document's fonts are ready (D-038).
+    const fonts = (document as Document & { fonts?: { ready: Promise<unknown> } }).fonts;
+    let disposed = false;
+    fonts?.ready.then(() => {
+      if (!disposed) measure();
+    });
+    return () => {
+      disposed = true;
+      el.removeEventListener("scroll", measure);
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [scrollRef, stripRef]);
+
+  return { fades, hiddenAttn, bridge };
+};
+
 /** The narrowest the tab strip may become when the drawer takes its room. */
 const MIN_TAB_STRIP_PX = 240;
 
@@ -509,68 +639,10 @@ const TabStrip = () => {
   const activeKey = useShell((s) => s.activeKey);
   const sessions = useHub((s) => s.sessions);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [fades, setFades] = useState({ left: false, right: false });
-  /** Attention dots hidden past an edge (D-023): the fade on that side wears a
-   *  marker IN THE HIDDEN DOT'S OWN KIND, so an off-screen working tab is not
-   *  dressed as a question. Null = nothing hidden on that side. */
-  const [hiddenAttn, setHiddenAttn] = useState<{
-    left: string | null;
-    right: string | null;
-  }>({ left: null, right: null });
+  const stripRef = useRef<HTMLDivElement>(null);
+  const { fades, hiddenAttn, bridge } = useTabStripGeometry(scrollRef, stripRef);
 
   const groups = groupTabs(sessionKeys, sessions);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const measure = (): void => {
-      const left = el.scrollLeft > 0;
-      // -1: fractional scroll widths round; a strip that fits must read as fitting.
-      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
-      setFades((f) => (f.left === left && f.right === right ? f : { left, right }));
-      // Which side hides attention, and of what KIND: a tab wearing a dot
-      // whose box sits fully outside the visible window. When several kinds
-      // hide on one side the marker wears the most urgent (the resolver's own
-      // order).
-      //
-      // Compared as RECTS, in viewport coordinates. `offsetLeft` was measured
-      // from the nearest positioned ancestor, which is the group frame now that
-      // a project's tabs live inside one - so every tab reported a position a
-      // few pixels from its own group's left edge and no tab ever read as
-      // off-screen. A rect is a rect wherever the element sits.
-      const rank: Record<string, number> = { question: 3, working: 2, unseen: 1 };
-      let attnLeft: string | null = null;
-      let attnRight: string | null = null;
-      const view = el.getBoundingClientRect();
-      for (const dot of el.querySelectorAll('[data-test="tab-attention"]')) {
-        const tab = dot.closest('[data-test="shell-tab"]') as HTMLElement | null;
-        if (!tab) continue;
-        const kind = dot.getAttribute("data-kind") ?? "unseen";
-        const box = tab.getBoundingClientRect();
-        if (box.right < view.left) {
-          if ((rank[kind] ?? 0) > (rank[attnLeft ?? ""] ?? 0)) attnLeft = kind;
-        } else if (box.left > view.right) {
-          if ((rank[kind] ?? 0) > (rank[attnRight ?? ""] ?? 0)) attnRight = kind;
-        }
-      }
-      setHiddenAttn((a) =>
-        a.left === attnLeft && a.right === attnRight ? a : { left: attnLeft, right: attnRight },
-      );
-    };
-    measure();
-    el.addEventListener("scroll", measure, { passive: true });
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    // Content width moves without a scroll or resize event when a tab opens
-    // or closes; watching the scroller's children catches exactly that.
-    const mo = new MutationObserver(measure);
-    mo.observe(el, { childList: true, subtree: true });
-    return () => {
-      el.removeEventListener("scroll", measure);
-      ro.disconnect();
-      mo.disconnect();
-    };
-  }, []);
 
   return (
     <div
@@ -589,6 +661,7 @@ const TabStrip = () => {
           ? `min(${chromeWidth}px, max(0px, 100vw - ${MIN_TAB_STRIP_PX}px))`
           : 0,
       }}
+      ref={stripRef}
       className="relative flex h-[46px] flex-none items-end border-b border-ink-600 bg-ink-900 transition-[margin] duration-200 ease-out"
     >
       <div
@@ -703,6 +776,20 @@ const TabStrip = () => {
       <div className="flex flex-none items-center self-stretch pr-1.5 pb-1.5 pl-1">
         <PanelToggle />
       </div>
+      {/* The active tab pours into the header below it: same surface, no seam.
+          This fills the moat under that one tab - its group frame's bottom
+          border, the row's 6px padding, and the strip's own border-b
+          (-bottom-px reaches past the padding box to cover it). Rendered
+          after the fades so an edge-adjacent active tab is not tinted by the
+          gradient. */}
+      {bridge !== null ? (
+        <div
+          data-test="active-tab-bridge"
+          aria-hidden
+          className="pointer-events-none absolute -bottom-px border-x border-ink-600 bg-chrome-surface"
+          style={{ left: bridge.left, width: bridge.width, top: bridge.top }}
+        />
+      ) : null}
     </div>
   );
 };

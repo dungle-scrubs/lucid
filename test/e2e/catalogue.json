@@ -1825,6 +1825,22 @@
           "mutation": null
         },
         {
+          "id": "active-tab-bridge-joins-header",
+          "title": "The active tab joins the header below it as one continuous surface",
+          "steps": [
+            "Open several tabs across two projects",
+            "Inspect [data-test=active-tab-bridge] against the active tab and the header"
+          ],
+          "expected": "The bridge shares the active tab's surface color and its top edge meets the tab's bottom edge, so the tab reads as pouring into the header with no seam; switching tabs moves the bridge to the new active tab's column.",
+          "risk": "medium",
+          "kind": "visual",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/grouped-strip.e2e.ts",
+          "testName": "the active tab pours into the header through one bridge surface (M0.1)",
+          "mutation": "client/chrome/Shell.tsx: stop rendering [data-test=active-tab-bridge] (or drop the chrome-surface token from it) - the seam between the active tab and the header reappears and the color/top assertions fail."
+        },
+        {
           "id": "boot-s-pending-retry-until-listed",
           "title": "?s= for a session the listing does not name yet is retried, not dropped",
           "steps": [

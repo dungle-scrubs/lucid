@@ -1,5 +1,5 @@
 import { chord, hook, on } from "./locators.ts";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -407,4 +407,87 @@ test("unseen badges survive a reload; restoring is not arriving (M3.2)", async (
       .locator(hook("shell-tab"), { hasText: "Rollout checklist" })
       .locator(`${hook("tab-attention")}[data-kind="unseen"]`),
   ).toHaveCount(1);
+});
+
+test("the active tab pours into the header through one bridge surface (M0.1)", async ({ page }) => {
+  await twoProjectsFourTabs(page);
+  // Wide enough that every tab fits: the claim is about the active tab joining
+  // the header, not about scrolling.
+  await page.setViewportSize({ width: 1400, height: 700 });
+
+  const activeTab = (): Locator => page.locator(`${hook("shell-tab")}[data-active="true"]`);
+  const bridge = on(page).activeTabBridge();
+
+  // Land deterministically on the first tab (twoProjectsFourTabs leaves the
+  // last-opened tab active). The bridge is present under it.
+  await page.keyboard.press(chord("1"));
+  await expect(activeTab()).toContainText("Beta one");
+  await expect(bridge).toBeVisible();
+
+  // Source-level: the three sites that must form one surface all reference the
+  // chrome-surface token - no ink-800 literal remains at any of them. Asserted
+  // on the class, which is where the claim lives (the token is shared by name).
+  const refs = await page.evaluate(() => ({
+    tab: document
+      .querySelector('[data-test="shell-tab"][data-active="true"]')
+      ?.className.includes("bg-chrome-surface"),
+    bridge: document
+      .querySelector('[data-test="active-tab-bridge"]')
+      ?.className.includes("bg-chrome-surface"),
+    header: document.querySelector("header")?.className.includes("bg-chrome-surface"),
+  }));
+  expect(refs.tab).toBe(true);
+  expect(refs.bridge).toBe(true);
+  expect(refs.header).toBe(true);
+
+  // The load-bearing visual claim: the bridge and the header below it share ONE
+  // surface color, so the strip and the header read as joined with no seam.
+  // (The active tab is a Base UI context-menu trigger whose own background is
+  // composed through a cascade a class read cannot see, so the bridge - a plain
+  // div wearing the same token - is the surface the seam claim is tested on.)
+  const colors = await page.evaluate(() => {
+    const header = document.querySelector("header");
+    const b = document.querySelector('[data-test="active-tab-bridge"]');
+    return {
+      header: header ? getComputedStyle(header).backgroundColor : null,
+      bridge: b ? getComputedStyle(b).backgroundColor : null,
+    };
+  });
+  expect(colors.header).toBeTruthy();
+  expect(colors.bridge).toBe(colors.header);
+
+  // The bridge's top edge sits at the active tab's bottom edge: it covers the
+  // seam from the tab down through the moat (group frame border, row padding,
+  // the strip's own border-b) to the header. Allow 1px for sub-pixel rounding.
+  // Selectors pass in through hook() so no raw data-test literal lives in the
+  // evaluate body (check-locators).
+  const seam = await page.evaluate(
+    (sels: { tab: string; bridge: string }) => {
+      const tab = document.querySelector(sels.tab) as HTMLElement;
+      const b = document.querySelector(sels.bridge) as HTMLElement;
+      return {
+        tabBottom: tab.getBoundingClientRect().bottom,
+        bridgeTop: b.getBoundingClientRect().top,
+      };
+    },
+    { tab: `${hook("shell-tab")}[data-active="true"]`, bridge: hook("active-tab-bridge") },
+  );
+  expect(Math.abs(seam.bridgeTop - seam.tabBottom)).toBeLessThanOrEqual(1);
+
+  // Switching tabs moves the bridge to the new active tab's column - its left
+  // changes. Beta one is first in its group; Alpha two is in the other group,
+  // so the two columns differ. The bridge follows the active tab through a
+  // data-active MutationObserver, which fires on a microtask after the click -
+  // so wait for the position to land rather than racing the read.
+  const before = await bridge.evaluate((el) => (el as HTMLElement).getBoundingClientRect().left);
+  await page.locator(hook("shell-tab"), { hasText: "Alpha two" }).click();
+  await expect(activeTab()).toContainText("Alpha two");
+  await page.waitForFunction(
+    (prior: number) => {
+      const b = document.querySelector('[data-test="active-tab-bridge"]') as HTMLElement | null;
+      return b !== null && b.getBoundingClientRect().left !== prior;
+    },
+    before,
+    { timeout: 3000 },
+  );
 });

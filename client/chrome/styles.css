@@ -87,6 +87,12 @@
   --color-bg-raised: var(--color-ink-850);
   --color-bg-inset: hsl(213 19% 8%);
   --color-bg-overlay: var(--color-ink-700);
+  /* The surface an active piece of chrome wears so it reads as one continuous
+     piece - the active tab, the header directly below it, and the bridge that
+     joins them must agree. Pointed at ink-800 and named, so the three sites
+     that must match share one name instead of three copies of the literal
+     (plan 04, M0.1). */
+  --color-chrome-surface: var(--color-ink-800);
   /* The artifact's ground. The chrome is dark and recedes; the artifact is
      paper and is the thing being looked at. We only supply the ground it
      renders on - what the agent paints there is its own (see the lucid-design
