@@ -11,6 +11,25 @@ import type { ItemAnswer, QuestionItem } from "./question-contract.ts";
 
 export type SessionStatus = "none" | "active" | "suspended" | "ended";
 
+/**
+ * The shared ten-minute grace window (plan 04, M1.3, D-010). One number, two
+ * PREDICATES that read it, and they are not the same and must not be merged:
+ *
+ * - The VIEWER (client/chrome/working.ts) declares a turn stale when nothing
+ *   has been acked for this long, measured from the oldest OPEN turn's
+ *   `heardAt`, segment-scoped. It only governs what the viewer may CLAIM while
+ *   a turn stays open - nothing here ends one.
+ * - The SERVER (attend.ts) treats a working window younger than this as
+ *   mid-flight (so a startup sweep does not close a turn that is merely
+ *   thinking), measured from the newest ack of ANY turn over the whole log,
+ *   with an injectable grace the stub harness shrinks.
+ *
+ * Unifying the predicates would re-break the silent-turn / fan-out cases
+ * (#132 / #133). The CONSTANT is shared so a review stops re-suggesting they
+ * drift; the rules that USE it stay apart on purpose.
+ */
+export const WORKING_GRACE_MS = 10 * 60 * 1000;
+
 export interface AnnotationRecord {
   readonly id: string;
   readonly seq: number;

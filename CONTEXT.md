@@ -615,3 +615,11 @@ _Avoid_: request id (that names the record's own id), correlation id, span id.
   observes such a turn and does not own it, and an agent that is killed could
   not append anything either way. The viewer's ten-minute stale state is the
   answer for both.
+
+  The ten-minute NUMBER is one constant (`WORKING_GRACE_MS`, core/fold.ts),
+  shared by the viewer's stale predicate and attend's working-grace gate so a
+  review stops re-suggesting they drift. The two PREDICATES are not the same
+  and stay apart deliberately (D-010, plan 04 M1.3): the viewer measures from
+  the oldest open turn's `heardAt` (segment-scoped); attend measures from the
+  newest ack of any turn over the whole log, with an injectable grace. Merging
+  them re-breaks the silent-turn / fan-out cases (#132 / #133).

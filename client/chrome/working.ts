@@ -1,4 +1,5 @@
 import type { AgentWorking } from "../../src/protocol/wire.ts";
+import { WORKING_GRACE_MS } from "../../src/core/fold.ts";
 
 /**
  * When an open turn stops counting as work in progress.
@@ -8,8 +9,13 @@ import type { AgentWorking } from "../../src/protocol/wire.ts";
  * watching a spinner for an hour over a process that exited. Nothing here ends
  * the turn - the log is the only thing that can do that - this only governs
  * what the viewer is entitled to claim while the turn stays open.
+ *
+ * The NUMBER is shared with attend.ts via `WORKING_GRACE_MS` (core/fold.ts,
+ * plan 04 M1.3). The PREDICATE is not: this one measures from the oldest open
+ * turn's `heardAt` (segment-scoped); attend measures from the newest ack of
+ * any turn over the whole log. Merging them re-breaks #132/#133.
  */
-export const WORKING_STALE_MS = 10 * 60 * 1000;
+export { WORKING_GRACE_MS };
 
 export interface WorkingClock {
   /** Since delivery: what the human has been waiting, which is what they care
@@ -45,7 +51,7 @@ export const workingClock = (working: AgentWorking, now: number): WorkingClock =
   return {
     elapsedMs,
     quietMs,
-    stale: quietMs >= WORKING_STALE_MS,
+    stale: quietMs >= WORKING_GRACE_MS,
     mm: Math.floor(elapsedMs / 60000),
     ss: String(Math.floor((elapsedMs % 60000) / 1000)).padStart(2, "0"),
   };
