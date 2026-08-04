@@ -52,6 +52,8 @@ const TrustedMutationObserver=MutationObserver,TrustedResizeObserver=ResizeObser
 const mutationAddedNodes=getter(MutationRecord.prototype,"addedNodes"),nodeListLength=getter(NodeList.prototype,"length"),nodeListItem=NodeList.prototype.item,ruleListLength=getter(CSSRuleList.prototype,"length"),ruleListItem=CSSRuleList.prototype.item;
 const setTimer=window.setTimeout.bind(window),clearTimer=window.clearTimeout.bind(window),requestFrame=window.requestAnimationFrame.bind(window),cancelFrame=window.cancelAnimationFrame.bind(window),enqueueMicrotask=window.queueMicrotask.bind(window),clock=performance.now.bind(performance),promiseThen=Promise.prototype.then;
 const imageComplete=getter(HTMLImageElement.prototype,"complete"),fonts=document.fonts,fontStatus=globalThis.FontFaceSet?getter(FontFaceSet.prototype,"status"):undefined,fontReady=globalThis.FontFaceSet?getter(FontFaceSet.prototype,"ready"):undefined;
+/* The parent WindowProxy captured BEFORE any artifact script runs. window.parent is [Replaceable]: an artifact reassigns it to itself and forges a chrome command to its own window, and silently redirects every genuine overlay->chrome reply into the artifact's own window. The overlay reads THIS reference - never the live global - so both directions stay pinned to the real parent (plan 04, M1.1, D-009). */
+const parentWindow=window.parent;
 const value=(style,name)=>apply(styleValue,style,[name]),style=(element,pseudo)=>apply(computed,window,[element,pseudo]);
 const rect=(element)=>{const box=apply(elementRect,element,[]);return{top:apply(rectTop,box,[]),right:apply(rectRight,box,[]),bottom:apply(rectBottom,box,[]),left:apply(rectLeft,box,[])}};
 const listen=(target,type,callback,options)=>{apply(eventAdd,target,[type,callback,options]);return()=>apply(eventRemove,target,[type,callback,options])};
@@ -113,6 +115,7 @@ onFontsSettled:(callback)=>{if(!fontReady)return()=>{};let active=true;const not
 onFrameDetach:(callback)=>listen(window,"pagehide",callback,{once:true}),
 onWindowResize:(callback)=>listen(window,"resize",callback,{passive:true}),onWindowScroll:(callback)=>listen(window,"scroll",callback,{capture:true,passive:true}),
 parentElement:(element)=>apply(nodeParent,element,[]),
+parentWindow,
 pseudoContent:(element)=>({before:value(style(element,"::before"),"content"),after:value(style(element,"::after"),"content")}),
 rect,
 scheduleFrame:(callback)=>{const id=requestFrame(callback);return()=>cancelFrame(id)},scheduleQuiet:(delay,callback)=>{const id=setTimer(callback,delay);return()=>clearTimer(id)},
@@ -124,7 +127,7 @@ viewport:()=>{const root=apply(documentRoot,document,[]);return{clientWidth:root
 performOverlayUpdate:performOwnedUpdate
 };
 const channel=new MessageChannel(),tag="lucid-overlay-"+crypto.randomUUID().replaceAll("-","");
-window.parent.postMessage({source:"lucid-overlay-bootstrap",type:"private-channel",version:1},"*",[channel.port2]);
+parentWindow.postMessage({source:"lucid-overlay-bootstrap",type:"private-channel",version:1},"*",[channel.port2]);
 const trustedPort={close:()=>apply(messagePortClose,channel.port1,[]),listen:(onMessage,onClose)=>{const messageListener=(event)=>onMessage(apply(messageData,event,[]));apply(eventAdd,channel.port1,["message",messageListener]);apply(eventAdd,channel.port1,["close",onClose]);apply(messagePortStart,channel.port1,[]);let active=true;return()=>{if(!active)return;active=false;apply(eventRemove,channel.port1,["message",messageListener]);apply(eventRemove,channel.port1,["close",onClose])}},post:(message)=>apply(messagePortPost,channel.port1,[message])};
 const launch=(module)=>{const run=()=>module.bootOverlay(trustedPort,tag,capabilities);if(apply(documentReady,document,[])==="loading")listen(document,"DOMContentLoaded",run,{once:true});else run()};
 const current=document.currentScript;apply(promiseThen,import(${JSON.stringify(moduleUrl)}),[launch]);current?.remove()

@@ -3940,6 +3940,22 @@
           "testFile": "test/e2e/hostile.e2e.ts",
           "testName": "picking the third of four identically-stamped rows marks the THIRD",
           "mutation": "src/core/payload.ts: sever anchor resolution (const resolved = null) - the orphan re-render empties the committed-card count ahead of the badge query, so the test reds there (measured). Single-layer ladder breaks do NOT red it: reverting 9df5eae was applied and observed GREEN, because computeFingerprint folds the sibling index and disambiguates a layer above the fall-through (D-064)."
+        },
+        {
+          "id": "hostile-forged-parent-swap",
+          "title": "A forged chrome command after window.parent = window is refused",
+          "steps": [
+            "Open an artifact that reassigns window.parent = window, then posts a forged {source:lucid-chrome, type:swap} to its own window once the overlay is listening",
+            "Read whether the artifact body flipped to the forged html; check a genuine overlay->chrome pong still reaches the parent"
+          ],
+          "expected": "The forged swap never lands (the body stays intact), a genuine pong reply still reaches the real parent rather than being redirected into the artifact's own window, and the overlay logs the refusal (reason + frame tag).",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "a forged swap after window.parent = window is rejected (M1.1, D-009)",
+          "mutation": "client/overlay/overlay.ts: read the live window.parent in the guard and post again (revert the parentWindow capture) - the forged swap is accepted and the body flips to the forged html, and the pong is redirected into the artifact's own window."
         }
       ]
     }

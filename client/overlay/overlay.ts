@@ -137,7 +137,19 @@ const coalesceByLine = (rects: readonly DOMRect[]): Rect[] => {
   }));
 };
 
-const post = (message: OverlayMessage): void => window.parent.postMessage(message, "*");
+/* The parent WindowProxy captured pre-artifact and handed through the
+ * capability bag (D-009). Set once in `mountOverlay` before the element
+ * connects, then read by `post` and the inbound guard - NEVER the live
+ * `window.parent`, which an artifact reassigns to forge commands and to
+ * redirect genuine replies. */
+let parentWindow: Window | null = null;
+/** The overlay's element tag, for identifying which frame refused a forgery. */
+let overlayTag: string | null = null;
+
+const post = (message: OverlayMessage): void => {
+  // The captured parent, never the live global (D-009).
+  parentWindow?.postMessage(message, "*");
+};
 
 /**
  * The overlay (RFC §1, §5). Injected into the artifact iframe, mounted once
@@ -813,10 +825,20 @@ export class LucidOverlay extends LitElement {
   };
 
   private readonly onMessage = (e: MessageEvent): void => {
-    // Artifact scripts share this Window and can forge message payloads, but
-    // they cannot forge the parent WindowProxy as event.source. This check is
-    // the public-channel authority boundary for every chrome command.
-    if (e.source !== window.parent || !isChromeMessage(e.data)) return;
+    // Artifact scripts share this Window and can forge message payloads. The
+    // authority boundary is the parent WindowProxy captured PRE-ARTIFACT:
+    // `window.parent` is [Replaceable], so reading the live global lets an
+    // artifact reassign it to itself and forge a same-window command. A message
+    // that IS a chrome command but did not come from the real parent is a
+    // forgery - refuse it, and say so, so a regression cannot hide in silence.
+    if (!isChromeMessage(e.data)) return;
+    if (e.source !== parentWindow) {
+      console.warn("[lucid-overlay] refused a chrome command from a non-parent source", {
+        tag: overlayTag,
+        type: (e.data as { type?: string }).type ?? "unknown",
+      });
+      return;
+    }
     const msg = e.data as ChromeMessage;
     if (msg.type === "highlight") {
       this.committed = [...msg.annotations];
@@ -1115,9 +1137,15 @@ export const mountOverlay = (
   if (window.name.startsWith("lucid-retry:")) window.name = "";
   capabilities.defineCustomElement(tagName, LucidOverlay);
   const overlay = capabilities.constructCustomElement(LucidOverlay);
+  // Pin the parent reference BEFORE the element connects: connectedCallback
+  // registers the inbound listener and posts `ready`, both of which must read
+  // the captured parent rather than the live (artifact-reassignable) global.
+  parentWindow = capabilities.parentWindow;
+  overlayTag = tagName;
   const hostHandle: TrustedOverlayHostHandle = {
     isOwned: capabilities.isOwned,
     overlayRoot: capabilities.overlayRoot,
+    parentWindow: capabilities.parentWindow,
     performOverlayUpdate: capabilities.performOverlayUpdate,
   };
   overlay.configureOutlineChannel(outlinePort, capabilities, hostHandle);

@@ -11,6 +11,13 @@ export interface TrustedOverlayHostHandle {
   readonly isOwned: (element: Element) => boolean;
   readonly overlayRoot: () => HTMLElement;
   readonly performOverlayUpdate: (element: HTMLElement) => void;
+  /** The parent WindowProxy captured PRE-ARTIFACT. `window.parent` is a
+   *  `[Replaceable]` global an artifact script reassigns to itself, then forges
+   *  a chrome command to its own window (the guard's `e.source !== window.parent`
+   *  passes) and silently redirects every genuine overlay->chrome reply into
+   *  the artifact's own window. Reading THIS captured reference - never the
+   *  live global - closes both directions (plan 04, M1.1, D-009). */
+  readonly parentWindow: Window;
 }
 
 export interface TrustedOverlayMountCapabilities {
@@ -64,6 +71,7 @@ const TRUSTED_OVERLAY_CAPABILITY_WITNESS = {
   onWindowScroll: true,
   overlayRoot: true,
   parentElement: true,
+  parentWindow: true,
   performOverlayUpdate: true,
   proofRealmTrusted: true,
   pseudoContent: true,
