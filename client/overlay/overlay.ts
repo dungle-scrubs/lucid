@@ -19,13 +19,8 @@ import {
 } from "../shared/protocol.ts";
 import { type ArtifactTheme, createArtifactTheme } from "./artifact-theme.ts";
 import { emphasizeElement, revealElement as revealOutlineElement } from "./reveal.ts";
-import {
-  BADGE_STEP_PX,
-  computeMarkers,
-  MAX_MARKER_RECTS,
-  type Marker,
-  type Rect,
-} from "./markers.ts";
+import { BADGE_STEP_PX, computeMarkers, type Marker, type Rect } from "./markers.ts";
+import { sanitizeRenderSnapshot, type OverlayRenderSnapshot } from "./render-snapshot.ts";
 import {
   BrowserArtifactOutlineController,
   type TrustedOutlineCapabilities,
@@ -67,14 +62,6 @@ const dropStyle = (id: string): void => {
 
 const INTERACTIVE =
   "a, button, input, select, textarea, label, [contenteditable], [role=button], summary";
-
-interface OverlayRenderSnapshot {
-  readonly focusedId: string | null;
-  readonly hoverRect: Rect | null;
-  readonly markers: readonly Marker[];
-  readonly sectionPulse: number;
-  readonly sectionRect: Rect | null;
-}
 
 /**
  * Merge a range's client rects into one box per visual line. `getClientRects()`
@@ -203,76 +190,16 @@ export class LucidOverlay extends LitElement {
   }
 
   #captureRenderSnapshot(): OverlayRenderSnapshot {
-    const number = (value: unknown): number =>
-      typeof value === "number" && Number.isFinite(value) ? value : 0;
-    const rect = (value: unknown): Rect | null => {
-      if (typeof value !== "object" || value === null) return null;
-      const candidate = value as Partial<Rect>;
-      return {
-        height: number(candidate.height),
-        left: number(candidate.left),
-        top: number(candidate.top),
-        width: number(candidate.width),
-      };
-    };
-    try {
-      const rawMarkers = Array.isArray(this.markers) ? this.markers : [];
-      const markers: Marker[] = [];
-      let renderedRectCount = 0;
-      let markerBudgetExceeded = false;
-      for (
-        let markerIndex = 0;
-        markerIndex < Math.min(rawMarkers.length, 2_000);
-        markerIndex += 1
-      ) {
-        const candidate = rawMarkers[markerIndex] as Partial<Marker> | undefined;
-        if (typeof candidate !== "object" || candidate === null) continue;
-        const state = candidate.state;
-        if (
-          state !== "committed" &&
-          state !== "queued" &&
-          state !== "pending" &&
-          state !== "decision"
-        ) {
-          continue;
-        }
-        const rawRects = Array.isArray(candidate.rects) ? candidate.rects : [];
-        const rects: Rect[] = [];
-        for (let rectIndex = 0; rectIndex < Math.min(rawRects.length, 64); rectIndex += 1) {
-          const captured = rect(rawRects[rectIndex]);
-          if (captured === null) continue;
-          renderedRectCount += 1;
-          if (renderedRectCount > MAX_MARKER_RECTS) {
-            markerBudgetExceeded = true;
-            break;
-          }
-          rects.push(captured);
-        }
-        if (markerBudgetExceeded) break;
-        markers.push({
-          id: typeof candidate.id === "string" ? candidate.id.slice(0, 256) : "",
-          index: Math.trunc(number(candidate.index)),
-          rects,
-          stackIndex: Math.trunc(number(candidate.stackIndex)),
-          state,
-        });
-      }
-      return {
-        focusedId: typeof this.focusedId === "string" ? this.focusedId.slice(0, 256) : null,
-        hoverRect: rect(this.hoverRect),
-        markers: markerBudgetExceeded ? [] : markers,
-        sectionPulse: Math.trunc(number(this.sectionPulse)),
-        sectionRect: rect(this.sectionRect),
-      };
-    } catch {
-      return {
-        focusedId: null,
-        hoverRect: null,
-        markers: [],
-        sectionPulse: 0,
-        sectionRect: null,
-      };
-    }
+    // All sanitization lives in render-snapshot.ts (pure over values); this
+    // just hands the overlay's reactive fields - untrusted, same realm as the
+    // artifact - across the seam.
+    return sanitizeRenderSnapshot({
+      focusedId: this.focusedId,
+      hoverRect: this.hoverRect,
+      markers: this.markers,
+      sectionPulse: this.sectionPulse,
+      sectionRect: this.sectionRect,
+    });
   }
 
   static styles = css`
