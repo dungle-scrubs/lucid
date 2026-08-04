@@ -397,9 +397,13 @@ export const validateOverlayMessage = (
     case "target-picked": {
       if (!isRecord(data.anchor)) return refuse("anchor");
       return {
+        anchor: data.anchor as unknown as Anchor,
+        ...(isRecord(data.modifiers)
+          ? { modifiers: data.modifiers as { meta: boolean; shift: boolean } }
+          : {}),
+        ...(isRecord(data.decision) ? { decision: data.decision as unknown as Anchor } : {}),
         source: "lucid-overlay",
         type: "target-picked",
-        anchor: data.anchor as unknown as Anchor,
       };
     }
     case "annotation-hover":
