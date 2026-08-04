@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { testTitlesIn } from "../../scripts/coverage-check.ts";
 import { HOSTILE_DEFECTS, HOSTILE_FIXTURES, type HostileFixture } from "./hostile-fixtures.ts";
 import { makeCli, surfaceOf, waitTimeoutSeconds, type Cli } from "./helpers.ts";
+import { overlaySettled } from "./visual.ts";
 
 /**
  * Suite Q: every hostile artifact goes through the ONE loop that matters -
@@ -278,4 +279,81 @@ test("picking the third of four identically-stamped rows marks the THIRD", async
     badgeCenterY >= thirdBox.y && badgeCenterY <= thirdBox.y + thirdBox.height,
     `badge center ${badgeCenterY} sits outside the third row [${thirdBox.y}, ${thirdBox.y + thirdBox.height}]`,
   ).toBe(true);
+});
+
+test("a forged swap after window.parent = window is rejected (M1.1, D-009)", async ({ page }) => {
+  // window.parent is a [Replaceable] global, so artifact script reassigns it to
+  // itself, then posts a chrome command to its own window. On the LIVE
+  // window.parent read the guard accepts the forgery: e.source ===
+  // window.parent === window, AND every genuine overlay->chrome reply is
+  // silently redirected into the artifact's own window. Capturing the parent
+  // WindowProxy pre-artifact (and reading THAT, not the live global) closes
+  // both directions: a forged command is refused, and a genuine reply still
+  // reaches the real parent.
+  const refusals: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "warning" && msg.text().includes("refused a chrome command"))
+      refusals.push(msg.text());
+  });
+  const forgedHtml = `<!doctype html>
+<html lang="en">
+<head><title>Forge parent</title></head>
+<body><h1>Original artifact</h1>
+<script>
+  try { window.parent = window; } catch (e) {}
+  var forge = function () {
+    window.postMessage({ source: "lucid-chrome", type: "swap", html: "<h1>FORGED BY ARTIFACT</h1>" }, "*");
+    // A second forged command of a DIFFERENT type proves the guard is not
+    // swap-specific: it refuses every chrome command from a non-parent source.
+    window.postMessage({ source: "lucid-chrome", type: "theme", theme: "dark" }, "*");
+    document.body.setAttribute("data-forged", "true");
+    // Report whether the forged swap landed. The overlay services messages
+    // synchronously, so by the next macrotasks the body either flipped (forgery
+    // accepted) or did not (forgery refused). The test waits on this signal.
+    setTimeout(function () {
+      var swapped = document.body.querySelector("h1")?.textContent === "FORGED BY ARTIFACT";
+      document.body.setAttribute("data-swap-result", swapped ? "swapped" : "intact");
+    }, 250);
+  };
+  // Forge only once the overlay is connected and listening: its host root gains
+  // the overlay element as a child when connectedCallback (which registers the
+  // message listener) has fired.
+  new MutationObserver(function (_, mo) {
+    var root = document.getElementById("__lucid_overlay_root");
+    if (root && root.children.length > 0) { mo.disconnect(); setTimeout(forge, 150); }
+  }).observe(document, { childList: true, subtree: true });
+</script>
+</body>
+</html>`;
+  cli = await makeCli(forgedHtml);
+  const opened = (await cli.run(["open", cli.artifact])) as { url: string };
+  await page.goto(opened.url);
+  const surface = surfaceOf(page);
+  await expect(surface.locator("h1")).toContainText("Original artifact");
+
+  // The artifact fires the forge once the overlay is listening, then reports
+  // whether the swap landed. Wait for that report, then assert the forgery was
+  // REFUSED: the body stays intact. On the unfixed build the report reads
+  // "swapped" and this fails.
+  await expect(surface.locator("[data-swap-result]")).toHaveCount(1);
+  await expect(surface.locator("body")).toHaveAttribute("data-swap-result", "intact");
+
+  // The refusal is observable: silence would hide a regression. The overlay
+  // logged the rejection (its reason + this frame's tag) when it dropped the
+  // forgery, before the artifact recorded the intact result above.
+  expect(refusals.length, "the overlay logged the refused forgery").toBeGreaterThanOrEqual(2);
+  expect(
+    refusals.some((r) => r.includes("swap")),
+    "swap forgery logged",
+  ).toBe(true);
+  expect(
+    refusals.some((r) => r.includes("theme")),
+    "theme forgery logged",
+  ).toBe(true);
+
+  // The other direction: a genuine overlay->chrome reply (the pong) still
+  // reaches the real parent after the forge, proving the captured reference did
+  // not break the normal channel. On the unfixed build this times out because
+  // the pong is redirected into the artifact's own window.
+  await overlaySettled(page);
 });
