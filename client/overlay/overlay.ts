@@ -721,7 +721,7 @@ export class LucidOverlay extends LitElement {
     } else if (msg.type === "swap") {
       this.swapArtifact(msg.html, msg.revision);
     } else if (msg.type === "diff-show") {
-      this.swapArtifact(msg.html);
+      this.swapArtifact(msg.html, msg.revision);
       this.injectDiffStyles();
     } else if (msg.type === "diff-goto") {
       this.gotoHunk(msg.hunkId);
@@ -747,8 +747,6 @@ export class LucidOverlay extends LitElement {
       post({ source: "lucid-overlay", type: "pong", nonce: msg.nonce });
     } else if (msg.type === "theme") {
       this.#theme.apply(msg.theme);
-    } else if (msg.type === "clear-pending") {
-      this.focusedId = null;
     }
   };
 

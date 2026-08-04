@@ -254,7 +254,6 @@ export type OverlayMessage =
       readonly id: string | null;
     }
   | { readonly source: "lucid-overlay"; readonly type: "annotation-activate"; readonly id: string }
-  | { readonly source: "lucid-overlay"; readonly type: "selection-cleared" }
   /** Widest real child of the artifact body, measured inside the iframe. The
    *  chrome cannot measure it: the surface runs on an opaque origin (D-020), so
    *  `iframe.contentDocument` is null from the parent. */
@@ -317,7 +316,12 @@ export type ChromeMessage =
   | { readonly source: "lucid-chrome"; readonly type: "reveal-section"; readonly lucidId: string }
   | { readonly source: "lucid-chrome"; readonly type: "pulse-section"; readonly lucidId: string }
   | { readonly source: "lucid-chrome"; readonly type: "request-section-ids" }
-  | { readonly source: "lucid-chrome"; readonly type: "diff-show"; readonly html: string }
+  | {
+      readonly source: "lucid-chrome";
+      readonly type: "diff-show";
+      readonly html: string;
+      readonly revision?: number;
+    }
   | { readonly source: "lucid-chrome"; readonly type: "diff-goto"; readonly hunkId: string }
   | { readonly source: "lucid-chrome"; readonly type: "clear-pending" }
   /** Ask the overlay to measure the artifact's content width. */
@@ -346,7 +350,6 @@ export type ChromeMessage =
       readonly type: "theme";
       readonly theme: "light" | "dark";
     };
-
 export const isOverlayMessage = (data: unknown): data is OverlayMessage =>
   typeof data === "object" &&
   data !== null &&
@@ -356,3 +359,109 @@ export const isChromeMessage = (data: unknown): data is ChromeMessage =>
   typeof data === "object" &&
   data !== null &&
   (data as { source?: unknown }).source === "lucid-chrome";
+
+/** The bound on section-ids the overlay may report. Deliberately larger than the
+ *  private port's 64-heading cap (headings are a subset of sections): a plan
+ *  artifact carries hundreds of data-lucid-ids, and discarding the tail would
+ *  silently break every section permalink past the cut. */
+export const MAX_OVERLAY_SECTION_IDS = 512;
+
+export type OverlayValidationRecord =
+  | { readonly kind: "refusal"; readonly type: string; readonly field: string }
+  | {
+      readonly kind: "truncation";
+      readonly type: string;
+      readonly field: string;
+      readonly original: number;
+      readonly kept: number;
+    };
+
+/** Validate a public-channel overlay message (the artifact shares the overlay's
+ *  JS realm, so inbound data is untrusted). Returns the typed message, or null
+ *  when the shape or a field's bounds are wrong; `onRecord` receives a refusal
+ *  or truncation record for observability. */
+export const validateOverlayMessage = (
+  data: unknown,
+  onRecord?: (record: OverlayValidationRecord) => void,
+): OverlayMessage | null => {
+  if (!isRecord(data) || data.source !== "lucid-overlay") return null;
+  const type = data.type;
+  const refuse = (field: string): null => {
+    onRecord?.({ field, kind: "refusal", type: String(type) });
+    return null;
+  };
+
+  switch (type) {
+    case "ready":
+      return { source: "lucid-overlay", type: "ready" };
+    case "target-picked": {
+      if (!isRecord(data.anchor)) return refuse("anchor");
+      return {
+        anchor: data.anchor as unknown as Anchor,
+        ...(isRecord(data.modifiers)
+          ? { modifiers: data.modifiers as { meta: boolean; shift: boolean } }
+          : {}),
+        ...(isRecord(data.decision) ? { decision: data.decision as unknown as Anchor } : {}),
+        source: "lucid-overlay",
+        type: "target-picked",
+      };
+    }
+    case "annotation-hover":
+      if (data.id !== null && typeof data.id !== "string") return refuse("id");
+      return {
+        source: "lucid-overlay",
+        type: "annotation-hover",
+        id: data.id as string | null,
+      };
+    case "annotation-activate":
+      if (typeof data.id !== "string") return refuse("id");
+      return { source: "lucid-overlay", type: "annotation-activate", id: data.id };
+    case "content-width": {
+      const width = data.width;
+      if (typeof width !== "number" || !Number.isFinite(width) || width <= 0)
+        return refuse("width");
+      return { source: "lucid-overlay", type: "content-width", width };
+    }
+    case "pong":
+      if (typeof data.nonce !== "string") return refuse("nonce");
+      return { source: "lucid-overlay", type: "pong", nonce: data.nonce };
+    case "section-ids": {
+      if (!Array.isArray(data.ids)) return refuse("ids");
+      const ids = data.ids.filter((id): id is string => typeof id === "string");
+      if (ids.length > MAX_OVERLAY_SECTION_IDS) {
+        onRecord?.({
+          field: "ids",
+          kind: "truncation",
+          kept: MAX_OVERLAY_SECTION_IDS,
+          original: ids.length,
+          type: "section-ids",
+        });
+        return {
+          source: "lucid-overlay",
+          type: "section-ids",
+          ids: ids.slice(0, MAX_OVERLAY_SECTION_IDS),
+          ...(Array.isArray(data.added)
+            ? {
+                added: data.added as readonly {
+                  readonly id: string;
+                  readonly inViewport: boolean;
+                }[],
+              }
+            : {}),
+        };
+      }
+      return {
+        source: "lucid-overlay",
+        type: "section-ids",
+        ids,
+        ...(Array.isArray(data.added)
+          ? {
+              added: data.added as readonly { readonly id: string; readonly inViewport: boolean }[],
+            }
+          : {}),
+      };
+    }
+    default:
+      return null;
+  }
+};

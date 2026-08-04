@@ -46,6 +46,23 @@ export interface Surface {
    *  session's state. */
   readonly ownsSource: (source: MessageEventSource | null) => boolean;
   readonly toOverlay: (message: ChromeMessage) => void;
+  /** Replace the artifact DOM. ALWAYS arms the outline revision barrier so the
+   *  outline re-proofs. Every swap, diff-show, version view and version exit
+   *  goes through this - no caller may replace artifact DOM without it. */
+  readonly showHtml: (html: string, options?: { revision?: number; mode?: "diff-show" }) => void;
+  /** Light a mark in place (scroll: false) or bring it into view (scroll: true). */
+  readonly emphasize: (id: string, scroll: boolean) => void;
+  /** Scroll to a section (pulse: false) or flash it in place (pulse: true). */
+  readonly revealSection: (lucidId: string, pulse: boolean) => void;
+  readonly gotoHunk: (hunkId: string) => void;
+  readonly requestSections: () => void;
+  readonly measure: () => void;
+  readonly setTheme: (theme: "dark" | "light") => void;
+  readonly ping: (nonce: string) => void;
+  /** Arm the outline revision barrier and return its number. Every
+   *  DOM-replacing message (swap, diff-show) must carry one so the outline
+   *  re-proofs against the new document. */
+  readonly prepareRevision: () => number;
   readonly pushHighlights: () => void;
   readonly applyDeferredSwapIfReady: () => void;
   readonly bootstrap: () => Promise<void>;
@@ -212,7 +229,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     // connectedCallback can beat React installing the chrome's message
     // listener, so we ask again from this reliable point (fires on `ready` and
     // on the iframe onLoad fallback) rather than trusting the push alone.
-    toOverlay({ source: "lucid-chrome", type: "request-section-ids" });
+    requestSections();
     outline.requestLayout(true);
   };
 
@@ -296,8 +313,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   };
 
   const applySwap = (html: string, version: number): void => {
-    const outlineRevision = outline.prepareRevision();
-    toOverlay({ source: "lucid-chrome", type: "swap", html, revision: outlineRevision });
+    showHtml(html);
     // A live update supersedes a historical view: the surface is now the new
     // current, so history mode ends rather than showing a stale snapshot label.
     set((s) => ({ diffBase: s.version, version, newerVersion: null, viewingVersion: null }));
@@ -373,6 +389,41 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     outline.setLayoutAvailable(effectiveOutlineLayoutAvailable());
   };
 
+  // SurfaceView: the nine named commands that replace raw toOverlay. Every
+  // DOM-replacing path goes through showHtml, which arms the outline revision
+  // barrier so the outline re-proofs against the new document.
+  const showHtml = (
+    html: string,
+    options: { revision?: number; mode?: "diff-show" } = {},
+  ): void => {
+    toOverlay({
+      html,
+      revision: options.revision ?? outline.prepareRevision(),
+      source: "lucid-chrome",
+      type: options.mode === "diff-show" ? "diff-show" : "swap",
+    });
+  };
+  const emphasize = (id: string, scroll: boolean): void =>
+    toOverlay({
+      id,
+      source: "lucid-chrome",
+      type: scroll ? "reveal-annotation" : "focus-annotation",
+    });
+  const revealSection = (lucidId: string, pulse: boolean): void =>
+    toOverlay({
+      lucidId,
+      source: "lucid-chrome",
+      type: pulse ? "pulse-section" : "reveal-section",
+    });
+  const gotoHunk = (hunkId: string): void =>
+    toOverlay({ hunkId, source: "lucid-chrome", type: "diff-goto" });
+  const requestSections = (): void =>
+    toOverlay({ source: "lucid-chrome", type: "request-section-ids" });
+  const measure = (): void => toOverlay({ source: "lucid-chrome", type: "measure-content" });
+  const setTheme = (theme: "dark" | "light"): void =>
+    toOverlay({ source: "lucid-chrome", theme, type: "theme" });
+  const ping = (nonce: string): void => toOverlay({ nonce, source: "lucid-chrome", type: "ping" });
+
   const dispose = (): void => {
     outlineSlotObserver?.disconnect();
     outlineSlotObserver = null;
@@ -396,6 +447,15 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     ownsSource,
     outlineSlotRect,
     toOverlay,
+    prepareRevision: outline.prepareRevision,
+    showHtml,
+    emphasize,
+    revealSection,
+    gotoHunk,
+    requestSections,
+    measure,
+    setTheme,
+    ping,
     pushHighlights,
     applyDeferredSwapIfReady,
     bootstrap,
