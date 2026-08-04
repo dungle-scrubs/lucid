@@ -308,7 +308,15 @@ const leaveForAbsent = (
   return focusInside ? { effects: ["focus-surface"], state } : { state };
 };
 
-export const reduceOutlinePresentation = (
+/**
+ * The pure presentation-lattice transition: given a basis state and one
+ * event, return the next state plus the side-effecting intent (today, only a
+ * focus handoff). This is the speculative half of the outline machine - it
+ * touches no clock, no DOM, and no snapshot store, so the interaction machine
+ * (`createOutlinePresentation`) and its tests can peek at where an event would
+ * take the lattice without committing to it.
+ */
+export const project = (
   state: OutlinePresentationState,
   event: OutlinePresentationEvent,
 ): OutlinePresentationResult => {
@@ -362,6 +370,447 @@ export const reduceOutlinePresentation = (
     return { state: { mode: "TRANSIENT_CLOSED" } };
   }
   return { state };
+};
+
+/**
+ * Legacy alias for {@link project}, kept while the snapshot-validation suite
+ * (which only checks that a valid proof pins the mode) migrates onto the
+ * interaction machine. New code calls `project` or drives the machine through
+ * `createOutlinePresentation().send`.
+ */
+export const reduceOutlinePresentation = project;
+
+/**
+ * Side effects the interaction machine asks its adapter (the React component)
+ * to perform. The machine itself is DOM- and clock-free: it never calls
+ * setTimeout or focuses an element. Instead it returns these intents, and the
+ * adapter applies the ones that touch the realm.
+ *
+ * - `focus-surface` / `focus-rail`: move focus so it survives a mode change
+ *   (focus was inside a control that is about to unmount, or the outline just
+ *   closed and focus should return to the rail).
+ * - `schedule(timer, ms, event)`: arm a deferred transition. The adapter starts
+ *   a real timer; when it fires it feeds `event` back through `send`. This is
+ *   how the hover/leave/pending hysteresis timers stop being component refs.
+ * - `cancel(timer)`: clear a timer the adapter armed, because a later event
+ *   superseded it (re-entering the rail cancels the pending close, a fresh
+ *   snapshot cancels the pending reproof).
+ */
+export type OutlinePresentationTimer = "hover" | "leave" | "pending";
+
+/**
+ * The three hysteresis delays the interaction machine arms as `schedule`
+ * effects. They live here - beside the machine, not in the React component -
+ * because the component no longer owns a timer; it only applies the effect the
+ * machine returns.
+ */
+export const OUTLINE_PRESENTATION_HOVER_INTENT_MS = 120;
+export const OUTLINE_PRESENTATION_HOVER_LEAVE_MS = 180;
+export const OUTLINE_PRESENTATION_PENDING_HOLD_MS = 500;
+
+export type OutlinePresentationEffect =
+  | { readonly kind: "focus-surface" }
+  | { readonly kind: "focus-rail" }
+  | {
+      readonly kind: "schedule";
+      readonly timer: OutlinePresentationTimer;
+      readonly ms: number;
+      readonly event: OutlinePresentationInput;
+    }
+  | { readonly kind: "cancel"; readonly timer: OutlinePresentationTimer };
+
+/** The interaction machine's input. Grows by milestone as more of the React
+ *  component's ad-hoc handling moves behind `send` (timers, then pointer/focus
+ *  ordering, then snapshot selection). */
+export type OutlinePresentationInput =
+  | OutlinePresentationEvent
+  | { readonly type: "pointer-enter" }
+  | { readonly type: "pointer-exit" }
+  | { readonly type: "rail-focus" }
+  | { readonly type: "rail-pointer-down" }
+  | { readonly type: "rail-pointer-up" }
+  | { readonly type: "rail-touch" }
+  | { readonly type: "escape" }
+  | { readonly type: "collapsible-change"; readonly open: boolean }
+  | { readonly type: "pick"; readonly keyboard: boolean }
+  | { readonly type: "blur" }
+  | { readonly type: "outside-press" }
+  | {
+      readonly type: "snapshot-arrived";
+      readonly snapshot: OutlineSnapshot;
+      readonly focusInside: boolean;
+      /** Outline key of the focused item, if focus is on an item button. */
+      readonly focusedKey?: string | null;
+      /** Whether focus is on the resting rail. */
+      readonly focusedRail?: boolean;
+    }
+  | {
+      readonly type: "snapshot-withdrawn";
+      readonly pending: boolean;
+      readonly focusInside: boolean;
+    }
+  | { readonly type: "pending-expired"; readonly focusInside?: boolean };
+
+export interface OutlinePresentationSendResult {
+  readonly mode: OutlinePresentationMode;
+  readonly snapshot: OutlineSnapshot | null;
+  readonly effects: readonly OutlinePresentationEffect[];
+}
+
+export interface OutlinePresentationOptions {
+  /** Seed the lattice at a known mode (tests reach arbitrary modes this way).
+   *  Omit to start ABSENT. */
+  readonly seed?: OutlinePresentationState;
+  /** Seed the rendered snapshot (tests that assert snapshot selection). */
+  readonly snapshot?: OutlineSnapshot | null;
+}
+
+/**
+ * The outline's interaction machine: one owner for the presentation lattice,
+ * the hover/leave/pending timers, the pointer/focus/touch ordering rules, and
+ * which snapshot is currently rendered. It is DOM- and clock-free - every
+ * realm touch is an {@link OutlinePresentationEffect} the adapter applies - so
+ * the whole interaction surface is unit-testable with a fake clock and ordered
+ * `send` calls instead of a mounted component.
+ *
+ * The pure half is {@link project}; this factory holds the stateful half.
+ */
+export const createOutlinePresentation = (
+  options: OutlinePresentationOptions = {},
+): {
+  readonly send: (event: OutlinePresentationInput, nowMs: number) => OutlinePresentationSendResult;
+} => {
+  let presentation: OutlinePresentationState = options.seed ?? { mode: "ABSENT" };
+  let renderedSnapshot: OutlineSnapshot | null = options.snapshot ?? null;
+  // Logical pending-ness for the three timers. The adapter holds the real
+  // handles; the machine tracks these so it can ask for a cancel when a later
+  // event supersedes a timer it armed, and so it never arms one twice.
+  let hoverPending = false;
+  let leavePending = false;
+  // Ordering bookkeeping that used to live as scattered component refs. The
+  // machine owns it so the ordering is unit-testable as a sequence of `send`
+  // calls rather than a race between DOM events and microtasks.
+  // - pointerOnRail: a pointer is down on the rail, so a focus arriving now is a
+  //   touch/mouse synthesis, not a keyboard focus that should open the panel.
+  // - suppressNextRailFocus: the machine just returned focus to the rail itself
+  //   (Escape); the focus event that causes is its own and must not re-open.
+  // - touchOpening: a touch just opened the rail; the browser's synthesized
+  //   close-click is the next collapsible-change and is suppressed.
+  let pointerOnRail = false;
+  let suppressNextRailFocus = false;
+  let touchOpening = false;
+  // Whether the pending-reproof hold timer is armed. Tracked so a fresh
+  // snapshot can cancel it and so the hold arms at most once.
+  let pendingPending = false;
+
+  // Commit a lattice transition: adopt its settled state and append any lattice
+  // effects (today only focus-surface) to the machine's effect list. One
+  // helper replaces the repeated set-state-and-push-effects idiom at every
+  // transition site.
+  const commit = (
+    effects: OutlinePresentationEffect[],
+    result: OutlinePresentationResult,
+  ): OutlinePresentationState => {
+    presentation = result.state;
+    for (const effect of result.effects ?? []) effects.push({ kind: effect });
+    return result.state;
+  };
+
+  // Re-evaluate the lattice as the end of an interaction (blur, Escape, a close
+  // click): re-pin if the current snapshot's proof still fits the gutter,
+  // otherwise drop to transient-closed. A projection whose reproof is still in
+  // flight (the pending hold is armed, or no snapshot is rendered yet) is NOT a
+  // proof to re-pin against - it dismisses, matching the store's projectionPending
+  // guard. Returns the settled state so callers branch on a value the closure
+  // reassigned (an outer narrowing on `presentation` is stale).
+  const finishInteraction = (effects: OutlinePresentationEffect[]): OutlinePresentationState =>
+    renderedSnapshot !== null && !pendingPending
+      ? commit(
+          effects,
+          project(presentation, {
+            headingCount: renderedSnapshot.headings.length,
+            proof: renderedSnapshot.proof,
+            type: "interaction-finished",
+          }),
+        )
+      : commit(effects, project(presentation, { type: "dismiss" }));
+
+  const send = (event: OutlinePresentationInput, _nowMs: number): OutlinePresentationSendResult => {
+    const effects: OutlinePresentationEffect[] = [];
+
+    if (event.type === "pointer-enter") {
+      // Entering always cancels a pending close; only a closed panel arms the
+      // open-on-hover delay, and only if one is not already armed.
+      if (leavePending) {
+        effects.push({ kind: "cancel", timer: "leave" });
+        leavePending = false;
+      }
+      if (presentation.mode === "TRANSIENT_CLOSED" && !hoverPending) {
+        hoverPending = true;
+        effects.push({
+          kind: "schedule",
+          timer: "hover",
+          ms: OUTLINE_PRESENTATION_HOVER_INTENT_MS,
+          event: { type: "hover-intent" },
+        });
+      }
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "pointer-exit") {
+      // Leaving cancels a pending open; only an open-on-hover panel arms the
+      // close-on-leave delay. A closed panel that never opened arms nothing.
+      if (hoverPending) {
+        effects.push({ kind: "cancel", timer: "hover" });
+        hoverPending = false;
+      }
+      if (presentation.mode === "TRANSIENT_HOVER" && !leavePending) {
+        leavePending = true;
+        effects.push({
+          kind: "schedule",
+          timer: "leave",
+          ms: OUTLINE_PRESENTATION_HOVER_LEAVE_MS,
+          event: { type: "pointer-leave" },
+        });
+      }
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "rail-pointer-down") {
+      pointerOnRail = true;
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+    if (event.type === "rail-pointer-up") {
+      pointerOnRail = false;
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "rail-focus") {
+      // A focus we caused (Escape returning focus to the rail) is suppressed for
+      // exactly one event. A focus that arrives while a pointer is down on the
+      // rail is a touch/mouse synthesis, not a keyboard open. Only a genuine
+      // keyboard focus latches the panel open.
+      if (suppressNextRailFocus) {
+        suppressNextRailFocus = false;
+        return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+      }
+      if (pointerOnRail) {
+        pointerOnRail = false;
+        return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+      }
+      const focused = project(presentation, { type: "latch" });
+      commit(effects, focused);
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "rail-touch") {
+      // Touch has no hover: tapping the rail is the only way in. It latches from
+      // closed or hover, and marks the open so the synthesized close-click is
+      // suppressed below.
+      if (presentation.mode === "TRANSIENT_CLOSED" || presentation.mode === "TRANSIENT_HOVER") {
+        commit(effects, project(presentation, { type: "latch" }));
+        touchOpening = true;
+      }
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "escape") {
+      // Escape ends an open transient interaction. Re-pinning focuses the
+      // surface (pinned has no rail); otherwise focus returns to the rail and
+      // the machine suppresses its own focus so the panel does not re-open.
+      if (presentation.mode === "TRANSIENT_HOVER" || presentation.mode === "TRANSIENT_LATCHED") {
+        const settled = finishInteraction(effects);
+        if (settled.mode === "PINNED") {
+          effects.push({ kind: "focus-surface" });
+        } else {
+          suppressNextRailFocus = true;
+          effects.push({ kind: "focus-rail" });
+        }
+      }
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "pick") {
+      // Activating a section ends a transient interaction (a pinned outline is
+      // not driven by picks). A keyboard pick returns focus to the rail - which
+      // only exists while the panel is transient-closed, not after a re-pin -
+      // and the machine suppresses its own focus so the panel stays closed.
+      if (presentation.mode !== "PINNED") {
+        const settled = finishInteraction(effects);
+        if (event.keyboard && settled.mode === "TRANSIENT_CLOSED") {
+          suppressNextRailFocus = true;
+          effects.push({ kind: "focus-rail" });
+        }
+      }
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "outside-press") {
+      // A pointer press outside a latched panel ends the interaction.
+      if (presentation.mode === "TRANSIENT_LATCHED") finishInteraction(effects);
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "blur") {
+      // Focus left the outline. A pending hold that loses focus exits early
+      // (cancel the hold, drop to absent preserving priorMode, clear the held
+      // snapshot); otherwise a latched interaction simply ends.
+      if (pendingPending) {
+        effects.push({ kind: "cancel", timer: "pending" });
+        pendingPending = false;
+        commit(
+          effects,
+          project(presentation, {
+            focusInside: false,
+            preserveHysteresis: true,
+            type: "invalidate",
+          }),
+        );
+        renderedSnapshot = null;
+      } else if (presentation.mode === "TRANSIENT_LATCHED") {
+        finishInteraction(effects);
+      }
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "collapsible-change") {
+      // The rail trigger's toggle. Pinned is not driven by the trigger. A close
+      // that is the synthesized echo of a touch-open is suppressed; an open (or
+      // a toggle while hovering) latches; otherwise the interaction ends.
+      if (presentation.mode !== "PINNED") {
+        if (!event.open && touchOpening) {
+          touchOpening = false;
+        } else if (event.open || presentation.mode === "TRANSIENT_HOVER") {
+          commit(effects, project(presentation, { type: "latch" }));
+        } else {
+          finishInteraction(effects);
+        }
+      }
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "snapshot-arrived") {
+      // A fresh snapshot cancels any armed hold. A stale generation (older or
+      // equal to the one already rendered) is ignored; only a strictly newer
+      // generation replaces the rendered snapshot and drives the projection.
+      if (pendingPending) {
+        effects.push({ kind: "cancel", timer: "pending" });
+        pendingPending = false;
+      }
+      if (renderedSnapshot !== null && event.snapshot.generation <= renderedSnapshot.generation) {
+        return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+      }
+      const projectionEvent = {
+        focusInside: event.focusInside,
+        headingCount: event.snapshot.headings.length,
+        proof: event.snapshot.proof,
+        type: "projection" as const,
+      };
+      const projected = project(presentation, projectionEvent);
+      // Focus survives if it is on an item that still exists, or on the rail
+      // while the panel stays transient. Otherwise the snapshot change orphaned
+      // focus, and it is handed to the surface before the lattice moves.
+      const stableFocusedItem =
+        event.focusedKey !== undefined &&
+        event.focusedKey !== null &&
+        event.snapshot.headings.some((heading) => heading.key === event.focusedKey);
+      const stableFocusedRail = event.focusedRail === true && projected.state.mode !== "PINNED";
+      const handoff = event.focusInside && !stableFocusedItem && !stableFocusedRail;
+      renderedSnapshot = event.snapshot;
+      if (handoff) {
+        effects.push({ kind: "focus-surface" });
+        commit(effects, project(presentation, { ...projectionEvent, focusInside: false }));
+      } else {
+        commit(effects, projected);
+      }
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "snapshot-withdrawn") {
+      if (event.pending) {
+        // A reproof is in flight: a new snapshot is expected. With focus inside
+        // on a rendered snapshot, latch the gutter so focus and identity survive
+        // the short hold; otherwise drop to absent preserving the prior mode so
+        // the reproof snaps back to it.
+        if (event.focusInside && renderedSnapshot !== null) {
+          commit(
+            effects,
+            project(presentation, {
+              focusInside: true,
+              headingCount: renderedSnapshot.headings.length,
+              proof: { clearancePx: 0, complete: false },
+              type: "projection",
+            }),
+          );
+          if (!pendingPending) {
+            pendingPending = true;
+            effects.push({
+              kind: "schedule",
+              timer: "pending",
+              ms: OUTLINE_PRESENTATION_PENDING_HOLD_MS,
+              event: { type: "pending-expired" },
+            });
+          }
+        } else {
+          if (pendingPending) {
+            effects.push({ kind: "cancel", timer: "pending" });
+            pendingPending = false;
+          }
+          commit(
+            effects,
+            project(presentation, {
+              focusInside: false,
+              preserveHysteresis: true,
+              type: "invalidate",
+            }),
+          );
+          renderedSnapshot = null;
+        }
+      } else {
+        // A real loss, not a reproof: cancel any hold and hard-invalidate so the
+        // next arrival must meet the full enter gate.
+        if (pendingPending) {
+          effects.push({ kind: "cancel", timer: "pending" });
+          pendingPending = false;
+        }
+        commit(
+          effects,
+          project(presentation, { focusInside: event.focusInside, type: "invalidate" }),
+        );
+        renderedSnapshot = null;
+      }
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    if (event.type === "pending-expired") {
+      // The hold elapsed without a fresh snapshot: clear what was held and drop
+      // to absent, preserving the prior mode across the soft reproof. The
+      // adapter refreshes focusInside from the DOM when it fires this timer -
+      // focus is the one payload known only at fire time - so it is optional
+      // here and defaults to a safe no-handoff.
+      pendingPending = false;
+      renderedSnapshot = null;
+      commit(
+        effects,
+        project(presentation, {
+          focusInside: event.focusInside ?? false,
+          preserveHysteresis: true,
+          type: "invalidate",
+        }),
+      );
+      return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+    }
+
+    // A deferred transition firing clears the timer it owns, then runs the
+    // lattice. (hover-intent clears hover; pointer-leave clears leave.)
+    if (event.type === "hover-intent") hoverPending = false;
+    else if (event.type === "pointer-leave") leavePending = false;
+
+    commit(effects, project(presentation, event));
+    return { mode: presentation.mode, snapshot: renderedSnapshot, effects };
+  };
+
+  return { send };
 };
 
 export type OutlineRateChannel = "snapshot" | "active-key";

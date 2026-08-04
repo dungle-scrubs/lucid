@@ -2,13 +2,20 @@ import { describe, expect, test } from "bun:test";
 import {
   activeOutlineKey,
   ARTIFACT_OUTLINE_POLICY,
+  createOutlinePresentation,
   createOutlineRateGate,
   normalizeOutlineLabel,
+  OUTLINE_PRESENTATION_HOVER_INTENT_MS,
+  OUTLINE_PRESENTATION_HOVER_LEAVE_MS,
+  OUTLINE_PRESENTATION_PENDING_HOLD_MS,
+  project,
   projectOutlineHeadings,
   reduceOutlinePresentation,
   resolveOutlineActivation,
+  type OutlinePresentationEvent,
   type OutlinePresentationMode,
   type OutlinePresentationState,
+  type OutlineSnapshot,
   validateOutlineSnapshot,
 } from "../client/shared/artifact-outline.ts";
 import { validateOutlinePrivateInbound } from "../client/shared/protocol.ts";
@@ -194,6 +201,9 @@ describe("artifact outline presentation state machine", () => {
     headingCount,
     proof: { clearancePx, complete },
   });
+  // Drive one lattice event through the interaction machine from a seeded mode.
+  const drive = (mode: OutlinePresentationMode, event: OutlinePresentationEvent) =>
+    createOutlinePresentation({ seed: state(mode) }).send(event, 0);
 
   test.each([
     ["absent -> pinned", "ABSENT", projection(2, 12), "PINNED"],
@@ -242,7 +252,7 @@ describe("artifact outline presentation state machine", () => {
       "PINNED",
     ],
   ] as const)("%s", (_name, mode, event, expected) => {
-    expect(reduceOutlinePresentation(state(mode), event).state.mode).toBe(expected);
+    expect(drive(mode, event).mode).toBe(expected);
   });
 
   test("every state becomes absent below two headings", () => {
@@ -253,7 +263,7 @@ describe("artifact outline presentation state machine", () => {
       "TRANSIENT_HOVER",
       "TRANSIENT_LATCHED",
     ] as const) {
-      expect(reduceOutlinePresentation(state(mode), projection(1, 20)).state.mode).toBe("ABSENT");
+      expect(drive(mode, projection(1, 20)).mode).toBe("ABSENT");
     }
   });
 
@@ -265,61 +275,434 @@ describe("artifact outline presentation state machine", () => {
       "TRANSIENT_HOVER",
       "TRANSIENT_LATCHED",
     ] as const) {
-      expect(reduceOutlinePresentation(state(mode), { type: "invalidate" }).state.mode).toBe(
-        "ABSENT",
-      );
+      expect(drive(mode, { type: "invalidate" }).mode).toBe("ABSENT");
     }
   });
 
   test("invalidation requests focus handoff before removing a focused control", () => {
-    expect(
-      reduceOutlinePresentation({ mode: "PINNED" }, { type: "invalidate", focusInside: true }),
-    ).toEqual({ effects: ["focus-surface"], state: { mode: "ABSENT" } });
+    const result = drive("PINNED", { focusInside: true, type: "invalidate" });
+    expect(result.mode).toBe("ABSENT");
+    expect(result.effects).toEqual([{ kind: "focus-surface" }]);
   });
 
   test("records whether a latch came from the user or a focused gutter loss", () => {
-    expect(
-      reduceOutlinePresentation({ mode: "PINNED" }, { ...projection(2, 7), focusInside: true }),
-    ).toEqual({ state: { latchOrigin: "gutter", mode: "TRANSIENT_LATCHED" } });
-    expect(reduceOutlinePresentation({ mode: "TRANSIENT_HOVER" }, { type: "latch" })).toEqual({
+    // latchOrigin is a pure-lattice property, asserted at the project seam; the
+    // machine surfaces only the resulting mode, which both latch sources share.
+    expect(project({ mode: "PINNED" }, { ...projection(2, 7), focusInside: true })).toEqual({
+      state: { latchOrigin: "gutter", mode: "TRANSIENT_LATCHED" },
+    });
+    expect(project({ mode: "TRANSIENT_HOVER" }, { type: "latch" })).toEqual({
       state: { latchOrigin: "user", mode: "TRANSIENT_LATCHED" },
     });
     expect(
-      reduceOutlinePresentation(
+      project(
         { latchOrigin: "gutter", mode: "TRANSIENT_LATCHED" },
         { ...projection(2, 12), type: "interaction-finished" },
       ),
     ).toEqual({ state: { mode: "PINNED" } });
+    expect(drive("PINNED", { ...projection(2, 7), focusInside: true }).mode).toBe(
+      "TRANSIENT_LATCHED",
+    );
+    expect(drive("TRANSIENT_HOVER", { type: "latch" }).mode).toBe("TRANSIENT_LATCHED");
   });
 
   test("the four-pixel hysteresis band retains pinned at 8px but requires 12px to enter", () => {
-    expect(reduceOutlinePresentation({ mode: "PINNED" }, projection(2, 8)).state.mode).toBe(
-      "PINNED",
+    expect(drive("PINNED", projection(2, 8)).mode).toBe("PINNED");
+    expect(drive("PINNED", projection(2, 7)).mode).toBe("TRANSIENT_CLOSED");
+    expect(drive("TRANSIENT_CLOSED", projection(2, 11)).mode).toBe("TRANSIENT_CLOSED");
+    expect(drive("TRANSIENT_CLOSED", projection(2, 12)).mode).toBe("PINNED");
+    // preserveHysteresis remembers PINNED across a soft reproof: a 9px proof
+    // (below the 12px enter gate, above the 8px retain gate) re-pins only because
+    // the prior mode was PINNED. Two sends on one machine carry that memory.
+    const heldPin = createOutlinePresentation({ seed: state("PINNED") });
+    expect(heldPin.send({ preserveHysteresis: true, type: "invalidate" }, 0).mode).toBe("ABSENT");
+    expect(heldPin.send(projection(2, 9), 0).mode).toBe("PINNED");
+    // ...but a reproof that itself FAILED proof drops the retain gate: the same
+    // 9px proof then lands transient, because the last settled mode was not PINNED.
+    const failedProof = createOutlinePresentation({ seed: state("PINNED") });
+    expect(failedProof.send({ preserveHysteresis: true, type: "invalidate" }, 0).mode).toBe(
+      "ABSENT",
     );
-    expect(reduceOutlinePresentation({ mode: "PINNED" }, projection(2, 7)).state.mode).toBe(
-      "TRANSIENT_CLOSED",
+    expect(failedProof.send(projection(2, 0, false), 0).mode).toBe("TRANSIENT_CLOSED");
+    expect(failedProof.send(projection(2, 9), 0).mode).toBe("TRANSIENT_CLOSED");
+    // A hard invalidate (no hysteresis) forgets PINNED entirely.
+    const resetPin = createOutlinePresentation({ seed: state("PINNED") });
+    expect(resetPin.send({ type: "invalidate" }, 0).mode).toBe("ABSENT");
+    expect(resetPin.send(projection(2, 9), 0).mode).toBe("TRANSIENT_CLOSED");
+  });
+});
+
+describe("outline presentation timer effects", () => {
+  const seed = (mode: OutlinePresentationMode): OutlinePresentationState =>
+    mode === "TRANSIENT_LATCHED" ? { latchOrigin: "user", mode } : { mode };
+
+  test("pointer-enter schedules hover-intent after the hover delay, and the panel opens only when it fires", () => {
+    const machine = createOutlinePresentation({ seed: seed("TRANSIENT_CLOSED") });
+    const armed = machine.send({ type: "pointer-enter" }, 0);
+    expect(armed.mode).toBe("TRANSIENT_CLOSED");
+    expect(armed.effects).toEqual([
+      {
+        kind: "schedule",
+        timer: "hover",
+        ms: OUTLINE_PRESENTATION_HOVER_INTENT_MS,
+        event: { type: "hover-intent" },
+      },
+    ]);
+    // The adapter fires the scheduled event after the delay; only then does the
+    // lattice move. Nothing opens early.
+    const opened = machine.send({ type: "hover-intent" }, OUTLINE_PRESENTATION_HOVER_INTENT_MS);
+    expect(opened.mode).toBe("TRANSIENT_HOVER");
+    expect(opened.effects).toEqual([]);
+  });
+
+  test("pointer-exit schedules pointer-leave after the leave delay", () => {
+    const machine = createOutlinePresentation({ seed: seed("TRANSIENT_HOVER") });
+    const armed = machine.send({ type: "pointer-exit" }, 0);
+    expect(armed.mode).toBe("TRANSIENT_HOVER");
+    expect(armed.effects).toEqual([
+      {
+        kind: "schedule",
+        timer: "leave",
+        ms: OUTLINE_PRESENTATION_HOVER_LEAVE_MS,
+        event: { type: "pointer-leave" },
+      },
+    ]);
+    const closed = machine.send({ type: "pointer-leave" }, OUTLINE_PRESENTATION_HOVER_LEAVE_MS);
+    expect(closed.mode).toBe("TRANSIENT_CLOSED");
+  });
+
+  test("re-entering within the hysteresis window cancels the pending close and keeps the panel open", () => {
+    const machine = createOutlinePresentation({ seed: seed("TRANSIENT_HOVER") });
+    machine.send({ type: "pointer-exit" }, 0); // arms the leave timer
+    const reentered = machine.send({ type: "pointer-enter" }, 50); // re-enter before it fires
+    expect(reentered.mode).toBe("TRANSIENT_HOVER");
+    expect(reentered.effects).toEqual([{ kind: "cancel", timer: "leave" }]);
+  });
+
+  test("a pointer-exit before the hover fired cancels the pending open without arming a close", () => {
+    // CLOSED, hover scheduled, pointer leaves before hover-intent fires: cancel
+    // the hover, do NOT arm a leave (the panel never opened).
+    const machine = createOutlinePresentation({ seed: seed("TRANSIENT_CLOSED") });
+    machine.send({ type: "pointer-enter" }, 0); // arms hover
+    const exited = machine.send({ type: "pointer-exit" }, 30);
+    expect(exited.mode).toBe("TRANSIENT_CLOSED");
+    expect(exited.effects).toEqual([{ kind: "cancel", timer: "hover" }]);
+  });
+
+  test("pointer-enter in a mode that is not closed does not arm a hover timer", () => {
+    const alreadyOpen = createOutlinePresentation({ seed: seed("TRANSIENT_HOVER") });
+    const result = alreadyOpen.send({ type: "pointer-enter" }, 0);
+    expect(result.mode).toBe("TRANSIENT_HOVER");
+    expect(result.effects).toEqual([]);
+  });
+});
+
+describe("outline presentation pointer, focus and touch ordering", () => {
+  const seed = (mode: OutlinePresentationMode): OutlinePresentationState =>
+    mode === "TRANSIENT_LATCHED" ? { latchOrigin: "user", mode } : { mode };
+  const snapshot = (overrides: Partial<OutlineSnapshot> = {}): OutlineSnapshot => ({
+    activeKey: "h-1",
+    available: true,
+    generation: 1,
+    headings: [
+      { key: "h-1", label: "First" },
+      { key: "h-2", label: "Second" },
+    ],
+    proof: { clearancePx: 0, complete: false },
+    railInsetPx: ARTIFACT_OUTLINE_POLICY.railInsetPx,
+    ...overrides,
+  });
+
+  test("rail-focus opens the panel from the keyboard", () => {
+    const machine = createOutlinePresentation({ seed: seed("TRANSIENT_CLOSED") });
+    expect(machine.send({ type: "rail-focus" }, 0).mode).toBe("TRANSIENT_LATCHED");
+  });
+
+  test("a focus that arrives during a rail pointer sequence does not latch the panel open", () => {
+    // A tap (touch or mouse) synthesizes pointerdown -> focus -> pointerup. The
+    // focus between the two pointer events must NOT read as a keyboard focus
+    // that opens the panel; the machine suppresses it because a pointer is
+    // down on the rail. A fake clock cannot catch this - it is task ordering.
+    const machine = createOutlinePresentation({ seed: seed("TRANSIENT_CLOSED") });
+    machine.send({ type: "rail-pointer-down" }, 0);
+    const focused = machine.send({ type: "rail-focus" }, 0);
+    expect(focused.mode).toBe("TRANSIENT_CLOSED");
+    expect(focused.effects).toEqual([]);
+    const released = machine.send({ type: "rail-pointer-up" }, 0);
+    expect(released.mode).toBe("TRANSIENT_CLOSED");
+    // Once the pointer is up, a genuine keyboard focus opens the panel.
+    expect(machine.send({ type: "rail-focus" }, 0).mode).toBe("TRANSIENT_LATCHED");
+  });
+
+  test("rail-touch opens the panel and the synthesized close-click does not reopen or close it", () => {
+    const machine = createOutlinePresentation({ seed: seed("TRANSIENT_CLOSED") });
+    const opened = machine.send({ type: "rail-touch" }, 0);
+    expect(opened.mode).toBe("TRANSIENT_LATCHED");
+    // The browser synthesizes a click that toggles the Collapsible closed; the
+    // machine suppresses exactly that one close.
+    const synthesizedClose = machine.send({ type: "collapsible-change", open: false }, 0);
+    expect(synthesizedClose.mode).toBe("TRANSIENT_LATCHED");
+  });
+
+  test("Escape closes the transient panel and the focus-rail it issues does not instantly reopen it", () => {
+    // A proof that does not fit the gutter means the interaction ends CLOSED,
+    // not re-pinned, so Escape returns focus to the rail. Focusing the rail
+    // would normally open it - the machine marks that focus as its own and
+    // suppresses it, keeping the panel closed.
+    const machine = createOutlinePresentation({
+      seed: seed("TRANSIENT_LATCHED"),
+      snapshot: snapshot({ proof: { clearancePx: 0, complete: false } }),
+    });
+    const escaped = machine.send({ type: "escape" }, 0);
+    expect(escaped.mode).toBe("TRANSIENT_CLOSED");
+    expect(escaped.effects).toEqual([{ kind: "focus-rail" }]);
+    // The adapter applies focus-rail synchronously; the resulting focus event is
+    // the machine's own, so it is suppressed and the panel stays closed.
+    const refocused = machine.send({ type: "rail-focus" }, 0);
+    expect(refocused.mode).toBe("TRANSIENT_CLOSED");
+    expect(refocused.effects).toEqual([]);
+    // A genuine later keyboard focus still opens the panel.
+    expect(machine.send({ type: "rail-focus" }, 0).mode).toBe("TRANSIENT_LATCHED");
+  });
+
+  test("Escape to pinned focuses the surface, not the rail", () => {
+    const machine = createOutlinePresentation({
+      seed: seed("TRANSIENT_LATCHED"),
+      snapshot: snapshot({ proof: { clearancePx: 24, complete: true } }),
+    });
+    const escaped = machine.send({ type: "escape" }, 0);
+    expect(escaped.mode).toBe("PINNED");
+    expect(escaped.effects).toEqual([{ kind: "focus-surface" }]);
+  });
+
+  test("a click that opens latches, and a later click that closes ends the interaction", () => {
+    const machine = createOutlinePresentation({ seed: seed("TRANSIENT_CLOSED") });
+    expect(machine.send({ type: "collapsible-change", open: true }, 0).mode).toBe(
+      "TRANSIENT_LATCHED",
     );
-    expect(
-      reduceOutlinePresentation({ mode: "TRANSIENT_CLOSED" }, projection(2, 11)).state.mode,
-    ).toBe("TRANSIENT_CLOSED");
-    expect(
-      reduceOutlinePresentation({ mode: "TRANSIENT_CLOSED" }, projection(2, 12)).state.mode,
-    ).toBe("PINNED");
-    const invalidatedPinned = reduceOutlinePresentation(
-      { mode: "PINNED" },
-      { preserveHysteresis: true, type: "invalidate" },
-    ).state;
-    expect(reduceOutlinePresentation(invalidatedPinned, projection(2, 9)).state.mode).toBe(
-      "PINNED",
+    const closed = machine.send({ type: "collapsible-change", open: false }, 0);
+    expect(closed.mode).toBe("TRANSIENT_CLOSED");
+  });
+
+  test("a keyboard pick closes the interaction and returns focus to the rail; a pointer pick does not", () => {
+    // A pointer pick (detail > 0): interaction ends closed, no focus handoff.
+    const pointer = createOutlinePresentation({
+      seed: seed("TRANSIENT_LATCHED"),
+      snapshot: snapshot({ proof: { clearancePx: 0, complete: false } }),
+    });
+    const pointerPick = pointer.send({ type: "pick", keyboard: false }, 0);
+    expect(pointerPick.mode).toBe("TRANSIENT_CLOSED");
+    expect(pointerPick.effects).toEqual([]);
+    // A keyboard pick: interaction ends closed and focus returns to the rail,
+    // with the machine suppressing its own focus so the panel stays closed.
+    const keyboard = createOutlinePresentation({
+      seed: seed("TRANSIENT_LATCHED"),
+      snapshot: snapshot({ proof: { clearancePx: 0, complete: false } }),
+    });
+    const keyboardPick = keyboard.send({ type: "pick", keyboard: true }, 0);
+    expect(keyboardPick.mode).toBe("TRANSIENT_CLOSED");
+    expect(keyboardPick.effects).toEqual([{ kind: "focus-rail" }]);
+    expect(keyboard.send({ type: "rail-focus" }, 0).mode).toBe("TRANSIENT_CLOSED");
+    // From pinned, a pick is a no-op for the lattice (pinned stays pinned).
+    const pinnedPick = createOutlinePresentation({ seed: seed("PINNED") }).send(
+      { type: "pick", keyboard: true },
+      0,
     );
-    const failedProof = reduceOutlinePresentation(invalidatedPinned, projection(2, 0, false)).state;
-    expect(reduceOutlinePresentation(failedProof, projection(2, 9)).state.mode).toBe(
-      "TRANSIENT_CLOSED",
+    expect(pinnedPick.mode).toBe("PINNED");
+    expect(pinnedPick.effects).toEqual([]);
+  });
+
+  test("blur ends a latched interaction, and exits a pending hold early", () => {
+    // A latched panel whose focus leaves ends the interaction (closes).
+    const latched = createOutlinePresentation({
+      seed: seed("TRANSIENT_LATCHED"),
+      snapshot: snapshot({ proof: { clearancePx: 0, complete: false } }),
+    });
+    expect(latched.send({ type: "blur" }, 0).mode).toBe("TRANSIENT_CLOSED");
+    // A pending hold that loses focus exits early: cancel the hold, drop to
+    // absent preserving priorMode, clear the held snapshot.
+    const held = createOutlinePresentation({ seed: seed("PINNED"), snapshot: snapshot() });
+    held.send({ type: "snapshot-withdrawn", pending: true, focusInside: true }, 0);
+    const blurred = held.send({ type: "blur" }, 0);
+    expect(blurred.mode).toBe("ABSENT");
+    expect(blurred.effects).toEqual([{ kind: "cancel", timer: "pending" }]);
+    expect(blurred.snapshot).toBeNull();
+  });
+
+  test("a pointer press outside a latched panel ends the interaction", () => {
+    const machine = createOutlinePresentation({
+      seed: seed("TRANSIENT_LATCHED"),
+      snapshot: snapshot({ proof: { clearancePx: 0, complete: false } }),
+    });
+    expect(machine.send({ type: "outside-press" }, 0).mode).toBe("TRANSIENT_CLOSED");
+  });
+});
+
+describe("outline presentation snapshot selection", () => {
+  const seed = (mode: OutlinePresentationMode): OutlinePresentationState =>
+    mode === "TRANSIENT_LATCHED" ? { latchOrigin: "user", mode } : { mode };
+  const snapshot = (
+    generation: number,
+    proof = { clearancePx: 24, complete: true },
+  ): OutlineSnapshot => ({
+    activeKey: "h-1",
+    available: true,
+    generation,
+    headings: [
+      { key: "h-1", label: "First" },
+      { key: "h-2", label: "Second" },
+    ],
+    proof,
+    railInsetPx: ARTIFACT_OUTLINE_POLICY.railInsetPx,
+  });
+
+  test("snapshot-arrived with a newer generation replaces the rendered snapshot and pins when the proof fits the gutter", () => {
+    const machine = createOutlinePresentation({ seed: seed("ABSENT") });
+    const result = machine.send(
+      { type: "snapshot-arrived", snapshot: snapshot(5), focusInside: false },
+      0,
     );
-    const resetPinned = reduceOutlinePresentation({ mode: "PINNED" }, { type: "invalidate" }).state;
-    expect(reduceOutlinePresentation(resetPinned, projection(2, 9)).state.mode).toBe(
-      "TRANSIENT_CLOSED",
+    expect(result.mode).toBe("PINNED");
+    expect(result.snapshot?.generation).toBe(5);
+  });
+
+  test("snapshot-arrived projects transient when the proof does not fit the gutter", () => {
+    const machine = createOutlinePresentation({ seed: seed("ABSENT") });
+    const result = machine.send(
+      {
+        type: "snapshot-arrived",
+        snapshot: snapshot(5, { clearancePx: 0, complete: false }),
+        focusInside: false,
+      },
+      0,
     );
+    expect(result.mode).toBe("TRANSIENT_CLOSED");
+    expect(result.snapshot?.generation).toBe(5);
+  });
+
+  test("snapshot-arrived with a stale generation is ignored", () => {
+    const machine = createOutlinePresentation({ seed: seed("PINNED"), snapshot: snapshot(5) });
+    const result = machine.send(
+      { type: "snapshot-arrived", snapshot: snapshot(3), focusInside: false },
+      0,
+    );
+    expect(result.mode).toBe("PINNED");
+    expect(result.snapshot?.generation).toBe(5); // unchanged
+  });
+
+  test("snapshot-arrived with focus on an item that survives the change keeps focus and does not hand off", () => {
+    const machine = createOutlinePresentation({
+      seed: seed("TRANSIENT_CLOSED"),
+      snapshot: snapshot(5),
+    });
+    const result = machine.send(
+      { type: "snapshot-arrived", snapshot: snapshot(6), focusInside: true, focusedKey: "h-1" },
+      0,
+    );
+    expect(result.effects).toEqual([]); // no focus-surface handoff: the item survives
+    expect(result.mode).toBe("PINNED");
+  });
+
+  test("snapshot-arrived with focus orphaned by the change hands focus to the surface", () => {
+    const machine = createOutlinePresentation({
+      seed: seed("TRANSIENT_CLOSED"),
+      snapshot: snapshot(5),
+    });
+    const result = machine.send(
+      {
+        type: "snapshot-arrived",
+        snapshot: snapshot(6, { clearancePx: 0, complete: false }),
+        focusInside: true,
+        focusedKey: "gone",
+      },
+      0,
+    );
+    expect(result.effects).toEqual([{ kind: "focus-surface" }]);
+    expect(result.mode).toBe("TRANSIENT_CLOSED");
+  });
+
+  test("a pending reproof without focus returns to absent and preserves priorMode across the gap", () => {
+    const machine = createOutlinePresentation({ seed: seed("PINNED"), snapshot: snapshot(5) });
+    const withdrawn = machine.send(
+      { type: "snapshot-withdrawn", pending: true, focusInside: false },
+      0,
+    );
+    expect(withdrawn.mode).toBe("ABSENT");
+    expect(withdrawn.snapshot).toBeNull();
+    // A reproof that fits only the RETAIN gate (9px, below the 12px enter gate)
+    // re-pins because priorMode was PINNED.
+    const reproof = machine.send(
+      {
+        type: "snapshot-arrived",
+        snapshot: snapshot(6, { clearancePx: 9, complete: true }),
+        focusInside: false,
+      },
+      0,
+    );
+    expect(reproof.mode).toBe("PINNED");
+  });
+
+  test("a real loss without a pending reproof hard-resets, so the return requires the full enter gate", () => {
+    const machine = createOutlinePresentation({ seed: seed("PINNED"), snapshot: snapshot(5) });
+    machine.send({ type: "snapshot-withdrawn", pending: false, focusInside: false }, 0);
+    const reproof = machine.send(
+      {
+        type: "snapshot-arrived",
+        snapshot: snapshot(6, { clearancePx: 9, complete: true }),
+        focusInside: false,
+      },
+      0,
+    );
+    expect(reproof.mode).toBe("TRANSIENT_CLOSED"); // 9px is below the 12px enter gate after a hard reset
+  });
+
+  test("a pending reproof with focus inside latches and arms the hold timer; its expiry returns to absent", () => {
+    const machine = createOutlinePresentation({ seed: seed("PINNED"), snapshot: snapshot(5) });
+    const held = machine.send({ type: "snapshot-withdrawn", pending: true, focusInside: true }, 0);
+    expect(held.mode).toBe("TRANSIENT_LATCHED"); // focus survives the reproof as a gutter latch
+    expect(held.effects).toEqual([
+      {
+        kind: "schedule",
+        timer: "pending",
+        ms: OUTLINE_PRESENTATION_PENDING_HOLD_MS,
+        event: { type: "pending-expired" },
+      },
+    ]);
+    // The hold expires without a fresh snapshot: focus hands off and the
+    // machine goes absent, preserving priorMode across the soft reproof.
+    const expired = machine.send({ type: "pending-expired", focusInside: true }, 500);
+    expect(expired.mode).toBe("ABSENT");
+    expect(expired.effects).toEqual([{ kind: "focus-surface" }]);
+    expect(expired.snapshot).toBeNull();
+  });
+
+  test("ending an interaction during a pending reproof dismisses rather than re-pinning on the stale proof", () => {
+    // The pending hold keeps the last good (still-fitting) snapshot rendered so
+    // focus survives. Ending the interaction then must NOT re-pin against that
+    // stale proof - the reproof is in flight - so it dismisses to closed and
+    // returns focus to the rail, exactly like Escape after a gutter loss.
+    const machine = createOutlinePresentation({ seed: seed("PINNED"), snapshot: snapshot(5) });
+    machine.send({ type: "snapshot-withdrawn", pending: true, focusInside: true }, 0);
+    const escaped = machine.send({ type: "escape" }, 0);
+    expect(escaped.mode).toBe("TRANSIENT_CLOSED");
+    expect(escaped.effects).toEqual([{ kind: "focus-rail" }]);
+  });
+
+  test("a fresh snapshot cancels an armed pending hold and updates the rendered snapshot", () => {
+    // The pending latch holds focus while a reproof is in flight. When the fresh
+    // snapshot returns, the hold is cancelled and the rendered snapshot updates;
+    // a projection arriving while latched is ignored by the lattice, so the
+    // panel stays latched open showing the new snapshot until the next
+    // interaction - matching the component's pre-refactor behavior.
+    const machine = createOutlinePresentation({ seed: seed("PINNED"), snapshot: snapshot(5) });
+    machine.send({ type: "snapshot-withdrawn", pending: true, focusInside: true }, 0);
+    const reproof = machine.send(
+      { type: "snapshot-arrived", snapshot: snapshot(6), focusInside: true, focusedKey: "h-1" },
+      0,
+    );
+    expect(reproof.effects).toEqual([{ kind: "cancel", timer: "pending" }]);
+    expect(reproof.mode).toBe("TRANSIENT_LATCHED");
+    expect(reproof.snapshot?.generation).toBe(6);
   });
 });
 
