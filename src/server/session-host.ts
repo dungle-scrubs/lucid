@@ -815,7 +815,7 @@ export const createSessionHost = (
     // so a truncated or bodyless POST is refused instead of silently wiping
     // what every later unattended turn reuses.
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body) {
+    if (!body || typeof body !== "object") {
       return json({ error: "selection body must be a JSON object" }, 400);
     }
     const selection = sanitizeSelection({
