@@ -386,9 +386,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       artifact = idToArtifact.get(id);
       if (artifact === undefined) return json({ error: "unknown session" }, 404);
     }
+    // The artifact identity a mounted route's exit record carries (DF-1c): a
+    // mounted host serves exactly this artifact, so it is a property of the
+    // route, and the host re-attaches it too (idempotent merge).
+    observation.attach({ artifact });
 
     const mounted = mounts.get(id);
-    if (mounted) return mounted.host.handle(req, subPath);
+    if (mounted) return mounted.host.handle(req, subPath, observation);
 
     const paths = sessionPaths(artifact);
 
@@ -487,7 +491,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     }
 
     const m = await mount(id, artifact);
-    if (m !== undefined) return m.host.handle(req, subPath);
+    if (m !== undefined) return m.host.handle(req, subPath, observation);
     // A dedicated server took over between our check and the mount: fall
     // through to proxy. The next request will discover it fresh.
     const liveServer = await discoverLiveServer(paths);
