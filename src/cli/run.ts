@@ -10,6 +10,7 @@ import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
 import { themeReadiness, themeWarning } from "../core/theme.ts";
 import { registerSession } from "../core/registry.ts";
 import { sanitizeBlocked, sanitizeProgress } from "../core/progress.ts";
+import { ack, attendantStamp } from "./ack.ts";
 import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import {
   assertCanonicalLocation,
@@ -19,8 +20,6 @@ import {
 } from "../core/session.ts";
 import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
-import { sanitizeAttendant } from "../core/events.ts";
-import type { AttendantStamp } from "../core/events.ts";
 import {
   legacyProjection,
   normalizeQuestionGroup,
@@ -66,46 +65,6 @@ const randomId = (): string => crypto.randomUUID();
  *  turn writes carry the id the hub will name when it appends the terminator.
  *  Absent for an interactive turn nobody spawned - then the acks belong to the
  *  anonymous turn, which is how every pre-turnId log folds. */
-const turnStamp = (): { turnId?: string } => {
-  const t = process.env.LUCID_TURN_ID;
-  return t && t.length > 0 ? { turnId: t.slice(0, 128) } : {};
-};
-
-const attendantStamp = (
-  harness?: string,
-  live?: { readonly model?: string; readonly effort?: string },
-): AttendantStamp | undefined => {
-  const h = harness || process.env.LUCID_HARNESS;
-  const sessionId = process.env.LUCID_SESSION_ID;
-  if (!h && !sessionId) return undefined;
-  // Model/effort ride the same way (LUCID_MODEL / LUCID_EFFORT): the viewer's
-  // inherited pickers show what the attending session actually runs. A caller
-  // that STATES them (a wait declaring its current settings) outranks the
-  // environment, which was read once when the session started.
-  const model = live?.model ?? process.env.LUCID_MODEL;
-  const effort = live?.effort ?? process.env.LUCID_EFFORT;
-  // Through the shared normalizer even though we authored it: the direct-
-  // append path bypasses the server, and the log's invariants (bounded,
-  // control-free strings) must not depend on which writer was live.
-  return sanitizeAttendant({
-    harness: h || "agent",
-    ...(sessionId ? { sessionId } : {}),
-    cwd: process.cwd(),
-    ...(model ? { model } : {}),
-    ...(effort ? { effort } : {}),
-    // The click's trace (plan 07, M1.3): a spawned turn holds it in
-    // LUCID_REQUEST_ID, and the sanitizer drops anything not well-formed.
-    ...(process.env.LUCID_REQUEST_ID ? { trace: process.env.LUCID_REQUEST_ID } : {}),
-    // Who vouches for the session id, and which launch this turn IS (plan 03):
-    // both ride every stamp so a discovered create's progress can correlate
-    // by launch before any native id exists, and a resume can rank the id's
-    // authority. The sanitizer enforces the closed set / well-formed rule.
-    ...(process.env.LUCID_SESSION_ID_AUTHORITY
-      ? { sessionIdAuthority: process.env.LUCID_SESSION_ID_AUTHORITY }
-      : {}),
-    ...(process.env.LUCID_LAUNCH_ID ? { launchId: process.env.LUCID_LAUNCH_ID } : {}),
-  });
-};
 
 export interface OpenOptions {
   readonly open?: boolean;
@@ -307,21 +266,17 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
   // hand-off (D-064).
   if (payload.status === "feedback" && options.since !== undefined) {
     try {
-      const attendant = attendantStamp(options.harness, {
-        ...(options.model !== undefined ? { model: options.model } : {}),
-        ...(options.effort !== undefined ? { effort: options.effort } : {}),
-      });
       // What this hand-off actually covers (D20): the cursor just read, not
       // the ack's own position. Feedback that lands between the read and this
       // append belongs to the NEXT batch, and the hub's attend engine reads
       // this claim to know a batch is already someone's.
       const covers = parseCursor(payload.nextCursor);
-      await deliver(paths, {
-        t: "agent_ack",
-        id: randomId(),
-        ...turnStamp(),
-        ...(covers !== undefined ? { covers } : {}),
-        ...(attendant ? { attendant } : {}),
+      await ack(paths, covers !== undefined ? { covers } : {}, {
+        harness: options.harness,
+        live: {
+          ...(options.model !== undefined ? { model: options.model } : {}),
+          ...(options.effort !== undefined ? { effort: options.effort } : {}),
+        },
       });
     } catch {
       /* presence is advisory */
@@ -373,14 +328,7 @@ export const runWaitCli = async (file: string, options: WaitCliOptions = {}): Pr
  */
 export const runIntent = async (file: string, intent: "revise" | "reply"): Promise<void> => {
   const paths = sessionPaths(file);
-  const attendant = attendantStamp();
-  await deliver(paths, {
-    t: "agent_ack",
-    id: randomId(),
-    ...turnStamp(),
-    intent,
-    ...(attendant ? { attendant } : {}),
-  });
+  await ack(paths, { intent });
   print({ ok: true, intent });
 };
 
@@ -403,22 +351,11 @@ export const runIntent = async (file: string, intent: "revise" | "reply"): Promi
  * answer the block and the agent's next ack clears it.
  */
 export const runBlocked = async (file: string, reason: string): Promise<void> => {
-  const paths = sessionPaths(file);
-  // Validated here as well as server-side, for the same reason `progress` is:
-  // the no-daemon path appends straight to the log without passing the ack
-  // handler.
   const cleaned = sanitizeBlocked(reason);
   if (!cleaned) {
     throw new ValidationError({ message: "blocked needs a --reason", detail: { file } });
   }
-  const attendant = attendantStamp();
-  await deliver(paths, {
-    t: "agent_ack",
-    id: randomId(),
-    ...turnStamp(),
-    blocked: cleaned,
-    ...(attendant ? { attendant } : {}),
-  });
+  await ack(sessionPaths(file), { blocked: cleaned });
   print({ ok: true, blocked: cleaned });
 };
 
@@ -426,27 +363,14 @@ export const runProgress = async (
   file: string,
   progress: { label?: string; total?: number; done?: number },
 ): Promise<void> => {
-  const paths = sessionPaths(file);
-  // Validate here, not just server-side: `deliver` falls back to a direct log
-  // append when no daemon answers, which never passes through the ack handler.
   const cleaned = sanitizeProgress(progress);
   if (!cleaned) {
-    // Thrown, not printed. This used to `print({ok:false})` and return, which
-    // exits 0 - so `if lucid progress …; then` read a refusal as success and
-    // every agent checking the exit code before parsing saw nothing wrong.
     throw new ValidationError({
       message: "progress needs a --label, --total, or --done",
       detail: { file },
     });
   }
-  const attendant = attendantStamp();
-  await deliver(paths, {
-    t: "agent_ack",
-    id: randomId(),
-    ...turnStamp(),
-    progress: cleaned,
-    ...(attendant ? { attendant } : {}),
-  });
+  await ack(sessionPaths(file), { progress: cleaned });
   print({ ok: true, progress: cleaned });
 };
 
