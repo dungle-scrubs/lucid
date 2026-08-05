@@ -20,6 +20,7 @@ import {
 import { type ArtifactTheme, createArtifactTheme } from "./artifact-theme.ts";
 import { BADGE_STEP_PX, computeMarkers, type Marker, type Rect } from "./markers.ts";
 import { sanitizeRenderSnapshot, type OverlayRenderSnapshot } from "./render-snapshot.ts";
+import { shouldOfferSelectionCopy } from "./selection-offer.ts";
 import {
   addedSectionsInView,
   enumerateSectionIds,
@@ -683,6 +684,38 @@ export class LucidOverlay extends LitElement {
   };
 
   private readonly onMouseUp = (e: MouseEvent): void => {
+    // Copy is mode-independent (RFC "Overlay behavior"): a non-collapsed
+    // selection offers a Copy Popover regardless of showTargets, because
+    // copying text out is a read action independent of whether the surface
+    // also accepts picks. The selection text and the release coordinates
+    // travel as a message payload - the parent cannot read this opaque-origin
+    // frame's selection (D-020), so it cannot anchor the Popover or write the
+    // clipboard without them. The decision lives in `selection-offer.ts` so
+    // the mode-independence is pinned by a unit test, not buried in wiring.
+    // Runs before the targeting gate below; the existing target-picked path
+    // (including the shift-click-extension guard) is unchanged and coexists.
+    const selection = window.getSelection();
+    if (
+      shouldOfferSelectionCopy({
+        showTargets: this.showTargets,
+        selectionCollapsed: selection?.isCollapsed ?? true,
+      })
+    ) {
+      post({
+        source: "lucid-overlay",
+        type: "selection-copy",
+        text: selection?.toString() ?? "",
+        x: e.clientX,
+        y: e.clientY,
+      });
+    } else if (this.hadSelectionAtDown && (selection?.isCollapsed ?? true)) {
+      // A bare click collapsed a selection that existed at mousedown. The
+      // parent cannot see an in-iframe selectionchange (opaque origin), so
+      // report the collapse so an open Copy Popover can dismiss. No-op when
+      // none is open; gated on hadSelectionAtDown so it only fires for a real
+      // collapse, not every bare click that never had a selection.
+      post({ source: "lucid-overlay", type: "selection-collapsed" });
+    }
     if (!this.showTargets) return; // read mode: selecting text is just selecting text
     const stationary =
       this.downAt !== null && Math.hypot(e.clientX - this.downAt.x, e.clientY - this.downAt.y) < 4;

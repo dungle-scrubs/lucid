@@ -273,7 +273,26 @@ export type OverlayMessage =
        *  whether any part of each section was already in the artifact
        *  viewport at that moment. Absent on initial boot and older overlays. */
       readonly added?: readonly { readonly id: string; readonly inViewport: boolean }[];
-    };
+    }
+  /** The selected text plus the release coordinates, posted from the overlay so
+   *  the parent chrome can open a Copy Popover at the release point. The parent
+   *  CANNOT read the iframe's selection (opaque origin: `contentDocument` is
+   *  null), so the text travels as a message payload - a snapshot taken at the
+   *  selection release. Mode-independent: it fires in both targeting modes
+   *  because copying is a read action, independent of whether the surface also
+   *  accepts annotation picks. */
+  | {
+      readonly source: "lucid-overlay";
+      readonly type: "selection-copy";
+      readonly text: string;
+      readonly x: number;
+      readonly y: number;
+    }
+  /** The artifact's selection collapsed (a bare click), reported so the parent
+   *  can dismiss an open Copy Popover. The parent cannot see an in-iframe
+   *  `selectionchange` (opaque origin), so the overlay reports the collapse;
+   *  a no-op when no Popover is open. */
+  | { readonly source: "lucid-overlay"; readonly type: "selection-collapsed" };
 
 /** chrome -> overlay */
 export type ChromeMessage =
@@ -365,6 +384,15 @@ export const isChromeMessage = (data: unknown): data is ChromeMessage =>
  *  artifact carries hundreds of data-lucid-ids, and discarding the tail would
  *  silently break every section permalink past the cut. */
 export const MAX_OVERLAY_SECTION_IDS = 512;
+
+/** The bound on the selection text the overlay may post for the Copy Popover.
+ *  Deliberately generous against a real selection (a whole-document select can
+ *  run tens of KB) while still capping a hostile realm's payload - the text is
+ *  untrusted input at the parent boundary (opaque origin), so it is gated
+ *  exactly like the section-ids array above. Over-length text is TRUNCATED,
+ *  not refused: a copy of the head of a very long selection is more useful
+ *  than no Popover at all. */
+export const MAX_SELECTION_COPY_TEXT = 65_536;
 
 export type OverlayValidationRecord =
   | { readonly kind: "refusal"; readonly type: string; readonly field: string }
@@ -461,6 +489,36 @@ export const validateOverlayMessage = (
           : {}),
       };
     }
+    case "selection-copy": {
+      // The text is untrusted input from the opaque-origin overlay. A bare
+      // selection of whitespace is not a real selection: the overlay posts
+      // nothing for a collapsed range, and a stray newline must not open a
+      // Popover with nothing to copy. Coerce via trim so a hostile payload
+      // cannot slip a whitespace-only string through to a Popover.
+      if (typeof data.text !== "string" || data.text.trim().length === 0) return refuse("text");
+      const x = data.x;
+      const y = data.y;
+      // Finite coords only: the Popover anchors at (x, y), and a NaN/Infinity
+      // here would place it off-screen or break Base UI's collision math. The
+      // iframe-viewport release point from a real mouseup is always finite, so
+      // a non-finite value is a forged payload.
+      if (typeof x !== "number" || !Number.isFinite(x)) return refuse("x");
+      if (typeof y !== "number" || !Number.isFinite(y)) return refuse("y");
+      let text = data.text;
+      if (text.length > MAX_SELECTION_COPY_TEXT) {
+        onRecord?.({
+          field: "text",
+          kind: "truncation",
+          kept: MAX_SELECTION_COPY_TEXT,
+          original: text.length,
+          type: "selection-copy",
+        });
+        text = text.slice(0, MAX_SELECTION_COPY_TEXT);
+      }
+      return { source: "lucid-overlay", text, type: "selection-copy", x, y };
+    }
+    case "selection-collapsed":
+      return { source: "lucid-overlay", type: "selection-collapsed" };
     default:
       return null;
   }
