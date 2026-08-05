@@ -117,4 +117,17 @@ describe("the trusted overlay capability contract", () => {
     );
     expect(topLevelKeys(body)).toEqual(["hot", "quoted", "shorthand"]);
   });
+
+  test("the artifact-swap's trusted operations are in the bag (DF-3)", () => {
+    // importNode and the flat head-access members (remove the old tagged
+    // artifact styles, append a tagged clone) are the swap operations that
+    // MUST run on captured intrinsics: an artifact that patches
+    // Document.prototype.importNode or the head accessors could otherwise
+    // observe or redirect them onto overlay-owned nodes. Flat members, not a
+    // nested handle, so the bag stays one shape (D-005).
+    const keys = new Set(TRUSTED_OVERLAY_CAPABILITY_KEYS);
+    expect(keys.has("importNode")).toBe(true);
+    expect(keys.has("removeArtifactStyles")).toBe(true);
+    expect(keys.has("appendArtifactStyle")).toBe(true);
+  });
 });

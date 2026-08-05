@@ -28,9 +28,30 @@ export interface TrustedOverlayMountCapabilities {
   readonly installOverlay: (element: HTMLElement) => void;
 }
 
+/** Trusted DOM operations for swapping the artifact body (DF-3). Node import
+ *  and head-style mutation run on intrinsics captured PRE-ARTIFACT, so a
+ *  hostile artifact that patches `Document.prototype.importNode` or the head
+ *  accessors cannot observe or redirect them onto overlay-owned nodes. Flat
+ *  members of the bag, not a nested handle, so the bag stays one shape (D-005).
+ *  Parsing and body traversal stay realm-local deliberately; only import and
+ *  head mutation are captured. */
+export interface TrustedOverlaySwapCapabilities {
+  /** Clone a node from the parsed document into the live one through the
+   *  captured `importNode`, not the realm's patchable global. */
+  readonly importNode: <T extends Node>(node: T, deep: boolean) => T;
+  /** Remove every existing artifact-tagged style/link from the live `<head>`
+   *  (queried and removed through captured intrinsics). */
+  readonly removeArtifactStyles: () => void;
+  /** Clone the parsed style/link through the captured `importNode`, tag it as
+   *  an artifact style, append it to the live `<head>`, and - for a linked
+   *  sheet - fire the callback when it loads. */
+  readonly appendArtifactStyle: (source: Element, onLinkedSheetLoad?: () => void) => void;
+}
+
 export type TrustedOverlayCapabilities = TrustedOutlineCapabilities &
   TrustedOverlayHostHandle &
-  TrustedOverlayMountCapabilities;
+  TrustedOverlayMountCapabilities &
+  TrustedOverlaySwapCapabilities;
 
 /**
  * Every capability name the pre-artifact bootstrap has to hand over, as one
@@ -54,6 +75,7 @@ const TRUSTED_OVERLAY_CAPABILITY_WITNESS = {
   defineCustomElement: true,
   hasActiveMotion: true,
   hidden: true,
+  importNode: true,
   inert: true,
   installOverlay: true,
   isConnected: true,
@@ -73,6 +95,8 @@ const TRUSTED_OVERLAY_CAPABILITY_WITNESS = {
   parentElement: true,
   parentWindow: true,
   performOverlayUpdate: true,
+  appendArtifactStyle: true,
+  removeArtifactStyles: true,
   proofRealmTrusted: true,
   pseudoContent: true,
   rect: true,
