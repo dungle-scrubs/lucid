@@ -241,6 +241,58 @@ export const setPaletteOpen = (open: boolean): void => useHub.setState({ palette
 
 export const setCreateOpen = (open: boolean): void => useHub.setState({ createOpen: open });
 
+/** The result of naming a project the listing does not know (the folder
+ *  chooser). The hub resolves it exactly as it resolves a listed one, so a
+ *  worktree arrives as its main repo. */
+export type RegisterProjectResult =
+  | { readonly ok: true; readonly target: string; readonly roots?: readonly string[] }
+  | { readonly ok: false; readonly reason: "no-answer" | "refused"; readonly error?: string }
+  | { readonly ok: false; readonly reason: "cancelled" }
+  | { readonly ok: false; readonly reason: "no-chooser" };
+
+/** Name a project the listing does not know. The hub resolves it exactly as
+ *  it resolves a listed one, so a WORKTREE arrives as its main repo: pick
+ *  either checkout and the artifact lands under the same project.
+ *
+ *  Extracted from CreateDialog (M4.3): the roots update is hub state, and the
+ *  hub-module function is the seam that owns the /hub/project contract. The
+ *  dialog keeps only the form-state callbacks (added, typing, project). */
+export const registerProject = async (path?: string): Promise<RegisterProjectResult> => {
+  const res = await hubFetch("/hub/project", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    // Exempt only when it opens the native chooser and waits on a human
+    // (M2.2); a typed path resolves and registers, which walks the tree, so
+    // it takes the scan budget rather than the default.
+    ...(path ? { timeoutMs: SCAN_TIMEOUT_MS } : { timeoutMs: null }),
+    body: JSON.stringify(path ? { path } : {}),
+  }).catch(() => null);
+  if (!res) return { ok: false, reason: "no-answer" };
+  const body = (await res.json().catch(() => null)) as {
+    project?: string;
+    worktree?: string;
+    roots?: readonly string[];
+    cancelled?: boolean;
+    error?: string;
+  } | null;
+  if (body?.cancelled === true) return { ok: false, reason: "cancelled" };
+  if (res.status === 501) return { ok: false, reason: "no-chooser" };
+  if (!res.ok || typeof body?.project !== "string")
+    return {
+      ok: false,
+      reason: "refused",
+      ...(typeof body?.error === "string" ? { error: body.error } : {}),
+    };
+  // A worktree is offered as ITSELF (that is where the file goes) while the
+  // listing groups it under its main repo - the same relationship git
+  // already defines, never a second one for the human to maintain.
+  const target = body.worktree ?? body.project;
+  // The hub registered it; keep this window's copy of the roots in step so
+  // the project survives closing and reopening the dialog.
+  if (body.roots !== undefined) useHub.setState({ roots: [...body.roots] });
+  return { ok: true, target, ...(body.roots !== undefined ? { roots: body.roots } : {}) };
+};
+
 /**
  * Open sessions hold a live stream each; past this many, the least recently
  * ACTIVATED background stream is disconnected (the log is untouched -

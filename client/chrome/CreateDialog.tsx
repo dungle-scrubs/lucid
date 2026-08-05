@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { hubFetch, SCAN_TIMEOUT_MS } from "./request.ts";
+import { hubFetch } from "./request.ts";
 import {
   createRoots,
   createStatus,
   forgetCreate,
+  noteCreateSubmitted,
   openTab,
+  registerProject,
   setCreateOpen,
   useHub,
   type CreateTurnEntry,
@@ -135,49 +137,26 @@ const CreateDialogBody = () => {
    * Name a project the listing does not know. The hub resolves it exactly as
    * it resolves a listed one, so a WORKTREE arrives as its main repo: pick
    * either checkout and the artifact lands under the same project.
+   *
+   * Thin adapter over registerProject (M4.3): the /hub/project contract lives
+   * in the hub module; this holds only the form-state callbacks.
    */
   const addProject = async (path?: string): Promise<void> => {
     setAddError(null);
-    const res = await hubFetch("/hub/project", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      // Exempt only when it opens the native chooser and waits on a human
-      // (M2.2); a typed path resolves and registers, which walks the tree, so
-      // it takes the scan budget rather than the default.
-      ...(path ? { timeoutMs: SCAN_TIMEOUT_MS } : { timeoutMs: null }),
-      body: JSON.stringify(path ? { path } : {}),
-    }).catch(() => null);
-    if (!res) {
-      setAddError("The hub did not answer.");
+    const result = await registerProject(path);
+    if (!result.ok) {
+      if (result.reason === "cancelled") return;
+      if (result.reason === "no-chooser") {
+        setTyping(true); // no native chooser here: take a typed path instead
+        return;
+      }
+      setAddError(
+        result.reason === "no-answer" ? "The hub did not answer." : (result.error ?? `Refused.`),
+      );
       return;
     }
-    const body = (await res.json().catch(() => null)) as {
-      project?: string;
-      worktree?: string;
-      /** The hub's effective scan roots after registering this one. */
-      roots?: readonly string[];
-      cancelled?: boolean;
-      error?: string;
-    } | null;
-    if (body?.cancelled === true) return;
-    if (res.status === 501) {
-      setTyping(true); // no native chooser here: take a typed path instead
-      return;
-    }
-    if (!res.ok || typeof body?.project !== "string") {
-      setAddError(typeof body?.error === "string" ? body.error : `Refused (${res.status}).`);
-      return;
-    }
-    // A worktree is offered as ITSELF (that is where the file goes) while the
-    // listing groups it under its main repo - the same relationship git
-    // already defines, never a second one for the human to maintain.
-    const target = body.worktree ?? body.project;
-    setAdded((prev) => [...new Set([...prev, target])]);
-    // The hub registered it; keep this window's copy of the roots in step so the
-    // project survives closing and reopening the dialog, and shows up in the
-    // "looking in" line like any other.
-    if (body.roots !== undefined) useHub.setState({ roots: [...body.roots] });
-    setProject(target);
+    setAdded((prev) => [...new Set([...prev, result.target])]);
+    setProject(result.target);
     setTyping(false);
     setTypedPath("");
   };
@@ -391,7 +370,7 @@ const CreateDialogBody = () => {
     // A turn BEGINS: forget this artifact's history before watching it. A
     // previous attempt's failure would otherwise render over a live turn, and
     // its last heartbeat would arm the silence detector at zero.
-    useHub.setState((prev) => forgetCreate(prev, started));
+    useHub.setState((prev) => noteCreateSubmitted(forgetCreate(prev, started), started));
     setAuthoring(started);
   };
 
