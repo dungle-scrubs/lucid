@@ -132,7 +132,7 @@ export const readRunOutput = async (outLog: string, from: number): Promise<strin
 /** Which template a turn runs. A RESUME re-enters a recorded conversation; a
  *  HANDOFF gives the artifact to a session that does not exist yet - the same
  *  sequence, minus an id to hold the harness to. */
-export type TurnMode = "handoff" | "resume";
+export type TurnMode = "handoff" | "resume" | "create";
 
 /** What a driver knows before a turn can be planned. */
 export interface TurnRequest {
@@ -254,7 +254,8 @@ export const planTurn = async (request: TurnRequest): Promise<PlannedTurn | Turn
     };
   }
   let strategy: SessionIdentityRecipe | undefined;
-  if (mode === "handoff") {
+  if (mode !== "resume") {
+    // handoff AND create: require identity, mint a UUID for caller-assigned.
     try {
       strategy = requireSessionIdentity(harness, recipe, request.registryFile);
     } catch (err) {
