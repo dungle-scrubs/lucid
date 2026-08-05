@@ -3,6 +3,7 @@ import {
   forgetCreate,
   noteCreateFailed,
   noteCreateProgress,
+  noteCreateSubmitted,
   onHubFrame,
   useHub,
 } from "../client/chrome/hub.ts";
@@ -95,5 +96,56 @@ describe("starting a turn forgets both - the retry begins with no history", () =
     };
     const after = forgetCreate(before, "/p/.lucid/x.html");
     expect(after.createProgress["/p/.lucid/live.html"]).toBeDefined();
+  });
+});
+
+describe("noteCreateSubmitted (the keyed createTurns record)", () => {
+  test("records the submission timestamp for the artifact", () => {
+    const before = { createFailed: null, createProgress: {}, createTurns: {} };
+    const after = noteCreateSubmitted(before, "/p/.lucid/new.html");
+    expect(after.createTurns["/p/.lucid/new.html"]).toBeDefined();
+    expect(typeof after.createTurns["/p/.lucid/new.html"]).toBe("number");
+  });
+
+  test("does not clobber existing turns (two creates can run at once)", () => {
+    const before = {
+      createFailed: null,
+      createProgress: {},
+      createTurns: { "/p/.lucid/first.html": 1000 },
+    };
+    const after = noteCreateSubmitted(before, "/p/.lucid/second.html");
+    expect(after.createTurns["/p/.lucid/first.html"]).toBe(1000);
+    expect(after.createTurns["/p/.lucid/second.html"]).toBeDefined();
+  });
+
+  test("forgetCreate clears the createTurns entry on landing", () => {
+    const before = {
+      createFailed: null,
+      createProgress: { "/p/.lucid/x.html": frame() },
+      createTurns: { "/p/.lucid/x.html": 1000, "/p/.lucid/other.html": 2000 },
+    };
+    const after = forgetCreate(before, "/p/.lucid/x.html");
+    expect(after.createTurns["/p/.lucid/x.html"]).toBeUndefined();
+    expect(after.createTurns["/p/.lucid/other.html"]).toBe(2000);
+  });
+
+  test("noteCreateFailed clears the createTurns entry on death", () => {
+    const before = {
+      createFailed: null,
+      createProgress: { "/p/.lucid/x.html": frame() },
+      createTurns: { "/p/.lucid/x.html": 1000 },
+    };
+    const after = noteCreateFailed(before, { ...failure, artifact: "/p/.lucid/x.html" });
+    expect(after.createTurns["/p/.lucid/x.html"]).toBeUndefined();
+  });
+
+  test("noteCreateProgress preserves createTurns unchanged", () => {
+    const before = {
+      createFailed: null,
+      createProgress: {},
+      createTurns: { "/p/.lucid/x.html": 1000 },
+    };
+    const after = noteCreateProgress(before, "/p/.lucid/x.html", frame());
+    expect(after.createTurns).toBe(before.createTurns);
   });
 });
