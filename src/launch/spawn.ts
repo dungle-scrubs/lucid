@@ -4,6 +4,7 @@ import { recordPendingIdentity } from "../core/attendant.ts";
 import { promotePendingBindings } from "../core/deliver.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { requireSessionIdentity, type SpawnRecipe } from "./recipes.ts";
+import { buildSpawnEnv } from "./env-stamp.ts";
 import {
   classifyObservedIdentity,
   classifySpawnResult,
@@ -170,35 +171,27 @@ export const runSpawn = async (
   // further: even a caller-supplied id is cleared, because the harness mints
   // its own and a pre-minted UUID in the child's env is exactly the synthetic
   // identity that poisoned resume.
-  const env = identity
-    ? {
-        ...process.env,
-        LUCID_HARNESS: identity.harness,
-        LUCID_SESSION_ID: discovered ? undefined : identity.sessionId,
-        LUCID_SESSION_ID_AUTHORITY:
-          !discovered && identity.strategy && identity.sessionId ? "assigned" : undefined,
-        LUCID_LAUNCH_ID: identity.launchId,
-        LUCID_MODEL: identity.model,
-        LUCID_EFFORT: identity.effort,
-        LUCID_REQUEST_ID: identity.requestId,
-        LUCID_TURN_ID: identity.turnId,
-        // Set, not defaulted: an inherited value is another hub's address, and
-        // a turn that opens its artifact into somebody else's hub is the
-        // failure this closes. Absent means "no hub spawned me", so whatever
-        // the environment says stands.
-        ...(identity.hubPort !== undefined ? { LUCID_HUB_PORT: String(identity.hubPort) } : {}),
-      }
-    : {
-        ...process.env,
-        LUCID_HARNESS: undefined,
-        LUCID_SESSION_ID: undefined,
-        LUCID_SESSION_ID_AUTHORITY: undefined,
-        LUCID_LAUNCH_ID: undefined,
-        LUCID_MODEL: undefined,
-        LUCID_EFFORT: undefined,
-        LUCID_REQUEST_ID: undefined,
-        LUCID_TURN_ID: undefined,
-      };
+  // The env mapping lives in env-stamp.ts (M5.5): one table both the
+  // spawn writer and the ack reader import. buildSpawnEnv sets each
+  // LUCID_* from the identity or clears them all when no identity is passed.
+  const env = buildSpawnEnv(
+    identity
+      ? {
+          harness: identity.harness,
+          ...(identity.sessionId !== undefined ? { sessionId: identity.sessionId } : {}),
+          ...(identity.strategy && identity.sessionId && !discovered
+            ? { sessionIdAuthority: "assigned" }
+            : {}),
+          ...(identity.launchId !== undefined ? { launchId: identity.launchId } : {}),
+          ...(identity.model !== undefined ? { model: identity.model } : {}),
+          ...(identity.effort !== undefined ? { effort: identity.effort } : {}),
+          ...(identity.requestId !== undefined ? { requestId: identity.requestId } : {}),
+          ...(identity.turnId !== undefined ? { turnId: identity.turnId } : {}),
+        }
+      : null,
+    discovered,
+    identity?.hubPort,
+  );
   // The out-log is machine-local (plan 02); its `run/` parent may not exist
   // yet when a fork's create turn spawns. mkdir defensively - idempotent.
   mkdirSync(dirname(logFile), { recursive: true });

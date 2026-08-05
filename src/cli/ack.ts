@@ -11,37 +11,40 @@ import { sanitizeAttendant, type AttendantStamp } from "../core/events.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { sanitizeBlocked, sanitizeProgress } from "../core/progress.ts";
 import type { AgentProgress } from "../protocol/wire.ts";
+import { LUCID_ENV_FIELDS } from "../launch/env-stamp.ts";
 
-/** Read the LUCID_TURN_ID env var. Bounded like every caller-supplied id. */
+/** Read the LUCID_TURN_ID env var through the shared table. */
 const turnStamp = (): { readonly turnId?: string } => {
-  const t = process.env.LUCID_TURN_ID;
+  const t = process.env[LUCID_ENV_FIELDS.turnId];
   return t && t.length > 0 ? { turnId: t.slice(0, 128) } : {};
 };
 
-/** Build the attendant provenance stamp from LUCID_* env vars. Through the
- *  shared normalizer even though we authored it: the direct-append path
- *  bypasses the server, and the log's invariants must not depend on which
- *  writer was live. */
+/** Build the attendant provenance stamp from LUCID_* env vars, through the
+ *  shared table (M5.5). Through the shared normalizer even though we authored
+ *  it: the direct-append path bypasses the server, and the log's invariants
+ *  must not depend on which writer was live. */
 const attendantStamp = (
   harness?: string,
   live?: { readonly model?: string; readonly effort?: string },
 ): AttendantStamp | undefined => {
-  const h = harness || process.env.LUCID_HARNESS;
-  const sessionId = process.env.LUCID_SESSION_ID;
+  const h = harness || process.env[LUCID_ENV_FIELDS.harness];
+  const sessionId = process.env[LUCID_ENV_FIELDS.sessionId];
   if (!h && !sessionId) return undefined;
-  const model = live?.model ?? process.env.LUCID_MODEL;
-  const effort = live?.effort ?? process.env.LUCID_EFFORT;
+  const model = live?.model ?? process.env[LUCID_ENV_FIELDS.model];
+  const effort = live?.effort ?? process.env[LUCID_ENV_FIELDS.effort];
   return sanitizeAttendant({
     harness: h || "agent",
     ...(sessionId ? { sessionId } : {}),
     cwd: process.cwd(),
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
-    ...(process.env.LUCID_REQUEST_ID ? { trace: process.env.LUCID_REQUEST_ID } : {}),
-    ...(process.env.LUCID_SESSION_ID_AUTHORITY
-      ? { sessionIdAuthority: process.env.LUCID_SESSION_ID_AUTHORITY }
+    ...(process.env[LUCID_ENV_FIELDS.trace] ? { trace: process.env[LUCID_ENV_FIELDS.trace] } : {}),
+    ...(process.env[LUCID_ENV_FIELDS.sessionIdAuthority]
+      ? { sessionIdAuthority: process.env[LUCID_ENV_FIELDS.sessionIdAuthority] }
       : {}),
-    ...(process.env.LUCID_LAUNCH_ID ? { launchId: process.env.LUCID_LAUNCH_ID } : {}),
+    ...(process.env[LUCID_ENV_FIELDS.launchId]
+      ? { launchId: process.env[LUCID_ENV_FIELDS.launchId] }
+      : {}),
   });
 };
 
