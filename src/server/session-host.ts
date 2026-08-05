@@ -19,15 +19,10 @@ import {
   decodeRevert,
   decodeTurnEnded,
 } from "../protocol/inbound.ts";
-import {
-  harnessSessionId,
-  type HarnessPresence,
-  interactiveResumeCommand,
-  presenceFor,
-} from "../core/presence.ts";
-import { readSettingsCached } from "../core/settings.ts";
-import { artifactAttendant, readLastAttendant } from "../core/attendant.ts";
-import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
+import { type HarnessPresence, presenceFor } from "../core/presence.ts";
+import { viewerState } from "../core/viewer-state.ts";
+import { artifactAttendant } from "../core/attendant.ts";
+import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
 import { versionRef } from "../core/fold.ts";
 import { sanitizeAttendant } from "../core/events.ts";
@@ -45,7 +40,6 @@ import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/
 import { appendEvents, appendIfStatus, sessionState } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
-import { assemblePayload } from "../core/payload.ts";
 import {
   atomicWrite,
   commitAgainstSnapshot,
@@ -71,7 +65,6 @@ import type {
   ContextUsage,
   SelectionResponse,
   SessionsResponse,
-  StateResponse,
 } from "../protocol/wire.ts";
 import { serveBundleAsset } from "./assets.ts";
 import { createChannel, wantsUpgrade, type Subscriber, type Upgrade } from "./live.ts";
@@ -905,92 +898,11 @@ export const createSessionHost = (
       });
     }
     if (pathname === "/__lucid/state") {
-      const state = await sessionState(paths);
-      const payload = await assemblePayload(
-        paths,
-        state,
-        state.status === "ended"
-          ? "ended"
-          : state.status === "suspended"
-            ? "suspended"
-            : "feedback",
-        {
-          annotations: state.annotations,
-          messages: state.messages,
-          reverts: state.reverts,
-        },
-      );
-      // Who last took delivery, from the advisory sidecars: display data for
-      // the chrome's resume affordance, never something the server executes.
-      const attendant = await readLastAttendant(paths);
-      // Is that conversation open in a terminal right now? Resolved per
-      // request (the panel polls state, and a human resuming in a terminal
-      // must flip the mode within a beat, not on a restart).
-      // The SAME resolution the attend engine uses, so the panel's idea of
-      // whose conversation this is can never differ from the hub's.
-      const target = await artifactAttendant(paths, state.sessionHistory);
-      const stampedHarness = [...state.sessionHistory].reverse().find((r) => r.harness);
-      const presence = await presenceFor(target, paths.artifactDir);
-      const contextUsage = await readContextSidecar(paths);
-      const selection = await readSelection(paths);
-      // Resumable = the engine has something to re-enter. Same resolution the
-      // attend engine uses, so the panel cannot promise a turn it will refuse.
-      const knownSessionId =
-        target?.sessionId ??
-        harnessSessionId({
-          ...(target?.resume ? { resume: target.resume } : {}),
-          artifactDir: paths.artifactDir,
-        });
-      const resumable = knownSessionId !== undefined;
-      // A command the human can paste, offered whenever the session is KNOWN -
-      // not only when an agent happened to write one down. Recorded first: it
-      // carries the agent's own flags.
-      const settings = await readSettingsCached();
-      const resumeCommand =
-        attendant?.resume ??
-        (target?.harness && knownSessionId
-          ? interactiveResumeCommand(target.harness, knownSessionId, {
-              yolo: settings.resumeYolo,
-            })
-          : undefined);
-      const attendantPresence = attendantPresenceOf(presence);
-      const response: StateResponse = {
-        ...payload,
-        // The LIFECYCLE, beside the wait outcome `payload.status` carries. The
-        // viewer drives every "is this session live" affordance off this: a
-        // session healed by a watcher reconnecting is active again, and no
-        // wait outcome can say so.
-        lifecycle: state.status,
-        agentsListening: agentSubscribers.size,
-        resumable,
-        ...(attendantPresence ? { attendantPresence } : {}),
-        // The sidecar when there is one (it carries the resume command and the
-        // attending session's model/effort); otherwise the harness the LOG
-        // records, so a fresh artifact still NAMES its agent. Without this the
-        // panel called a stamped claude-code session "the agent".
-        ...(attendant
-          ? {
-              lastAttendant: {
-                harness: attendant.harness,
-                at: attendant.at,
-                ...(resumeCommand ? { resume: resumeCommand } : {}),
-                ...(attendant.model ? { model: attendant.model } : {}),
-                ...(attendant.effort ? { effort: attendant.effort } : {}),
-              },
-            }
-          : stampedHarness
-            ? {
-                lastAttendant: {
-                  harness: stampedHarness.harness,
-                  at: stampedHarness.lastAt,
-                  ...(resumeCommand ? { resume: resumeCommand } : {}),
-                },
-              }
-            : {}),
-        ...(contextUsage ? { contextUsage } : {}),
-        ...(selection ? { selection } : {}),
-      };
-      return json(response);
+      // The whole viewer-state assembly (fold + attendant + presence +
+      // resume + context/selection) lives behind src/core/viewer-state.ts.
+      // agentsListening is a THUNK so it is read at response-build time,
+      // not when the request started (D-006).
+      return json(await viewerState(paths, { agentsListening: () => agentSubscribers.size }));
     }
     if (pathname === "/__lucid/sessions" && req.method === "GET") {
       const root = await projectRoot(paths);
