@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   DOMParser,
   Element as LinkedomElement,
@@ -129,5 +131,29 @@ describe("swapArtifactBody with trusted operations (DF-3)", () => {
     const { ops } = recordingOps(document);
     swapArtifactBody(document, NEXT, { keep: new Set(), ref: null, operations: ops });
     expect(realmHeadTouches).toBe(0);
+  });
+});
+
+/**
+ * The production call site (overlay.ts) is browser-targeted - a Lit element
+ * mounted through customElements - so it cannot be driven behaviourally in the
+ * unit tier. D-008 sanctions a unit-tier pin for exactly this: a focused check
+ * that the swap call passes the trusted operations, so dropping the argument
+ * is a red test rather than a silent regression only the slowest e2e tier
+ * catches. The behavioural proof is the e2e hostile fixture.
+ */
+describe("the production swap call site supplies the trusted operations", () => {
+  test("overlay.ts passes operations from the capability bag to swapArtifactBody", async () => {
+    const source = await readFile(
+      join(import.meta.dirname, "..", "client", "overlay", "overlay.ts"),
+      "utf8",
+    );
+    // The production call exists and threads the bag's operations through -
+    // not a fresh literal or a dropped argument. A regression that removes
+    // the wiring reds here at unit speed.
+    expect(source).toContain("swapArtifactBody(document, htmlText, {");
+    expect(source).toContain("operations: this.#swapOperations");
+    // And the field is populated from the capability bag, not left null.
+    expect(source).toContain("this.#swapOperations = swapOperations");
   });
 });

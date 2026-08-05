@@ -247,6 +247,18 @@ test(
   survives("hostile-huge-dom"),
 );
 
+test(
+  "the loop survives an artifact that patches Document.prototype.importNode to intercept the swap",
+  // DF-3 (plan 05 M2.2): the overlay installs the artifact body through
+  // importNode. An artifact that patches Document.prototype.importNode could
+  // observe or redirect every node the swap imports - the import is the one
+  // operation whose interception exposes overlay-owned nodes. The overlay
+  // captures the intrinsic pre-artifact, so the patch is never reached for
+  // the swap (the fixture's proof, run inside the loop, asserts <html> stays
+  // unmarked).
+  survives("hostile-patched-import-node"),
+);
+
 test("picking the third of four identically-stamped rows marks the THIRD", async ({ page }) => {
   // The duplicate-ids fixture's sharper half: payload resolution says "an
   // element resolved", but the human-facing claim is that the MARK sits on
