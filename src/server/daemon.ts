@@ -28,7 +28,7 @@ import {
 import { artifactDocumentResponse, shellResponse, viewerResponse } from "./viewer.ts";
 import { projectOf } from "../core/project.ts";
 import { createListing, type Listing } from "./listing.ts";
-import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
+import { parseTitle } from "../core/title.ts";
 import { planTurn, runTurn, type TurnOutcome } from "../launch/turn.ts";
 import { readEvents, sessionStateCacheStats, sessionStateSync } from "../core/log.ts";
 import { createArtifactPrompt } from "../launch/prompts.ts";
@@ -287,67 +287,17 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     for (const e of entries) idToArtifact.set(sessionId(e.artifact), e.artifact);
   };
 
-  /** Project identity is stable for a given artifact path; the listing runs
-   *  every poll tick, so the .git resolution happens once per artifact, not
-   *  per tick. */
-  const projectCache = new Map<string, { project: string; worktree?: string }>();
-
-  /** A session's project, from the one owner of that question
-   *  (`core/project.ts`): `project` is the grouping root - a worktree resolved
-   *  to its main repo, a scratchpad decoded to the checkout it names - and
-   *  `worktree` names the checkout when it differs. */
-  const resolveProject = async (
-    artifact: string,
-  ): Promise<{ project: string; worktree?: string }> => {
-    const cached = projectCache.get(artifact);
-    if (cached !== undefined) return cached;
-    const { project, worktree } = await projectOf(sessionPaths(artifact));
-    const resolved = { project, ...(worktree !== undefined ? { worktree } : {}) };
-    projectCache.set(artifact, resolved);
-    return resolved;
-  };
-
-  /**
-   * An artifact's `<title>`, cached against its mtime: the listing re-scans
-   * every POLL_MS, and re-reading every artifact's head each time would make
-   * a quiet hub do steady disk work for a string that only changes when the
-   * agent revises the file.
-   */
-  const titleCache = new Map<string, { readonly mtimeMs: number; readonly title: string | null }>();
-  const readTitle = async (artifact: string): Promise<string | null> => {
-    let mtimeMs: number;
-    try {
-      mtimeMs = (await stat(artifact)).mtimeMs;
-    } catch {
-      return null; // an artifact that is not there has no title to show
-    }
-    const hit = titleCache.get(artifact);
-    if (hit && hit.mtimeMs === mtimeMs) return hit.title;
-    let title: string | null = null;
-    try {
-      const fd = await open(artifact, "r");
-      try {
-        const buf = Buffer.alloc(TITLE_SCAN_BYTES);
-        const { bytesRead } = await fd.read(buf, 0, TITLE_SCAN_BYTES, 0);
-        title = parseTitle(buf.subarray(0, bytesRead).toString("utf8"));
-      } finally {
-        await fd.close();
-      }
-    } catch {
-      title = null;
-    }
-    titleCache.set(artifact, { mtimeMs, title });
-    return title;
-  };
-
-  const computeListing = async (): Promise<HubSession[]> => {
+  const computeListing = async (caches: {
+    resolveProject: (a: string) => Promise<{ project: string; worktree?: string }>;
+    readTitle: (a: string) => Promise<string | null>;
+  }): Promise<HubSession[]> => {
     const entries = await listAll(await scanRootSet(), registryPath);
     rememberIds(entries);
     return Promise.all(
       entries.map(async (e) => {
         const id = sessionId(e.artifact);
-        const proj = await resolveProject(e.artifact);
-        const title = await readTitle(e.artifact);
+        const proj = await caches.resolveProject(e.artifact);
+        const title = await caches.readTitle(e.artifact);
         return {
           ...e,
           id,
@@ -378,7 +328,20 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     attention: () => attentionSnapshot(),
     broadcast: (frame) => broadcast(frame),
     channelSize: () => channel.size(),
-    pollMs: POLL_MS,
+    projectOf,
+    parseTitle,
+    stat: (p) => stat(p),
+    readHead: async (p, bytes) => {
+      const fd = await open(p, "r");
+      try {
+        const buf = Buffer.alloc(bytes);
+        const { bytesRead } = await fd.read(buf, 0, bytes, 0);
+        return buf.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await fd.close();
+      }
+    },
+    sessionPaths,
   });
 
   /** Unmount a hosted session: close its streams/watchers and release the
@@ -1260,7 +1223,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const dir = chosen.dir;
     // resolveProject reads an ARTIFACT's location, so ask it about a file that
     // would live directly in this folder. Nothing is created or written.
-    const proj = await resolveProject(join(dir, "artifact.html"));
+    const proj = await listing.resolveProject(join(dir, "artifact.html"));
     // Naming a project REGISTERS it. This route used to resolve a path and
     // return it, persisting nothing - so the folder existed only in the
     // dialog's React state, and `/hub/create` (which validates against real
