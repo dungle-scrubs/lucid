@@ -204,3 +204,51 @@ describe("advance - pending tracking", () => {
     expect(cursor.firstPendingAt).toBe(1000); // not overwritten
   });
 });
+
+describe("advance - overlap safety (M5.1 checkboxes)", () => {
+  test("two concurrent passes cannot clobber ownClaimSeq to 0", () => {
+    // The advance reducer never sets ownClaimSeq to 0: it only changes it in
+    // the rollback path (sets it to deliveredThroughSeq). So interleaved
+    // advance calls preserve a non-zero ownClaimSeq.
+    const before: DeliveryCursor = {
+      deliveredUpTo: 5,
+      firstPendingAt: undefined,
+      ownClaimSeq: 7,
+      unfulfilledClaimAt: undefined,
+    };
+    // Two passes with the same inputs (simulating interleaved execution)
+    const pass1 = advance(before, { deliveredThroughSeq: 7, agentWorking: null }, [], {
+      now: 1000,
+      workingGraceMs: 500,
+      inFlight: false,
+    });
+    const pass2 = advance(pass1, { deliveredThroughSeq: 7, agentWorking: null }, [], {
+      now: 1001,
+      workingGraceMs: 500,
+      inFlight: false,
+    });
+    expect(pass2.ownClaimSeq).toBe(7);
+    expect(pass2.ownClaimSeq).not.toBe(0);
+  });
+
+  test("an orphan's claim is not re-adopted after the sweep", () => {
+    // After the orphan sweep: deliveredUpTo = answeredMark (0), ownClaimSeq =
+    // closedClaimMax (the swept claim). The next advance must NOT re-adopt
+    // the swept claim via foreign-claim adoption, because
+    // deliveredThroughSeq === ownClaimSeq.
+    const afterSweep: DeliveryCursor = {
+      deliveredUpTo: 0,
+      firstPendingAt: undefined,
+      ownClaimSeq: 5, // the swept claim's max
+      unfulfilledClaimAt: undefined,
+    };
+    // The fold still carries deliveredThroughSeq=5 (the swept ack is in the log)
+    const cursor = advance(afterSweep, { deliveredThroughSeq: 5, agentWorking: null }, [], {
+      now: 1000,
+      workingGraceMs: 500,
+      inFlight: false,
+    });
+    // foreign-claim adoption skips: deliveredThroughSeq(5) !== ownClaimSeq(5) is FALSE
+    expect(cursor.deliveredUpTo).toBe(0); // not re-adopted to 5
+  });
+});
