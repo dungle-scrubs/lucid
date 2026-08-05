@@ -349,6 +349,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   const evict = async (id: string): Promise<void> => {
     const mount = mounts.get(id);
     if (!mount) return;
+    log(`[hub] session ${id}: evicting (${mount.paths.artifactPath})`);
     mounts.delete(id);
     clearInterval(mount.idleTimer);
     if (mount.attendTimer) clearInterval(mount.attendTimer);
@@ -369,7 +370,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (stopped) throw new Error("daemon is stopping");
     // Never over a live dedicated server - that stays the one appender.
     const live = await discoverLiveServer(sessionPaths(artifact));
-    if (live && live.port !== port) return undefined;
+    if (live && live.port !== port) {
+      log(`[hub] session ${id}: proxied to dedicated server on port ${live.port}`);
+      return undefined;
+    }
+    log(`[hub] session ${id}: hosting ${artifact}`);
     const existing = mounts.get(id);
     if (existing) return existing;
     const paths = sessionPaths(artifact);
