@@ -141,6 +141,10 @@ interface HubState {
       }
     >
   >;
+  /** Artifacts whose create turn is in flight, keyed by artifact to its
+   *  submission timestamp. Answers "is a create turn running" with no dialog
+   *  mounted. */
+  createTurns: Readonly<Record<string, number>>;
 }
 
 export const useHub = create<HubState>(() => ({
@@ -156,6 +160,7 @@ export const useHub = create<HubState>(() => ({
   harnessInfo: [],
   createFailed: null,
   createProgress: {},
+  createTurns: {},
   attention: {},
 }));
 
@@ -171,6 +176,7 @@ export const useHub = create<HubState>(() => ({
 export interface CreateState {
   readonly createFailed: HubState["createFailed"];
   readonly createProgress: HubState["createProgress"];
+  readonly createTurns: HubState["createTurns"];
 }
 
 /** A live turn's heartbeat. Clears a failure recorded for the SAME artifact -
@@ -188,6 +194,15 @@ export const noteCreateProgress = (
 ): CreateState => ({
   createFailed: state.createFailed?.artifact === artifact ? null : state.createFailed,
   createProgress: { ...state.createProgress, [artifact]: frame },
+  createTurns: state.createTurns,
+});
+
+/** The hub accepted the create: record the submission timestamp so the entry
+ *  is visible as "in flight" even before the first heartbeat. */
+export const noteCreateSubmitted = (state: CreateState, artifact: string): CreateState => ({
+  createFailed: state.createFailed,
+  createProgress: state.createProgress,
+  createTurns: { ...state.createTurns, [artifact]: Date.now() },
 });
 
 /** A turn died. Drops its heartbeat, so nothing can arm the silence detector
@@ -197,7 +212,8 @@ export const noteCreateFailed = (
   failed: NonNullable<HubState["createFailed"]>,
 ): CreateState => {
   const { [failed.artifact]: _gone, ...rest } = state.createProgress;
-  return { createFailed: failed, createProgress: rest };
+  const { [failed.artifact]: _turn, ...turnsRest } = state.createTurns;
+  return { createFailed: failed, createProgress: rest, createTurns: turnsRest };
 };
 
 /** A turn BEGINS, or has landed: forget everything about that artifact. A
@@ -206,9 +222,11 @@ export const noteCreateFailed = (
  *  dialog claims silence instantly for a turn the hub is reporting. */
 export const forgetCreate = (state: CreateState, artifact: string): CreateState => {
   const { [artifact]: _gone, ...rest } = state.createProgress;
+  const { [artifact]: _turn, ...turnsRest } = state.createTurns;
   return {
     createFailed: state.createFailed?.artifact === artifact ? null : state.createFailed,
     createProgress: rest,
+    createTurns: turnsRest,
   };
 };
 
