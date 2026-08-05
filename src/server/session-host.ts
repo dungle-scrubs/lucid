@@ -1,4 +1,4 @@
-import { statSync, mkdirSync, watch } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { parseHTML } from "linkedom";
 import { basename, join } from "node:path";
@@ -40,12 +40,8 @@ import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/
 import { appendEvents, appendIfStatus, sessionState } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
-import {
-  atomicWrite,
-  commitAgainstSnapshot,
-  commitWatchedChange,
-  readArtifact,
-} from "../core/session.ts";
+import { atomicWrite, commitAgainstSnapshot, readArtifact } from "../core/session.ts";
+import { createArtifactWatch } from "./artifact-watch.ts";
 import { escapeHtml } from "../core/escape.ts";
 import {
   defaultRecipe,
@@ -191,20 +187,6 @@ const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response 
   });
 
 const noStore = { "cache-control": "no-store" } as const;
-
-/**
- * Cheap `stat` fingerprint (size + mtimeMs) for the polling watcher. Returns
- * null if the artifact is not statable. Used to gate the 1Hz poll so a quiet
- * session does not re-read + hash the artifact every second.
- */
-const statFingerprint = (absPath: string): string | null => {
-  try {
-    const s = statSync(absPath);
-    return `${s.size}:${s.mtimeMs}`;
-  } catch {
-    return null;
-  }
-};
 
 export interface SessionHostOptions {
   /** Watcher debounce (ms). */
@@ -641,7 +623,7 @@ export const createSessionHost = (
     atomicWrite(paths.artifactPath, next);
     // Commit deterministically rather than waiting out the watcher debounce:
     // the caller's optimistic label is confirmed by the version broadcast.
-    await commitNow();
+    await artifactWatch.commitNow();
     return json({ ok: true, title });
   };
 
@@ -997,73 +979,16 @@ export const createSessionHost = (
   };
 
   // ---- artifact change detection --------------------------------------------
-  // commitNow() is driven by BOTH fs.watch and a polling fallback: fs.watch is
-  // not guaranteed (Node documents this) and is unreliable through a symlinked
-  // path (e.g. macOS /tmp -> /private/tmp) or across atomic-rename saves, so a
-  // 1s hash poll guarantees a settled change is committed regardless.
-  const artifactBase = basename(paths.artifactPath);
-  let committing = false;
-  /** A change arrived while a commit was mid-flight. Silently RETURNING there
-   *  lost the newer bytes until the next unrelated event: the in-flight commit
-   *  records what it already read, the poll has advanced its stat baseline,
-   *  and a caller who awaited commitNow (the rename route) got a resolved
-   *  promise for a commit that never ran. Queue one rerun instead. */
-  let commitQueued = false;
-  const commitNow = async (): Promise<void> => {
-    if (committing) {
-      commitQueued = true;
-      return;
-    }
-    committing = true;
-    try {
-      do {
-        commitQueued = false;
-        try {
-          const result = await commitWatchedChange(paths);
-          if (result.committed) {
-            // Broadcast the actually-appended event (real seq/timestamp), not a
-            // synthetic stand-in, so the SSE stream stays consistent with the log.
-            broadcast(result.committed);
-          } else if (result.warning) {
-            broadcastWarning(result.warning.code, result.warning.message);
-          }
-        } catch {
-          // transient; the poll (or the queued rerun) retries
-        }
-      } while (commitQueued);
-    } finally {
-      committing = false;
-    }
-  };
-
-  let debounce: ReturnType<typeof setTimeout> | undefined;
-  const onChange = (): void => {
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => void commitNow(), debounceMs);
-  };
-
-  let watcher: ReturnType<typeof watch> | undefined;
-  try {
-    watcher = watch(paths.artifactDir, (_event, filename) => {
-      if (!filename || filename === artifactBase) onChange();
-    });
-  } catch {
-    watcher = undefined;
-  }
-  // Polling fallback (see above): catches anything fs.watch misses. To avoid
-  // re-reading + hashing the artifact every second on a quiet session, the poll
-  // is gated on a cheap stat (size + mtimeMs); it only commits when those move.
-  let lastStat = statFingerprint(paths.artifactPath);
-  const pollTimer = setInterval(() => {
-    const next = statFingerprint(paths.artifactPath);
-    if (next !== null && next !== lastStat) {
-      lastStat = next;
-      void commitNow();
-    } else if (next !== null) {
-      // unchanged; keep the baseline current
-      lastStat = next;
-    }
-  }, 1000);
+  // Artifact change detection (the debounced fs.watch, the stat-gated 1s
+  // poll, and the coalescing commit queue) lives behind
+  // src/server/artifact-watch.ts. onCommitted broadcasts the actually-appended
+  // event; onWarning surfaces a typed refusal. The presence sweep stays here
+  // (it is broadcast presence, not change detection).
+  const artifactWatch = createArtifactWatch(paths, {
+    debounceMs,
+    onCommitted: broadcast,
+    onWarning: (warning) => broadcastWarning(warning.code, warning.message),
+  });
 
   /**
    * Synthetic frame (like `listeners`): whether the artifact's own harness
@@ -1163,9 +1088,7 @@ export const createSessionHost = (
     clearInterval(presenceTimer);
     if (stopped) return;
     stopped = true;
-    if (watcher) watcher.close();
-    if (debounce) clearTimeout(debounce);
-    clearInterval(pollTimer);
+    artifactWatch.stop();
     channel.stop();
     agentSubscribers.clear();
   };
