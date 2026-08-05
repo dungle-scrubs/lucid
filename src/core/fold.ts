@@ -706,3 +706,30 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
 /** Look up the version ref a given version number maps to within the segment. */
 export const versionRef = (state: FoldedState, version: number): VersionRef | undefined =>
   state.versions.find((v) => v.version === version);
+
+/** The highest delivery mark that was FOLLOWED by agent output - a batch some
+ *  turn actually answered, rather than one a turn merely claimed.
+ *
+ *  Delivery is acked before the turn runs (D20), so an ack alone proves nothing
+ *  about whether the work happened. This is what a stale claim rolls back to.
+ *
+ *  Extracted from attend.ts (M5.1) so the fold module owns every delivery-mark
+ *  computation: `deliveredThroughSeq` (what was claimed) and `answeredMark`
+ *  (what was answered) live beside each other.
+ *
+ *  Pure: a function of the events alone, with no closure state. */
+export const answeredMark = (events: readonly LogEvent[]): number => {
+  let openMark: number | undefined;
+  let answered = 0;
+  for (const e of events) {
+    if (e.t === "agent_ack") {
+      openMark = (e as { covers?: number }).covers ?? openMark;
+      continue;
+    }
+    if (e.t === "version" || e.t === "agent_reply" || e.t === "question") {
+      if (openMark !== undefined) answered = Math.max(answered, openMark);
+      openMark = undefined;
+    }
+  }
+  return answered;
+};
