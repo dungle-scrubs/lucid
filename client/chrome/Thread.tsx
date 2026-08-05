@@ -30,6 +30,7 @@ import { QaPart } from "./QaPart.tsx";
 import { VerdictPart } from "./VerdictPart.tsx";
 import { deliveredWaiting } from "./store.ts";
 import { workingClock } from "./working.ts";
+import { attendance, workingLine } from "./attendance.ts";
 import { markdownComponents, prose, urlTransform } from "./ui/markdown.tsx";
 import { closeButtonSmall } from "./ui/close.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
@@ -220,10 +221,6 @@ const WorkingIndicator = () => {
   const attendant = useSession((s) => s.lastAttendant);
   const resumable = useSession((s) => s.resumable);
   const harnessCount = useSession((s) => s.selectionHarnesses.length);
-  // Was anything ever handed to this agent? A create/authoring turn is working
-  // on an empty session - nothing was picked up, so the stale line must not
-  // say it was. Selected as two counts rather than a derived slice: a selector
-  // that builds an array re-renders forever (React #185).
   const annotationCount = useSession((s) => s.annotations.length);
   const messageCount = useSession((s) => s.messages.length);
   const attend = useHub((s) => s.attend) === true;
@@ -235,17 +232,21 @@ const WorkingIndicator = () => {
     return () => clearInterval(t);
   }, [working]);
 
-  // The delivered-to-ack gap: feedback is in the log, no working window is open
-  // yet, and the log has nothing new to render. Fill the SAME slot the working
-  // line will take, so "Delivered — waiting…" flows into "Updating the
-  // artifact…" as one story rather than a gap and then a jump.
-  if (!working && awaitingAck && status === "active") {
-    const { text, transient } = deliveredWaiting({
-      interactive: presence?.interactive === true,
-      listening,
-      spawnable: attend && resumable,
-      harness: attendant?.harness ?? "the agent",
-    });
+  // The decision tree lives behind workingLine; this component is its renderer.
+  const line = workingLine(
+    { agentWorking: working, annotationCount, awaitingAck, lastTurnEnd, messageCount, status },
+    now,
+  );
+  const a = attendance({
+    agentsListening: listening,
+    attendantPresence: presence,
+    attend,
+    lastAttendant: attendant,
+    resumable,
+  });
+
+  if (line.kind === "awaiting-ack") {
+    const { text, transient } = deliveredWaiting(a);
     return (
       <div data-test="awaiting-ack" data-transient={transient} className="text-[12px]">
         <span className={transient ? "shimmer text-fg/40" : "text-fg-muted"}>{text}</span>
@@ -253,60 +254,34 @@ const WorkingIndicator = () => {
     );
   }
 
-  // A turn ended and produced nothing. The window is correctly closed - the
-  // agent is not working - but saying nothing at all leaves the human with
-  // feedback marked delivered and no idea what came of it, which reads as if
-  // the turn never happened. Distinct from the stale line below: this is a
-  // turn we KNOW ended, not one that went quiet (OQ-3).
-  if (!working && lastTurnEnd && status === "active") {
-    const limit =
-      lastTurnEnd.code === "weekly_limit"
-        ? "weekly usage limit"
-        : lastTurnEnd.code === "session_limit"
-          ? "session limit"
-          : lastTurnEnd.code === "credits"
-            ? "available credits"
-            : lastTurnEnd.code === "quota"
-              ? "provider quota"
-              : "usage limit";
+  if (line.kind === "turn-ended") {
     const ended =
-      lastTurnEnd.reason === "usage_limit"
-        ? `The agent stopped because it reached its ${limit}. Your feedback is still here and can be continued after the limit resets${harnessCount > 1 ? " or by selecting another harness below" : ""}.`
-        : lastTurnEnd.reason === "failed"
+      line.reason === "usage_limit"
+        ? `The agent stopped because it reached its ${line.limit}. Your feedback is still here and can be continued after the limit resets${harnessCount > 1 ? " or by selecting another harness below" : ""}.`
+        : line.reason === "failed"
           ? "The agent's turn failed without producing anything."
           : "The agent read your feedback and finished without changing anything.";
     return (
-      <div data-test="turn-ended" data-reason={lastTurnEnd.reason} className="text-[12px]">
+      <div data-test="turn-ended" data-reason={line.reason} className="text-[12px]">
         <span className="text-fg-muted">{ended}</span>
       </div>
     );
   }
 
-  if (!working || status !== "active") return null;
-  // Shared with the surface's chip so the two cannot disagree about whether
-  // the same turn is still working (client/chrome/working.ts).
-  const { stale, mm, ss } = workingClock(working, now);
-  const delivered = annotationCount > 0 || messageCount > 0;
+  if (line.kind === "none") return null;
 
-  // Blocked outranks every other state here, stale included. The turn is not
-  // slow and it is not dead - it is waiting on a person, and that person is
-  // reading this line. Rust, because it is the one state that asks for
-  // something rather than reporting.
-  if (working.blocked) {
+  if (line.kind === "blocked") {
     return (
       <div data-test="agent-blocked" className="flex flex-col gap-0.5 text-[12px]">
         <span className="text-rust-300">The agent is blocked and needs you.</span>
-        <span className="text-[11px] text-fg-muted">{working.blocked}</span>
+        <span className="text-[11px] text-fg-muted">{line.text}</span>
       </div>
     );
   }
 
-  const progress = working.progress;
-  // A lone turn narrating its phases (`lucid progress --label`, no counts):
-  // the ordinary working line with the turn's own one-liner beneath it. NOT
-  // the fan-out rendering - dots and "agents in progress" would claim
-  // parallelism a single codex/claude turn does not have.
-  if (progress && !stale && progress.total === undefined) {
+  const { stale, mm, ss } = workingClock(line.working, now);
+  const progress = line.working.progress ?? undefined;
+  if (line.kind === "progress") {
     return (
       <div
         data-test="agent-working"
@@ -315,25 +290,22 @@ const WorkingIndicator = () => {
       >
         <div className="flex items-baseline gap-1.5">
           <span className="shimmer text-fg/40">
-            {working.intent === "revise" ? "Updating the artifact…" : "Agent responding…"}
+            {line.working.intent === "revise" ? "Updating the artifact…" : "Agent responding…"}
           </span>
           <span className="text-[11px] text-fg-faint tabular-nums">
             ({mm}:{ss})
           </span>
         </div>
-        {progress.label ? (
+        {progress?.label ? (
           <span data-test="working-phase" className="text-[11px] text-fg-muted">
-            {progress.label}
+            {progress?.label}
           </span>
         ) : null}
       </div>
     );
   }
-  // Fan-out: the agent self-reported parallel subagents working the revision.
-  // A distinct rendering (agent-colored dots + counts) so the human reads "many
-  // agents in flight, this will take a bit" rather than a lone spinner.
-  if (progress && !stale) {
-    const { label, total, done } = progress;
+  if (line.kind === "fan-out") {
+    const { label, total, done } = progress ?? {};
     return (
       <div
         data-test="agent-working"
@@ -350,8 +322,6 @@ const WorkingIndicator = () => {
           </span>
           {total ? (
             <span className="text-[11px] text-fg-faint tabular-nums">
-              {/* total and done can arrive on separate acks, so clamp here -
-                  the one place that sees both - rather than trust done<=total. */}
               {Math.min(done ?? 0, total)}/{total} reported
             </span>
           ) : null}
@@ -370,22 +340,16 @@ const WorkingIndicator = () => {
       data-stale={stale ? "true" : "false"}
       className="flex items-baseline gap-1.5 text-[12px]"
     >
-      {stale ? (
+      {line.kind === "stale" ? (
         <span className="text-fg-muted">
-          {/* An authoring turn was never handed anything: saying it "picked up
-              your feedback" describes an exchange that never happened, which is
-              how a session whose agent died before writing its first version
-              read for eight minutes. */}
-          {delivered
+          {line.delivered
             ? `${progress?.total ? "agents picked up" : "agent picked up"} your feedback ${mm}m ago · no response yet`
             : `nothing from the agent for ${mm}m · it may have stopped`}
         </span>
       ) : (
         <>
-          {/* tw-shimmer clips to the text, so the base color's opacity is what
-              makes the sweep visible (their documented /40 idiom). */}
           <span className="shimmer text-fg/40">
-            {working.intent === "revise" ? "Updating the artifact…" : "Agent responding…"}
+            {line.working.intent === "revise" ? "Updating the artifact…" : "Agent responding…"}
           </span>
           <span className="text-[11px] text-fg-faint tabular-nums">
             ({mm}:{ss})
@@ -461,30 +425,30 @@ const ConnectionLine = () => {
  */
 const AttendanceFooter = () => {
   const status = useSession((s) => s.status);
-  const presence = useSession((s) => s.attendantPresence);
   const attendant = useSession((s) => s.lastAttendant);
   const listening = useSession((s) => s.agentsListening);
   const attend = useHub((s) => s.attend) === true;
   const resumable = useSession((s) => s.resumable);
-  // Always rendered on an active session, attendant or not: a hand-written
-  // artifact still has a mode ("recording only"), and the LIVE state below
-  // has to be able to appear the moment a waker connects. Gating on the
-  // attendant made the line vanish exactly where it had the most to say.
+  const presence = useSession((s) => s.attendantPresence);
   if (status !== "active") return null;
-  const interactive = presence?.interactive === true;
-  const spawnable = attend && resumable;
-  const harness = attendant?.harness;
+  const a = attendance({
+    agentsListening: listening,
+    attendantPresence: presence,
+    attend,
+    lastAttendant: attendant,
+    resumable,
+  });
   // Interactive wins: a human sitting in that conversation is the fact that
   // matters, and nothing is being spawned while they are. A LISTENING agent
   // (blocked in `lucid wait`) beats every recorded mode - it is presence,
   // not configuration: feedback sends straight to it.
-  const mode = interactive
+  const mode = a.interactive
     ? "interactive"
-    : listening > 0
-      ? listening === 1
+    : a.listening > 0
+      ? a.listening === 1
         ? "agent listening"
-        : `${listening} agents listening`
-      : spawnable
+        : `${a.listening} agents listening`
+      : a.spawnable
         ? "spawn mode"
         : attend
           ? "no agent session"
@@ -492,10 +456,8 @@ const AttendanceFooter = () => {
   return (
     <div
       data-test="listener-line"
-      data-listening={listening > 0 ? "true" : "false"}
-      data-mode={
-        interactive ? "interactive" : spawnable ? "spawn" : attend ? "unattached" : "recorded"
-      }
+      data-listening={a.listening > 0 ? "true" : "false"}
+      data-mode={a.mode}
       className="flex flex-col items-center gap-1 border-t border-ink-700 pt-2"
     >
       <Tooltip>
@@ -505,9 +467,9 @@ const AttendanceFooter = () => {
               data-test="harness-line"
               className={`cursor-default text-[10px] ${listening > 0 ? "text-agent" : "text-fg-faint hover:text-fg"}`}
             >
-              {harness ? (
+              {a.harness ? (
                 <>
-                  {harness} · <span data-test="mode-term">{mode}</span>
+                  {a.harness} · <span data-test="mode-term">{mode}</span>
                 </>
               ) : (
                 <span data-test="mode-term">{mode}</span>
@@ -516,18 +478,18 @@ const AttendanceFooter = () => {
           }
         />
         <TooltipContent>
-          {interactive
-            ? `${harness ?? "The agent"} is open in a terminal. Your feedback goes to that conversation; nothing is spawned while somebody is sitting in it.`
-            : listening > 0
+          {a.interactive
+            ? `${a.harness} is open in a terminal. Your feedback goes to that conversation; nothing is spawned while somebody is sitting in it.`
+            : a.listening > 0
               ? "An agent is blocked in `lucid wait` on this session right now - feedback sends straight to it, no spawn involved."
-              : spawnable
-                ? `Nothing is running. Sending resumes ${harness ?? "the agent"} headlessly - one turn per send, on the model and effort picked above.`
+              : a.spawnable
+                ? `Nothing is running. Sending resumes ${a.harness} headlessly - one turn per send, on the model and effort picked above.`
                 : attend
                   ? "No agent conversation is recorded on this artifact, so there is nothing to resume - it was written by hand, or recovered from a backup. Your feedback is saved and the next agent that opens it reads everything waiting."
-                  : `Nothing is running, and this hub does not spawn agents. Feedback is recorded and delivered the next time ${harness ?? "the agent"} checks in. Start the hub with --attend to have it drive turns itself.`}
+                  : `Nothing is running, and this hub does not spawn agents. Feedback is recorded and delivered the next time ${a.harness} checks in. Start the hub with --attend to have it drive turns itself.`}
         </TooltipContent>
       </Tooltip>
-      {interactive || listening > 0 ? null : <ResumeHint />}
+      {a.interactive || a.listening > 0 ? null : <ResumeHint />}
     </div>
   );
 };
