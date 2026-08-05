@@ -4,6 +4,7 @@ import { unsentWork, versionSwapBlockedReason } from "./store.ts";
 import type { DiffHunk } from "./types.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 import { workingClock } from "./working.ts";
+import { workingLine } from "./attendance.ts";
 
 const HUNK_SIGN: Readonly<Record<DiffHunk["kind"], string>> = {
   added: "+",
@@ -272,22 +273,28 @@ export const SessionGoneBanner = () => {
  * was heard. No spin, no accent - a fact, not an animation.
  */
 export const SurfaceUpdating = () => {
-  const working = useSession((s) => s.agentWorking);
   const status = useSession((s) => s.status);
+  const annotationCount = useSession((s) => s.annotations.length);
+  const messageCount = useSession((s) => s.messages.length);
+  const agentWorking = useSession((s) => s.agentWorking);
+  const awaitingAck = useSession((s) => s.awaitingAck);
+  const lastTurnEnd = useSession((s) => s.lastTurnEnd);
   const [now, setNow] = useState(() => Date.now());
-  // Only while a window is open, and only per minute: the reading changes at
-  // minute granularity, and this sits over a document being read.
   useEffect(() => {
-    if (!working) return;
+    if (!agentWorking) return;
     const t = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(t);
-  }, [working]);
-  if (working?.intent !== "revise" || status !== "active") return null;
-  // A blocked turn has a reason worth reading, and the panel is where it fits.
-  // Promising an update over the document while the agent waits on a person is
-  // the same lie as promising one after it died.
-  if (working.blocked) return null;
-  const { stale, mm } = workingClock(working, now);
+  }, [agentWorking]);
+  const line = workingLine(
+    { agentWorking, annotationCount, awaitingAck, lastTurnEnd, messageCount, status },
+    now,
+  );
+  // Only the live, fan-out and progress arms show the pill: a blocked turn's
+  // reason belongs in the panel, a stale/dead one should not promise an
+  // update, and none/awaiting-ack/turn-ended are not revisions.
+  if (line.kind !== "live" && line.kind !== "fan-out" && line.kind !== "progress") return null;
+  if (line.working.intent !== "revise") return null;
+  const { stale, mm } = workingClock(line.working, now);
   return (
     <div
       data-test="surface-updating"

@@ -31,6 +31,11 @@ export interface Attendance {
   readonly spawnable: boolean;
   readonly harness: string;
   readonly mode: AttendanceMode;
+  /** Whether the model/effort/harness pickers are read-only: an interactive or
+   *  listening session has no unattended turn to configure. Same derivation
+   *  as `interactive || listening > 0`, exposed so SelectionPickers does not
+   *  spell it a third time. */
+  readonly readOnly: boolean;
 }
 
 export const attendance = (state: AttendanceState): Attendance => {
@@ -48,6 +53,7 @@ export const attendance = (state: AttendanceState): Attendance => {
         : state.attend
           ? "unattached"
           : "recorded",
+    readOnly: state.agentsListening > 0 || interactive,
     spawnable,
   };
 };
@@ -56,7 +62,7 @@ export const attendance = (state: AttendanceState): Attendance => {
 export interface WorkingLineState {
   readonly agentWorking: AgentWorking | null;
   readonly awaitingAck: ReadonlySet<string> | null;
-  readonly lastTurnEnd: { readonly reason: string; readonly code: string } | null;
+  readonly lastTurnEnd: { readonly reason: string; readonly code?: string } | null;
   readonly status: string;
   readonly annotationCount: number;
   readonly messageCount: number;
@@ -75,7 +81,7 @@ export type WorkingLine =
   | {
       readonly kind: "turn-ended";
       readonly reason: string;
-      readonly code: string;
+      readonly code: string | undefined;
       readonly limit: string;
     }
   | { readonly kind: "blocked"; readonly text: string }
@@ -111,7 +117,7 @@ export type WorkingLine =
 
 /** The limit-reason table. Lives here so the turn-ended arm and any future
  *  consumer share one owner rather than re-deriving the wording. */
-const limitReason = (code: string): string =>
+const limitReason = (code: string | undefined): string =>
   code === "weekly_limit"
     ? "weekly usage limit"
     : code === "session_limit"
