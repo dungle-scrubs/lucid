@@ -289,10 +289,16 @@ export const SurfaceUpdating = () => {
     { agentWorking, annotationCount, awaitingAck, lastTurnEnd, messageCount, status },
     now,
   );
-  // Only the live, fan-out and progress arms show the pill: a blocked turn's
-  // reason belongs in the panel, a stale/dead one should not promise an
-  // update, and none/awaiting-ack/turn-ended are not revisions.
-  if (line.kind !== "live" && line.kind !== "fan-out" && line.kind !== "progress") return null;
+  // The pill shows for live, fan-out, progress and stale: all four have a
+  // working window open and intent === "revise". Blocked has a reason that
+  // belongs in the panel; none/awaiting-ack/turn-ended are not revisions.
+  if (
+    line.kind !== "live" &&
+    line.kind !== "fan-out" &&
+    line.kind !== "progress" &&
+    line.kind !== "stale"
+  )
+    return null;
   if (line.working.intent !== "revise") return null;
   const { stale, mm } = workingClock(line.working, now);
   return (
