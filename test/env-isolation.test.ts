@@ -45,6 +45,15 @@ const lucidVarsReadUnderSrc = async (): Promise<string[]> => {
     for (const match of text.matchAll(/readonly\s+(LUCID_[A-Z0-9_]+)\??:/g)) {
       if (match[1]) found.add(match[1]);
     }
+    // A name table read back through computed `process.env[name]` access this
+    // scan cannot follow (M5.5's env-stamp table in src/launch/env-stamp.ts,
+    // read by src/cli/ack.ts): a quoted LUCID_* as an object-literal VALUE or
+    // a const assignment is the env-var NAME, not a value the product ships.
+    // Excludes union members (`| "..."`) and prose, which have no leading
+    // `:` or `=`.
+    for (const match of text.matchAll(/[:=]\s*["'`](LUCID_[A-Z0-9_]+)["'`]/g)) {
+      if (match[1]) found.add(match[1]);
+    }
   }
   return [...found].sort();
 };
