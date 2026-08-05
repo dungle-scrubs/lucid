@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { hubFetch, SCAN_TIMEOUT_MS } from "./request.ts";
-import { createRoots, forgetCreate, openTab, setCreateOpen, useHub } from "./hub.ts";
+import {
+  createRoots,
+  createStatus,
+  forgetCreate,
+  openTab,
+  setCreateOpen,
+  useHub,
+  type CreateTurnEntry,
+} from "./hub.ts";
 import { projectName } from "./naming.ts";
 import { effortLadder, harnessInfoFor } from "./selection.ts";
 import { handleize } from "../../src/core/title.ts";
@@ -39,7 +47,6 @@ const MAX_PROMPT = 4000;
  *  means the HUB stopped reporting - which is true and actionable - where the
  *  old two-minute "the turn may have failed" accused a healthy 8-minute turn
  *  of dying. A real failure still interrupts instantly via create-failed. */
-const PROGRESS_SILENCE_MS = 15_000;
 
 const ATTEND_HINT =
   "This hub does not spawn agents. Start it with attend mode to author artifacts:";
@@ -194,9 +201,6 @@ const CreateDialogBody = () => {
   const [authoring, setAuthoring] = useState<string | null>(null);
   /** This dialog's own turn's last heartbeat, never another's. */
   const progress = authoring === null ? undefined : createProgress[authoring];
-  /** The hub stopped reporting - which is a fact about the HUB, not a verdict
-   *  on the turn. */
-  const [silent, setSilent] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -255,27 +259,13 @@ const CreateDialogBody = () => {
   // Re-armed by every heartbeat: while the hub reports, this never fires, so
   // the dialog cannot accuse a turn the hub says is running.
   const progressAt = progress?.at ?? null;
-  useEffect(() => {
-    if (authoring === null) return;
-    setSilent(false);
-    // Armed from the AGE of the last heartbeat, not from now: a frame that
-    // arrived while this effect was re-running must not buy the hub a fresh
-    // full window, or a hub reporting once every 14s would look healthy
-    // forever.
-    const since = progressAt ?? Date.now();
-    const timer = setTimeout(
-      () => setSilent(true),
-      Math.max(0, PROGRESS_SILENCE_MS - (Date.now() - since)),
-    );
-    return () => clearTimeout(timer);
-  }, [authoring, progressAt]);
 
   // The clock ticks locally for smoothness but its ORIGIN is the hub's own
   // elapsed time, re-based by every heartbeat - so what the human reads is
   // the turn's real age, not this window's guess (a window opened late, or a
   // reconnected stream, would otherwise show its own shorter clock). The tick
   // reads the base through a ref so it cannot clobber the correction.
-  const [elapsed, setElapsed] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const base = useRef<{ at: number; elapsedMs: number }>({ at: Date.now(), elapsedMs: 0 });
   useEffect(() => {
     if (progress === undefined) return;
@@ -284,14 +274,26 @@ const CreateDialogBody = () => {
   useEffect(() => {
     if (authoring === null) return;
     base.current = { at: Date.now(), elapsedMs: 0 };
-    setElapsed(0);
-    const t = setInterval(
-      () =>
-        setElapsed(Math.floor((base.current.elapsedMs + (Date.now() - base.current.at)) / 1000)),
-      1000,
-    );
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [authoring]);
+  const elapsed = Math.floor((base.current.elapsedMs + (now - base.current.at)) / 1000);
+
+  // The lifecycle state is derived through createStatus (the tested pure
+  // function), not re-derived inline with a timer. `silent` was a component
+  // state driven by a setTimeout; it is now the `silent` arm of the union.
+  const entry: CreateTurnEntry | null =
+    authoring === null
+      ? null
+      : {
+          artifact: authoring,
+          submittedAt: progressAt ?? Date.now(),
+          lastProgressAt: progressAt,
+          lastProgressElapsedMs: progress?.elapsedMs ?? null,
+          failure: createFailed?.artifact === authoring ? createFailed : null,
+        };
+  const status = entry === null ? null : createStatus(entry, now);
 
   const onTitle = (value: string): void => {
     setTitle(value);
@@ -815,7 +817,7 @@ const CreateDialogBody = () => {
                   </span>
                 ) : null}
                 <span className="text-[11px] text-fg-faint">{authoring}</span>
-                {silent ? null : (
+                {status === "silent" ? null : (
                   <span className="pt-1 text-[11px] text-fg-faint">
                     {progressAt !== null
                       ? "The hub is reporting this turn as running. A few minutes is normal; a failure interrupts this on its own."
@@ -830,7 +832,7 @@ const CreateDialogBody = () => {
                     only in the branches this turn never reaches. A pointer,
                     not a clock: nothing here infers failure from elapsed
                     time. */}
-                {silent ? null : (
+                {status === "silent" ? null : (
                   <span data-test="create-running-log" className="text-[11px] text-fg-faint">
                     Watch it work:{" "}
                     <code className="bg-ink-700 px-1">
@@ -840,7 +842,7 @@ const CreateDialogBody = () => {
                 )}
               </>
             )}
-            {silent && createFailed?.artifact !== authoring ? (
+            {status === "silent" && createFailed?.artifact !== authoring ? (
               <span data-test="create-silent" className="pt-1 text-[11px] text-fg-muted">
                 {hubConnected
                   ? "The hub has stopped reporting on this turn. That does not mean it failed - it means this window is no longer being told. "
