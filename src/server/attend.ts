@@ -9,8 +9,17 @@ import {
   type ResumeCandidate,
 } from "../core/attendant.ts";
 import { deliver } from "../core/deliver.ts";
-import type { LogEvent, LogEventType } from "../core/events.ts";
-import { answeredMark, foldLog, type FoldedState, WORKING_GRACE_MS } from "../core/fold.ts";
+import type { LogEvent } from "../core/events.ts";
+import {
+  advance,
+  answeredMark,
+  foldLog,
+  lastAckAt,
+  pendingHumanSeqs,
+  type DeliveryCursor,
+  type FoldedState,
+  WORKING_GRACE_MS,
+} from "../core/fold.ts";
 import { normalizeHarness } from "../core/harness.ts";
 import { readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
@@ -63,13 +72,6 @@ import { readSelection } from "../launch/selection.ts";
  *  back to the agent, and a `fork` asks for a NEW artifact - the launcher's
  *  job (D-064), never a revise turn on this one, so the hub does not count it
  *  as its own to deliver. */
-const HUMAN_EVENTS: ReadonlySet<LogEventType> = new Set<LogEventType>([
-  "annotation",
-  "prompt",
-  "revert",
-  "question_answered",
-]);
-
 /** Default quiet window before a batch is driven: a burst of annotations sent
  *  together must arrive as ONE turn, not one turn per annotation. */
 export const DEFAULT_ATTEND_DEBOUNCE_MS = 3000;
@@ -123,23 +125,9 @@ export const resetSessionsInFlight = (): void => {
   sessionsInFlight.clear();
 };
 
-/** Seqs of human feedback nobody has taken delivery of yet. */
-export const pendingHumanSeqs = (
-  events: readonly LogEvent[],
-  deliveredUpTo: number,
-): readonly number[] =>
-  events.filter((e) => e.seq > deliveredUpTo && HUMAN_EVENTS.has(e.t)).map((e) => e.seq);
-
-/** Epoch ms of the newest ack in the log, or undefined when there is none. */
-const lastAckAt = (events: readonly LogEvent[]): number | undefined => {
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const e = events[i];
-    if (e?.t !== "agent_ack") continue;
-    const at = Date.parse(e.at);
-    return Number.isFinite(at) ? at : undefined;
-  }
-  return undefined;
-};
+// Re-exported from fold.ts (M5.1): the delivery-cursor helpers live with the
+// fold module. Tests that imported from attend.ts keep working.
+export { pendingHumanSeqs };
 
 export interface AttendDecisionInput {
   /** Human-feedback seqs past the delivered cursor. */
@@ -387,8 +375,16 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   const cooloffMs = options.cooloffMs ?? ATTEND_COOLOFF_MS;
   const orphanMinAgeMs = options.orphanMinAgeMs ?? DEFAULT_ORPHAN_MIN_AGE_MS;
 
-  let deliveredUpTo: number | undefined;
-  let firstPendingAt: number | undefined;
+  /** The delivery cursor (M5.1): pure transitions live in fold.ts.advance;
+   *  this object is the mutable state the evaluate loop carries across ticks.
+   *  lastLogStamp stays separate - it gates whether to read the log at all,
+   *  which is not a delivery-cursor transition. */
+  let cursor: DeliveryCursor = {
+    deliveredUpTo: undefined,
+    firstPendingAt: undefined,
+    ownClaimSeq: 0,
+    unfulfilledClaimAt: undefined,
+  };
   let inFlight = false;
   let fails = 0;
   let stopped = false;
@@ -396,17 +392,9 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   let pausedUntil = 0;
   /** Harness that caused a delivery pause. A deliberate switch bypasses it. */
   let pausedHarness: string | undefined;
-  /** The seq of our own outstanding delivery claim. Read back from the log it
-   *  would look like somebody else took the batch, and the turn it belongs to
-   *  is still being judged by its exit code. */
-  let ownClaimSeq = 0;
   /** Log identity (mtime + size) at the last full evaluation: an idle artifact
    *  must not re-read and re-fold its whole log once a second. */
   let lastLogStamp = "";
-  /** Epoch ms of a delivery claim that has produced nothing yet. While this is
-   *  set the watcher keeps evaluating on the CLOCK (the log will not change if
-   *  the turn that took the batch is dead), so the claim can time out. */
-  let unfulfilledClaimAt: number | undefined;
   /** Once-per-mount diagnostics: a missing recipe is a standing condition, not
    *  a per-poll event, so it must not fill the hub's output. */
   let saidUnattendable = false;
@@ -768,8 +756,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     if (revision === null) {
       // Pending, but nothing an agent can act on (a skipped question). Consume
       // it rather than re-deciding on it every poll.
-      deliveredUpTo = target;
-      firstPendingAt = undefined;
+      cursor = { ...cursor, deliveredUpTo: target, firstPendingAt: undefined };
       return;
     }
 
@@ -843,7 +830,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // for the whole headless turn instead of "recorded", and a second watcher
     // reading the log sees the batch is taken. The owner appends the ack, the
     // terminator, and everything between.
-    ownClaimSeq = target;
+    cursor = { ...cursor, ownClaimSeq: target };
     let outcome: TurnOutcome;
     try {
       outcome = await runTurn(planned, {
@@ -926,8 +913,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     if (code === 0) {
       // Advance only on a clean turn, so a failed one retries the batch
       // instead of silently swallowing the human's feedback.
-      deliveredUpTo = target;
-      firstPendingAt = undefined;
+      cursor = { ...cursor, deliveredUpTo: target, firstPendingAt: undefined };
       fails = 0;
       await reportSilentTurn(target, outcome.outputFrom);
       return;
@@ -1025,8 +1011,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     if (
       stamp !== undefined &&
       stamp === lastLogStamp &&
-      firstPendingAt === undefined &&
-      unfulfilledClaimAt === undefined
+      cursor.firstPendingAt === undefined &&
+      cursor.unfulfilledClaimAt === undefined
     ) {
       return;
     }
@@ -1106,8 +1092,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
         // best-effort, and a failed one must not leave the cheap gate
         // believing nothing changed. Then re-read - the fold in hand predates
         // the terminators.
-        deliveredUpTo = answeredMark(events);
-        ownClaimSeq = closedClaimMax;
+        cursor = { ...cursor, deliveredUpTo: answeredMark(events), ownClaimSeq: closedClaimMax };
         lastLogStamp = "";
         return;
       }
@@ -1122,61 +1107,19 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // with no turn, no error, and nothing in the log to explain why.
     //
     // Un-acked is un-delivered, by the same definition the panel displays, so
-    // this drives it once - as ONE batched turn - and then advances normally.
-    if (deliveredUpTo === undefined) {
-      // Adopt the log's OWN delivered mark - the last batch an agent acked -
-      // not the current high seq. High seq meant "everything already in the
-      // log is someone else's problem", which silently swallowed the one case
-      // attend mode exists for: feedback sent while nothing was mounted (the
-      // hub restarted, the tab was closed, the artifact was dormant). The
-      // human saw it sit at "recorded" forever with no turn and no error.
-      deliveredUpTo = state.deliveredThroughSeq;
+    // Advance the delivery cursor through the pure transitions (M5.1):
+    // first-pass adoption, unanswered-claim rollback, foreign-claim adoption,
+    // and pending tracking. The reducer lives in fold.ts.advance; this loop
+    // owns only the impure parts (reading the log, folding, spawning).
+    cursor = advance(cursor, state, events, { now, workingGraceMs, inFlight });
+    // A deliveredUpTo below the fold's deliveredThroughSeq can only mean the
+    // unanswered-claim rollback fired inside advance: adoption and foreign-
+    // claim adoption both move deliveredUpTo UP to deliveredThroughSeq, never
+    // below it.
+    if (cursor.deliveredUpTo !== undefined && cursor.deliveredUpTo < state.deliveredThroughSeq) {
+      log(`attend ${paths.name}: a delivery claim went unanswered - re-driving that batch`);
     }
-
-    // A claim nobody honoured. Delivery is recorded BEFORE the turn runs (D20),
-    // so a turn that then died - a crashed agent, a hub killed mid-turn, a
-    // resume that exited non-zero and was never retried - leaves an ack
-    // covering feedback nothing acted on, and the human's message sits marked
-    // "delivered" forever. An open working window (ack, no agent output since)
-    // older than the grace is that state, by the same staleness rule
-    // attendDecision uses for a live one.
-    //
-    // Checked every pass, not just the first: a claim usually goes stale while
-    // the hub is UP, minutes after the watcher started.
-    const ackAt = lastAckAt(events);
-    unfulfilledClaimAt = state.agentWorking !== null ? ackAt : undefined;
-    if (
-      unfulfilledClaimAt !== undefined &&
-      now - unfulfilledClaimAt > workingGraceMs &&
-      !inFlight &&
-      ownClaimSeq !== state.deliveredThroughSeq &&
-      deliveredUpTo === state.deliveredThroughSeq
-    ) {
-      // The last batch that was actually ANSWERED - not simply the previous
-      // ack. Retrying the same batch writes another ack covering the same
-      // seqs, so "the ack before this one" converged on the current mark and
-      // the rollback below could never fire: fifteen failed turns, fifteen
-      // acks, and feedback pinned at "delivered" that nothing had read.
-      const priorMark = answeredMark(events);
-      if (priorMark < deliveredUpTo) {
-        log(`attend ${paths.name}: a delivery claim went unanswered - re-driving that batch`);
-        deliveredUpTo = priorMark;
-        // Disown it, or the "somebody else took this batch" rule below
-        // re-adopts it from the very same log on this same pass.
-        ownClaimSeq = state.deliveredThroughSeq;
-        unfulfilledClaimAt = undefined;
-      }
-    }
-    // Delivery SOMEBODY ELSE took: an interactive agent's ack names the batch
-    // it read, so the hub steps aside rather than running the same turn again
-    // in the gap after that agent's wait returns. Our own outstanding claim is
-    // excluded - its turn is still being judged by its exit code.
-    if (state.deliveredThroughSeq > deliveredUpTo && state.deliveredThroughSeq !== ownClaimSeq) {
-      deliveredUpTo = state.deliveredThroughSeq;
-      firstPendingAt = undefined;
-    }
-    const pendingFeedbackSeqs = pendingHumanSeqs(events, deliveredUpTo);
-    firstPendingAt = pendingFeedbackSeqs.length === 0 ? undefined : (firstPendingAt ?? now);
+    const pendingFeedbackSeqs = pendingHumanSeqs(events, cursor.deliveredUpTo ?? 0);
     // A working window OUR OWN dead turn opened must not gate the retry. The
     // window exists to keep the hub out while somebody else edits; when the
     // claim is ours and the process has already exited, there is nobody to
@@ -1184,12 +1127,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // every failed turn into ten minutes of silence, which is what made this
     // look like nothing was happening at all.
     const ourDeadClaim =
-      !inFlight && ownClaimSeq !== 0 && state.deliveredThroughSeq === ownClaimSeq;
+      !inFlight && cursor.ownClaimSeq !== 0 && state.deliveredThroughSeq === cursor.ownClaimSeq;
     const verdict = attendReason({
       pendingFeedbackSeqs,
       listening: options.agentsListening(),
       workingSince: state.agentWorking && !ourDeadClaim ? lastAckAt(events) : undefined,
-      firstPendingAt,
+      firstPendingAt: cursor.firstPendingAt,
       now,
       inFlight,
       debounceMs,
@@ -1226,7 +1169,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // second poll decide "spawn" on the same batch and run a duplicate agent.
     inFlight = true;
     try {
-      await driveTurn(state, deliveredUpTo);
+      await driveTurn(state, cursor.deliveredUpTo ?? 0);
     } finally {
       inFlight = false;
     }

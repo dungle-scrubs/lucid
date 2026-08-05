@@ -707,6 +707,117 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
 export const versionRef = (state: FoldedState, version: number): VersionRef | undefined =>
   state.versions.find((v) => v.version === version);
 
+/** Event types a HUMAN produces (as opposed to agent output). Used by
+ *  `pendingHumanSeqs` to find feedback nobody has taken delivery of yet. */
+const HUMAN_EVENTS: ReadonlySet<string> = new Set([
+  "annotation",
+  "prompt",
+  "revert",
+  "question_answered",
+]);
+
+/** Seqs of human feedback nobody has taken delivery of yet. Pure: a function
+ *  of events and the delivery boundary. */
+export const pendingHumanSeqs = (
+  events: readonly LogEvent[],
+  deliveredUpTo: number,
+): readonly number[] =>
+  events.filter((e) => e.seq > deliveredUpTo && HUMAN_EVENTS.has(e.t)).map((e) => e.seq);
+
+/** Epoch ms of the newest ack in the log, or undefined when there is none. */
+export const lastAckAt = (events: readonly LogEvent[]): number | undefined => {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const e = events[i];
+    if (e?.t !== "agent_ack") continue;
+    const at = Date.parse(e.at);
+    return Number.isFinite(at) ? at : undefined;
+  }
+  return undefined;
+};
+
+/** The delivery cursor (M5.1): the mutable delivery-ack state the attend
+ *  engine carries across ticks. Pure transitions are encapsulated in
+ *  `advance`; the caller owns the impure parts (reading the log, folding,
+ *  spawning turns). */
+export interface DeliveryCursor {
+  /** The highest seq the attend engine has driven a turn for. Undefined until
+   *  the first pass adopts the log's own delivered mark. */
+  readonly deliveredUpTo: number | undefined;
+  /** Epoch ms of the first pending human event in the current batch, or
+   *  undefined when nothing is pending. */
+  readonly firstPendingAt: number | undefined;
+  /** The seq of our own outstanding delivery claim. Read back from the log it
+   *  would look like somebody else took the batch, and the turn it belongs to
+   *  is still being judged by its exit code. */
+  readonly ownClaimSeq: number;
+  /** Epoch ms of a delivery claim that has produced nothing yet. While set,
+   *  the watcher keeps evaluating on the CLOCK (the log will not change if
+   *  the turn that took the batch is dead), so the claim can time out. */
+  readonly unfulfilledClaimAt: number | undefined;
+}
+
+/** Advance the delivery cursor by one evaluate pass. Pure: given the current
+ *  cursor, the fold's delivery-related fields, the events, and timing
+ *  parameters, returns the next cursor state. The four transitions:
+ *
+ *  1. First-pass adoption: a fresh attendant adopts the log's own delivered
+ *     mark (not high seq) so un-acked feedback is driven once.
+ *  2. Unanswered-claim rollback: our own claim with no agent output past the
+ *     grace rolls back to the last ANSWERED mark.
+ *  3. Foreign-claim adoption: another agent's larger claim is adopted, and
+ *     pending is cleared (the batch is theirs).
+ *  4. Pending tracking: `firstPendingAt` opens on the first pending event and
+ *     closes when nothing is pending. */
+export const advance = (
+  cursor: DeliveryCursor,
+  fold: {
+    readonly deliveredThroughSeq: number;
+    readonly agentWorking: unknown;
+  },
+  events: readonly LogEvent[],
+  opts: {
+    readonly now: number;
+    readonly workingGraceMs: number;
+    readonly inFlight: boolean;
+  },
+): DeliveryCursor => {
+  // 1. First-pass adoption.
+  let deliveredUpTo = cursor.deliveredUpTo ?? fold.deliveredThroughSeq;
+  let firstPendingAt = cursor.firstPendingAt;
+  let ownClaimSeq = cursor.ownClaimSeq;
+  let unfulfilledClaimAt = cursor.unfulfilledClaimAt;
+
+  // 2. Unanswered-claim tracking + rollback.
+  const ackAt = lastAckAt(events);
+  unfulfilledClaimAt = fold.agentWorking !== null ? ackAt : undefined;
+  if (
+    unfulfilledClaimAt !== undefined &&
+    opts.now - unfulfilledClaimAt > opts.workingGraceMs &&
+    !opts.inFlight &&
+    ownClaimSeq !== fold.deliveredThroughSeq &&
+    deliveredUpTo === fold.deliveredThroughSeq
+  ) {
+    const priorMark = answeredMark(events);
+    if (priorMark < deliveredUpTo) {
+      deliveredUpTo = priorMark;
+      ownClaimSeq = fold.deliveredThroughSeq;
+      unfulfilledClaimAt = undefined;
+    }
+  }
+
+  // 3. Foreign-claim adoption.
+  if (fold.deliveredThroughSeq > deliveredUpTo && fold.deliveredThroughSeq !== ownClaimSeq) {
+    deliveredUpTo = fold.deliveredThroughSeq;
+    firstPendingAt = undefined;
+  }
+
+  // 4. Pending tracking.
+  const pending = pendingHumanSeqs(events, deliveredUpTo);
+  firstPendingAt = pending.length === 0 ? undefined : (firstPendingAt ?? opts.now);
+
+  return { deliveredUpTo, firstPendingAt, ownClaimSeq, unfulfilledClaimAt };
+};
+
 /** The highest delivery mark that was FOLLOWED by agent output - a batch some
  *  turn actually answered, rather than one a turn merely claimed.
  *
