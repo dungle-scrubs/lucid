@@ -1097,3 +1097,91 @@ describe("no request escapes the record (adversarial review of #89)", () => {
     expect(exit).toBeDefined();
   });
 });
+
+// ---- M5.4 coexistence + regression tests --------------------------------
+
+test("coexistence: the daemon HOSTS when no dedicated server is live", async () => {
+  const scanned = await seedSession("proj", "hosted-session");
+  daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+  const id = sessionId(scanned);
+  // No server descriptor: nothing to discover, so the daemon hosts.
+  const res = await get(daemon.port, `/s/${id}/__lucid/identity`);
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { session: string; port: number };
+  expect(body.session).toBe(scanned);
+  expect(body.port).toBe(daemon.port);
+  // The descriptor the mount wrote names THIS daemon.
+  const paths = sessionPaths(scanned);
+  const desc = JSON.parse(await Bun.file(paths.serverJson).text()) as {
+    port: number;
+    pid: number;
+  };
+  expect(desc.port).toBe(daemon.port);
+  expect(desc.pid).toBe(process.pid);
+});
+
+test("coexistence: the daemon PROXIES to a live dedicated server", async () => {
+  const scanned = await seedSession("proj", "proxied-session");
+  const paths = sessionPaths(scanned);
+
+  // A stub dedicated server that answers identity with its own port.
+  let innerPort = 0;
+  const inner = Bun.serve({
+    port: 0,
+    fetch: (req): Response => {
+      const { pathname } = new URL(req.url);
+      if (pathname === "/__lucid/identity")
+        return Response.json({ lucid: true, session: scanned, port: innerPort, version: 1 });
+      return new Response("inner server response", {
+        headers: { "content-type": "text/plain" },
+      });
+    },
+  });
+  innerPort = inner.port ?? 0;
+
+  // Write a descriptor pointing to the stub: the daemon should discover it
+  // and proxy, not host.
+  await writeFile(
+    paths.serverJson,
+    JSON.stringify({ port: inner.port, pid: process.pid, startedAt: new Date(0).toISOString() }),
+  );
+
+  try {
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+    const id = sessionId(scanned);
+    const res = await get(daemon.port, `/s/${id}/__lucid/state`);
+    // The stub answers with plain text; a mount would answer with JSON.
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("inner server response");
+  } finally {
+    inner.stop();
+  }
+});
+
+test("regression: a stale descriptor naming our own port does not cause route recursion", async () => {
+  const scanned = await seedSession("proj", "stale-descriptor");
+  const paths = sessionPaths(scanned);
+
+  // Start the daemon first so we know its port.
+  daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+
+  // Write a descriptor naming the DAEMON'S OWN port but with no mount behind
+  // it - exactly what a previous hub life on the same port leaves behind.
+  await writeFile(
+    paths.serverJson,
+    JSON.stringify({
+      port: daemon.port,
+      pid: process.pid,
+      startedAt: new Date(0).toISOString(),
+    }),
+  );
+
+  // Request the session: the daemon must short-circuit the stale descriptor
+  // (port matches our own) and mount, not discover-and-recurse.
+  const id = sessionId(scanned);
+  const res = await get(daemon.port, `/s/${id}/__lucid/identity`);
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { session: string; port: number };
+  // If this answered, there was no recursion (recursion would hang or 500).
+  expect(body.port).toBe(daemon.port);
+});
