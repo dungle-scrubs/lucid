@@ -10,7 +10,7 @@ import {
 } from "../core/attendant.ts";
 import { deliver } from "../core/deliver.ts";
 import type { LogEvent, LogEventType } from "../core/events.ts";
-import { foldLog, type FoldedState, WORKING_GRACE_MS } from "../core/fold.ts";
+import { answeredMark, foldLog, type FoldedState, WORKING_GRACE_MS } from "../core/fold.ts";
 import { normalizeHarness } from "../core/harness.ts";
 import { readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
@@ -631,29 +631,6 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       /* the turn already succeeded; relaying its words is best-effort */
     });
     log(`attend ${paths.name}: the turn changed nothing and said so - relayed its reply`);
-  };
-
-  /**
-   * The highest delivery mark that was FOLLOWED by agent output - a batch some
-   * turn actually answered, rather than one a turn merely claimed.
-   *
-   * Delivery is acked before the turn runs (D20), so an ack alone proves nothing
-   * about whether the work happened. This is what a stale claim rolls back to.
-   */
-  const answeredMark = (events: readonly LogEvent[]): number => {
-    let openMark: number | undefined;
-    let answered = 0;
-    for (const e of events) {
-      if (e.t === "agent_ack") {
-        openMark = (e as { covers?: number }).covers ?? openMark;
-        continue;
-      }
-      if (e.t === "version" || e.t === "agent_reply" || e.t === "question") {
-        if (openMark !== undefined) answered = Math.max(answered, openMark);
-        openMark = undefined;
-      }
-    }
-    return answered;
   };
 
   /** Drive one revise turn for everything pending up to `state.highSeq`. */
