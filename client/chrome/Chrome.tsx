@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { shouldRefocusArtifactOnCopy } from "./copy-keymap.ts";
 import { validateOverlayMessage, type OverlayValidationRecord } from "../shared/protocol.ts";
 import { SessionProvider, useSession } from "./context.tsx";
 import { selectOutlineGeneration, selectOutlineHealthCode } from "./store.ts";
@@ -47,6 +48,29 @@ const isTextEntry = (node: EventTarget | null): boolean =>
   node instanceof HTMLInputElement ||
   (node instanceof HTMLElement && node.isContentEditable);
 
+/** True when the focused chrome text-entry field has a selection of its own -
+ *  i.e. there is something IN the field to copy, so copy redirection must
+ *  stand aside and let native copy target the field.
+ *
+ *  The Selection API does NOT reflect a form control's selection: a textarea
+ *  with text selected reads `window.getSelection().isCollapsed === true` even
+ *  though it plainly has a selection to copy (the selection lives on the
+ *  element as selectionStart/End). contentEditable DOES flow through the
+ *  Selection API, so the check branches on the element type. Reading only
+ *  `getSelection()` here would redirect a real in-field copy of the
+ *  annotation note - the exact failure the parent-selection guard exists to
+ *  prevent. */
+const chromeFieldHasSelection = (node: EventTarget | null): boolean => {
+  if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
+    return node.selectionStart !== node.selectionEnd;
+  }
+  if (node instanceof HTMLElement && node.isContentEditable) {
+    const sel = window.getSelection();
+    return sel !== null && !sel.isCollapsed;
+  }
+  return false;
+};
+
 /**
  * Everything window-level for the ACTIVE session: the overlay postMessage
  * bridge, the chrome's custom events, and the keyboard map. A hook rather
@@ -60,7 +84,12 @@ const isTextEntry = (node: EventTarget | null): boolean =>
  * single-session viewer, but under the shell those digits belong to the
  * session tab bar and the Sessions panel does not exist.
  */
-const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: boolean): void => {
+const useSessionWiring = (
+  session: SessionHandle,
+  panelDigits: boolean,
+  active: boolean,
+  iframeRef: React.RefObject<HTMLIFrameElement | null>,
+): void => {
   useEffect(() => {
     session.surface.setOutlineActive(active);
     // A hidden tab's view stays mounted (drafts survive switching), but only
@@ -209,6 +238,42 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
     };
     window.addEventListener("keydown", onPanelKey);
 
+    // Copy redirection. The composer auto-focuses its note textarea after a
+    // target pick (correct, and asserted by the loop e2e), which moves focus
+    // off the opaque-origin artifact iframe. The artifact's text stays visually
+    // selected, but the focused document is now the parent - so the browser's
+    // native copy targets the parent and copies nothing. This handler restores
+    // native copy without touching that focus policy: when ⌘C/Ctrl+C lands on a
+    // chrome text field that holds no selection of its own, it refocuses the
+    // iframe and lets the default copy run against it. Capture phase so the
+    // focus change is in place before the browser's default copy action; never
+    // preventDefault, because the whole point is to let native copy proceed.
+    // See `copy-keymap.ts` for the decision table this reads through.
+    const onCopyKey = (e: KeyboardEvent): void => {
+      if (
+        !shouldRefocusArtifactOnCopy(
+          {
+            key: e.key,
+            code: e.code,
+            metaKey: e.metaKey,
+            ctrlKey: e.ctrlKey,
+            shiftKey: e.shiftKey,
+            altKey: e.altKey,
+          },
+          {
+            textEntryFocused: isTextEntry(document.activeElement),
+            parentSelectionCollapsed: !chromeFieldHasSelection(document.activeElement),
+          },
+        )
+      )
+        return;
+      // The session's OWN attached surface, never a global querySelector: under
+      // tabs/multiple sessions each must refocus its own frame, and a stale or
+      // other-session frame would both miss and misroute.
+      iframeRef.current?.contentWindow?.focus();
+    };
+    window.addEventListener("keydown", onCopyKey, true);
+
     return () => {
       window.removeEventListener("message", onMessage);
       window.removeEventListener("lucid:focus-annotation", onFocusAnnotation);
@@ -217,9 +282,10 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
       window.removeEventListener("keydown", onDiffKey);
       window.removeEventListener("keydown", onSendKey);
       window.removeEventListener("keydown", onPanelKey);
+      window.removeEventListener("keydown", onCopyKey, true);
       surface.setOutlineActive(false);
     };
-  }, [session, panelDigits, active]);
+  }, [session, panelDigits, active, iframeRef]);
 };
 
 /**
@@ -374,7 +440,13 @@ export const SessionView = ({
   // Render state (not a ref): the slide duration is a style the panel reads.
   const [resizing, setResizing] = useState(false);
 
-  useSessionWiring(session, !shell, active);
+  // The session's own artifact frame, kept as a ref alongside the surface's
+  // attachment so the copy-redirection handler can focus THIS session's frame
+  // without a global querySelector (which under tabs would route to the wrong
+  // session's iframe).
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  useSessionWiring(session, !shell, active, iframeRef);
   useEffect(
     () => () => {
       stopDrag.current?.();
@@ -388,7 +460,10 @@ export const SessionView = ({
   // onLoad-as-ready - would be lost). Stable per session so React does not
   // detach/re-attach on every render.
   const attachSurface = useCallback(
-    (el: HTMLIFrameElement | null) => session.surface.attach(el),
+    (el: HTMLIFrameElement | null) => {
+      iframeRef.current = el;
+      session.surface.attach(el);
+    },
     [session],
   );
 
