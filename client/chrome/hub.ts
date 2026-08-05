@@ -20,7 +20,7 @@ export interface CreateTurnEntry {
   readonly lastProgressElapsedMs: number | null;
   readonly failure: {
     readonly artifact: string;
-    readonly code: number;
+    readonly code: string | number;
     readonly tail: string;
   } | null;
 }
