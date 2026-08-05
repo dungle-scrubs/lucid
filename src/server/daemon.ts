@@ -3,12 +3,7 @@ import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, stat } from "node:fs/promises";
 import { attentionOf } from "../core/attention.ts";
 import { recordPendingIdentity } from "../core/attendant.ts";
-import {
-  ARTIFACT_DIR,
-  canonicalArtifactPath,
-  sessionPaths,
-  type SessionPaths,
-} from "../core/paths.ts";
+import { ARTIFACT_DIR, canonicalArtifactPath, sessionPaths } from "../core/paths.ts";
 import {
   addRoot,
   defaultRoots,
@@ -18,16 +13,11 @@ import {
   type RegistryEntry,
   scanRoots,
 } from "../core/registry.ts";
-import {
-  discoverLiveServer,
-  loopbackFetch,
-  removeServerDescriptor,
-  readServerDescriptor,
-  writeServerDescriptor,
-} from "./discovery.ts";
+import { discoverLiveServer, loopbackFetch, readServerDescriptor } from "./discovery.ts";
 import { artifactDocumentResponse, shellResponse, viewerResponse } from "./viewer.ts";
 import { projectOf } from "../core/project.ts";
 import { createListing, type Listing } from "./listing.ts";
+import { createMounts, type Mount } from "./mounts.ts";
 import { parseTitle } from "../core/title.ts";
 import { planTurn, runTurn, type TurnOutcome } from "../launch/turn.ts";
 import { readEvents, sessionStateCacheStats, sessionStateSync } from "../core/log.ts";
@@ -55,7 +45,6 @@ import type {
   HubSessionsResponse,
 } from "../protocol/hub.ts";
 import type { HarnessInfo } from "../protocol/wire.ts";
-import { createAttendant, type Attendant } from "./attend.ts";
 import {
   cliRequestId,
   sinkStatus,
@@ -80,7 +69,6 @@ import {
 } from "./live.ts";
 import { hubPort, portBase } from "./ports.ts";
 import { validateHeaders } from "./security.ts";
-import { createSessionHost, type SessionHost } from "./session-host.ts";
 
 /**
  * The always-on hub daemon (Model B). One long-lived loopback process that
@@ -263,15 +251,6 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
 
   // ---- session mounts -------------------------------------------------------
 
-  interface Mount {
-    readonly paths: SessionPaths;
-    readonly host: SessionHost;
-    readonly idleTimer: ReturnType<typeof setInterval>;
-    /** Attend mode only: this artifact's delivery watcher and its timer. */
-    readonly attendant?: Attendant;
-    readonly attendTimer?: ReturnType<typeof setInterval>;
-  }
-
   /** Artifact paths a `POST /hub/create` turn is currently authoring. The
    *  file does not exist until the agent writes it, so the "does it exist"
    *  check cannot see an authoring run in progress. */
@@ -280,6 +259,16 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   /** id -> artifact path, refreshed from every listing pass. The id space is
    *  derived (hash of path), so this map is a cache, not a source of truth. */
   const idToArtifact = new Map<string, string>();
+  const _mountsApi = createMounts({
+    log,
+    port: () => port,
+    stopped: () => stopped,
+    sessionPaths,
+    upgrade,
+    sessionIdleMs,
+    attend,
+    attendPollMs,
+  });
   /** Sessions the daemon itself hosts right now, by id. */
   const mounts = new Map<string, Mount>();
 
@@ -347,113 +336,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   /** Unmount a hosted session: close its streams/watchers and release the
    *  descriptor if it is ours. Appends nothing (suspend is the caller's call). */
   const evict = async (id: string): Promise<void> => {
-    const mount = mounts.get(id);
-    if (!mount) return;
-    log(`[hub] session ${id}: evicting (${mount.paths.artifactPath})`);
     mounts.delete(id);
-    clearInterval(mount.idleTimer);
-    if (mount.attendTimer) clearInterval(mount.attendTimer);
-    mount.attendant?.stop();
-    mount.host.stop();
-    // Only remove OUR descriptor: a dedicated server that took over meanwhile
-    // owns the file now.
-    const desc = await readServerDescriptor(mount.paths);
-    if (desc && desc.pid === process.pid) await removeServerDescriptor(mount.paths);
+    await _mountsApi.evict(id);
   };
-
-  /** Host a session in-process (idempotent). The single owner (M5.4): checks
-   *   for a live dedicated server internally, so callers never discover
-   *   unconditionally. All-or-nothing: a mount that cannot finish must not
-   *   stay half registered. Returns undefined when a dedicated server owns
-   *   the session (caller proxies). */
   const mount = async (id: string, artifact: string): Promise<Mount | undefined> => {
-    if (stopped) throw new Error("daemon is stopping");
-    // Never over a live dedicated server - that stays the one appender.
-    const live = await discoverLiveServer(sessionPaths(artifact));
-    if (live && live.port !== port) {
-      log(`[hub] session ${id}: proxied to dedicated server on port ${live.port}`);
-      return undefined;
-    }
-    log(`[hub] session ${id}: hosting ${artifact}`);
-    const existing = mounts.get(id);
-    if (existing) return existing;
-    const paths = sessionPaths(artifact);
-    // Sessions recorded before the record moved out of `.lucid/` are listed by
-    // the scan and must OPEN, not just appear: mounting one moves it forward.
-    const base = `/s/${id}`;
-    const host = createSessionHost(paths, {
-      getPort: () => port,
-      base,
-      // The mount's selection route validates against the SAME registry the
-      // hub's create and attend paths use (tests inject their own).
-      ...(opts.harnessesPath !== undefined ? { harnessesPath: opts.harnessesPath } : {}),
-      onEnded: () => void evict(id),
-      // Only the process that bound the port can upgrade, and every mount
-      // shares this one. The socket's join closes over THIS host, so the
-      // channel-agnostic handler needs to know nothing about mounts.
-      upgrade,
-    });
-    const idleTimer = setInterval(
-      () => {
-        if (Date.now() - host.lastActivityAt() > sessionIdleMs) {
-          void (async () => {
-            // Same semantics as a dedicated server's idle-suspend: subscribers
-            // learn of it, the log records it, memory is released. The log is
-            // untouched otherwise - reopening refolds. A refused suspend means
-            // a subscriber connected inside the check-to-append gap - the
-            // session is live again, so it stays mounted.
-            if (await host.suspend()) await evict(id);
-          })();
-        }
-      },
-      Math.min(sessionIdleMs, 5000),
-    );
-    // Attend mode: one delivery watcher per mount, reading THIS session's
-    // listener count so a live interactive attendant always wins.
-    const attendant = attend
-      ? createAttendant({
-          paths,
-          agentsListening: () => host.agentsListening(),
-          warn: (code, message) => host.warn(code, message),
-          ...(opts.harnessesPath !== undefined ? { harnessesPath: opts.harnessesPath } : {}),
-          ...(opts.attendDebounceMs !== undefined ? { debounceMs: opts.attendDebounceMs } : {}),
-          // So a turn this hub spawns opens its artifact back into THIS hub.
-          hubPort: port,
-          log,
-        })
-      : undefined;
-    // Evaluate immediately, not a poll interval from now: the first pass adopts
-    // the log's high seq as delivered, so anything appended before it would be
-    // read as already-taken backlog.
-    if (attendant) void attendant.tick();
-    const attendTimer = attendant
-      ? setInterval(() => void attendant.tick(), attendPollMs)
-      : undefined;
-    const created: Mount = {
-      paths,
-      host,
-      idleTimer,
-      ...(attendant ? { attendant } : {}),
-      ...(attendTimer ? { attendTimer } : {}),
-    };
-    mounts.set(id, created);
-    try {
-      await writeServerDescriptor(paths, {
-        port,
-        pid: process.pid,
-        session: paths.artifactPath,
-        startedAt: new Date().toISOString(),
-        base,
-      });
-    } catch (err) {
-      mounts.delete(id);
-      clearInterval(idleTimer);
-      if (attendTimer) clearInterval(attendTimer);
-      attendant?.stop();
-      host.stop();
-      throw err;
-    }
-    return created;
+    const m = await _mountsApi.mount(id, artifact);
+    if (m !== undefined) mounts.set(id, m);
+    return m;
   };
 
   /** Hop-by-hop and trust-bearing headers that must not travel through the
