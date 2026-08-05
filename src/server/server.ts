@@ -92,7 +92,7 @@ export const runServer = async (
         // Attached here, not per route: a dedicated server serves exactly ONE
         // artifact, so its identity is a property of the server.
         observation.attach({ artifact: paths.artifactPath });
-        return host.handle(req);
+        return host.handle(req, undefined, observation);
       },
     });
   } catch (err) {

@@ -127,6 +127,34 @@ describe("hub daemon", () => {
     expect(folded.version).toBe(1);
   });
 
+  test("a mounted route's exit record carries the artifact (M3.3, DF-1c)", async () => {
+    const scanned = await seedSession("proj", "recorded");
+    await writeFile(sessionPaths(scanned).currentHtml, "<h1 data-lucid-id='t'>Recorded</h1>");
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    const id = sessionId(scanned);
+    const res = await get(daemon.port, `/s/${id}/__lucid/identity`);
+    expect(res.status).toBe(200);
+    // The hub's request log is the sink: one JSON record line per request.
+    // Find the exit record for the mounted identity route and assert the
+    // artifact identity rode with it (the host attaches it via observation).
+    const records = lines
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l) as { artifact?: string; path?: string; status?: number });
+    // The exit record (the one with a status) carries the artifact the host
+    // attached; the entry record for the same path does not yet.
+    const mine = records.find(
+      (r) => r.path === `/s/${id}/__lucid/identity` && r.status !== undefined,
+    );
+    expect(mine, "no exit record for the mounted identity route").toBeDefined();
+    expect(mine?.artifact).toBe(scanned);
+  });
+
   /**
    * The stand-in document, in the two states "nothing to serve" can mean.
    *

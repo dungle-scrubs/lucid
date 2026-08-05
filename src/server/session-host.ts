@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import { parseHTML } from "linkedom";
 import { basename, join } from "node:path";
@@ -42,6 +43,7 @@ import type { SessionPaths } from "../core/paths.ts";
 import { listSessions, projectRoot } from "../core/sessions.ts";
 import { atomicWrite, commitAgainstSnapshot, readArtifact } from "../core/session.ts";
 import { createArtifactWatch } from "./artifact-watch.ts";
+import type { ErrorIdentity, RequestObservation } from "./observe.ts";
 import { escapeHtml } from "../core/escape.ts";
 import {
   defaultRecipe,
@@ -78,6 +80,21 @@ import { artifactDocumentResponse, viewerResponse } from "./viewer.ts";
  */
 
 const DEFAULT_DEBOUNCE_MS = 150;
+
+/**
+ * The current request's observation, for guard refusals that live in the route
+ * handlers (the decode refusals) to record without threading the observation
+ * through every handler signature. Set at the top of `handle` per request;
+ * each request is its own async frame, so one store cannot leak into another.
+ */
+const observationContext = new AsyncLocalStorage<RequestObservation | undefined>();
+/** Record a typed guard refusal onto the current request's observation, if any.
+ *  The decode refusals carry a string reason (not a typed error), so the
+ *  identity is synthesized from the refusal kind; the RESPONSE still carries
+ *  the reason. */
+const recordRefusal = (identity: ErrorIdentity): void => {
+  observationContext.getStore()?.fail(identity);
+};
 
 /** Accepted pasted-image content types -> extension. */
 const IMAGE_EXT: Readonly<Record<string, string>> = {
@@ -220,7 +237,11 @@ export interface SessionHostOptions {
 export interface SessionHost {
   /** Serve one session-relative request. `pathname` overrides the URL's own
    *  path so a mounting owner can strip its prefix. */
-  readonly handle: (req: Request, pathname?: string) => Promise<Response>;
+  readonly handle: (
+    req: Request,
+    pathname?: string,
+    observation?: RequestObservation,
+  ) => Promise<Response>;
   /** Append + broadcast session_suspended, unless a subscriber arrived since
    *  the owner's idle check or the log already moved on. True = go ahead and
    *  stop/evict; false = the session is live again, leave it mounted. */
@@ -341,14 +362,20 @@ export const createSessionHost = (
 
   const handleAnnotation = async (req: Request): Promise<Response> => {
     const result = decodeAnnotation(await req.json().catch(() => null));
-    if (!result.ok) return json({ error: result.error }, 400);
+    if (!result.ok) {
+      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+      return json({ error: result.error }, 400);
+    }
     await serverAppend([result.value]);
     return json({ ok: true });
   };
 
   const handleFork = async (req: Request): Promise<Response> => {
     const result = decodeFork(await req.json().catch(() => null));
-    if (!result.ok) return json({ error: result.error }, 400);
+    if (!result.ok) {
+      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+      return json({ error: result.error }, 400);
+    }
     await serverAppend([result.value]);
     return json({ ok: true });
   };
@@ -356,7 +383,10 @@ export const createSessionHost = (
   const handleMessage = async (req: Request): Promise<Response> => {
     const raw = await req.json().catch(() => null);
     const result = decodeMessage(raw);
-    if (!result.ok) return json({ error: result.error }, 400);
+    if (!result.ok) {
+      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+      return json({ error: result.error }, 400);
+    }
     // The session check stays in the handler: it reads `paths.artifactPath`,
     // which the decoder (a pure function of the body) does not know.
     if (
@@ -565,7 +595,10 @@ export const createSessionHost = (
 
   const handleRevert = async (req: Request): Promise<Response> => {
     const result = decodeRevert(await req.json().catch(() => null));
-    if (!result.ok) return json({ error: result.error }, 400);
+    if (!result.ok) {
+      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+      return json({ error: result.error }, 400);
+    }
     await serverAppend([result.value]);
     return json({ ok: true });
   };
@@ -579,7 +612,10 @@ export const createSessionHost = (
    */
   const handleRename = async (req: Request): Promise<Response> => {
     const result = decodeRename(await req.json().catch(() => null));
-    if (!result.ok) return json({ error: result.error }, 400);
+    if (!result.ok) {
+      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+      return json({ error: result.error }, 400);
+    }
     const { title, replaces } = result.value;
     const html = await readArtifact(paths);
     // The DOCUMENT's title, by parsing - a bare regex over source finds the
@@ -663,7 +699,10 @@ export const createSessionHost = (
 
   const handleAck = async (req: Request): Promise<Response> => {
     const result = decodeAck(await req.json().catch(() => null));
-    if (!result.ok) return json({ error: result.error }, 400);
+    if (!result.ok) {
+      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+      return json({ error: result.error }, 400);
+    }
     await serverAppend([result.value]);
     return json({ ok: true });
   };
@@ -698,14 +737,20 @@ export const createSessionHost = (
    */
   const handleTurnEnded = async (req: Request): Promise<Response> => {
     const result = decodeTurnEnded(await req.json().catch(() => null));
-    if (!result.ok) return json({ error: result.error }, 400);
+    if (!result.ok) {
+      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+      return json({ error: result.error }, 400);
+    }
     await serverAppend([result.value]);
     return json({ ok: true });
   };
 
   const handleReply = async (req: Request): Promise<Response> => {
     const result = decodeReply(await req.json().catch(() => null));
-    if (!result.ok) return json({ error: result.error }, 400);
+    if (!result.ok) {
+      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+      return json({ error: result.error }, 400);
+    }
     await serverAppend([result.value]);
     return json({ ok: true });
   };
@@ -823,9 +868,20 @@ export const createSessionHost = (
     return json(response);
   };
 
-  const handle = async (req: Request, pathnameOverride?: string): Promise<Response> => {
+  const handle = async (
+    req: Request,
+    pathnameOverride?: string,
+    observation?: RequestObservation,
+  ): Promise<Response> => {
     const url = new URL(req.url);
     const pathname = pathnameOverride ?? url.pathname;
+    if (observation) {
+      // Attach the artifact so a mounted route's exit record carries it
+      // (DF-1c). The host attaches; the record lifecycle (end) stays with
+      // observeRequests.
+      observation.attach({ artifact: paths.artifactPath });
+      observationContext.enterWith(observation);
+    }
 
     // The overlay bootstrap bundle is a public static asset. It must be
     // reachable from the sandboxed artifact iframe, which loads it cross-origin
@@ -836,6 +892,7 @@ export const createSessionHost = (
 
     const headerCheck = validateHeaders(req, options.getPort());
     if (!headerCheck.ok) {
+      recordRefusal({ _tag: "ForbiddenError", code: "FORBIDDEN" });
       return json({ error: `forbidden: ${headerCheck.reason}` }, 403);
     }
     touch();
@@ -925,7 +982,10 @@ export const createSessionHost = (
     if (pathname === "/__lucid/context" && req.method === "POST") return handleContext(req);
     if (pathname === "/__lucid/resolve" && req.method === "POST") {
       const result = decodeResolve();
-      if (!result.ok) return json({ error: result.error }, 400);
+      if (!result.ok) {
+        recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+        return json({ error: result.error }, 400);
+      }
       await serverAppend([result.value]);
       return json({ ok: true });
     }
@@ -933,19 +993,28 @@ export const createSessionHost = (
     // every event and the viewer derives its record from what follows.
     if (pathname === "/__lucid/clear" && req.method === "POST") {
       const result = decodeClear();
-      if (!result.ok) return json({ error: result.error }, 400);
+      if (!result.ok) {
+        recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+        return json({ error: result.error }, 400);
+      }
       await serverAppend([result.value]);
       return json({ ok: true });
     }
     if (pathname === "/__lucid/reopen" && req.method === "POST") {
       const result = decodeReopen();
-      if (!result.ok) return json({ error: result.error }, 400);
+      if (!result.ok) {
+        recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+        return json({ error: result.error }, 400);
+      }
       await serverAppend([result.value]);
       return json({ ok: true });
     }
     if (pathname === "/__lucid/end" && req.method === "POST") {
       const result = decodeEnd();
-      if (!result.ok) return json({ error: result.error }, 400);
+      if (!result.ok) {
+        recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+        return json({ error: result.error }, 400);
+      }
       await serverAppend([result.value]);
       queueMicrotask(() => options.onEnded());
       return json({ ok: true });
