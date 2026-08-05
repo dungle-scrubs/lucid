@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { createSession } from "../client/chrome/session.ts";
+import { clearDelivered } from "../client/chrome/surface.ts";
 import {
   approveBlockedReason,
   blocksVersionSwap,
@@ -13,6 +12,7 @@ import {
 } from "../client/chrome/store.ts";
 import type { OutboxMessage, QueuedAnnotation } from "../client/chrome/types.ts";
 import type { Anchor } from "../src/anchors/anchor.ts";
+import type { StateResponse } from "../src/protocol/wire.ts";
 
 /**
  * The line shown between a feedback send and the agent's first ack.
@@ -32,6 +32,70 @@ const presence = (over: Partial<AwaitPresence> = {}): AwaitPresence => ({
   harness: "claude-code",
   ...over,
 });
+
+/** A spot a queued annotation points at, shared by the queue and send tests. */
+const anchor: Anchor = {
+  kind: "element",
+  fingerprint: 'li#a3f9·"Backfill"',
+  domPath: "ol>li:nth-child(1)",
+  snippet: "<li>Backfill</li>",
+};
+
+/**
+ * A session handle with no server behind it, and a stub answering the routes a
+ * send or a version swap reads. `base` is absolute so the chrome's one fetch
+ * seam addresses the stub rather than a page origin that does not exist.
+ *
+ * `failMessage` makes the outbox drain's POST throw (a 4xx is the server's
+ * verdict, so the transport refuses at once rather than retrying for 14s): the
+ * success path answers every route, the failure path answers everything EXCEPT
+ * the message post.
+ */
+const V2 = "<!doctype html><html><body><h1>v2</h1></body></html>";
+
+const withStub = async (
+  key: string,
+  body: (handle: ReturnType<typeof createSession>) => Promise<void>,
+  opts: { failMessage?: boolean } = {},
+): Promise<void> => {
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.endsWith("/__lucid/artifact")) return new Response(V2);
+    // A 4xx is the server's VERDICT, not a blip: the transport throws at once
+    // (no backoff) carrying the server's own words, which is the real failure
+    // shape the drain must keep the text through.
+    if (opts.failMessage && method === "POST" && url.endsWith("/__lucid/message")) {
+      return new Response(JSON.stringify({ error: "log busy" }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        session: key,
+        version: 2,
+        reviewResolved: false,
+        annotations: [],
+        messages: [],
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  const handle = createSession({
+    session: key,
+    name: "plan.html",
+    version: 1,
+    base: "http://127.0.0.1:1",
+  });
+  try {
+    await body(handle);
+  } finally {
+    handle.surface.dispose();
+    globalThis.fetch = real;
+  }
+};
 
 describe("delivered, waiting for the agent", () => {
   test("a human at the terminal is told delivery reached them", () => {
@@ -86,42 +150,84 @@ describe("delivered, waiting for the agent", () => {
 });
 
 /**
- * Which sends open the delivered-waiting window (finding #19).
+ * Which sends open the delivered-waiting window (finding #19), driven through
+ * the handle rather than read off the source.
  *
  * The line exists to fill the gap between a send landing and the agent
  * speaking - a gap that is 3-4s for a headless turn (attend's 3s debounce plus
  * a poll). It renders on `awaitingAck`, which the ANNOTATION path set and the
  * message path did not: marking up text showed "Delivered - starting a turn…",
- * typing in the composer showed nothing at all.
+ * typing in the composer showed nothing at all. The two defects a bare boolean
+ * could not distinguish (07#22) are covered here too: both sends must land
+ * their ids, and a post that threw must not.
  */
 describe("every send that lands opens the window, not just annotations", () => {
-  const SOURCE = readFileSync(join(import.meta.dir, "..", "client/chrome/actions.ts"), "utf8");
+  const unsent: OutboxMessage = { id: "m1", text: "hold this", images: [], at: "t", failed: false };
+  const queued: QueuedAnnotation = {
+    id: "q1",
+    target: anchor,
+    targets: [anchor],
+    note: "n",
+    at: "t",
+    images: [],
+  };
 
-  test("the outbox drain sets awaitingAck once a message really landed", () => {
-    // Asserted on the source because the drain is a network loop over module
-    // state; what matters is that the successful-post branch - the one that
-    // discards the message from the outbox - is also the one that opens the
-    // window. A post that threw must NOT (it warns and keeps the text).
-    const drain = /const flushOutbox[\s\S]*?\n {2}};/.exec(SOURCE)?.[0] ?? "";
-    expect(drain, "could not find flushOutbox").not.toBe("");
-    // Holds the id of the send it is waiting on, not a bare flag: as a boolean
-    // it could not say WHICH send it covered (plan 08 M8).
-    expect(drain).toContain("awaitingAck: new Set(");
-    // ORDER, not proximity: it must come after the discard that marks the
-    // post as landed, so it cannot be hoisted above the try and claim a send
-    // that never happened. (A distance check would have measured how long the
-    // comment beside it is.)
-    const discardAt = drain.indexOf("discardOutboxMessage");
-    const openAt = drain.indexOf("awaitingAck: new Set(");
-    expect(discardAt).toBeGreaterThan(-1);
-    expect(openAt).toBeGreaterThan(discardAt);
+  test("a successful post opens the window on the message that landed", async () => {
+    // The message really landed, so awaitingAck holds ITS id (D-054 / finding
+    // #19). Asserted on the drain's observable consequence - the id is in the
+    // set AND the message has left the outbox - which is what the
+    // discard-before-open ordering guards: the set is written AFTER the
+    // discard, never hoisted above the post.
+    await withStub("/proj/.lucid/drain-ok.html", async (handle) => {
+      handle.store.setState({ outbox: [unsent] });
+      await handle.actions.flushOutbox();
+      expect(handle.store.getState().awaitingAck).toEqual(new Set(["m1"]));
+      expect(handle.store.getState().outbox).toEqual([]);
+    });
   });
 
-  test("a failed post does not claim the agent has anything to answer", () => {
-    const drain = /const flushOutbox[\s\S]*?\n {2}};/.exec(SOURCE)?.[0] ?? "";
-    const catchBlock = /\} catch \(e\) \{[\s\S]*?\n {8}\}/.exec(drain)?.[0] ?? "";
-    expect(catchBlock, "could not find the drain's catch").not.toBe("");
-    expect(catchBlock).not.toContain("awaitingAck");
+  test("a failed post does not claim the agent has anything to answer", async () => {
+    // The catch keeps the text and its own warning; awaitingAck stays clear
+    // because nothing landed. This covers the discard-before-open ordering by
+    // its observable consequence: a post that threw must not open the window,
+    // and its message must stay put, marked failed, text intact.
+    await withStub(
+      "/proj/.lucid/drain-fail.html",
+      async (handle) => {
+        handle.store.setState({ outbox: [unsent] });
+        await handle.actions.flushOutbox();
+        expect(handle.store.getState().awaitingAck).toBeNull();
+        const out = handle.store.getState().outbox;
+        expect(out).toHaveLength(1);
+        expect(out[0]?.failed).toBe(true);
+        expect(out[0]?.text).toBe(unsent.text);
+      },
+      { failMessage: true },
+    );
+  });
+
+  test("an empty outbox drains to nothing and opens no window", async () => {
+    // SHOULD: the drain's re-entrancy guard returns before any post, so an empty
+    // outbox neither sends nor opens the window.
+    await withStub("/proj/.lucid/drain-empty.html", async (handle) => {
+      await handle.actions.flushOutbox();
+      expect(handle.store.getState().awaitingAck).toBeNull();
+      expect(handle.store.getState().outbox).toEqual([]);
+    });
+  });
+
+  test("the annotation send path lands its id in awaitingAck too (07#22)", async () => {
+    // 07#22 needs BOTH send paths to participate: a deduped message whose item
+    // is ALREADY delivered must resolve at once rather than wait for an ack
+    // that will never come. The message path is covered by the drain test
+    // above; this drives the annotation path through the same handle so the
+    // pair is provably symmetric - every send that lands opens the window.
+    await withStub("/proj/.lucid/send-annot.html", async (handle) => {
+      handle.store.setState({ queue: [queued] });
+      await handle.actions.sendQueue();
+      expect(handle.store.getState().awaitingAck).toEqual(new Set(["q1"]));
+      expect(handle.store.getState().queue).toEqual([]);
+    });
   });
 });
 
@@ -168,12 +274,6 @@ describe("the session holds unsent work, counted in one place", () => {
   const state = (over: Partial<Parameters<typeof unsentWork>[0]> = {}) =>
     unsentWork({ queue: [], pendingTarget: null, composerNote: "", outbox: [], ...over });
 
-  const anchor: Anchor = {
-    kind: "element",
-    fingerprint: 'li#a3f9·"Backfill"',
-    domPath: "ol>li:nth-child(1)",
-    snippet: "<li>Backfill</li>",
-  };
   const queued: QueuedAnnotation = {
     id: "q1",
     target: anchor,
@@ -251,44 +351,7 @@ describe("the session holds unsent work, counted in one place", () => {
  * undelivered message, and released when that message leaves the outbox.
  */
 describe("the gates that started counting the outbox", () => {
-  const V2 = "<!doctype html><html><body><h1>v2</h1></body></html>";
   const unsent: OutboxMessage = { id: "m1", text: "hold this", images: [], at: "t", failed: false };
-
-  /** A session handle with no server behind it, and a stub answering the two
-   *  routes a version swap reads. `base` is absolute so the chrome's one fetch
-   *  seam addresses the stub rather than a page origin that does not exist. */
-  const withStub = async (
-    key: string,
-    body: (handle: ReturnType<typeof createSession>) => Promise<void>,
-  ): Promise<void> => {
-    const real = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("/__lucid/artifact")) return new Response(V2);
-      return new Response(
-        JSON.stringify({
-          session: key,
-          version: 2,
-          reviewResolved: false,
-          annotations: [],
-          messages: [],
-        }),
-        { headers: { "content-type": "application/json" } },
-      );
-    }) as typeof fetch;
-    const handle = createSession({
-      session: key,
-      name: "plan.html",
-      version: 1,
-      base: "http://127.0.0.1:1",
-    });
-    try {
-      await body(handle);
-    } finally {
-      handle.surface.dispose();
-      globalThis.fetch = real;
-    }
-  };
 
   test("a new version waits for an undelivered message, and lands when it leaves", async () => {
     await withStub("/proj/.lucid/swap.html", async (handle) => {
@@ -330,40 +393,61 @@ describe("the gates that started counting the outbox", () => {
 });
 
 /**
- * The two defects a bare boolean could not distinguish (plan 08 M8, D-006).
+ * The two defects a bare boolean could not distinguish (plan 08 M8, D-006),
+ * asserted on the RULE rather than the plumbing around it.
  *
  * `clearDelivered` is the seam: it takes the ids a send is waiting on and the
- * payload, and returns what is still outstanding. Testing it directly rather
- * than through the store keeps the assertion on the RULE - "clear what the
- * server says is delivered" - instead of on the plumbing around it.
+ * payload, and returns what is still outstanding. Called directly here so the
+ * assertion stays on the rule - "clear what the server says is delivered, keep
+ * what it has not mentioned" - instead of on the store wiring around it.
  */
 describe("awaitingAck holds the ids of the send it covers", () => {
-  const SURFACE = readFileSync(join(import.meta.dir, "..", "client/chrome/surface.ts"), "utf8");
+  /** A StateResponse carrying only the fields clearDelivered reads; the rest
+   *  are out of scope for this rule. */
+  const payload = (over: {
+    annotations?: { id: string; delivered?: true }[];
+    messages?: { id: string; delivered?: true }[];
+    agentWorking?: unknown;
+  }): StateResponse =>
+    ({
+      annotations: [],
+      messages: [],
+      ...over,
+    }) as unknown as StateResponse;
 
-  test("it clears against the payload's delivered state, not against a working window", () => {
+  test("it clears against the payload's delivered state, not against a working window (07#21)", () => {
     // 07#21: any open working window cleared the boolean, so typing while the
     // agent was mid-turn on an EARLIER batch reopened the 3-4s silence #92
-    // closed. The clear must not read agentWorking at all.
-    const fn = /const clearDelivered[\s\S]*?\n};/.exec(SURFACE)?.[0] ?? "";
-    expect(fn, "could not find clearDelivered").not.toBe("");
-    expect(fn).not.toContain("agentWorking");
-    expect(fn).toContain("delivered");
+    // closed. The clear must read the payload's delivered state and nothing
+    // else - so a window being open changes nothing about an undelivered id.
+    const waiting = new Set(["a1", "a2"]);
+    const p = payload({
+      agentWorking: { since: "t" }, // a window IS open - 07#21's trap
+      annotations: [{ id: "a1", delivered: true }, { id: "a2" }],
+    });
+    expect(clearDelivered(waiting, p)).toEqual(new Set(["a2"]));
+  });
+
+  test("a delivered message id clears too (07#22)", () => {
+    // The message path lands ids in awaitingAck (the drain test above), so a
+    // delivered message must resolve the same way an annotation does.
+    const waiting = new Set(["m1", "m2"]);
+    const p = payload({ messages: [{ id: "m1", delivered: true }, { id: "m2" }] });
+    expect(clearDelivered(waiting, p)).toEqual(new Set(["m2"]));
   });
 
   test("an id the payload has not mentioned yet is kept, not dropped", () => {
     // The other direction: clearing on absence would blank the line before the
-    // agent had seen anything, which is the same lie in reverse.
-    const fn = /const clearDelivered[\s\S]*?\n};/.exec(SURFACE)?.[0] ?? "";
-    expect(fn).toContain("filter");
-    expect(fn).toContain("!delivered.has(id)");
+    // agent had seen anything, which is the same lie in reverse. A send whose
+    // item has not appeared in the fold yet is still outstanding.
+    expect(clearDelivered(new Set(["x9"]), payload({}))).toEqual(new Set(["x9"]));
   });
 
-  test("both send paths carry ids into it", () => {
-    // 07#22 needs the message path to participate: a deduped message whose
-    // item is ALREADY delivered must resolve at once rather than wait for an
-    // ack that will never come. That only works if messages are in the set.
-    const actions = readFileSync(join(import.meta.dir, "..", "client/chrome/actions.ts"), "utf8");
-    const sends = actions.match(/awaitingAck: new Set\(/g) ?? [];
-    expect(sends.length).toBeGreaterThanOrEqual(2);
+  test("nothing left to wait on resolves to null", () => {
+    expect(
+      clearDelivered(new Set(["a1"]), payload({ annotations: [{ id: "a1", delivered: true }] })),
+    ).toBeNull();
+    expect(clearDelivered(null, payload({}))).toBeNull();
+    expect(clearDelivered(new Set(), payload({}))).toBeNull();
   });
 });

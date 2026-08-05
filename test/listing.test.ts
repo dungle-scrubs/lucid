@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { createListing, type Listing } from "../src/server/listing.ts";
 import type { HubSession } from "../src/protocol/hub.ts";
 
@@ -23,11 +23,26 @@ const fakePaths = (artifact: string) => ({
   attendLog: `${artifact}/.lucid/attend.log`,
   contextPath: `${artifact}/.lucid/context.json`,
   serverJson: `${artifact}/.lucid/server.json`,
+  requestLog: `${artifact}/.lucid/request.log`,
+  serverLog: `${artifact}/.lucid/server.log`,
+  contextSidecar: `${artifact}/.lucid/context.json`,
+});
+
+/** A HubSession fixture with the fields the listing broadcasts: the registry
+ *  pointer (name/lastSeen), the hub facts (hosted/project), and an id. The
+ *  mtime the listing dedupes on comes from the `stat` callback, not the
+ *  session object, so it is not on this fixture. */
+const session = (over: Partial<HubSession> & Pick<HubSession, "id" | "artifact">): HubSession => ({
+  name: "test",
+  lastSeen: "t",
+  project: "/p",
+  hosted: false,
+  ...over,
 });
 
 describe("createListing - SWR + snapshot", () => {
   test("cached returns the computed listing", async () => {
-    const sessions: HubSession[] = [{ id: "a", artifact: "/p/a.html", project: "/p", mtimeMs: 0 }];
+    const sessions: HubSession[] = [session({ id: "a", artifact: "/p/a.html" })];
     let computeCalls = 0;
     const listing: Listing = createListing({
       compute: async () => {
@@ -77,9 +92,7 @@ describe("createListing - SWR + snapshot", () => {
   test("invalidate forces a recompute on next cached call", async () => {
     let value = 0;
     const listing: Listing = createListing({
-      compute: async () => [
-        { id: `s${value}`, artifact: `/p/${value}.html`, project: "/p", mtimeMs: 0 },
-      ],
+      compute: async () => [session({ id: `s${value}`, artifact: `/p/${value}.html` })],
       bundleStamp: () => "stamp",
       attention: () => ({}),
       broadcast: () => {},
@@ -121,7 +134,7 @@ describe("createListing - project and title caches", () => {
     });
 
     const r1 = await listing.resolveProject("/p/a.html");
-    const r2 = await listing.resolveProject("/p/a.html");
+    await listing.resolveProject("/p/a.html");
     expect(r1.project).toBe("/resolved");
     expect(calls).toBe(1); // cached
   });
@@ -173,9 +186,7 @@ describe("createListing - notify dedupe", () => {
     const value = 0;
     let broadcasts = 0;
     const listing: Listing = createListing({
-      compute: async () => [
-        { id: `s${value}`, artifact: `/p/${value}.html`, project: "/p", mtimeMs: 0 },
-      ],
+      compute: async () => [session({ id: `s${value}`, artifact: `/p/${value}.html` })],
       bundleStamp: () => "stamp",
       attention: () => ({}),
       broadcast: () => {

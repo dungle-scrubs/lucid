@@ -87,7 +87,7 @@ export interface Surface {
  * not appeared in the fold yet is still outstanding, and dropping it would
  * clear the line before the agent had seen anything.
  */
-const clearDelivered = (
+export const clearDelivered = (
   waiting: ReadonlySet<string> | null,
   payload: StateResponse,
 ): ReadonlySet<string> | null => {
