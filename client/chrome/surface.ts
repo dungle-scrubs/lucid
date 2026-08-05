@@ -45,6 +45,12 @@ export interface Surface {
    *  payload, and under tabs a stale surface must not mutate another
    *  session's state. */
   readonly ownsSource: (source: MessageEventSource | null) => boolean;
+  /** This session's own artifact frame rect in the parent viewport, or null
+   *  when no iframe is attached. The copy Popover translates an in-iframe
+   *  release point (posted by the overlay) into parent-viewport coordinates
+   *  by adding this rect's origin; the parent cannot read the opaque-origin
+   *  selection, and it cannot anchor the Popover without the frame's position. */
+  readonly frameRect: () => DOMRect | null;
   readonly toOverlay: (message: ChromeMessage) => void;
   /** Replace the artifact DOM. ALWAYS arms the outline revision barrier so the
    *  outline re-proofs. Every swap, diff-show, version view and version exit
@@ -141,6 +147,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   const outlineSlotRect = (): DOMRect | null => outlineSlotEl?.getBoundingClientRect() ?? null;
   const ownsSource = (source: MessageEventSource | null): boolean =>
     iframeEl !== null && source === iframeEl.contentWindow;
+  const frameRect = (): DOMRect | null => iframeEl?.getBoundingClientRect() ?? null;
   const outlineLayoutAvailable = (): boolean => iframeEl !== null && outlineSlotEl !== null;
   const effectiveOutlineLayoutAvailable = (): boolean =>
     outlineLayoutAvailable() && outlineGeometryMotions.size === 0;
@@ -445,6 +452,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     activateOutline: outline.activate,
     markOverlayReady,
     ownsSource,
+    frameRect,
     outlineSlotRect,
     toOverlay,
     prepareRevision: outline.prepareRevision,

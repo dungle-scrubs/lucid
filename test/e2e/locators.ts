@@ -66,6 +66,8 @@ export const on = (root: Page | FrameLocator | Locator) => ({
   choice: (): Locator => root.locator(hook("choice")),
   cleared: (): Locator => root.locator(hook("cleared")),
   contextRing: (): Locator => root.locator(hook("context-ring")),
+  copyPopover: (): Locator => root.locator(hook("copy-popover")),
+  copyPopoverCopy: (): Locator => root.locator(hook("copy-popover-copy")),
   copyUnsent: (): Locator => root.locator(hook("copy-unsent")),
   createAddProject: (): Locator => root.locator(hook("create-add-project")),
   createAttendHint: (): Locator => root.locator(hook("create-attend-hint")),

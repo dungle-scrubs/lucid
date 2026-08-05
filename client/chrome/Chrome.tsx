@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  nextCopyPopoverState,
+  translateToViewport,
+  type CopyPopoverState,
+} from "./selection-copy.ts";
+import { CopyPopover, type CopyPopoverDispatch } from "./CopyPopover.tsx";
 import { validateOverlayMessage, type OverlayValidationRecord } from "../shared/protocol.ts";
 import { SessionProvider, useSession } from "./context.tsx";
 import { selectOutlineGeneration, selectOutlineHealthCode } from "./store.ts";
@@ -60,7 +66,12 @@ const isTextEntry = (node: EventTarget | null): boolean =>
  * single-session viewer, but under the shell those digits belong to the
  * session tab bar and the Sessions panel does not exist.
  */
-const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: boolean): void => {
+const useSessionWiring = (
+  session: SessionHandle,
+  panelDigits: boolean,
+  active: boolean,
+  dispatchCopy: CopyPopoverDispatch,
+): void => {
   useEffect(() => {
     session.surface.setOutlineActive(active);
     // A hidden tab's view stays mounted (drafts survive switching), but only
@@ -123,6 +134,36 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
               }
             : {}),
         });
+      } else if (msg.type === "selection-copy") {
+        // The overlay posted the artifact's selection text plus the release
+        // point (iframe-viewport coords). Translate that point into the PARENT
+        // viewport by adding the iframe's own origin, then open the Copy
+        // Popover anchored at a zero-size rect there. The parent cannot read
+        // the opaque-origin selection, so the text travels as the payload; it
+        // cannot anchor without the frame's position, so frameRect is the
+        // translation's origin. See `selection-copy.ts` for the pure math.
+        const frameRect = surface.frameRect();
+        if (frameRect === null) return;
+        const point = translateToViewport(frameRect, msg.x, msg.y);
+        dispatchCopy({
+          kind: "selection-copy",
+          text: msg.text,
+          anchorRect: {
+            left: point.x,
+            top: point.y,
+            width: 0,
+            height: 0,
+            right: point.x,
+            bottom: point.y,
+            x: point.x,
+            y: point.y,
+          },
+        });
+      } else if (msg.type === "selection-collapsed") {
+        // A bare click in the artifact collapsed the selection; the parent
+        // cannot see in-iframe selectionchange (opaque origin), so the overlay
+        // reports it. Dismisses an open Popover (no-op when none is open).
+        dispatchCopy({ kind: "collapse" });
       }
     };
     window.addEventListener("message", onMessage);
@@ -219,7 +260,7 @@ const useSessionWiring = (session: SessionHandle, panelDigits: boolean, active: 
       window.removeEventListener("keydown", onPanelKey);
       surface.setOutlineActive(false);
     };
-  }, [session, panelDigits, active]);
+  }, [session, panelDigits, active, dispatchCopy]);
 };
 
 /**
@@ -232,10 +273,14 @@ const SurfaceRegion = ({
   active,
   session,
   attachSurface,
+  copyState,
+  dispatchCopy,
 }: {
   readonly active: boolean;
   readonly session: SessionHandle;
   readonly attachSurface: (el: HTMLIFrameElement | null) => void;
+  readonly copyState: CopyPopoverState;
+  readonly dispatchCopy: CopyPopoverDispatch;
 }) => {
   const drawer = useQuestionDrawer();
   const outlineCode = useSession(selectOutlineHealthCode);
@@ -266,8 +311,11 @@ const SurfaceRegion = ({
     }
     if (previousDrawerRaised.current === drawer.raised) return;
     previousDrawerRaised.current = drawer.raised;
+    // The drawer raising parallaxes the surface; the Popover's anchor moves
+    // with it, so dismiss rather than anchor to a point that is sliding.
+    dispatchCopy({ kind: "geometry-change" });
     session.surface.setOutlineGeometryMoving("drawer", true);
-  }, [active, drawer.raised, session]);
+  }, [active, drawer.raised, session, dispatchCopy]);
   useEffect(() => () => bottomOverlayObserver.current?.disconnect(), []);
   useEffect(() => () => session.surface.setOutlineGeometryMoving("drawer", false), [session]);
   return (
@@ -294,6 +342,7 @@ const SurfaceRegion = ({
             event.target === event.currentTarget &&
             (event.propertyName === "transform" || event.propertyName === "translate")
           ) {
+            dispatchCopy({ kind: "geometry-change" });
             session.surface.setOutlineGeometryMoving("drawer", true);
           }
         }}
@@ -344,6 +393,10 @@ const SurfaceRegion = ({
           the artifact, and the artifact must stay visible while it is
           answered (D11). */}
       <QuestionDrawer state={drawer} attach={attachBottomOverlay} />
+      {/* The Copy Popover anchors at the selection-release point over the
+          surface. Portalled to <body> by Base UI so it overlays the iframe;
+          rendered (and dismissed) per its pure reducer state. */}
+      <CopyPopover state={copyState} dispatch={dispatchCopy} />
     </section>
   );
 };
@@ -374,7 +427,16 @@ export const SessionView = ({
   // Render state (not a ref): the slide duration is a style the panel reads.
   const [resizing, setResizing] = useState(false);
 
-  useSessionWiring(session, !shell, active);
+  // The Copy Popover's open state and its dispatch. Held here (not in the
+  // surface) because it is React render state: the Popover renders over the
+  // surface, and the wiring dispatches into it. The reducer owns the lifecycle
+  // table; this is the thin holder the wiring and the component share.
+  const [copyState, setCopyState] = useState<CopyPopoverState>(null);
+  const dispatchCopy = useCallback<CopyPopoverDispatch>((event) => {
+    setCopyState((prev) => nextCopyPopoverState(prev, event));
+  }, []);
+
+  useSessionWiring(session, !shell, active, dispatchCopy);
   useEffect(
     () => () => {
       stopDrag.current?.();
@@ -399,6 +461,9 @@ export const SessionView = ({
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     dragging.current = e.pointerId;
     setResizing(true);
+    // The divider drag moves the iframe; the Popover's anchor slides with it,
+    // so dismiss rather than chase a moving release point.
+    dispatchCopy({ kind: "geometry-change" });
     session.surface.setOutlineGeometryMoving("divider", true);
     const startX = e.clientX;
     const startW = useShell.getState().chromeWidth;
@@ -458,7 +523,13 @@ export const SessionView = ({
       >
         <SidebarInset className="flex min-h-0 flex-col bg-ink-850">
           <Header shell={shell} />
-          <SurfaceRegion active={active} session={session} attachSurface={attachSurface} />
+          <SurfaceRegion
+            active={active}
+            session={session}
+            attachSurface={attachSurface}
+            copyState={copyState}
+            dispatchCopy={dispatchCopy}
+          />
         </SidebarInset>
         {/* The window-splitter pattern: a separator carries the role, and arrow
             keys resize it for anything that cannot drag. Double-click asks the
