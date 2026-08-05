@@ -397,12 +397,16 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (desc && desc.pid === process.pid) await removeServerDescriptor(mount.paths);
   };
 
-  /** Host a session in-process (idempotent). The caller has already ruled out
-   *  a live dedicated server. All-or-nothing: a mount that cannot finish
-   *  (say, a descriptor write into a deleted session dir) must not stay half
-   *  registered - that made the first request 500 and the retry "work". */
-  const mount = async (id: string, artifact: string): Promise<Mount> => {
+  /** Host a session in-process (idempotent). The single owner (M5.4): checks
+   *   for a live dedicated server internally, so callers never discover
+   *   unconditionally. All-or-nothing: a mount that cannot finish must not
+   *   stay half registered. Returns undefined when a dedicated server owns
+   *   the session (caller proxies). */
+  const mount = async (id: string, artifact: string): Promise<Mount | undefined> => {
     if (stopped) throw new Error("daemon is stopping");
+    // Never over a live dedicated server - that stays the one appender.
+    const live = await discoverLiveServer(sessionPaths(artifact));
+    if (live && live.port !== port) return undefined;
     const existing = mounts.get(id);
     if (existing) return existing;
     const paths = sessionPaths(artifact);
@@ -626,7 +630,20 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     }
 
     const m = await mount(id, artifact);
-    return m.host.handle(req, subPath);
+    if (m !== undefined) return m.host.handle(req, subPath);
+    // A dedicated server took over between our check and the mount: fall
+    // through to proxy. The next request will discover it fresh.
+    const liveServer = await discoverLiveServer(paths);
+    if (liveServer && liveServer.port !== port) {
+      const url = new URL(req.url);
+      const init: RequestInit = {
+        method: req.method,
+        headers: sanitizedProxyHeaders(req),
+        ...(req.method === "GET" || req.method === "HEAD" ? {} : { body: req.body }),
+      };
+      return loopbackFetch(liveServer.port, `${subPath}${url.search}`, init);
+    }
+    return json({ error: "session could not be mounted" }, 500);
   };
 
   // ---- hub listing + events ---------------------------------------------------
@@ -766,11 +783,10 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const id = sessionId(artifact);
     idToArtifact.set(id, artifact);
     // Mount eagerly (idempotent) so the descriptor exists the moment `open`
-    // returns: `wait`'s presence waker and `deliver` discover the session
-    // through it. Never over a live dedicated server - that stays the one
-    // appender and we proxy to it instead.
-    const live = await discoverLiveServer(sessionPaths(artifact));
-    if (!live || live.port === port) await mount(id, artifact);
+    // returns. The mount function is the single owner (M5.4): it checks for a
+    // live dedicated server internally, so handleHubOpen does not discover
+    // unconditionally.
+    await mount(id, artifact);
     // listing.invalidate() also resets the dedupe hashes in the listing module.
     void listing.notify("after-change");
     // Tell open shell windows to surface this session as a tab NOW. The CLI
