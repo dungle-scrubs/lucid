@@ -33,7 +33,11 @@ import {
   type TrustedOutlineCapabilities,
   type TrustedOutlinePort,
 } from "./browser-artifact-outline.ts";
-import type { TrustedOverlayCapabilities, TrustedOverlayHostHandle } from "./trusted-overlay.ts";
+import type {
+  TrustedOverlayCapabilities,
+  TrustedOverlayHostHandle,
+  TrustedOverlaySwapCapabilities,
+} from "./trusted-overlay.ts";
 
 /**
  * A stylesheet the overlay adds to the ARTIFACT's document, as a constructed
@@ -153,6 +157,11 @@ export class LucidOverlay extends LitElement {
   #outlineController: BrowserArtifactOutlineController | null = null;
   #hostHandle: TrustedOverlayHostHandle | null = null;
   #ownedRoot: HTMLElement | null = null;
+  /** Trusted import + head-mutation operations for the artifact swap (DF-3),
+   *  captured pre-artifact. Set once when the overlay mounts; read every
+   *  swap so an artifact that patches the intrinsics meanwhile cannot
+   *  intercept them. */
+  #swapOperations: TrustedOverlaySwapCapabilities | null = null;
   #renderSnapshot: OverlayRenderSnapshot = {
     focusedId: null,
     hoverRect: null,
@@ -389,10 +398,12 @@ export class LucidOverlay extends LitElement {
     port: TrustedOutlinePort,
     outlineCapabilities: TrustedOutlineCapabilities,
     hostHandle: TrustedOverlayHostHandle,
+    swapOperations: TrustedOverlaySwapCapabilities,
   ): void {
     if (this.#outlineController !== null) return;
     this.#hostHandle = hostHandle;
     this.#ownedRoot = hostHandle.overlayRoot();
+    this.#swapOperations = swapOperations;
     this.#outlineController = new BrowserArtifactOutlineController(port, outlineCapabilities, {
       clearEmphasis: this.clearSectionEmphasis,
       markEmphasis: this.markSectionEmphasis,
@@ -846,6 +857,7 @@ export class LucidOverlay extends LitElement {
     const { addedIds } = swapArtifactBody(document, htmlText, {
       keep,
       onLinkedSheetLoad: () => this.#theme.reapply(),
+      operations: this.#swapOperations ?? undefined,
       ref: this.#ownedRoot,
     });
     // New inline sheets are ready now. Linked sheets re-run this on load above,
@@ -939,6 +951,6 @@ export const mountOverlay = (
     parentWindow: capabilities.parentWindow,
     performOverlayUpdate: capabilities.performOverlayUpdate,
   };
-  overlay.configureOutlineChannel(outlinePort, capabilities, hostHandle);
+  overlay.configureOutlineChannel(outlinePort, capabilities, hostHandle, capabilities);
   capabilities.installOverlay(overlay);
 };

@@ -1,3 +1,5 @@
+import type { TrustedOverlaySwapCapabilities } from "./trusted-overlay.ts";
+
 /**
  * Swaps the artifact's body into the live document and syncs its head styles.
  *
@@ -6,10 +8,14 @@
  * never assume the document, the parsed html, or the nodes it carries are
  * benign. It takes the live document plus the replacement html and performs the
  * subtree swap, preserving the overlay-owned nodes the caller names - it cannot
- * discover them itself (D-028). Trusted handles for importNode/head access are
- * a deferred follow-up (DF-3); today this calls the realm's own intrinsics,
- * which is safe because it mutates only the artifact document, never the
- * chrome.
+ * discover them itself (D-028).
+ *
+ * Node import and head-style mutation run on captured intrinsics when the
+ * caller supplies them (DF-3): an artifact that patches
+ * `Document.prototype.importNode` or the head accessors cannot observe or
+ * redirect them onto overlay-owned nodes. Parsing and body traversal stay
+ * realm-local deliberately - a forged parser only corrupts the artifact's own
+ * content, and a patchable body walker only moves the artifact's own nodes.
  */
 
 export interface ArtifactSwapOptions {
@@ -22,6 +28,10 @@ export interface ArtifactSwapOptions {
   /** Invoked when a newly added linked stylesheet finishes loading, so a
    *  dark-capable artifact is not pinned light by an early capability check. */
   readonly onLinkedSheetLoad?: () => void;
+  /** Trusted import + head-mutation operations captured pre-artifact (DF-3).
+   *  When absent, the swap falls back to the realm's own intrinsics, so tests
+   *  driving the swap without a capability bag behave exactly as before. */
+  readonly operations?: TrustedOverlaySwapCapabilities;
 }
 
 export interface ArtifactSwapResult {
@@ -47,6 +57,11 @@ const collectSectionIds = (document: Document): Set<string> => {
  * and report the newly present section ids. The overlay host, the overlay
  * element, and the chrome's client.js scripts are preserved; new nodes marked
  * `data-lucid-ignore="true"` or re-loading client.js are not inserted.
+ *
+ * Import and head-style mutation go through the supplied `operations` when
+ * present (captured intrinsics), else the realm's own - resolved once at the
+ * top so the body is branch-free and a spy bag records every call either path
+ * makes.
  */
 export const swapArtifactBody = (
   document: Document,
@@ -55,6 +70,24 @@ export const swapArtifactBody = (
 ): ArtifactSwapResult => {
   const parsed = new DOMParser().parseFromString(htmlText, "text/html");
   const previousIds = collectSectionIds(document);
+  const ops = options.operations;
+  const importNode: (node: Node, deep: boolean) => Node =
+    ops?.importNode ?? ((node, deep) => document.importNode(node, deep));
+  const removeArtifactStyles: () => void =
+    ops?.removeArtifactStyles ??
+    (() => {
+      for (const sheet of document.head.querySelectorAll(`[${ARTIFACT_STYLE_ATTR}]`)) {
+        sheet.remove();
+      }
+    });
+  const appendArtifactStyle: (source: Element, onLoad?: () => void) => void =
+    ops?.appendArtifactStyle ??
+    ((source, onLoad) => {
+      const clone = document.importNode(source, true);
+      clone.setAttribute(ARTIFACT_STYLE_ATTR, "true");
+      if (onLoad) clone.addEventListener("load", onLoad, { once: true });
+      document.head.appendChild(clone);
+    });
 
   const preserve = new Set(options.keep);
   for (const script of document.body.querySelectorAll(`script[src='${CLIENT_JS_SRC}']`)) {
@@ -68,24 +101,15 @@ export const swapArtifactBody = (
   for (const node of Array.from(parsed.body.childNodes)) {
     if (node instanceof Element && node.getAttribute("data-lucid-ignore") === "true") continue;
     if (node instanceof HTMLScriptElement && node.src.includes(CLIENT_JS_SRC)) continue;
-    document.body.insertBefore(document.importNode(node, true), ref);
+    document.body.insertBefore(importNode(node, true), ref);
   }
 
-  for (const sheet of document.head.querySelectorAll(`[${ARTIFACT_STYLE_ATTR}]`)) {
-    sheet.remove();
-  }
+  removeArtifactStyles();
   for (const style of parsed.head.querySelectorAll("style")) {
-    const clone = document.importNode(style, true);
-    clone.setAttribute(ARTIFACT_STYLE_ATTR, "true");
-    document.head.appendChild(clone);
+    appendArtifactStyle(style);
   }
   for (const link of parsed.head.querySelectorAll('link[rel="stylesheet"]')) {
-    const clone = document.importNode(link, true);
-    clone.setAttribute(ARTIFACT_STYLE_ATTR, "true");
-    if (options.onLinkedSheetLoad) {
-      clone.addEventListener("load", () => options.onLinkedSheetLoad?.(), { once: true });
-    }
-    document.head.appendChild(clone);
+    appendArtifactStyle(link, options.onLinkedSheetLoad);
   }
 
   const currentIds = collectSectionIds(document);
