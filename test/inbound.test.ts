@@ -10,6 +10,8 @@ import {
   decodeReply,
   decodeRevert,
   decodeTurnEnded,
+  decodeBind,
+  decodeRename,
   decodeVersion,
   MAX_ANCHORS,
 } from "../src/protocol/inbound.ts";
@@ -258,5 +260,56 @@ describe("decodeTurnEnded", () => {
   });
   test("refuses malformed code", () => {
     expect(decodeTurnEnded({ turnId: "t1", reason: "done", code: "has spaces" }).ok).toBe(false);
+  });
+});
+
+describe("decodeBind", () => {
+  test("accepts a valid binding", () => {
+    const result = decodeBind({
+      launchId: "launch-1",
+      attendant: { sessionId: "s1", sessionIdAuthority: "declared", harness: "claude" },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.launchId).toBe("launch-1");
+  });
+  test("refuses missing launchId", () => {
+    expect(decodeBind({ attendant: { sessionId: "s1", sessionIdAuthority: "declared" } }).ok).toBe(
+      false,
+    );
+  });
+  test("refuses unsafe launchId", () => {
+    expect(
+      decodeBind({
+        launchId: "../evil",
+        attendant: { sessionId: "s1", sessionIdAuthority: "declared" },
+      }).ok,
+    ).toBe(false);
+  });
+  test("refuses attendant without sessionId", () => {
+    expect(decodeBind({ launchId: "l1", attendant: { harness: "claude" } }).ok).toBe(false);
+  });
+});
+
+describe("decodeRename", () => {
+  test("accepts and normalizes a valid title", () => {
+    const result = decodeRename({ title: "  hello   world  " });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.title).toBe("hello world");
+  });
+  test("truncates to 200 chars", () => {
+    const result = decodeRename({ title: "x".repeat(300) });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.title).toHaveLength(200);
+  });
+  test("refuses empty title", () => {
+    expect(decodeRename({ title: "   " }).ok).toBe(false);
+  });
+  test("refuses missing title", () => {
+    expect(decodeRename({}).ok).toBe(false);
+  });
+  test("carries replaces through", () => {
+    const result = decodeRename({ title: "new", replaces: "old" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.replaces).toBe("old");
   });
 });
