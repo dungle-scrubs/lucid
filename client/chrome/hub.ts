@@ -7,6 +7,31 @@ import {
   type FrameHandlers,
   type HubFrame,
 } from "../../src/protocol/frames.ts";
+
+const PROGRESS_SILENCE_MS = 15_000;
+
+export type CreateTurnStatus = "authoring" | "silent" | "failed" | "landed";
+
+/** One keyed entry in the create-turn record. */
+export interface CreateTurnEntry {
+  readonly artifact: string;
+  readonly submittedAt: number;
+  readonly lastProgressAt: number | null;
+  readonly lastProgressElapsedMs: number | null;
+  readonly failure: {
+    readonly artifact: string;
+    readonly code: number;
+    readonly tail: string;
+  } | null;
+}
+
+/** Derive the lifecycle state of a create turn from its entry. */
+export const createStatus = (entry: CreateTurnEntry, now: number): CreateTurnStatus => {
+  if (entry.failure !== null) return "failed";
+  const since = entry.lastProgressAt ?? entry.submittedAt;
+  return now - since <= PROGRESS_SILENCE_MS ? "authoring" : "silent";
+};
+
 import type {
   HubAttention,
   HubIdentity,
