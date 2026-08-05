@@ -1,7 +1,15 @@
 import { create } from "zustand";
 import { storeTheme, type ArtifactTheme } from "./theme.ts";
-import { createSession, type SessionHandle } from "./session.ts";
-import type { SessionConfig } from "./store.ts";
+import { getSession } from "./tabs.ts";
+// Re-exported for backward compat: callers that imported these from shell.ts
+// (Palette.tsx, Shell.tsx) keep working. The implementations live in tabs.ts
+// (M4.4) so the roster is one module's concern.
+export {
+  register as ensureSession,
+  dropHandle as dropSession,
+  getSession,
+  activeSession,
+} from "./tabs.ts";
 
 /**
  * The shell: what belongs to the WINDOW, not to any one session. Layout is a
@@ -197,39 +205,6 @@ export const setSidebarOpen = (open: boolean): void => {
 export const setSidebarTab = (tab: "chat" | "sessions"): void =>
   useShell.setState({ sidebarTab: tab });
 
-/**
- * The handle roster. A plain module Map rather than store state: handles hold
- * live resources (an EventSource, closures), and zustand state wants
- * immutable snapshots. The reactive mirror is `sessionKeys`/`activeKey`.
- */
-const handles = new Map<string, SessionHandle>();
-
-/** Create (or return) the handle for a session, registering its tab. */
-export const ensureSession = (config: SessionConfig): SessionHandle => {
-  const existing = handles.get(config.session);
-  if (existing) return existing;
-  const handle = createSession(config);
-  handles.set(handle.key, handle);
-  useShell.setState((s) => ({
-    sessionKeys: s.sessionKeys.includes(handle.key)
-      ? s.sessionKeys
-      : [...s.sessionKeys, handle.key],
-    activeKey: s.activeKey ?? handle.key,
-  }));
-  return handle;
-};
-
-export const getSession = (key: string): SessionHandle | undefined => handles.get(key);
-
-/** Forget a handle entirely (a closed tab). The caller has disconnected it;
- *  its on-disk state is untouched and reopening builds a fresh handle. */
-export const dropSession = (key: string): void => {
-  handles.delete(key);
-};
-
-/** The handle driving the render right now, for window-level handlers that
- *  fire outside React (keyboard, postMessage). Null only before boot. */
-export const activeSession = (): SessionHandle | null => {
-  const key = useShell.getState().activeKey;
-  return key === null ? null : (handles.get(key) ?? null);
-};
+/** The handle roster, extracted to tabs.ts (M4.4). The reactive mirror
+ *  (`sessionKeys`/`activeKey`) stays here in `useShell`; tabs.ts is the sole
+ *  writer. */

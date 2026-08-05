@@ -7,6 +7,14 @@ import {
   type FrameHandlers,
   type HubFrame,
 } from "../../src/protocol/frames.ts";
+import {
+  activate as activateTabKey,
+  close as closeTabRoster,
+  enforceCap,
+  getSession,
+  register as registerHandle,
+  streamCap,
+} from "./tabs.ts";
 
 const PROGRESS_SILENCE_MS = 15_000;
 
@@ -43,7 +51,7 @@ import type { HarnessInfo } from "../../src/protocol/wire.ts";
 import { visibleEl } from "./dom.ts";
 import { sessionLabel } from "./naming.ts";
 import type { SessionHandle } from "./session.ts";
-import { dropSession, ensureSession, getSession, recordViewed, useShell } from "./shell.ts";
+import { recordViewed, useShell } from "./shell.ts";
 import { openStream, type LiveStream } from "./stream.ts";
 import type { ShellConfig } from "./types.ts";
 
@@ -304,15 +312,10 @@ export const registerProject = async (path?: string): Promise<RegisterProjectRes
  * HTTP pool, so the shell broke at FIVE open tabs and this cap of ten never
  * got the chance to fire. The streams are WebSockets now (see stream.ts),
  * which that pool does not bound, and this number means what it says again.
+ *
+ * The cap value and the LRU order live in tabs.ts (M4.4); this module keeps
+ * only the attention coupling that reads `useHub`.
  */
-const MAX_CONNECTED = 10;
-
-/** The effective cap: the shell page may carry a LUCID_STREAM_CAP override -
- *  a test seam, since eviction is otherwise unreachable without 11 real tabs. */
-const streamCap = (): number => shellConfig()?.streamCap ?? MAX_CONNECTED;
-
-/** Activation recency per session key, for the eviction order. */
-const lastActivated = new Map<string, number>();
 
 /** The hub-attention seq for an artifact, when the hub has one. */
 const attentionSeqFor = (key: string): number | undefined => {
@@ -321,11 +324,11 @@ const attentionSeqFor = (key: string): number | undefined => {
   return id !== undefined ? attention[id]?.lastEventSeq : undefined;
 };
 
+/** Mark `key` as the active tab (through tabs.ts) and record its attention
+ *  seq as viewed. The roster mechanics (LRU stamp, activeKey mirror) live in
+ *  tabs.ts; the attention coupling lives here because it reads `useHub`. */
 const activate = (key: string): void => {
-  lastActivated.set(key, Date.now());
-  // The strip shows every open tab now (plan 03, M2.1): activating a tab no
-  // longer scopes the strip to a project.
-  useShell.setState({ activeKey: key });
+  activateTabKey(key);
   // Arrival is what clears unseen (M3.2): the human landing on the tab marks
   // its log read up to here. Settling never does this - only activation and
   // the in-front tracking below.
@@ -348,19 +351,6 @@ export const applyAttentionFrame = (map: Readonly<Record<string, HubAttention>>)
   if (seq !== undefined) recordViewed(activeKey, seq);
 };
 
-const enforceStreamCap = (): void => {
-  const { sessionKeys, activeKey } = useShell.getState();
-  const connected = sessionKeys
-    .map((k) => getSession(k))
-    .filter((h): h is SessionHandle => h?.connected() === true);
-  const cap = streamCap();
-  if (connected.length <= cap) return;
-  const victims = connected
-    .filter((h) => h.key !== activeKey)
-    .sort((a, b) => (lastActivated.get(a.key) ?? 0) - (lastActivated.get(b.key) ?? 0));
-  for (const v of victims.slice(0, connected.length - cap)) v.disconnect();
-};
-
 /**
  * Surface a hub session as a tab and make it active. Fetches the session's
  * identity through its mount (which is also what makes the daemon lazily
@@ -380,7 +370,7 @@ export const openTab = async (
   if (existing) {
     if (!existing.connected()) existing.connect(); // reactivation refolds via bootstrap
     if (!opts?.background) activate(existing.key);
-    enforceStreamCap();
+    enforceCap(streamCap(shellConfig()?.streamCap));
     return existing;
   }
   const base = `/s/${row.id}`;
@@ -388,7 +378,7 @@ export const openTab = async (
     .then((r) => (r.ok ? (r.json() as Promise<{ session: string; version: number }>) : null))
     .catch(() => null);
   if (!identity) return null;
-  const handle = ensureSession({
+  const handle = registerHandle({
     session: identity.session,
     name: sessionLabel(row),
     version: identity.version,
@@ -403,7 +393,7 @@ export const openTab = async (
   });
   handle.connect();
   if (!opts?.background) activate(handle.key);
-  enforceStreamCap();
+  enforceCap(streamCap(shellConfig()?.streamCap));
   return handle;
 };
 
@@ -412,7 +402,7 @@ export const activateTab = (key: string): void => {
   if (!handle) return;
   if (!handle.connected()) handle.connect();
   activate(key);
-  enforceStreamCap();
+  enforceCap(streamCap(shellConfig()?.streamCap));
   // Focus routing: landing on a tab should land the keyboard with it. The
   // composer is where typing goes next; rAF waits for the view to show
   // (visibleEl, because every open tab's view stays mounted).
@@ -425,25 +415,17 @@ export const activateTab = (key: string): void => {
 };
 
 /** Close a tab: drop the stream and the roster entry. State on disk is
- *  untouched; reopening from the hub listing refolds everything. */
+ *  untouched; reopening from the hub listing refolds everything.
+ *
+ *  The roster mechanics (remove from sessionKeys, clean lastActivated, drop
+ *  handle, compute promoted neighbor) live in tabs.ts.close (M4.4); this
+ *  function does the stream cleanup and the promote-through-activateTab that
+ *  reconnects an LRU-disconnected background tab. */
 export const closeTab = (key: string): void => {
   const handle = getSession(key);
   handle?.disconnect();
   handle?.surface.dispose();
-  lastActivated.delete(key);
-  const wasActive = useShell.getState().activeKey === key;
-  let promoted: string | null = null;
-  useShell.setState((s) => {
-    const keys = s.sessionKeys.filter((k) => k !== key);
-    const nextActive =
-      s.activeKey === key
-        ? // The neighbor that took the closed tab's place, else the last tab.
-          (keys[Math.min(s.sessionKeys.indexOf(key), keys.length - 1)] ?? null)
-        : s.activeKey;
-    promoted = s.activeKey === key ? nextActive : null;
-    return { sessionKeys: keys, activeKey: nextActive };
-  });
-  dropSession(key);
+  const { wasActive, promoted } = closeTabRoster(key);
   // Promote through activateTab, not by index alone: the neighbor may be an
   // LRU-disconnected background tab, and landing on a dead stream would show
   // a frozen review until the human clicked it again.
