@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { QUICK_REPLIES } from "./actions.ts";
+import { attendance } from "./attendance.ts";
 import { DECISION_REPLIES } from "../shared/decision.ts";
 import { TargetSnippet } from "./TargetSnippet.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
@@ -504,21 +505,25 @@ export const SelectionPickers = () => {
   const info = useSession((s) => s.selectionInfo);
   const harnesses = useSession((s) => s.selectionHarnesses);
   const selection = useSession((s) => s.selection);
-  const listening = useSession((s) => s.agentsListening);
   const attendant = useSession((s) => s.lastAttendant);
-  const presence = useSession((s) => s.attendantPresence);
   const status = useSession((s) => s.status);
+  // readOnly comes from attendance: an interactive or listening session
+  // has no unattended turn to configure, so the pickers report it instead.
+  const readOnly = useSession(
+    (s) =>
+      attendance({
+        agentsListening: s.agentsListening,
+        attendantPresence: s.attendantPresence,
+        attend: false,
+        lastAttendant: s.lastAttendant,
+        resumable: s.resumable,
+      }).readOnly,
+  );
   const [busy, setBusy] = useState(false);
 
   // No recipe for this artifact's harness (or a server that predates the
   // route): there is no vocabulary to pick from, so there is no picker.
   if (info === null || status !== "active") return null;
-  // A pick here sets what the next UNATTENDED turn runs as. With the
-  // conversation open in a terminal there is no unattended turn to configure -
-  // that session already runs on what it runs on - so the pickers report it
-  // instead of pretending to set it. Same rule as a listening agent; presence
-  // just sees the case the listener count cannot.
-  const readOnly = listening > 0 || presence?.interactive === true;
   const models = info.models ?? [];
   const ladder = effortLadder(info, selection.model ?? "") ?? [];
   const modelValue = readOnly ? (attendant?.model ?? "") : (selection.model ?? "");
