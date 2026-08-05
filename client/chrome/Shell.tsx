@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useStore } from "zustand";
-import { attentionStateOf, isUnseen } from "./attention.ts";
+import { hubAttentionFor, tabAttention } from "./attention.ts";
 import { bridgeBox } from "./bridge-box.ts";
 import { matchScore, openSplit } from "./list.ts";
 import { SessionView } from "./Chrome.tsx";
@@ -49,31 +49,20 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
  * combined object selector would defeat useSyncExternalStore's equality check.
  */
 const TabAttention = ({ handle }: { readonly handle: SessionHandle }) => {
-  const hubEntry = useHub((s) => {
-    const id = s.sessions.find((row) => row.artifact === handle.key)?.id;
-    return id !== undefined ? s.attention[id] : undefined;
-  });
+  const hubEntry = useHub((s) => hubAttentionFor(s.sessions, s.attention, handle.key));
   const viewed = useShell((s) => s.viewedSeq[handle.key]);
   const active = useShell((s) => s.activeKey === handle.key);
   const storeQuestions = useStore(handle.store, (s) => s.questions.some((q) => !q.answered));
   const storeWorking = useStore(handle.store, (s) => s.agentWorking !== null);
-  // Which source is FRESH follows the stream: a connected tab's own SSE is
-  // push (instant), so it joins the hub map in a union - set-fast from the
-  // push side, cleared within a poll tick. A disconnected (evicted) tab's
-  // store is FROZEN at eviction time; unioning it in would hold a stale dot
-  // forever, so only the hub speaks for it (M3.1) - with the frozen store as
-  // the last resort when the hub has no entry at all.
   const live = handle.connected();
-  const state = attentionStateOf({
-    openQuestions: live
-      ? Math.max(hubEntry?.openQuestions ?? 0, storeQuestions ? 1 : 0)
-      : (hubEntry?.openQuestions ?? (storeQuestions ? 1 : 0)),
-    working: live
-      ? (hubEntry?.working ?? false) || storeWorking
-      : (hubEntry?.working ?? storeWorking),
-    // The tab in FRONT is being looked at - unseen is a background-tab state
-    // by definition (M3.2), and the marker map only knows hub-fed logs.
-    unseen: !active && hubEntry !== undefined && isUnseen(hubEntry.lastEventSeq, viewed),
+  // The live/evicted union, the active-tab guard and the id↔artifact join all
+  // live behind tabAttention now; this component is a selector plus a call.
+  const { state } = tabAttention({
+    active,
+    hub: hubEntry,
+    live,
+    own: { openQuestions: storeQuestions, working: storeWorking },
+    viewed,
   });
   if (state === "question") {
     return (
