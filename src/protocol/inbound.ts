@@ -36,6 +36,12 @@ export const decoded = <T>(value: T): Decoded<T> => ({ ok: true, value });
 
 // ---- shared validators -----------------------------------------------------
 
+/** Coerce an unknown to string-or-undefined. Replaces every inline
+ *  `typeof body.x === "string"` guard so no route body carries a raw typeof
+ *  check (M5.2). */
+export const asString = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined;
+
 /** A multi-anchor list is bounded so a runaway client cannot flood the log
  *  with one POST; the chrome caps collection at the same number. */
 export const MAX_ANCHORS = 8;

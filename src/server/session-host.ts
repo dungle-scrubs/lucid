@@ -4,6 +4,7 @@ import { parseHTML } from "linkedom";
 import { basename, join } from "node:path";
 import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
 import {
+  asString,
   decodeAck,
   decodeAnnotation,
   decodeBind,
@@ -414,9 +415,11 @@ export const createSessionHost = (
 
   const handleQuestion = async (req: Request): Promise<Response> => {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body || typeof body.id !== "string") {
+    const id = asString(body?.id);
+    if (!body || id === undefined) {
       return json({ error: "invalid question" }, 400);
     }
+    const ref = asString(body.ref);
     const attendant = parseAttendant(body.attendant);
     // The rich grouped form (D12), when the caller sent one. Normalized and
     // re-validated HERE even though the CLI already did: the HTTP route is
@@ -434,9 +437,9 @@ export const createSessionHost = (
       await serverAppend([
         {
           t: "question",
-          id: body.id,
+          id,
           text: legacy.text,
-          ...(typeof body.ref === "string" ? { ref: body.ref } : {}),
+          ...(ref ? { ref } : {}),
           ...(legacy.options ? { options: legacy.options } : {}),
           ...(legacy.multi ? { multi: true } : {}),
           group,
@@ -445,16 +448,17 @@ export const createSessionHost = (
       ]);
       return json({ ok: true });
     }
-    if (typeof body.text !== "string" || body.text.trim() === "") {
+    const text = asString(body.text);
+    if (text === undefined || text.trim() === "") {
       return json({ error: "invalid question" }, 400);
     }
     const options = parseQuestionOptions(body.options);
     await serverAppend([
       {
         t: "question",
-        id: body.id,
-        text: body.text,
-        ...(typeof body.ref === "string" ? { ref: body.ref } : {}),
+        id,
+        text,
+        ...(ref ? { ref } : {}),
         ...(options.length > 0 ? { options } : {}),
         ...(body.multi === true && options.length > 0 ? { multi: true } : {}),
         ...(attendant ? { attendant } : {}),
@@ -469,11 +473,13 @@ export const createSessionHost = (
     // answer has no `items`: a grouped answer carries its content there, and
     // demanding a field it does not use would 400 a valid rich POST before the
     // shared validator ever saw it.
+    const ansId = asString(body?.id);
+    const questionId = asString(body?.questionId);
     if (
       !body ||
-      typeof body.id !== "string" ||
-      typeof body.questionId !== "string" ||
-      (body.items === undefined && typeof body.text !== "string")
+      ansId === undefined ||
+      questionId === undefined ||
+      (body.items === undefined && asString(body.text) === undefined)
     ) {
       return json({ error: "invalid answer" }, 400);
     }
@@ -490,7 +496,8 @@ export const createSessionHost = (
     // artifact reference, and/or images - options and anchor reuse the same
     // validators as annotations.
     const decided = !skipped && !unclear;
-    const text = skipped || typeof body.text !== "string" ? "" : body.text;
+    const bodyText = asString(body.text);
+    const text = skipped || bodyText === undefined ? "" : bodyText;
     const options =
       decided && Array.isArray(body.options)
         ? body.options.filter((o): o is string => typeof o === "string" && o.length > 0)
@@ -519,7 +526,7 @@ export const createSessionHost = (
     let grouped = false;
     if (decided) {
       const state = await sessionState(paths);
-      const asked = state.questions.find((q) => q.id === body.questionId);
+      const asked = state.questions.find((q) => q.id === questionId);
       const group = asked?.group ?? [];
       if (group.length > 0) {
         // A client that only speaks the legacy wire answered a one-question
@@ -542,7 +549,7 @@ export const createSessionHost = (
               {
                 code: "unknown_question",
                 message: `Question "${body.questionId}" has no grouped contract.`,
-                questionId: body.questionId,
+                questionId: questionId,
               },
             ],
           },
@@ -566,8 +573,8 @@ export const createSessionHost = (
     await serverAppend([
       {
         t: "question_answered",
-        id: body.id,
-        questionId: body.questionId,
+        id: ansId,
+        questionId,
         text: legacyText,
         ...(skipped ? { skipped: true } : {}),
         ...(unclear ? { unclear: true } : {}),
@@ -808,7 +815,7 @@ export const createSessionHost = (
     // so a truncated or bodyless POST is refused instead of silently wiping
     // what every later unattended turn reuses.
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body || typeof body !== "object") {
+    if (!body) {
       return json({ error: "selection body must be a JSON object" }, 400);
     }
     const selection = sanitizeSelection({
