@@ -3,7 +3,15 @@ import { readFile } from "node:fs/promises";
 import { parseHTML } from "linkedom";
 import { basename, join } from "node:path";
 import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
-import { decodeAnnotation } from "../protocol/inbound.ts";
+import {
+  decodeAck,
+  decodeAnnotation,
+  decodeFork,
+  decodeMessage,
+  decodeReply,
+  decodeRevert,
+  decodeTurnEnded,
+} from "../protocol/inbound.ts";
 import {
   harnessSessionId,
   type HarnessPresence,
@@ -15,12 +23,7 @@ import { artifactAttendant, readLastAttendant } from "../core/attendant.ts";
 import { readContextSidecar, sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
 import { versionRef } from "../core/fold.ts";
-import {
-  sanitizeAttendant,
-  TURN_END_CODE,
-  TURN_END_REASONS,
-  type TurnEndReason,
-} from "../core/events.ts";
+import { sanitizeAttendant } from "../core/events.ts";
 import { appendSessionBindings } from "../core/deliver.ts";
 import { WELL_FORMED_ID } from "../core/request-id.ts";
 import {
@@ -64,7 +67,6 @@ import type {
   SessionsResponse,
   StateResponse,
 } from "../protocol/wire.ts";
-import { sanitizeBlocked, sanitizeProgress } from "../core/progress.ts";
 import { serveBundleAsset } from "./assets.ts";
 import { createChannel, wantsUpgrade, type Subscriber, type Upgrade } from "./live.ts";
 import { resolveAsset, validateHeaders } from "./security.ts";
@@ -364,61 +366,25 @@ export const createSessionHost = (
   };
 
   const handleFork = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    // The fork id becomes a filesystem path component in the launcher
-    // (`.lucid/<name>/forks/<id>/`), so it is held to a strict safe charset -
-    // no path separators or dots - not merely "non-blank" like a log-only id.
-    // A blank/traversing id would also collide in the shared dedupe set (D-057).
-    if (!body || typeof body.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.id)) {
-      return json({ error: "invalid fork id" }, 400);
-    }
-    if (typeof body.note !== "string" || body.note.trim() === "") {
-      return json({ error: "empty fork directive" }, 400);
-    }
-    const anchor = parseAnchor(body.target);
-    if ("error" in anchor) return json({ error: anchor.error }, 400);
-    const version =
-      typeof body.version === "number" && Number.isInteger(body.version) ? body.version : 0;
-    // Same pasted blobs an annotation carries, just attached to a fork directive.
-    const images = parseImages(body.images);
-    const authoredAt =
-      typeof body.authoredAt === "string" &&
-      body.authoredAt.length <= 40 &&
-      !Number.isNaN(Date.parse(body.authoredAt))
-        ? body.authoredAt
-        : undefined;
-    await serverAppend([
-      {
-        t: "fork",
-        id: body.id,
-        version,
-        target: anchor,
-        note: body.note,
-        ...(authoredAt ? { authoredAt } : {}),
-        ...(images.length > 0 ? { images } : {}),
-      },
-    ]);
+    const result = decodeFork(await req.json().catch(() => null));
+    if (!result.ok) return json({ error: result.error }, 400);
+    await serverAppend([result.value]);
     return json({ ok: true });
   };
 
   const handleMessage = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body || typeof body.id !== "string" || typeof body.text !== "string") {
-      return json({ error: "invalid message" }, 400);
-    }
-    const refs = Array.isArray(body.refs)
-      ? body.refs.filter((r): r is string => typeof r === "string")
-      : [];
-    const images = parseImages(body.images);
-    if (body.text.trim() === "" && images.length === 0) {
-      return json({ error: "empty message" }, 400);
-    }
-    if (typeof body.session === "string" && body.session !== paths.artifactPath) {
+    const raw = await req.json().catch(() => null);
+    const result = decodeMessage(raw);
+    if (!result.ok) return json({ error: result.error }, 400);
+    // The session check stays in the handler: it reads `paths.artifactPath`,
+    // which the decoder (a pure function of the body) does not know.
+    if (
+      typeof (raw as { session?: unknown })?.session === "string" &&
+      (raw as { session: string }).session !== paths.artifactPath
+    ) {
       return json({ error: "a different session is running at this address" }, 409);
     }
-    await serverAppend([
-      { t: "prompt", id: body.id, refs, text: body.text, ...(images.length > 0 ? { images } : {}) },
-    ]);
+    await serverAppend([result.value]);
     return json({ ok: true });
   };
 
@@ -611,26 +577,9 @@ export const createSessionHost = (
   };
 
   const handleRevert = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (
-      !body ||
-      typeof body.id !== "string" ||
-      typeof body.why !== "string" ||
-      typeof body.targetVersion !== "number"
-    ) {
-      return json({ error: "invalid revert" }, 400);
-    }
-    const anchor = parseAnchor(body.target);
-    if ("error" in anchor) return json({ error: anchor.error }, 400);
-    await serverAppend([
-      {
-        t: "revert",
-        id: body.id,
-        target: anchor,
-        targetVersion: Math.trunc(body.targetVersion),
-        why: body.why,
-      },
-    ]);
+    const result = decodeRevert(await req.json().catch(() => null));
+    if (!result.ok) return json({ error: result.error }, 400);
+    await serverAppend([result.value]);
     return json({ ok: true });
   };
 
@@ -728,38 +677,9 @@ export const createSessionHost = (
   };
 
   const handleAck = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body || typeof body.id !== "string") return json({ error: "invalid ack" }, 400);
-    const intent = body.intent === "revise" || body.intent === "reply" ? body.intent : undefined;
-    const progress = sanitizeProgress(body.progress);
-    const blocked = sanitizeBlocked(body.blocked);
-    const attendant = parseAttendant(body.attendant);
-    // The delivered range (D20). A non-integer or negative claim is dropped
-    // rather than clamped: the panel says "recorded" instead of asserting a
-    // delivery from a value the writer got wrong.
-    const covers =
-      typeof body.covers === "number" && Number.isInteger(body.covers) && body.covers >= 0
-        ? body.covers
-        : undefined;
-    // Which turn this ack belongs to (D-013). Bounded like every other
-    // caller-supplied identifier; absent is the anonymous turn, which is how
-    // every pre-turnId writer folds.
-    const turnId =
-      typeof body.turnId === "string" && body.turnId.length > 0
-        ? body.turnId.slice(0, 128)
-        : undefined;
-    await serverAppend([
-      {
-        t: "agent_ack",
-        id: body.id,
-        ...(intent ? { intent } : {}),
-        ...(progress ? { progress } : {}),
-        ...(blocked ? { blocked } : {}),
-        ...(covers !== undefined ? { covers } : {}),
-        ...(turnId ? { turnId } : {}),
-        ...(attendant ? { attendant } : {}),
-      },
-    ]);
+    const result = decodeAck(await req.json().catch(() => null));
+    if (!result.ok) return json({ error: result.error }, 400);
+    await serverAppend([result.value]);
     return json({ ok: true });
   };
 
@@ -807,41 +727,16 @@ export const createSessionHost = (
    * There is deliberately no free-text field to validate.
    */
   const handleTurnEnded = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body || typeof body.turnId !== "string" || body.turnId.length === 0) {
-      return json({ error: "invalid turnId" }, 400);
-    }
-    if (typeof body.reason !== "string" || !TURN_END_REASONS.has(body.reason)) {
-      return json({ error: "invalid reason" }, 400);
-    }
-    if (
-      body.code !== undefined &&
-      (typeof body.code !== "string" || !TURN_END_CODE.test(body.code))
-    ) {
-      return json({ error: "invalid code" }, 400);
-    }
-    const attendant = parseAttendant(body.attendant);
-    await serverAppend([
-      {
-        t: "agent_turn_ended",
-        turnId: body.turnId.slice(0, 128),
-        reason: body.reason as TurnEndReason,
-        ...(typeof body.code === "string" ? { code: body.code } : {}),
-        ...(attendant ? { attendant } : {}),
-      },
-    ]);
+    const result = decodeTurnEnded(await req.json().catch(() => null));
+    if (!result.ok) return json({ error: result.error }, 400);
+    await serverAppend([result.value]);
     return json({ ok: true });
   };
 
   const handleReply = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body || typeof body.id !== "string" || typeof body.text !== "string") {
-      return json({ error: "invalid reply" }, 400);
-    }
-    const attendant = parseAttendant(body.attendant);
-    await serverAppend([
-      { t: "agent_reply", id: body.id, text: body.text, ...(attendant ? { attendant } : {}) },
-    ]);
+    const result = decodeReply(await req.json().catch(() => null));
+    if (!result.ok) return json({ error: result.error }, 400);
+    await serverAppend([result.value]);
     return json({ ok: true });
   };
 

@@ -11,8 +11,10 @@
  * `decode -> serverAppend -> ok`.
  */
 import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
-import type { AttendantStamp } from "../core/events.ts";
+import type { AgentProgress } from "../protocol/wire.ts";
+import type { AttendantStamp, TurnEndReason } from "../core/events.ts";
 import { sanitizeAttendant } from "../core/events.ts";
+import { sanitizeBlocked, sanitizeProgress } from "../core/progress.ts";
 import type { PromptImage } from "../core/events.ts";
 
 /** A decoded refusal: the handler returns it as a 400 with the error message. */
@@ -138,5 +140,196 @@ export const decodeAnnotation = (body: unknown): DecodeResult<DecodedAnnotation>
     note: b.note,
     ...(authoredAt ? { authoredAt } : {}),
     ...(images.length > 0 ? { images } : {}),
+  });
+};
+
+// ---- fork ------------------------------------------------------------------
+
+export interface DecodedFork {
+  readonly t: "fork";
+  readonly id: string;
+  readonly version: number;
+  readonly target: Anchor;
+  readonly note: string;
+  readonly authoredAt?: string;
+  readonly images?: readonly PromptImage[];
+}
+
+const WELL_FORMED_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** Decode a `POST /__lucid/fork` body. The fork id becomes a filesystem path
+ *  component, so it is held to a strict safe charset - no path separators or
+ *  dots - not merely "non-blank" like a log-only id. */
+export const decodeFork = (body: unknown): DecodeResult<DecodedFork> => {
+  if (!body || typeof body !== "object") return refuse("invalid fork");
+  const b = body as Record<string, unknown>;
+  if (typeof b.id !== "string" || !WELL_FORMED_ID.test(b.id)) return refuse("invalid fork id");
+  if (typeof b.note !== "string" || b.note.trim() === "") return refuse("empty fork directive");
+  const anchor = parseAnchor(b.target);
+  if ("error" in anchor) return refuse(anchor.error);
+  const images = decodeImages(b.images);
+  const authoredAt = decodeAuthoredAt(b.authoredAt);
+  return decoded({
+    t: "fork",
+    id: b.id,
+    version: decodeVersion(b.version),
+    target: anchor,
+    note: b.note,
+    ...(authoredAt ? { authoredAt } : {}),
+    ...(images.length > 0 ? { images } : {}),
+  });
+};
+
+// ---- message ---------------------------------------------------------------
+
+export interface DecodedMessage {
+  readonly t: "prompt";
+  readonly id: string;
+  readonly text: string;
+  readonly refs: readonly string[];
+  readonly images?: readonly PromptImage[];
+}
+
+/** Decode a `POST /__lucid/message` body. A blank message with no images is
+ *  refused. `refs` is an optional array of strings; non-strings are dropped. */
+export const decodeMessage = (body: unknown): DecodeResult<DecodedMessage> => {
+  if (!body || typeof body !== "object") return refuse("invalid message");
+  const b = body as Record<string, unknown>;
+  if (typeof b.id !== "string" || typeof b.text !== "string") return refuse("invalid message");
+  const refs = Array.isArray(b.refs)
+    ? b.refs.filter((r): r is string => typeof r === "string")
+    : [];
+  const images = decodeImages(b.images);
+  if (b.text.trim() === "" && images.length === 0) return refuse("empty message");
+  return decoded({
+    t: "prompt",
+    id: b.id,
+    text: b.text,
+    refs,
+    ...(images.length > 0 ? { images } : {}),
+  });
+};
+
+// ---- revert ----------------------------------------------------------------
+
+export interface DecodedRevert {
+  readonly t: "revert";
+  readonly id: string;
+  readonly target: Anchor;
+  readonly targetVersion: number;
+  readonly why: string;
+}
+
+/** Decode a `POST /__lucid/revert` body. */
+export const decodeRevert = (body: unknown): DecodeResult<DecodedRevert> => {
+  if (!body || typeof body !== "object") return refuse("invalid revert");
+  const b = body as Record<string, unknown>;
+  if (typeof b.id !== "string" || typeof b.why !== "string" || typeof b.targetVersion !== "number")
+    return refuse("invalid revert");
+  const anchor = parseAnchor(b.target);
+  if ("error" in anchor) return refuse(anchor.error);
+  return decoded({
+    t: "revert",
+    id: b.id,
+    target: anchor,
+    targetVersion: Math.trunc(b.targetVersion),
+    why: b.why,
+  });
+};
+
+// ---- reply -----------------------------------------------------------------
+
+export interface DecodedReply {
+  readonly t: "agent_reply";
+  readonly id: string;
+  readonly text: string;
+  readonly attendant?: AttendantStamp;
+}
+
+/** Decode a `POST /__lucid/reply` body. */
+export const decodeReply = (body: unknown): DecodeResult<DecodedReply> => {
+  if (!body || typeof body !== "object") return refuse("invalid reply");
+  const b = body as Record<string, unknown>;
+  if (typeof b.id !== "string" || typeof b.text !== "string") return refuse("invalid reply");
+  const attendant = decodeAttendant(b.attendant);
+  return decoded({
+    t: "agent_reply",
+    id: b.id,
+    text: b.text,
+    ...(attendant ? { attendant } : {}),
+  });
+};
+
+// ---- ack -------------------------------------------------------------------
+
+export interface DecodedAck {
+  readonly t: "agent_ack";
+  readonly id: string;
+  readonly intent?: "revise" | "reply";
+  readonly progress?: AgentProgress;
+  readonly blocked?: string;
+  readonly covers?: number;
+  readonly turnId?: string;
+  readonly attendant?: AttendantStamp;
+}
+
+/** Decode a `POST /__lucid/ack` body. */
+export const decodeAck = (body: unknown): DecodeResult<DecodedAck> => {
+  if (!body || typeof body !== "object") return refuse("invalid ack");
+  const b = body as Record<string, unknown>;
+  if (typeof b.id !== "string") return refuse("invalid ack");
+  const intent = b.intent === "revise" || b.intent === "reply" ? b.intent : undefined;
+  const progress = sanitizeProgress(b.progress);
+  const blockedRaw = sanitizeBlocked(b.blocked);
+  const blocked = blockedRaw;
+  const covers =
+    typeof b.covers === "number" && Number.isInteger(b.covers) && b.covers >= 0
+      ? b.covers
+      : undefined;
+  const turnId =
+    typeof b.turnId === "string" && b.turnId.length > 0 ? b.turnId.slice(0, 128) : undefined;
+  const attendant = decodeAttendant(b.attendant);
+  return decoded({
+    t: "agent_ack",
+    id: b.id,
+    ...(intent ? { intent } : {}),
+    ...(progress ? { progress } : {}),
+    ...(blocked ? { blocked } : {}),
+    ...(covers !== undefined ? { covers } : {}),
+    ...(turnId ? { turnId } : {}),
+    ...(attendant ? { attendant } : {}),
+  });
+};
+
+// ---- turn-ended ------------------------------------------------------------
+
+const TURN_END_REASONS = new Set(["done", "exited", "failed", "usage_limit"]);
+const TURN_END_CODE = /^[A-Za-z0-9_-]{1,64}$/;
+
+export interface DecodedTurnEnded {
+  readonly t: "agent_turn_ended";
+  readonly turnId: string;
+  readonly reason: TurnEndReason;
+  readonly code?: string;
+  readonly attendant?: AttendantStamp;
+}
+
+/** Decode a `POST /__lucid/turn-ended` body. Every field is a CLOSED set,
+ *  refused rather than coerced. */
+export const decodeTurnEnded = (body: unknown): DecodeResult<DecodedTurnEnded> => {
+  if (!body || typeof body !== "object") return refuse("invalid turnId");
+  const b = body as Record<string, unknown>;
+  if (typeof b.turnId !== "string" || b.turnId.length === 0) return refuse("invalid turnId");
+  if (typeof b.reason !== "string" || !TURN_END_REASONS.has(b.reason))
+    return refuse("invalid reason");
+  if (b.code !== undefined && (typeof b.code !== "string" || !TURN_END_CODE.test(b.code)))
+    return refuse("invalid code");
+  const attendant = decodeAttendant(b.attendant);
+  return decoded({
+    t: "agent_turn_ended",
+    turnId: b.turnId.slice(0, 128),
+    reason: b.reason as TurnEndReason,
+    ...(typeof b.code === "string" ? { code: b.code } : {}),
+    ...(attendant ? { attendant } : {}),
   });
 };

@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+  decodeAck,
   decodeAnchorList,
   decodeAnnotation,
   decodeAuthoredAt,
+  decodeFork,
   decodeImages,
+  decodeMessage,
+  decodeReply,
+  decodeRevert,
+  decodeTurnEnded,
   decodeVersion,
   MAX_ANCHORS,
 } from "../src/protocol/inbound.ts";
@@ -156,5 +162,101 @@ describe("decodeAnnotation", () => {
       expect(result.value.authoredAt).toBe("2024-01-15T10:30:00Z");
       expect(result.value.images).toHaveLength(1);
     }
+  });
+});
+
+describe("decodeFork", () => {
+  test("accepts a valid fork with safe id", () => {
+    const result = decodeFork({ id: "fork-1", note: "branch here", target: validAnchor });
+    expect(result.ok).toBe(true);
+  });
+  test("refuses unsafe id (path separators)", () => {
+    expect(decodeFork({ id: "../evil", note: "x", target: validAnchor }).ok).toBe(false);
+  });
+  test("refuses empty note", () => {
+    expect(decodeFork({ id: "f1", note: "  ", target: validAnchor }).ok).toBe(false);
+  });
+});
+
+describe("decodeMessage", () => {
+  test("accepts a valid message", () => {
+    const result = decodeMessage({ id: "m1", text: "hello world" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.text).toBe("hello world");
+  });
+  test("refuses blank text with no images", () => {
+    expect(decodeMessage({ id: "m1", text: "  " }).ok).toBe(false);
+  });
+  test("carries refs as strings only", () => {
+    const result = decodeMessage({ id: "m1", text: "hi", refs: ["a", 42, "b"] });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.refs).toEqual(["a", "b"]);
+  });
+});
+
+describe("decodeRevert", () => {
+  test("accepts a valid revert", () => {
+    const result = decodeRevert({ id: "r1", why: "typo", targetVersion: 3, target: validAnchor });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.targetVersion).toBe(3);
+  });
+  test("refuses missing why", () => {
+    expect(decodeRevert({ id: "r1", targetVersion: 3, target: validAnchor }).ok).toBe(false);
+  });
+});
+
+describe("decodeReply", () => {
+  test("accepts a valid reply", () => {
+    const result = decodeReply({ id: "rep1", text: "done" });
+    expect(result.ok).toBe(true);
+  });
+  test("refuses missing text", () => {
+    expect(decodeReply({ id: "rep1" }).ok).toBe(false);
+  });
+});
+
+describe("decodeAck", () => {
+  test("accepts a minimal ack", () => {
+    const result = decodeAck({ id: "ack1" });
+    expect(result.ok).toBe(true);
+  });
+  test("accepts intent and covers", () => {
+    const result = decodeAck({ id: "ack1", intent: "revise", covers: 5 });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.intent).toBe("revise");
+      expect(result.value.covers).toBe(5);
+    }
+  });
+  test("drops non-integer covers", () => {
+    const result = decodeAck({ id: "ack1", covers: 3.5 });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.covers).toBeUndefined();
+  });
+  test("drops negative covers", () => {
+    const result = decodeAck({ id: "ack1", covers: -1 });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.covers).toBeUndefined();
+  });
+});
+
+describe("decodeTurnEnded", () => {
+  test("accepts a valid turn-ended", () => {
+    const result = decodeTurnEnded({ turnId: "t1", reason: "done" });
+    expect(result.ok).toBe(true);
+  });
+  test("refuses unknown reason", () => {
+    expect(decodeTurnEnded({ turnId: "t1", reason: "mystery" }).ok).toBe(false);
+  });
+  test("refuses empty turnId", () => {
+    expect(decodeTurnEnded({ turnId: "", reason: "done" }).ok).toBe(false);
+  });
+  test("accepts optional code", () => {
+    const result = decodeTurnEnded({ turnId: "t1", reason: "failed", code: "OOM" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.code).toBe("OOM");
+  });
+  test("refuses malformed code", () => {
+    expect(decodeTurnEnded({ turnId: "t1", reason: "done", code: "has spaces" }).ok).toBe(false);
   });
 });
