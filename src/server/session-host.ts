@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { parseHTML } from "linkedom";
 import { basename, join } from "node:path";
 import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
+import { decodeAnnotation } from "../protocol/inbound.ts";
 import {
   harnessSessionId,
   type HarnessPresence,
@@ -356,44 +357,9 @@ export const createSessionHost = (
   // ---- request handling -----------------------------------------------------
 
   const handleAnnotation = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body || typeof body.id !== "string" || typeof body.note !== "string") {
-      return json({ error: "invalid annotation" }, 400);
-    }
-    // Cmd-collected picks arrive as `targets`; `target` is DERIVED as the
-    // first, never taken from the caller beside them (two sources for one
-    // spot is how they drift). A singleton list normalizes to the canonical
-    // single form so the log has one shape per arity.
-    const targetList = parseAnchorList(body.targets, "targets");
-    if (targetList && "error" in targetList) return json({ error: targetList.error }, 400);
-    const anchor = targetList ? targetList[0]! : parseAnchor(body.target);
-    if ("error" in anchor) return json({ error: anchor.error }, 400);
-    const targets = targetList && targetList.length > 1 ? targetList : undefined;
-    const version =
-      typeof body.version === "number" && Number.isInteger(body.version) ? body.version : 0;
-    // Same validator as a message's images: an annotation's images are the same
-    // pasted blobs, just located.
-    const images = parseImages(body.images);
-    // Client-supplied authorship time, display metadata only (seq stays the
-    // cursor). Bounded sanity check rather than trust: a parseable timestamp.
-    const authoredAt =
-      typeof body.authoredAt === "string" &&
-      body.authoredAt.length <= 40 &&
-      !Number.isNaN(Date.parse(body.authoredAt))
-        ? body.authoredAt
-        : undefined;
-    await serverAppend([
-      {
-        t: "annotation",
-        id: body.id,
-        version,
-        target: anchor,
-        ...(targets ? { targets } : {}),
-        note: body.note,
-        ...(authoredAt ? { authoredAt } : {}),
-        ...(images.length > 0 ? { images } : {}),
-      },
-    ]);
+    const result = decodeAnnotation(await req.json().catch(() => null));
+    if (!result.ok) return json({ error: result.error }, 400);
+    await serverAppend([result.value]);
     return json({ ok: true });
   };
 
