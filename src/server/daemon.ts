@@ -51,8 +51,11 @@ import { DEFAULT_FRAME, type HubFrame, type HubListing } from "../protocol/frame
 import type {
   HubAttention,
   HubCreateAccepted,
+  HubCreateRequest,
   HubIdentity,
+  HubOpenRequest,
   HubOpenResult,
+  HubRootsRequest,
   HubRootsResponse,
   HubSession,
   HubSessionsResponse,
@@ -807,7 +810,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    *  daemon records the pointer, resolves the mount id, and tells connected
    *  shells. It never spawns anything. */
   const handleHubOpen = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    const body = (await req.json().catch(() => null)) as HubOpenRequest | null;
     if (!body || typeof body.artifact !== "string" || body.artifact.length === 0) {
       return json({ error: "invalid open" }, 400);
     }
@@ -860,7 +863,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     if (!attend) {
       return json({ error: "create requires the hub's attend mode (lucid hub --attend)" }, 403);
     }
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+    const body = (await req.json().catch(() => null)) as HubCreateRequest | null;
     const project = typeof body?.project === "string" ? body.project : "";
     const name = typeof body?.name === "string" ? body.name : "";
     // Attach the identifiers the moment they exist, so even a refused create
@@ -1273,8 +1276,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    * human wondering whether they picked the right one.
    */
   const handleHubRoots = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    const chosen = await chooseFolder(body, "Choose a folder to scan for Lucid sessions");
+    const body = (await req.json().catch(() => null)) as HubRootsRequest | null;
+    const chosen = await chooseFolder(
+      body as Record<string, unknown> | null,
+      "Choose a folder to scan for Lucid sessions",
+    );
     if ("res" in chosen) return chosen.res;
     await addRoot(chosen.dir, rootsPath);
     // The listing's cached answer was computed for the OLD root set, so it is
