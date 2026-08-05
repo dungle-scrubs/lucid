@@ -87,14 +87,19 @@ export const CopyPopover = ({
     }
   }, [showTargets, version, viewingVersion, dispatch]);
 
-  // Scroll: a capture-phase window listener catches ANY scrollable element in
-  // the parent (the review panel, the thread viewport). The release point
-  // moves relative to the reader's attention once they scroll, so the anchor
-  // is stale - dismiss rather than chase it (RFC Dismissal lifecycle).
+  // Scroll: a NON-capture window listener, deliberately. A document scroll
+  // moves the iframe - and with it the anchored release point - so it
+  // dismisses (RFC: dismiss when the anchor moves). Element scrolls do not
+  // bubble, so inner scrolls (the review panel, the thread viewport) never
+  // reach this listener; capture-phase would catch them all, and the panel
+  // column scrolling the annotation composer into view on the SAME
+  // drag-select would dismiss the Popover the frame it opened. Scrolls
+  // INSIDE the opaque-origin artifact are invisible to the parent either
+  // way; covering those needs the overlay to report them (not done yet).
   useEffect(() => {
     const onScroll = (): void => dispatch({ kind: "scroll" });
-    window.addEventListener("scroll", onScroll, true);
-    return () => window.removeEventListener("scroll", onScroll, true);
+    window.addEventListener("scroll", onScroll);
+    return () => window.removeEventListener("scroll", onScroll);
   }, [dispatch]);
 
   // A failed clipboard write surfaces a brief "Copy failed" state. Reset it
@@ -118,8 +123,9 @@ export const CopyPopover = ({
 
   // The VirtualElement anchor (spike A-001): Base UI's Positioner accepts this
   // and positions against a coordinate with no real trigger element. The rect
-  // is the zero-size translated release point; collision handling flips the
-  // Popover above/below so it never covers the selection's end.
+  // is the zero-size translated release point; the Popover sits ABOVE it
+  // (Medium-style), and collision handling flips it below when there is no
+  // room above.
   const anchor = useMemo(
     () => ({ getBoundingClientRect: () => state?.anchorRect ?? ZERO_RECT }),
     [state],
@@ -138,12 +144,21 @@ export const CopyPopover = ({
     >
       <PopoverPositioner
         anchor={anchor}
-        side="bottom"
+        side="top"
         align="start"
         sideOffset={8}
         collisionAvoidance={{ side: "flip", align: "shift" }}
       >
-        <PopoverContent data-test="copy-popover" className="flex min-w-[96px] items-center">
+        <PopoverContent
+          data-test="copy-popover"
+          className="flex min-w-[96px] items-center"
+          // A mouse-driven selection Popover must not grab focus: the same
+          // targeting-mode drag opens the annotation composer, whose autofocus
+          // this would fight (and whose focus-scroll dismissed the Popover
+          // before the reader ever saw it). The Copy button stays clickable;
+          // it just never steals the keyboard.
+          initialFocus={false}
+        >
           <button
             type="button"
             data-test="copy-popover-copy"
