@@ -21,14 +21,14 @@ const failure = { artifact: "/p/.lucid/x.html", code: 1, tail: "the old failure 
 
 describe("a heartbeat invalidates a stale failure for the SAME artifact", () => {
   test("a retry of a previously failed artifact is not reported as failed", () => {
-    const before = { createFailed: failure, createProgress: {} };
+    const before = { createFailed: failure, createProgress: {}, createTurns: {} };
     const after = noteCreateProgress(before, "/p/.lucid/x.html", frame());
     expect(after.createFailed).toBeNull();
     expect(after.createProgress["/p/.lucid/x.html"]).toBeDefined();
   });
 
   test("a heartbeat for a DIFFERENT artifact leaves the failure standing", () => {
-    const before = { createFailed: failure, createProgress: {} };
+    const before = { createFailed: failure, createProgress: {}, createTurns: {} };
     const after = noteCreateProgress(before, "/p/.lucid/other.html", frame());
     expect(after.createFailed).toEqual(failure);
   });
@@ -39,6 +39,7 @@ describe("a failure invalidates the heartbeat for that artifact", () => {
     const before = {
       createFailed: null,
       createProgress: { "/p/.lucid/x.html": frame(), "/p/.lucid/y.html": frame() },
+      createTurns: {},
     };
     const after = noteCreateFailed(before, failure);
     expect(after.createProgress["/p/.lucid/x.html"]).toBeUndefined();
@@ -79,6 +80,7 @@ describe("starting a turn forgets both - the retry begins with no history", () =
     const before = {
       createFailed: failure,
       createProgress: { "/p/.lucid/x.html": frame(480_000) },
+      createTurns: {},
     };
     const after = forgetCreate(before, "/p/.lucid/x.html");
     expect(after.createFailed).toBeNull();
@@ -89,6 +91,7 @@ describe("starting a turn forgets both - the retry begins with no history", () =
     const before = {
       createFailed: null,
       createProgress: { "/p/.lucid/x.html": frame(), "/p/.lucid/live.html": frame() },
+      createTurns: {},
     };
     const after = forgetCreate(before, "/p/.lucid/x.html");
     expect(after.createProgress["/p/.lucid/live.html"]).toBeDefined();
