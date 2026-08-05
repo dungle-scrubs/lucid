@@ -3940,6 +3940,24 @@
           "testFile": "test/e2e/hostile.e2e.ts",
           "testName": "picking the third of four identically-stamped rows marks the THIRD",
           "mutation": "src/core/payload.ts: sever anchor resolution (const resolved = null) - the orphan re-render empties the committed-card count ahead of the badge query, so the test reds there (measured). Single-layer ladder breaks do NOT red it: reverting 9df5eae was applied and observed GREEN, because computeFingerprint folds the sibling index and disambiguates a layer above the fall-through (D-064)."
+        },
+        {
+          "id": "hostile-patched-import-node",
+          "title": "An artifact that patches Document.prototype.importNode cannot intercept the swap",
+          "steps": [
+            "Open the corpus fixture (test/e2e/hostile-fixtures.ts, id hostile-patched-import-node)",
+            "The artifact script patches Document.prototype.importNode to mark <html> when the imported node carries #claim",
+            "The overlay mounts and swaps the artifact body; the fixture proof asserts <html> is unmarked",
+            "Pick the fixture-declared element, write the note, queue, send; lucid wait delivers the annotation"
+          ],
+          "expected": "The overlay captured importNode PRE-ARTIFACT (plan 04 M1.1 / plan 05 M2.2), so the swap imports through the captured reference and the patched realm global is never reached - <html> stays unmarked and the annotation delivers normally.",
+          "risk": "high",
+          "kind": "functional",
+          "needsCapability": "",
+          "status": "covered",
+          "testFile": "test/e2e/hostile.e2e.ts",
+          "testName": "the loop survives an artifact that patches Document.prototype.importNode to intercept the swap",
+          "mutation": "client/overlay/artifact-swap.ts: drop the operations option so the swap falls back to document.importNode - the patched realm global fires on the #claim import and the fixture proof reds. Equivalently, client/overlay/overlay.ts: drop operations: this.#swapOperations from the swapArtifactBody call (caught at unit speed by the call-site pin in test/artifact-swap.test.ts)."
         }
       ]
     }

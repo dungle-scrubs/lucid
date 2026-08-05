@@ -376,4 +376,46 @@ h1 { color: var(--accent); }`,
     note: "This third row specifically is the broken one.",
     picked: "same generated row",
   },
+  {
+    id: "hostile-patched-import-node",
+    title: "an artifact that patches Document.prototype.importNode to intercept the swap",
+    // The seam (DF-3): the overlay installs the artifact body through
+    // importNode. An artifact that patches Document.prototype.importNode
+    // could observe or redirect every node the swap imports - the import is
+    // the one operation whose interception exposes overlay-owned nodes. The
+    // overlay captures the intrinsic PRE-ARTIFACT (plan 04 M1.1 / plan 05
+    // M2.2), so the patch is never reached for the swap. The mark is gated on
+    // the imported node carrying #claim: Lit stamps its OWN shadow template
+    // through importNode too, so a bare counter would fire on rendering rather
+    // than the swap. #claim lives only in the artifact body the swap imports,
+    // so this isolates the swap's import from Lit's.
+    html: page(
+      "",
+      `<article>
+  <h1>Captured import</h1>
+  <p id="claim">The swap imports through a reference taken before this script ran.</p>
+</article>
+<script>
+  (function () {
+    var realImport = Document.prototype.importNode;
+    Document.prototype.importNode = function (node, deep) {
+      if (node && node.nodeType === 1 && node.querySelector && node.querySelector("#claim")) {
+        document.documentElement.setAttribute("data-lucid-intercepted-import", "1");
+      }
+      return realImport.call(this, node, deep);
+    };
+  })();
+</script>`,
+    ),
+    pick: "#claim",
+    note: "Captured beats patched.",
+    picked: "reference taken before",
+    proof: async (surface) => {
+      // The overlay has mounted and swapped the body by now. The swap imports
+      // the article (which carries #claim); had it reached for the patched
+      // realm global, <html> would be marked. The captured reference must have
+      // left it clean.
+      await expect(surface.locator("html[data-lucid-intercepted-import]")).toHaveCount(0);
+    },
+  },
 ];
