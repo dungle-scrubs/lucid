@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, stat } from "node:fs/promises";
 import { attentionOf } from "../core/attention.ts";
+import { recordPendingIdentity } from "../core/attendant.ts";
 import {
   ARTIFACT_DIR,
   canonicalArtifactPath,
@@ -28,12 +29,10 @@ import { artifactDocumentResponse, shellResponse, viewerResponse } from "./viewe
 import { projectOf } from "../core/project.ts";
 import { swr } from "../core/swr.ts";
 import { parseTitle, TITLE_SCAN_BYTES } from "../core/title.ts";
-import { classifyTurnFailure, readRunOutput, runOutputStart } from "../launch/turn.ts";
+import { planTurn, runTurn, type TurnOutcome } from "../launch/turn.ts";
 import { readEvents, sessionStateCacheStats, sessionStateSync } from "../core/log.ts";
 import { createArtifactPrompt } from "../launch/prompts.ts";
-import { prepareSpawnIdentity, runSpawn } from "../launch/spawn.ts";
 import {
-  buildArgv,
   defaultRecipe,
   type HarnessRegistry,
   loadRegistry,
@@ -41,12 +40,7 @@ import {
   resolveExactRecipe,
   type SpawnRecipe,
 } from "../launch/recipes.ts";
-import {
-  insertSelectionArgs,
-  sanitizeSelection,
-  selectionArgs,
-  writeSelection,
-} from "../launch/selection.ts";
+import { sanitizeSelection, selectionArgs, writeSelection } from "../launch/selection.ts";
 import { DEFAULT_FRAME, type HubFrame, type HubListing } from "../protocol/frames.ts";
 import type {
   HubAttention,
@@ -991,70 +985,55 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
         return json({ error: `no spawn recipe for harness "${harness ?? "(default)"}"` }, 400);
       }
 
-      // A pick the recipe does not offer fails HERE, with the adapter's own
-      // words, rather than as an agent turn that dies on an unknown flag.
+      const paths = sessionPaths(artifact);
+      // The daemon retains the validation ladder (M5.3 checkbox 13): a pick
+      // the recipe does not offer fails HERE, with the adapter's own words,
+      // rather than as an agent turn that dies on an unknown flag.
       const selArgs = selection ? selectionArgs(resolved.name, resolved.recipe, selection) : [];
       if ("error" in selArgs) return json({ error: selArgs.error }, 400);
-
-      const paths = sessionPaths(artifact);
-      // The identity arrangement for this launch (plan 03, M3): caller-assigned
-      // recipes get an id minted here so the child's stamps name a resumable
-      // conversation from birth; DISCOVERED harnesses mint their own and
-      // announce it - handing them a UUID was the synthetic identity that
-      // poisoned resume. Legacy identity-free recipes are refused before any
-      // process exists (HSI001): an unattended session Lucid cannot resume is
-      // a session it should not start.
-      const spawnIdentity = prepareSpawnIdentity(
-        resolved.name,
-        resolved.recipe,
-        opts.harnessesPath ?? harnessRegistryPath(),
-      );
-      const argv = insertSelectionArgs(
-        resolved.name,
-        buildArgv(
-          resolved.recipe.spawn,
-          {
-            id: spawnIdentity.assignedSessionId ?? "",
-            artifact,
-            cwd: project,
-            prompt: createArtifactPrompt(artifact, prompt, title || undefined),
-          },
-          resolved.recipe.tools,
-        ),
-        selArgs,
-        resolved.recipe.spawn,
-      );
       // The artifact folder too: the agent writes the artifact itself, and it
       // cannot write into a `.lucid/` that does not exist yet.
       await mkdir(dirname(artifact), { recursive: true });
       await mkdir(paths.sessionDir, { recursive: true });
       // The pick STICKS to the artifact: every later unattended resume reads
       // this sidecar rather than re-deriving a model from the registry.
+      // Written BEFORE planTurn so planTurn's applicableSelection reads it.
       if (selection) {
         await writeSelection(paths, { harness: resolved.name, ...selection });
       }
       log(`create ${name}: spawning "${resolved.name}" in ${project}`);
+
+      // Route through planTurn (M5.3): the argv, identity strategy, turn id,
+      // and launch id all come from the same planner every other turn uses.
+      // createArtifactPrompt is the prompt source, passed to planTurn as-is.
+      const planned = await planTurn({
+        mode: "create",
+        paths,
+        harness: resolved.name,
+        recipe: resolved.recipe,
+        registryFile: opts.harnessesPath ?? harnessRegistryPath(),
+        cwd: project,
+        prompt: createArtifactPrompt(artifact, prompt, title || undefined),
+      });
+      if (planned.status === "refused") {
+        return json({ error: planned.reason }, 400);
+      }
+      // Record a caller-assigned identity as pending BEFORE the turn runs
+      // (replaces prepareSpawnIdentity.recordAssigned): a child that crashes
+      // pre-open must still leave a resumable record.
+      if (planned.sessionId !== undefined && planned.strategy !== undefined) {
+        await recordPendingIdentity(paths, {
+          harness: resolved.name,
+          sessionId: planned.sessionId,
+          sessionIdAuthority: "assigned",
+          launchId: planned.launchId,
+        });
+      }
+
       // Answer immediately: authoring is a whole agent turn, and the artifact
       // surfaces as a tab on its own `lucid open`. The claim is held until the
       // turn ends, so a retry while it runs is refused rather than doubled.
       const outLog = paths.createLog;
-      // Where THIS attempt's output starts, through the one owner of that
-      // question: the log is opened in append mode (spawn.ts), so a second
-      // failed create on the same artifact would otherwise tail both attempts
-      // concatenated with no separator - the previous turn's evidence
-      // presented as this one's (07#17).
-      const outputFrom = await runOutputStart(outLog);
-      // A dead create turn is knowable the moment the child exits - waiting
-      // out the dialog's own patience to report "check the log" turned a
-      // seconds-fast failure (a harness over its usage limit) into two
-      // minutes of mystery silence. Broadcast the exit with the log's tail
-      // so the dialog can say what actually happened, immediately.
-      // The POSITIVE signal (M2.1). The hub already knew when a turn DIED; it
-      // said nothing while one lived, so the dialog inferred health from a
-      // clock and accused a working 8-minute turn of failing at two minutes.
-      // A heartbeat while the child is alive is the fact the clock was
-      // standing in for - and it carries the trace, so a progress frame and
-      // the click's request record join with one grep.
       const startedAt = Date.now();
       // The turn's own phase one-liner (`lucid progress --label`, the same
       // channel a revise turn narrates through). Pre-open, `deliver` falls
@@ -1074,9 +1053,8 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           // cannot narrate this creation.
           const stamp = e.attendant;
           const owned =
-            stamp?.launchId === spawnIdentity.launchId ||
-            (spawnIdentity.assignedSessionId !== undefined &&
-              stamp?.sessionId === spawnIdentity.assignedSessionId) ||
+            stamp?.launchId === planned.launchId ||
+            (planned.sessionId !== undefined && stamp?.sessionId === planned.sessionId) ||
             (observation.trace !== undefined && stamp?.trace === observation.trace);
           if (!owned) continue;
           const label = e.progress?.label;
@@ -1113,74 +1091,54 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
           }
         })();
       }, CREATE_PROGRESS_MS);
-      // A heartbeat must never hold the process open: the hub outlives any one
-      // turn, but an interval nobody unrefs would keep a bare `node`-style
-      // exit waiting on it.
+      // A heartbeat must never hold the process open.
       heartbeat.unref?.();
       heartbeats.add(heartbeat);
 
-      const reportFailure = async (code: number | string): Promise<void> => {
-        // THIS attempt only.
-        const raw = await readRunOutput(outLog, outputFrom);
-        const tail = raw.trim().split("\n").slice(-3).join("\n").slice(-500);
-        // Why the turn died, through the one classifier every driver shares.
-        // A usage wall is the one failure the human can do nothing about in
-        // Lucid - name it as such rather than leaving them to read the tail.
-        // And a detached hub cannot read the macOS Keychain, so a turn can die
-        // on auth while the human is correctly logged in interactively:
-        // showing the raw tail alone sends them to re-check a login that was
-        // never the problem (plan 08 M22). The KINDs ride the event; the
-        // dialog owns the wording, and the harness's own line still arrives
-        // in `tail`.
-        const failure = classifyTurnFailure(raw);
+      // runTurn (M5.3) handles the spawn, out-log window, identity, failure
+      // classification, and agent_turn_ended delivery. The daemon owns only
+      // the SSE layer (heartbeat + create-failed broadcast) and the claim set.
+      const broadcastFailure = (outcome: TurnOutcome): void => {
+        const tail = outcome.output.trim().split("\n").slice(-3).join("\n").slice(-500);
         broadcast({
           event: "create-failed",
           data: {
             artifact,
-            code,
+            code: outcome.code,
             tail,
-            ...(failure.usageLimit !== null ? { usageLimit: failure.usageLimit } : {}),
-            ...(failure.authFailure !== null ? { authFailure: failure.authFailure } : {}),
+            ...(outcome.failure?.usageLimit != null
+              ? { usageLimit: outcome.failure.usageLimit }
+              : {}),
+            ...(outcome.failure?.authFailure != null
+              ? { authFailure: outcome.failure.authFailure }
+              : {}),
           },
         });
       };
-      void spawnIdentity
-        .recordAssigned(paths)
-        .then(() =>
-          runSpawn(
-            argv,
-            project,
-            outLog,
-            spawnIdentity.identityFor(paths, {
-              requestId: observation.trace,
-              // The create prompt ends with `lucid open <artifact>`; without
-              // this the turn opens it against the default port instead of
-              // this hub.
-              hubPort: port,
-              ...(selection?.model !== undefined ? { model: selection.model } : {}),
-              ...(selection?.effort !== undefined ? { effort: selection.effort } : {}),
-            }),
-          ),
-        )
-        .then((result) => {
-          if (result.code !== 0) {
-            log(`create ${name}: create turn exited ${result.code}`);
-            void reportFailure(result.code);
-          } else if (result.status === "identity-missing") {
-            // The artifact survives; the launch is non-resumable (HSI002).
-            // Named in the hub log, where launch records live.
+
+      void runTurn(planned, {
+        outLog,
+        requestId: observation.trace,
+        hubPort: port,
+        ...(planned.model !== undefined ? { model: planned.model } : {}),
+        ...(planned.effort !== undefined ? { effort: planned.effort } : {}),
+      })
+        .then((outcome) => {
+          if (outcome.code !== 0) {
+            log(`create ${name}: create turn exited ${outcome.code}`);
+            broadcastFailure(outcome);
+          } else if (outcome.result.status === "identity-missing") {
             log(`create ${name}: turn announced no session identity (HSI002)`);
           }
         })
         .catch((err) => {
           log(`create ${name}: create turn failed: ${(err as Error).message}`);
-          void reportFailure("spawn-error");
+          broadcast({
+            event: "create-failed",
+            data: { artifact, code: "spawn-error", tail: "" },
+          });
         })
         .finally(() => {
-          // `ended` before anything else: it closes the async gap
-          // clearInterval cannot (a heartbeat mid-read resumes after this and
-          // must drop its frame). It is set before reportFailure's broadcast
-          // can land, so no progress frame ever follows a create-failed one.
           ended = true;
           clearInterval(heartbeat);
           heartbeats.delete(heartbeat);
