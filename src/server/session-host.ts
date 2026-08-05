@@ -6,8 +6,10 @@ import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
 import {
   decodeAck,
   decodeAnnotation,
+  decodeBind,
   decodeFork,
   decodeMessage,
+  decodeRename,
   decodeReply,
   decodeRevert,
   decodeTurnEnded,
@@ -25,7 +27,6 @@ import { diffHtml } from "../diff/diff.ts";
 import { versionRef } from "../core/fold.ts";
 import { sanitizeAttendant } from "../core/events.ts";
 import { appendSessionBindings } from "../core/deliver.ts";
-import { WELL_FORMED_ID } from "../core/request-id.ts";
 import {
   legacyProjection,
   normalizeItemAnswers,
@@ -591,11 +592,9 @@ export const createSessionHost = (
    * version like any other change, so a rename is in history and revertable.
    */
   const handleRename = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (typeof body?.title !== "string") return json({ error: "invalid title" }, 400);
-    // One line, bounded: this lands inside a <title> element and on a tab.
-    const title = body.title.replace(/\s+/g, " ").trim().slice(0, 200);
-    if (title === "") return json({ error: "a title cannot be empty" }, 400);
+    const result = decodeRename(await req.json().catch(() => null));
+    if (!result.ok) return json({ error: result.error }, 400);
+    const { title, replaces } = result.value;
     const html = await readArtifact(paths);
     // The DOCUMENT's title, by parsing - a bare regex over source finds the
     // first title-SHAPED substring, which can live inside a <script> string or
@@ -605,7 +604,7 @@ export const createSessionHost = (
     // Compare-and-set: the transport retries POSTs, and a lost-response retry
     // of an OLD rename landing after a newer one must not roll it back.
     // Advisory - a caller that does not know the current title omits it.
-    if (typeof body.replaces === "string" && body.replaces !== current) {
+    if (replaces !== undefined && replaces !== current) {
       return json({ error: "the title changed underneath this rename" }, 409);
     }
     // Serializing the parsed DOM back out would reformat the agent's whole
@@ -693,24 +692,9 @@ export const createSessionHost = (
    * line and one frame, however many times it arrives.
    */
   const handleBind = async (req: Request): Promise<Response> => {
-    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!body) return json({ error: "invalid binding" }, 400);
-    const launchId =
-      typeof body.launchId === "string" && WELL_FORMED_ID.test(body.launchId)
-        ? body.launchId
-        : undefined;
-    if (!launchId) return json({ error: "invalid launchId" }, 400);
-    const attendant = parseAttendant(body.attendant);
-    if (!attendant?.sessionId || !attendant.sessionIdAuthority) {
-      return json({ error: "binding stamp needs sessionId and sessionIdAuthority" }, 400);
-    }
-    const turnId =
-      typeof body.turnId === "string" && body.turnId.length > 0
-        ? body.turnId.slice(0, 128)
-        : undefined;
-    const result = await appendSessionBindings(paths, [
-      { launchId, attendant, ...(turnId ? { turnId } : {}) },
-    ]);
+    const decoded = decodeBind(await req.json().catch(() => null));
+    if (!decoded.ok) return json({ error: decoded.error }, 400);
+    const result = await appendSessionBindings(paths, [decoded.value]);
     if (!result.opened) return json({ error: "session not opened" }, 409);
     for (const e of result.fresh) broadcast(e);
     touch();

@@ -333,3 +333,55 @@ export const decodeTurnEnded = (body: unknown): DecodeResult<DecodedTurnEnded> =
     ...(attendant ? { attendant } : {}),
   });
 };
+
+// ---- bind ------------------------------------------------------------------
+
+export interface DecodedBind {
+  readonly launchId: string;
+  readonly attendant: AttendantStamp;
+  readonly turnId?: string;
+}
+
+/** Decode a `POST /__lucid/bind` body. Validation is refusal, not coercion:
+ *  a stamp that cannot vouch (no sessionId, no authority) or a malformed
+ *  launchId is a 400, never a cleaned-up record. */
+export const decodeBind = (body: unknown): DecodeResult<DecodedBind> => {
+  if (!body || typeof body !== "object") return refuse("invalid binding");
+  const b = body as Record<string, unknown>;
+  const launchId =
+    typeof b.launchId === "string" && WELL_FORMED_ID.test(b.launchId) ? b.launchId : undefined;
+  if (!launchId) return refuse("invalid launchId");
+  const attendant = decodeAttendant(b.attendant);
+  if (!attendant?.sessionId || !attendant.sessionIdAuthority)
+    return refuse("binding stamp needs sessionId and sessionIdAuthority");
+  const turnId =
+    typeof b.turnId === "string" && b.turnId.length > 0 ? b.turnId.slice(0, 128) : undefined;
+  return decoded({
+    launchId,
+    attendant,
+    ...(turnId ? { turnId } : {}),
+  });
+};
+
+// ---- rename ----------------------------------------------------------------
+
+export interface DecodedRename {
+  readonly title: string;
+  readonly replaces?: string;
+}
+
+/** Decode a `POST /__lucid/rename` body. One line, bounded: this lands inside
+ *  a <title> element and on a tab. The handler does the DOM manipulation; this
+ *  validates and normalizes the title field only. */
+export const decodeRename = (body: unknown): DecodeResult<DecodedRename> => {
+  if (!body || typeof body !== "object") return refuse("invalid title");
+  const b = body as Record<string, unknown>;
+  if (typeof b.title !== "string") return refuse("invalid title");
+  const title = b.title.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (title === "") return refuse("a title cannot be empty");
+  const replaces = typeof b.replaces === "string" ? b.replaces : undefined;
+  return decoded({
+    title,
+    ...(replaces !== undefined ? { replaces } : {}),
+  });
+};
