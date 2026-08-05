@@ -385,3 +385,22 @@ export const decodeRename = (body: unknown): DecodeResult<DecodedRename> => {
     ...(replaces !== undefined ? { replaces } : {}),
   });
 };
+
+// ---- no-body routes --------------------------------------------------------
+
+/** The four no-body POST routes each append a fixed event type with no
+ *  caller-supplied fields. Rather than special-casing them in the route table,
+ *  each goes through its own decoder that returns the fixed event. The body is
+ *  ignored - these routes carry no information beyond the route itself. */
+
+export const decodeResolve = (): DecodeResult<{ readonly t: "review_resolved" }> =>
+  decoded({ t: "review_resolved" });
+
+export const decodeClear = (): DecodeResult<{ readonly t: "record_cleared" }> =>
+  decoded({ t: "record_cleared" });
+
+export const decodeReopen = (): DecodeResult<{ readonly t: "review_reopened" }> =>
+  decoded({ t: "review_reopened" });
+
+export const decodeEnd = (): DecodeResult<{ readonly t: "session_ended" }> =>
+  decoded({ t: "session_ended" });

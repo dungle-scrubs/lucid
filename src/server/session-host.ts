@@ -7,10 +7,14 @@ import {
   decodeAck,
   decodeAnnotation,
   decodeBind,
+  decodeClear,
+  decodeEnd,
   decodeFork,
   decodeMessage,
   decodeRename,
+  decodeReopen,
   decodeReply,
+  decodeResolve,
   decodeRevert,
   decodeTurnEnded,
 } from "../protocol/inbound.ts";
@@ -1019,21 +1023,29 @@ export const createSessionHost = (
     if (pathname === "/__lucid/bind" && req.method === "POST") return handleBind(req);
     if (pathname === "/__lucid/context" && req.method === "POST") return handleContext(req);
     if (pathname === "/__lucid/resolve" && req.method === "POST") {
-      await serverAppend([{ t: "review_resolved" }]);
+      const result = decodeResolve();
+      if (!result.ok) return json({ error: result.error }, 400);
+      await serverAppend([result.value]);
       return json({ ok: true });
     }
     // Clearing is a boundary the fold understands, not a delete: the log keeps
     // every event and the viewer derives its record from what follows.
     if (pathname === "/__lucid/clear" && req.method === "POST") {
-      await serverAppend([{ t: "record_cleared" }]);
+      const result = decodeClear();
+      if (!result.ok) return json({ error: result.error }, 400);
+      await serverAppend([result.value]);
       return json({ ok: true });
     }
     if (pathname === "/__lucid/reopen" && req.method === "POST") {
-      await serverAppend([{ t: "review_reopened" }]);
+      const result = decodeReopen();
+      if (!result.ok) return json({ error: result.error }, 400);
+      await serverAppend([result.value]);
       return json({ ok: true });
     }
     if (pathname === "/__lucid/end" && req.method === "POST") {
-      await serverAppend([{ t: "session_ended" }]);
+      const result = decodeEnd();
+      if (!result.ok) return json({ error: result.error }, 400);
+      await serverAppend([result.value]);
       queueMicrotask(() => options.onEnded());
       return json({ ok: true });
     }
