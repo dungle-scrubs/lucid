@@ -13,7 +13,7 @@ import { expect } from "@playwright/test";
 import { FIXED_HUB_BASE_OFFSET } from "./hub-offset.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { hubPort, portBase } from "../../src/server/ports.ts";
+import { hubPort, portBase } from "../../src/core/ports.ts";
 import { invoke, makeCli, MAIN, type Cli } from "./cli.ts";
 import { harnessEnv } from "./harness-env.ts";
 

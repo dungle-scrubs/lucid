@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { hubPort, portBase, sessionPortPool } from "../src/server/ports.ts";
+import { hubPort, portBase, sessionPortPool } from "../src/core/ports.ts";
 import { FIXED_HUB_BASE_OFFSET, WORKER_STRIDE } from "./e2e/hub-offset.ts";
 
 describe("portBase", () => {
