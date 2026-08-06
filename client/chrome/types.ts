@@ -5,6 +5,7 @@ import type {
   PayloadImage,
   PayloadMessage,
   PayloadQuestion,
+  PayloadVerdict,
   SessionSummary,
 } from "../../src/protocol/wire.ts";
 import type { PayloadAnnotationLike } from "../shared/protocol.ts";
@@ -191,13 +192,10 @@ export interface RecordCleared {
 }
 
 /** One `review_resolved`/`review_reopened` event, kept with its own time so it
- *  can sit in the record where it belongs. `seq` is the log's own ordering and
- *  is what makes the id stable across reloads. */
-export interface ReviewVerdict {
-  readonly at: string;
-  /** True for `review_resolved` (approved), false for `review_reopened`. */
-  readonly resolved: boolean;
-  readonly seq: number;
-}
+ *  can sit in the record where it belongs. An alias of the wire `PayloadVerdict`
+ *  (M2.3): the one verdict shape, built by `verdictOf`, so the session store
+ *  and the fold agree. `seq` is the log's own ordering and is what makes the id
+ *  stable across reloads. */
+export type ReviewVerdict = PayloadVerdict;
 
 export type { Anchor, PayloadAnnotationLike };

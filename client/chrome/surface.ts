@@ -1,4 +1,4 @@
-import type { StateResponse } from "../../src/protocol/wire.ts";
+import { multiTargets, type StateResponse } from "../../src/protocol/wire.ts";
 import type { OutlineMotionPreference } from "../shared/artifact-outline.ts";
 import type { ChromeMessage } from "../shared/protocol.ts";
 import { createChromeArtifactOutline, type OutlinePort } from "./artifact-outline-session.ts";
@@ -211,7 +211,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
       queued: s.queue.map((q) => ({
         id: q.id,
         target: q.target,
-        ...(q.targets.length > 1 ? { targets: q.targets } : {}),
+        ...(multiTargets(q.targets) ? { targets: q.targets } : {}),
       })),
       pending: s.pendingTarget,
       pendingList: s.pendingTargets,

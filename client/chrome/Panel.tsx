@@ -5,7 +5,8 @@ import { DECISION_REPLIES } from "../shared/decision.ts";
 import { TargetSnippet } from "./TargetSnippet.tsx";
 import { useActions, useSession, useSessionHandle } from "./context.tsx";
 import { FoldedText } from "./FoldedText.tsx";
-import { effortLadder, withCurrent } from "./selection.ts";
+import { effortLadderOf } from "../../src/protocol/wire.ts";
+import { withCurrent } from "./selection.ts";
 import { hasComposerDraft, imagesFromPaste } from "./store.ts";
 import type { OutboxMessage, PastedImage } from "./types.ts";
 import { Kbd, KbdGroup } from "./ui/kbd.tsx";
@@ -525,7 +526,7 @@ export const SelectionPickers = () => {
   // route): there is no vocabulary to pick from, so there is no picker.
   if (info === null || status !== "active") return null;
   const models = info.models ?? [];
-  const ladder = effortLadder(info, selection.model ?? "") ?? [];
+  const ladder = effortLadderOf(info, selection.model ?? "") ?? [];
   const modelValue = readOnly ? (attendant?.model ?? "") : (selection.model ?? "");
   const effortValue = readOnly ? (attendant?.effort ?? "") : (selection.effort ?? "");
   // A live effort keeps its row even when the ladder resolves empty (a sticky
@@ -557,7 +558,7 @@ export const SelectionPickers = () => {
   // A model change re-picks the ladder, so an effort the new model does not
   // accept falls back to default instead of being refused.
   const pickModel = (v: string): void => {
-    const next = effortLadder(info, v);
+    const next = effortLadderOf(info, v);
     const effort = selection.effort ?? "";
     void commit(harness, v, effort !== "" && next?.includes(effort) ? effort : "");
   };

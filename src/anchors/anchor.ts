@@ -10,6 +10,12 @@
  * both sides share this shape exactly.
  */
 
+/** The DOM attribute an element's `lucidId` is read from and written to
+ *  (D-047): the one spelling of `data-lucid-id`, owned beside the anchor it
+ *  names, so the diff, the plan renderer, the overlay, and the swap cannot
+ *  drift to a differently-hyphenated copy (M2.3). */
+export const LUCID_ID_ATTR = "data-lucid-id";
+
 export interface ElementAnchor {
   readonly kind: "element";
   /** Present iff the agent supplied a unique `data-lucid-id` (D-047). */

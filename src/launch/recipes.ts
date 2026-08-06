@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { hasControlCharacters } from "../core/events.ts";
 import { harnessKind, normalizeHarness } from "../core/harness.ts";
 import { IdentityDeclarationError, ValidationError } from "../errors.ts";
+import type { HarnessInfo } from "../protocol/wire.ts";
+import { effortLadderOf } from "../protocol/wire.ts";
 import type { SessionIdentityRecipe } from "./session-identity.ts";
 
 /**
@@ -75,8 +77,9 @@ export interface SpawnRecipe {
   readonly models?: readonly HarnessModel[];
   /** The model preselected in pickers; must be one of `models`. */
   readonly defaultModel?: string;
-  /** Harness-wide effort ladder, used when a model declares no `efforts` of
-   *  its own (pi normalizes one ladder across every model). */
+  /** Harness-wide effort ladder, the fallback `effortLadderOf` uses when a
+   *  model declares no `efforts` of its own (pi normalizes one ladder across
+   *  every model). */
   readonly efforts?: readonly string[];
   /** The effort preselected in pickers; must be in the ladder that applies
    *  (the default model's `efforts`, else the harness-wide `efforts`). */
@@ -91,6 +94,20 @@ export interface SpawnRecipe {
    */
   readonly sessionIdentity?: SessionIdentityRecipe;
 }
+
+/**
+ * The ONE projection of a recipe to the wire `HarnessInfo` a picker renders
+ * (M2.1). Both servers used to build this inline with the same five fields; a
+ * mounted host's `/selection` and the hub's `/identity` cannot offer different
+ * vocabularies, so the projection is owned beside the recipe it reads.
+ */
+export const harnessInfoOf = (name: string, recipe: SpawnRecipe): HarnessInfo => ({
+  name,
+  ...(recipe.models ? { models: recipe.models } : {}),
+  ...(recipe.defaultModel !== undefined ? { defaultModel: recipe.defaultModel } : {}),
+  ...(recipe.efforts ? { efforts: recipe.efforts } : {}),
+  ...(recipe.defaultEffort !== undefined ? { defaultEffort: recipe.defaultEffort } : {}),
+});
 
 export interface HarnessRegistry {
   /** Recipe to use when the parent session's harness is unknown/unlisted. */
@@ -213,11 +230,17 @@ const parseSelectionFields = (
     if (typeof defaultEffort !== "string" || defaultEffort.trim() === "") {
       fail(`harness "${name}" \`defaultEffort\` must be a non-empty string when present`);
     }
-    // The ladder the default sits in: the default model's own efforts when it
-    // declares them, else the harness-wide ladder - the same fallback the
-    // selection adapter validates against at spawn time.
-    const defaultModelEfforts = models?.find((m) => m.id === defaultModel)?.efforts;
-    const ladder = defaultModelEfforts ?? efforts;
+    // The ladder the default sits in, through the one owner (M2.1) rather than
+    // a restatement: the default model's own efforts, else the harness-wide
+    // ladder - the same rule the selection adapter validates against at spawn.
+    const ladder = effortLadderOf(
+      {
+        ...(models ? { models } : {}),
+        ...(typeof defaultModel === "string" ? { defaultModel } : {}),
+        ...(efforts ? { efforts } : {}),
+      },
+      undefined,
+    );
     if (!ladder) {
       fail(`harness "${name}" has a \`defaultEffort\` but declares no effort levels`);
     } else if (!ladder.includes(defaultEffort as string)) {

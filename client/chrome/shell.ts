@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { storeTheme, type ArtifactTheme } from "./theme.ts";
+import { storeTheme, type ThemeName } from "./theme.ts";
 import { getSession } from "./tabs.ts";
 // Re-exported for backward compat: callers that imported these from shell.ts
 // (Palette.tsx, Shell.tsx) keep working. The implementations live in tabs.ts
@@ -75,7 +75,7 @@ const readStoredSidebarOpen = (): boolean => {
  * only reached the foreground tab would leave the others to flash the old
  * palette when you switched to them.
  */
-export const setArtifactTheme = (theme: ArtifactTheme): void => {
+export const setArtifactTheme = (theme: ThemeName): void => {
   storeTheme(theme);
   for (const key of useShell.getState().sessionKeys) {
     getSession(key)?.surface.setTheme(theme);

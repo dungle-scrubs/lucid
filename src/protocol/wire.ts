@@ -67,6 +67,17 @@ export const lifecycleStatusOf = (t: string): SessionStatus | null =>
  */
 export type WaitOutcome = "feedback" | "ended" | "suspended" | "waiting";
 
+/**
+ * Map a session lifecycle status onto the wait outcome a viewer reports (M2.3):
+ * `ended` and `suspended` pass through; everything else (an active or unopened
+ * session) reads as `feedback` - the conversation is what to show. The ONE
+ * mapping, so `viewerState` and any other reader cannot disagree. The status
+ * union is `SessionStatus` (owned by `core/fold.ts`); inlined here so the wire
+ * contract stays a leaf that does not reach back into `core/fold`.
+ */
+export const waitOutcomeOf = (status: "none" | "active" | "suspended" | "ended"): WaitOutcome =>
+  status === "ended" ? "ended" : status === "suspended" ? "suspended" : "feedback";
+
 /** Open "agent is working" window (ack received, no output yet). */
 export interface AgentWorking {
   readonly since: string;
@@ -220,6 +231,23 @@ export interface PayloadVerdict {
   readonly resolved: boolean;
   readonly seq: number;
 }
+
+/**
+ * Project one `review_resolved`/`review_reopened` event into a `PayloadVerdict`
+ * (M2.3): the one extraction, so the fold (server) and the session store
+ * (client) cannot build the {at, resolved, seq} triple differently. Both the
+ * server's `ReviewVerdictRecord` and the client's `ReviewVerdict` are this
+ * shape, so they alias `PayloadVerdict`.
+ */
+export const verdictOf = (event: {
+  readonly t: "review_resolved" | "review_reopened";
+  readonly at: string;
+  readonly seq: number;
+}): PayloadVerdict => ({
+  at: event.at,
+  resolved: event.t === "review_resolved",
+  seq: event.seq,
+});
 
 /**
  * The newest clear boundary, when the record has one.
@@ -379,6 +407,44 @@ export interface HarnessInfo {
   readonly efforts?: readonly string[];
   readonly defaultEffort?: string;
 }
+
+/** The structural shape that carries a model/effort vocabulary - both a
+ *  `SpawnRecipe` (server) and a `HarnessInfo` (client) satisfy it, so the one
+ *  ladder rule reads the same off either (M2.1). */
+interface EffortVocabulary {
+  readonly models?: readonly { readonly id: string; readonly efforts?: readonly string[] }[];
+  readonly defaultModel?: string;
+  readonly efforts?: readonly string[];
+}
+
+/**
+ * The effort ladder that applies to a pick: the selected model's own
+ * vocabulary when it declares one (codex enforces per-generation subsets),
+ * else the harness-wide ladder. With no model selected the DEFAULT model's
+ * ladder applies - the registry's preselection, which is the best guess
+ * available here; the CLI resolves its own configured model when none is
+ * passed. The ONE rule, read off a recipe (server validator) or a HarnessInfo
+ * (client picker) alike.
+ */
+export const effortLadderOf = (
+  vocab: EffortVocabulary | undefined,
+  model: string | undefined,
+): readonly string[] | undefined => {
+  if (!vocab) return undefined;
+  const id = model || vocab.defaultModel;
+  return vocab.models?.find((m) => m.id === id)?.efforts ?? vocab.efforts;
+};
+
+/**
+ * The wire's one shape per arity (ledger 7, M2.2): `targets` is emitted only
+ * when two or more anchors share an annotation - a singleton normalizes to the
+ * single `target`, so it never rides as a one-element `targets`. No Lucid
+ * writer ever produced a singleton; this affects only hand-edited or foreign
+ * logs, and unifies the five sites that each restated the rule (fold/payload
+ * used `> 0`, emitting a one-element list nothing consumes).
+ */
+export const multiTargets = <T>(list: readonly T[] | undefined): readonly T[] | undefined =>
+  list && list.length > 1 ? list : undefined;
 
 /** An artifact's sticky model/effort selection, as `GET/POST
  *  {base}/__lucid/selection` reads and writes it. Every unattended turn on

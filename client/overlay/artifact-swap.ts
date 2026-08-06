@@ -1,4 +1,5 @@
 import type { TrustedOverlaySwapCapabilities } from "./trusted-overlay.ts";
+import { LUCID_ID_ATTR } from "../../src/anchors/anchor.ts";
 
 /**
  * Swaps the artifact's body into the live document and syncs its head styles.
@@ -45,7 +46,7 @@ const ARTIFACT_STYLE_ATTR = "data-lucid-artifact-style";
 const collectSectionIds = (document: Document): Set<string> => {
   const ids = new Set<string>();
   for (const element of document.querySelectorAll("[data-lucid-id]")) {
-    const id = element.getAttribute("data-lucid-id");
+    const id = element.getAttribute(LUCID_ID_ATTR);
     if (id !== null && id !== "") ids.add(id);
   }
   return ids;

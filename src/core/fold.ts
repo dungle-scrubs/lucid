@@ -1,8 +1,10 @@
 import type { Anchor } from "../anchors/anchor.ts";
+import { multiTargets, verdictOf } from "../protocol/wire.ts";
 import {
   lifecycleStatusOf,
   type AgentProgress,
   type AgentWorking,
+  type PayloadVerdict,
   type QuestionOption,
   type SessionHistoryRecord,
 } from "../protocol/wire.ts";
@@ -238,13 +240,10 @@ export interface RecordClearedMark {
   readonly seq: number;
 }
 
-/** One approve/reopen, projected from `review_resolved`/`review_reopened`. */
-export interface ReviewVerdictRecord {
-  readonly at: string;
-  /** True for an approval, false for a reopening. */
-  readonly resolved: boolean;
-  readonly seq: number;
-}
+/** One approve/reopen, projected from `review_resolved`/`review_reopened`. An
+ *  alias of the wire `PayloadVerdict` (M2.3): the one verdict shape, built by
+ *  `verdictOf`, so the fold and the client's session store agree. */
+export type ReviewVerdictRecord = PayloadVerdict;
 
 /** One explicit binding, projected from a `harness_session_bound` event. */
 export interface HarnessBindingRecord {
@@ -420,7 +419,7 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
           seq: e.seq,
           version: e.version,
           target: e.target,
-          ...(e.targets && e.targets.length > 0 ? { targets: e.targets } : {}),
+          ...(multiTargets(e.targets) ? { targets: e.targets } : {}),
           note: e.note,
           at: e.at,
           ...(e.authoredAt ? { authoredAt: e.authoredAt } : {}),
@@ -542,12 +541,12 @@ export const foldLog = (events: readonly LogEvent[]): FoldedState => {
       case "review_resolved":
         reviewResolved = true;
         reviewToggleSeq = e.seq;
-        verdicts.push({ at: e.at, resolved: true, seq: e.seq });
+        verdicts.push(verdictOf(e));
         break;
       case "review_reopened":
         reviewResolved = false;
         reviewToggleSeq = e.seq;
-        verdicts.push({ at: e.at, resolved: false, seq: e.seq });
+        verdicts.push(verdictOf(e));
         break;
       default:
         break;

@@ -24,6 +24,7 @@ import { createArtifactPrompt } from "../launch/prompts.ts";
 import {
   defaultRecipe,
   type HarnessRegistry,
+  harnessInfoOf,
   loadRegistry,
   registryPath as harnessRegistryPath,
   resolveExactRecipe,
@@ -1184,13 +1185,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       const registry = await loadRegistry(opts.harnessesPath).catch(() => null);
       const harnesses = registry ? Object.keys(registry.harnesses) : [];
       const harnessInfo: HarnessInfo[] = Object.entries(registry?.harnesses ?? {}).map(
-        ([name, recipe]) => ({
-          name,
-          ...(recipe.models ? { models: recipe.models } : {}),
-          ...(recipe.defaultModel !== undefined ? { defaultModel: recipe.defaultModel } : {}),
-          ...(recipe.efforts ? { efforts: recipe.efforts } : {}),
-          ...(recipe.defaultEffort !== undefined ? { defaultEffort: recipe.defaultEffort } : {}),
-        }),
+        ([name, recipe]) => harnessInfoOf(name, recipe),
       );
       // `roots` names the folders being scanned, so an empty shell can say
       // WHERE it looked instead of just "no reviews yet" - the difference

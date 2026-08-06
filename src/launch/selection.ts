@@ -6,6 +6,7 @@ import {
   sanitizeSelection,
   writeSelection,
 } from "../core/selection-sidecar.ts";
+import { effortLadderOf } from "../protocol/wire.ts";
 import type { SpawnRecipe } from "./recipes.ts";
 
 // Re-export the core-owned sidecar surface (M1.9): the types, validator, and
@@ -61,18 +62,19 @@ export const selectionArgs = (
     }
   }
   if (effort !== undefined) {
-    // The ladder that applies: the selected model's own efforts, else the
-    // harness-wide ladder. With no model selected the default model's ladder
-    // applies - that is the registry's PRESELECTION, not a promise about the
-    // CLI, which resolves its own configured model when none is passed. A pick
-    // the CLI's model then refuses fails at the turn, in the CLI's own words.
-    const modelId = model ?? recipe.defaultModel;
-    const perModel = recipe.models?.find((m) => m.id === modelId)?.efforts;
-    const ladder = perModel ?? recipe.efforts;
+    // The ladder rule is owned by `effortLadderOf` (M2.1): the selected
+    // model's own efforts, else the harness-wide ladder, with the default
+    // model's ladder applying when none is selected. A pick the CLI's model
+    // then refuses fails at the turn, in the CLI's own words.
+    const ladder = effortLadderOf(recipe, model);
     if (!ladder) {
       return { error: `harness "${harnessName}" declares no effort levels` };
     }
     if (!ladder.includes(effort)) {
+      // The scope is a display detail: which vocabulary the refused effort was
+      // measured against. The ladder value itself came from the one owner.
+      const modelId = model || recipe.defaultModel;
+      const perModel = recipe.models?.find((m) => m.id === modelId)?.efforts;
       const scope = perModel ? `model "${modelId}"` : `harness "${harnessName}"`;
       return { error: `effort "${effort}" is not supported by ${scope} (${ladder.join(", ")})` };
     }

@@ -1,4 +1,10 @@
-import type { Anchor, ElementAnchor, RangeAnchor, RangePosition } from "./anchor.ts";
+import {
+  LUCID_ID_ATTR,
+  type Anchor,
+  type ElementAnchor,
+  type RangeAnchor,
+  type RangePosition,
+} from "./anchor.ts";
 import { tracer } from "../core/verbose.ts";
 
 /**
@@ -120,7 +126,7 @@ export const computeDomPath = (el: DomElementLike): string => {
 
 /** Capture a full element anchor from a target element. */
 export const captureElementAnchor = (el: DomElementLike): ElementAnchor => {
-  const lucidId = el.getAttribute("data-lucid-id");
+  const lucidId = el.getAttribute(LUCID_ID_ATTR);
   return {
     kind: "element",
     ...(lucidId ? { lucidId } : {}),
