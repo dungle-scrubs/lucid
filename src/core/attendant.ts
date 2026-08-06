@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeJsonFile } from "./atomic-json.ts";
 import { cleanStampField, sanitizeAttendant, type SessionIdAuthority } from "./events.ts";
-import { parseHarnessResumeCommand } from "./presence.ts";
+import { parseHarnessResumeCommand } from "./harness-store.ts";
 import { withAppendLock } from "./lock.ts";
 import { cursorSidecarPath, type SessionPaths } from "./paths.ts";
 

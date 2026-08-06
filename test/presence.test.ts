@@ -3,14 +3,16 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  harnessPidsIn,
   harnessStoreHas,
   parseHarnessResumeCommand,
-  headlessPidsIn,
   harnessSessionCwd,
   harnessSessionId,
-  harnessSupportsPresence,
   interactiveResumeCommand,
+} from "../src/core/harness-store.ts";
+import {
+  harnessPidsIn,
+  headlessPidsIn,
+  harnessSupportsPresence,
   type HarnessPresence,
   livePresence,
   presenceFor,

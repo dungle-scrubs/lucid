@@ -14,12 +14,8 @@ import { appendEvent, readEvents, sessionState } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { openSession } from "../src/core/session.ts";
 import type { HarnessInfo, SelectionResponse } from "../src/protocol/wire.ts";
-import {
-  resetPresenceCache,
-  resetProcessLister,
-  resetSessionCwdCache,
-  setProcessLister,
-} from "../src/core/presence.ts";
+import { resetSessionCwdCache } from "../src/core/harness-store.ts";
+import { resetPresenceCache, resetProcessLister, setProcessLister } from "../src/core/presence.ts";
 import { applyUnitEnv } from "./unit-env.ts";
 import { attendDecision, createAttendant, pendingHumanSeqs } from "../src/server/attend.ts";
 import { runDaemon, sessionId, type DaemonHandle } from "../src/server/daemon.ts";

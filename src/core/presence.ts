@@ -3,22 +3,6 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { harnessKind } from "./harness.ts";
 import { harnessSessionId } from "./harness-store.ts";
-// Re-export the per-harness store adapters (M1.12) so every existing caller of
-// `presence.ts` is untouched while the attend gate (plan 05 Phase 4) holds. The
-// adapters themselves live in `harness-store.ts`; Phase 5 swaps `attend.ts` to
-// import them directly and deletes this re-export.
-export {
-  claudeProjectsDir,
-  codexSessionsDir,
-  harnessHasLocalStore,
-  harnessSessionCwd,
-  harnessSessionId,
-  harnessStoreHas,
-  harnessTranscriptPath,
-  interactiveResumeCommand,
-  parseHarnessResumeCommand,
-  resetSessionCwdCache,
-} from "./harness-store.ts";
 
 /**
  * Is the harness conversation behind an artifact OPEN right now, in a terminal

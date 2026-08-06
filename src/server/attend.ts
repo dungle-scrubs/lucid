@@ -18,8 +18,8 @@ import {
   pendingHumanSeqs,
   type DeliveryCursor,
   type FoldedState,
-  WORKING_GRACE_MS,
 } from "../core/fold.ts";
+import { WORKING_GRACE_MS } from "../core/working-grace.ts";
 import { normalizeHarness } from "../core/harness.ts";
 import { readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
@@ -30,8 +30,10 @@ import {
   harnessSessionCwd,
   harnessSessionId,
   harnessStoreHas,
-  harnessSupportsPresence,
   harnessTranscriptPath,
+} from "../core/harness-store.ts";
+import {
+  harnessSupportsPresence,
   livePresenceCached,
   presenceFor,
   presenceStoreReadable,

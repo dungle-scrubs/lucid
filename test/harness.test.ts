@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { harnessKind, normalizeHarness } from "../src/core/harness.ts";
-import { harnessHasLocalStore, harnessSupportsPresence } from "../src/core/presence.ts";
+import { harnessHasLocalStore } from "../src/core/harness-store.ts";
+import { harnessSupportsPresence } from "../src/core/presence.ts";
 import type { SpawnRecipe } from "../src/launch/recipes.ts";
 import { selectionArgs } from "../src/launch/selection.ts";
 
