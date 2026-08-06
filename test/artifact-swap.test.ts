@@ -152,8 +152,10 @@ describe("the production swap call site supplies the trusted operations", () => 
     // not a fresh literal or a dropped argument. A regression that removes
     // the wiring reds here at unit speed.
     expect(source).toContain("swapArtifactBody(document, htmlText, {");
-    expect(source).toContain("operations: this.#swapOperations");
-    // And the field is populated from the capability bag, not left null.
-    expect(source).toContain("this.#swapOperations = swapOperations");
+    // M4.7: the swap operations are a member of the one capability bag
+    // (#capabilities), not a separate #swapOperations field.
+    expect(source).toContain("operations: this.#capabilities");
+    // And the bag is taken once by configureOutlineChannel (no re-picked handle).
+    expect(source).toContain("this.#capabilities = capabilities;");
   });
 });

@@ -32,14 +32,9 @@ import {
 import { swapArtifactBody } from "./artifact-swap.ts";
 import {
   BrowserArtifactOutlineController,
-  type TrustedOutlineCapabilities,
   type TrustedOutlinePort,
 } from "./browser-artifact-outline.ts";
-import type {
-  TrustedOverlayCapabilities,
-  TrustedOverlayHostHandle,
-  TrustedOverlaySwapCapabilities,
-} from "./trusted-overlay.ts";
+import type { TrustedOverlayCapabilities } from "./trusted-overlay.ts";
 
 /**
  * A stylesheet the overlay adds to the ARTIFACT's document, as a constructed
@@ -157,13 +152,13 @@ export class LucidOverlay extends LitElement {
    *  document Lucid did not write (artifact-theme.ts). */
   readonly #theme: ArtifactTheme = createArtifactTheme(document);
   #outlineController: BrowserArtifactOutlineController | null = null;
-  #hostHandle: TrustedOverlayHostHandle | null = null;
+  /** The one capability bag (M4.7): the host-handle fields (isOwned,
+   *  overlayRoot, parentWindow, performOverlayUpdate) AND the swap operations
+   *  (importNode, remove/appendArtifactStyle) are all members of the same
+   *  `TrustedOverlayCapabilities`, captured pre-artifact. One field, not a
+   *  re-picked handle beside a separate swap bag. */
+  #capabilities: TrustedOverlayCapabilities | null = null;
   #ownedRoot: HTMLElement | null = null;
-  /** Trusted import + head-mutation operations for the artifact swap (DF-3),
-   *  captured pre-artifact. Set once when the overlay mounts; read every
-   *  swap so an artifact that patches the intrinsics meanwhile cannot
-   *  intercept them. */
-  #swapOperations: TrustedOverlaySwapCapabilities | null = null;
   #renderSnapshot: OverlayRenderSnapshot = {
     focusedId: null,
     hoverRect: null,
@@ -194,7 +189,7 @@ export class LucidOverlay extends LitElement {
   }
 
   protected override performUpdate(): void {
-    const capabilities = this.#hostHandle;
+    const capabilities = this.#capabilities;
     if (!this.isUpdatePending) {
       super.performUpdate();
       return;
@@ -398,15 +393,12 @@ export class LucidOverlay extends LitElement {
    * private controller or the MessagePort it already owns. */
   configureOutlineChannel(
     port: TrustedOutlinePort,
-    outlineCapabilities: TrustedOutlineCapabilities,
-    hostHandle: TrustedOverlayHostHandle,
-    swapOperations: TrustedOverlaySwapCapabilities,
+    capabilities: TrustedOverlayCapabilities,
   ): void {
     if (this.#outlineController !== null) return;
-    this.#hostHandle = hostHandle;
-    this.#ownedRoot = hostHandle.overlayRoot();
-    this.#swapOperations = swapOperations;
-    this.#outlineController = new BrowserArtifactOutlineController(port, outlineCapabilities, {
+    this.#capabilities = capabilities;
+    this.#ownedRoot = capabilities.overlayRoot();
+    this.#outlineController = new BrowserArtifactOutlineController(port, capabilities, {
       clearEmphasis: this.clearSectionEmphasis,
       markEmphasis: this.markSectionEmphasis,
     });
@@ -418,7 +410,7 @@ export class LucidOverlay extends LitElement {
 
   private isOwn(el: EventTarget | null): boolean {
     if (!(el instanceof Element)) return true;
-    return this.#hostHandle?.isOwned(el) === true || el.hasAttribute("data-lucid-ignore");
+    return this.#capabilities?.isOwned(el) === true || el.hasAttribute("data-lucid-ignore");
   }
 
   /**
@@ -891,7 +883,7 @@ export class LucidOverlay extends LitElement {
     const { addedIds } = swapArtifactBody(document, htmlText, {
       keep,
       onLinkedSheetLoad: () => this.#theme.reapply(),
-      operations: this.#swapOperations ?? undefined,
+      operations: this.#capabilities ?? undefined,
       ref: this.#ownedRoot,
     });
     // New inline sheets are ready now. Linked sheets re-run this on load above,
@@ -979,12 +971,9 @@ export const mountOverlay = (
   // the captured parent rather than the live (artifact-reassignable) global.
   parentWindow = capabilities.parentWindow;
   overlayTag = tagName;
-  const hostHandle: TrustedOverlayHostHandle = {
-    isOwned: capabilities.isOwned,
-    overlayRoot: capabilities.overlayRoot,
-    parentWindow: capabilities.parentWindow,
-    performOverlayUpdate: capabilities.performOverlayUpdate,
-  };
-  overlay.configureOutlineChannel(outlinePort, capabilities, hostHandle, capabilities);
+  // M4.7: the capability bag is taken ONCE - the host-handle and swap fields
+  // are all members of the one TrustedOverlayCapabilities, so there is no
+  // re-picked handle beside a duplicate swap param.
+  overlay.configureOutlineChannel(outlinePort, capabilities);
   capabilities.installOverlay(overlay);
 };
