@@ -25,7 +25,7 @@
  * child, on the same Bun and platform - a sound proxy, not the run itself.
  */
 import { lockBackend } from "../src/core/lock.ts";
-import { hubPort, portBase, sessionPortPool } from "../src/server/ports.ts";
+import { hubPort, portBase, sessionPortPool } from "../src/core/ports.ts";
 
 const backend = lockBackend();
 const base = portBase(process.env);

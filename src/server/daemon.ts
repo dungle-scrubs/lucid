@@ -46,14 +46,7 @@ import type {
   HubSessionsResponse,
 } from "../protocol/hub.ts";
 import type { HarnessInfo } from "../protocol/wire.ts";
-import {
-  cliRequestId,
-  sinkStatus,
-  type SinkStatus,
-  REQUEST_ID_HEADER,
-  resolveHubSink,
-  type RequestObservation,
-} from "./observe.ts";
+import { sinkStatus, resolveHubSink, type RequestObservation } from "./observe.ts";
 import { setNarrationSink, warnUnknownSubsystems } from "../core/verbose.ts";
 import { json, noStore, serveBundleAsset } from "./assets.ts";
 import { CLIENT_BUNDLE_HASH } from "./client-bundle.generated.ts";
@@ -68,7 +61,6 @@ import {
   type Subscriber,
   type Upgrade,
 } from "./live.ts";
-import { hubPort, portBase } from "./ports.ts";
 import { validateHeaders } from "./security.ts";
 
 /**
@@ -94,7 +86,18 @@ import { validateHeaders } from "./security.ts";
  * Binds 127.0.0.1 only, behind the same Host/Origin gate the per-session
  * server uses.
  */
-export const HUB_PORT = hubPort(portBase(process.env));
+// `HUB_PORT` (and the hub probes `hubInfo`/`hubOpen`) are owned by
+// `protocol/hub-client.ts` (M3.5); the daemon binds it, the CLI reaches the
+// hub through it without importing the daemon.
+export {
+  hubAlive,
+  hubInfo,
+  hubOpen,
+  parseHubPort,
+  HUB_PORT,
+  type HubInfo,
+} from "../protocol/hub-client.ts";
+import { HUB_PORT } from "../protocol/hub-client.ts";
 
 /** How often the SSE change-detector re-scans while subscribers are connected. */
 const POLL_MS = 2000;
@@ -266,6 +269,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     sessionIdleMs,
     attend,
     attendPollMs,
+    // M3.6 (ledger 8): forward the configured harness registry + attend
+    // debounce so mounted hosts and attendants honor them rather than reading
+    // the default registry. Built here once; mounts/session-host take them whole.
+    harnessesPath: opts.harnessesPath,
+    attendDebounceMs: opts.attendDebounceMs,
   });
 
   const rememberIds = (entries: readonly RegistryEntry[]): void => {
@@ -1293,89 +1301,4 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   };
 
   return { port, stop };
-};
-
-const HUB_PROBE_TIMEOUT_MS = 500;
-
-/** Strict LUCID_HUB_PORT parse: full-string digits in the TCP range, or
- *  nothing. `parseInt` would accept "17428garbage" and NaN would reach
- *  fetch/Bun.serve as a port. */
-export const parseHubPort = (raw: string | undefined): number | undefined => {
-  if (!raw || !/^\d{1,5}$/.test(raw)) return undefined;
-  const n = Number(raw);
-  return n >= 1 && n <= 65535 ? n : undefined;
-};
-
-/** What a live hub reports about itself, as the CLI uses it: the slice of
- *  `HubIdentity` (protocol/hub.ts) the terminal has decisions to make about,
- *  with `port` being the one that ANSWERED rather than the one it claims. */
-export interface HubInfo {
-  readonly port: number;
-  /** Connected shell windows (listing-stream subscribers). */
-  readonly shells: number;
-  /** True when the hub runs the attend engine (headless turns + create). */
-  readonly attend: boolean;
-  /** The hub's own view of where its evidence goes, and whether it is landing
-   *  (M3.2). Absent from an older hub, which is why the reader falls back. */
-  readonly log?: SinkStatus;
-}
-
-/** The hub's identity on `port`, or undefined when none answers. */
-export const hubInfo = async (port = HUB_PORT): Promise<HubInfo | undefined> => {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HUB_PROBE_TIMEOUT_MS);
-    const probe = await loopbackFetch(port, "/hub/identity", {
-      signal: controller.signal,
-      // The probe rides the same trace as the open it fronts - without this,
-      // every `lucid open` emits one un-joined record right before the
-      // joined one.
-      headers: { [REQUEST_ID_HEADER]: cliRequestId() },
-    });
-    clearTimeout(timer);
-    if (!probe.ok) return undefined;
-    // The identity contract (protocol/hub.ts), read defensively: whatever
-    // answers this port may be older than these fields, or not a hub at all.
-    const who = (await probe.json()) as Partial<HubIdentity>;
-    if (who.lucid !== "hub") return undefined;
-    // The hub's own log view rides along when it reports one; an older hub
-    // reports none and the caller falls back to deriving its own.
-    const log = typeof who.log?.path === "string" ? who.log : undefined;
-    return {
-      port,
-      shells: typeof who.shells === "number" ? who.shells : 0,
-      attend: who.attend === true,
-      ...(log ? { log } : {}),
-    };
-  } catch {
-    return undefined;
-  }
-};
-
-/** True when a hub daemon answers its identity probe on `port`. */
-export const hubAlive = async (port = HUB_PORT): Promise<boolean> =>
-  (await hubInfo(port)) !== undefined;
-
-/**
- * Ask a running hub daemon to surface a session (register + mount + tab).
- * Returns undefined when no hub answers - the caller then falls back to the
- * dedicated per-session server, so a machine without the shell keeps the
- * exact pre-daemon behavior.
- */
-export const hubOpen = async (
-  artifact: string,
-  port = parseHubPort(process.env.LUCID_HUB_PORT) ?? HUB_PORT,
-): Promise<HubOpenResult | undefined> => {
-  try {
-    if (!(await hubAlive(port))) return undefined;
-    const res = await loopbackFetch(port, "/hub/open", {
-      method: "POST",
-      headers: { "content-type": "application/json", [REQUEST_ID_HEADER]: cliRequestId() },
-      body: JSON.stringify({ artifact }),
-    });
-    if (!res.ok) return undefined;
-    return (await res.json()) as HubOpenResult;
-  } catch {
-    return undefined;
-  }
 };

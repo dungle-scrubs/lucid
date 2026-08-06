@@ -1,8 +1,11 @@
 import { dirname } from "node:path";
 import { readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import type { SessionPaths } from "../core/paths.ts";
-import { REQUEST_ID_HEADER, WELL_FORMED_ID } from "../core/request-id.ts";
-import { cliRequestId } from "./observe.ts";
+// `loopbackFetch` (the trace-stamped loopback probe) is owned by
+// `protocol/hub-client.ts` (M3.5); re-exported here so the discovery handshake
+// and its existing callers keep their import path.
+export { loopbackFetch } from "../protocol/hub-client.ts";
+import { loopbackFetch } from "../protocol/hub-client.ts";
 
 /**
  * Per-session server discovery (D-036) and handshake liveness (D-049). There is
@@ -37,25 +40,6 @@ export interface ServerDescriptor {
  * forbids a bare `fetch` outside its one seam) and the CLI side had none. A
  * property of the seam needs no guard.
  */
-export const loopbackFetch = (
-  port: number,
-  path: string,
-  init: RequestInit = {},
-): Promise<Response> => {
-  // Headers() normalizes every HeadersInit form, so a caller passing a Headers
-  // instance or an entries array is not silently dropped by an object spread.
-  const headers = new Headers(init.headers);
-  headers.set("host", `127.0.0.1:${port}`);
-  // Adopt what the caller carries, mint otherwise - the same rule the server
-  // applies to an inbound trace, so a forwarded hop keeps the id that joins it
-  // to the hop before, and a malformed value is replaced rather than passed on.
-  const carried = headers.get(REQUEST_ID_HEADER);
-  if (carried === null || !WELL_FORMED_ID.test(carried)) {
-    headers.set(REQUEST_ID_HEADER, cliRequestId());
-  }
-  return fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers });
-};
-
 export const writeServerDescriptor = async (
   paths: SessionPaths,
   descriptor: ServerDescriptor,

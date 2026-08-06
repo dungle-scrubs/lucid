@@ -139,11 +139,9 @@ export const startRequest = (
 
 /** The trace a CLI process sends: adopt `LUCID_REQUEST_ID` when a spawned
  *  turn holds one (its hub calls then join the click that spawned it), mint
- *  otherwise. Malformed values are replaced, same as the header rule. */
-export const cliRequestId = (env: NodeJS.ProcessEnv = process.env): string => {
-  const held = env.LUCID_REQUEST_ID;
-  return held !== undefined && WELL_FORMED_ID.test(held) ? held : mintRequestId();
-};
+ *  otherwise. Owned by `protocol/hub-client.ts` (M3.5); re-exported here so
+ *  the existing server-tier callers (the wait probe) keep their import. */
+export { cliRequestId } from "../protocol/hub-client.ts";
 
 /** Adopt a well-formed inbound trace, refuse anything else (M1.3, R4).
  *  Adoption is what joins the hops: the caller that already holds a trace
@@ -306,18 +304,8 @@ export const resolveHubSink = (options: HubSinkOptions = {}): LineSink =>
     mirror: options.mirror ?? stdoutSink,
   });
 
-export interface SinkStatus {
-  readonly path: string;
-  readonly exists: boolean;
-  readonly bytes: number;
-  /** A previous generation is on disk (`<path>.1`), so the cap has been hit
-   *  at least once and older evidence is one file away. */
-  readonly rotated: boolean;
-  /** False when the last write attempt failed. */
-  readonly writable: boolean;
-  /** Why the last write failed, when one did. */
-  readonly error?: string;
-}
+export type { SinkStatus } from "../protocol/hub.ts";
+import type { SinkStatus } from "../protocol/hub.ts";
 
 /**
  * The sink's own state (M3.2 - technique 1 applied to the one module whose

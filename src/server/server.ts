@@ -2,7 +2,7 @@ import type { SessionPaths } from "../core/paths.ts";
 import { removeServerDescriptor, writeServerDescriptor } from "./discovery.ts";
 import { createLogSink } from "./observe.ts";
 import { serveLoopback } from "./live.ts";
-import { portBase, sessionPortPool } from "./ports.ts";
+import { portBase, sessionPortPool } from "../core/ports.ts";
 import { createSessionHost } from "./session-host.ts";
 
 export interface ServerOptions {

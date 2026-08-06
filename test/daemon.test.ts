@@ -105,6 +105,40 @@ describe("hub daemon", () => {
     expect(row!.id).toBe(sessionId(scanned));
   });
 
+  test("a mounted host's /selection reads the configured harnessesPath (ledger 8, M3.6)", async () => {
+    // The daemon forwards its configured harness registry to mounted session
+    // hosts - previously it was silently ignored, so a host's /selection read
+    // the default registry instead of the one the hub was configured with.
+    const harnesses = join(dir, "harnesses.json");
+    await writeFile(
+      harnesses,
+      JSON.stringify({
+        default: "stub",
+        harnesses: {
+          stub: {
+            spawn: ["true", "--sid", "{id}"],
+            sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+          },
+        },
+      }),
+    );
+    const scanned = await seedSession("proj", "notes");
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      harnessesPath: harnesses,
+      attend: true,
+    });
+    const id = sessionId(scanned);
+    const res = await get(daemon.port, `/s/${id}/__lucid/selection`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { harnesses?: { name: string }[] };
+    // The configured registry's harness reaches the mounted host, not the
+    // default registry the host would otherwise read.
+    expect(body.harnesses?.some((h) => h.name === "stub")).toBe(true);
+  });
+
   test("/s/<id>/ serves the session's routes off the daemon origin", async () => {
     const scanned = await seedSession("proj", "notes");
     await writeFile(sessionPaths(scanned).currentHtml, "<h1 data-lucid-id='t'>Notes</h1>");

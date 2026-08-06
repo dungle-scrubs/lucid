@@ -1,6 +1,5 @@
 import type { SessionStateCache } from "../core/log.ts";
 import type { RegistryEntry } from "../core/registry.ts";
-import type { SinkStatus } from "../server/observe.ts";
 import type { HarnessInfo } from "./wire.ts";
 
 /**
@@ -17,6 +16,22 @@ import type { HarnessInfo } from "./wire.ts";
  * bound them: a field added on one side was a field missing on the other, and
  * nothing said so.
  */
+
+/** The state of the evidence sink (M3.5, moved from server/observe.ts so the
+ *  hub wire contract is types-only with no server-tier import). The writer is
+ *  the only process that knows where its evidence actually goes. */
+export interface SinkStatus {
+  readonly path: string;
+  readonly exists: boolean;
+  readonly bytes: number;
+  /** A previous generation is on disk (`<path>.1`), so the cap has been hit
+   *  at least once and older evidence is one file away. */
+  readonly rotated: boolean;
+  /** False when the last write attempt failed. */
+  readonly writable: boolean;
+  /** Why the last write failed, when one did. */
+  readonly error?: string;
+}
 
 /** A hub-listed session as the shell consumes it: the registry pointer plus
  *  its opaque mount id, its project, and whether a dedicated server is
