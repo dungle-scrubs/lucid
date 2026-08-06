@@ -5,21 +5,17 @@ import { parseHTML } from "linkedom";
 import { basename, join } from "node:path";
 import { parseAnchor } from "../anchors/anchor.ts";
 import {
+  APPEND_ROUTE_DECODERS,
   asString,
-  decodeAck,
-  decodeAnnotation,
   decodeBind,
   decodeClear,
   decodeEnd,
-  decodeFork,
   decodeMessage,
   decodeRename,
   decodeReopen,
-  decodeReply,
   decodeResolve,
-  decodeRevert,
-  decodeTurnEnded,
 } from "../protocol/inbound.ts";
+import { LUCID_ROUTES } from "../protocol/routes.ts";
 import { type HarnessPresence, presenceFor } from "../core/presence.ts";
 import { viewerState } from "../core/viewer-state.ts";
 import { artifactAttendant } from "../core/attendant.ts";
@@ -309,25 +305,10 @@ export const createSessionHost = (
 
   // ---- request handling -----------------------------------------------------
 
-  const handleAnnotation = async (req: Request): Promise<Response> => {
-    const result = decodeAnnotation(await req.json().catch(() => null));
-    if (!result.ok) {
-      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
-      return json({ error: result.error }, 400);
-    }
-    await serverAppend([result.value]);
-    return json({ ok: true });
-  };
-
-  const handleFork = async (req: Request): Promise<Response> => {
-    const result = decodeFork(await req.json().catch(() => null));
-    if (!result.ok) {
-      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
-      return json({ error: result.error }, 400);
-    }
-    await serverAppend([result.value]);
-    return json({ ok: true });
-  };
+  // The six pure decode-then-append routes (annotation, fork, revert, reply,
+  // ack, turn-ended) share one shape, so the router dispatches them through
+  // `APPEND_ROUTE_DECODERS` below instead of carrying six near-identical
+  // handlers. The stateful routes that follow keep their own handlers.
 
   const handleMessage = async (req: Request): Promise<Response> => {
     const raw = await req.json().catch(() => null);
@@ -542,16 +523,6 @@ export const createSessionHost = (
     return json({ ok: true });
   };
 
-  const handleRevert = async (req: Request): Promise<Response> => {
-    const result = decodeRevert(await req.json().catch(() => null));
-    if (!result.ok) {
-      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
-      return json({ error: result.error }, 400);
-    }
-    await serverAppend([result.value]);
-    return json({ ok: true });
-  };
-
   /**
    * Rename the artifact: rewrite its `<title>` text. The document's own title
    * is the ONE name every surface reads - the tab label, the hub listing, the
@@ -646,16 +617,6 @@ export const createSessionHost = (
     });
   };
 
-  const handleAck = async (req: Request): Promise<Response> => {
-    const result = decodeAck(await req.json().catch(() => null));
-    if (!result.ok) {
-      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
-      return json({ error: result.error }, 400);
-    }
-    await serverAppend([result.value]);
-    return json({ ok: true });
-  };
-
   /**
    * `POST /__lucid/bind` - a launch announcing which harness-native session it
    * bound (plan 03, M2). Validation is refusal, not coercion: a stamp that
@@ -672,35 +633,6 @@ export const createSessionHost = (
     if (!result.opened) return json({ error: "session not opened" }, 409);
     for (const e of result.fresh) broadcast(e);
     touch();
-    return json({ ok: true });
-  };
-
-  /**
-   * `POST /__lucid/turn-ended` - a turn saying it stopped (plan 08, RFC-01).
-   *
-   * Every field is a CLOSED set, refused rather than coerced. A `reason` this
-   * build does not know is not a shortened one and a `code` outside the
-   * charset is not a truncated identifier - both are something else, and
-   * accepting a cleaned-up version of them is how prose gets into a record.
-   * There is deliberately no free-text field to validate.
-   */
-  const handleTurnEnded = async (req: Request): Promise<Response> => {
-    const result = decodeTurnEnded(await req.json().catch(() => null));
-    if (!result.ok) {
-      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
-      return json({ error: result.error }, 400);
-    }
-    await serverAppend([result.value]);
-    return json({ ok: true });
-  };
-
-  const handleReply = async (req: Request): Promise<Response> => {
-    const result = decodeReply(await req.json().catch(() => null));
-    if (!result.ok) {
-      recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
-      return json({ error: result.error }, 400);
-    }
-    await serverAppend([result.value]);
     return json({ ok: true });
   };
 
@@ -839,7 +771,7 @@ export const createSessionHost = (
     touch();
 
     // ---- control routes (reserved prefix) ----
-    if (pathname === "/__lucid/identity") {
+    if (pathname === LUCID_ROUTES.identity) {
       return json({
         lucid: true,
         session: paths.artifactPath,
@@ -847,7 +779,7 @@ export const createSessionHost = (
         version: await currentVersion(),
       });
     }
-    if (pathname === "/__lucid/viewer") {
+    if (pathname === LUCID_ROUTES.viewer) {
       return viewerResponse({
         session: paths.artifactPath,
         name: basename(paths.artifactPath),
@@ -861,7 +793,7 @@ export const createSessionHost = (
     // viewer page, and nothing in the sandboxed artifact should reach them.
     if (pathname === "/__lucid/chrome.js") return serveBundleAsset("chrome.js", req);
     if (pathname === "/__lucid/chrome.css") return serveBundleAsset("chrome.css", req);
-    if (pathname === "/__lucid/events") {
+    if (pathname === LUCID_ROUTES.events) {
       const isAgent = url.searchParams.get("role") === "agent";
       // The browser upgrades (its six-per-origin HTTP pool is the whole reason
       // live.ts exists); `lucid wait`'s subscriber keeps the SSE wire. The
@@ -877,7 +809,7 @@ export const createSessionHost = (
         headers: { "content-type": "text/html; charset=utf-8", ...noStore },
       });
     }
-    if (pathname === "/__lucid/state") {
+    if (pathname === LUCID_ROUTES.state) {
       // The whole viewer-state assembly (fold + attendant + presence +
       // resume + context/selection) lives behind src/core/viewer-state.ts.
       // agentsListening is a THUNK so it is read at response-build time,
@@ -898,13 +830,22 @@ export const createSessionHost = (
     }
     if (pathname === "/__lucid/diff") return handleDiff(url);
     if (pathname === "/__lucid/version") return handleVersion(url);
-    if (pathname === "/__lucid/annotation" && req.method === "POST") return handleAnnotation(req);
-    if (pathname === "/__lucid/fork" && req.method === "POST") return handleFork(req);
-    if (pathname === "/__lucid/message" && req.method === "POST") return handleMessage(req);
-    if (pathname === "/__lucid/revert" && req.method === "POST") return handleRevert(req);
-    if (pathname === "/__lucid/rename" && req.method === "POST") return handleRename(req);
-    if (pathname === "/__lucid/question" && req.method === "POST") return handleQuestion(req);
-    if (pathname === "/__lucid/answer" && req.method === "POST") return handleAnswer(req);
+    // The pure decode-then-append routes (annotation, fork, revert, reply,
+    // ack, turn-ended) dispatch through the route->decoder table: one decode,
+    // one refusal, one append, no per-route handler.
+    if (req.method === "POST" && APPEND_ROUTE_DECODERS[pathname] !== undefined) {
+      const result = APPEND_ROUTE_DECODERS[pathname](await req.json().catch(() => null));
+      if (!result.ok) {
+        recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
+        return json({ error: result.error }, 400);
+      }
+      await serverAppend([result.value]);
+      return json({ ok: true });
+    }
+    if (pathname === LUCID_ROUTES.message && req.method === "POST") return handleMessage(req);
+    if (pathname === LUCID_ROUTES.rename && req.method === "POST") return handleRename(req);
+    if (pathname === LUCID_ROUTES.question && req.method === "POST") return handleQuestion(req);
+    if (pathname === LUCID_ROUTES.answer && req.method === "POST") return handleAnswer(req);
     if (pathname === "/__lucid/asset" && req.method === "POST") return handleAssetUpload(req);
     if (pathname.startsWith("/__lucid/asset/")) {
       const file = pathname.slice("/__lucid/asset/".length);
@@ -916,11 +857,8 @@ export const createSessionHost = (
         headers: { "content-type": contentTypeFor(ext) },
       });
     }
-    if (pathname === "/__lucid/reply" && req.method === "POST") return handleReply(req);
-    if (pathname === "/__lucid/ack" && req.method === "POST") return handleAck(req);
-    if (pathname === "/__lucid/turn-ended" && req.method === "POST") return handleTurnEnded(req);
-    if (pathname === "/__lucid/bind" && req.method === "POST") return handleBind(req);
-    if (pathname === "/__lucid/context" && req.method === "POST") return handleContext(req);
+    if (pathname === LUCID_ROUTES.bind && req.method === "POST") return handleBind(req);
+    if (pathname === LUCID_ROUTES.context && req.method === "POST") return handleContext(req);
     if (pathname === "/__lucid/resolve" && req.method === "POST") {
       const result = decodeResolve();
       if (!result.ok) {
@@ -950,7 +888,7 @@ export const createSessionHost = (
       await serverAppend([result.value]);
       return json({ ok: true });
     }
-    if (pathname === "/__lucid/end" && req.method === "POST") {
+    if (pathname === LUCID_ROUTES.end && req.method === "POST") {
       const result = decodeEnd();
       if (!result.ok) {
         recordRefusal({ _tag: "ValidationError", code: "VALIDATION_ERROR" });
