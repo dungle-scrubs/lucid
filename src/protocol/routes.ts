@@ -46,6 +46,18 @@ export const LUCID_ROUTES = {
   bind: "/__lucid/bind",
   /** CLI delivery: a context-usage update (sidecar fallback target). */
   context: "/__lucid/context",
+  /** Browser GET: the live artifact document (the iframe's srcdoc/url). */
+  artifact: "/__lucid/artifact",
+  /** Browser GET: the per-session model/effort selection. */
+  selection: "/__lucid/selection",
+  /** Browser GET: the hub's session listing (open reviews). */
+  sessions: "/__lucid/sessions",
+  /** Browser POST: mark the review resolved. */
+  resolve: "/__lucid/resolve",
+  /** Browser POST: clear the review record. */
+  clear: "/__lucid/clear",
+  /** Browser POST: reopen a resolved review. */
+  reopen: "/__lucid/reopen",
   /** The viewer review page, served for the mount base (not the hub root). */
   viewer: "/__lucid/viewer",
   /** The live event stream (SSE / WebSocket upgrade). */

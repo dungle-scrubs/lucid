@@ -5,6 +5,7 @@ import {
   type FrameHandlers,
   type SessionFrame,
 } from "../../src/protocol/frames.ts";
+import { LUCID_ROUTES } from "../../src/protocol/routes.ts";
 import { lifecycleStatusOf, verdictOf, type SelectionResponse } from "../../src/protocol/wire.ts";
 import { createActions, type SessionActions } from "./actions.ts";
 import { createPastes, type Pastes } from "./pastes.ts";
@@ -162,7 +163,7 @@ export const createSession = (config: SessionConfig): SessionHandle => {
    *  otherwise keep offering the vocabulary it started with. A server that
    *  predates the route answers 404 and the pickers stay off. */
   const loadSelection = async (): Promise<void> => {
-    const body = await transport.get<SelectionResponse>("/__lucid/selection");
+    const body = await transport.get<SelectionResponse>(LUCID_ROUTES.selection);
     if (body) applySelection(body);
   };
 
@@ -216,7 +217,7 @@ export const createSession = (config: SessionConfig): SessionHandle => {
    */
   const checkGone = async (): Promise<void> => {
     // null is "nothing answered" - unreachable, not gone.
-    if ((await transport.probe("/__lucid/identity")) !== 404) return;
+    if ((await transport.probe(LUCID_ROUTES.identity)) !== 404) return;
     set({ gone: true, live: false });
     disconnect();
   };

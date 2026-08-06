@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useStore } from "zustand";
+import { LUCID_ROUTES } from "../../src/protocol/routes.ts";
 import { hubAttentionFor, tabAttention } from "./attention.ts";
 import { bridgeBox } from "./bridge-box.ts";
 import { matchScore, openSplit } from "./list.ts";
@@ -160,7 +161,7 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
       // a filename fallback label is not the title and would always mismatch.
       // The SERVER's spelling (trimmed, bounded), so the optimistic label is
       // exactly what the next sessions push will confirm - no settle flicker.
-      const out = await handle.transport.post<{ title?: string }>("/__lucid/rename", {
+      const out = await handle.transport.post<{ title?: string }>(LUCID_ROUTES.rename, {
         title,
         ...(row?.title !== undefined ? { replaces: row.title } : {}),
       });
