@@ -70,13 +70,17 @@ export const activate = (key: string): void => {
 };
 
 /** Remove a key from the roster and clean BOTH maps (no orphan in
- *  `lastActivated`). Returns whether the closed tab was active and which
- *  neighbor should be promoted, so the caller can reconnect and activate it
- *  through the full path (LRU-disconnected background tabs need a reconnect,
- *  not just an activeKey swap). */
+ *  `lastActivated`). When `ops` is passed this is the ONE door for the whole
+ *  close protocol (M4.3): dispose the stream/surface, drop the roster, then
+ *  activate the promoted neighbor through the caller's reconnect path - in
+ *  that order, so a disconnect never races the activate that reconnects the
+ *  promoted (LRU-disconnected) tab. Returns whether the closed tab was active
+ *  and which neighbor was promoted. */
 export const close = (
   key: string,
+  ops?: { readonly dispose?: (key: string) => void; readonly activate?: (key: string) => void },
 ): { readonly wasActive: boolean; readonly promoted: string | null } => {
+  ops?.dispose?.(key);
   lastActivated.delete(key);
   const wasActive = useShell.getState().activeKey === key;
   let promoted: string | null = null;
@@ -91,6 +95,7 @@ export const close = (
     return { sessionKeys: keys, activeKey: nextActive };
   });
   dropHandle(key);
+  if (wasActive && promoted !== null) ops?.activate?.(promoted);
   return { wasActive, promoted };
 };
 

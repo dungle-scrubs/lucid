@@ -12,6 +12,8 @@
  * rather than painting a misleading partial one.
  */
 
+import { numberAnnotations } from "../shared/numbering.ts";
+
 export interface Rect {
   readonly left: number;
   readonly top: number;
@@ -104,14 +106,21 @@ export const computeMarkers = (input: MarkerInput): Marker[] => {
       badged = true;
     }
   };
-  let number = 0;
+  // The one numbering rule (M4.1): committed (resolved) annotations number
+  // in record order, queued continue the count - shared with the panel's
+  // buildTimeline so a badge and its card wear the same number. Non-painting
+  // committed annotations still hold a number (hiding #1 must not renumber #2);
+  // they just skip the push below.
+  const numbers = numberAnnotations(
+    input.committed.map((c) => ({ id: c.id, resolved: true })),
+    input.queued,
+  );
   for (const annotation of input.committed) {
-    number += 1; // per annotation, never per target: the badge matches the card's number
     if (!annotation.paints) continue;
-    pushAll(annotation.id, "committed", number, annotation.targets);
+    pushAll(annotation.id, "committed", numbers.get(annotation.id) ?? 0, annotation.targets);
   }
-  input.queued.forEach((queued, index) => {
-    pushAll(queued.id, "queued", number + index + 1, queued.targets);
+  input.queued.forEach((queued) => {
+    pushAll(queued.id, "queued", numbers.get(queued.id) ?? 0, queued.targets);
   });
   input.pending.forEach((rects, index) => {
     if (rects.length > 0) {

@@ -422,14 +422,18 @@ export const activateTab = (key: string): void => {
  *  function does the stream cleanup and the promote-through-activateTab that
  *  reconnects an LRU-disconnected background tab. */
 export const closeTab = (key: string): void => {
-  const handle = getSession(key);
-  handle?.disconnect();
-  handle?.surface.dispose();
-  const { wasActive, promoted } = closeTabRoster(key);
-  // Promote through activateTab, not by index alone: the neighbor may be an
-  // LRU-disconnected background tab, and landing on a dead stream would show
-  // a frozen review until the human clicked it again.
-  if (wasActive && promoted !== null) activateTab(promoted);
+  // M4.3: the whole close protocol is one door (`tabs.close`), sequenced there.
+  // This side provides the stream/surface dispose and the activate that
+  // reconnects an LRU-disconnected promoted tab - the roster mechanics and the
+  // dispose->promote ordering are the tab module's, not re-sequenced here.
+  closeTabRoster(key, {
+    dispose: (k) => {
+      const handle = getSession(k);
+      handle?.disconnect();
+      handle?.surface.dispose();
+    },
+    activate: activateTab,
+  });
 };
 
 let hubStream: LiveStream | null = null;

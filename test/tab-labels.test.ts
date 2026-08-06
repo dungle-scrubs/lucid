@@ -6,7 +6,6 @@ import {
   groupTabs,
   projectName,
   sessionLabel,
-  tabLabel,
 } from "../client/chrome/naming.ts";
 
 /**
@@ -65,15 +64,15 @@ describe("a tab shows only its title (D-012; flips e2e finding #56 by design)", 
   const tabB = { key: b.artifact, name: sessionLabel(b) };
 
   test("a cross-project collision stays title-only; group membership tells them apart", () => {
-    expect(tabLabel(tabA)).toBe("Migration");
-    expect(tabLabel(tabB)).toBe("Migration");
+    expect(tabA.name).toBe("Migration");
+    expect(tabB.name).toBe("Migration");
     // The distinction the labels no longer carry lives in the grouping.
     const groups = groupTabs([tabA.key, tabB.key], [a, b]);
     expect(groups.map((g) => g.project)).toEqual(["/dev/lucid", "/dev/tether"]);
   });
 
   test("an uncontested name is unchanged", () => {
-    expect(tabLabel(tabA)).toBe("Migration");
+    expect(tabA.name).toBe("Migration");
   });
 
   test("a same-project collision is a tooltip's job, not the label's", () => {
@@ -85,7 +84,7 @@ describe("a tab shows only its title (D-012; flips e2e finding #56 by design)", 
       project: "/dev/lucid",
       title: "Migration",
     });
-    expect(tabLabel({ key: c.artifact, name: "Migration" })).toBe("Migration");
+    expect({ key: c.artifact, name: "Migration" }.name).toBe("Migration");
   });
 });
 

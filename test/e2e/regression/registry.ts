@@ -450,9 +450,15 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     testName: "a queued card takes the NEXT number, on its card and on its mark alike",
     mutation: {
       kind: "edit",
-      file: "client/overlay/markers.ts",
-      find: '    pushAll(queued.id, "queued", number + index + 1, queued.targets);',
-      replace: '    pushAll(queued.id, "queued", index + 1, queued.targets);',
+      file: "client/shared/numbering.ts",
+      // Reintroduce the queued-restart-at-1 bug: queued badges numbered per
+      // their own index instead of continuing the committed count, so a queued
+      // mark wore the same number as a sent one. The numbering moved from
+      // markers.ts to the shared `numberAnnotations` owner (M4.1); the anchor
+      // follows it.
+      find: "  queued.forEach((q) => {\n    if (!numbers.has(q.id)) {\n      n += 1;\n      numbers.set(q.id, n);\n    }\n  });",
+      replace:
+        "  queued.forEach((q, i) => {\n    if (!numbers.has(q.id)) numbers.set(q.id, i + 1);\n  });",
     },
   },
   {

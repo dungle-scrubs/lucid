@@ -19,7 +19,7 @@ import {
   useHub,
 } from "./hub.ts";
 import { resolveShortcut } from "./keymap.ts";
-import { groupTabs, projectName, sessionLabel, tabLabel } from "./naming.ts";
+import { groupTabs, projectName, sessionLabel } from "./naming.ts";
 import { Palette } from "./Palette.tsx";
 import type { SessionHandle } from "./session.ts";
 import { getSession, persistTabs, readStoredTabs, useShell } from "./shell.ts";
@@ -147,7 +147,7 @@ const Tab = ({ sessionKey, active }: { readonly sessionKey: string; readonly act
   // Title only (D-012): the project a colliding name used to carry as a
   // qualifier is the GROUP heading's job now; the tooltip carries the path.
   const row = sessions.find((r) => r.artifact === sessionKey);
-  const label = row ? sessionLabel(row) : tabLabel({ key: sessionKey, name: handle.config.name });
+  const label = row ? sessionLabel(row) : handle.config.name;
 
   const commitRename = async (value: string): Promise<void> => {
     setRenaming(false);

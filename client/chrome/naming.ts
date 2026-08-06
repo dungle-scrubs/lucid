@@ -93,21 +93,11 @@ export const groupTabs = (
   return order.map((project) => ({ project, keys: keysByProject.get(project) as string[] }));
 };
 
-/** An open tab, as naming sees it: its session key and what its session is
- *  called. The handle itself is the caller's business. */
-export interface OpenTab {
-  readonly key: string;
-  readonly name: string;
-}
-
-/**
- * What a tab reads: its title, and ONLY its title (plan 03, D-012). The
- * cross-project qualifier the label used to grow on a name collision is the
- * GROUP's job now - the strip renders every tab under its project's heading
- * (`groupTabs`), so "which project's Migration plan is this?" is answered by
- * where the tab sits, not by a suffix eating the strip's width. Two same-titled
- * tabs in ONE project are distinguished by each tab's tooltip (its artifact
- * path), which is the tooltip's job in a browser too. This deliberately flips
- * e2e finding #56's pinned behavior - by design (D-027).
+/** What a tab reads: its title, and ONLY its title (plan 03, D-012/D-027).
+ *  The cross-project qualifier on a name collision is the GROUP's job now - the
+ *  strip renders every tab under its project's heading (`groupTabs`), so
+ *  "which project's Migration plan is this?" is answered by where the tab
+ *  sits, not by a suffix eating the strip's width. This deliberately flips e2e
+ *  finding #56's pinned behavior - by design. (M4.3: the `tabLabel` wrapper and
+ *  its `OpenTab` interface were deleted; the call site reads `.name` directly.)
  */
-export const tabLabel = (tab: OpenTab): string => tab.name;
