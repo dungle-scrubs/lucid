@@ -1,9 +1,9 @@
 import type { SessionPaths } from "../core/paths.ts";
 import { removeServerDescriptor, writeServerDescriptor } from "./discovery.ts";
 import { createLogSink } from "./observe.ts";
-import { serveLoopback } from "./live.ts";
+import { serveLoopback, type LoopbackServer } from "./live.ts";
 import { portBase, sessionPortPool } from "../core/ports.ts";
-import { createSessionHost } from "./session-host.ts";
+import { createSessionHost, type SessionHost } from "./session-host.ts";
 
 export interface ServerOptions {
   /** Idle window before auto-suspend (ms). 0 disables auto-suspend. */
@@ -51,57 +51,48 @@ export const runServer = async (
     if (stopped) return;
     stopped = true;
     if (idleTimer) clearInterval(idleTimer);
-    host.stop();
+    host?.stop();
     await removeServerDescriptor(paths);
-    boundServer.stop(true);
+    server.stop(true);
     resolveDone();
   };
 
-  // Only the process that BOUND the port can upgrade a request, and that is
-  // this owner, not the host. Read through a binding assigned below, because
-  // the host is constructed before the server exists.
-  let bound: ReturnType<typeof Bun.serve> | undefined;
-
-  const host = createSessionHost(paths, {
-    ...(options.debounceMs !== undefined ? { debounceMs: options.debounceMs } : {}),
-    getPort: () => port,
-    onEnded: () => void stop(),
-    upgrade: (req, socket) => bound?.upgrade(req, { data: socket }) === true,
-  });
-
-  // This server's OWN boundary record (plan 08 M10). Two things the first
-  // attempt got wrong, both caught in review:
-  //
-  // The SINK is per-session, not the shared hub log. N dedicated servers
-  // writing to one file interleave records of identical shape, into a file
-  // whose rotation this repo already documents as lossy - and the default sink
-  // also mirrors to stdout, which spawnServer redirects to a file the codebase
-  // itself calls uncapped, so every request would grow it forever.
-  //
-  // And every record carries the session, attached here rather than per route:
-  // a dedicated server serves exactly ONE artifact, so its identity is a
-  // property of the server, not of the request. Without it the records were
-  // anonymous - a record is defined as carrying which artifact it is about.
-  let boundServer: ReturnType<typeof Bun.serve>;
+  // The host/router is built INSIDE serveLoopback's handler factory (M2.3):
+  // serveLoopback binds the port, then hands the factory {port, upgrade} so the
+  // host gets the WebSocket upgrade fn directly - no caller-side let-bound
+  // server. The host is captured here for the idle policy and shutdown.
+  let host: SessionHost | undefined;
+  // This server's OWN boundary record (plan 08 M10): the SINK is per-session
+  // (N dedicated servers writing to one shared log interleave), and every
+  // record carries the session, attached in the factory rather than per route
+  // (a dedicated server serves exactly ONE artifact).
+  let server: LoopbackServer;
   try {
-    boundServer = serveLoopback({
+    server = serveLoopback({
       ports: requestedPorts,
       name: "server",
       sink: createLogSink({ path: paths.requestLog, mirror: () => {} }),
-      // Attached here, not per route: a dedicated server serves exactly ONE
-      // artifact, so its identity is a property of the server, not of the
-      // request. `attach` runs at the observation boundary before the gate
-      // (M2.2), so pre-gate and refused requests carry it too.
-      attach: (observation) => observation.attach({ artifact: paths.artifactPath }),
-      gate: host.gate,
-      handler: (req, observation) => host.handle(req, undefined, observation),
+      handler: ({ port: boundPort, upgrade }) => {
+        const h = createSessionHost(paths, {
+          ...(options.debounceMs !== undefined ? { debounceMs: options.debounceMs } : {}),
+          getPort: () => boundPort,
+          onEnded: () => void stop(),
+          upgrade,
+        });
+        host = h;
+        return {
+          attach: (observation) => observation.attach({ artifact: paths.artifactPath }),
+          gate: h.gate,
+          route: (req, observation) => h.handle(req, undefined, observation),
+        };
+      },
     });
   } catch (err) {
-    host.stop();
+    host?.stop();
     throw err;
   }
-  bound = boundServer;
-  port = boundServer.port ?? 0;
+  const boundHost = host as SessionHost;
+  port = server.port;
 
   // One line naming what was bound and why it was available.
   //
@@ -127,7 +118,7 @@ export const runServer = async (
   // The policy is the host's (M3.2): one poll/suspend/onSuspended shape,
   // shared with the hub's mounts. The server passes its `!stopped` flag as
   // the gate so a stopping server never suspends, and `stop` as the action.
-  const idleTimer = host.startIdlePolicy(
+  const idleTimer = boundHost.startIdlePolicy(
     idleMs,
     // Suspend appends + broadcasts BEFORE stop() closes the streams, so
     // subscribers learn of it. Refused = a subscriber connected in the gap;

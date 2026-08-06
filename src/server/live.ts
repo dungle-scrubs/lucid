@@ -360,24 +360,45 @@ export interface LoopbackGate {
   readonly check: (req: Request, observation: RequestObservation) => Response | undefined;
 }
 
+/** What serveLoopback hands back (M2.3): the bound port, a stop, and the
+ *  WebSocket upgrade fn - everything the host/router needs, without handing
+ *  out the full Bun server (the source of the caller's old let-bound
+ *  back-patch). */
+export interface LoopbackServer {
+  readonly port: number;
+  readonly stop: (force?: boolean) => void;
+  readonly upgrade: Upgrade;
+}
+
+/** What serveLoopback passes the handler factory: the port it bound and the
+ *  upgrade fn only the bound server can provide, so the host/router is built
+ *  with both in hand - breaking the host<->server boot cycle without a
+ *  caller-side let-bound back-patch (M2.2/M2.3). */
+export interface LoopbackFactoryCtx {
+  readonly port: number;
+  readonly upgrade: Upgrade;
+}
+
+/** What the handler factory returns: the gate + attach that run before the
+ *  route (M2.2), and the route itself. */
+export interface LoopbackFactoryResult {
+  readonly gate?: LoopbackGate;
+  readonly attach?: (observation: RequestObservation) => void;
+  readonly route: (req: Request, observation: RequestObservation) => Promise<Response>;
+}
+
 export interface LoopbackOptions {
   /** Ports to try, in order. The first that binds wins. */
   readonly ports: readonly number[];
   /** What this server calls itself in the 500 an escaping throw becomes. */
   readonly name: string;
-  /** The one funnel every route passes through. */
-  readonly handler: (req: Request, observation: RequestObservation) => Promise<Response>;
   /** Where the wide event per request goes (observe.ts). */
   readonly sink: LineSink;
-  /** Run on each request's observation before the gate (M2.2), so a per-server
-   *  identity - which session a dedicated server belongs to - attaches even
-   *  to pre-gate and refused requests, the way it did when the gate lived in
-   *  each handler. */
-  readonly attach?: (observation: RequestObservation) => void;
-  /** The Host/Origin DNS-rebind gate serveLoopback runs before the handler
-   *  (M2.2): the overlay bundle bypasses it, and a 403 records on the
-   *  observation. Optional: a gateless stream (the hub listing) sets none. */
-  readonly gate?: LoopbackGate;
+  /** The handler FACTORY (M2.2/M2.3): serveLoopback binds the port, then calls
+   *  this with {port, upgrade} so the host/router is built with both - the
+   *  upgrade the host needs (M2.3) and the gate it owns (M2.2) arrive
+   *  together, and no caller holds a let-bound server. */
+  readonly handler: (ctx: LoopbackFactoryCtx) => LoopbackFactoryResult;
 }
 
 /**
@@ -388,30 +409,22 @@ export interface LoopbackOptions {
  * Loopback only, and never an idle timeout: a live channel is a response that
  * is meant to stay open for as long as someone is watching.
  */
-export const serveLoopback = (options: LoopbackOptions): ReturnType<typeof Bun.serve> => {
-  // The wide event is made HERE, at the one funnel every route passes
-  // through (D-004) - no route can forget to log. Built once, not per request.
-  const observed = observeRequests(
-    { sink: options.sink },
-    async (req, observation): Promise<Response> => {
-      // attach runs at the observation boundary, before the gate, so a
-      // per-server identity rides pre-gate and refused requests too - the
-      // invariant the gate owned when it lived in each handler.
-      options.attach?.(observation);
-      if (options.gate) {
-        const pre = await options.gate.preGate?.(req);
-        if (pre !== undefined) return pre;
-        const blocked = options.gate.check(req, observation);
-        if (blocked !== undefined) return blocked;
-      }
-      return options.handler(req, observation);
-    },
-  );
-  let server: ReturnType<typeof Bun.serve> | undefined;
+export const serveLoopback = (options: LoopbackOptions): LoopbackServer => {
+  // The factory needs the bound port + upgrade, and the bound server's fetch
+  // needs the observed route the factory produces - a cycle. Break it with a
+  // holder assigned between bind and first request. The factory runs in the
+  // same tick as the bind, so the 503 placeholder is unreachable in practice.
+  let observed: (req: Request) => Promise<Response> = async () =>
+    new Response(`${options.name} not ready`, {
+      status: 503,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  let bound: ReturnType<typeof Bun.serve> | undefined;
+  const upgrade: Upgrade = (req, socket) => bound?.upgrade(req, { data: socket }) === true;
   let lastErr: unknown;
   for (const candidate of options.ports) {
     try {
-      server = Bun.serve({
+      bound = Bun.serve({
         port: candidate,
         hostname: "127.0.0.1",
         idleTimeout: 0,
@@ -434,10 +447,29 @@ export const serveLoopback = (options: LoopbackOptions): ReturnType<typeof Bun.s
       lastErr = err;
     }
   }
-  if (!server) {
+  if (!bound) {
     throw new ServerError({
       message: `could not bind any port in [${options.ports.join(", ")}]: ${(lastErr as Error)?.message ?? "unknown"}`,
     });
   }
-  return server;
+  const port = bound.port ?? 0;
+  const { gate, attach, route } = options.handler({ port, upgrade });
+  // The wide event is made HERE, at the one funnel every route passes through
+  // (D-004) - no route can forget to log. Built once, not per request.
+  observed = observeRequests(
+    { sink: options.sink },
+    async (req, observation): Promise<Response> => {
+      // attach runs at the observation boundary, before the gate, so a
+      // per-server identity rides pre-gate and refused requests too.
+      attach?.(observation);
+      if (gate) {
+        const pre = await gate.preGate?.(req);
+        if (pre !== undefined) return pre;
+        const blocked = gate.check(req, observation);
+        if (blocked !== undefined) return blocked;
+      }
+      return route(req, observation);
+    },
+  );
+  return { port, stop: (force) => bound?.stop(force), upgrade };
 };

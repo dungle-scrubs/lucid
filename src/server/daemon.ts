@@ -58,7 +58,7 @@ import {
   upgradeOrRefuse,
   wantsUpgrade,
   wasUpgraded,
-  type LoopbackGate,
+  type LoopbackServer,
   type Subscriber,
   type Upgrade,
 } from "./live.ts";
@@ -238,11 +238,13 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
    *  detached child outlives the hub, and its interval would otherwise keep
    *  firing at nobody for the rest of that turn. */
   const heartbeats = new Set<ReturnType<typeof setInterval>>();
-  /** The bound server, once it exists. Only the process that bound the port can
-   *  upgrade a request to a WebSocket, and the routes that need to do so are
-   *  defined before `Bun.serve` returns - so they read it through here. */
-  let bound: ReturnType<typeof Bun.serve> | undefined;
-  const upgrade: Upgrade = (req, socket) => bound?.upgrade(req, { data: socket }) === true;
+  /** The bound loopback server, once it exists. The hub's WS-upgrade routes
+   *  are defined before serveLoopback returns, so they read it through here - a
+   *  let the daemon's channel<->handle<->server cycle structurally requires
+   *  (the channel is woven through a thousand lines of `handle`, so it cannot
+   *  move into the factory the way the dedicated server's host did). */
+  let server: LoopbackServer | undefined;
+  const upgrade: Upgrade = (req, socket) => server?.upgrade(req, socket) ?? false;
   let port = 0; // assigned once bound (below)
   let stopped = false;
   // Attention rides its OWN SSE event, deduped independently of the listing, so
@@ -1256,30 +1258,33 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   // server's behaviour, and the documented closed set of error codes.
   // The hub's Host/Origin gate (M2.2): the overlay bundle is served before it
   // (a session mount loads it from an opaque origin), and a 403 records
-  // nothing - the hub's refusals are not a session's metrics. serveLoopback
+  // nothing. serveLoopback's factory builds it with the bound port (M2.3) and
   // runs it before `handle`, so session routes are gated before any id
   // resolution.
-  const gate: LoopbackGate = {
-    preGate: (req) => {
-      const match = SESSION_ROUTE_RE.exec(new URL(req.url).pathname);
-      return match && match[2] === "/__lucid/client.js"
-        ? serveBundleAsset("client.js", req)
-        : undefined;
-    },
-    check: (req) => {
-      const headerCheck = validateHeaders(req, port);
-      return headerCheck.ok ? undefined : json({ error: `forbidden: ${headerCheck.reason}` }, 403);
-    },
-  };
-  const server = serveLoopback({
+  const loopback = serveLoopback({
     ports: [requestedPort],
     name: "daemon",
-    handler: handle,
     sink: log,
-    gate,
+    handler: ({ port: boundPort }) => ({
+      gate: {
+        preGate: (req) => {
+          const match = SESSION_ROUTE_RE.exec(new URL(req.url).pathname);
+          return match && match[2] === "/__lucid/client.js"
+            ? serveBundleAsset("client.js", req)
+            : undefined;
+        },
+        check: (req) => {
+          const headerCheck = validateHeaders(req, boundPort);
+          return headerCheck.ok
+            ? undefined
+            : json({ error: `forbidden: ${headerCheck.reason}` }, 403);
+        },
+      },
+      route: handle,
+    }),
   });
-  bound = server;
-  port = server.port ?? 0;
+  server = loopback;
+  port = loopback.port;
 
   // The one line that matters most to a detached hub - which port it actually
   // bound - through the sink, so it lands in the file and not only on the
