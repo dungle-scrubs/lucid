@@ -398,10 +398,11 @@ export class LucidOverlay extends LitElement {
     if (this.#outlineController !== null) return;
     this.#capabilities = capabilities;
     this.#ownedRoot = capabilities.overlayRoot();
-    this.#outlineController = new BrowserArtifactOutlineController(port, capabilities, {
-      clearEmphasis: this.clearSectionEmphasis,
-      markEmphasis: this.markSectionEmphasis,
-    });
+    this.#outlineController = new BrowserArtifactOutlineController(
+      port,
+      capabilities,
+      this.sectionEmphasisEnv,
+    );
   }
 
   outlineDebugInfo(): ReturnType<BrowserArtifactOutlineController["debugInfo"]> | null {
@@ -539,7 +540,7 @@ export class LucidOverlay extends LitElement {
       this.#sectionDocument(),
       lucidId,
       window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "normal",
-      { clearEmphasis: this.clearSectionEmphasis, markEmphasis: this.markSectionEmphasis },
+      this.sectionEmphasisEnv,
     );
   }
 
@@ -554,14 +555,18 @@ export class LucidOverlay extends LitElement {
     this.sectionPulse += 1;
   };
 
+  /** The emphasis environment every reveal/pulse call shares (M2.5): built
+   *  once rather than re-allocated at each of the three call sites. */
+  private readonly sectionEmphasisEnv = {
+    clearEmphasis: this.clearSectionEmphasis,
+    markEmphasis: this.markSectionEmphasis,
+  };
+
   /** Flash a section where it already sits. This is the no-scroll half of the
    *  update-location rule: if the new material is already under the reader's
    *  eyes, moving the page would destroy rather than improve orientation. */
   private pulseSection(lucidId: string): void {
-    pulseSectionIn(this.#sectionDocument(), lucidId, {
-      clearEmphasis: this.clearSectionEmphasis,
-      markEmphasis: this.markSectionEmphasis,
-    });
+    pulseSectionIn(this.#sectionDocument(), lucidId, this.sectionEmphasisEnv);
   }
 
   /** Report every `data-lucid-id` in the artifact so the chrome can tell a live
