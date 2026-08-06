@@ -6,7 +6,7 @@ import type {
   QuestionGroup,
   QuestionItem,
   QuestionPreview,
-} from "../../src/core/question-contract.ts";
+} from "../shared/question-contract.ts";
 import { useActions, useSession } from "./context.tsx";
 import {
   advance,

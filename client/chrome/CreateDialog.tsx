@@ -14,7 +14,7 @@ import {
 import { projectName } from "./naming.ts";
 import { effortLadderOf } from "../../src/protocol/wire.ts";
 import { harnessInfoFor } from "./selection.ts";
-import { handleize } from "../../src/core/title.ts";
+import { handleize } from "../shared/handleize.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { closeButton } from "./ui/close.ts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";

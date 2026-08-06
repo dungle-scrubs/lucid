@@ -43,21 +43,7 @@ export const parseTitle = (html: string): string | null => {
   return text.length > 0 ? text.slice(0, 120) : null;
 };
 
-/**
- * A filename from a title: lowercase, words joined by dashes, everything the
- * create route's name rule would reject dropped. Empty when the title has no
- * usable characters at all (an emoji-only title), so the caller keeps whatever
- * the human typed rather than showing them a blank field.
- */
-export const handleize = (title: string): string =>
-  title
-    .normalize("NFKD")
-    // Strip combining marks so "Café" handleizes to "cafe", not "cafa".
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/['']/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    // The route's own cap, minus room for ".html".
-    .slice(0, 75)
-    .replace(/-+$/g, "");
+// `handleize` moved to client/shared/handleize.ts (M4.5): the create dialog
+// is its only consumer, and a client component must not import this server-
+// tier module directly. The server title path (TITLE_SCAN_BYTES / parseTitle)
+// stays here.
