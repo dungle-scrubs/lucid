@@ -1111,6 +1111,14 @@ export const createActions = (ctx: ActionsCtx) => {
   const openLightbox = (images: readonly MessageImage[], index: number): void =>
     set({ lightboxImages: images, lightboxIndex: index });
 
+  /** Light up an annotation's mark without scrolling (a card gained focus).
+   *  M4.2: the chrome's cards call this directly rather than dispatching a
+   *  `lucid:focus-annotation` CustomEvent the surface used to relay. */
+  const focusMark = (id: string): void => surfaceEmphasize(id, false);
+
+  /** Light the mark AND scroll the surface to it (Enter on a focused card). */
+  const revealMark = (id: string): void => surfaceEmphasize(id, true);
+
   const closeLightbox = (): void => set({ lightboxImages: null });
 
   const stepLightbox = (delta: number): void => {
@@ -1278,6 +1286,8 @@ export const createActions = (ctx: ActionsCtx) => {
     setHovered,
     openLightbox,
     openLightboxForSrc,
+    focusMark,
+    revealMark,
     closeLightbox,
     stepLightbox,
     enterDiff,

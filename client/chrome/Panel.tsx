@@ -240,7 +240,7 @@ export const Notices = () => {
  * re-render without the timeline rebuilding.
  */
 export const QueuedCard = ({ id, index }: { readonly id: string; readonly index: number }) => {
-  const { beginEdit, cancelEdit, commitEdit, removeQueued, setEditDraft, setHovered } =
+  const { beginEdit, cancelEdit, commitEdit, removeQueued, setEditDraft, setHovered, focusMark } =
     useActions();
   const { pastes } = useSessionHandle();
   const q = useSession((s) => s.queue.find((x) => x.id === id));
@@ -274,11 +274,11 @@ export const QueuedCard = ({ id, index }: { readonly id: string; readonly index:
       }`}
       onMouseEnter={() => {
         setHovered(q.id);
-        window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: q.id }));
+        focusMark(q.id);
       }}
       onMouseLeave={() => {
         setHovered(null);
-        window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: "" }));
+        focusMark("");
       }}
     >
       {/* leading-none + pt-px: the same optical centring the sent card's chip
