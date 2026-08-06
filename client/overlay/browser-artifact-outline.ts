@@ -88,6 +88,107 @@ interface BrowserElement extends OutlineRuntimeElement {
   parent: BrowserElement | null;
 }
 
+/**
+ * The outline's element vocabulary, declared once (M2.6): every field an
+ * `OutlineRuntimeElement` exposes, projected from a native DOM element through
+ * the trusted capabilities. Geometry, style and (for H2s) text are cached
+ * lazily so a pass that reads only geometry pays nothing for text. Extracted
+ * from the traversal loop so the vocabulary lives in one place instead of
+ * drifting beside the snapshot plumbing.
+ */
+const snapshotElement = (
+  capabilities: TrustedOutlineCapabilities,
+  nativeElement: Element,
+  parent: BrowserElement | null,
+  deadlineMs: number,
+): BrowserElement => {
+  const tagName = capabilities.tagName(nativeElement);
+  let cachedRect: OutlineRuntimeRect | undefined;
+  let cachedStyle: OutlineRuntimeStyle | undefined;
+  let cachedText:
+    | { readonly complete: boolean; readonly examinedNodes: number; readonly value: string }
+    | undefined;
+  return {
+    get activeMotion() {
+      return capabilities.hasActiveMotion(nativeElement);
+    },
+    get ariaHidden() {
+      return capabilities.ariaHidden(nativeElement);
+    },
+    get clientHeight() {
+      return capabilities.clientHeight(nativeElement);
+    },
+    get clientWidth() {
+      return capabilities.clientWidth(nativeElement);
+    },
+    get connected() {
+      return capabilities.isConnected(nativeElement);
+    },
+    get hasBox() {
+      cachedRect ??= capabilities.rect(nativeElement);
+      return cachedRect.right > cachedRect.left || cachedRect.bottom > cachedRect.top;
+    },
+    get hidden() {
+      return capabilities.hidden(nativeElement);
+    },
+    get inert() {
+      return capabilities.inert(nativeElement);
+    },
+    get lightDom() {
+      return capabilities.isLightDom(nativeElement);
+    },
+    nativeElement,
+    owned: tagName === "HTML" || tagName === "BODY" || capabilities.isOwned(nativeElement),
+    parent,
+    get rect() {
+      cachedRect ??= capabilities.rect(nativeElement);
+      return cachedRect;
+    },
+    rootScroller: tagName === "HTML" || tagName === "BODY",
+    get scrollHeight() {
+      return capabilities.scrollHeight(nativeElement);
+    },
+    get scrollWidth() {
+      return capabilities.scrollWidth(nativeElement);
+    },
+    get style() {
+      cachedStyle ??= capabilities.style(nativeElement);
+      return cachedStyle;
+    },
+    tagName,
+    get text() {
+      if (tagName !== "H2") return "";
+      cachedText ??= capabilities.text(
+        nativeElement,
+        ARTIFACT_OUTLINE_POLICY.maxExaminedLabelCodeUnits + 1,
+        ARTIFACT_OUTLINE_POLICY.maxTextNodesPerHeading,
+        deadlineMs,
+      );
+      return cachedText.value;
+    },
+    get textComplete() {
+      if (tagName !== "H2") return true;
+      cachedText ??= capabilities.text(
+        nativeElement,
+        ARTIFACT_OUTLINE_POLICY.maxExaminedLabelCodeUnits + 1,
+        ARTIFACT_OUTLINE_POLICY.maxTextNodesPerHeading,
+        deadlineMs,
+      );
+      return cachedText.complete;
+    },
+    get textNodesExamined() {
+      if (tagName !== "H2") return 0;
+      cachedText ??= capabilities.text(
+        nativeElement,
+        ARTIFACT_OUTLINE_POLICY.maxExaminedLabelCodeUnits + 1,
+        ARTIFACT_OUTLINE_POLICY.maxTextNodesPerHeading,
+        deadlineMs,
+      );
+      return cachedText.examinedNodes;
+    },
+  };
+};
+
 const snapshotGeometry = (
   capabilities: TrustedOutlineCapabilities,
   deadlineMs: number,
@@ -111,93 +212,9 @@ const snapshotGeometry = (
       wrappedTraversal = false;
       break;
     }
-    const tagName = capabilities.tagName(nativeElement);
     const parentElement = capabilities.parentElement(nativeElement);
     const parent = parentElement ? (byNative.get(parentElement) ?? null) : null;
-    let cachedRect: OutlineRuntimeRect | undefined;
-    let cachedStyle: OutlineRuntimeStyle | undefined;
-    let cachedText:
-      | { readonly complete: boolean; readonly examinedNodes: number; readonly value: string }
-      | undefined;
-    const snapshot: BrowserElement = {
-      get activeMotion() {
-        return capabilities.hasActiveMotion(nativeElement);
-      },
-      get ariaHidden() {
-        return capabilities.ariaHidden(nativeElement);
-      },
-      get clientHeight() {
-        return capabilities.clientHeight(nativeElement);
-      },
-      get clientWidth() {
-        return capabilities.clientWidth(nativeElement);
-      },
-      get connected() {
-        return capabilities.isConnected(nativeElement);
-      },
-      get hasBox() {
-        cachedRect ??= capabilities.rect(nativeElement);
-        return cachedRect.right > cachedRect.left || cachedRect.bottom > cachedRect.top;
-      },
-      get hidden() {
-        return capabilities.hidden(nativeElement);
-      },
-      get inert() {
-        return capabilities.inert(nativeElement);
-      },
-      get lightDom() {
-        return capabilities.isLightDom(nativeElement);
-      },
-      nativeElement,
-      owned: tagName === "HTML" || tagName === "BODY" || capabilities.isOwned(nativeElement),
-      parent,
-      get rect() {
-        cachedRect ??= capabilities.rect(nativeElement);
-        return cachedRect;
-      },
-      rootScroller: tagName === "HTML" || tagName === "BODY",
-      get scrollHeight() {
-        return capabilities.scrollHeight(nativeElement);
-      },
-      get scrollWidth() {
-        return capabilities.scrollWidth(nativeElement);
-      },
-      get style() {
-        cachedStyle ??= capabilities.style(nativeElement);
-        return cachedStyle;
-      },
-      tagName,
-      get text() {
-        if (tagName !== "H2") return "";
-        cachedText ??= capabilities.text(
-          nativeElement,
-          ARTIFACT_OUTLINE_POLICY.maxExaminedLabelCodeUnits + 1,
-          ARTIFACT_OUTLINE_POLICY.maxTextNodesPerHeading,
-          deadlineMs,
-        );
-        return cachedText.value;
-      },
-      get textComplete() {
-        if (tagName !== "H2") return true;
-        cachedText ??= capabilities.text(
-          nativeElement,
-          ARTIFACT_OUTLINE_POLICY.maxExaminedLabelCodeUnits + 1,
-          ARTIFACT_OUTLINE_POLICY.maxTextNodesPerHeading,
-          deadlineMs,
-        );
-        return cachedText.complete;
-      },
-      get textNodesExamined() {
-        if (tagName !== "H2") return 0;
-        cachedText ??= capabilities.text(
-          nativeElement,
-          ARTIFACT_OUTLINE_POLICY.maxExaminedLabelCodeUnits + 1,
-          ARTIFACT_OUTLINE_POLICY.maxTextNodesPerHeading,
-          deadlineMs,
-        );
-        return cachedText.examinedNodes;
-      },
-    };
+    const snapshot = snapshotElement(capabilities, nativeElement, parent, deadlineMs);
     byNative.set(nativeElement, snapshot);
     elements.push(snapshot);
   }

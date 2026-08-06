@@ -26,6 +26,7 @@ import {
   type SelectionResponse,
   type SelectionState,
 } from "../../src/protocol/wire.ts";
+import { LUCID_ROUTES } from "../../src/protocol/routes.ts";
 import type { Surface } from "./surface.ts";
 import type { Transport, UploadedAsset } from "./transport.ts";
 import type {
@@ -320,7 +321,7 @@ export const createActions = (ctx: ActionsCtx) => {
     const id = s.forkId ?? uuid();
     set({ forking: true, forkId: id });
     try {
-      await transport.post("/__lucid/fork", {
+      await transport.post(LUCID_ROUTES.fork, {
         id,
         version: s.version,
         target,
@@ -467,7 +468,7 @@ export const createActions = (ctx: ActionsCtx) => {
     set({ sending: true }); // freeze the queue: an item edited mid-flight would send its old note
     try {
       for (const q of get().queue) {
-        await transport.post("/__lucid/annotation", {
+        await transport.post(LUCID_ROUTES.annotation, {
           id: q.id,
           version: get().version,
           target: q.target,
@@ -587,7 +588,7 @@ export const createActions = (ctx: ActionsCtx) => {
    * ordinary outage, and it should take the ordinary retry path.
    */
   const anotherSessionAnswers = async (): Promise<boolean> => {
-    const identity = await transport.get<{ session?: unknown }>("/__lucid/identity");
+    const identity = await transport.get<{ session?: unknown }>(LUCID_ROUTES.identity);
     return identity !== null && identity.session !== get().session;
   };
 
@@ -618,7 +619,7 @@ export const createActions = (ctx: ActionsCtx) => {
         try {
           // Ids are client-minted and deduped server-side, so re-sending one
           // that actually landed (a lost response) appends nothing.
-          await transport.post("/__lucid/message", {
+          await transport.post(LUCID_ROUTES.message, {
             id: m.id,
             text: m.text,
             refs: [],
@@ -678,7 +679,7 @@ export const createActions = (ctx: ActionsCtx) => {
       return;
     }
     try {
-      await transport.post("/__lucid/resolve", {});
+      await transport.post(LUCID_ROUTES.resolve, {});
     } catch {
       warn("Approve didn't send - try again.");
     }
@@ -731,7 +732,7 @@ export const createActions = (ctx: ActionsCtx) => {
       return;
     }
     try {
-      await transport.post("/__lucid/clear", {});
+      await transport.post(LUCID_ROUTES.clear, {});
     } catch {
       warn("Clear didn't send - try again.");
     }
@@ -745,7 +746,7 @@ export const createActions = (ctx: ActionsCtx) => {
       return;
     }
     try {
-      await transport.post("/__lucid/reopen", {});
+      await transport.post(LUCID_ROUTES.reopen, {});
       // No notice. The reopening is an entry in the record at its own moment,
       // and it carries this fact itself when nobody is listening - a toast for
       // it was pinned to the bottom of the thread, where it outlived its moment
@@ -761,7 +762,7 @@ export const createActions = (ctx: ActionsCtx) => {
 
   const loadSessions = async (): Promise<void> => {
     set({ sessionsLoading: true });
-    const data = await transport.get<{ sessions: SessionSummary[] }>("/__lucid/sessions");
+    const data = await transport.get<{ sessions: SessionSummary[] }>(LUCID_ROUTES.sessions);
     if (!data) {
       set({ sessions: [], sessionsLoading: false });
       warn("Couldn't list this project's sessions.");
@@ -806,7 +807,7 @@ export const createActions = (ctx: ActionsCtx) => {
    */
   const setSelection = async (pick: SelectionState): Promise<void> => {
     try {
-      const body = await transport.post<SelectionResponse>("/__lucid/selection", pick);
+      const body = await transport.post<SelectionResponse>(LUCID_ROUTES.selection, pick);
       // A body with no selection in it is a server that did not do what was
       // asked; applying it would blank the pickers on an answer that isn't one.
       if (!body?.selection) {
@@ -1003,7 +1004,7 @@ export const createActions = (ctx: ActionsCtx) => {
     const legacy = grouped ? null : legacyAnswerFields(group, draft);
     answerSending.add(q.id);
     try {
-      await transport.post("/__lucid/answer", {
+      await transport.post(LUCID_ROUTES.answer, {
         id: uuid(),
         questionId: q.id,
         text: legacy?.text ?? "",
@@ -1032,7 +1033,7 @@ export const createActions = (ctx: ActionsCtx) => {
     if (answerSending.has(q.id)) return;
     answerSending.add(q.id);
     try {
-      await transport.post("/__lucid/answer", {
+      await transport.post(LUCID_ROUTES.answer, {
         id: uuid(),
         questionId: q.id,
         text: "",
@@ -1057,7 +1058,7 @@ export const createActions = (ctx: ActionsCtx) => {
     if (answerSending.has(q.id)) return;
     answerSending.add(q.id);
     try {
-      await transport.post("/__lucid/answer", {
+      await transport.post(LUCID_ROUTES.answer, {
         id: uuid(),
         questionId: q.id,
         text: (note ?? "").trim(),
@@ -1173,14 +1174,14 @@ export const createActions = (ctx: ActionsCtx) => {
   const exitVersionView = async (): Promise<void> => {
     if (get().viewingVersion === null) return;
     set({ viewingVersion: null });
-    const html = await transport.getText("/__lucid/artifact");
+    const html = await transport.getText(LUCID_ROUTES.artifact);
     if (html !== null) showHtml(html);
     pushHighlights();
   };
 
   const exitDiff = async (): Promise<void> => {
     set({ diffMode: false, revertWhy: "" });
-    const html = await transport.getText("/__lucid/artifact");
+    const html = await transport.getText(LUCID_ROUTES.artifact);
     if (html !== null) showHtml(html);
     pushHighlights();
   };
@@ -1206,7 +1207,7 @@ export const createActions = (ctx: ActionsCtx) => {
     const why = s.revertWhy.trim() || `Undo this change - restore to v${s.diffBase}.`;
     if (!hunk) return;
     try {
-      await transport.post("/__lucid/revert", {
+      await transport.post(LUCID_ROUTES.revert, {
         id: uuid(),
         target: hunk.anchor,
         targetVersion: s.diffBase,

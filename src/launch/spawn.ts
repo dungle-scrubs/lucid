@@ -190,7 +190,7 @@ export const runSpawn = async (
         }
       : null,
     discovered,
-    identity?.hubPort,
+    identity?.hubPort !== undefined ? { hubPort: identity.hubPort } : undefined,
   );
   // The out-log is machine-local (plan 02); its `run/` parent may not exist
   // yet when a fork's create turn spawns. mkdir defensively - idempotent.

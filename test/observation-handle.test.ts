@@ -80,18 +80,19 @@ describe("handle(req, pathname, observation) (M3.3 / DF-1c)", () => {
     }
   });
 
-  test("a header-guard refusal is recorded via fail, never end", async () => {
+  test("a header-guard refusal is recorded via fail, never end", () => {
     const h = host();
     const obs = recording();
     try {
-      const res = await h.handle(
+      // The Host/Origin gate lives on `gate` now (M2.2): serveLoopback runs it
+      // before `handle`, so a refusal is recorded on the observation directly.
+      const res = h.gate.check(
         new Request("http://evil.example/__lucid/identity", {
           headers: { host: "evil.example" },
         }),
-        undefined,
         obs,
       );
-      expect(res.status).toBe(403);
+      expect(res?.status).toBe(403);
       expect(obs.failed).toHaveLength(1);
       expect(obs.failed[0]?.code).toBe("FORBIDDEN");
       expect(obs.ended).toEqual([]);

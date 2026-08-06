@@ -12,8 +12,9 @@
  */
 import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
 import type { AgentProgress } from "../protocol/wire.ts";
-import type { AttendantStamp, TurnEndReason } from "../core/events.ts";
+import type { AttendantStamp, EventInput, TurnEndReason } from "../core/events.ts";
 import { sanitizeAttendant } from "../core/events.ts";
+import { LUCID_ROUTES } from "./routes.ts";
 import { sanitizeBlocked, sanitizeProgress } from "../core/progress.ts";
 import type { PromptImage } from "../core/events.ts";
 
@@ -410,3 +411,29 @@ export const decodeReopen = (): DecodeResult<{ readonly t: "review_reopened" }> 
 
 export const decodeEnd = (): DecodeResult<{ readonly t: "session_ended" }> =>
   decoded({ t: "session_ended" });
+
+// ---- route -> decoder dispatcher table (M2.1) -----------------------------
+
+/**
+ * The body-parsing POST routes whose handler is a pure decode-then-append:
+ * read the body, decode it, refuse on a malformed body, append on a valid one.
+ * Six routes share that exact shape, so the dispatcher in session-host reads
+ * this table instead of carrying six near-identical handlers.
+ *
+ * Routes whose handler is stateful - `message` (a session check), `rename`
+ * (a title rewrite), `question`/`answer` (grouped-form validation), `bind`
+ * (a different writer), `context` (a sanitizer, not a decoder) - stay out of
+ * the table and keep their own handlers; a pure decode-then-act split does
+ * not clean them up. Keyed by the `LUCID_ROUTES` spelling so a rename lands
+ * in one place.
+ */
+export const APPEND_ROUTE_DECODERS: Readonly<
+  Record<string, (body: unknown) => DecodeResult<EventInput>>
+> = {
+  [LUCID_ROUTES.annotation]: decodeAnnotation,
+  [LUCID_ROUTES.fork]: decodeFork,
+  [LUCID_ROUTES.revert]: decodeRevert,
+  [LUCID_ROUTES.reply]: decodeReply,
+  [LUCID_ROUTES.ack]: decodeAck,
+  [LUCID_ROUTES.turnEnded]: decodeTurnEnded,
+};

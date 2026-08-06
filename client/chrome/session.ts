@@ -5,6 +5,7 @@ import {
   type FrameHandlers,
   type SessionFrame,
 } from "../../src/protocol/frames.ts";
+import { LUCID_ROUTES } from "../../src/protocol/routes.ts";
 import { lifecycleStatusOf, verdictOf, type SelectionResponse } from "../../src/protocol/wire.ts";
 import { createActions, type SessionActions } from "./actions.ts";
 import { createPastes, type Pastes } from "./pastes.ts";
@@ -162,7 +163,7 @@ export const createSession = (config: SessionConfig): SessionHandle => {
    *  otherwise keep offering the vocabulary it started with. A server that
    *  predates the route answers 404 and the pickers stay off. */
   const loadSelection = async (): Promise<void> => {
-    const body = await transport.get<SelectionResponse>("/__lucid/selection");
+    const body = await transport.get<SelectionResponse>(LUCID_ROUTES.selection);
     if (body) applySelection(body);
   };
 
@@ -216,51 +217,45 @@ export const createSession = (config: SessionConfig): SessionHandle => {
    */
   const checkGone = async (): Promise<void> => {
     // null is "nothing answered" - unreachable, not gone.
-    if ((await transport.probe("/__lucid/identity")) !== 404) return;
+    if ((await transport.probe(LUCID_ROUTES.identity)) !== 404) return;
     set({ gone: true, live: false });
     disconnect();
   };
 
   const connect = (): void => {
     if (stream !== null) return;
-    stream = openStream(
-      `${config.base}/__lucid/events`,
-      {
-        onFrame,
-        // Re-fetch on every (re)open: synthetic frames (listeners, context) go
-        // only to connected clients and are never replayed, so anything
-        // reported while the stream was down would otherwise stay stale until
-        // the next report. bootstrap() is seq-guarded, so the extra fetch at
-        // first open is harmless.
-        onOpen: () => {
-          set({ live: true, streamRetries: 0 });
-          void surface.bootstrap();
-          void loadSelection();
-          // A live stream means the server is answering again, which is the
-          // only thing an undelivered message was waiting on. Fires on the
-          // first open too, so a message stranded by a closed tab leaves on the
-          // next load without the human having to notice it.
-          void actions.flushOutbox();
-        },
-        // A drop is a state to show, not a warning to accumulate: one warning
-        // per failed attempt spammed the panel and told the human to reload,
-        // which was never true.
-        //
-        // But a drop that keeps happening deserves ONE question: is there
-        // still a session here? A WebSocket handshake refused with 404 is
-        // indistinguishable from a refused connection in the browser - the
-        // status never reaches JS - so the socket alone can retry a session
-        // that no longer exists until the tab is closed. Two failures in,
-        // ask a route that CAN answer.
-        onDown: (retries) => {
-          set({ live: false, streamRetries: retries });
-          if (retries === 2) void checkGone();
-        },
+    stream = openStream(`${config.base}/__lucid/events`, {
+      onFrame,
+      // Re-fetch on every (re)open: synthetic frames (listeners, context) go
+      // only to connected clients and are never replayed, so anything
+      // reported while the stream was down would otherwise stay stale until
+      // the next report. bootstrap() is seq-guarded, so the extra fetch at
+      // first open is harmless.
+      onOpen: () => {
+        set({ live: true, streamRetries: 0 });
+        void surface.bootstrap();
+        void loadSelection();
+        // A live stream means the server is answering again, which is the
+        // only thing an undelivered message was waiting on. Fires on the
+        // first open too, so a message stranded by a closed tab leaves on the
+        // next load without the human having to notice it.
+        void actions.flushOutbox();
       },
-      ...(config.sseMaxBackoffMs === undefined
-        ? []
-        : ([{ maxBackoffMs: config.sseMaxBackoffMs }] as const)),
-    );
+      // A drop is a state to show, not a warning to accumulate: one warning
+      // per failed attempt spammed the panel and told the human to reload,
+      // which was never true.
+      //
+      // But a drop that keeps happening deserves ONE question: is there
+      // still a session here? A WebSocket handshake refused with 404 is
+      // indistinguishable from a refused connection in the browser - the
+      // status never reaches JS - so the socket alone can retry a session
+      // that no longer exists until the tab is closed. Two failures in,
+      // ask a route that CAN answer.
+      onDown: (retries) => {
+        set({ live: false, streamRetries: retries });
+        if (retries === 2) void checkGone();
+      },
+    });
     // First paint should not wait for the stream to open: fetch the folded
     // state immediately (seq-guarded, so the onopen re-fetch is harmless).
     void surface.bootstrap();

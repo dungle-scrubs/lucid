@@ -1,4 +1,5 @@
 import { multiTargets, type StateResponse } from "../../src/protocol/wire.ts";
+import { LUCID_ROUTES } from "../../src/protocol/routes.ts";
 import type { OutlineMotionPreference } from "../shared/artifact-outline.ts";
 import type { ChromeMessage } from "../shared/protocol.ts";
 import { createChromeArtifactOutline, type OutlinePort } from "./artifact-outline-session.ts";
@@ -252,7 +253,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   const bootstrap = async (): Promise<void> => {
     const mine = ++bootstrapSeq;
     const lifecycleAtRequest = lifecycleSeq;
-    const payload = await transport.get<StateResponse>("/__lucid/state");
+    const payload = await transport.get<StateResponse>(LUCID_ROUTES.state);
     // Guarded AFTER the body is parsed, not merely after the response arrives:
     // an older request can stall in the parse and land over a newer snapshot
     // that completed meanwhile. A malformed body applies nothing.
@@ -336,7 +337,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
   };
 
   const onNewVersion = async (version: number): Promise<void> => {
-    const html = await transport.getText("/__lucid/artifact");
+    const html = await transport.getText(LUCID_ROUTES.artifact);
     if (html === null) return;
     if (swapBlocked()) {
       pendingSwapHtml = html;

@@ -7,10 +7,12 @@
  * single source: every site that addresses a `/__lucid/*` route imports the
  * spelling from here.
  *
- * Scope (M1.5): the CLI delivery map (`deliver.ts`) and the daemon's proxy
- * special-cases. The dispatcher table itself (route -> decoder -> handler) is
- * built on this in M3.1; the client fetch sites import it in M4.2/M4.5. Until
- * then those sites keep their own literals, swept when their milestone lands.
+ * Scope: the CLI delivery map (`deliver.ts`), the daemon's proxy
+ * special-cases, and the route->decoder dispatcher table (`inbound.ts`'s
+ * `APPEND_ROUTE_DECODERS`, M2.1) all read their spellings from here. The
+ * browser POST routes the dispatcher covers (annotation/fork/message/revert/
+ * rename/question/answer) live here too. Client fetch sites still keep their
+ * own literals, swept when the inbound surface seam (M2.4) lands.
  *
  * `protocol/` owns the shared contract: value imports are allowed from both
  * bundles, this file imports nothing from `server/`.
@@ -18,20 +20,44 @@
 
 /** Every `/__lucid/*` route the server exposes, by stable name. */
 export const LUCID_ROUTES = {
+  /** Browser POST: a human annotation on the artifact. */
+  annotation: "/__lucid/annotation",
+  /** Browser POST: a fork request for a new artifact. */
+  fork: "/__lucid/fork",
+  /** Browser POST: a human chat message. */
+  message: "/__lucid/message",
+  /** Browser POST: a revert to a prior version. */
+  revert: "/__lucid/revert",
+  /** Browser POST: rename the artifact's title. */
+  rename: "/__lucid/rename",
+  /** A question posed to the human (browser POST, relayed by CLI delivery). */
+  question: "/__lucid/question",
+  /** Browser POST: the human's answer to a question. */
+  answer: "/__lucid/answer",
   /** CLI delivery: an agent reply line. */
   reply: "/__lucid/reply",
   /** CLI delivery: a phase/heartbeat ack. */
   ack: "/__lucid/ack",
   /** CLI delivery: the terminator of an agent turn. */
   turnEnded: "/__lucid/turn-ended",
-  /** CLI delivery: a question posed to the human. */
-  question: "/__lucid/question",
   /** CLI delivery / browser: end the session. */
   end: "/__lucid/end",
   /** CLI delivery: a harness session identity binding. */
   bind: "/__lucid/bind",
   /** CLI delivery: a context-usage update (sidecar fallback target). */
   context: "/__lucid/context",
+  /** Browser GET: the live artifact document (the iframe's srcdoc/url). */
+  artifact: "/__lucid/artifact",
+  /** Browser GET: the per-session model/effort selection. */
+  selection: "/__lucid/selection",
+  /** Browser GET: the hub's session listing (open reviews). */
+  sessions: "/__lucid/sessions",
+  /** Browser POST: mark the review resolved. */
+  resolve: "/__lucid/resolve",
+  /** Browser POST: clear the review record. */
+  clear: "/__lucid/clear",
+  /** Browser POST: reopen a resolved review. */
+  reopen: "/__lucid/reopen",
   /** The viewer review page, served for the mount base (not the hub root). */
   viewer: "/__lucid/viewer",
   /** The live event stream (SSE / WebSocket upgrade). */

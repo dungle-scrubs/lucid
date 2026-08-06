@@ -1,13 +1,8 @@
 import { mkdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { tracer } from "../core/verbose.ts";
-import {
-  artifactAttendant,
-  readAttendantSidecars,
-  recordSessionInvalidation,
-  resolveResumeCandidates,
-  type ResumeCandidate,
-} from "../core/attendant.ts";
+import { artifactAttendant } from "../core/attendant.ts";
+import { attendTarget, createVerdictCache, quarantineSession } from "./attend-candidates.ts";
 import { deliver } from "../core/deliver.ts";
 import type { LogEvent } from "../core/events.ts";
 import {
@@ -25,20 +20,13 @@ import { readEvents } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { artifactCheckout, checkoutOf, projectOf } from "../core/project.ts";
 import { assemblePayload } from "../core/payload.ts";
-import {
-  harnessHasLocalStore,
-  harnessSessionCwd,
-  harnessSessionId,
-  harnessStoreHas,
-  harnessTranscriptPath,
-} from "../core/harness-store.ts";
+import { harnessHasLocalStore, harnessTranscriptPath } from "../core/harness-store.ts";
 import {
   harnessSupportsPresence,
   livePresenceCached,
   presenceFor,
   presenceStoreReadable,
 } from "../core/presence.ts";
-import { scratchpadProject } from "../core/scratchpad.ts";
 import { revisePrompt } from "../launch/prompts.ts";
 import {
   DEFAULT_TURN_IDLE_MS,
@@ -425,16 +413,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
    *  verdicts behind these entries are not all final either: a pre-flight
    *  "no transcript" can be a transient store-read failure, a stall a
    *  transient wedge. An entry older than the cooloff expires and the verdict
-   *  is re-tested; only the on-disk HSI004 quarantine is durable. */
-  let ruledOutForBatch = new Map<string, number>();
-  let ruledOutBatchFrom = -1;
-  const ruledOut = (id: string): boolean => {
-    const at = ruledOutForBatch.get(id);
-    if (at === undefined) return false;
-    if (Date.now() - at < cooloffMs) return true;
-    ruledOutForBatch.delete(id);
-    return false;
-  };
+   *  is re-tested; only the on-disk HSI004 quarantine is durable.
+   *
+   *  Extracted into `verdict` (attend-candidates.ts, M1) so the cache's
+   *  cooloff expiry, batch-boundary reset, and within-batch persistence are
+   *  unit-testable with an injectable clock. */
+  const verdict = createVerdictCache({ cooloffMs, now: () => Date.now() });
 
   const pauseFor = (ms: number, harness?: string): void => {
     pausedUntil = Date.now() + ms;
@@ -461,129 +445,12 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     log(`attend ${paths.name}: pausing attendance for ${cooloffMs / 60000} minutes`);
   };
 
-  /**
-   * The harness conversation this artifact's turns belong to: which harness,
-   * which session id, and where it ran.
-   *
-   * Two sources, because an artifact can carry either. The LOG's session
-   * history is the exact one, stamped by an agent that exported its identity
-   * (D18). Failing that, the cursor sidecar an agent writes when it takes
-   * delivery names the harness and carries the resume command with the session
-   * id inside it - which is what the viewer has always shown as "copy the
-   * command to resume", and what presence detection joins on.
-   *
-   * Reading only the first meant an artifact whose agent never exported
-   * `LUCID_SESSION_ID` was declared unattendable ("no harness session recorded")
-   * while the panel sat there displaying that very session's resume command.
-   */
-  /**
-   * Where a resume can actually FIND the session. `claude --resume <id>` looks
-   * the session up under the project of the directory it runs in, so for an
-   * artifact in an agent scratchpad the only workable cwd is the one the
-   * scratchpad path encodes - never the scratchpad itself, and never a cwd
-   * recorded from inside it (which is what this engine's own earlier acks
-   * stamped, so a stale stamp must not win).
-   */
-  const resumeCwd = async (
-    sessionId: string | undefined,
-    recorded?: string,
-  ): Promise<{ readonly cwd?: string }> => {
-    // Where the harness FILED this conversation beats every inference about
-    // where it ought to live - see harnessSessionCwd.
-    const filed = sessionId ? await harnessSessionCwd(sessionId) : undefined;
-    const decoded = filed ?? (await scratchpadProject(paths.artifactDir));
-    const cwd = decoded ?? recorded;
-    return cwd ? { cwd } : {};
-  };
-
-  /**
-   * The ranked resume candidates for this artifact (plan 03, M4): sidecars
-   * with explicit authority, corroborated durable bindings, one id a
-   * harness-specific parser pulled from the recorded resume command, and a
-   * corroborated scratchpad id - in that order, with locally quarantined ids
-   * excluded. sessionHistory MENTIONS never rank: an untyped stamp is how the
-   * synthetic UUID reached resume argv (the reported failure).
-   */
-  const attendCandidates = async (
-    state: FoldedState,
-    legacy: Awaited<ReturnType<typeof artifactAttendant>>,
-  ): Promise<readonly ResumeCandidate[]> => {
-    const sidecars = await readAttendantSidecars(paths);
-    const scratchpadId = harnessSessionId({ artifactDir: paths.artifactDir });
-    // The recorded resume COMMAND comes from the sidecars directly, not from
-    // `artifactAttendant`: that resolver answers "who owns this artifact" and
-    // returns early on a stamped id, carrying no resume string - so reading
-    // the command through it made tier 3 vanish for exactly the artifacts
-    // that followed the integration guide most completely (export an id AND
-    // record a resume command). Newest sidecar that has one wins.
-    const recorded = [...sidecars]
-      .filter((a) => a.resume !== undefined)
-      .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))[0];
-    const harnessForScratchpad = recorded?.harness ?? legacy?.harness;
-    return resolveResumeCandidates({
-      sidecars,
-      bindings: state.bindings,
-      corroborate: (harness, sessionId) => harnessStoreHas(harness, sessionId),
-      ...(recorded?.resume
-        ? { legacyResume: { command: recorded.resume, harness: recorded.harness } }
-        : {}),
-      ...(scratchpadId && harnessForScratchpad
-        ? { scratchpad: { harness: harnessForScratchpad, sessionId: scratchpadId } }
-        : {}),
-    });
-  };
-
-  const attendTarget = async (
-    state: FoldedState,
-  ): Promise<
-    | {
-        readonly harness: string;
-        /** Absent when nothing PROVEN resumable exists: the artifact is still
-         *  attendable - by a fresh handoff, which resumes nothing. */
-        readonly sessionId?: string;
-        readonly cwd?: string;
-        readonly fallback?: { readonly harness: string; readonly sessionId: string };
-        /** Every candidate this artifact had was proven dead on this machine:
-         *  a fresh handoff would answer a question nobody asked. */
-        readonly exhausted?: boolean;
-      }
-    | undefined
-  > => {
-    // ONE read of the recorded association, shared by ranking (it supplies
-    // the legacy resume command and the harness a scratchpad id belongs to)
-    // and by placement (its cwd decides fresh-vs-resume).
-    const recorded = await artifactAttendant(paths, state.sessionHistory);
-    const candidates = await attendCandidates(state, recorded);
-    const best = candidates[0];
-    if (!best) {
-      // No id survives the trust ladder. Two very different situations hide
-      // here, and collapsing them was how the unavailable warning became
-      // unreachable: an artifact that never had a resumable session (a fresh
-      // handoff is right) versus one whose sessions this machine has PROVEN
-      // dead (quarantined) - where silently starting a stranger is the
-      // opposite of what the human is owed.
-      if (!recorded?.harness) return undefined;
-      const quarantined = (await readAttendantSidecars(paths)).some(
-        (a) => (a.invalidatedSessionIds ?? []).length > 0,
-      );
-      return {
-        harness: recorded.harness,
-        ...(quarantined ? { exhausted: true } : {}),
-        ...(await resumeCwd(undefined, recorded.cwd)),
-      };
-    }
-    // The one permitted fallback (D-004): the next DISTINCT id, resolved now
-    // so a not-found on the primary needs no second resolution pass.
-    const next = candidates.find(
-      (c) => c.sessionId !== best.sessionId && c.harness === best.harness,
-    );
-    return {
-      harness: best.harness,
-      sessionId: best.sessionId,
-      ...(await resumeCwd(best.sessionId, recorded?.cwd)),
-      ...(next ? { fallback: { harness: next.harness, sessionId: next.sessionId } } : {}),
-    };
-  };
+  /** The harness conversation this artifact's turns belong to, the resume
+   *  candidate ladder, the verdict cache, and the durable quarantine live in
+   *  attend-candidates.ts (M1): `attendTarget(paths, state)` resolves the one
+   *  target a batch drives, `verdict` (createVerdictCache) retires ids
+   *  per-batch with an injectable cooloff, and `quarantineSession` is the
+   *  single entry point for a durable HSI004 invalidation. */
 
   /**
    * A turn that exited CLEAN but wrote nothing to the log - no new version, no
@@ -627,7 +494,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
   const driveTurn = async (state: FoldedState, deliveredFrom: number): Promise<void> => {
     // The artifact's LATEST identified harness session: the association to
     // resume (D10 - resume is per session id, from its own cwd).
-    const record = await attendTarget(state);
+    const record = await attendTarget(paths, state);
     if (!record) {
       unattendable("no harness session recorded on this artifact");
       return;
@@ -679,10 +546,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     }
 
     const target = state.highSeq;
-    if (deliveredFrom !== ruledOutBatchFrom) {
-      ruledOutBatchFrom = deliveredFrom;
-      ruledOutForBatch = new Map<string, number>();
-    }
+    verdict.advanceBatch(deliveredFrom);
     // The id THIS attempt resumes: the primary, or - after a not-found
     // quarantined it - the one permitted fallback. Both spent means the
     // artifact's identity evidence is exhausted for this batch: say so once,
@@ -690,7 +554,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     const resumeTargetId = startsFresh
       ? undefined
       : [record.sessionId, record.fallback?.sessionId].find(
-          (id): id is string => id !== undefined && !ruledOut(id),
+          (id): id is string => id !== undefined && !verdict.isRuledOut(id),
         );
     if (record.exhausted === true) {
       // Say it, then stand down: the recorded sessions are gone, and the
@@ -718,7 +582,8 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // exists. A tier-one candidate is this machine's own sidecar record and
     // was never store-corroborated - which is exactly how a declared id whose
     // conversation lives elsewhere reached `--resume` argv and died as
-    // "Execution error". The verdict expires with the cooloff (see ruledOut):
+    // "Execution error". The verdict expires with the cooloff (see
+    // verdict.isRuledOut / createVerdictCache):
     // a "no" can be a transient store-read failure, and must not strand a
     // single-candidate artifact forever. ONE store walk serves two needs -
     // the path found here is also the activity signal the stall watchdog
@@ -733,7 +598,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       harnessHasLocalStore(resolved.name) &&
       transcript === undefined
     ) {
-      ruledOutForBatch.set(resumeTargetId, Date.now());
+      verdict.ruleOut(resumeTargetId);
       options.warn?.(
         "HARNESS_SESSION_UNAVAILABLE",
         `Session ${resumeTargetId} has no local transcript for "${resolved.name}", so it cannot be resumed from this machine; trying the next candidate, if any.`,
@@ -930,7 +795,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
     // abandoning the bound session is the one thing the human has asked this
     // engine never to do.
     if (outcome.stalled && !startsFresh && sessionId) {
-      ruledOutForBatch.set(sessionId, Date.now());
+      verdict.ruleOut(sessionId);
       options.warn?.(
         "ATTEND_RESUME_STALLED",
         `The resume of session ${sessionId} produced nothing and was stopped; it will not be retried for this batch.`,
@@ -949,8 +814,7 @@ export const createAttendant = (options: AttendantOptions): Attendant => {
       // Retired for this batch as well as quarantined on disk: the durable
       // record stops the id coming back after a restart, and this set is what
       // bounds the batch to one weaker candidate before standing down.
-      ruledOutForBatch.set(sessionId as string, Date.now());
-      await recordSessionInvalidation(paths, resolved.name, sessionId as string).catch(() => {});
+      await quarantineSession(paths, resolved.name, sessionId as string, verdict);
       log(
         `attend ${paths.name}: harness says session ${sessionId} does not exist here (HSI004); quarantined`,
       );

@@ -18,6 +18,7 @@
  */
 
 import { DEFAULT_FRAME, RECONNECT_FRAME } from "../../src/protocol/frames.ts";
+import { shellConfig } from "./shell-config.ts";
 
 /** What a caller does with the channel. `type` is the frame's event name, or
  *  "message" for the default frame - the frame vocabulary both sides share
@@ -54,6 +55,14 @@ const SILENCE_CHECK_MS = 5_000;
 /** The production ceiling on reconnect backoff. */
 const MAX_BACKOFF_MS = 15_000;
 
+/** The backoff cap this page's server advertised (M2.5): a session viewer reads
+ *  it from `window.__LUCID__`, the shell from `window.__LUCID_SHELL__` - both
+ *  carry LUCID_SSE_MAX_BACKOFF_MS from the server env. Read here at the one
+ *  reconnect owner, so the cap no longer threads through session config. */
+const pageBackoffCap = (): number | undefined =>
+  (globalThis as { __LUCID__?: { sseMaxBackoffMs?: number } }).__LUCID__?.sseMaxBackoffMs ??
+  shellConfig()?.sseMaxBackoffMs;
+
 /** How long a connection must survive before it counts as one that WORKED,
  *  and so clears the backoff. Shorter than any real session, longer than an
  *  open-then-immediately-dropped socket. */
@@ -71,7 +80,10 @@ export const openStream = (
   handlers: StreamHandlers,
   options: StreamOptions = {},
 ): LiveStream => {
-  const ceiling = Math.min(options.maxBackoffMs ?? MAX_BACKOFF_MS, MAX_BACKOFF_MS);
+  const ceiling = Math.min(
+    options.maxBackoffMs ?? pageBackoffCap() ?? MAX_BACKOFF_MS,
+    MAX_BACKOFF_MS,
+  );
   let socket: WebSocket | null = null;
   /**
    * When this connection last proved it was alive.
