@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  nextCopyPopoverState,
-  translateToViewport,
-  type CopyPopoverState,
-} from "./selection-copy.ts";
+import { applyInboundMessage } from "./inbound.ts";
+import { nextCopyPopoverState, type CopyPopoverState } from "./selection-copy.ts";
 import { CopyPopover, type CopyPopoverDispatch } from "./CopyPopover.tsx";
 import { validateOverlayMessage, type OverlayValidationRecord } from "../shared/protocol.ts";
 import { SessionProvider, useSession } from "./context.tsx";
@@ -16,7 +13,6 @@ import { Sessions } from "./Sessions.tsx";
 import { SurfaceControls } from "./surface-controls.tsx";
 import {
   CHROME_MIN_WIDTH,
-  defaultChromeWidth,
   persistWidth,
   setChromeWidth,
   setSidebarOpen,
@@ -100,71 +96,34 @@ const useSessionWiring = (
       // can forge an overlay-shaped payload, and under tabs a stale surface
       // must not mutate the active session's state.
       if (!surface.ownsSource(e.source)) return;
-      if (msg.type === "ready") {
-        surface.markOverlayReady();
-        surface.pushHighlights();
-      } else if (msg.type === "target-picked") {
-        actions.applyOverlayMessage(msg);
-      } else if (msg.type === "annotation-hover") {
-        set({ hoveredId: msg.id });
-      } else if (msg.type === "content-width") {
-        // Size the surface to the content and give the rest to the review,
-        // keeping the panel at or above its minimum. Fall back to the default
-        // when there is nothing measurable.
-        const width =
-          msg.width <= 0
-            ? defaultChromeWidth(window.innerWidth)
-            : Math.max(CHROME_MIN_WIDTH, window.innerWidth - DIVIDER_WIDTH - msg.width);
-        setChromeWidth(width);
-        persistWidth(width);
-      } else if (msg.type === "annotation-activate") {
-        set({ hoveredId: msg.id });
-        document
-          .querySelector(`[data-annotation-id="${msg.id}"]`)
-          ?.scrollIntoView({ behavior: "smooth", block: "center" });
-      } else if (msg.type === "section-ids") {
-        set({
-          sectionIds: msg.ids,
-          ...(msg.added !== undefined
-            ? {
-                addedSectionVisibility: Object.fromEntries(
-                  msg.added.map((section) => [section.id, section.inViewport]),
-                ),
-                emphasizedSectionIds: new Set<string>(),
-              }
-            : {}),
-        });
-      } else if (msg.type === "selection-copy") {
-        // The overlay posted the artifact's selection text plus the release
-        // point (iframe-viewport coords). Translate that point into the PARENT
-        // viewport by adding the iframe's own origin, then open the Copy
-        // Popover anchored at a zero-size rect there. The parent cannot read
-        // the opaque-origin selection, so the text travels as the payload; it
-        // cannot anchor without the frame's position, so frameRect is the
-        // translation's origin. See `selection-copy.ts` for the pure math.
-        const frameRect = surface.frameRect();
-        if (frameRect === null) return;
-        const point = translateToViewport(frameRect, msg.x, msg.y);
-        dispatchCopy({
-          kind: "selection-copy",
-          text: msg.text,
-          anchorRect: {
-            left: point.x,
-            top: point.y,
-            width: 0,
-            height: 0,
-            right: point.x,
-            bottom: point.y,
-            x: point.x,
-            y: point.y,
-          },
-        });
-      } else if (msg.type === "selection-collapsed") {
-        // A bare click in the artifact collapsed the selection; the parent
-        // cannot see in-iframe selectionchange (opaque origin), so the overlay
-        // reports it. Dismisses an open Popover (no-op when none is open).
-        dispatchCopy({ kind: "collapse" });
-      }
+      applyInboundMessage(
+        msg,
+        surface,
+        {
+          applyOverlayMessage: (m) => actions.applyOverlayMessage(m),
+          setHoveredId: (id) => set({ hoveredId: id }),
+          setChromeWidth,
+          persistWidth,
+          scrollAnnotationIntoView: (id) =>
+            document
+              .querySelector(`[data-annotation-id="${id}"]`)
+              ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+          setSections: (ids, added) =>
+            set({
+              sectionIds: ids,
+              ...(added !== undefined
+                ? {
+                    addedSectionVisibility: Object.fromEntries(
+                      added.map((section) => [section.id, section.inViewport]),
+                    ),
+                    emphasizedSectionIds: new Set<string>(),
+                  }
+                : {}),
+            }),
+          dispatchCopy,
+        },
+        window.innerWidth,
+      );
     };
     window.addEventListener("message", onMessage);
 
