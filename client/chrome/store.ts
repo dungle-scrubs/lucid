@@ -64,10 +64,6 @@ export interface SessionConfig {
   readonly version: number;
   /** URL prefix for this session's routes ("" or "/s/<id>"). */
   readonly base: string;
-  /** Cap on the fatal-stream reconnect backoff, ms. Threaded from the server
-   *  (LUCID_SSE_MAX_BACKOFF_MS) so a test that kills a stream is not billed
-   *  the production 15s ceiling; absent means production behaviour. */
-  readonly sseMaxBackoffMs?: number;
 }
 
 const SHOW_TARGETS_LEGACY_KEY = "lucid:showTargets";

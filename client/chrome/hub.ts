@@ -53,7 +53,6 @@ import { sessionLabel } from "./naming.ts";
 import type { SessionHandle } from "./session.ts";
 import { recordViewed, useShell } from "./shell.ts";
 import { openStream, type LiveStream } from "./stream.ts";
-import { shellConfig } from "./shell-config.ts";
 
 /** The shell page's payload, read through the shared owner (M4.4). */
 
@@ -379,13 +378,9 @@ export const openTab = async (
     name: sessionLabel(row),
     version: identity.version,
     base,
-    // The shell page carries the server's backoff cap (D-015) exactly the way
-    // the standalone viewer page does; sessions built here must not silently
-    // lose it or a hub-hosted tab reconnects on production patience under a
-    // harness that killed its stream on purpose.
-    ...((cap) => (typeof cap === "number" ? { sseMaxBackoffMs: cap } : {}))(
-      shellConfig()?.sseMaxBackoffMs,
-    ),
+    // The backoff cap rides the session's own `__lucid` payload (written by the
+    // per-session server, same env), which stream.ts reads directly (M2.5) -
+    // no longer threaded here from the shell's cap.
   });
   handle.connect();
   if (!opts?.background) activate(handle.key);
@@ -599,21 +594,15 @@ export const onHubFrame = (type: string, payload: string): void => {
 export const connectHub = (): void => {
   if (hubStream !== null) return;
   refreshIdentity();
-  hubStream = openStream(
-    "/hub/events",
-    {
-      onFrame: onHubFrame,
-      // Identity is re-read per connection: a hub restarted with --attend, or
-      // pointed at a new folder, would otherwise leave the shell repeating the
-      // answer it started with for as long as the window stays open.
-      onOpen: () => {
-        useHub.setState({ connected: true });
-        refreshIdentity();
-      },
-      onDown: () => useHub.setState({ connected: false }),
+  hubStream = openStream("/hub/events", {
+    onFrame: onHubFrame,
+    // Identity is re-read per connection: a hub restarted with --attend, or
+    // pointed at a new folder, would otherwise leave the shell repeating the
+    // answer it started with for as long as the window stays open.
+    onOpen: () => {
+      useHub.setState({ connected: true });
+      refreshIdentity();
     },
-    ...(shellConfig()?.sseMaxBackoffMs === undefined
-      ? []
-      : ([{ maxBackoffMs: shellConfig()?.sseMaxBackoffMs }] as const)),
-  );
+    onDown: () => useHub.setState({ connected: false }),
+  });
 };
