@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { writeJsonFile } from "./atomic-json.ts";
 import type { ContextUsage } from "../protocol/wire.ts";
 import type { SessionPaths } from "./paths.ts";
 
@@ -44,7 +45,7 @@ export const writeContextSidecar = async (
   paths: SessionPaths,
   usage: ContextUsage,
 ): Promise<void> => {
-  await writeFile(paths.contextSidecar, `${JSON.stringify(usage, null, 2)}\n`);
+  await writeJsonFile(paths.contextSidecar, usage);
 };
 
 const isContextUsage = (v: unknown): v is ContextUsage =>

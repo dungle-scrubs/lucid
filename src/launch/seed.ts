@@ -28,20 +28,43 @@ export const safeForkId = (forkId: string): string => {
   return cleaned.length > 0 ? cleaned : "fork";
 };
 
-export interface SeededFork {
+export interface ForkPaths {
+  /** The fork's own directory: `<sessionDir>/forks/<safe-id>/`. */
+  readonly dir: string;
+  /** `seed.md` inside the fork dir. */
   readonly seedPath: string;
-  readonly forkDir: string;
+  /** `COMMAND.txt` written when no spawn recipe exists. */
+  readonly commandFile: string;
+  /** The create turn's out-log, under the fork's own `run/`. */
+  readonly createOutLog: string;
 }
 
-export const forkDirFor = (parent: SessionPaths, forkId: string): string =>
-  join(parent.sessionDir, "forks", safeForkId(forkId));
+/** The shared parent of every fork dir for a session: `<sessionDir>/forks/`. */
+export const forksDir = (parent: SessionPaths): string => join(parent.sessionDir, "forks");
 
-export const writeForkSeed = async (
-  parent: SessionPaths,
-  fork: ForkRecord,
-): Promise<SeededFork> => {
-  const forkDir = forkDirFor(parent, fork.id);
-  await mkdir(forkDir, { recursive: true });
+/** The handled-set marker that sits beside the fork dirs (not inside one). */
+export const handledForksPath = (parent: SessionPaths): string =>
+  join(forksDir(parent), "handled.json");
+
+/**
+ * The on-disk layout of one fork (M1.1): a typed sub-layout rather than a bare
+ * dir string, so the fork's paths (seed, command file, create out-log) are not
+ * caller-spelled `join`s scattered across fork-launcher. `dir` is still the
+ * sanitized path the traversal guard (`safeForkId`) produces.
+ */
+export const forkDirFor = (parent: SessionPaths, forkId: string): ForkPaths => {
+  const dir = join(forksDir(parent), safeForkId(forkId));
+  return {
+    dir,
+    seedPath: join(dir, "seed.md"),
+    commandFile: join(dir, "COMMAND.txt"),
+    createOutLog: join(dir, "run", "create.out.log"),
+  };
+};
+
+export const writeForkSeed = async (parent: SessionPaths, fork: ForkRecord): Promise<ForkPaths> => {
+  const fp = forkDirFor(parent, fork.id);
+  await mkdir(fp.dir, { recursive: true });
   const images = (fork.images ?? []).map(
     (img) => `- ${img.name}: ${join(parent.sessionDir, pastedRelPath(img.file))}`,
   );
@@ -64,7 +87,6 @@ export const writeForkSeed = async (
     ...(images.length > 0 ? ["", "**Attached images:**", ...images] : []),
     "",
   ].join("\n");
-  const seedPath = join(forkDir, "seed.md");
-  await writeFile(seedPath, body);
-  return { seedPath, forkDir };
+  await writeFile(fp.seedPath, body);
+  return fp;
 };

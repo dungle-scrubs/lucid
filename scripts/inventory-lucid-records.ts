@@ -20,7 +20,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { defaultRoots, registryFilePath } from "../src/core/registry.ts";
@@ -30,10 +30,7 @@ import {
   probeForLucidRecord,
   type RecordLayout,
 } from "../src/core/inventory.ts";
-
-/** Never descend these - the same prune the registry scan uses, so a record
- *  sweep of `~/dev` does not walk every dependency tree (00-e2e finding #64). */
-const PRUNE = new Set(["node_modules", "dist", "build", "target", "vendor", ".git"]);
+import { findRecords } from "../src/core/records.ts";
 
 interface RecordEntry {
   readonly artifact: string | null;
@@ -53,29 +50,6 @@ interface RecordEntry {
  *  `main` before any record is classified. */
 let tmpReal = "";
 const isEphemeral = (p: string): boolean => tmpReal !== "" && p.startsWith(tmpReal);
-
-/** Every `log.ndjson` under `root`, both layouts, pruning heavy trees. */
-const findLogs = async (root: string): Promise<string[]> => {
-  const out: string[] = [];
-  const walk = async (dir: string): Promise<void> => {
-    let entries: import("node:fs").Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return; // unreadable dir: skip, never fail the sweep
-    }
-    for (const e of entries) {
-      if (e.isDirectory()) {
-        if (PRUNE.has(e.name)) continue;
-        await walk(join(dir, e.name));
-      } else if (e.isFile() && e.name === "log.ndjson") {
-        out.push(join(dir, e.name));
-      }
-    }
-  };
-  await walk(root);
-  return out;
-};
 
 /** Which of a stem's candidate artifact files exist, as an absolute-path set. */
 const existingArtifacts = async (candidates: readonly string[]): Promise<Set<string>> => {
@@ -210,7 +184,7 @@ const main = async (): Promise<void> => {
   const seen = new Set<string>();
   const records: RecordEntry[] = [];
   for (const root of roots) {
-    for (const logPath of await findLogs(root)) {
+    for (const logPath of await findRecords([root])) {
       const real = await realpath(logPath).catch(() => logPath);
       if (seen.has(real)) continue;
       seen.add(real);

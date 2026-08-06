@@ -98,6 +98,31 @@ export interface HarnessRegistry {
   readonly harnesses: Readonly<Record<string, SpawnRecipe>>;
 }
 
+/**
+ * The one registry example the docs and the CLI error both show (M1.3, ledger
+ * H4). It is a complete, valid registry - it LOADS through `parseRegistry` and
+ * satisfies `requireSessionIdentity` - so a user who copies it verbatim is not
+ * then refused by the launcher's own identity gate (HSI001). The README json
+ * block is pinned to this object by test, so the docs cannot drift from it.
+ */
+export const EXAMPLE_REGISTRY: HarnessRegistry = {
+  default: "claude_code",
+  harnesses: {
+    claude_code: {
+      spawn: ["claude", "-p", "--session-id", "{id}", "{prompt}"],
+      resume: ["claude", "--resume", "{id}", "-p", "{prompt}"],
+      models: [{ id: "opus", label: "Opus 5" }],
+      defaultModel: "opus",
+      efforts: ["low", "medium", "high"],
+      sessionIdentity: {
+        argument: "--session-id",
+        source: "caller-assigned",
+        resumeArgument: "--resume",
+      },
+    },
+  },
+};
+
 /** Resolved location of the registry file (env override wins, then XDG). */
 export const registryPath = (): string => {
   if (process.env.LUCID_HARNESSES) return process.env.LUCID_HARNESSES;

@@ -1,4 +1,5 @@
 import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
+import { LUCID_ROUTES } from "../protocol/routes.ts";
 import { mutateAttendantSidecar, readPendingAttendants } from "./attendant.ts";
 import {
   bindingEventId,
@@ -19,15 +20,59 @@ import type { SessionPaths } from "./paths.ts";
  * append under the exclusive log lock (D-049) when no server answers.
  */
 
-/** Server route per deliverable event type. The handlers read the event body
- *  minus `t`, so one POST shape serves them all. */
+/** Server route per deliverable event type (M1.5): the spellings live in
+ *  `LUCID_ROUTES`; this maps each CLI-deliverable event type to its route.
+ *  The handlers read the event body minus `t`, so one POST shape serves them. */
 const ROUTES: Partial<Record<LogEventType, string>> = {
-  agent_reply: "/__lucid/reply",
-  agent_ack: "/__lucid/ack",
-  agent_turn_ended: "/__lucid/turn-ended",
-  question: "/__lucid/question",
-  session_ended: "/__lucid/end",
-  harness_session_bound: "/__lucid/bind",
+  agent_reply: LUCID_ROUTES.reply,
+  agent_ack: LUCID_ROUTES.ack,
+  agent_turn_ended: LUCID_ROUTES.turnEnded,
+  question: LUCID_ROUTES.question,
+  session_ended: LUCID_ROUTES.end,
+  harness_session_bound: LUCID_ROUTES.bind,
+};
+
+/**
+ * The one live-delivery seam (M1.4, D-005): discover the live server, POST the
+ * body to the route, and report which of three outcomes happened. The CALLER
+ * owns the policy by pattern-matching the result - this never decides what a
+ * live failure means, because the three callers mean three different things:
+ *
+ * - `ignore` (deliver): a live failure is an error (rethrow); only a truly
+ *   offline server falls back to a direct append.
+ * - `fallbackOffline` (runContext): offline OR live-failure both fall back to a
+ *   SIDECAR write - never a log append (enforced by the caller's own action).
+ * - `keepOwed` (promotePendingBindings): a live failure leaves the binding owed
+ *   (no fallback, no error); only offline appends directly.
+ *
+ * Centralizing discover+POST here is what keeps those three policies from
+ * drifting apart as the fourth hand-rolled copy once did. The trace header is
+ * stamped by `loopbackFetch` itself, so every live delivery stays joinable to
+ * the click that caused it without each call site remembering.
+ */
+export type LiveDelivery =
+  | { readonly live: true }
+  | { readonly live: false; readonly reason: "offline" }
+  | { readonly live: false; readonly reason: "live-failure"; readonly error: unknown };
+
+export const deliverToLive = async (
+  paths: SessionPaths,
+  route: string,
+  body: unknown,
+): Promise<LiveDelivery> => {
+  const live = await discoverLiveServer(paths);
+  if (!live) return { live: false, reason: "offline" };
+  try {
+    const res = await loopbackFetch(live.port, `${live.base ?? ""}${route}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`live POST ${route} returned ${res.status}`);
+    return { live: true };
+  } catch (error) {
+    return { live: false, reason: "live-failure", error };
+  }
 };
 
 export interface DeliverResult {
@@ -98,21 +143,15 @@ export const deliver = async (paths: SessionPaths, input: EventInput): Promise<D
   if (route === undefined) {
     throw new Error(`event type ${input.t} is not CLI-deliverable`);
   }
-  const live = await discoverLiveServer(paths);
-  if (live) {
-    const { t: _t, ...body } = input;
-    await loopbackFetch(live.port, `${live.base ?? ""}${route}`, {
-      method: "POST",
-      // The turn's WRITE joins the click that spawned it (plan 07 #9): without
-      // the trace, the record for a reply is an orphan line no grep can tie to
-      // the request that caused the turn. `loopbackFetch` stamps it - carrying
-      // it here too would say the call site owns it, which is the arrangement
-      // that let an untraced fourth caller exist (plan 08, finding #15).
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return { live: true };
-  }
+  // `ignore` policy (M1.4, D-005): a live failure is an error (the turn's write
+  // must land somewhere or be seen to fail - a silent fall-through to a direct
+  // append would double-append over a server that is in fact still taking it);
+  // only a truly offline server falls back to the direct append below. The
+  // trace is stamped by `loopbackFetch` inside the seam.
+  const { t: _t, ...body } = input;
+  const outcome = await deliverToLive(paths, route, body);
+  if (outcome.live) return { live: true };
+  if (outcome.reason === "live-failure") throw outcome.error;
   if (input.t === "harness_session_bound") {
     // Through the one binding writer, so the offline fallback carries the
     // same after-open guard and derived id as every other producer. A refusal
@@ -142,27 +181,18 @@ export const deliver = async (paths: SessionPaths, input: EventInput): Promise<D
 export const promotePendingBindings = async (paths: SessionPaths): Promise<readonly LogEvent[]> => {
   const pending = await readPendingAttendants(paths);
   if (pending.length === 0) return [];
-  const live = await discoverLiveServer(paths);
   const promoted: LogEvent[] = [];
   for (const attendant of pending) {
     const { harness, sessionId, sessionIdAuthority, launchId } = attendant;
     if (!sessionId || !sessionIdAuthority || !launchId) continue;
     const stamp: AttendantStamp = { harness, sessionId, sessionIdAuthority };
-    if (live) {
-      try {
-        const res = await loopbackFetch(live.port, `${live.base ?? ""}/__lucid/bind`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ launchId, attendant: stamp }),
-        });
-        // A refusal is not a landing: a 409 (not opened yet) or a 400
-        // (malformed) leaves the binding owed, and clearing the pending flag
-        // on it would lose the identity for good.
-        if (!res.ok) continue;
-      } catch {
-        continue; // the server died; the binding stays owed
-      }
-    } else {
+    // `keepOwed` policy (M1.4, D-005) through the one seam: a live server takes
+    // the binding over POST; only offline appends directly (guarded on open);
+    // a live FAILURE (the server that answered discovery then refused or died)
+    // leaves the binding owed - clearing the flag on it would lose the identity.
+    const outcome = await deliverToLive(paths, "/__lucid/bind", { launchId, attendant: stamp });
+    if (!outcome.live) {
+      if (outcome.reason === "live-failure") continue; // keep owed
       const result = await appendSessionBindings(paths, [{ launchId, attendant: stamp }]);
       if (!result.opened) continue; // not opened yet: still owed
       promoted.push(...result.fresh);

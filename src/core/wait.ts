@@ -1,8 +1,9 @@
-import { NotFoundError, ValidationError } from "../errors.ts";
+import { ValidationError } from "../errors.ts";
 import { discoverLiveServer, loopbackFetch } from "../server/discovery.ts";
 import { cliRequestId } from "../server/observe.ts";
 import { parseCursor, sliceAfterCursor } from "./cursor.ts";
 import { REQUEST_ID_HEADER } from "./request-id.ts";
+import { requireOpenSession } from "./session.ts";
 import type {
   AnnotationRecord,
   FoldedState,
@@ -151,13 +152,7 @@ export const runWait = async (
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const heartbeatMs = options.pollMs ?? HEARTBEAT_MS;
 
-  const initial = await sessionState(paths);
-  if (initial.status === "none") {
-    throw new NotFoundError({
-      message: `No Lucid session for ${paths.artifactPath}`,
-      detail: { path: paths.artifactPath },
-    });
-  }
+  const initial = await requireOpenSession(paths);
   if (initial.status === "ended") {
     return buildFromState(paths, initial, "ended", [], []);
   }

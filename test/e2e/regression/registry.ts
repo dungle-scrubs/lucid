@@ -432,13 +432,14 @@ export const REGRESSIONS: readonly RegressionRow[] = [
     testName: "bare lucid lists sibling and canonical records, each once, at the right artifact",
     mutation: {
       kind: "edit",
-      file: "src/core/sessions.ts",
+      file: "src/core/records.ts",
       // Reintroduce the deleted `.lucid`-stripping (plan 02, MB.2): the
       // canonical layout addresses THROUGH `.lucid`, so dropping it from the
-      // artifact dir sends the canonical row to the wrong artifact path.
-      find: "    const artifactDir = resolve(scanRoot, ...parts.slice(0, -2));",
-      replace:
-        '    const artifactDir = resolve(scanRoot, ...parts.slice(0, -2)).replace(/\\/\\.lucid$/, "");',
+      // artifact dir sends the canonical row to the wrong artifact path. The
+      // resolution moved from sessions.ts's glob to `recordPathsFor` (M1.10);
+      // the anchor follows it.
+      find: "  const artifactDir = dirname(recordDir);",
+      replace: '  const artifactDir = dirname(recordDir).replace(/\\/\\.lucid$/, "");',
     },
   },
   {

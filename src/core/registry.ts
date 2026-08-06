@@ -1,10 +1,10 @@
-import type { Dirent } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, resolve } from "node:path";
+import { CONFIG_ENV, configFile } from "./config-paths.ts";
 import { writeJsonFile } from "./atomic-json.ts";
-import { sessionState } from "./log.ts";
 import { canonicalArtifactPath, sessionPaths } from "./paths.ts";
+import { findRecords, recordPathsFor } from "./records.ts";
 import { agentScratchpadRoots } from "./scratchpad.ts";
 
 /**
@@ -26,12 +26,10 @@ export interface RegistryEntry {
   readonly lastSeen: string;
 }
 
-/** Resolve the registry file path: explicit override, then env, then default. */
-export const registryFilePath = (registryPath?: string): string => {
-  if (registryPath) return registryPath;
-  if (process.env.LUCID_REGISTRY) return process.env.LUCID_REGISTRY;
-  return resolve(homedir(), ".lucid", "registry.json");
-};
+/** Resolve the registry file path (M1.8): one precedence rule, owned by
+ *  `configFile`. */
+export const registryFilePath = (registryPath?: string): string =>
+  configFile("registry.json", CONFIG_ENV.registry, registryPath);
 
 /**
  * Default discovery roots: `~/dev` for project checkouts, plus this user's
@@ -40,12 +38,10 @@ export const registryFilePath = (registryPath?: string): string => {
  */
 export const defaultRoots = (): string[] => [resolve(homedir(), "dev"), ...agentScratchpadRoots()];
 
-/** Resolve the added-roots file path: explicit override, then env, then default. */
-export const rootsFilePath = (rootsPath?: string): string => {
-  if (rootsPath) return rootsPath;
-  if (process.env.LUCID_ROOTS) return process.env.LUCID_ROOTS;
-  return resolve(homedir(), ".lucid", "roots.json");
-};
+/** Resolve the added-roots file path (M1.8): one precedence rule, owned by
+ *  `configFile`. */
+export const rootsFilePath = (rootsPath?: string): string =>
+  configFile("roots.json", CONFIG_ENV.roots, rootsPath);
 
 /**
  * Folders a human added by hand, scanned ON TOP of `defaultRoots`. The default
@@ -136,73 +132,16 @@ export const registerSession = async (
   await writeRegistry(path, [...others, entry]);
 };
 
-/** Recover the recorded artifact basename from a session's log, if any. */
-const resolveArtifactPath = async (artifactDir: string, stem: string): Promise<string> => {
-  // CANONICAL, like every other identity (plan 05, M1.1): a scan that walked in
-  // through a symlinked root would otherwise report a second spelling of an
-  // artifact the registry already holds, and the listing's union would show
-  // one session twice.
-  const probe = sessionPaths(resolve(artifactDir, `${stem}.html`));
-  try {
-    const state = await sessionState(probe);
-    if (state.artifact) return canonicalArtifactPath(resolve(artifactDir, state.artifact));
-  } catch {
-    // unreadable/corrupt log: fall back to the slug-derived name
-  }
-  return canonicalArtifactPath(resolve(artifactDir, `${stem}.html`));
-};
-
-/** Directories a session can never live under, pruned WITHOUT descending -
- *  a glob over all of ~/dev spends nearly all of its time inside
- *  node_modules, and the hub re-scans while a shell is connected. */
-const SCAN_PRUNE = new Set(["node_modules", "dist", "build", "target", "vendor"]);
-
 /**
- * Recursively find `<root>/**​/.lucid/*​/log.ndjson` under each root and return
- * the canonical artifact paths (deduped). A hand-rolled walk rather than a
- * glob so pruned subtrees (node_modules, .git, build output) are never
- * ENTERED - Bun.Glob has no exclude, and traversal is the whole cost.
- * Unreadable directories are skipped rather than fatal. Default roots = `~/dev`.
+ * Recursively find every review record under each root and return the
+ * canonical artifact paths (deduped). Discovery and log->artifact resolution
+ * are owned by `core/records.ts` (M1.10); this is the registry's thin read of
+ * the one walk. Default roots = `~/dev`.
  */
 export const scanRoots = async (roots: readonly string[] = defaultRoots()): Promise<string[]> => {
-  const found = new Set<string>();
-
-  const walk = async (dir: string): Promise<void> => {
-    let entries: Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return; // unreadable: skip rather than fail the scan
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const name = entry.name;
-      if (!name.startsWith(".")) {
-        // `<dir>/<stem>/log.ndjson` - a record folder. In the canonical layout
-        // this `<dir>` is a project's `.lucid/` (the walk descends into it
-        // below), so `<cwd>/.lucid/<stem>/log.ndjson` is found by exactly this
-        // rule, and `resolveArtifactPath` reads the artifact out of the log and
-        // resolves it against `.lucid/` - no special case needed (plan 02,
-        // MB.2). Not recursed into: inside a record is its own state.
-        try {
-          await stat(join(dir, name, "log.ndjson"));
-          found.add(await resolveArtifactPath(dir, name));
-          continue;
-        } catch {
-          /* no log here: an ordinary directory, keep walking */
-        }
-      }
-      // Prune heavy trees. Descend `.lucid` - that is where canonical records
-      // live now - but skip every OTHER dot-directory (.git, .cache, ...),
-      // which cannot hold a project's records and dominate the walk time.
-      if (SCAN_PRUNE.has(name)) continue;
-      if (name.startsWith(".") && name !== ".lucid") continue;
-      await walk(join(dir, name));
-    }
-  };
-
-  for (const root of roots) await walk(resolve(root));
-  return [...found];
+  const logs = await findRecords(roots);
+  const paths = await Promise.all(logs.map(recordPathsFor));
+  return [...new Set(paths.map((p) => p.artifactPath))];
 };
 
 /** ISO mtime of a session's log, or the epoch when it cannot be read. */

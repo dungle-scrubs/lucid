@@ -40,8 +40,10 @@ import {
 import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/events.ts";
 import { appendEvents, appendIfStatus, sessionState } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
-import { listSessions, projectRoot } from "../core/sessions.ts";
-import { atomicWrite, commitAgainstSnapshot, readArtifact } from "../core/session.ts";
+import { listSessions } from "../core/sessions.ts";
+import { artifactCheckout } from "../core/project.ts";
+import { commitAgainstSnapshot, readArtifact } from "../core/session.ts";
+import { writeTextAtomicSync } from "../core/atomic-json.ts";
 import { createArtifactWatch } from "./artifact-watch.ts";
 import type { ErrorIdentity, RequestObservation } from "./observe.ts";
 import { escapeHtml } from "../core/escape.ts";
@@ -656,7 +658,7 @@ export const createSessionHost = (
     if ((await readArtifact(paths)) !== html) {
       return json({ error: "the artifact changed while renaming - try again" }, 409);
     }
-    atomicWrite(paths.artifactPath, next);
+    writeTextAtomicSync(paths.artifactPath, next);
     // Commit deterministically rather than waiting out the watcher debounce:
     // the caller's optimistic label is confirmed by the version broadcast.
     await artifactWatch.commitNow();
@@ -944,7 +946,7 @@ export const createSessionHost = (
       return json(await viewerState(paths, { agentsListening: () => agentSubscribers.size }));
     }
     if (pathname === "/__lucid/sessions" && req.method === "GET") {
-      const root = await projectRoot(paths);
+      const root = artifactCheckout(paths);
       const response: SessionsResponse = {
         root,
         current: paths.artifactPath,

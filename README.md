@@ -154,7 +154,8 @@ Reviews work without any registry at all.
       "resume": ["claude", "--resume", "{id}", "-p", "{prompt}"],
       "models": [{ "id": "opus", "label": "Opus 5" }],
       "defaultModel": "opus",
-      "efforts": ["low", "medium", "high"]
+      "efforts": ["low", "medium", "high"],
+      "sessionIdentity": { "argument": "--session-id", "source": "caller-assigned", "resumeArgument": "--resume" }
     }
   }
 }

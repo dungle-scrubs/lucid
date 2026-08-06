@@ -182,6 +182,7 @@ describe("the unit suite's own containment", () => {
       "attend.test.ts",
       "cli-trace.test.ts",
       "daemon.test.ts",
+      "deliver.test.ts",
       "launch.test.ts",
     ]);
   });

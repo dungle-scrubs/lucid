@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { CONFIG_ENV, configFile } from "./config-paths.ts";
 
 /**
  * Lucid's own settings, at `~/.lucid/settings.json`.
@@ -25,12 +24,9 @@ export interface LucidSettings {
 
 export const DEFAULT_SETTINGS: LucidSettings = { resumeYolo: true };
 
-/** Where settings live. Injectable for tests. */
-export const settingsFilePath = (path?: string): string => {
-  if (path) return path;
-  if (process.env.LUCID_SETTINGS) return process.env.LUCID_SETTINGS;
-  return resolve(homedir(), ".lucid", "settings.json");
-};
+/** Where settings live (M1.8): one precedence rule, owned by `configFile`. */
+export const settingsFilePath = (path?: string): string =>
+  configFile("settings.json", CONFIG_ENV.settings, path);
 
 export const readSettings = async (path?: string): Promise<LucidSettings> => {
   try {
