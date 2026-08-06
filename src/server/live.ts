@@ -54,9 +54,7 @@ export interface Subscriber {
 const encoder = new TextEncoder();
 
 /** SSE: the wire format is the frame. A null event is SSE's default `message`. */
-export const sseSubscriber = (
-  controller: ReadableStreamDefaultController<Uint8Array>,
-): Subscriber => ({
+const sseSubscriber = (controller: ReadableStreamDefaultController<Uint8Array>): Subscriber => ({
   send: (event, data) =>
     controller.enqueue(
       encoder.encode(event === null ? `data: ${data}\n\n` : `event: ${event}\ndata: ${data}\n\n`),
@@ -69,7 +67,7 @@ export const sseSubscriber = (
  * in its `event:` line. `data` stays a STRING rather than being inlined as
  * JSON, so every existing handler keeps parsing exactly what it parsed before.
  */
-export const socketSubscriber = (ws: { readonly send: (data: string) => number }): Subscriber => {
+const socketSubscriber = (ws: { readonly send: (data: string) => number }): Subscriber => {
   // A socket that is GONE reports it in the return value rather than by
   // throwing: measured on Bun 1.3.14, `send` answers the byte count while
   // open, 0 once the peer has left, and -1 for backpressure - which is a slow
@@ -96,7 +94,7 @@ export const socketSubscriber = (ws: { readonly send: (data: string) => number }
  * rides across that gap as the socket's `data`, and holds the release so
  * `close` can unsubscribe without the handler knowing which channel it was.
  */
-export class LiveSocket {
+class LiveSocket {
   private release: (() => void) | null = null;
 
   constructor(private readonly join: (sub: Subscriber) => () => void) {}
@@ -120,7 +118,7 @@ export class LiveSocket {
  * happening sends no frames for minutes, and an idle timeout would close the
  * socket under a human who is simply reading.
  */
-export const liveWebSocket: WebSocketHandler<LiveSocket> = {
+const liveWebSocket: WebSocketHandler<LiveSocket> = {
   open: (ws) => ws.data.opened(ws),
   close: (ws) => ws.data.closed(),
   // One-way by design: the chrome mutates over HTTP, where retries, idempotent
@@ -189,7 +187,7 @@ export const wantsUpgrade = (req: Request): boolean =>
  *
  * Identity, not shape, is the signal - `null` body, so nothing can lock it.
  */
-export const UPGRADED: Response = new Response(null, { status: 200 });
+const UPGRADED: Response = new Response(null, { status: 200 });
 
 export const wasUpgraded = (res: Response): boolean => res === UPGRADED;
 
