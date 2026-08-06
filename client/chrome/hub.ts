@@ -53,13 +53,9 @@ import { sessionLabel } from "./naming.ts";
 import type { SessionHandle } from "./session.ts";
 import { recordViewed, useShell } from "./shell.ts";
 import { openStream, type LiveStream } from "./stream.ts";
-import type { ShellConfig } from "./types.ts";
+import { shellConfig } from "./shell-config.ts";
 
-/** The shell page's payload, read through its declared shape - `daemon.ts`
- *  writes it and this reads it, so one type keeps the two spellings from
- *  drifting silently past typecheck. */
-const shellConfig = (): ShellConfig | undefined =>
-  (window as { __LUCID_SHELL__?: ShellConfig }).__LUCID_SHELL__;
+/** The shell page's payload, read through the shared owner (M4.4). */
 
 /**
  * The shell's connection to the hub daemon: the session listing (every
@@ -370,7 +366,7 @@ export const openTab = async (
   if (existing) {
     if (!existing.connected()) existing.connect(); // reactivation refolds via bootstrap
     if (!opts?.background) activate(existing.key);
-    enforceCap(streamCap(shellConfig()?.streamCap));
+    enforceCap(streamCap());
     return existing;
   }
   const base = `/s/${row.id}`;
@@ -393,7 +389,7 @@ export const openTab = async (
   });
   handle.connect();
   if (!opts?.background) activate(handle.key);
-  enforceCap(streamCap(shellConfig()?.streamCap));
+  enforceCap(streamCap());
   return handle;
 };
 
@@ -402,7 +398,7 @@ export const activateTab = (key: string): void => {
   if (!handle) return;
   if (!handle.connected()) handle.connect();
   activate(key);
-  enforceCap(streamCap(shellConfig()?.streamCap));
+  enforceCap(streamCap());
   // Focus routing: landing on a tab should land the keyboard with it. The
   // composer is where typing goes next; rAF waits for the view to show
   // (visibleEl, because every open tab's view stays mounted).

@@ -1,5 +1,6 @@
 import type { TrustedOverlaySwapCapabilities } from "./trusted-overlay.ts";
 import { LUCID_ID_ATTR } from "../../src/anchors/anchor.ts";
+import { enumerateSectionIds, type SectionDocument } from "./sections.ts";
 
 /**
  * Swaps the artifact's body into the live document and syncs its head styles.
@@ -43,13 +44,21 @@ export interface ArtifactSwapResult {
 const CLIENT_JS_SRC = "/__lucid/client.js";
 const ARTIFACT_STYLE_ATTR = "data-lucid-artifact-style";
 
+/** The non-empty `[data-lucid-id]` values in a swapped document, deduped
+ *  through the one section enumeration (`enumerateSectionIds`, M4.6) rather
+ *  than an independent walk. Rects are unused for id collection, so a parsed
+ *  document's zero-rect is fine. */
 const collectSectionIds = (document: Document): Set<string> => {
-  const ids = new Set<string>();
-  for (const element of document.querySelectorAll("[data-lucid-id]")) {
-    const id = element.getAttribute(LUCID_ID_ATTR);
-    if (id !== null && id !== "") ids.add(id);
-  }
-  return ids;
+  const adapter: SectionDocument = {
+    sections: () =>
+      Array.from(document.querySelectorAll("[data-lucid-id]")).map((element) => ({
+        element,
+        id: element.getAttribute(LUCID_ID_ATTR) ?? "",
+        rect: { left: 0, top: 0, width: 0, height: 0 },
+      })),
+    viewport: () => ({ height: 0, width: 0 }),
+  };
+  return new Set(enumerateSectionIds(adapter));
 };
 
 /**
