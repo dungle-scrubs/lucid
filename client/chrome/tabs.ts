@@ -14,6 +14,7 @@
  */
 import { createSession, type SessionHandle } from "./session.ts";
 import type { SessionConfig } from "./store.ts";
+import { shellConfig } from "./shell-config.ts";
 import { useShell } from "./shell.ts";
 
 /** The cap on simultaneously connected SSE streams (plan 03, D-036). The
@@ -99,8 +100,9 @@ export const close = (
   return { wasActive, promoted };
 };
 
-/** The effective cap: the shell page may carry a LUCID_STREAM_CAP override. */
-export const streamCap = (override?: number): number => override ?? MAX_CONNECTED;
+/** The effective cap: read once from the shared shell config (M4.4) rather
+ *  than threaded per-call. The shell page carries the override. */
+export const streamCap = (): number => shellConfig()?.streamCap ?? MAX_CONNECTED;
 
 /** Evict the least-recently-ACTIVATED background streams past the cap. The
  *  active tab is never a victim. Disconnected tabs keep their roster entry -

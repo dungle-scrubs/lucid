@@ -103,12 +103,15 @@ describe("close whole-protocol (M4.3: one door)", () => {
 
 describe("streamCap", () => {
   test("defaults to MAX_CONNECTED (10)", () => {
+    delete (globalThis as { __LUCID_SHELL__?: unknown }).__LUCID_SHELL__;
     expect(streamCap()).toBe(MAX_CONNECTED);
     expect(MAX_CONNECTED).toBe(10);
   });
 
-  test("accepts an override", () => {
-    expect(streamCap(3)).toBe(3);
+  test("honors the shell config override (M4.4: read from the shared owner)", () => {
+    (globalThis as { __LUCID_SHELL__?: { streamCap?: number } }).__LUCID_SHELL__ = { streamCap: 3 };
+    expect(streamCap()).toBe(3);
+    delete (globalThis as { __LUCID_SHELL__?: unknown }).__LUCID_SHELL__;
   });
 });
 
