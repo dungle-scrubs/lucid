@@ -36,6 +36,7 @@ describe("SessionPaths: content stays, runtime moves under run/", () => {
       p.serverLog,
       p.attendLog,
       p.createLog,
+      p.reviseLog,
       p.contextSidecar,
       p.selectionPath,
     ]) {
@@ -44,6 +45,15 @@ describe("SessionPaths: content stays, runtime moves under run/", () => {
     expect(basename(p.currentHtml)).toBe("current.html");
     expect(basename(p.serverJson)).toBe("server.json");
     expect(basename(p.selectionPath)).toBe("selection.json");
+  });
+
+  test("the fork revise turn's out-log is under run/, not committed history (M0.2)", () => {
+    // A revise turn is headless launcher work, not part of the record: its
+    // out-log belongs beside create.out.log / attend.out.log under run/, so a
+    // single `run/` gitignore line keeps it out of committed history. It used
+    // to be caller-spelled into the session dir.
+    expect(p.reviseLog).toBe(join(run, "revise.out.log"));
+    expect(dirname(p.reviseLog)).toBe(run);
   });
 
   test("the per-harness cursor sidecar is under run/", () => {

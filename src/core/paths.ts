@@ -48,6 +48,10 @@ export interface SessionPaths {
    *  Not the hub log: N session servers sharing one file interleave records
    *  whose shape is identical, into a file whose rotation is already lossy. */
   readonly requestLog: string;
+  /** A headless fork REVISE turn's out-log. Launcher work, not record: sits
+   *  beside `createLog`/`attendLog` under `run/` so a single `run/` gitignore
+   *  line keeps it out of committed history (M0.2). */
+  readonly reviseLog: string;
   /** The detached per-session server's stdout/stderr log. `run/`. */
   readonly serverLog: string;
   /** The attend engine's per-turn output log. `run/`. */
@@ -144,6 +148,7 @@ export const sessionPaths = (input: string, recordDir?: string): SessionPaths =>
     serverLog: resolve(runDir, "server.out.log"),
     attendLog: resolve(runDir, "attend.out.log"),
     createLog: resolve(runDir, "create.out.log"),
+    reviseLog: resolve(runDir, "revise.out.log"),
     contextSidecar: resolve(runDir, "context.json"),
     selectionPath: resolve(runDir, "selection.json"),
   };

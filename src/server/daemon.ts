@@ -17,7 +17,7 @@ import { discoverLiveServer, loopbackFetch, readServerDescriptor } from "./disco
 import { artifactDocumentResponse, shellResponse, viewerResponse } from "./viewer.ts";
 import { projectOf } from "../core/project.ts";
 import { createListing, type Listing } from "./listing.ts";
-import { createMounts, type Mount } from "./mounts.ts";
+import { createMounts } from "./mounts.ts";
 import { parseTitle } from "../core/title.ts";
 import { planTurn, runTurn, type TurnOutcome } from "../launch/turn.ts";
 import { readEvents, sessionStateCacheStats, sessionStateSync } from "../core/log.ts";
@@ -259,7 +259,12 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   /** id -> artifact path, refreshed from every listing pass. The id space is
    *  derived (hash of path), so this map is a cache, not a source of truth. */
   const idToArtifact = new Map<string, string>();
-  const _mountsApi = createMounts({
+  // The Mounts module (M0.1) is the ONE owner of the hosted-session map:
+  // mount, evict, stopAll, has, get. The daemon used to keep a mirror Map
+  // beside it, but onEnded and idle-suspend evict through the Mounts API
+  // directly, so the mirror went stale - a stopped session stayed "hosted"
+  // and routed to its stopped host. Every read now goes through this API.
+  const mounts = createMounts({
     log,
     port: () => port,
     stopped: () => stopped,
@@ -269,8 +274,6 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     attend,
     attendPollMs,
   });
-  /** Sessions the daemon itself hosts right now, by id. */
-  const mounts = new Map<string, Mount>();
 
   const rememberIds = (entries: readonly RegistryEntry[]): void => {
     for (const e of entries) idToArtifact.set(sessionId(e.artifact), e.artifact);
@@ -332,18 +335,6 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     },
     sessionPaths,
   });
-
-  /** Unmount a hosted session: close its streams/watchers and release the
-   *  descriptor if it is ours. Appends nothing (suspend is the caller's call). */
-  const evict = async (id: string): Promise<void> => {
-    mounts.delete(id);
-    await _mountsApi.evict(id);
-  };
-  const mount = async (id: string, artifact: string): Promise<Mount | undefined> => {
-    const m = await _mountsApi.mount(id, artifact);
-    if (m !== undefined) mounts.set(id, m);
-    return m;
-  };
 
   /** Hop-by-hop and trust-bearing headers that must not travel through the
    *  proxy: loopbackFetch sets its own Host, and a forwarded Origin would
@@ -490,7 +481,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       return loopbackFetch(live.port, `${subPath}${url.search}`, init);
     }
 
-    const m = await mount(id, artifact);
+    const m = await mounts.mount(id, artifact);
     if (m !== undefined) return m.host.handle(req, subPath, observation);
     // A dedicated server took over between our check and the mount: fall
     // through to proxy. The next request will discover it fresh.
@@ -643,11 +634,11 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     }
     const id = sessionId(artifact);
     idToArtifact.set(id, artifact);
-    // Mount eagerly (idempotent) so the descriptor exists the moment `open`
+    // Mount eagerly (idempotent, through the Mounts API) so the descriptor exists the moment `open`
     // returns. The mount function is the single owner (M5.4): it checks for a
     // live dedicated server internally, so handleHubOpen does not discover
     // unconditionally.
-    await mount(id, artifact);
+    await mounts.mount(id, artifact);
     // listing.invalidate() also resets the dedupe hashes in the listing module.
     void listing.notify("after-change");
     // Tell open shell windows to surface this session as a tab NOW. The CLI
@@ -1312,7 +1303,16 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     // windows still here nothing; the server closing them itself is what is
     // unsafe (RECONNECT_FRAME), and `stop` does not do that.
     channel.stop();
-    for (const id of [...mounts.keys()]) await evict(id);
+    // Shutdown evicts every mount through the one owner (M0.1): the loop used
+    // to walk a mirror Map, but the Mounts API owns the roster now. The gate
+    // is load-bearing: an `await` here - even of a no-op empty stopAll -
+    // yields a microtask before `server.stop(true)`, and on Bun 1.3.14 that
+    // yield lets an in-flight SSE close finish first, which is exactly the
+    // state in which `server.stop(true)` never resolves (see daemon.test.ts's
+    // open-socket shutdown test). Baseline's inline empty loop never awaited,
+    // so it never yielded; `isEmpty` restores that timing when there is
+    // nothing to evict, and still awaits the real eviction when there is.
+    if (!mounts.isEmpty()) await mounts.stopAll();
     await server.stop(true);
   };
 
