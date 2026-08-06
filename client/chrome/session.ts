@@ -5,7 +5,7 @@ import {
   type FrameHandlers,
   type SessionFrame,
 } from "../../src/protocol/frames.ts";
-import { lifecycleStatusOf, type SelectionResponse } from "../../src/protocol/wire.ts";
+import { lifecycleStatusOf, verdictOf, type SelectionResponse } from "../../src/protocol/wire.ts";
 import { createActions, type SessionActions } from "./actions.ts";
 import { createPastes, type Pastes } from "./pastes.ts";
 import {
@@ -138,12 +138,11 @@ export const createSession = (config: SessionConfig): SessionHandle => {
       // arrives twice cannot double-enter the record.
       case "review_resolved":
       case "review_reopened": {
-        const resolved = ev.t === "review_resolved";
         set((s) => ({
-          reviewResolved: resolved,
+          reviewResolved: ev.t === "review_resolved",
           verdicts: s.verdicts.some((v) => v.seq === ev.seq)
             ? s.verdicts
-            : [...s.verdicts, { at: ev.at, resolved, seq: ev.seq }],
+            : [...s.verdicts, verdictOf(ev)],
         }));
         break;
       }

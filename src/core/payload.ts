@@ -13,6 +13,7 @@ import type {
   WaitOutcome,
   WaitPayload,
 } from "../protocol/wire.ts";
+import { multiTargets } from "../protocol/wire.ts";
 import { summarizeAnswer } from "./question-contract.ts";
 import { renderCursor } from "./cursor.ts";
 import type {
@@ -242,7 +243,7 @@ export const buildWaitPayload = async (opts: BuildPayloadOptions): Promise<WaitP
       resolved: resolved !== null,
       ...confidenceOf(resolved),
       target: a.target,
-      ...(a.targets && a.targets.length > 0 ? { targets: a.targets } : {}),
+      ...(multiTargets(a.targets) ? { targets: a.targets } : {}),
       note: a.note,
       at: a.at,
       ...(a.authoredAt ? { authoredAt: a.authoredAt } : {}),

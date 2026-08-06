@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ThemeName } from "../../src/core/palette.ts";
 
 /**
  * Which palette the ARTIFACTS render in.
@@ -14,15 +15,17 @@ import { create } from "zustand";
  * broadcasts a change to every session) and a session's surface (which applies
  * the current value the moment an artifact loads) need it, and routing it
  * through either would make them import each other.
+ *
+ * The type is `ThemeName` (M2.3): one spelling, owned by `palette.ts`, so the
+ * chrome's theme store and the wire's theme message cannot drift apart.
  */
-
-export type ArtifactTheme = "light" | "dark";
+export type { ThemeName };
 
 const THEME_KEY = "lucid.artifactTheme";
 
 /** Light unless the human chose otherwise: paper is what a document reads best
  *  on, and it is the ground every artifact is designed against first. */
-const readStoredTheme = (): ArtifactTheme => {
+const readStoredTheme = (): ThemeName => {
   try {
     return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
   } catch {
@@ -31,18 +34,18 @@ const readStoredTheme = (): ArtifactTheme => {
 };
 
 interface ThemeState {
-  theme: ArtifactTheme;
+  theme: ThemeName;
 }
 
 export const useTheme = create<ThemeState>(() => ({ theme: readStoredTheme() }));
 
 /** The current choice, for anything outside React (a surface applying it to a
  *  freshly loaded artifact). */
-export const currentTheme = (): ArtifactTheme => useTheme.getState().theme;
+export const currentTheme = (): ThemeName => useTheme.getState().theme;
 
 /** Record the choice. Broadcasting it to open artifacts is the shell's job -
  *  it is the only thing that knows which sessions are open. */
-export const storeTheme = (theme: ArtifactTheme): void => {
+export const storeTheme = (theme: ThemeName): void => {
   useTheme.setState({ theme });
   try {
     localStorage.setItem(THEME_KEY, theme);

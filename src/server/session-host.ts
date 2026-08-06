@@ -49,6 +49,7 @@ import type { ErrorIdentity, RequestObservation } from "./observe.ts";
 import { escapeHtml } from "../core/escape.ts";
 import {
   defaultRecipe,
+  harnessInfoOf,
   loadRegistry,
   resolveExactRecipe,
   type SpawnRecipe,
@@ -66,6 +67,7 @@ import type {
   SelectionResponse,
   SessionsResponse,
 } from "../protocol/wire.ts";
+import { multiTargets } from "../protocol/wire.ts";
 import { serveBundleAsset } from "./assets.ts";
 import { createChannel, wantsUpgrade, type Subscriber, type Upgrade } from "./live.ts";
 import { resolveAsset, validateHeaders } from "./security.ts";
@@ -520,7 +522,7 @@ export const createSessionHost = (
         ? parseAnchor(body.anchor)
         : undefined;
     if (anchorIn && "error" in anchorIn) return json({ error: anchorIn.error }, 400);
-    const anchors = anchorList && anchorList.length > 1 ? anchorList : undefined;
+    const anchors = multiTargets(anchorList);
     const images = decided ? parseImages(body.images) : [];
     // Per-item answers to a grouped question (D12), re-validated against the
     // group the ASKING event recorded - the drawer gates its submit with the
@@ -791,14 +793,6 @@ export const createSessionHost = (
     return wanted === undefined ? defaultRecipe(registry) : resolveExactRecipe(registry, wanted);
   };
 
-  const harnessInfo = (name: string, recipe: SpawnRecipe) => ({
-    name,
-    ...(recipe.models ? { models: recipe.models } : {}),
-    ...(recipe.defaultModel !== undefined ? { defaultModel: recipe.defaultModel } : {}),
-    ...(recipe.efforts ? { efforts: recipe.efforts } : {}),
-    ...(recipe.defaultEffort !== undefined ? { defaultEffort: recipe.defaultEffort } : {}),
-  });
-
   /** The selection route's answer: the sticky pick plus the vocabulary it was
    *  made in, so a picker can render without the hub's identity call (a
    *  dedicated `lucid open` server has no hub). */
@@ -809,12 +803,12 @@ export const createSessionHost = (
     return {
       selection: (await readSelection(paths)) ?? {},
       ...(resolved
-        ? { harness: resolved.name, info: harnessInfo(resolved.name, resolved.recipe) }
+        ? { harness: resolved.name, info: harnessInfoOf(resolved.name, resolved.recipe) }
         : {}),
       ...(registry
         ? {
             harnesses: Object.entries(registry.harnesses).map(([name, recipe]) =>
-              harnessInfo(name, recipe),
+              harnessInfoOf(name, recipe),
             ),
           }
         : {}),

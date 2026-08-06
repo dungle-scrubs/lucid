@@ -21,7 +21,11 @@ import {
   uuid,
 } from "./store.ts";
 import type { DecisionReply } from "../shared/decision.ts";
-import type { SelectionResponse, SelectionState } from "../../src/protocol/wire.ts";
+import {
+  multiTargets,
+  type SelectionResponse,
+  type SelectionState,
+} from "../../src/protocol/wire.ts";
 import type { Surface } from "./surface.ts";
 import type { Transport, UploadedAsset } from "./transport.ts";
 import type {
@@ -470,7 +474,7 @@ export const createActions = (ctx: ActionsCtx) => {
           // A multi-spot item sends `targets`; the server derives `target` as
           // the first and ignores the one beside it. A singleton stays the
           // canonical single form.
-          ...(q.targets.length > 1 ? { targets: q.targets } : {}),
+          ...(multiTargets(q.targets) ? { targets: q.targets } : {}),
           // The queued card shows the `[Pasted text #N +L lines]` placeholder;
           // what sends is the paste it stands for.
           note: expandPastes(q.note),

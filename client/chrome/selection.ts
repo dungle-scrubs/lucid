@@ -20,22 +20,6 @@ export const harnessInfoFor = (
   return wanted ? info.find((h) => h.name === wanted) : undefined;
 };
 
-/**
- * The effort ladder that applies to a pick: the selected model's own vocabulary
- * when it declares one (codex enforces per-generation subsets), else the
- * harness-wide ladder. With no model selected the DEFAULT model's ladder
- * applies - the registry's preselection, which is the best guess available
- * here; the CLI resolves its own configured model when none is passed.
- */
-export const effortLadder = (
-  info: HarnessInfo | undefined,
-  model: string,
-): readonly string[] | undefined => {
-  if (!info) return undefined;
-  const id = model || info.defaultModel;
-  return info.models?.find((m) => m.id === id)?.efforts ?? info.efforts;
-};
-
 /** The offered rows, with a value the registry no longer lists kept as a row of
  *  its own: a sticky pick made against an older registry must still SHOW, not
  *  vanish into a blank control. */

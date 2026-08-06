@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { writeJsonFile } from "./atomic-json.ts";
 import type { SessionPaths } from "./paths.ts";
+import type { SelectionState } from "../protocol/wire.ts";
 
 /**
  * The sticky selection sidecar: its types, its validator, and its reader/
@@ -23,10 +24,10 @@ export interface Selection {
 /** The per-artifact sticky selection (`.lucid/<name>/selection.json`): the
  *  model/effort every later unattended turn reuses. `harness` records which
  *  vocabulary the pick was made in, so a resume under a different harness is
- *  detectable rather than silently misapplied. */
-export interface ArtifactSelection extends Selection {
-  readonly harness?: string;
-}
+ *  detectable rather than silently misapplied. An alias of the wire
+ *  `SelectionState` (M2.3): one type for the sticky pick, read by the sidecar
+ *  and the wire alike. */
+export type ArtifactSelection = SelectionState;
 
 /** Bound + clean one selection field: a string with control chars stripped,
  *  trimmed, non-empty and not "default" (which means "no explicit pick"). */

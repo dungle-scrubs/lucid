@@ -27,7 +27,7 @@ import {
 } from "./presence.ts";
 import { readSettingsCached } from "./settings.ts";
 import { readSelection } from "./selection-sidecar.ts";
-import type { AttendantPresence, StateResponse } from "../protocol/wire.ts";
+import { waitOutcomeOf, type AttendantPresence, type StateResponse } from "../protocol/wire.ts";
 
 /** The one fact the host owns that core cannot derive: how many agents are
  *  subscribed right now. A thunk, not a number, so it is read at response-build
@@ -57,12 +57,11 @@ export const viewerState = async (
   host: ViewerStateHost,
 ): Promise<StateResponse> => {
   const state = await sessionState(paths);
-  const payload = await assemblePayload(
-    paths,
-    state,
-    state.status === "ended" ? "ended" : state.status === "suspended" ? "suspended" : "feedback",
-    { annotations: state.annotations, messages: state.messages, reverts: state.reverts },
-  );
+  const payload = await assemblePayload(paths, state, waitOutcomeOf(state.status), {
+    annotations: state.annotations,
+    messages: state.messages,
+    reverts: state.reverts,
+  });
   // Who last took delivery, from the advisory sidecars: display data for the
   // chrome's resume affordance, never something the server executes.
   const attendant = await readLastAttendant(paths);

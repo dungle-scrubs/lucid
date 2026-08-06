@@ -12,7 +12,8 @@ import {
   type CreateTurnEntry,
 } from "./hub.ts";
 import { projectName } from "./naming.ts";
-import { effortLadder, harnessInfoFor } from "./selection.ts";
+import { effortLadderOf } from "../../src/protocol/wire.ts";
+import { harnessInfoFor } from "./selection.ts";
 import { handleize } from "../../src/core/title.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.tsx";
 import { closeButton } from "./ui/close.ts";
@@ -221,7 +222,7 @@ const CreateDialogBody = () => {
     [harnessInfo, harness, defaultHarness],
   );
   const models = info?.models ?? [];
-  const ladder = effortLadder(info, model) ?? [];
+  const ladder = effortLadderOf(info, model) ?? [];
 
   // The authored artifact surfaces as a listing row when the agent runs
   // `lucid open` on it (the hub's scan needs a log, so an empty session dir
@@ -311,7 +312,7 @@ const CreateDialogBody = () => {
   // accept goes back to default instead of reaching the hub as a 400.
   const pickModel = (v: string): void => {
     setModel(v);
-    const next = effortLadder(info, v);
+    const next = effortLadderOf(info, v);
     setEffort((e) => (e !== "" && next?.includes(e) ? e : ""));
   };
 

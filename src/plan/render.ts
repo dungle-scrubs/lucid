@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { LUCID_ID_ATTR } from "../anchors/anchor.ts";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { parseHTML } from "linkedom";
 import { marked } from "marked";
@@ -184,8 +185,8 @@ const applyDecisionIds = (document: Document): void => {
     // Block marker: id the next element sibling. Inline marker: id the parent.
     const next = comment.nextElementSibling;
     const target = next ?? (comment.parentElement as Element | null);
-    if (target && target.tagName !== "BODY" && !target.getAttribute("data-lucid-id")) {
-      target.setAttribute("data-lucid-id", id);
+    if (target && target.tagName !== "BODY" && !target.getAttribute(LUCID_ID_ATTR)) {
+      target.setAttribute(LUCID_ID_ATTR, id);
       target.setAttribute("data-lucid-decision", "true");
     }
     comment.remove();
@@ -225,7 +226,7 @@ const applyQuestionIds = (document: Document): void => {
     if (node.tagName === "OL" || node.tagName === "UL") {
       for (const li of Array.from(node.children)) {
         n += 1;
-        li.setAttribute("data-lucid-id", `Q-${n}`);
+        li.setAttribute(LUCID_ID_ATTR, `Q-${n}`);
         li.setAttribute("data-lucid-question", "true");
       }
     }

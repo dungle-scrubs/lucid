@@ -1,4 +1,5 @@
 import type { Anchor } from "../../src/anchors/anchor.ts";
+import type { ThemeName } from "../../src/core/palette.ts";
 import type { PayloadAnnotation } from "../../src/protocol/wire.ts";
 import {
   ARTIFACT_OUTLINE_POLICY,
@@ -367,7 +368,7 @@ export type ChromeMessage =
   | {
       readonly source: "lucid-chrome";
       readonly type: "theme";
-      readonly theme: "light" | "dark";
+      readonly theme: ThemeName;
     };
 export const isOverlayMessage = (data: unknown): data is OverlayMessage =>
   typeof data === "object" &&

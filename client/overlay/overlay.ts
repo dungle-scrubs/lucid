@@ -10,6 +10,7 @@ import {
   resolveRangeInDocument,
 } from "../shared/capture.ts";
 import { DECISION_ATTR } from "../shared/decision.ts";
+import { LUCID_ID_ATTR } from "../../src/anchors/anchor.ts";
 import {
   isChromeMessage,
   type ChromeMessage,
@@ -534,7 +535,7 @@ export class LucidOverlay extends LitElement {
       sections: () =>
         Array.from(document.querySelectorAll("[data-lucid-id]")).map((element) => ({
           element,
-          id: element.getAttribute("data-lucid-id") ?? "",
+          id: element.getAttribute(LUCID_ID_ATTR) ?? "",
           rect: element.getBoundingClientRect(),
         })),
       viewport: () => ({ height: window.innerHeight, width: window.innerWidth }),

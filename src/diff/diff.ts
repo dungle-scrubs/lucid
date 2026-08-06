@@ -1,4 +1,5 @@
 import { parseHTML } from "linkedom";
+import { LUCID_ID_ATTR } from "../anchors/anchor.ts";
 import type { Anchor } from "../anchors/anchor.ts";
 import {
   computeDomPath,
@@ -35,7 +36,7 @@ interface Block {
 }
 
 const blockKey = (el: Element, sibIndex: number): string => {
-  const lucidId = el.getAttribute("data-lucid-id");
+  const lucidId = el.getAttribute(LUCID_ID_ATTR);
   if (lucidId) return `id:${lucidId}`;
   return `fp:${computeFingerprint(el as unknown as DomElementLike, sibIndex)}`;
 };
@@ -72,7 +73,7 @@ const labelOf = (text: string): string =>
   text.length > 60 ? `${text.slice(0, 60)}…` : text || "(empty)";
 
 const anchorOf = (el: Element, snippet: string): Anchor => {
-  const lucidId = el.getAttribute("data-lucid-id");
+  const lucidId = el.getAttribute(LUCID_ID_ATTR);
   return {
     kind: "element",
     ...(lucidId ? { lucidId } : {}),
