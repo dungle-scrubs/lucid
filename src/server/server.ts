@@ -88,12 +88,13 @@ export const runServer = async (
       ports: requestedPorts,
       name: "server",
       sink: createLogSink({ path: paths.requestLog, mirror: () => {} }),
-      handler: async (req, observation) => {
-        // Attached here, not per route: a dedicated server serves exactly ONE
-        // artifact, so its identity is a property of the server.
-        observation.attach({ artifact: paths.artifactPath });
-        return host.handle(req, undefined, observation);
-      },
+      // Attached here, not per route: a dedicated server serves exactly ONE
+      // artifact, so its identity is a property of the server, not of the
+      // request. `attach` runs at the observation boundary before the gate
+      // (M2.2), so pre-gate and refused requests carry it too.
+      attach: (observation) => observation.attach({ artifact: paths.artifactPath }),
+      gate: host.gate,
+      handler: (req, observation) => host.handle(req, undefined, observation),
     });
   } catch (err) {
     host.stop();

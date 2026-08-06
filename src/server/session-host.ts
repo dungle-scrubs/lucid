@@ -17,6 +17,7 @@ import {
 } from "../protocol/inbound.ts";
 import { LUCID_ROUTES } from "../protocol/routes.ts";
 import { type HarnessPresence, presenceFor } from "../core/presence.ts";
+import type { LoopbackGate } from "./live.ts";
 import { viewerState } from "../core/viewer-state.ts";
 import { artifactAttendant } from "../core/attendant.ts";
 import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
@@ -168,6 +169,10 @@ export interface SessionHostOptions {
 }
 
 export interface SessionHost {
+  /** The Host/Origin gate this session server runs before `handle` (M2.2):
+   *  serveLoopback owns it, so the per-session router receives only requests
+   *  that already passed the DNS-rebind check. */
+  readonly gate: LoopbackGate;
   /** Serve one session-relative request. `pathname` overrides the URL's own
    *  path so a mounting owner can strip its prefix. */
   readonly handle: (
@@ -756,18 +761,9 @@ export const createSessionHost = (
       observationContext.enterWith(observation);
     }
 
-    // The overlay bootstrap bundle is a public static asset. It must be
-    // reachable from the sandboxed artifact iframe, which loads it cross-origin
-    // (opaque origin -> Origin: null). Serving it BEFORE the Host/Origin gate
-    // (with a CORS allow) lets the overlay mount; the control routes below still
-    // reject null/cross-origin callers, so artifact scripts cannot reach them.
-    if (pathname === "/__lucid/client.js") return serveBundleAsset("client.js", req);
-
-    const headerCheck = validateHeaders(req, options.getPort());
-    if (!headerCheck.ok) {
-      recordRefusal({ _tag: "ForbiddenError", code: "FORBIDDEN" });
-      return json({ error: `forbidden: ${headerCheck.reason}` }, 403);
-    }
+    // The overlay bundle pre-gate and the Host/Origin DNS-rebind gate now live
+    // in serveLoopback (M2.2), built as `gate` below - so every route here has
+    // already passed it, and the overlay bundle has already been served.
     touch();
 
     // ---- control routes (reserved prefix) ----
@@ -1041,8 +1037,29 @@ export const createSessionHost = (
     agentSubscribers.clear();
   };
 
+  /** The Host/Origin gate this session server runs (M2.2): the overlay bundle
+   *  is served before it (the sandboxed artifact iframe loads it from an opaque
+   *  origin), and a 403 records on the observation - directly, not via the
+   *  route handlers' observationContext, because the gate runs before `handle`
+   *  sets that context. serveLoopback owns running it. */
+  const gate: LoopbackGate = {
+    preGate: (req) =>
+      new URL(req.url).pathname === "/__lucid/client.js"
+        ? serveBundleAsset("client.js", req)
+        : undefined,
+    check: (req, observation) => {
+      const headerCheck = validateHeaders(req, options.getPort());
+      if (!headerCheck.ok) {
+        observation.fail({ _tag: "ForbiddenError", code: "FORBIDDEN" });
+        return json({ error: `forbidden: ${headerCheck.reason}` }, 403);
+      }
+      return undefined;
+    },
+  };
+
   return {
     handle,
+    gate,
     suspend,
     stop,
     // A live subscriber IS activity: requests only touch the clock when they

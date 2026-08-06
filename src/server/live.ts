@@ -350,6 +350,16 @@ export const createChannel = <F extends LiveFrame, J = void>(
   };
 };
 
+export interface LoopbackGate {
+  /** Routes served before the gate (the overlay bundle, reachable from the
+   *  sandboxed artifact's opaque origin). */
+  readonly preGate?: (req: Request) => Response | Promise<Response> | undefined;
+  /** Returns a 403 Response if the request fails the Host/Origin DNS-rebind
+   *  gate - recording the refusal on the observation so it is attributed
+   *  correctly - or undefined if it passes. */
+  readonly check: (req: Request, observation: RequestObservation) => Response | undefined;
+}
+
 export interface LoopbackOptions {
   /** Ports to try, in order. The first that binds wins. */
   readonly ports: readonly number[];
@@ -359,6 +369,15 @@ export interface LoopbackOptions {
   readonly handler: (req: Request, observation: RequestObservation) => Promise<Response>;
   /** Where the wide event per request goes (observe.ts). */
   readonly sink: LineSink;
+  /** Run on each request's observation before the gate (M2.2), so a per-server
+   *  identity - which session a dedicated server belongs to - attaches even
+   *  to pre-gate and refused requests, the way it did when the gate lived in
+   *  each handler. */
+  readonly attach?: (observation: RequestObservation) => void;
+  /** The Host/Origin DNS-rebind gate serveLoopback runs before the handler
+   *  (M2.2): the overlay bundle bypasses it, and a 403 records on the
+   *  observation. Optional: a gateless stream (the hub listing) sets none. */
+  readonly gate?: LoopbackGate;
 }
 
 /**
@@ -372,7 +391,22 @@ export interface LoopbackOptions {
 export const serveLoopback = (options: LoopbackOptions): ReturnType<typeof Bun.serve> => {
   // The wide event is made HERE, at the one funnel every route passes
   // through (D-004) - no route can forget to log. Built once, not per request.
-  const observed = observeRequests({ sink: options.sink }, options.handler);
+  const observed = observeRequests(
+    { sink: options.sink },
+    async (req, observation): Promise<Response> => {
+      // attach runs at the observation boundary, before the gate, so a
+      // per-server identity rides pre-gate and refused requests too - the
+      // invariant the gate owned when it lived in each handler.
+      options.attach?.(observation);
+      if (options.gate) {
+        const pre = await options.gate.preGate?.(req);
+        if (pre !== undefined) return pre;
+        const blocked = options.gate.check(req, observation);
+        if (blocked !== undefined) return blocked;
+      }
+      return options.handler(req, observation);
+    },
+  );
   let server: ReturnType<typeof Bun.serve> | undefined;
   let lastErr: unknown;
   for (const candidate of options.ports) {

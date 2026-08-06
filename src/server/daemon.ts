@@ -58,6 +58,7 @@ import {
   upgradeOrRefuse,
   wantsUpgrade,
   wasUpgraded,
+  type LoopbackGate,
   type Subscriber,
   type Upgrade,
 } from "./live.ts";
@@ -123,6 +124,11 @@ const ROOT_COUNT_BUDGET_MS = 2000;
  *  `.html` basename, never a path - the project root comes from the listing
  *  and the two are joined here, so no traversal is expressible. */
 const CREATE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.html$/;
+
+/** A mounted session URL: `/s/<16-hex-id>` plus an optional sub-path. The hub
+ *  proxies these to a per-session server, so the route shape is the hub's to
+ *  recognize (M2.2: the gate's pre-flight and the router share it). */
+const SESSION_ROUTE_RE = /^\/s\/([a-f0-9]{16})(\/.*)?$/;
 
 /** How often a live create turn says it is still alive (M2.1). Frequent
  *  enough that the dialog can distinguish "running" from "the hub stopped
@@ -1135,24 +1141,18 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     const url = new URL(req.url);
     const { pathname } = url;
 
-    const sessionMatch = /^\/s\/([a-f0-9]{16})(\/.*)?$/.exec(pathname);
+    const sessionMatch = SESSION_ROUTE_RE.exec(pathname);
 
     // The overlay bundle is the ONE pre-gate route (the sandboxed artifact
     // iframe loads it from an opaque origin). It is the same static bytes
     // for every session, so it is served here at the router - reaching it
     // must never resolve ids, scan the registry, or mount anything.
-    if (sessionMatch && sessionMatch[2] === "/__lucid/client.js") {
-      return serveBundleAsset("client.js", req);
-    }
-
-    // EVERYTHING else - hub routes and session mounts alike - sits behind
-    // the Host/Origin gate. Session routes are gated here, before any id
-    // resolution or mounting: the proxy branch rewrites Host for loopback
-    // delivery, so an ungated pass-through would let a DNS-rebound request
-    // ride that rewrite past the inner server's own gate.
-    const headerCheck = validateHeaders(req, port);
-    if (!headerCheck.ok) return json({ error: `forbidden: ${headerCheck.reason}` }, 403);
-
+    // The client.js pre-gate and the Host/Origin gate now live in serveLoopback
+    // (M2.2), built as `gate` below - so by the time a request reaches here it
+    // has already passed the gate (and the overlay bundle has been served).
+    // Session routes are gated before any id resolution or mounting: the proxy
+    // branch rewrites Host for loopback delivery, so an ungated pass-through
+    // would let a DNS-rebound request ride that rewrite past the inner server.
     if (sessionMatch?.[1]) {
       // A slashless mount URL would make the document's RELATIVE references
       // resolve against /s/ instead of /s/<id>/ - normalize before serving,
@@ -1254,11 +1254,29 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
   // means that failure now leaves as a typed `ServerError` (SERVER_ERROR),
   // where the bare `Bun.serve` let a raw `EADDRINUSE` out - the dedicated
   // server's behaviour, and the documented closed set of error codes.
+  // The hub's Host/Origin gate (M2.2): the overlay bundle is served before it
+  // (a session mount loads it from an opaque origin), and a 403 records
+  // nothing - the hub's refusals are not a session's metrics. serveLoopback
+  // runs it before `handle`, so session routes are gated before any id
+  // resolution.
+  const gate: LoopbackGate = {
+    preGate: (req) => {
+      const match = SESSION_ROUTE_RE.exec(new URL(req.url).pathname);
+      return match && match[2] === "/__lucid/client.js"
+        ? serveBundleAsset("client.js", req)
+        : undefined;
+    },
+    check: (req) => {
+      const headerCheck = validateHeaders(req, port);
+      return headerCheck.ok ? undefined : json({ error: `forbidden: ${headerCheck.reason}` }, 403);
+    },
+  };
   const server = serveLoopback({
     ports: [requestedPort],
     name: "daemon",
     handler: handle,
     sink: log,
+    gate,
   });
   bound = server;
   port = server.port ?? 0;
