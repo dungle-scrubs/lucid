@@ -1,5 +1,5 @@
 import type { AgentWorking } from "../../src/protocol/wire.ts";
-import { WORKING_GRACE_MS } from "../../src/core/fold.ts";
+import { WORKING_GRACE_MS } from "../shared/working-grace.ts";
 
 /**
  * When an open turn stops counting as work in progress.

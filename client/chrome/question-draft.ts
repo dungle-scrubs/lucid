@@ -8,7 +8,7 @@ import {
   type QuestionItem,
   type SelectedChoice,
   validateAnswer,
-} from "../../src/core/question-contract.ts";
+} from "../shared/question-contract.ts";
 import type { AgentQuestion } from "./types.ts";
 
 /**

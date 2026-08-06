@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { handleize, parseTitle } from "../src/core/title.ts";
+import { handleize } from "../client/shared/handleize.ts";
+import { parseTitle } from "../src/core/title.ts";
 
 /**
  * An artifact's own name. The shell puts `<title>` on a tab, so both halves
