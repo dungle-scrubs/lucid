@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { applyInboundMessage } from "./inbound.ts";
+import type { InboundHandlers } from "./inbound.ts";
 import { nextCopyPopoverState, type CopyPopoverState } from "./selection-copy.ts";
 import { CopyPopover, type CopyPopoverDispatch } from "./CopyPopover.tsx";
-import { validateOverlayMessage, type OverlayValidationRecord } from "../shared/protocol.ts";
 import { SessionProvider, useSession } from "./context.tsx";
 import { selectOutlineGeneration, selectOutlineHealthCode } from "./store.ts";
 import { Header } from "./Header.tsx";
@@ -78,53 +77,32 @@ const useSessionWiring = (
     const get = store.getState;
     const set = store.setState;
 
-    const onMessage = (e: MessageEvent): void => {
-      const msg = validateOverlayMessage(e.data, (record: OverlayValidationRecord) => {
-        // Refusals and truncations are observability, not errors: the hostile
-        // realm can send any shape, and a refused message simply does not
-        // reach the layout math below.
-        if (record.kind === "refusal") {
-          console.warn(`[overlay] refused ${record.type}.${record.field}`);
-        } else {
-          console.warn(
-            `[overlay] truncated ${record.type}.${record.field} (${record.original} -> ${record.kept})`,
-          );
-        }
-      });
-      if (msg === null) return;
-      // Only this session's own iframe may speak for the surface: any frame
-      // can forge an overlay-shaped payload, and under tabs a stale surface
-      // must not mutate the active session's state.
-      if (!surface.ownsSource(e.source)) return;
-      applyInboundMessage(
-        msg,
-        surface,
-        {
-          applyOverlayMessage: (m) => actions.applyOverlayMessage(m),
-          setHoveredId: (id) => set({ hoveredId: id }),
-          setChromeWidth,
-          persistWidth,
-          scrollAnnotationIntoView: (id) =>
-            document
-              .querySelector(`[data-annotation-id="${id}"]`)
-              ?.scrollIntoView({ behavior: "smooth", block: "center" }),
-          setSections: (ids, added) =>
-            set({
-              sectionIds: ids,
-              ...(added !== undefined
-                ? {
-                    addedSectionVisibility: Object.fromEntries(
-                      added.map((section) => [section.id, section.inViewport]),
-                    ),
-                    emphasizedSectionIds: new Set<string>(),
-                  }
-                : {}),
-            }),
-          dispatchCopy,
-        },
-        window.innerWidth,
-      );
+    // The inbound dispatch (validate + ownsSource + apply) lives on the surface
+    // now (M2.4); this listener just wires the chrome actions it needs.
+    const handlers: InboundHandlers = {
+      applyOverlayMessage: (m) => actions.applyOverlayMessage(m),
+      setHoveredId: (id) => set({ hoveredId: id }),
+      setChromeWidth,
+      persistWidth,
+      scrollAnnotationIntoView: (id) =>
+        document
+          .querySelector(`[data-annotation-id="${id}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+      setSections: (ids, added) =>
+        set({
+          sectionIds: ids,
+          ...(added !== undefined
+            ? {
+                addedSectionVisibility: Object.fromEntries(
+                  added.map((section) => [section.id, section.inViewport]),
+                ),
+                emphasizedSectionIds: new Set<string>(),
+              }
+            : {}),
+        }),
+      dispatchCopy,
     };
+    const onMessage = (e: MessageEvent): void => surface.onWindowMessage(e, handlers);
     window.addEventListener("message", onMessage);
 
     // M4.2: the chrome's cards call SessionActions (focusMark/revealMark/
