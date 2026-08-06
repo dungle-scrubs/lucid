@@ -6,12 +6,8 @@ import { mergeAttendantSidecar } from "../src/core/attendant.ts";
 import type { LogEvent } from "../src/core/events.ts";
 import { appendEvent, readEvents } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
-import {
-  resetPresenceCache,
-  resetProcessLister,
-  resetSessionCwdCache,
-  setProcessLister,
-} from "../src/core/presence.ts";
+import { resetSessionCwdCache } from "../src/core/harness-store.ts";
+import { resetPresenceCache, resetProcessLister, setProcessLister } from "../src/core/presence.ts";
 import { openSession } from "../src/core/session.ts";
 import { createAttendant, resetSessionsInFlight, type Attendant } from "../src/server/attend.ts";
 import { applyUnitEnv } from "./unit-env.ts";

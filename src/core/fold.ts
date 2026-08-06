@@ -28,9 +28,11 @@ export type SessionStatus = "none" | "active" | "suspended" | "ended";
  *
  * Unifying the predicates would re-break the silent-turn / fan-out cases
  * (#132 / #133). The CONSTANT is shared so a review stops re-suggesting they
- * drift; the rules that USE it stay apart on purpose.
+ * drift; the rules that USE it stay apart on purpose. The shared home is
+ * `core/working-grace.ts` (M5.1); re-exported here for fold's own use and the
+ * callers that still reach the fold for it.
  */
-export const WORKING_GRACE_MS = 10 * 60 * 1000;
+export { WORKING_GRACE_MS } from "./working-grace.ts";
 
 export interface AnnotationRecord {
   readonly id: string;

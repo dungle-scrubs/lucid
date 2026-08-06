@@ -19,12 +19,8 @@ import { readContextSidecar } from "./context.ts";
 import { sessionState } from "./log.ts";
 import type { SessionPaths } from "./paths.ts";
 import { assemblePayload } from "./payload.ts";
-import {
-  harnessSessionId,
-  type HarnessPresence,
-  interactiveResumeCommand,
-  presenceFor,
-} from "./presence.ts";
+import { harnessSessionId, interactiveResumeCommand } from "./harness-store.ts";
+import { type HarnessPresence, presenceFor } from "./presence.ts";
 import { readSettingsCached } from "./settings.ts";
 import { readSelection } from "./selection-sidecar.ts";
 import { waitOutcomeOf, type AttendantPresence, type StateResponse } from "../protocol/wire.ts";

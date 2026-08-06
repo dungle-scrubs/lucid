@@ -14,7 +14,7 @@ import type { ForkRecord } from "../core/fold.ts";
 import { sessionState } from "../core/log.ts";
 import { sessionPaths, type SessionPaths } from "../core/paths.ts";
 import type { WaitPayload } from "../core/payload.ts";
-import { harnessHasLocalStore, harnessTranscriptPath } from "../core/presence.ts";
+import { harnessHasLocalStore, harnessTranscriptPath } from "../core/harness-store.ts";
 import { registerSession } from "../core/registry.ts";
 import { openSession } from "../core/session.ts";
 import { runWait } from "../core/wait.ts";

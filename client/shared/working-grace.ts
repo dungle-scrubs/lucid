@@ -5,4 +5,4 @@
  * imports it from there); Phase 5 moves attend.ts to the shared home and this
  * re-export becomes the definition.
  */
-export { WORKING_GRACE_MS } from "../../src/core/fold.ts";
+export { WORKING_GRACE_MS } from "../../src/core/working-grace.ts";
