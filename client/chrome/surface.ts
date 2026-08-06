@@ -1,7 +1,9 @@
 import { multiTargets, type StateResponse } from "../../src/protocol/wire.ts";
 import { LUCID_ROUTES } from "../../src/protocol/routes.ts";
 import type { OutlineMotionPreference } from "../shared/artifact-outline.ts";
-import type { ChromeMessage } from "../shared/protocol.ts";
+import type { ChromeMessage, OverlayValidationRecord } from "../shared/protocol.ts";
+import { validateOverlayMessage } from "../shared/protocol.ts";
+import { applyInboundMessage, type InboundHandlers } from "./inbound.ts";
 import { createChromeArtifactOutline, type OutlinePort } from "./artifact-outline-session.ts";
 import {
   claimPendingOutlineChannel,
@@ -46,6 +48,11 @@ export interface Surface {
    *  payload, and under tabs a stale surface must not mutate another
    *  session's state. */
   readonly ownsSource: (source: MessageEventSource | null) => boolean;
+  /** The inbound overlay-message handler (M2.4): validate the payload, confirm
+   *  this surface's own iframe is the source (the security boundary - any frame
+   *  can forge an overlay-shaped payload), then apply it via the chrome actions
+   *  the listener owner passes in. */
+  readonly onWindowMessage: (e: MessageEvent, handlers: InboundHandlers) => void;
   /** This session's own artifact frame rect in the parent viewport, or null
    *  when no iframe is attached. The copy Popover translates an in-iframe
    *  release point (posted by the overlay) into parent-viewport coordinates
@@ -444,6 +451,32 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     outlineSlotEl = null;
   };
 
+  /** The inbound overlay-message handler (M2.4): validate, confirm this
+   *  surface's own iframe is the source (the security boundary), then apply.
+   *  The chrome actions are passed in by the listener owner. */
+  const onWindowMessage = (e: MessageEvent, handlers: InboundHandlers): void => {
+    const msg = validateOverlayMessage(e.data, (record: OverlayValidationRecord) => {
+      // Refusals and truncations are observability, not errors: the hostile
+      // realm can send any shape, and a refused message simply does not reach
+      // the layout math below.
+      if (record.kind === "refusal") {
+        console.warn(`[overlay] refused ${record.type}.${record.field}`);
+      } else {
+        console.warn(
+          `[overlay] truncated ${record.type}.${record.field} (${record.original} -> ${record.kept})`,
+        );
+      }
+    });
+    if (msg === null) return;
+    if (!ownsSource(e.source)) return;
+    applyInboundMessage(
+      msg,
+      { markOverlayReady, pushHighlights, frameRect },
+      handlers,
+      window.innerWidth,
+    );
+  };
+
   return {
     attach,
     attachOutlineSlot,
@@ -453,6 +486,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
     activateOutline: outline.activate,
     markOverlayReady,
     ownsSource,
+    onWindowMessage,
     frameRect,
     outlineSlotRect,
     toOverlay,
