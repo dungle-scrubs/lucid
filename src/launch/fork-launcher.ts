@@ -440,7 +440,7 @@ export const attendChild = async (
       // Where THIS run's output starts is the owner's problem now: the log is
       // opened in append mode, so classifying the whole file would let an
       // earlier turn's not-found banner durably quarantine a live session.
-      outLog: join(child.sessionDir, "revise.out.log"),
+      outLog: child.reviseLog,
       ...(covers !== undefined ? { covers } : {}),
       // A wedged child holds this artifact for as long as the launcher lives,
       // and nothing down here would ever notice. Bounded on SILENCE, never on

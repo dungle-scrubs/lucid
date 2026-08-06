@@ -57,6 +57,8 @@ export interface Mounts {
   has: (id: string) => boolean;
   /** Get a hosted session's mount, or undefined. */
   get: (id: string) => Mount | undefined;
+  /** Whether no session is currently hosted. */
+  isEmpty: () => boolean;
 }
 
 /** Create the mounts module (M5.4). The mount Map, idle policy, descriptor
@@ -131,7 +133,10 @@ export const createMounts = (opts: MountsOptions): Mounts => {
       ...(attendant ? { attendant } : {}),
       ...(attendTimer ? { attendTimer } : {}),
     };
-    mounts.set(id, created);
+    // A mount is visible to routing ONLY after its descriptor write succeeds
+    // (M0.1): inserting before the write left a window onto a host whose
+    // descriptor write then rolled back, so a concurrent route could reach a
+    // mount the next boot's stale-descriptor guard would later reject.
     try {
       await writeServerDescriptor(paths, {
         port: port(),
@@ -141,13 +146,13 @@ export const createMounts = (opts: MountsOptions): Mounts => {
         base,
       });
     } catch (err) {
-      mounts.delete(id);
       clearInterval(idleTimer);
       if (attendTimer) clearInterval(attendTimer);
       attendant?.stop();
       host.stop();
       throw err;
     }
+    mounts.set(id, created);
     return created;
   };
 
@@ -161,5 +166,6 @@ export const createMounts = (opts: MountsOptions): Mounts => {
     stopAll,
     has: (id) => mounts.has(id),
     get: (id) => mounts.get(id),
+    isEmpty: () => mounts.size === 0,
   };
 };

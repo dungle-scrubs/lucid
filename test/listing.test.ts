@@ -25,6 +25,7 @@ const fakePaths = (artifact: string) => ({
   serverJson: `${artifact}/.lucid/server.json`,
   requestLog: `${artifact}/.lucid/request.log`,
   serverLog: `${artifact}/.lucid/server.log`,
+  reviseLog: `${artifact}/.lucid/revise.out.log`,
   contextSidecar: `${artifact}/.lucid/context.json`,
 });
 

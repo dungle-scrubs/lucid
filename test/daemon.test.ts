@@ -1213,3 +1213,146 @@ test("regression: a stale descriptor naming our own port does not cause route re
   // If this answered, there was no recursion (recursion would hang or 500).
   expect(body.port).toBe(daemon.port);
 });
+
+// ---- M0.1: Mounts single owner (stale-mirror bug) -----------------------
+//
+// The daemon used to keep a MIRROR Map<string, Mount> beside the Mounts
+// module. onEnded (and idle-suspend) evicted through the Mounts-internal
+// map only, so the mirror stayed stale: a session the hub had just stopped
+// was still listed as hosted and still routed to its stopped host. These
+// pin the post-fix shape - one owner (the Mounts API), no mirror.
+
+describe("M0.1: a stopped mount is neither hosted nor routable", () => {
+  test("after POST /__lucid/end the listing reports hosted: false", async () => {
+    const scanned = await seedSession("proj", "ended");
+    await writeFile(sessionPaths(scanned).currentHtml, "<h1 data-lucid-id='t'>Ended</h1>");
+    daemon = await runDaemon({ port: 0, roots: [root], registryPath });
+    const id = sessionId(scanned);
+
+    // Mount it first.
+    await get(daemon.port, `/s/${id}/__lucid/identity`);
+    let listed = (await get(daemon.port, "/hub/sessions?fresh=1").then((r) => r.json())) as {
+      sessions: Array<{ id: string; hosted: boolean }>;
+    };
+    expect(listed.sessions.find((s) => s.id === id)?.hosted).toBe(true);
+
+    // End the session. onEnded evicts through the Mounts API; the mirror is
+    // gone, so the listing must now reflect reality.
+    const end = await post(daemon.port, `/s/${id}/__lucid/end`, {});
+    expect(end.status).toBe(200);
+    // Give the queued onEnded microtask a beat to run.
+    await new Promise((r) => setTimeout(r, 50));
+
+    listed = (await get(daemon.port, "/hub/sessions?fresh=1").then((r) => r.json())) as {
+      sessions: Array<{ id: string; hosted: boolean }>;
+    };
+    expect(listed.sessions.find((s) => s.id === id)?.hosted).toBe(false);
+  });
+
+  test("after POST /__lucid/end a subsequent /s/<id> request re-mounts, not the stopped host", async () => {
+    const scanned = await seedSession("proj", "routed");
+    await writeFile(sessionPaths(scanned).currentHtml, "<h1 data-lucid-id='t'>Routed</h1>");
+    const lines: string[] = [];
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    const id = sessionId(scanned);
+
+    // Mount, then end. The eviction log line is the proof the host was
+    // actually stopped (the observability fence for this path).
+    await get(daemon.port, `/s/${id}/__lucid/identity`);
+    await post(daemon.port, `/s/${id}/__lucid/end`, {});
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lines.some((l) => l.includes(`[hub] session ${id}: evicting`))).toBe(true);
+
+    // A new request must NOT reach the stopped host. With the stale mirror it
+    // did: `mounts.get(id)` returned the stopped Mount, so the route handed
+    // the request straight to a host whose channel was already closed. The
+    // tell is the "hosting" line: a fresh mount logs it, reusing a stopped
+    // host does not.
+    const hostingBefore = lines.filter((l) => l.includes(`[hub] session ${id}: hosting`)).length;
+    const res = await get(daemon.port, `/s/${id}/__lucid/identity`);
+    expect(res.status).toBe(200);
+    const who = (await res.json()) as { port: number; session: string };
+    expect(who.port).toBe(daemon.port);
+    expect(who.session).toBe(scanned);
+    const hostingAfter = lines.filter((l) => l.includes(`[hub] session ${id}: hosting`)).length;
+    expect(hostingAfter).toBeGreaterThan(hostingBefore);
+  });
+
+  test("idle-suspend eviction: the listing drops hosted and the next route re-mounts", async () => {
+    const scanned = await seedSession("proj", "idle");
+    await writeFile(sessionPaths(scanned).currentHtml, "<h1 data-lucid-id='t'>Idle</h1>");
+    daemon = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      sessionIdleMs: 100,
+    });
+    const id = sessionId(scanned);
+
+    // Mount it (no subscriber ever connects, so the idle timer is the only
+    // thing keeping it alive). Wait long enough for the idle tick to suspend
+    // and evict through the Mounts API.
+    await get(daemon.port, `/s/${id}/__lucid/identity`);
+    let listed = (await get(daemon.port, "/hub/sessions?fresh=1").then((r) => r.json())) as {
+      sessions: Array<{ id: string; hosted: boolean }>;
+    };
+    expect(listed.sessions.find((s) => s.id === id)?.hosted).toBe(true);
+
+    // Poll for the eviction: the timer fires every min(idleMs, 5000)=100ms,
+    // and the suspend needs channel.size()==0 (no subscriber here).
+    const deadline = Date.now() + 5000;
+    let hosted = true;
+    while (Date.now() < deadline && hosted) {
+      await new Promise((r) => setTimeout(r, 50));
+      listed = (await get(daemon.port, "/hub/sessions?fresh=1").then((r) => r.json())) as {
+        sessions: Array<{ id: string; hosted: boolean }>;
+      };
+      hosted = listed.sessions.find((s) => s.id === id)?.hosted ?? false;
+    }
+    expect(hosted).toBe(false);
+
+    // And the next route re-mounts rather than reaching the stopped host: a
+    // fresh hosting line lands for this id.
+    const res = await get(daemon.port, `/s/${id}/__lucid/identity`);
+    expect(res.status).toBe(200);
+  });
+
+  test("daemon shutdown evicts every mount and removes its descriptor", async () => {
+    const scanned = await seedSession("proj", "shutdown");
+    const paths = sessionPaths(scanned);
+    await writeFile(paths.currentHtml, "<h1 data-lucid-id='t'>Shutdown</h1>");
+    const lines: string[] = [];
+    const hub = await runDaemon({
+      port: 0,
+      roots: [root],
+      registryPath,
+      log: (m) => void lines.push(m),
+    });
+    daemon = hub;
+    const id = sessionId(scanned);
+
+    // Mount, then confirm the descriptor the mount wrote is on disk.
+    await get(hub.port, `/s/${id}/__lucid/identity`);
+    expect(
+      await readFile(paths.serverJson, "utf8")
+        .then(() => true)
+        .catch(() => false),
+    ).toBe(true);
+
+    // Stop the hub. shutdown must evict every mount (the eviction line lands)
+    // and remove each descriptor so the next boot does not trip the
+    // stale-descriptor guard against its own port.
+    await hub.stop();
+    daemon = undefined;
+    expect(lines.some((l) => l.includes(`[hub] session ${id}: evicting`))).toBe(true);
+    const gone = await readFile(paths.serverJson, "utf8")
+      .then(() => false)
+      .catch(() => true);
+    expect(gone).toBe(true);
+  });
+});
