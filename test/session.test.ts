@@ -22,7 +22,8 @@ import { cursorSidecarPath, sessionPaths, snapshotPath } from "../src/core/paths
 import { commitWatchedChange, ensureSessionDirs, openSession } from "../src/core/session.ts";
 import { promotePendingBindings } from "../src/core/deliver.ts";
 import { runWaitCli } from "../src/cli/run.ts";
-import { listSessions, projectRoot } from "../src/core/sessions.ts";
+import { listSessions } from "../src/core/sessions.ts";
+import { artifactCheckout } from "../src/core/project.ts";
 
 let dir: string;
 let artifact: string;
@@ -1378,21 +1379,21 @@ describe("pending binding promotion (identity before the log exists)", () => {
   });
 });
 
-describe("projectRoot", () => {
+describe("artifactCheckout (project root)", () => {
   test("returns the nearest ancestor with a .git entry", async () => {
     const root = join(dir, "project");
     const artifactDir = join(root, "nested", "artifacts");
     await mkdir(join(root, ".git"), { recursive: true });
     await mkdir(artifactDir, { recursive: true });
 
-    expect(await projectRoot(sessionPaths(join(artifactDir, "plan.html")))).toBe(root);
+    expect(artifactCheckout(sessionPaths(join(artifactDir, "plan.html")))).toBe(root);
   });
 
   test("falls back to the artifact directory without a .git ancestor", async () => {
     const artifactDir = join(dir, "standalone", "artifacts");
     await mkdir(artifactDir, { recursive: true });
 
-    expect(await projectRoot(sessionPaths(join(artifactDir, "plan.html")))).toBe(artifactDir);
+    expect(artifactCheckout(sessionPaths(join(artifactDir, "plan.html")))).toBe(artifactDir);
   });
 });
 
@@ -1458,6 +1459,35 @@ describe("a session folder never colonises someone else's directory", () => {
     await openSession(paths);
     expect(existsSync(paths.logPath)).toBe(true);
   });
+
+  // ---- M0.1/M1.1: the ownership inventory is derived from the layout ----
+
+  test("a folder holding only a legacy sidecar still reads as ours (M1.1)", async () => {
+    // `attendant.json` and a top-level `log.ndjson.lock` are not in the
+    // current layout (attendant stamps moved under run/, the lock lives next
+    // to the log), but older Lucid wrote them to the session dir directly.
+    // They are named-legacy entries in isLucidOwnedEntry, so a directory
+    // holding ONLY one still reads as ours rather than being colonised or
+    // refused.
+    const paths = sessionPaths(artifact);
+    await mkdir(paths.sessionDir, { recursive: true });
+    await writeFile(join(paths.sessionDir, "attendant.json"), "{}");
+    await openSession(paths);
+    expect(existsSync(paths.logPath)).toBe(true);
+  });
+
+  test("a folder holding only a forks/ tree reads as ours (M1.1, ledger 3)", async () => {
+    // A session whose record dir has only `forks/` (the parent of spun-off
+    // fork sessions) is unmistakably Lucid's: nothing else writes that name.
+    // It used to read as somebody else's because `forks` was absent from the
+    // hand-maintained LUCID_WRITES allowlist, so the derived inventory now
+    // owns it.
+    const paths = sessionPaths(artifact);
+    await mkdir(join(paths.sessionDir, "forks", "abc12345"), { recursive: true });
+    await writeFile(join(paths.sessionDir, "forks", "abc12345", "seed.md"), "# seed");
+    await openSession(paths);
+    expect(existsSync(paths.logPath)).toBe(true);
+  });
 });
 
 describe(".lucid is never a project (live review)", () => {
@@ -1468,36 +1498,36 @@ describe(".lucid is never a project (live review)", () => {
    * Lucid's own plumbing instead of the human's work.
    */
   test("a project without a checkout is the folder ABOVE .lucid", async () => {
-    const { projectRoot } = await import("../src/core/sessions.ts");
+    const { artifactCheckout } = await import("../src/core/project.ts");
     const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-proj-")));
     await mkdir(join(dir, "artifacts", ".lucid"), { recursive: true });
     const artifact = join(dir, "artifacts", ".lucid", "plan.html");
     await writeFile(artifact, V1);
 
-    expect(await projectRoot(sessionPaths(artifact))).toBe(join(dir, "artifacts"));
+    expect(artifactCheckout(sessionPaths(artifact))).toBe(join(dir, "artifacts"));
     await rm(dir, { recursive: true, force: true });
   });
 
   test("a checkout still wins over the folder walk", async () => {
-    const { projectRoot } = await import("../src/core/sessions.ts");
+    const { artifactCheckout } = await import("../src/core/project.ts");
     const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-proj-")));
     await mkdir(join(dir, "repo", ".git"), { recursive: true });
     await mkdir(join(dir, "repo", ".lucid"), { recursive: true });
     const artifact = join(dir, "repo", ".lucid", "plan.html");
     await writeFile(artifact, V1);
 
-    expect(await projectRoot(sessionPaths(artifact))).toBe(join(dir, "repo"));
+    expect(artifactCheckout(sessionPaths(artifact))).toBe(join(dir, "repo"));
     await rm(dir, { recursive: true, force: true });
   });
 
   test("an artifact NOT in a .lucid folder keeps its own directory", async () => {
-    const { projectRoot } = await import("../src/core/sessions.ts");
+    const { artifactCheckout } = await import("../src/core/project.ts");
     const dir = await realpath(await mkdtemp(join(tmpdir(), "lucid-proj-")));
     await mkdir(join(dir, "loose"), { recursive: true });
     const artifact = join(dir, "loose", "plan.html");
     await writeFile(artifact, V1);
 
-    expect(await projectRoot(sessionPaths(artifact))).toBe(join(dir, "loose"));
+    expect(artifactCheckout(sessionPaths(artifact))).toBe(join(dir, "loose"));
     await rm(dir, { recursive: true, force: true });
   });
 });

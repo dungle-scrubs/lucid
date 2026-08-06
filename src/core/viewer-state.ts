@@ -26,7 +26,7 @@ import {
   presenceFor,
 } from "./presence.ts";
 import { readSettingsCached } from "./settings.ts";
-import { readSelection } from "../launch/selection.ts";
+import { readSelection } from "./selection-sidecar.ts";
 import type { AttendantPresence, StateResponse } from "../protocol/wire.ts";
 
 /** The one fact the host owns that core cannot derive: how many agents are

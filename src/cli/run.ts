@@ -2,8 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { mergeAttendantSidecar } from "../core/attendant.ts";
 import { parseCursor, renderCursor } from "../core/cursor.ts";
-import { deliver, promotePendingBindings } from "../core/deliver.ts";
-import { sessionState } from "../core/log.ts";
+import { deliver, deliverToLive, promotePendingBindings } from "../core/deliver.ts";
 import { ARTIFACT_DIR, canonicalArtifactPath, sessionPaths } from "../core/paths.ts";
 import { enclosingCheckout } from "../core/project.ts";
 import { isVolatilePath, scratchpadProject } from "../core/scratchpad.ts";
@@ -17,6 +16,7 @@ import {
   assertNoStrandedRecord,
   ensureSessionDirs,
   openSession,
+  requireOpenSession,
 } from "../core/session.ts";
 import { listSessions } from "../core/sessions.ts";
 import { runWait, type WaitOptions } from "../core/wait.ts";
@@ -25,14 +25,14 @@ import {
   normalizeQuestionGroup,
   validateGroup,
 } from "../core/question-contract.ts";
-import { ArtifactError, NotFoundError, ServerError, ValidationError } from "../errors.ts";
+import { ArtifactError, ServerError, ValidationError } from "../errors.ts";
 import { runLaunch } from "../launch/fork-launcher.ts";
-import { loadRegistry, registryPath } from "../launch/recipes.ts";
+import { EXAMPLE_REGISTRY, loadRegistry, registryPath } from "../launch/recipes.ts";
 import { ingestPayload, parseWaitPayloadInput } from "../plan/ingest.ts";
 import { planArtifactPath, renderPlanDoc, renderedSourceOf } from "../plan/render.ts";
 import { HUB_PORT, hubInfo, hubOpen, parseHubPort, runDaemon } from "../server/daemon.ts";
 import { sinkStatus } from "../server/observe.ts";
-import { discoverLiveServer, loopbackFetch, removeServerDescriptor } from "../server/discovery.ts";
+import { discoverLiveServer, removeServerDescriptor } from "../server/discovery.ts";
 import { PORT_POOL, runServer } from "../server/server.ts";
 import { decodeGroupText } from "./ask-input.ts";
 import { resolveView, selectOpenUrl } from "../server/view.ts";
@@ -394,25 +394,14 @@ export const runContext = async (
       detail: { file },
     });
   }
-  const live = await discoverLiveServer(paths);
-  if (live) {
-    try {
-      const res = await loopbackFetch(live.port, `${live.base ?? ""}/__lucid/context`, {
-        method: "POST",
-        // The trace is stamped by `loopbackFetch` (plan 08, finding #15).
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(usage),
-      });
-      // A stale daemon (older build, no /__lucid/context) 404s, and one that
-      // dies mid-request throws - either way fall through to the direct write
-      // rather than report a success that never landed.
-      if (res.ok) {
-        print({ ok: true, live: true, context: clean });
-        return;
-      }
-    } catch {
-      /* server vanished between handshake and post - use the sidecar */
-    }
+  // `fallbackOffline` policy (M1.4, D-005) through the one seam: a live server
+  // takes the context POST; offline OR a live failure both fall back to the
+  // SIDECAR - never a log append (context is not a log event). The trace is
+  // stamped by `loopbackFetch` inside the seam.
+  const outcome = await deliverToLive(paths, "/__lucid/context", usage);
+  if (outcome.live) {
+    print({ ok: true, live: true, context: clean });
+    return;
   }
   await writeContextSidecar(paths, { ...clean, at: new Date().toISOString() });
   print({ ok: true, live: false, context: clean });
@@ -447,13 +436,7 @@ export const runAsk = async (
   opts: { ref?: string; options?: readonly string[]; multi?: boolean; group?: string } = {},
 ): Promise<void> => {
   const paths = sessionPaths(file);
-  const state = await sessionState(paths);
-  if (state.status === "none") {
-    throw new NotFoundError({
-      message: `No Lucid session for ${paths.artifactPath}`,
-      detail: { path: paths.artifactPath },
-    });
-  }
+  await requireOpenSession(paths);
   const id = randomId();
   const attendant = attendantStamp();
   // The rich grouped form (D12). Normalized and validated through the SAME
@@ -522,13 +505,7 @@ export const runAsk = async (
 /** `lucid end <file>` - terminal end of the session. */
 export const runEnd = async (file: string): Promise<void> => {
   const paths = sessionPaths(file);
-  const state = await sessionState(paths);
-  if (state.status === "none") {
-    throw new NotFoundError({
-      message: `No Lucid session for ${paths.artifactPath}`,
-      detail: { path: paths.artifactPath },
-    });
-  }
+  const state = await requireOpenSession(paths);
   if (state.status === "ended") {
     print({ session: paths.artifactPath, status: "ended" });
     return;
@@ -550,44 +527,17 @@ export interface LaunchCliOptions {
  */
 export const runLaunchCli = async (file: string, options: LaunchCliOptions = {}): Promise<void> => {
   const paths = sessionPaths(file);
-  const state = await sessionState(paths);
-  if (state.status === "none") {
-    throw new NotFoundError({
-      message: `No Lucid session for ${paths.artifactPath}`,
-      detail: { path: paths.artifactPath },
-    });
-  }
+  await requireOpenSession(paths);
   const registry = await loadRegistry();
   if (!registry) {
     throw new ValidationError({
       message: `no harness registry at ${registryPath()} - create it to enable the fork launcher`,
       detail: {
         path: registryPath(),
-        example: {
-          default: "claude_code",
-          harnesses: {
-            claude_code: {
-              spawn: [
-                "claude",
-                "-p",
-                "--session-id",
-                "{id}",
-                "--allowedTools",
-                "Bash(lucid *) Write Edit Read",
-                "{prompt}",
-              ],
-              resume: [
-                "claude",
-                "--resume",
-                "{id}",
-                "-p",
-                "--allowedTools",
-                "Bash(lucid *) Write Edit Read",
-                "{prompt}",
-              ],
-            },
-          },
-        },
+        // The one example the docs also show (M1.3): a complete, valid registry
+        // that loads and satisfies the identity gate, so copying it verbatim is
+        // not then refused as HSI001.
+        example: EXAMPLE_REGISTRY,
       },
     });
   }

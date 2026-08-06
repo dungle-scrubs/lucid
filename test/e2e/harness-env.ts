@@ -47,6 +47,9 @@ export const ENV_POLICY: Readonly<Record<string, NotIsolatedReason | "isolate">>
   LUCID_REGISTRY: "isolate",
   LUCID_ROOTS: "isolate",
   LUCID_HARNESSES: "isolate",
+  // The config-path owner's home override (M1.8): unset, every config file
+  // that has no specific env override resolves into the real ~/.lucid.
+  LUCID_HOME: "isolate",
   // The hub's rotating request log (plan 07, D-009). Unset, every spawned hub
   // appends to the developer's real ~/.lucid/hub.log - and parallel workers
   // sharing one file can misrotate away the retained generation.
@@ -199,6 +202,7 @@ export const harnessEnv = (
     LUCID_CLAUDE_PROJECTS: join(dir, "claude-projects"),
     LUCID_CODEX_SESSIONS: join(dir, "codex-sessions"),
     LUCID_HARNESSES: join(dir, "harnesses.json"),
+    LUCID_HOME: join(dir, "lucid-home"),
     LUCID_HUB_LOG: join(dir, "hub.log"),
   };
 };

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { lstat, mkdir, open, stat } from "node:fs/promises";
 import { attentionOf } from "../core/attention.ts";
-import { recordPendingIdentity } from "../core/attendant.ts";
 import { ARTIFACT_DIR, canonicalArtifactPath, sessionPaths } from "../core/paths.ts";
 import {
   addRoot,
@@ -32,6 +31,7 @@ import {
 } from "../launch/recipes.ts";
 import { sanitizeSelection, selectionArgs, writeSelection } from "../launch/selection.ts";
 import { DEFAULT_FRAME, type HubFrame } from "../protocol/frames.ts";
+import { LUCID_ROUTES } from "../protocol/routes.ts";
 import type {
   HubAttention,
   HubCreateAccepted,
@@ -425,7 +425,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // dedicated server later (the hub quit, an `open` ran, the hub came
       // back). The version comes off the live server's own identity, which the
       // handshake above already fetched.
-      if (subPath === "/__lucid/viewer" && req.method === "GET") {
+      if (subPath === LUCID_ROUTES.viewer && req.method === "GET") {
         return viewerResponse({
           session: paths.artifactPath,
           name: basename(paths.artifactPath),
@@ -440,7 +440,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       // six-connection pool bites, so falling back to SSE would put the socket
       // right back. The hub takes the socket itself and relays the inner
       // server's SSE into it: browser side upgraded, loopback side unchanged.
-      if (subPath === "/__lucid/events" && wantsUpgrade(req)) {
+      if (subPath === LUCID_ROUTES.events && wantsUpgrade(req)) {
         // Subscribed BEFORE upgraded (see relayDedicated). The deadline covers
         // the HANDSHAKE only and is cleared once headers land - an SSE body is
         // meant to stay open, and a session with nothing happening is silent
@@ -834,17 +834,6 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
       });
       if (planned.status === "refused") {
         return json({ error: planned.reason }, 400);
-      }
-      // Record a caller-assigned identity as pending BEFORE the turn runs
-      // (replaces prepareSpawnIdentity.recordAssigned): a child that crashes
-      // pre-open must still leave a resumable record.
-      if (planned.sessionId !== undefined && planned.strategy !== undefined) {
-        await recordPendingIdentity(paths, {
-          harness: resolved.name,
-          sessionId: planned.sessionId,
-          sessionIdAuthority: "assigned",
-          launchId: planned.launchId,
-        });
       }
 
       // Answer immediately: authoring is a whole agent turn, and the artifact

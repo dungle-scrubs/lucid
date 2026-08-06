@@ -1,4 +1,5 @@
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
+import { writeJsonFile } from "../core/atomic-json.ts";
 import { join } from "node:path";
 import { ensureServer, type EnsureServerOptions, openBrowser } from "../cli/self.ts";
 import {
@@ -21,16 +22,8 @@ import { discoverLiveServer } from "../server/discovery.ts";
 import { stdoutSink } from "../server/observe.ts";
 import { resolveView, wantsBrowserWindow } from "../server/view.ts";
 import { createPrompt, revisePrompt } from "./prompts.ts";
-import {
-  buildArgv,
-  resolveRecipe,
-  registryPath,
-  type HarnessRegistry,
-  type RecipeVar,
-  type SpawnRecipe,
-} from "./recipes.ts";
-import { safeForkId, writeForkSeed } from "./seed.ts";
-import { prepareSpawnIdentity, runSpawn } from "./spawn.ts";
+import { resolveRecipe, registryPath, type HarnessRegistry, type SpawnRecipe } from "./recipes.ts";
+import { safeForkId, writeForkSeed, handledForksPath } from "./seed.ts";
 import { DEFAULT_TURN_IDLE_MS, planTurn, runTurn } from "./turn.ts";
 
 /**
@@ -84,9 +77,6 @@ const DEFAULT_POLL_MS = 1500;
  *  (advances past it) rather than retrying forever on a broken recipe. */
 const MAX_RESUME_FAILS = 3;
 
-const handledPath = (parent: SessionPaths): string =>
-  join(parent.sessionDir, "forks", "handled.json");
-
 /**
  * The set of forks already acted on. A missing file means "nothing handled"
  * (first run); a PRESENT-but-corrupt file throws rather than silently resetting
@@ -96,23 +86,20 @@ const handledPath = (parent: SessionPaths): string =>
 const loadHandled = async (parent: SessionPaths): Promise<Set<string>> => {
   let raw: string;
   try {
-    raw = await readFile(handledPath(parent), "utf8");
+    raw = await readFile(handledForksPath(parent), "utf8");
   } catch {
     return new Set(); // absent = first run
   }
   const arr = JSON.parse(raw) as unknown; // a parse error is loud, never swallowed
-  if (!Array.isArray(arr)) throw new Error(`corrupt handled.json at ${handledPath(parent)}`);
+  if (!Array.isArray(arr)) throw new Error(`corrupt handled.json at ${handledForksPath(parent)}`);
   return new Set(arr.filter((x): x is string => typeof x === "string"));
 };
 
-/** Persist the handled set atomically (temp + rename) so a crash mid-write can
- *  never leave a truncated file that reads back as "nothing handled". */
+/** Persist the handled set atomically through the one publish owner (M1.2):
+ *  the old `${target}.tmp` was a single shared name two concurrent saves would
+ *  write through; writeJsonFile's unique tmp ends that. */
 const saveHandled = async (parent: SessionPaths, handled: Set<string>): Promise<void> => {
-  await mkdir(join(parent.sessionDir, "forks"), { recursive: true });
-  const target = handledPath(parent);
-  const tmp = `${target}.tmp`;
-  await writeFile(tmp, `${JSON.stringify([...handled], null, 2)}\n`);
-  await rename(tmp, target);
+  await writeJsonFile(handledForksPath(parent), [...handled]);
 };
 
 /** Deterministic child artifact path: same dir as the parent, keyed by the FULL
@@ -176,14 +163,6 @@ export const ensureChildOpen = async (
   return true;
 };
 
-const substitutions = (v: {
-  id: string;
-  seed: string;
-  artifact: string;
-  cwd: string;
-  prompt: string;
-}): Partial<Record<RecipeVar, string>> => v;
-
 const createChild = async (
   parent: SessionPaths,
   fork: ForkRecord,
@@ -193,8 +172,8 @@ const createChild = async (
   const log = opts.log ?? stdoutSink;
   const childArtifact = childArtifactPath(parent, fork.id);
   const childPaths = sessionPaths(childArtifact);
-  const childSessionId = crypto.randomUUID();
-  const { seedPath, forkDir } = await writeForkSeed(parent, fork);
+  const forkLayout = await writeForkSeed(parent, fork);
+  const seedPath = forkLayout.seedPath;
   const harness = (await readLastAttendant(parent))?.harness ?? null;
   const resolved = resolveRecipe(registry, harness ?? undefined);
 
@@ -202,40 +181,50 @@ const createChild = async (
     // No recipe for this harness: degrade to the copy-command (D-064), so the
     // human can drive the fork by hand rather than the launcher guessing.
     const cmd = `# no spawn recipe for harness ${harness ?? "(unknown)"} - drive this fork manually:\n# 1) author ${childArtifact} from the seed: ${seedPath}\n# 2) lucid open ${childArtifact}\n`;
-    await writeFile(join(forkDir, "COMMAND.txt"), cmd);
+    await writeFile(forkLayout.commandFile, cmd);
     log(
       `fork ${fork.id.slice(0, 8)}: no recipe for "${harness ?? "unknown"}" -> wrote manual command`,
     );
-    return { forkId: fork.id, childArtifact, childSessionId, harness, status: "no-recipe" };
+    return {
+      forkId: fork.id,
+      childArtifact,
+      childSessionId: crypto.randomUUID(),
+      harness,
+      status: "no-recipe",
+    };
   }
 
-  const spawnIdentity = prepareSpawnIdentity(resolved.name, resolved.recipe, registryPath());
-  const argv = buildArgv(
-    resolved.recipe.spawn,
-    substitutions({
-      // Caller-assigned recipes take the id Lucid minted; discovered recipes
-      // declared no {id} in spawn (the registry validated that), so the empty
-      // substitution never lands in an argv.
-      id: spawnIdentity.assignedSessionId ?? "",
-      seed: seedPath,
-      artifact: childArtifact,
-      cwd: parent.artifactDir,
-      prompt: createPrompt(seedPath, childArtifact),
-    }),
-    resolved.recipe.tools,
-  );
+  // One owner for every turn (M1.6): the create argv, identity strategy,
+  // turn/launch correlation, and the artifact's sticky selection all come from
+  // planTurn; the ack/terminator bracketing and the pre-spawn identity record
+  // live in runTurn. No deadline - matching the hub's create (a fresh
+  // authoring turn is bounded on silence nowhere yet).
+  const planned = await planTurn({
+    mode: "create",
+    paths: childPaths,
+    harness: resolved.name,
+    recipe: resolved.recipe,
+    registryFile: registryPath(),
+    cwd: parent.artifactDir,
+    prompt: createPrompt(seedPath, childArtifact),
+    seed: seedPath,
+  });
   const short = safeForkId(fork.id).slice(0, 8);
+  // A recipe that resolved but carries no spawn template, or declares no
+  // identity strategy (HSI001), is refused here rather than spawning
+  // something that cannot be resumed. Degrade to the manual command, like the
+  // no-recipe path, so the human can still drive the fork by hand.
+  if (planned.status === "refused") {
+    const cmd = `# spawn refused for harness ${resolved.name}: ${planned.reason}\n# author ${childArtifact} from the seed: ${seedPath}\n# lucid open ${childArtifact}\n`;
+    await writeFile(forkLayout.commandFile, cmd);
+    log(`fork ${short}: spawn refused - ${planned.reason}`);
+    return { forkId: fork.id, childArtifact, childSessionId: "", harness, status: "no-recipe" };
+  }
   log(`fork ${short}: spawning "${resolved.name}" -> ${childArtifact}`);
-  await spawnIdentity.recordAssigned(childPaths);
-  const result = await runSpawn(
-    argv,
-    parent.artifactDir,
-    join(forkDir, "run", "create.out.log"),
-    spawnIdentity.identityFor(childPaths),
-  );
-  if (result.code !== 0) {
-    log(`fork ${short}: create turn exited ${result.code} (see ${forkDir}/run/create.out.log)`);
-  } else if (result.status === "identity-missing") {
+  const outcome = await runTurn(planned, { outLog: forkLayout.createOutLog });
+  if (outcome.code !== 0) {
+    log(`fork ${short}: create turn exited ${outcome.code} (see ${forkLayout.createOutLog})`);
+  } else if (outcome.result.status === "identity-missing") {
     // The artifact (if authored) survives; the launch is simply not resumable
     // (HSI002) - said HERE, where the launch record is, not discovered later
     // as a resume that starts a stranger.
@@ -245,17 +234,16 @@ const createChild = async (
   const open = opts.openChild ?? ensureChildOpen;
   if (!(await open(childPaths, opts.openBrowser ?? true))) {
     log(`fork ${short}: agent did not author ${childArtifact}`);
-    return { forkId: fork.id, childArtifact, childSessionId, harness, status: "author-failed" };
+    return { forkId: fork.id, childArtifact, childSessionId: "", harness, status: "author-failed" };
   }
   log(`fork ${short}: opened ${childPaths.name}`);
   // The child's `lucid open` ran mid-turn, possibly before discovery fired:
   // promote anything still pending now that the log exists.
   await promotePendingBindings(childPaths).catch(() => {});
-  // The id the attend loop resumes: assigned, or whatever the harness
-  // announced. Neither means one-shot - the loop refuses to resume nothing.
-  const resumableId =
-    spawnIdentity.assignedSessionId ??
-    ("identity" in result ? result.identity?.sessionId : undefined);
+  // The id the attend loop resumes: what the turn established (assigned,
+  // announced, or recovered by scan). None means one-shot - the loop refuses
+  // to resume nothing.
+  const resumableId = outcome.establishedSessionId;
   if (resumableId) {
     // Shape-C liveness runs for the loop's lifetime; a failure here never
     // aborts the parent watch, but it must be observable rather than

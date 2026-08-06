@@ -154,6 +154,32 @@ export const sessionPaths = (input: string, recordDir?: string): SessionPaths =>
   };
 };
 
+/**
+ * The entry names a Lucid session dir DIRECTLY owns (M1.1). Derived from the
+ * same `SessionPaths` the layout produces, so the ownership allowlist cannot
+ * drift from the writer the way the old hand-maintained `LUCID_WRITES` did
+ * (it listed `server.log` long after the writer moved to `server.out.log`,
+ * and never listed `forks`). `forks` is named explicitly because it is a dir
+ * the layout creates (`forkDirFor`) rather than a `SessionPaths` field.
+ */
+const _ownedProbe = sessionPaths("/__lucid-owned-probe__/x.html");
+const LUCID_OWNED_SESSION_ENTRIES: ReadonlySet<string> = new Set<string>([
+  basename(_ownedProbe.logPath), // log.ndjson
+  basename(_ownedProbe.versionsDir), // versions
+  basename(_ownedProbe.pastedDir), // pasted
+  basename(_ownedProbe.runDir), // run
+  "forks", // sessionDir/forks/<id> (forkDirFor)
+]);
+/** Entries Lucid wrote to the session dir in older layouts (not produced by
+ *  the current `SessionPaths`): attendant stamps moved under run/, and the
+ *  append lock sits beside the log. Named so a record dir holding only one
+ *  still reads as ours. */
+const LUCID_LEGACY_ENTRIES: ReadonlySet<string> = new Set(["attendant.json", "log.ndjson.lock"]);
+/** Whether a direct child entry name of a session dir is Lucid's (M1.1):
+ *  derived from the layout the writer produces, plus the named legacy set. */
+export const isLucidOwnedEntry = (name: string): boolean =>
+  LUCID_OWNED_SESSION_ENTRIES.has(name) || LUCID_LEGACY_ENTRIES.has(name);
+
 /** Segment-scoped snapshot path, e.g. `versions/s2/v3.html` (D-050). */
 export const snapshotPath = (paths: SessionPaths, segment: number, version: number): string =>
   resolve(paths.versionsDir, `s${segment}`, `v${version}.html`);

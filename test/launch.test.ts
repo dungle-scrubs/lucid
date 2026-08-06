@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { readLastAttendant } from "../src/core/attendant.ts";
 import { foldLog, type ForkRecord } from "../src/core/fold.ts";
 import { appendEvent, readEvents, sessionState } from "../src/core/log.ts";
 import { sessionPaths, type SessionPaths } from "../src/core/paths.ts";
 import { readRegistry } from "../src/core/registry.ts";
-import { ensureSessionDirs, openSession } from "../src/core/session.ts";
+import { assertRecordAvailable, ensureSessionDirs, openSession } from "../src/core/session.ts";
+import { planTurn, runTurn } from "../src/launch/turn.ts";
 import type { WaitPayload } from "../src/protocol/wire.ts";
 import {
   attendChild,
@@ -457,8 +459,8 @@ describe("safe fork ids", () => {
       const paths = sessionPaths(join(dir, "plan.html"));
       const evil = forkDirFor(paths, "../../../../etc/passwd");
       // The result must remain inside the session's forks/ directory.
-      expect(evil.startsWith(join(paths.sessionDir, "forks"))).toBe(true);
-      expect(evil).not.toContain("..");
+      expect(evil.dir.startsWith(join(paths.sessionDir, "forks"))).toBe(true);
+      expect(evil.dir).not.toContain("..");
       // Distinct full ids do not collide (no 8-char truncation).
       const a = childArtifactPath(paths, "11111111-aaaa");
       const b = childArtifactPath(paths, "11111111-bbbb");
@@ -1101,4 +1103,201 @@ console.log(JSON.stringify({ type: "thread.started", thread_id: "a-stranger-thre
     await endChildSession();
     await loop;
   }, 40_000);
+});
+
+describe("M1.6: a fork create runs through the turn owner", () => {
+  /**
+   * The fork create used to be a parallel reimplementation of the turn: it
+   * built its own argv (buildArgv), recorded its own identity
+   * (prepareSpawnIdentity.recordAssigned), and ran runSpawn directly - so it
+   * had no ack/terminator bracketing, no sticky selection, and the hub's
+   * create (already on planTurn/runTurn) was the only create that did. One
+   * owner answers all of it now: createChild routes through
+   * planTurn({mode:"create"}) + runTurn, the identity pre-record lives in the
+   * pipeline, and a fresh log never opens with an ack (M9-ack).
+   */
+  let dir: string;
+  let paths: SessionPaths;
+  let createStub: string;
+  let outLog: string;
+
+  const writeStub = async (body: string): Promise<void> => {
+    await writeFile(createStub, `#!/usr/bin/env bun\n${body}\n`);
+    await chmod(createStub, 0o755);
+  };
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "lucid-create-turn-"));
+    paths = sessionPaths(join(dir, "child.html"));
+    createStub = join(dir, "create-stub");
+    outLog = join(dir, "create.out.log");
+    await writeFile(paths.artifactPath, DOC);
+    ensureSessionDirs(paths);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("{seed} substitutes through planTurn for a create turn", async () => {
+    const seedPath = join(dir, "seed.md");
+    await writeFile(seedPath, "# seed");
+    const recipe: SpawnRecipe = {
+      sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+      spawn: [createStub, "--sid", "{id}", "{seed}", "{artifact}", "{prompt}"],
+    };
+    const planned = await planTurn({
+      mode: "create",
+      paths,
+      harness: "stub",
+      recipe,
+      registryFile: join(dir, "reg.json"),
+      cwd: dir,
+      prompt: "author it",
+      seed: seedPath,
+    });
+    expect(planned.status).toBe("planned");
+    if (planned.status !== "planned") return;
+    // The seed path reaches the argv where the recipe declared {seed}.
+    expect(planned.argv).toContain(seedPath);
+    // A caller-assigned create mints the id planTurn substitutes for {id}.
+    expect(planned.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(planned.argv).toContain(planned.sessionId ?? "");
+  });
+
+  test("a create turn weaves the artifact's sticky selection into argv", async () => {
+    // planTurn reads the selection sidecar for every mode; a fork child whose
+    // human picked a model gets that pick woven into its CREATE argv, not
+    // only into later resumes.
+    await writeFile(
+      paths.selectionPath,
+      JSON.stringify({ harness: "claude-code", model: "opus-5" }),
+    );
+    const recipe: SpawnRecipe = {
+      sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+      spawn: [createStub, "--sid", "{id}", "{prompt}"],
+      models: [{ id: "opus-5" }],
+      efforts: ["high"],
+    };
+    const planned = await planTurn({
+      mode: "create",
+      paths,
+      harness: "claude-code",
+      recipe,
+      registryFile: join(dir, "reg.json"),
+      cwd: dir,
+      prompt: "author it",
+    });
+    expect(planned.status).toBe("planned");
+    if (planned.status !== "planned") return;
+    expect(planned.argv.slice(1, 3)).toEqual(["--model", "opus-5"]);
+  });
+
+  test("a create turn appends no ack to a fresh log and closes with a terminator", async () => {
+    // M9-ack: the ack used to be the first thing appended, so a fresh record
+    // opened with agent_ack and session_opened landed second. A create turn
+    // owns no batch to claim, so its ack is skipped entirely when the log
+    // does not exist yet. The terminator still lands: the turn ended.
+    await writeStub("process.exit(0);");
+    const recipe: SpawnRecipe = {
+      sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+      spawn: [createStub, "--sid", "{id}"],
+    };
+    const planned = await planTurn({
+      mode: "create",
+      paths,
+      harness: "stub",
+      recipe,
+      registryFile: join(dir, "reg.json"),
+      cwd: dir,
+      prompt: "author it",
+    });
+    expect(planned.status).toBe("planned");
+    if (planned.status !== "planned") return;
+    await runTurn(planned, { outLog });
+    const events = (await readEvents(paths.logPath)).events;
+    // No ack opens a window on a log that did not exist.
+    expect(events.some((e) => e.t === "agent_ack")).toBe(false);
+    // The turn still closes its own window: a terminator names the turn.
+    const ended = events.find((e) => e.t === "agent_turn_ended") as { turnId?: string } | undefined;
+    expect(ended?.turnId).toBe(planned.turnId);
+  });
+
+  test("session_opened stays first when the agent opens mid-spawn, and the stem-collision guard is active", async () => {
+    // A real authoring agent writes the artifact AND runs `lucid open` during
+    // its turn, so session_opened lands BEFORE the terminator. The stub
+    // simulates that mid-spawn open by appending a session_opened line; the
+    // create turn's ack is skipped, so session_opened is the first line the
+    // record ever holds - which is what the stem-collision guard (D-006)
+    // reads to tell its own record from a stranger's.
+    const logPath = paths.logPath;
+    const artifactPath = paths.artifactPath;
+    const owner = basename(artifactPath);
+    await writeStub(
+      [
+        'const fs = require("node:fs");',
+        `fs.writeFileSync(${JSON.stringify(artifactPath)}, ${JSON.stringify(DOC)});`,
+        "fs.appendFileSync(" +
+          JSON.stringify(logPath) +
+          ', JSON.stringify({seq:1,at:"2026-01-01T00:00:00.000Z",t:"session_opened",segment:1,artifact:' +
+          JSON.stringify(owner) +
+          ',version:1,hash:"x",path:"x"}) + "\\n");',
+        "process.exit(0);",
+      ].join("\n"),
+    );
+    const recipe: SpawnRecipe = {
+      sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+      spawn: [createStub, "--sid", "{id}"],
+    };
+    const planned = await planTurn({
+      mode: "create",
+      paths,
+      harness: "stub",
+      recipe,
+      registryFile: join(dir, "reg.json"),
+      cwd: dir,
+      prompt: "author it",
+    });
+    expect(planned.status).toBe("planned");
+    if (planned.status !== "planned") return;
+    await runTurn(planned, { outLog });
+    const events = (await readEvents(paths.logPath)).events;
+    // session_opened is the FIRST event; no ack precedes it.
+    expect(events[0]?.t).toBe("session_opened");
+    expect(events.some((e) => e.t === "agent_ack")).toBe(false);
+    // The guard reads that first line: a same-stem artifact sharing this
+    // record dir is refused as a collision, not silently merged.
+    const sameStem = sessionPaths(join(dir, "child.md"));
+    expect(() => assertRecordAvailable(sameStem)).toThrow(/already the review record/);
+  });
+
+  test("a create turn records its assigned identity before the process opens (crash-before-open)", async () => {
+    // The identity pre-record used to be the caller's job (recordAssigned in
+    // createChild, recordPendingIdentity in the daemon). Moved into the
+    // pipeline: a create that crashes before it ever opens still leaves a
+    // resumable sidecar.
+    await writeStub("process.exit(1);"); // crashes immediately, opens nothing
+    const recipe: SpawnRecipe = {
+      sessionIdentity: { argument: "--sid", source: "caller-assigned" },
+      spawn: [createStub, "--sid", "{id}"],
+    };
+    const planned = await planTurn({
+      mode: "create",
+      paths,
+      harness: "stub",
+      recipe,
+      registryFile: join(dir, "reg.json"),
+      cwd: dir,
+      prompt: "author it",
+    });
+    expect(planned.status).toBe("planned");
+    if (planned.status !== "planned") return;
+    await runTurn(planned, { outLog });
+    const sidecar = await readLastAttendant(paths);
+    // The assigned id is pending in the sidecar even though the turn never
+    // opened the session - the pipeline recorded it before spawn.
+    expect(sidecar?.sessionId).toBe(planned.sessionId);
+    expect(sidecar?.sessionIdAuthority).toBe("assigned");
+    expect(sidecar?.pendingBinding).toBe(true);
+  });
 });

@@ -61,6 +61,13 @@ const runEffectBody = (fn: () => Promise<void>): Effect.Effect<void> =>
 
 const fileArg = Args.file({ name: "file" });
 
+/** Optional CLI option helpers (M1.7): `.text(name).pipe(Options.optional)`
+ *  and its integer twin were spelled out at 23 sites; these keep the spelling
+ *  in one place. A thin wrapper, so the generated --help and parsing are
+ *  byte-identical. */
+const optionalText = (name: string) => Options.text(name).pipe(Options.optional);
+const optionalInt = (name: string) => Options.integer(name).pipe(Options.optional);
+
 const noOpen = Options.boolean("no-open").pipe(Options.withDefault(false));
 const restart = Options.boolean("restart").pipe(Options.withDefault(false));
 const openCommand = Command.make(
@@ -69,15 +76,15 @@ const openCommand = Command.make(
   ({ file, noOpen, restart }) => runEffect(() => runOpen(file, { open: !noOpen, restart })),
 );
 
-const sinceOpt = Options.text("since").pipe(Options.optional);
-const replyOpt = Options.text("reply").pipe(Options.optional);
-const harnessOpt = Options.text("harness").pipe(Options.optional);
-const resumeOpt = Options.text("resume").pipe(Options.optional);
+const sinceOpt = optionalText("since");
+const replyOpt = optionalText("reply");
+const harnessOpt = optionalText("harness");
+const resumeOpt = optionalText("resume");
 /** What the attending session is running RIGHT NOW - stated per wait, because
  *  a level changed mid-conversation is invisible to an env read once. */
-const modelOpt = Options.text("model").pipe(Options.optional);
-const effortOpt = Options.text("effort").pipe(Options.optional);
-const timeoutOpt = Options.integer("timeout").pipe(Options.optional);
+const modelOpt = optionalText("model");
+const effortOpt = optionalText("effort");
+const timeoutOpt = optionalInt("timeout");
 const waitCommand = Command.make(
   "wait",
   {
@@ -108,19 +115,19 @@ const endCommand = Command.make("end", { file: fileArg }, ({ file }) =>
   runEffect(() => runEnd(file)),
 );
 
-const pollOpt = Options.integer("poll").pipe(Options.optional);
+const pollOpt = optionalInt("poll");
 const launchCommand = Command.make("launch", { file: fileArg, poll: pollOpt }, ({ file, poll }) =>
   runEffect(() => runLaunchCli(file, { ...(Option.isSome(poll) ? { pollMs: poll.value } : {}) })),
 );
 
 // `--text` is optional only because `--group` is the other way to ask; runAsk
 // requires one of them and says so.
-const askText = Options.text("text").pipe(Options.optional);
-const askRef = Options.text("ref").pipe(Options.optional);
+const askText = optionalText("text");
+const askRef = optionalText("ref");
 const askOption = Options.text("option").pipe(Options.repeated);
 const askMulti = Options.boolean("multi").pipe(Options.withDefault(false));
 /** Path to the grouped-question JSON (D12), or "-" to read it from stdin. */
-const askGroup = Options.text("group").pipe(Options.optional);
+const askGroup = optionalText("group");
 const askCommand = Command.make(
   "ask",
   {
@@ -155,9 +162,9 @@ const intentCommand = Command.make(
   ({ file, intent }) => runEffect(() => runIntent(file, intent as "revise" | "reply")),
 );
 
-const progressLabel = Options.text("label").pipe(Options.optional);
-const progressTotal = Options.integer("total").pipe(Options.optional);
-const progressDone = Options.integer("done").pipe(Options.optional);
+const progressLabel = optionalText("label");
+const progressTotal = optionalInt("total");
+const progressDone = optionalInt("done");
 const progressCommand = Command.make(
   "progress",
   { file: fileArg, label: progressLabel, total: progressTotal, done: progressDone },
@@ -178,9 +185,9 @@ const blockedCommand = Command.make(
   ({ file, reason }) => runEffect(() => runBlocked(file, reason)),
 );
 
-const ctxPct = Options.integer("pct").pipe(Options.optional);
-const ctxUsed = Options.integer("used").pipe(Options.optional);
-const ctxTotal = Options.integer("total").pipe(Options.optional);
+const ctxPct = optionalInt("pct");
+const ctxUsed = optionalInt("used");
+const ctxTotal = optionalInt("total");
 const contextCommand = Command.make(
   "context",
   { file: fileArg, pct: ctxPct, used: ctxUsed, total: ctxTotal },
@@ -198,7 +205,7 @@ const serveCommand = Command.make("__serve", { file: fileArg }, ({ file }) =>
   runEffect(() => runServe(file)),
 );
 
-const hubPortOpt = Options.integer("port").pipe(Options.optional);
+const hubPortOpt = optionalInt("port");
 const hubAttendOpt = Options.boolean("attend").pipe(Options.withDefault(false));
 const hubCommand = Command.make(
   "hub",
@@ -211,8 +218,8 @@ const appCommand = Command.make("app", {}, () => runEffect(() => runApp()));
 // `lucid plan render|ingest` - the planner bridge.
 const docArg = Args.file({ name: "doc" });
 const outOpt = Options.file("out").pipe(Options.optional);
-const titleOpt = Options.text("title").pipe(Options.optional);
-const stageOpt = Options.text("stage").pipe(Options.optional);
+const titleOpt = optionalText("title");
+const stageOpt = optionalText("stage");
 const forceOpt = Options.boolean("force").pipe(Options.withDefault(false));
 const planRenderCommand = Command.make(
   "render",

@@ -5,11 +5,11 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   writeFileSync,
 } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
-import { ArtifactError, ValidationError } from "../errors.ts";
+import { writeTextAtomicSync } from "./atomic-json.ts";
+import { ArtifactError, NotFoundError, ValidationError } from "../errors.ts";
 import type { Warning } from "../errors.ts";
 import { appendEvent, appendEventsIf, appendIfStatus, sessionState } from "./log.ts";
 import type { AttendantStamp, LogEvent } from "./events.ts";
@@ -18,6 +18,7 @@ import type { SessionPaths } from "./paths.ts";
 import {
   ARTIFACT_DIR,
   canonicalArtifactPath,
+  isLucidOwnedEntry,
   sessionName,
   sessionPaths,
   snapshotPath,
@@ -54,42 +55,6 @@ import { hashContent, validateStructure, writeSnapshot } from "./version.ts";
  * Anything else belongs to someone else.
  */
 /**
- * Files only Lucid writes. Finding one is positive evidence that this directory
- * is a record of ours, half-built or otherwise.
- *
- * `server.out.log` and not `server.log`: `paths.ts` writes the former, and the
- * latter was a name nothing has produced since. An allowlist that has drifted
- * from its writer is worse than a short one - it refuses our own directory and
- * accepts somebody else's.
- */
-const LUCID_WRITES = new Set([
-  "log.ndjson",
-  "log.ndjson.lock",
-  "current.html",
-  "versions",
-  "pasted",
-  "server.json",
-  "server.out.log",
-  "selection.json",
-  "attendant.json",
-  "context.json",
-  "attend.out.log",
-  "create.out.log",
-  "run",
-]);
-
-/*
- * Deliberately absent from that list: `.gitignore` and `.DS_Store`. Both used
- * to count as ours, and neither is evidence of anything. Lucid writes a
- * `.gitignore`, and so does anybody keeping a folder out of git; the Finder
- * writes `.DS_Store` into any folder somebody opens. Treating them as proof
- * meant a placeholder folder holding one of them was read as ours and written
- * over. They now count as somebody's, which errs toward refusing - the
- * recoverable direction, since the answer names the directory and renaming it
- * takes a second.
- */
-
-/**
  * Whether `<dir>/<stem>/` is somebody ELSE's.
  *
  * Ownership needs positive evidence, not the absence of a stranger. Deciding it
@@ -98,6 +63,12 @@ const LUCID_WRITES = new Set([
  * read as ours, and Lucid then wrote its log, its versions tree and a `*`
  * .gitignore over the top of it. That is the exact harm this check exists to
  * prevent, admitted through the list meant to prevent it.
+ *
+ * The inventory itself lives in `paths.ts` as `isLucidOwnedEntry` (M1.1):
+ * derived from the layout the writer produces, so the allowlist cannot drift
+ * from it the way the old hand-maintained `LUCID_WRITES` did. `.gitignore` and
+ * `.DS_Store` are deliberately not Lucid-owned: both are written by other
+ * things too, so counting them as ours re-admitted the placeholder-folder bug.
  */
 const occupiedByOthers = (paths: SessionPaths): boolean => {
   if (!existsSync(paths.sessionDir)) return false;
@@ -105,9 +76,9 @@ const occupiedByOthers = (paths: SessionPaths): boolean => {
   try {
     const entries = readdirSync(paths.sessionDir);
     if (entries.length === 0) return false; // an empty directory is nobody's
-    // Ours-in-progress - a versions tree, a descriptor, a server log - reads as
-    // ours. Ambient files are not counted either way.
-    if (entries.some((entry) => LUCID_WRITES.has(entry))) return false;
+    // Ours-in-progress - a versions tree, a descriptor, a server log, a forks/
+    // tree - reads as ours. The inventory is `isLucidOwnedEntry` (M1.1).
+    if (entries.some((entry) => isLucidOwnedEntry(entry))) return false;
     return true;
   } catch {
     return false; // unreadable: let the open fail on its own terms
@@ -217,19 +188,21 @@ export const ensureSessionDirs = (paths: SessionPaths): void => {
   makeSessionDirs(paths);
 };
 
-/** Atomic write within the session dir (temp-then-rename; same-dir rename). */
-export const atomicWrite = (absPath: string, content: string): void => {
-  // The target may live in `run/` (plan 02), which is machine-local and absent
-  // on a freshly pulled or newly mounted record. Recreate it: `run/` is derived
-  // state, so rebuilding the served copy under a missing run/ is exactly right
-  // (MB.3's fresh-pull-serves case). Idempotent.
-  mkdirSync(dirname(absPath), { recursive: true });
-  const tmp = `${absPath}.tmp.${process.pid}`;
-  writeSnapshot(tmp, content);
-  renameSync(tmp, absPath);
+/** Require a session to be open (M1.7): the four CLI commands that gate on
+ *  "is there a Lucid session here" each copied this refusal verbatim.
+ *  Returns the folded state so a caller that also branches on `status` (e.g.
+ *  `wait` on `ended`) does not re-fetch. */
+export const requireOpenSession = async (paths: SessionPaths): Promise<FoldedState> => {
+  const state = await sessionState(paths);
+  if (state.status === "none") {
+    throw new NotFoundError({
+      message: `No Lucid session for ${paths.artifactPath}`,
+      detail: { path: paths.artifactPath },
+    });
+  }
+  return state;
 };
 
-/** Read the agent's artifact file; ARTIFACT_ERROR if unreadable. */
 export const readArtifact = async (paths: SessionPaths): Promise<string> => {
   try {
     return await readFile(paths.artifactPath, "utf8");
@@ -283,7 +256,7 @@ export const commitVersionBytes = (
 ): VersionCommit => {
   const snapAbs = snapshotPath(paths, segment, version);
   writeSnapshot(snapAbs, html);
-  atomicWrite(paths.currentHtml, html);
+  writeTextAtomicSync(paths.currentHtml, html);
   return { version, hash: hashContent(html), path: snapshotRelPath(segment, version) };
 };
 
@@ -483,9 +456,8 @@ export const openSession = async (
       }
     } else if ((await readCurrent(paths)) === undefined) {
       // Unchanged, but the serve cache is gone (a fresh pull dropped run/).
-      // Rebuild it from the artifact - which equals the baseline snapshot - so
       // the session can be served without minting a version (MB.3).
-      atomicWrite(paths.currentHtml, html);
+      writeTextAtomicSync(paths.currentHtml, html);
     }
     if (before.status === "suspended") {
       await appendEvent(paths, {
@@ -510,8 +482,9 @@ export const openSession = async (
  * the old suspend bug left behind (cache == artifact, log still one version
  * back). The snapshot is committed history and cannot lie that way.
  */
-export const commitAgainstSnapshot = async (
+export const commitIfChanged = async (
   paths: SessionPaths,
+  options: { readonly baseline: "snapshot" | "cache" },
 ): Promise<{ committed?: LogEvent; warning?: Warning }> => {
   const html = await readArtifact(paths);
   const structure = validateStructure(html);
@@ -524,72 +497,44 @@ export const commitAgainstSnapshot = async (
       },
     };
   }
-  const before = await sessionState(paths);
-  if (before.status !== "active") {
-    return {
-      warning: {
-        code: "SESSION_NOT_ACTIVE",
-        message: `artifact change not committed: session is ${before.status}`,
-        detail: { path: paths.artifactPath },
-      },
-    };
+  if (options.baseline === "snapshot") {
+    // Compare against committed history (the snapshot), not the serve cache: a
+    // refused commit may already have clobbered current.html, so the cache can
+    // read as in sync while the log is a version behind (the suspend bug).
+    const before = await sessionState(paths);
+    if (before.status !== "active") {
+      return {
+        warning: {
+          code: "SESSION_NOT_ACTIVE",
+          message: `artifact change not committed: session is ${before.status}`,
+          detail: { path: paths.artifactPath },
+        },
+      };
+    }
+    const baseline = await readSnapshotBytes(paths, before.segment, before.version);
+    if (baseline !== undefined && hashContent(html) === hashContent(baseline)) {
+      // In sync with committed history; make sure the serve cache exists (a
+      // fresh pull drops run/) without minting a version.
+      if ((await readCurrent(paths)) === undefined) writeTextAtomicSync(paths.currentHtml, html);
+      return {};
+    }
+    const nextVersion = before.version + 1;
+    const commit = commitVersionBytes(paths, html, before.segment, nextVersion);
+    const events = await appendIfStatus(paths, "active", [
+      { t: "version", version: nextVersion, hash: commit.hash, path: commit.path },
+    ]);
+    return events.length > 0 ? { committed: events[0] } : {};
   }
-  const baseline = await readSnapshotBytes(paths, before.segment, before.version);
-  if (baseline !== undefined && hashContent(html) === hashContent(baseline)) {
-    // In sync with committed history; make sure the serve cache exists (a
-    // fresh pull drops run/) without minting a version.
-    if ((await readCurrent(paths)) === undefined) atomicWrite(paths.currentHtml, html);
-    return {};
-  }
-  const nextVersion = before.version + 1;
-  const commit = commitVersionBytes(paths, html, before.segment, nextVersion);
-  const events = await appendIfStatus(paths, "active", [
-    { t: "version", version: nextVersion, hash: commit.hash, path: commit.path },
-  ]);
-  return events.length > 0 ? { committed: events[0] } : {};
-};
-
-/**
- * Commit a watcher-detected artifact change as a new version, if the settled
- * file is structurally valid and actually differs from current.html. Returns
- * the appended `version` event (so callers can broadcast the real persisted
- * event rather than a synthetic one) or a warning.
- *
- * The status check and the version append run atomically under the exclusive
- * log lock (D-049) via `appendIfStatus`, so a concurrent
- * `session_suspended`/`session_ended` cannot land a `version` event in a
- * just-closed segment.
- */
-export const commitWatchedChange = async (
-  paths: SessionPaths,
-): Promise<{ committed?: LogEvent; warning?: Warning }> => {
-  const html = await readArtifact(paths);
-  const structure = validateStructure(html);
-  if (!structure.ok) {
-    return {
-      warning: {
-        code: "STRUCTURE_INVALID",
-        message: `artifact change not committed: ${structure.reason}`,
-        detail: { path: paths.artifactPath },
-      },
-    };
-  }
+  // `cache` baseline: a watcher-detected change, compared against current.html.
   const current = await readCurrent(paths);
   if (current !== undefined && hashContent(html) === hashContent(current)) {
     return {}; // no real change
   }
-  // The version number and segment are derived from the current fold; the
-  // status gate is re-checked atomically inside the lock by appendIfStatus so a
-  // concurrent suspend/end cannot let this version land in a closed segment.
-  const before = await sessionState(paths);
-  // Refuse BEFORE writing bytes on a session that is already not active.
+  // Refuse BEFORE writing bytes on a session that is already not active:
   // commitVersionBytes overwrites current.html, and doing that ahead of a
-  // refused append made the change permanently uncommittable: every later
-  // comparison saw artifact == current.html and said "no real change", so a
-  // save that landed while the log said suspended silently lost its version
-  // (the orphan snapshot stayed behind as the only evidence). The append's own
-  // guard below still closes the concurrent-suspend race; this is the
-  // deliberate-state case, checked while current.html is still the baseline.
+  // refused append made the change permanently uncommittable (every later
+  // comparison saw artifact == current.html and said "no real change").
+  const before = await sessionState(paths);
   if (before.status !== "active") {
     return {
       warning: {
@@ -609,19 +554,30 @@ export const commitWatchedChange = async (
     // and the append. Put current.html back to the pre-change baseline so the
     // change is still visible as a change - the resume reconcile (or the next
     // watcher pass) re-commits it instead of losing it to the clobbered cache.
-    //
-    // ONLY if the cache still holds OUR bytes: a concurrent writer (a resume
-    // reconcile committing newer content) may have replaced current.html
-    // between our write and this rollback, and restoring the old baseline
-    // over ITS commit would desync the served cache from the log. Not a full
-    // transaction - that needs every writer under one lock - but it narrows
-    // the stomp to a read-write gap on a path that is already a lost race.
+    // ONLY if the cache still holds OUR bytes: a concurrent writer may have
+    // replaced current.html between our write and this rollback, and restoring
+    // the old baseline over ITS commit would desync the served cache from the
+    // log.
     const now = await readCurrent(paths);
     if (now !== undefined && hashContent(now) === hashContent(html)) {
-      if (current !== undefined) atomicWrite(paths.currentHtml, current);
+      if (current !== undefined) writeTextAtomicSync(paths.currentHtml, current);
       else await rm(paths.currentHtml, { force: true });
     }
     return {};
   }
   return { committed: events[0] };
 };
+
+/** Commit a resume/reconcile change against the committed snapshot (M1.11):
+ *  the one body is `commitIfChanged`; this names the baseline callers want. */
+export const commitAgainstSnapshot = (
+  paths: SessionPaths,
+): Promise<{ committed?: LogEvent; warning?: Warning }> =>
+  commitIfChanged(paths, { baseline: "snapshot" });
+
+/** Commit a watcher-detected change against the serve cache (M1.11): the one
+ *  body is `commitIfChanged`; this names the baseline callers want. */
+export const commitWatchedChange = (
+  paths: SessionPaths,
+): Promise<{ committed?: LogEvent; warning?: Warning }> =>
+  commitIfChanged(paths, { baseline: "cache" });

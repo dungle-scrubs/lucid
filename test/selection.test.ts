@@ -16,7 +16,6 @@ import {
   readSelection,
   sanitizeSelection,
   selectionArgs,
-  selectionPath,
   writeSelection,
 } from "../src/launch/selection.ts";
 
@@ -500,7 +499,7 @@ describe("the sticky sidecar", () => {
       selectionPath: join(runDir, "selection.json"),
     } as SessionPaths;
     await writeSelection(paths, { harness: "codex", model: "m".repeat(200), effort: " high " });
-    const stored = (await Bun.file(selectionPath(paths)).json()) as Record<string, string>;
+    const stored = (await Bun.file(paths.selectionPath).json()) as Record<string, string>;
     expect(stored).toEqual((await readSelection(paths)) as unknown as Record<string, string>);
     expect(stored.model?.length).toBe(128);
     expect(stored.effort).toBe("high");

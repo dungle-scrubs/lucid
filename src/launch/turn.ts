@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { access, readFile, stat } from "node:fs/promises";
+import { recordPendingIdentity } from "../core/attendant.ts";
 import { deliver } from "../core/deliver.ts";
 import { normalizeHarness } from "../core/harness.ts";
 import type { SessionPaths } from "../core/paths.ts";
@@ -149,6 +150,10 @@ export interface TurnRequest {
   /** Where the harness can FIND that session (D10), and the turn's own cwd. */
   readonly cwd: string;
   readonly prompt: string;
+  /** The seed file path a CREATE turn's argv substitutes for `{seed}`
+   *  (the fork create points at the spun-off task; a hub create has none).
+   *  Absent for a resume, which re-enters an existing conversation. */
+  readonly seed?: string;
 }
 
 /** A turn that must not start, and why. Typed rather than thrown: every
@@ -287,6 +292,7 @@ export const planTurn = async (request: TurnRequest): Promise<PlannedTurn | Turn
         artifact: paths.artifactPath,
         cwd,
         prompt,
+        ...(request.seed !== undefined ? { seed: request.seed } : {}),
       },
       recipe.tools,
     ),
@@ -379,23 +385,48 @@ export interface TurnOutcome {
 export const runTurn = async (planned: PlannedTurn, drive: TurnDrive): Promise<TurnOutcome> => {
   const { allowRotation, cwd, harness, launchId, paths, sessionId, strategy, turnId } = planned;
   const resuming = planned.mode === "resume";
-  await deliver(paths, {
-    t: "agent_ack",
-    id: crypto.randomUUID(),
-    turnId,
-    // NO intent: an order to revise is not an outcome, and the turn is what
-    // decides whether an edit actually follows. The prompt tells the turn to
-    // declare that itself (`lucid intent`).
-    ...(drive.covers !== undefined ? { covers: drive.covers } : {}),
-    // The ARTIFACT's session (D18): the driver acts on its behalf, and the
-    // events the turn writes must not be attributed to the driver. A handoff
-    // is not a session until its spawn succeeds, so it stays unattributed -
-    // stamping the target here made a pre-session failure look resumable.
-    ...(resuming && sessionId !== undefined ? { attendant: { harness, sessionId, cwd } } : {}),
-  }).catch(() => {
-    /* presence is advisory; a failed ack must not cancel the delivery */
-  });
+  // M9-ack: a create/handoff turn opens a fresh record. The ack is a batch
+  // claim, and a create owns no batch - appending it to a log that does not
+  // exist yet would make `agent_ack` the first event instead of
+  // `session_opened` (which the agent's own `lucid open` writes mid-spawn).
+  // Skip it on a nonexistent log; the terminator still lands on exit, and
+  // the later progress acks the turn writes land after the open.
+  const logExists = await access(paths.logPath)
+    .then(() => true)
+    .catch(() => false);
+  if (resuming || logExists) {
+    await deliver(paths, {
+      t: "agent_ack",
+      id: crypto.randomUUID(),
+      turnId,
+      // NO intent: an order to revise is not an outcome, and the turn is what
+      // decides whether an edit actually follows. The prompt tells the turn to
+      // declare that itself (`lucid intent`).
+      ...(drive.covers !== undefined ? { covers: drive.covers } : {}),
+      // The ARTIFACT's session (D18): the driver acts on its behalf, and the
+      // events the turn writes must not be attributed to the driver. A handoff
+      // is not a session until its spawn succeeds, so it stays unattributed -
+      // stamping the target here made a pre-session failure look resumable.
+      ...(resuming && sessionId !== undefined ? { attendant: { harness, sessionId, cwd } } : {}),
+    }).catch(() => {
+      /* presence is advisory; a failed ack must not cancel the delivery */
+    });
+  }
   drive.onDelivered?.();
+  // M1.6: a caller-assigned identity is known before the process exists.
+  // Recording it here - inside the pipeline - means a create that crashes
+  // before its own `lucid open` still leaves a resumable sidecar, and the
+  // daemon's pre-turn recordPendingIdentity compensation is redundant.
+  if (!resuming && sessionId !== undefined && strategy?.source === "caller-assigned") {
+    await recordPendingIdentity(paths, {
+      harness,
+      sessionId,
+      sessionIdAuthority: "assigned",
+      launchId,
+    }).catch(() => {
+      /* a sidecar write failure must not cancel the turn */
+    });
+  }
   const outputFrom = await runOutputStart(drive.outLog);
   let result: SpawnResult;
   try {

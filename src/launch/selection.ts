@@ -1,8 +1,18 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import { harnessKind } from "../core/harness.ts";
-import type { SessionPaths } from "../core/paths.ts";
+import {
+  type ArtifactSelection,
+  type Selection,
+  readSelection,
+  sanitizeSelection,
+  writeSelection,
+} from "../core/selection-sidecar.ts";
 import type { SpawnRecipe } from "./recipes.ts";
+
+// Re-export the core-owned sidecar surface (M1.9): the types, validator, and
+// reader/writer now live in `core/selection-sidecar.ts` so `core` never imports
+// `launch`. Existing callers keep importing them from here unchanged.
+export { readSelection, sanitizeSelection, writeSelection };
+export type { ArtifactSelection, Selection };
 
 /**
  * The model/effort selection adapter: how a human's pick in the viewer becomes
@@ -16,20 +26,6 @@ import type { SpawnRecipe } from "./recipes.ts";
  * reaches an argv, so a bad pick fails fast with a named error instead of a
  * dead agent turn.
  */
-
-/** A human's model/effort pick. Absent (or "default") fields emit nothing. */
-export interface Selection {
-  readonly model?: string;
-  readonly effort?: string;
-}
-
-/** The per-artifact sticky selection (`.lucid/<name>/selection.json`): the
- *  model/effort every later unattended turn reuses. `harness` records which
- *  vocabulary the pick was made in, so a resume under a different harness is
- *  detectable rather than silently misapplied. */
-export interface ArtifactSelection extends Selection {
-  readonly harness?: string;
-}
 
 /** "default" = no explicit pick (skillval's discipline): emit nothing. */
 const explicit = (value: string | undefined): string | undefined =>
@@ -146,70 +142,4 @@ export const applySelection = (
   const args = selectionArgs(harnessName, recipe, sel);
   if ("error" in args) return args;
   return insertSelectionArgs(harnessName, argv, args, template);
-};
-
-/** Bound + clean one selection field: a string with control chars stripped,
- *  trimmed, non-empty and not "default" (which means "no explicit pick"). */
-const cleanField = (value: unknown, max: number): string | undefined => {
-  if (typeof value !== "string") return undefined;
-  const cleaned = [...value]
-    .filter((ch) => {
-      const c = ch.charCodeAt(0);
-      return c > 0x1f && c !== 0x7f;
-    })
-    .join("")
-    .trim()
-    .slice(0, max);
-  return cleaned.length > 0 && cleaned !== "default" ? cleaned : undefined;
-};
-
-/** The ONE selection normalizer, shared by every reader and writer (route
- *  bodies, the sidecar file), so a malformed field is dropped - bounded,
- *  control-free - no matter which surface it arrived through. Returns
- *  undefined when nothing usable remains. */
-export const sanitizeSelection = (input: unknown): ArtifactSelection | undefined => {
-  if (!input || typeof input !== "object") return undefined;
-  const o = input as Record<string, unknown>;
-  const harness = cleanField(o.harness, 64);
-  const model = cleanField(o.model, 128);
-  const effort = cleanField(o.effort, 32);
-  if (!harness && !model && !effort) return undefined;
-  return {
-    ...(harness ? { harness } : {}),
-    ...(model ? { model } : {}),
-    ...(effort ? { effort } : {}),
-  };
-};
-
-/** `.lucid/<name>/selection.json` - the sticky per-artifact selection. */
-export const selectionPath = (paths: SessionPaths): string => paths.selectionPath;
-
-/** Read the artifact's sticky selection. Absent or unreadable = none: the
- *  sidecar is advisory, and a corrupt one must not stall delivery. */
-export const readSelection = async (
-  paths: SessionPaths,
-): Promise<ArtifactSelection | undefined> => {
-  try {
-    return sanitizeSelection(JSON.parse(await readFile(selectionPath(paths), "utf8")));
-  } catch {
-    return undefined;
-  }
-};
-
-/** Persist the artifact's sticky selection (whole-file overwrite; last write
- *  wins, like the other advisory sidecars). Normalized on the way OUT as well
- *  as in, so what is stored is exactly what `readSelection` gives back - an
- *  over-long harness name or model id that only got bounded on read would no
- *  longer match its own registry entry, and every later resume would reject
- *  the pick it just accepted. */
-export const writeSelection = async (
-  paths: SessionPaths,
-  selection: ArtifactSelection,
-): Promise<void> => {
-  const clean = sanitizeSelection(selection) ?? {};
-  // selection.json lives in run/ (plan 02); ensure it exists so a write
-  // before the record is fully set up cannot fail on a missing parent.
-  const target = selectionPath(paths);
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, `${JSON.stringify(clean, null, 2)}\n`);
 };

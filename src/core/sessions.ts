@@ -1,14 +1,11 @@
-import { Glob } from "bun";
-import { realpathSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type { SessionSummary } from "../protocol/wire.ts";
 import { discoverLiveServer, readServerDescriptor } from "../server/discovery.ts";
 import { selectOpenUrl, type View } from "../server/view.ts";
-import { artifactCheckout } from "./project.ts";
 import { readLastAttendant } from "./attendant.ts";
 import { sessionState } from "./log.ts";
 import { canonicalArtifactPath, sessionPaths } from "./paths.ts";
-import type { SessionPaths } from "./paths.ts";
+import { findRecords, recordPathsFor } from "./records.ts";
 
 // The summary is wire contract (src/protocol/wire.ts); re-exported here so
 // server-side callers keep importing it from the module that produces it.
@@ -16,11 +13,12 @@ export type { SessionSummary } from "../protocol/wire.ts";
 
 /**
  * The project a session belongs to, as a scan root: the checkout the artifact
- * SITS in (`core/project.ts` owns the rule, including why `.lucid` is never a
- * project). A listing scans this folder, so a scratchpad artifact groups where
- * its own record is, not where its agent was working.
+ * SITS in (`core/project.ts` owns the rule - `artifactCheckout` - including why
+ * `.lucid` is never a project). A listing scans this folder, so a scratchpad
+ * artifact groups where its own record is, not where its agent was working.
+ * Callers use `artifactCheckout` directly (M1.7): this used to be a one-line
+ * async wrapper only `session-host` and the tests reached for.
  */
-export const projectRoot = async (paths: SessionPaths): Promise<string> => artifactCheckout(paths);
 
 /**
  * @param view Which view the rows' `viewer` URLs are for. PASSED, never read
@@ -40,30 +38,15 @@ export const listSessions = async (
   // parent - no `.lucid` stripping (plan 02, MB.2). The old nested layout,
   // where the artifact lived OUTSIDE `.lucid/`, is gone; the migration moves
   // such records to canonical.
-  const glob = new Glob("**/log.ndjson");
+  // Every record's `log.ndjson` under the scan root, found through the one
+  // pruned walk (M1.10) rather than an unpruned glob - a listing poll must
+  // not walk every dependency tree. Resolution is the one log->artifact owner,
+  // so a row the listing shows agrees with one the registry scans.
   const sessions: SessionSummary[] = [];
 
-  for await (const rel of glob.scan({ cwd: scanRoot, dot: true, onlyFiles: true })) {
-    const parts = rel.split("/");
-    const stem = parts.at(-2);
-    if (stem === undefined) continue;
-    const artifactDir = resolve(scanRoot, ...parts.slice(0, -2));
-
+  for (const logPath of await findRecords([scanRoot])) {
     try {
-      // The record the GLOB found, not the new-layout path recomputed from the
-      // artifact dir: for a legacy `.lucid/<stem>/` row those differ, the
-      // recomputed file does not exist, a missing log reads as `{events: []}`,
-      // and the fold's `none` dropped every legacy session from the listing
-      // while its log sat right where the glob had seen it. It is passed as the
-      // record dir rather than patched over `logPath` so the whole struct
-      // agrees with itself (`core/paths.ts` has the why), and realpath'd
-      // because `sessionPaths` canonicalizes everything else: `/tmp/x` and
-      // `/private/tmp/x` are two keys for one log in the shared fold cache,
-      // which would then hold - and re-fold - the same session twice per poll.
-      const found: SessionPaths = sessionPaths(
-        resolve(artifactDir, `${stem}.html`),
-        dirname(realpathSync(resolve(scanRoot, rel))),
-      );
+      const found = await recordPathsFor(logPath);
       const state = await sessionState(found);
       if (state.status === "none") continue;
 
@@ -71,12 +54,10 @@ export const listSessions = async (
       // root is whatever spelling the roots file holds, and a listing row that
       // reported `/tmp/x.html` while the session's own server reported
       // `/private/tmp/x.html` gave the shell two keys for one session - the tab
-      // it opened could never be found again.
-      const reconstructed = canonicalArtifactPath(
-        resolve(artifactDir, state.artifact || `${stem}.html`),
-      );
-      const descriptor = await readServerDescriptor(sessionPaths(reconstructed));
-      const artifactPath = canonicalArtifactPath(descriptor?.session ?? reconstructed);
+      // it opened could never be found again. `recordPathsFor` already
+      // canonicalized; the descriptor may point at a moved artifact.
+      const descriptor = await readServerDescriptor(found);
+      const artifactPath = canonicalArtifactPath(descriptor?.session ?? found.artifactPath);
       const canonical = sessionPaths(artifactPath);
       // Independent reads, and the first can burn a full handshake timeout on
       // a stale descriptor - inside a per-session loop the shell polls, so
