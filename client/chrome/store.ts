@@ -1,6 +1,7 @@
 import { warningText } from "./warnings.ts";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { parseAnchor, type Anchor } from "../../src/anchors/anchor.ts";
+import { numberAnnotations } from "../shared/numbering.ts";
 import type {
   AgentWorking,
   AttendantPresence,
@@ -839,8 +840,18 @@ export const buildTimeline = (
   verdicts: readonly ReviewVerdict[] = [],
   cleared: RecordCleared | null = null,
 ): TimelineItem[] => {
-  let located = 0;
   const sentIds = new Set(annotations.map((a) => a.id));
+  // A queued item whose id ALREADY appears in `annotations` is dropped here,
+  // because this function is where the two id-spaces are joined and therefore
+  // the only place the "one id, one entry" invariant can be enforced against
+  // every writer. Two entries sharing an id make assistant-ui's
+  // MessageRepository throw, unmounting the whole whole viewer. The sent form
+  // wins: it is the one the log has.
+  const queuedUnique = queue.filter((q) => !sentIds.has(q.id));
+  // The one numbering rule (M4.1): resolved annotations number in record
+  // order (orphans skipped - they have no mark), then queued continue the
+  // count. Shared with the overlay markers so a card and its badge agree.
+  const numbers = numberAnnotations(annotations, queuedUnique);
   return [
     ...annotations.map((annotation) => ({
       kind: "annotation" as const,
@@ -848,34 +859,20 @@ export const buildTimeline = (
       // 8:54 happened at 8:50, and must not leapfrog the messages in between.
       at: annotation.authoredAt ?? annotation.at,
       // Only a located anchor takes a number: the badge exists to match a mark
-      // on the surface, and an orphan has no mark. Counting them would shift
-      // every later card off its own badge.
-      index: annotation.resolved ? ++located : null,
+      // on the surface, and an orphan (not in the map) has none. Counting them
+      // would shift every later card off its own badge.
+      index: numbers.get(annotation.id) ?? null,
       annotation,
     })),
     // Unsent queue items hold their place in the record from the moment they
-    // were written - the same instant their sent form will occupy.
-    // CONTINUES the located count: a queued note is the next number, not a
-    // second number 1. Restarting the count put two "1" badges on the same
-    // element and two cards labelled "1" in the panel.
-    //
-    // A queued item whose id ALREADY appears in `annotations` is dropped
-    // here, because this function is where the two id-spaces are joined and
-    // therefore the only place the "one id, one entry" invariant can be
-    // enforced against every writer. A queued item sends under its own id,
-    // so between its POST landing and `sendQueue` filtering the queue the
-    // same id is in both lists - and two entries sharing an id make
-    // assistant-ui's MessageRepository throw, unmounting the whole viewer to
-    // a blank page (measured; every unsent note lost with it). The sent form
-    // wins: it is the one the log has.
-    ...queue
-      .filter((q) => !sentIds.has(q.id))
-      .map((q, i) => ({
-        kind: "queued" as const,
-        at: q.at,
-        index: located + i + 1,
-        id: q.id,
-      })),
+    // were written - the same instant their sent form will occupy - continuing
+    // the resolved count so a queued note is the next number, not a second 1.
+    ...queuedUnique.map((q) => ({
+      kind: "queued" as const,
+      at: q.at,
+      index: numbers.get(q.id)!,
+      id: q.id,
+    })),
     ...messages.map((message) => ({ kind: "message" as const, at: message.at, message })),
     // `answeredAt` is the answer's own moment; older logs (and any server that
     // predates the field) fall back to the ask time rather than vanishing.

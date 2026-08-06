@@ -70,6 +70,37 @@ describe("close", () => {
   });
 });
 
+describe("close whole-protocol (M4.3: one door)", () => {
+  test("dispose runs before the roster drops, then the promoted tab is activated", () => {
+    // The whole close protocol is one call (M4.3): dispose the stream/surface,
+    // drop the roster, then activate the promoted neighbor - in that order, so
+    // a disconnect never races the activate that reconnects the promoted tab.
+    useShell.setState({ sessionKeys: ["a", "b", "c"], activeKey: "b" });
+    const order: string[] = [];
+    const result = close("b", {
+      dispose: (k) => order.push(`dispose:${k}`),
+      activate: (k) => order.push(`activate:${k}`),
+    });
+    expect(result.wasActive).toBe(true);
+    expect(result.promoted).toBe("c");
+    // Dispose ran first, activate ran last with the promoted neighbor.
+    expect(order).toEqual(["dispose:b", "activate:c"]);
+    expect(useShell.getState().activeKey).toBe("c");
+  });
+
+  test("a background-tab close disposes but does not activate", () => {
+    useShell.setState({ sessionKeys: ["a", "b"], activeKey: "a" });
+    let activated: string | null = null;
+    close("b", {
+      dispose: () => {},
+      activate: (k) => {
+        activated = k;
+      },
+    });
+    expect(activated).toBeNull();
+  });
+});
+
 describe("streamCap", () => {
   test("defaults to MAX_CONNECTED (10)", () => {
     expect(streamCap()).toBe(MAX_CONNECTED);
