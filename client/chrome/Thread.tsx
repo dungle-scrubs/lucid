@@ -40,27 +40,30 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
  * scroll behaviour; Lucid owns what the entries mean.
  */
 
-const Thumb = ({ src, alt }: { readonly src: string; readonly alt: string }) => (
-  <Tooltip>
-    <TooltipTrigger
-      render={
-        <button
-          type="button"
-          data-test="thumb"
-          className="cursor-zoom-in focus-visible:annot-outline"
-          onClick={() => window.dispatchEvent(new CustomEvent("lucid:lightbox", { detail: src }))}
-        >
-          <img
-            className="block h-[66px] w-[88px] border border-ink-600 object-cover hover:border-accent"
-            src={src}
-            alt={alt}
-          />
-        </button>
-      }
-    />
-    <TooltipContent>{alt}</TooltipContent>
-  </Tooltip>
-);
+const Thumb = ({ src, alt }: { readonly src: string; readonly alt: string }) => {
+  const openLightbox = useSessionHandle().actions.openLightboxForSrc;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            data-test="thumb"
+            className="cursor-zoom-in focus-visible:annot-outline"
+            onClick={() => openLightbox(src)}
+          >
+            <img
+              className="block h-[66px] w-[88px] border border-ink-600 object-cover hover:border-accent"
+              src={src}
+              alt={alt}
+            />
+          </button>
+        }
+      />
+      <TooltipContent>{alt}</TooltipContent>
+    </Tooltip>
+  );
+};
 
 /** The human's own turns stay verbatim: what they typed is a quote, not a
  *  document, so it renders as plain text (no markdown surprises on a stray

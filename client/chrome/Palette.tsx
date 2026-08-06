@@ -32,7 +32,7 @@ const AnnotationItems = ({ handle }: { readonly handle: SessionHandle }) => {
           className={itemCls}
           onSelect={() => {
             setPaletteOpen(false);
-            window.dispatchEvent(new CustomEvent("lucid:reveal-annotation", { detail: a.id }));
+            handle.actions.revealMark(a.id);
             document
               .querySelector(`[data-annotation-id="${a.id}"]`)
               ?.scrollIntoView({ behavior: "smooth", block: "center" });

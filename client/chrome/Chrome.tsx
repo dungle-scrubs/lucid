@@ -168,26 +168,9 @@ const useSessionWiring = (
     };
     window.addEventListener("message", onMessage);
 
-    // The chrome's own cards ask the overlay to light up their mark.
-    const onFocusAnnotation = (e: Event): void => {
-      const id = (e as CustomEvent<string>).detail;
-      surface.emphasize(id, false);
-    };
-    window.addEventListener("lucid:focus-annotation", onFocusAnnotation);
-
-    // Enter on a focused card: light the mark AND scroll the surface to it.
-    const onRevealAnnotation = (e: Event): void => {
-      const id = (e as CustomEvent<string>).detail;
-      surface.emphasize(id, true);
-    };
-    window.addEventListener("lucid:reveal-annotation", onRevealAnnotation);
-
-    // A thumb asks for the lightbox by URL; the action resolves it back to the
-    // message's image list so the arrows can step through the set it came from.
-    const onLightbox = (e: Event): void => {
-      actions.openLightboxForSrc((e as CustomEvent<string>).detail);
-    };
-    window.addEventListener("lucid:lightbox", onLightbox);
+    // M4.2: the chrome's cards call SessionActions (focusMark/revealMark/
+    // openLightboxForSrc) directly now - the `lucid:*` CustomEvent bus and
+    // these three relays are gone.
 
     // Hunk navigation is a window listener, so it would otherwise steal arrows
     // from the caret and Escape from a composer while a text field has focus.
@@ -252,9 +235,6 @@ const useSessionWiring = (
 
     return () => {
       window.removeEventListener("message", onMessage);
-      window.removeEventListener("lucid:focus-annotation", onFocusAnnotation);
-      window.removeEventListener("lucid:reveal-annotation", onRevealAnnotation);
-      window.removeEventListener("lucid:lightbox", onLightbox);
       window.removeEventListener("keydown", onDiffKey);
       window.removeEventListener("keydown", onSendKey);
       window.removeEventListener("keydown", onPanelKey);

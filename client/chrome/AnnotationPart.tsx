@@ -25,19 +25,6 @@ export interface AnnotationData {
   readonly images?: readonly { readonly name: string; readonly file: string }[];
 }
 
-/** The transient hover light - the mark glows while the pointer (or keyboard
- *  focus) is on the card and goes out when it leaves. Distinct from the card's
- *  Focus link, which pins the mark until something else takes the focus. */
-const lightMark = (id: string): void => {
-  window.dispatchEvent(new CustomEvent("lucid:focus-annotation", { detail: id }));
-};
-
-/** Lighting shows the mark; reveal also scrolls the surface to it. The keyboard
- *  "open": a reader on the card who wants to look at the thing it points at. */
-const reveal = (id: string): void => {
-  window.dispatchEvent(new CustomEvent("lucid:reveal-annotation", { detail: id }));
-};
-
 /**
  * A sent annotation, rendered inline in the transcript where it was sent.
  *
@@ -50,7 +37,7 @@ const reveal = (id: string): void => {
  * pointed at is still what the note is about.
  */
 export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data }) => {
-  const { setHovered, openLightbox, toggleFocus } = useActions();
+  const { setHovered, openLightbox, toggleFocus, focusMark, revealMark } = useActions();
   const { transport } = useSessionHandle();
   const hovered = useSession((s) => s.hoveredId === data.id);
   // The card's own focus, not the header's all-at-once: with everything lit
@@ -65,11 +52,11 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
   const positional = !orphaned && data.confidence === "low";
   const enter = (): void => {
     setHovered(data.id);
-    lightMark(data.id);
+    focusMark(data.id);
   };
   const leave = (): void => {
     setHovered(null);
-    lightMark("");
+    focusMark("");
   };
   return (
     // A labelled <section> rather than a div+role: it carries the region role
@@ -98,7 +85,7 @@ export const AnnotationPart: DataMessagePartComponent<AnnotationData> = ({ data 
               if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                reveal(data.id);
+                revealMark(data.id);
               }
             }
       }
