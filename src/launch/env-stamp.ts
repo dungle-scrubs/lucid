@@ -26,6 +26,14 @@ export const LUCID_ENV_FIELDS = {
 /** The hub port env var (not a stamp field; used for `lucid open`). */
 export const LUCID_HUB_PORT = "LUCID_HUB_PORT";
 
+/** The non-identity environment a spawned child needs (M2.7): the hub port a
+ *  `lucid open` inside the turn dials back. Rides a unit here rather than as
+ *  a trailing arg or a stamp field, so the launch-env surface has one home
+ *  (a registry-source field joins it when the CLI needs to pass one). */
+export interface LaunchEnv {
+  readonly hubPort?: number;
+}
+
 /** Every LUCID_* env var that must be CLEARED when no identity is passed,
  *  so a fork child does not inherit its parent's identity. */
 export const LUCID_CLEAR_KEYS = Object.values(LUCID_ENV_FIELDS);
@@ -45,7 +53,7 @@ export const buildSpawnEnv = (
     readonly turnId?: string;
   } | null,
   discovered: boolean,
-  hubPort?: number,
+  launchEnv?: LaunchEnv,
 ): NodeJS.ProcessEnv => ({
   ...process.env,
   ...(identity
@@ -59,7 +67,9 @@ export const buildSpawnEnv = (
         [LUCID_ENV_FIELDS.effort]: identity.effort,
         [LUCID_ENV_FIELDS.trace]: identity.requestId,
         [LUCID_ENV_FIELDS.turnId]: identity.turnId,
-        ...(hubPort !== undefined ? { [LUCID_HUB_PORT]: String(hubPort) } : {}),
+        ...(launchEnv?.hubPort !== undefined
+          ? { [LUCID_HUB_PORT]: String(launchEnv.hubPort) }
+          : {}),
       }
     : Object.fromEntries(LUCID_CLEAR_KEYS.map((k) => [k, undefined]))),
 });
