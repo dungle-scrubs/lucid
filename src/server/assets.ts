@@ -36,6 +36,17 @@ const EMBEDDED: Readonly<Record<BundleAsset, string>> = {
   "favicon.ico": FAVICON_SVG,
 };
 
+/** A JSON response. The one helper (M3.3): both servers used to inline an
+ *  identical copy. */
+export const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", ...headers },
+  });
+
+/** `Cache-Control: no-store`, for responses that must never be cached. */
+export const noStore = { "cache-control": "no-store" } as const;
+
 /**
  * Serve one bundle asset.
  *

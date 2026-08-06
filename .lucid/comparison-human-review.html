@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en" data-lucid-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lucid vs. Human Review</title>
+<style>
+  :root {
+    --paper:     #faf6ec;
+    --ink:       #211d15;
+    --ink-muted: #5e6773;
+    --rule:      rgba(33, 29, 21, 0.12);
+    --rule-strong: rgba(33, 29, 21, 0.22);
+    --accent:    #7b6228;
+    --accent-wash: rgba(203, 168, 90, 0.16);
+    --serif: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:     #211d15;
+      --ink:       #ece3cf;
+      --ink-muted: #a89d84;
+      --rule:      rgba(236, 227, 207, 0.14);
+      --rule-strong: rgba(236, 227, 207, 0.28);
+      --accent:    #d9bd7a;
+      --accent-wash: rgba(203, 168, 90, 0.18);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--paper); }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 18px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 64px 32px 96px; }
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 12px;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-size: 40px;
+    line-height: 1.12;
+    margin: 0 0 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .dek {
+    font-size: 20px;
+    line-height: 1.5;
+    color: var(--ink-muted);
+    margin: 0 0 8px;
+    max-width: 62ch;
+  }
+  .meta {
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--ink-muted);
+    margin: 28px 0 0;
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .meta span { display: inline-flex; align-items: baseline; gap: 6px; }
+  .meta code { font-family: var(--mono); font-size: 12px; }
+
+  section { margin-top: 56px; }
+  h2 {
+    font-family: var(--serif);
+    font-size: 26px;
+    line-height: 1.25;
+    margin: 0 0 16px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+  p { margin: 0 0 16px; max-width: 66ch; }
+  p + p { margin-top: -4px; }
+
+  .lead { padding: 4px 0; }
+  .pull {
+    border-left: 2px solid var(--accent);
+    padding: 4px 0 4px 20px;
+    margin: 8px 0 20px;
+    color: var(--ink-muted);
+    font-style: italic;
+    max-width: 62ch;
+  }
+
+  /* Comparison matrix - uniform grid, no spanning cells, so auto-flow is safe. */
+  .matrix {
+    display: grid;
+    grid-template-columns: 160px 1fr 1fr;
+    border-top: 1px solid var(--rule-strong);
+    margin-top: 8px;
+  }
+  .matrix .h {
+    font-family: var(--sans);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    padding: 18px 16px 12px;
+    border-bottom: 1px solid var(--rule-strong);
+  }
+  .matrix .h.lbl { color: var(--ink-muted); }
+  .matrix .dim {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    padding: 18px 16px;
+    border-bottom: 1px solid var(--rule);
+    align-self: start;
+  }
+  .matrix .cell {
+    font-family: var(--serif);
+    font-size: 16px;
+    line-height: 1.5;
+    padding: 18px 16px;
+    border-bottom: 1px solid var(--rule);
+    border-left: 1px solid var(--rule);
+    min-width: 0;
+    overflow-wrap: break-word;
+  }
+  .matrix .cell code {
+    font-family: var(--mono);
+    font-size: 14px;
+  }
+  @media (max-width: 680px) {
+    .wrap { padding: 40px 20px 64px; }
+    h1 { font-size: 30px; }
+    .matrix { grid-template-columns: 1fr; }
+    .matrix .dim, .matrix .cell { border-left: none; padding: 10px 0; }
+    .matrix .h { padding: 14px 0 6px; }
+    .matrix .cell { border-bottom: none; padding-bottom: 4px; }
+    .matrix .row-sep { border-top: 1px solid var(--rule); }
+  }
+
+  .bet {
+    padding: 20px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .bet:first-of-type { border-top: none; padding-top: 4px; }
+  .bet h3 {
+    font-family: var(--sans);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  .bet h3 .num { color: var(--ink-muted); margin-right: 8px; }
+
+  .fits {
+    display: flex;
+    gap: 24px;
+    margin-top: 12px;
+  }
+  .fit {
+    flex: 1 1 0;
+    min-width: 0;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 22px 22px 20px;
+    background: var(--paper);
+  }
+  .fit h4 {
+    font-family: var(--sans);
+    font-size: 14px;
+    margin: 0 0 12px;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .fit p { font-size: 16px; line-height: 1.55; margin: 0; max-width: none; }
+  .fit p + p { margin-top: 10px; }
+  @media (max-width: 680px) {
+    .fits { flex-direction: column; }
+  }
+
+  .footnote {
+    margin-top: 56px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--ink-muted);
+    line-height: 1.6;
+  }
+  .footnote a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">Comparison</p>
+  <h1>Lucid vs. Human Review</h1>
+  <p class="dek" data-lucid-id="framing">
+    Two tools that found the same problem and the same fix, then made opposite
+    bets about who holds the pen, what is under review, and whether the review
+    leaves a record.
+  </p>
+  <div class="meta">
+    <span>Human Review <code>v0.4.0</code></span>
+    <span>Lucid <code>v0.4.0</code></span>
+    <span>Both local, no account, no cloud</span>
+  </div>
+
+  <section>
+    <h2>The same idea</h2>
+    <div class="lead" data-lucid-id="shared-core">
+      <p>
+        Both start from one complaint: giving an agent feedback in chat is
+        serial and lossy. You type "in the third paragraph, change X to Y", the
+        agent regenerates the whole thing, and you re-read it to check whether
+        it understood. Most of what a review costs is that round trip, one
+        message at a time.
+      </p>
+      <p>
+        Both reach the same fix. The agent writes or points at a file, a browser
+        opens it, you mark up as many places as actually need changing, and you
+        send the whole batch back in one pass. The agent receives located
+        feedback, applies it, and the page refreshes for another round. Both are
+        harness-agnostic through a CLI plus a skill, both run entirely on your
+        machine, and both target the same terminal agents.
+      </p>
+      <p class="pull">
+        The agreement ends at "open it in a browser and send a batch back."
+        Everything after that is a different product.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where they diverge</h2>
+    <div class="matrix" data-lucid-id="matrix">
+
+      <div class="h lbl">Dimension</div>
+      <div class="h">Human Review</div>
+      <div class="h">Lucid</div>
+
+      <div class="dim">What it reviews</div>
+      <div class="cell">Your existing files - HTML and Markdown - and a live <code>localhost</code> page. Edits route back into source like MDX or TSX.</div>
+      <div class="cell">An artifact the agent authors as its response: a plan, spec, or wireframe. Not your repo's source.</div>
+
+      <div class="dim">Who revises</div>
+      <div class="cell">You edit the text yourself. The agent transcribes your exact words back to the source.</div>
+      <div class="cell">You point and comment. The agent rewrites. A note is never approval; only an Approve signal is.</div>
+
+      <div class="dim">Direct editing</div>
+      <div class="cell">Type, bold and italic, lists, image resize, delete elements - all in place.</div>
+      <div class="cell">Comments and selections only. No inline text edits; the agent owns the wording.</div>
+
+      <div class="dim">Anchoring</div>
+      <div class="cell">One strategy: selected quote plus prefix and suffix context, with a character-offset fallback.</div>
+      <div class="cell">Layered. Element id, then content fingerprint, then DOM path; text quote plus context plus offset. Orphans are flagged, not silently dropped.</div>
+
+      <div class="dim">Persistence</div>
+      <div class="cell">Transient. The agent polls, applies, acknowledges. No history of versions or the exchange.</div>
+      <div class="cell">Committed. An append-only event log and version snapshots live beside the artifact and travel in git.</div>
+
+      <div class="dim">Many at once</div>
+      <div class="cell">One file, one server, one browser tab.</div>
+      <div class="cell">A hub plus a shell - one window, a tab per artifact, cross-project discovery, a solo view for embedded chat apps.</div>
+
+      <div class="dim">Decisions</div>
+      <div class="cell">None. Edits and comments only.</div>
+      <div class="cell"><code>data-lucid-decision</code> items offer one-tap Agree or Decline; <code>lucid ask</code> puts multiple-choice questions, with option previews, to the human.</div>
+
+      <div class="dim">Approval</div>
+      <div class="cell">Implicit. You stop sending when you are done.</div>
+      <div class="cell">First-class. Approve and Reopen are distinct signals the agent is told to obey, separate from suspend and end.</div>
+
+      <div class="dim">Harness support</div>
+      <div class="cell">Claude Code, Codex, ChatGPT, and generic agents.</div>
+      <div class="cell">Claude Code, Codex, and pi, with provenance stamps, resume commands, and cross-harness handoff.</div>
+
+      <div class="dim">Runtime</div>
+      <div class="cell">npm package. <code>npx -y human-review</code>, Node 20 and up, one dependency (<code>marked</code>).</div>
+      <div class="cell">Compiled Bun single binary. Effect core, Lit plus Shadow DOM overlay. A decision ledger of dozens of invariants.</div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>The bet each makes</h2>
+
+    <div class="bet" data-lucid-id="bet-pen">
+      <h3><span class="num">1</span>Who holds the pen</h3>
+      <p>
+        Human Review trusts your fingers. You correct the sentence yourself, and
+        the agent's only job is to carry that exact wording into the source -
+        Markdown, MDX, TSX. The agent is a transcriptionist. It cannot
+        misunderstand your fix because you made the fix.
+      </p>
+      <p>
+        Lucid keeps the pen with the agent. Your note says <em>this is wrong
+        because X</em>, and the agent rewrites. The agent is an author you are
+        editing. Direct editing is faster for small copy fixes and never
+        misreads intent, but it cannot ask the agent to rethink a section - you
+        can only override words. Comment-and-revise is slower per fix, but the
+        agent can restructure, and the review stays a dialogue instead of a
+        marked-up manuscript.
+      </p>
+    </div>
+
+    <div class="bet" data-lucid-id="bet-object">
+      <h3><span class="num">2</span>What is on the table</h3>
+      <p>
+        Human Review reviews things that already exist: your files, and - this
+        is its distinctive move - your running app on localhost. It walks your
+        browser edits back into the code that renders the page. It is a review
+        tool for product you are building.
+      </p>
+      <p>
+        Lucid reviews a thing the agent just wrote. Its README is explicit that
+        it is not for reviewing code or your repository's source; it is a
+        presentation layer for the agent's response. The two overlap only where
+        an agent's response happens to be an HTML or Markdown file. By default
+        they point at different objects.
+      </p>
+    </div>
+
+    <div class="bet" data-lucid-id="bet-record">
+      <h3><span class="num">3</span>Whether there is a record</h3>
+      <p>
+        This is the widest gap, and it is deliberate on both sides. Human
+        Review's feedback is a transient batch: poll, apply, acknowledge, gone.
+        Lucid treats the review as a first-class, committed object - an
+        append-only log, version snapshots, the full annotation and conversation
+        history, co-located with the artifact and meant to travel in git. You
+        can reopen a review next week, or on another machine, and the state is
+        re-derived from the log.
+      </p>
+      <p>
+        Human Review is a light utility you can install in five seconds. Lucid
+        is a review system whose cost is a compiled binary and a larger surface
+        to learn. The record is most of what you are paying that cost for.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Which fits</h2>
+    <div class="fits">
+      <div class="fit" data-lucid-id="fit-hr">
+        <h4>Reach for Human Review</h4>
+        <p>You want to fix copy and layout yourself rather than describe the fix.</p>
+        <p>You review a live localhost page and want edits to land in the source behind it.</p>
+        <p>You want something you can run with <code>npx</code> and no setup, and you do not need review history.</p>
+      </div>
+      <div class="fit" data-lucid-id="fit-lucid">
+        <h4>Reach for Lucid</h4>
+        <p>The agent's response is itself the document under review, and you want it revised, not transcribed.</p>
+        <p>You need decisions and questions as first-class, and an Approve signal the agent obeys.</p>
+        <p>You want the review committed, resumable, and open across many artifacts in one window.</p>
+      </div>
+    </div>
+  </section>
+
+  <p class="footnote">
+    Sources: <a href="https://github.com/petergyang/human-review">petergyang/human-review</a>
+    README and <code>src/SKILL.md</code>; Lucid <code>README.md</code>, <code>CONTEXT.md</code>,
+    and <code>skills/lucid/SKILL.md</code>. Both at v0.4.0.
+  </p>
+
+</div>
+</body>
+</html>

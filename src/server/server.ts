@@ -123,22 +123,17 @@ export const runServer = async (
   });
 
   // ---- idle suspend ----------------------------------------------------------
-  let idleTimer: ReturnType<typeof setInterval> | undefined;
-  if (idleMs > 0) {
-    idleTimer = setInterval(
-      () => {
-        if (Date.now() - host.lastActivityAt() > idleMs && !stopped) {
-          void (async () => {
-            // Suspend appends + broadcasts BEFORE stop() closes the streams,
-            // so subscribers learn of it. Refused = a subscriber connected in
-            // the gap; the server stays up for them.
-            if (await host.suspend()) await stop();
-          })();
-        }
-      },
-      Math.min(idleMs, 5000),
-    );
-  }
+  // The policy is the host's (M3.2): one poll/suspend/onSuspended shape,
+  // shared with the hub's mounts. The server passes its `!stopped` flag as
+  // the gate so a stopping server never suspends, and `stop` as the action.
+  const idleTimer = host.startIdlePolicy(
+    idleMs,
+    // Suspend appends + broadcasts BEFORE stop() closes the streams, so
+    // subscribers learn of it. Refused = a subscriber connected in the gap;
+    // the server stays up for them.
+    () => stop(),
+    () => !stopped,
+  );
 
   return done;
 };

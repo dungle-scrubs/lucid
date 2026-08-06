@@ -55,7 +55,7 @@ import {
   type RequestObservation,
 } from "./observe.ts";
 import { setNarrationSink, warnUnknownSubsystems } from "../core/verbose.ts";
-import { serveBundleAsset } from "./assets.ts";
+import { json, noStore, serveBundleAsset } from "./assets.ts";
 import { CLIENT_BUNDLE_HASH } from "./client-bundle.generated.ts";
 import { devBundleStamp } from "./dev-assets.ts";
 import {
@@ -193,14 +193,6 @@ export interface DaemonHandle {
   readonly port: number;
   stop(): Promise<void>;
 }
-
-const noStore = { "cache-control": "no-store" } as const;
-
-const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", ...headers },
-  });
 
 /**
  * Start the hub daemon. Foreground callers keep the returned handle and await
@@ -384,7 +376,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     observation.attach({ artifact });
 
     const mounted = mounts.get(id);
-    if (mounted) return mounted.host.handle(req, subPath, observation);
+    if (mounted) return mounted.handle(req, subPath, observation);
 
     const paths = sessionPaths(artifact);
 
@@ -483,7 +475,7 @@ export const runDaemon = async (opts: DaemonOptions = {}): Promise<DaemonHandle>
     }
 
     const m = await mounts.mount(id, artifact);
-    if (m !== undefined) return m.host.handle(req, subPath, observation);
+    if (m !== undefined) return m.handle(req, subPath, observation);
     // A dedicated server took over between our check and the mount: fall
     // through to proxy. The next request will discover it fresh.
     const liveServer = await discoverLiveServer(paths);

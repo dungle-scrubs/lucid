@@ -21,13 +21,22 @@ import {
   writeServerDescriptor,
 } from "./discovery.ts";
 
-/** A hosted session: its host, timers, and optional attend watcher. */
-export interface Mount {
+/** A hosted session's internal record: its host, timers, and optional attend
+ *  watcher. Closed over by the module - never returned to the daemon, which
+ *  reaches a mount only through its `handle` (M3.2 narrowing). */
+interface HostedSession {
   readonly paths: SessionPaths;
   readonly host: SessionHost;
-  readonly idleTimer: ReturnType<typeof setInterval>;
+  readonly idleTimer?: ReturnType<typeof setInterval>;
   readonly attendant?: Attendant;
   readonly attendTimer?: ReturnType<typeof setInterval>;
+}
+
+/** A hosted session's single outward surface: route a request to its host. The
+ *  daemon cannot reach a mount's timers, paths, or attendant - only forward a
+ *  request - so a mount's lifecycle is the module's alone (M3.2). */
+export interface Mount {
+  readonly handle: SessionHost["handle"];
 }
 
 export interface MountsOptions {
@@ -65,7 +74,7 @@ export interface Mounts {
  *  ownership, and attend wiring live here; the daemon provides factories and
  *  runtime state. */
 export const createMounts = (opts: MountsOptions): Mounts => {
-  const mounts = new Map<string, Mount>();
+  const mounts = new Map<string, HostedSession>();
   const port = opts.port;
   const pid = process.pid;
 
@@ -74,7 +83,7 @@ export const createMounts = (opts: MountsOptions): Mounts => {
     if (!mount) return;
     opts.log(`[hub] session ${id}: evicting (${mount.paths.artifactPath})`);
     mounts.delete(id);
-    clearInterval(mount.idleTimer);
+    if (mount.idleTimer) clearInterval(mount.idleTimer);
     if (mount.attendTimer) clearInterval(mount.attendTimer);
     mount.attendant?.stop();
     mount.host.stop();
@@ -91,7 +100,7 @@ export const createMounts = (opts: MountsOptions): Mounts => {
     }
     opts.log(`[hub] session ${id}: hosting ${artifact}`);
     const existing = mounts.get(id);
-    if (existing) return existing;
+    if (existing) return { handle: existing.host.handle };
     const paths = opts.sessionPaths(artifact);
     const base = `/s/${id}`;
     const host = createSessionHost(paths, {
@@ -99,18 +108,11 @@ export const createMounts = (opts: MountsOptions): Mounts => {
       base,
       ...(opts.harnessesPath !== undefined ? { harnessesPath: opts.harnessesPath } : {}),
       onEnded: () => void evict(id),
-      upgrade: opts.upgrade as never,
+      upgrade: opts.upgrade,
     });
-    const idleTimer = setInterval(
-      () => {
-        if (Date.now() - host.lastActivityAt() > opts.sessionIdleMs) {
-          void (async () => {
-            if (await host.suspend()) await evict(id);
-          })();
-        }
-      },
-      Math.min(opts.sessionIdleMs, 5000),
-    );
+    // The hub's mount idle policy is the host's (M3.2): an unconditional mount
+    // has no stopped-gate (it always checks idle), and evicts on suspend.
+    const idleTimer = host.startIdlePolicy(opts.sessionIdleMs, () => evict(id));
     const attendant = opts.attend
       ? createAttendant({
           paths,
@@ -126,7 +128,7 @@ export const createMounts = (opts: MountsOptions): Mounts => {
     const attendTimer = attendant
       ? setInterval(() => void attendant.tick(), opts.attendPollMs)
       : undefined;
-    const created: Mount = {
+    const created: HostedSession = {
       paths,
       host,
       idleTimer,
@@ -153,7 +155,7 @@ export const createMounts = (opts: MountsOptions): Mounts => {
       throw err;
     }
     mounts.set(id, created);
-    return created;
+    return { handle: created.host.handle };
   };
 
   const stopAll = async (): Promise<void> => {
@@ -165,7 +167,10 @@ export const createMounts = (opts: MountsOptions): Mounts => {
     evict,
     stopAll,
     has: (id) => mounts.has(id),
-    get: (id) => mounts.get(id),
+    get: (id) => {
+      const rec = mounts.get(id);
+      return rec ? { handle: rec.host.handle } : undefined;
+    },
     isEmpty: () => mounts.size === 0,
   };
 };

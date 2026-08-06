@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import { parseHTML } from "linkedom";
 import { basename, join } from "node:path";
-import { parseAnchor, type Anchor } from "../anchors/anchor.ts";
+import { parseAnchor } from "../anchors/anchor.ts";
 import {
   asString,
   decodeAck,
@@ -26,7 +26,7 @@ import { artifactAttendant } from "../core/attendant.ts";
 import { sanitizeContext, writeContextSidecar } from "../core/context.ts";
 import { diffHtml } from "../diff/diff.ts";
 import { versionRef } from "../core/fold.ts";
-import { sanitizeAttendant } from "../core/events.ts";
+import { decodeAnchorList, decodeAttendant, decodeImages } from "../protocol/inbound.ts";
 import { appendSessionBindings } from "../core/deliver.ts";
 import {
   legacyProjection,
@@ -37,7 +37,7 @@ import {
   validateAnswer,
   validateGroup,
 } from "../core/question-contract.ts";
-import type { AttendantStamp, EventInput, LogEvent, PromptImage } from "../core/events.ts";
+import type { EventInput, LogEvent } from "../core/events.ts";
 import { appendEvents, appendIfStatus, sessionState } from "../core/log.ts";
 import type { SessionPaths } from "../core/paths.ts";
 import { listSessions } from "../core/sessions.ts";
@@ -68,9 +68,9 @@ import type {
   SessionsResponse,
 } from "../protocol/wire.ts";
 import { multiTargets } from "../protocol/wire.ts";
-import { serveBundleAsset } from "./assets.ts";
+import { json, noStore, serveBundleAsset } from "./assets.ts";
 import { createChannel, wantsUpgrade, type Subscriber, type Upgrade } from "./live.ts";
-import { resolveAsset, validateHeaders } from "./security.ts";
+import { contentTypeFor, resolveAsset, validateHeaders } from "./security.ts";
 import { artifactDocumentResponse, viewerResponse } from "./viewer.ts";
 
 /**
@@ -109,69 +109,10 @@ const IMAGE_EXT: Readonly<Record<string, string>> = {
   "image/avif": "avif",
   "image/svg+xml": "svg",
 };
-const ASSET_CONTENT_TYPE: Readonly<Record<string, string>> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  avif: "image/avif",
-  svg: "image/svg+xml",
-};
 const MAX_ASSET_BYTES = 20 * 1024 * 1024;
-
-/** Validate a browser-supplied pasted-image manifest. */
-const parseImages = (input: unknown): PromptImage[] => {
-  if (!Array.isArray(input)) return [];
-  const out: PromptImage[] = [];
-  for (const item of input) {
-    if (
-      item &&
-      typeof item === "object" &&
-      typeof (item as PromptImage).id === "string" &&
-      typeof (item as PromptImage).name === "string" &&
-      typeof (item as PromptImage).file === "string" &&
-      /^[a-f0-9-]+\.[a-z]+$/i.test((item as PromptImage).file)
-    ) {
-      const it = item as PromptImage;
-      out.push({ id: it.id, name: it.name.slice(0, 120), file: it.file });
-    }
-  }
-  return out;
-};
 
 /** A multi-anchor list is bounded so a runaway client cannot flood the log
  *  with one POST; the chrome caps collection at the same number. */
-const MAX_ANCHORS = 8;
-
-/**
- * Validate an optional multi-anchor list (`targets` on an annotation,
- * `anchors` on an answer). Every element goes through parseAnchor and ONE
- * invalid element rejects the whole POST - a half-valid list would store a
- * note claiming spots it does not have. Returns undefined when the field is
- * absent or empty, so callers fall back to the single-anchor form.
- */
-const parseAnchorList = (
-  input: unknown,
-  field: string,
-): Anchor[] | { readonly error: string } | undefined => {
-  if (input === undefined) return undefined;
-  if (!Array.isArray(input)) return { error: `${field} must be an array` };
-  if (input.length === 0) return undefined;
-  if (input.length > MAX_ANCHORS) return { error: `too many ${field} (max ${MAX_ANCHORS})` };
-  const out: Anchor[] = [];
-  for (const item of input) {
-    const anchor = parseAnchor(item);
-    if ("error" in anchor) return { error: `${field}[${out.length}]: ${anchor.error}` };
-    out.push(anchor);
-  }
-  return out;
-};
-
-/** Validate an untrusted attendant provenance stamp (D18): the shared
- *  normalizer bounds and control-strips it - a malformed stamp is dropped,
- *  never trusted. */
-const parseAttendant = (input: unknown): AttendantStamp | undefined => sanitizeAttendant(input);
-
 /** Validate an untrusted structured-question `options` array into clean
  *  choices, dropping any without a non-empty string label. */
 const parseQuestionOptions = (input: unknown): { label: string; description?: string }[] => {
@@ -200,14 +141,6 @@ const BROWSER_PROBES = new Set([
   "/apple-touch-icon-precomposed.png",
   "/robots.txt",
 ]);
-
-const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", ...headers },
-  });
-
-const noStore = { "cache-control": "no-store" } as const;
 
 export interface SessionHostOptions {
   /** Watcher debounce (ms). */
@@ -254,6 +187,18 @@ export interface SessionHost {
   readonly stop: () => void;
   /** Epoch ms of the last request or append - the owner's idle policy input. */
   readonly lastActivityAt: () => number;
+  /** Start the idle-suspend policy (M3.2): poll `lastActivityAt`, and when the
+   *  session has been idle for `idleMs`, suspend and call `onSuspended` if it
+   *  took. A non-positive `idleMs` disables the policy (returns undefined).
+   *  `isActive` is the owner's gate checked alongside the idle threshold - the
+   *  per-session server passes its `!stopped` flag so a stopping server never
+   *  suspends; the hub's mounts pass nothing (an unconditional mount always
+   *  checks). The returned timer is the owner's to clear on stop/evict. */
+  readonly startIdlePolicy: (
+    idleMs: number,
+    onSuspended: () => Promise<void> | void,
+    isActive?: () => boolean,
+  ) => ReturnType<typeof setInterval> | undefined;
   /** Agents blocked in `wait` on this session right now. The same presence the
    *  viewer shows, read by the hub's attend engine: it only delivers a batch
    *  itself when NOTHING is listening. */
@@ -429,7 +374,7 @@ export const createSessionHost = (
       return json({ error: "invalid question" }, 400);
     }
     const ref = asString(body.ref);
-    const attendant = parseAttendant(body.attendant);
+    const attendant = decodeAttendant(body.attendant);
     // The rich grouped form (D12), when the caller sent one. Normalized and
     // re-validated HERE even though the CLI already did: the HTTP route is
     // reachable without the CLI, so the log's invariant cannot depend on which
@@ -514,7 +459,7 @@ export const createSessionHost = (
     // Shift+cmd-collected pins arrive as `anchors`, mirroring an annotation's
     // `targets`: `anchor` derives as the first, a singleton normalizes to the
     // single form, and none of it survives a skip or re-ask (decided-only).
-    const anchorList = decided ? parseAnchorList(body.anchors, "anchors") : undefined;
+    const anchorList = decided ? decodeAnchorList(body.anchors, "anchors") : undefined;
     if (anchorList && "error" in anchorList) return json({ error: anchorList.error }, 400);
     const anchorIn = anchorList
       ? anchorList[0]!
@@ -523,7 +468,7 @@ export const createSessionHost = (
         : undefined;
     if (anchorIn && "error" in anchorIn) return json({ error: anchorIn.error }, 400);
     const anchors = multiTargets(anchorList);
-    const images = decided ? parseImages(body.images) : [];
+    const images = decided ? decodeImages(body.images) : [];
     // Per-item answers to a grouped question (D12), re-validated against the
     // group the ASKING event recorded - the drawer gates its submit with the
     // same validator, so this catches only a caller that bypassed it.
@@ -968,7 +913,7 @@ export const createSessionHost = (
       const f = Bun.file(join(paths.pastedDir, file));
       if (!(await f.exists())) return json({ error: "not found" }, 404);
       return new Response(f, {
-        headers: { "content-type": ASSET_CONTENT_TYPE[ext] ?? "application/octet-stream" },
+        headers: { "content-type": contentTypeFor(ext) },
       });
     }
     if (pathname === "/__lucid/reply" && req.method === "POST") return handleReply(req);
@@ -1170,5 +1115,25 @@ export const createSessionHost = (
     lastActivityAt: () => (channel.size() > 0 ? Date.now() : lastActivity),
     agentsListening: () => agentSubscribers.size,
     warn: broadcastWarning,
+    startIdlePolicy: (
+      idleMs: number,
+      onSuspended: () => Promise<void> | void,
+      isActive: () => boolean = () => true,
+    ): ReturnType<typeof setInterval> | undefined => {
+      if (idleMs <= 0) return undefined;
+      return setInterval(
+        () => {
+          if (
+            isActive() &&
+            Date.now() - (channel.size() > 0 ? Date.now() : lastActivity) > idleMs
+          ) {
+            void (async () => {
+              if (await suspend()) await onSuspended();
+            })();
+          }
+        },
+        Math.min(idleMs, 5000),
+      );
+    },
   };
 };
