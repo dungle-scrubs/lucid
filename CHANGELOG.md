@@ -8,6 +8,50 @@ Releases from 0.1.0 onward are managed by
 [release-please](https://github.com/googleapis/release-please) from Conventional
 Commit messages.
 
+## [0.5.0](https://github.com/dungle-scrubs/lucid/compare/v0.4.0...v0.5.0) (2026-08-07)
+
+
+### Added
+
+* **chrome:** /clear empties the record without deleting anything ([#129](https://github.com/dungle-scrubs/lucid/issues/129)) ([20a18a1](https://github.com/dungle-scrubs/lucid/commit/20a18a17a8aebb2d84e03404a4df84a0b8198c37))
+* **chrome:** copy popover on artifact text selection (plan 07) ([#201](https://github.com/dungle-scrubs/lucid/issues/201)) ([37e5e7b](https://github.com/dungle-scrubs/lucid/commit/37e5e7b6774dddb6b5dd4fd7d54f113763734738))
+* **outline:** the transient panel grows out of the rail it came from ([#123](https://github.com/dungle-scrubs/lucid/issues/123)) ([e444c09](https://github.com/dungle-scrubs/lucid/commit/e444c0937d74bf81744410689c0f8bac1867ddff))
+* **shell:** the review drawer runs top to bottom beside the tab strip ([#131](https://github.com/dungle-scrubs/lucid/issues/131)) ([9d2ae65](https://github.com/dungle-scrubs/lucid/commit/9d2ae65d5cef048975a8973be8a469f8df789b7a))
+
+
+### Fixed
+
+* **attend:** a wedged turn stops holding the artifact, and the reopening says its own piece ([#132](https://github.com/dungle-scrubs/lucid/issues/132)) ([d4f355f](https://github.com/dungle-scrubs/lucid/commit/d4f355f0de0e104e33f20ac2bf9e829dc68cae1e))
+* **attend:** headless delivery survives long turns, dead sessions, restarts, and shared bindings ([#133](https://github.com/dungle-scrubs/lucid/issues/133)) ([f155c35](https://github.com/dungle-scrubs/lucid/commit/f155c35c9e73d3cc6775974088cff6248d38df88))
+* **chrome:** copy popover survives its own opening and sits above the release point ([#202](https://github.com/dungle-scrubs/lucid/issues/202)) ([658a7d8](https://github.com/dungle-scrubs/lucid/commit/658a7d83022113bc5faeb0ba5d518fdd160eefaa))
+* **chrome:** the image chip shows the image, not its extension over its name ([#135](https://github.com/dungle-scrubs/lucid/issues/135)) ([71ed96c](https://github.com/dungle-scrubs/lucid/commit/71ed96ca42b0f900c1617b34b17179351a3f2c6b))
+* **launch:** a fork child opens through the locked owner and lands in the registry ([#138](https://github.com/dungle-scrubs/lucid/issues/138)) ([84a1572](https://github.com/dungle-scrubs/lucid/commit/84a157298aecfa4554a01ab4df1c30ae64e8bc21))
+* **outline:** scrolling no longer takes the outline down with it ([#130](https://github.com/dungle-scrubs/lucid/issues/130)) ([0ca9a1a](https://github.com/dungle-scrubs/lucid/commit/0ca9a1a243c9affb2c9565bb1c0d86de15af0615))
+* **outline:** the hover zone sits under the panel, and reaches further ([#128](https://github.com/dungle-scrubs/lucid/issues/128)) ([10414ea](https://github.com/dungle-scrubs/lucid/commit/10414ea3ad9f5b606be4d90b72f8d4c5fd02d69d))
+* **outline:** the panel expands from the rail's own footprint ([#125](https://github.com/dungle-scrubs/lucid/issues/125)) ([a5c6142](https://github.com/dungle-scrubs/lucid/commit/a5c6142fa1b6157ccd7c4283d1dbcc5846ea003d))
+* **overlay:** capture the parent WindowProxy pre-artifact (D-009) ([#149](https://github.com/dungle-scrubs/lucid/issues/149)) ([c886f01](https://github.com/dungle-scrubs/lucid/commit/c886f012d32b26fbd2fc03158ee6b4f78bd0d9d3))
+* **overlay:** the trusted capability contract fails loudly, not open ([#146](https://github.com/dungle-scrubs/lucid/issues/146)) ([6e23629](https://github.com/dungle-scrubs/lucid/commit/6e23629f8c517eb98741f00e1c893f708edc294f))
+* **panel:** the inherited label names the attending session ([#126](https://github.com/dungle-scrubs/lucid/issues/126)) ([4e8c8a9](https://github.com/dungle-scrubs/lucid/commit/4e8c8a97654a9f8274e607d623a1889528a5e92b))
+* **server:** make Mounts the single owner of hosted sessions; move reviseLog under run/ (plan 08, Phase 0) ([#203](https://github.com/dungle-scrubs/lucid/issues/203)) ([de04c9c](https://github.com/dungle-scrubs/lucid/commit/de04c9c7aa24a0944648448e6d946994f685434f))
+
+
+### Changed
+
+* **anchors:** anchorText and resolveRangeOffsets own what six callsites re-derived ([#145](https://github.com/dungle-scrubs/lucid/issues/145)) ([71591a6](https://github.com/dungle-scrubs/lucid/commit/71591a67a74e02a14209e64aa92e9c6793ca9f8c))
+* **anchors:** capture measures range offsets against rangeTextNode (M1.2) ([#150](https://github.com/dungle-scrubs/lucid/issues/150)) ([c12b836](https://github.com/dungle-scrubs/lucid/commit/c12b83677affb56fe24dd74cf39109b8f636bc5b))
+* **chrome:** the tab bridge is one owned surface, measured by name ([#148](https://github.com/dungle-scrubs/lucid/issues/148)) ([102ecf7](https://github.com/dungle-scrubs/lucid/commit/102ecf7cfbf80e3ba6f3db8cd1a5c10e7224dd67))
+* **chrome:** the transport is unbypassable and unsent work has one owner ([#144](https://github.com/dungle-scrubs/lucid/issues/144)) ([afc55df](https://github.com/dungle-scrubs/lucid/commit/afc55df622a7e128e1c05d3d762ef92708f17376))
+* **core:** harness spelling and family have one owner ([#140](https://github.com/dungle-scrubs/lucid/issues/140)) ([e22ff60](https://github.com/dungle-scrubs/lucid/commit/e22ff60bb992ad448ed6ae4a1ffea22c3094fb89))
+* **core:** one owner answers which project an artifact belongs to ([#139](https://github.com/dungle-scrubs/lucid/issues/139)) ([85eca18](https://github.com/dungle-scrubs/lucid/commit/85eca18512b55e9a2ce5a11439d8f9f14a452976))
+* **core:** one stale-window grace constant, two deliberate predicates (M1.3) ([#151](https://github.com/dungle-scrubs/lucid/issues/151)) ([ae77923](https://github.com/dungle-scrubs/lucid/commit/ae77923b2517d4c4d6353be396e4926d0d578fcc))
+* **core:** sessionState is the one read seam of the session log ([#141](https://github.com/dungle-scrubs/lucid/issues/141)) ([e90a38c](https://github.com/dungle-scrubs/lucid/commit/e90a38c81f10322ecb92a424f5b71155097885ef))
+* **launch:** a recipe resolve answers the harness asked for or nothing ([#134](https://github.com/dungle-scrubs/lucid/issues/134)) ([167be82](https://github.com/dungle-scrubs/lucid/commit/167be829d01b7d24c754a44ad7683506d421e5dc))
+* **launch:** launcher.ts splits into spawn, fork-launcher, and prompts ([#136](https://github.com/dungle-scrubs/lucid/issues/136)) ([4d6e91c](https://github.com/dungle-scrubs/lucid/commit/4d6e91cc8b756b63beac95e11c443e581652359d))
+* **launch:** one owner drives a headless harness turn ([#137](https://github.com/dungle-scrubs/lucid/issues/137)) ([2e0fbaa](https://github.com/dungle-scrubs/lucid/commit/2e0fbaa611ab3a4df249baf8b460c3ba4b769b52))
+* **protocol:** the wire contract covers the hub tier, live frames, and lifecycle ([#143](https://github.com/dungle-scrubs/lucid/issues/143)) ([da50826](https://github.com/dungle-scrubs/lucid/commit/da50826f0f834c4ec9fce3bb39a7af241da99c98))
+* **server:** the live channel, bundle bytes, and boot pages each get one owner ([#142](https://github.com/dungle-scrubs/lucid/issues/142)) ([7c35bb3](https://github.com/dungle-scrubs/lucid/commit/7c35bb340952da5e53e5bd72e9ae56d921b954c2))
+* **theme:** one palette table, and the overlay theme becomes artifact-theme.ts ([#147](https://github.com/dungle-scrubs/lucid/issues/147)) ([5da50e8](https://github.com/dungle-scrubs/lucid/commit/5da50e833362064bb7821be228846e56f388dd10))
+
 ## [0.4.0](https://github.com/dungle-scrubs/lucid/compare/v0.3.0...v0.4.0) (2026-08-02)
 
 
