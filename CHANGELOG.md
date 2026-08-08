@@ -8,6 +8,23 @@ Releases from 0.1.0 onward are managed by
 [release-please](https://github.com/googleapis/release-please) from Conventional
 Commit messages.
 
+## [0.6.0](https://github.com/dungle-scrubs/lucid/compare/v0.5.0...v0.6.0) (2026-08-08)
+
+
+### Added
+
+* muse harness, hierarchical outline and footer reflow fixes ([#230](https://github.com/dungle-scrubs/lucid/issues/230)) ([01bb631](https://github.com/dungle-scrubs/lucid/commit/01bb6319ac37f8b8103c2619f053b4b97c66912d))
+
+
+### Fixed
+
+* **outline:** raise proofElementLimit so real-sized plans keep their ToC ([#228](https://github.com/dungle-scrubs/lucid/issues/228)) ([a0954dd](https://github.com/dungle-scrubs/lucid/commit/a0954ddcbe4374567fee1393c1670326f670d5e1))
+
+
+### Changed
+
+* update effect/[@effect](https://github.com/effect), base-ui, and pending patch/minor bumps ([#227](https://github.com/dungle-scrubs/lucid/issues/227)) ([2372ecd](https://github.com/dungle-scrubs/lucid/commit/2372ecde60e8f0d2cc6a9e8e5170543427ee8df1))
+
 ## [0.5.0](https://github.com/dungle-scrubs/lucid/compare/v0.4.0...v0.5.0) (2026-08-07)
 
 
