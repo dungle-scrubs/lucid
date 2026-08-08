@@ -125,8 +125,17 @@ describe("delivered, waiting for the agent", () => {
     // The one line that is NOT transient: no shimmer, because there is nothing
     // to shimmer for. This is the honest replacement for a spinner that would
     // otherwise imply a response nobody is going to send.
+    // It names the harness so the human knows who to tell to rejoin.
     expect(deliveredWaiting(presence())).toEqual({
-      text: "Delivered — nothing is watching yet",
+      text: "Delivered — Tell claude-code to participate",
+      transient: false,
+    });
+    expect(deliveredWaiting(presence({ harness: "muse-code" }))).toEqual({
+      text: "Delivered — Tell muse-code to participate",
+      transient: false,
+    });
+    expect(deliveredWaiting(presence({ harness: "agent" }))).toEqual({
+      text: "Delivered — Tell the agent to participate",
       transient: false,
     });
   });

@@ -44,7 +44,8 @@
     "test:e2e:soak": "bun run scripts/e2e-stamp.ts && playwright test --repeat-each=5",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "prepare": "bun run build:client && lefthook install"
+    "prepare": "bun run build:client && lefthook install",
+    "prototype:harness": "bun src/prototype-harness/index.ts"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.14.29",

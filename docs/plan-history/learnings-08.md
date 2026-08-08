@@ -144,6 +144,10 @@ it. Only the e2e caught it.
   output is always qualified as the hub log, and one line in it is a record.
   The code hit this collision before the glossary did.
 
+### On attendance — the single-attendant headache (D-068)
+
+- **D-068** - one artifact, one writer. **Spawn mode** (no interactive `sessionId` open per `harnessPresence`) lets the hub drive headless turns (`muse exec --session-id {id} --yolo`, `claude --resume`, `codex exec resume`) via the harness's declared `spawn`/`resume` + `sessionIdentity`. **Interactive mode** (presence true) yields — hub spawns nothing. Two substates: **waiting** (`lucid wait` running → `Delivered to {harness} in the terminal`) vs **not waiting** (queued → `Tell {harness} to participate` + copyable `interactiveResumeCommand` with yolo). The hub's attempt on `b78de416…` while the TUI held it (`already in use`) is what happens when a harness lacks `harnessSupportsPresence` — the mode switch is blind. Biggest headache because every new harness must implement six surfaces (`harnessKind`, store, resume parser, interactive command, `NOT_FOUND`, presence) or the invariant breaks.
+
 ### On scope
 
 - **D-001** - carry only the genuinely-open findings; close the already-fixed

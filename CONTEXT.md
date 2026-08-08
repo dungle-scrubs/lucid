@@ -63,8 +63,10 @@ view is where you are looking at it.
 
 ### Artifact outline
 The Lucid-owned, current-version projection of an artifact's visible,
-non-empty H2 headings, used to reveal sections without becoming artifact
-content or requiring agent-authored navigation.
+non-empty H2 headings — plus, when an H2 has more than three H3 subsections,
+those H3s as indented sub-items (numbered `1`, `1.1` …) — used to reveal
+sections without becoming artifact content or requiring agent-authored
+navigation.
 _Avoid_: table of contents, ToC, sidebar.
 
 ### Pinned outline mode
@@ -262,6 +264,19 @@ holding only pointers and `lastSeen` - never session data - and the **hub** unio
 with a scan of its **roots** to produce the **listing**. Cross-filesystem enumeration
 of scattered artifacts is no longer a deferred limitation; that is what the hub is
 for.
+
+### Spawn vs Interactive (D-068)
+
+How one artifact's review is driven, and **who may drive it, is a single-attendant invariant**.
+
+- **Spawn mode** — no interactive harness session with that artifact's `sessionId` is open (`harnessStore` has it, but `harnessPresence` does not). The hub owns it: any feedback spawns a headless turn (`muse exec --session-id {id} --yolo`, `claude --resume {id} -p`, `codex exec resume {id}`) via the harness's declared recipe (`harnesses.json` `spawn`/`resume` + `sessionIdentity`). The turn reuses the same caller-assigned id; yolo (`--yolo` / `--dangerously-skip-permissions`) is in the recipe, not invented.
+
+- **Interactive mode** — a terminal has that `sessionId` open. Presence (`harnessSupportsPresence` + `ps` over `~/.claude/sessions` or `~/.local/share/muse/sessions`) is true. The hub **yields** and spawns nothing — one writer on one log is what the `flock` and the single-appender rule (D-049) exist to protect.
+
+  - **waiting** (`lucid wait` running) → `Delivered to {harness} in the terminal` (transient). Chat lands instantly; the TUI's own wait loop drives the turn.
+  - **not waiting** (TUI idle or no `wait`) → feedback queues. Chrome says `Tell {harness} to participate` with a copyable `interactiveResumeCommand` (`muse resume {id} --yolo`, `claude --resume {id}`), not a generic wait prompt. The human must tell that harness to re-enter; Lucid never invents a session.
+
+The two predicates that decide this (viewer's staleness vs attend's working-grace) share the constant `WORKING_GRACE_MS` but are not the same check and stay apart deliberately (plan 04 M1.3). This split is the biggest operational headache: every new harness must implement `harnessKind` + `harnessHasLocalStore`/`harnessTranscriptPath` + `parseHarnessResumeCommand` + `interactiveResumeCommand` + `NOT_FOUND_MATCHERS` + presence, or the mode switch is blind and "already in use" becomes the user-visible failure.
 
 ### Event log (state file)
 The co-located, append-only NDJSON file that is the session's **source of
