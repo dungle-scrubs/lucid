@@ -623,7 +623,7 @@ describe("ArtifactOutlineRuntime conservative proof", () => {
     const main = node("main", { tagName: "MAIN" });
     append(main, node("One"));
     append(main, node("Two"));
-    for (let index = 0; index < 2_100; index += 1) {
+    for (let index = 0; index < 4_100; index += 1) {
       append(main, node(`span-${index}`, { tagName: "SPAN" }));
     }
     expect(complete([main])).toMatchObject({
