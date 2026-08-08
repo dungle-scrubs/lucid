@@ -393,7 +393,11 @@ const ConnectionLine = () => {
   // The session stream is the one that carries a turn, so it is named first;
   // the hub only matters here when the session itself is healthy.
   const what = !live ? "the live connection" : hubHosted && !hubConnected ? "the hub" : null;
-  if (what === null) return null;
+  if (what === null) {
+    // Reserve the same 22px slot the pill occupies (border-t + pt-2 + 10px line)
+    // so mounting the pill does not shift the composer/input down for a frame.
+    return <div className="h-[22px] border-t border-transparent pt-2" aria-hidden />;
+  }
   return (
     <Tooltip>
       <TooltipTrigger
@@ -405,7 +409,7 @@ const ConnectionLine = () => {
             // meaningful on a session-scoped pill; on a hub-scoped one it
             // would report 0 for a stream that is fine while the hub is not.
             {...(live ? {} : { "data-retries": streamRetries })}
-            className="flex items-center justify-center gap-1.5 border-t border-ink-700 pt-2 text-[10px] text-steel-400"
+            className="flex h-[22px] items-center justify-center gap-1.5 border-t border-ink-700 pt-2 text-[10px] text-steel-400"
           >
             <span className="inline-block size-1.5 flex-none bg-steel-400" />
             reconnecting to {what}…
@@ -456,12 +460,16 @@ const AttendanceFooter = () => {
         : attend
           ? "no agent session"
           : "recording only";
+  // Listening state has no reliable harness - agentsListening is a count, not a
+  // harness - so showing lastAttendant's harness misattributes (muse session
+  // rendered as "claude-code · agent listening"). Hide the prefix there.
+  const showHarness = a.harness && a.harness !== "the agent" && a.listening === 0;
   return (
     <div
       data-test="listener-line"
       data-listening={a.listening > 0 ? "true" : "false"}
       data-mode={a.mode}
-      className="flex flex-col items-center gap-1 border-t border-ink-700 pt-2"
+      className="flex h-[22px] items-center justify-between border-t border-ink-700 pt-2"
     >
       <Tooltip>
         <TooltipTrigger
@@ -470,7 +478,7 @@ const AttendanceFooter = () => {
               data-test="harness-line"
               className={`cursor-default text-[10px] ${listening > 0 ? "text-agent" : "text-fg-faint hover:text-fg"}`}
             >
-              {a.harness ? (
+              {showHarness ? (
                 <>
                   {a.harness} · <span data-test="mode-term">{mode}</span>
                 </>
@@ -492,7 +500,11 @@ const AttendanceFooter = () => {
                   : `Nothing is running, and this hub does not spawn agents. Feedback is recorded and delivered the next time ${a.harness} checks in. Start the hub with --attend to have it drive turns itself.`}
         </TooltipContent>
       </Tooltip>
-      {a.interactive || a.listening > 0 ? null : <ResumeHint />}
+      {a.interactive || a.listening > 0 ? (
+        <span aria-hidden className="w-[168px] shrink-0" />
+      ) : (
+        <ResumeHint />
+      )}
     </div>
   );
 };
@@ -525,9 +537,9 @@ const ResumeHint = () => {
                 () => notify.warn("Couldn't copy - the command is in this button's tooltip."),
               );
             }}
-            // Centred with the footer, and quieter than the harness line above it:
-            // this is an escape hatch to a terminal, not the way to use the panel.
-            className="flex cursor-pointer items-center gap-1 self-center border border-ink-700 bg-ink-800 px-1.5 py-px font-mono text-[9px] tracking-tight text-fg-faint hover:border-ink-600 hover:text-fg"
+            // On the same line as the harness, right-aligned, same 10px rhythm as
+            // "interactive" so toggling the button does not reflow the footer.
+            className="flex w-[168px] shrink-0 cursor-pointer items-center justify-center gap-1 self-center border border-ink-700 bg-ink-800 px-1.5 py-px font-mono text-[10px] tracking-tight text-fg-faint hover:border-ink-600 hover:text-fg"
           >
             {copied ? (
               // lucide check

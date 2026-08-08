@@ -93,6 +93,15 @@ const findSessionCwd = async (root: string, sessionId: string): Promise<string |
   return name === undefined ? undefined : decodeFlattenedPath(name);
 };
 
+/** Where Muse files its sessions (index at ~/.local/share/muse/session-index.db). */
+export const museSessionsDir = (dir?: string): string => {
+  if (dir) return dir;
+  if (process.env.LUCID_MUSE_SESSIONS) return process.env.LUCID_MUSE_SESSIONS;
+  // Default per Muse docs: ~/.local/share/muse/sessions/YYYY/MM/DD/{id}/session.jsonl
+  // XDG_DATA_HOME fallback not needed on macOS; hardcode homedir variant.
+  return join(homedir(), ".local", "share", "muse", "sessions");
+};
+
 /** A 36-char UUID, as every harness names its sessions. */
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const UUID_EVERYWHERE = new RegExp(UUID.source, "gi");
@@ -115,7 +124,9 @@ export const parseHarnessResumeCommand = (harness: string, command: string): str
       ? new RegExp(String.raw`--resume\s+(${UUID.source})(?:\s|$)`, "i").exec(command)
       : kind === "codex"
         ? new RegExp(String.raw`\bresume\s+(${UUID.source})(?:\s|$)`, "i").exec(command)
-        : null;
+        : kind === "muse"
+          ? new RegExp(String.raw`\bresume\s+(${UUID.source})(?:\s|$)`, "i").exec(command)
+          : null;
   const id = anchored?.[1];
   if (!id) return undefined;
   const all = command.match(UUID_EVERYWHERE) ?? [];
@@ -158,6 +169,37 @@ const codexRolloutPath = async (sessionId: string, dir?: string): Promise<string
 const codexStoreHas = async (sessionId: string, dir?: string): Promise<boolean> =>
   (await codexRolloutPath(sessionId, dir)) !== undefined;
 
+/** Muse session file (`<store>/YYYY/MM/DD/{id}/session.jsonl`). */
+const museSessionPath = async (sessionId: string, dir?: string): Promise<string | undefined> => {
+  const root = museSessionsDir(dir);
+  try {
+    for (const year of await readdir(root)) {
+      const yearDir = join(root, year);
+      for (const month of await readdir(yearDir).catch(() => [] as string[])) {
+        const monthDir = join(yearDir, month);
+        for (const day of await readdir(monthDir).catch(() => [] as string[])) {
+          const dDir = join(monthDir, day);
+          const entries = await readdir(dDir).catch(() => [] as string[]);
+          if (entries.includes(sessionId)) {
+            const candidate = join(dDir, sessionId, "session.jsonl");
+            try {
+              if ((await stat(candidate)).isFile()) return candidate;
+            } catch {
+              // not a file
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+const museStoreHas = async (sessionId: string, dir?: string): Promise<boolean> =>
+  (await museSessionPath(sessionId, dir)) !== undefined;
+
 /**
  * True when Lucid knows where this harness FILES its conversations on disk -
  * the precondition for asking `harnessStoreHas` a question whose "no" means
@@ -167,7 +209,7 @@ const codexStoreHas = async (sessionId: string, dir?: string): Promise<boolean> 
  */
 export const harnessHasLocalStore = (harness: string): boolean => {
   const kind = harnessKind(harness);
-  return kind === "claude" || kind === "codex";
+  return kind === "claude" || kind === "codex" || kind === "muse";
 };
 
 /**
@@ -184,7 +226,11 @@ export const harnessHasLocalStore = (harness: string): boolean => {
 export const harnessTranscriptPath = async (
   harness: string,
   sessionId: string,
-  opts: { readonly claudeProjectsDir?: string; readonly codexSessionsDir?: string } = {},
+  opts: {
+    readonly claudeProjectsDir?: string;
+    readonly codexSessionsDir?: string;
+    readonly museSessionsDir?: string;
+  } = {},
 ): Promise<string | undefined> => {
   if (!isUsableSessionId(sessionId)) return undefined;
   const kind = harnessKind(harness);
@@ -194,6 +240,7 @@ export const harnessTranscriptPath = async (
     return name === undefined ? undefined : join(root, name, `${sessionId}.jsonl`);
   }
   if (kind === "codex") return codexRolloutPath(sessionId, opts.codexSessionsDir);
+  if (kind === "muse") return museSessionPath(sessionId, opts.museSessionsDir);
   return undefined;
 };
 
@@ -208,7 +255,11 @@ export const harnessTranscriptPath = async (
 export const harnessStoreHas = async (
   harness: string,
   sessionId: string,
-  opts: { readonly claudeProjectsDir?: string; readonly codexSessionsDir?: string } = {},
+  opts: {
+    readonly claudeProjectsDir?: string;
+    readonly codexSessionsDir?: string;
+    readonly museSessionsDir?: string;
+  } = {},
 ): Promise<boolean> => {
   // The id becomes a PATH SEGMENT below (`<store>/<dir>/<id>.jsonl`), and it
   // reaches here from a log event, a sidecar file, or a harness's stdout -
@@ -228,6 +279,7 @@ export const harnessStoreHas = async (
     );
   }
   if (kind === "codex") return codexStoreHas(sessionId, opts.codexSessionsDir);
+  if (kind === "muse") return museStoreHas(sessionId, opts.museSessionsDir);
   return false;
 };
 
@@ -286,6 +338,9 @@ export const interactiveResumeCommand = (
   }
   if (h === "codex") {
     return `codex resume ${sessionId}${yolo ? " --dangerously-bypass-approvals-and-sandbox" : ""}`;
+  }
+  if (h === "muse") {
+    return `muse resume ${sessionId}${yolo ? " --yolo" : ""}`;
   }
   return undefined;
 };

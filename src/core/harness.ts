@@ -24,7 +24,7 @@ export const normalizeHarness = (name: string): string =>
   name.trim().toLowerCase().replace(/_/g, "-");
 
 /** The harness families Lucid carries built-in knowledge of. */
-export type HarnessKind = "claude" | "codex" | "pi";
+export type HarnessKind = "claude" | "codex" | "pi" | "muse";
 
 /**
  * The family a harness name names, or undefined when Lucid knows none.
@@ -41,5 +41,6 @@ export type HarnessKind = "claude" | "codex" | "pi";
 export const harnessKind = (name: string): HarnessKind | undefined => {
   const n = normalizeHarness(name);
   if (n === "claude-code" || n === "claude") return "claude";
+  if (n === "muse-code" || n === "muse") return "muse";
   return n === "codex" || n === "pi" ? n : undefined;
 };

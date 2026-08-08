@@ -304,7 +304,7 @@ export const createSurface = (store: SessionStore, transport: Transport): Surfac
         // The agent has spoken once a working window opens or a new version
         // lands - either closes the delivered-waiting gap. Cleared here rather
         // than on a timer, so an unattended send (nothing ever acks) keeps
-        // saying "nothing is watching yet" truthfully instead of lapsing to
+        // saying "Tell {harness} to participate" truthfully instead of lapsing to
         // silence.
         // Clear the ids the payload now reports DELIVERED, not on "is anything
         // working". An unrelated turn's window said nothing about this send

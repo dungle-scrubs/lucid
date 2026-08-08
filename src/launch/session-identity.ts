@@ -300,6 +300,7 @@ export const classifyObservedIdentity = (
  *  an unknown one returns null - including one named `toString`. */
 const NOT_FOUND_MATCHERS: Readonly<Record<string, RegExp>> = Object.assign(Object.create(null), {
   codex: /no rollout found for thread/i,
+  muse: /session not found|no session with id|unknown session/i,
 });
 /** Only this much of the tail is consulted - failure banners sit at the end
  *  of output, and an unbounded scan of a runaway stream is its own bug. */

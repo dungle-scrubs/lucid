@@ -186,6 +186,7 @@ pickers.
 | `claude-code` | `--model <id>` | `--effort <level>` |
 | `codex` | `-c model="<id>"` | `-c model_reasoning_effort="<level>"` |
 | `pi` | `--model <id>` | `--thinking <level>` |
+| `muse` | `--model <id>` | `--reasoning-effort <level>` |
 
 A harness Lucid has no flags for cannot carry a selection. Declaring `models`,
 `efforts`, `defaultModel`, or `defaultEffort` on one **fails the registry
@@ -197,7 +198,7 @@ an effort picker and no model picker. It is also rarely what anyone means: a
 harness that shows a thinking level but never a model name looks broken rather
 than minimal. If the harness accepts `--model`, declare the models too.
 
-**Where they are inserted:** right after `argv[0]` for `claude-code`/`pi`, and
+**Where they are inserted:** right after `argv[0]` for `claude-code`/`pi`/`muse`, and
 after the last `exec` (or `exec resume`) subcommand tokens for `codex`. Never
 appended - a trailing option lands inside claude's variadic `--allowedTools`
 (see the warning above) and is read as another tool name. The index is read off

@@ -157,7 +157,7 @@ const snapshotElement = (
     },
     tagName,
     get text() {
-      if (tagName !== "H2") return "";
+      if (tagName !== "H2" && tagName !== "H3") return "";
       cachedText ??= capabilities.text(
         nativeElement,
         ARTIFACT_OUTLINE_POLICY.maxExaminedLabelCodeUnits + 1,
@@ -167,7 +167,7 @@ const snapshotElement = (
       return cachedText.value;
     },
     get textComplete() {
-      if (tagName !== "H2") return true;
+      if (tagName !== "H2" && tagName !== "H3") return true;
       cachedText ??= capabilities.text(
         nativeElement,
         ARTIFACT_OUTLINE_POLICY.maxExaminedLabelCodeUnits + 1,
@@ -177,7 +177,7 @@ const snapshotElement = (
       return cachedText.complete;
     },
     get textNodesExamined() {
-      if (tagName !== "H2") return 0;
+      if (tagName !== "H2" && tagName !== "H3") return 0;
       cachedText ??= capabilities.text(
         nativeElement,
         ARTIFACT_OUTLINE_POLICY.maxExaminedLabelCodeUnits + 1,
@@ -221,7 +221,7 @@ const snapshotGeometry = (
   return {
     completeTraversal: wrappedTraversal,
     elements,
-    headings: elements.filter(({ tagName }) => tagName === "H2"),
+    headings: elements.filter(({ tagName }) => tagName === "H2" || tagName === "H3"),
   };
 };
 

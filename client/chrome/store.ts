@@ -709,7 +709,8 @@ export const deliveredWaiting = (p: AwaitPresence): { text: string; transient: b
   if (p.interactive) return { text: `Delivered to ${p.harness} in the terminal`, transient: true };
   if (p.listening > 0) return { text: "Delivered — waiting for the agent…", transient: true };
   if (p.spawnable) return { text: "Delivered — starting a turn…", transient: true };
-  return { text: "Delivered — nothing is watching yet", transient: false };
+  const who = p.harness && p.harness !== "agent" ? p.harness : "the agent";
+  return { text: `Delivered — Tell ${who} to participate`, transient: false };
 };
 
 /**

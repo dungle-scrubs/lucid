@@ -96,6 +96,11 @@ export const selectionArgs = (
         ...(model !== undefined ? ["--model", model] : []),
         ...(effort !== undefined ? ["--thinking", effort] : []),
       ];
+    case "muse":
+      return [
+        ...(model !== undefined ? ["--model", model] : []),
+        ...(effort !== undefined ? ["--reasoning-effort", effort] : []),
+      ];
   }
 };
 
@@ -120,9 +125,12 @@ export const insertSelectionArgs = (
 ): string[] => {
   if (args.length === 0) return [...argv];
   let at = 1;
-  if (harnessKind(harnessName) === "codex") {
+  const kind = harnessKind(harnessName);
+  if (kind === "codex" || kind === "muse") {
     // Last, not first: a recipe fronted by a wrapper (`direnv exec . codex
     // exec ...`) has the wrapper's own `exec` ahead of the harness's.
+    // Muse is the same: `muse exec` is the subcommand that owns --model
+    // and --reasoning-effort, while `muse resume` (interactive) takes none.
     const exec = template.lastIndexOf("exec");
     if (exec !== -1) {
       at = exec + 1;

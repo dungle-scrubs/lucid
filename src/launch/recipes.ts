@@ -311,18 +311,31 @@ const parseSessionIdentity = (
     // The resume flag may differ from the assign flag: claude assigns with
     // `--session-id <id>` and re-enters with `--resume <id>`, and demanding
     // one spelling for both would refuse a correct recipe.
+    // Muse resumes positionally: `muse resume {id}` — no flag, just a bare
+    // `{id}` token where the CLI expects the session id. That is still
+    // caller-assigned (Lucid mints it, the harness does not), so we allow a
+    // bare `{id}` in resume when resumeArgument is absent and the token is
+    // present.
+    const hasResumeArg = d.resumeArgument !== undefined;
     const resumeArgument = isBoundedSelector(d.resumeArgument) ? d.resumeArgument : argument;
+    const resumeHasBareId = resume !== undefined && resume.includes("{id}");
     if (!adjacentIdAfter(spawn, argument)) {
       fail(`harness "${name}" spawn argv must pass "${argument}" immediately followed by "{id}"`);
     }
-    if (resume && !adjacentIdAfter(resume, resumeArgument)) {
-      fail(
-        `harness "${name}" resume argv must pass "${resumeArgument}" immediately followed by "{id}"`,
-      );
+    if (resume) {
+      const resumeFlagged = adjacentIdAfter(resume, resumeArgument);
+      const resumePositional = !hasResumeArg && resumeHasBareId;
+      if (!resumeFlagged && !resumePositional) {
+        fail(
+          `harness "${name}" resume argv must pass "${resumeArgument}" immediately followed by "{id}" (or a bare "{id}" for positional resume)`,
+        );
+      }
     }
     return {
       argument,
-      ...(resumeArgument !== argument ? { resumeArgument } : {}),
+      ...(resumeArgument !== argument && adjacentIdAfter(resume ?? [], resumeArgument)
+        ? { resumeArgument }
+        : {}),
       source: "caller-assigned",
     };
   }
