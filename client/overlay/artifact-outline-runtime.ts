@@ -520,7 +520,7 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
   }
 
   #eligible(element: ElementType, work: WorkState): boolean | "budget" {
-    if (element.tagName !== "H2") return false;
+    if (element.tagName !== "H2" && element.tagName !== "H3") return false;
     if (!this.#consume(work)) return "budget";
     const textComplete = element.textComplete;
     work.examinedTextCodeUnits += element.text.length;
@@ -702,7 +702,11 @@ export class ArtifactOutlineRuntime<ElementType extends OutlineRuntimeElement> {
 
     const keyed = eligible.map((element) => ({
       element,
-      input: { key: this.#keyFor(element), text: element.text },
+      input: {
+        key: this.#keyFor(element),
+        text: element.text,
+        level: element.tagName === "H3" ? 2 : 1,
+      },
     }));
     const projection = projectOutlineHeadings(
       this.#generation,

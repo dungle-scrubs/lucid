@@ -40,6 +40,8 @@ export const ARTIFACT_OUTLINE_POLICY = {
   maxPreferredWidthPx: 1_024,
   maxTextNodesPerHeading: 4_096,
   activeReadingThresholdPx: 80,
+  inlineContentsThreshold: 10,
+  inlineContentsMinH2: 8,
 } as const;
 
 /** A pre-trust timestamp sentinel that invokes no artifact-controlled intrinsic. */
@@ -77,11 +79,15 @@ export const isValidOutlineKey = (value: unknown): value is string =>
 export interface OutlineHeadingInput {
   readonly key: string;
   readonly text: string;
+  /** 1 = H2 (main), 2 = H3 (subsection). Defaults to 1. */
+  readonly level?: number;
 }
 
 export interface OutlineHeading {
   readonly key: string;
   readonly label: string;
+  /** 1 = H2, 2 = H3. Omitted for legacy flat outlines where every heading is an H2. */
+  readonly level?: number;
 }
 
 export type OutlineProjection =
@@ -160,16 +166,17 @@ export const projectOutlineHeadings = (
   generation: number,
   inputs: readonly OutlineHeadingInput[],
 ): OutlineProjection => {
-  if (inputs.length < 2) return { generation, kind: "absent" };
   if (inputs.length > ARTIFACT_OUTLINE_POLICY.maxHeadings) {
     return invalidProjection(generation, "heading-count");
   }
 
   const keys = new Set<string>();
-  const headings: OutlineHeading[] = [];
+  type Parsed = { readonly key: string; readonly label: string; readonly level: number };
+  const parsedInputs: Parsed[] = [];
   let aggregateRawLabelLength = 0;
   let aggregateLabelLength = 0;
-  for (const { key, text } of inputs) {
+  for (const { key, text, level: rawLevel } of inputs) {
+    const level = rawLevel === 2 ? 2 : 1;
     if (!isValidOutlineKey(key)) return invalidProjection(generation, "invalid-key");
     if (keys.has(key)) return invalidProjection(generation, "duplicate-key");
     keys.add(key);
@@ -183,13 +190,89 @@ export const projectOutlineHeadings = (
     if (aggregateLabelLength > ARTIFACT_OUTLINE_POLICY.maxAggregateLabelCodeUnits) {
       return invalidProjection(generation, "aggregate-label-length");
     }
-    headings.push({ key, label: parsed.label });
+    parsedInputs.push({ key, label: parsed.label, level });
   }
+
+  // Hierarchical filtering: H3s only surface when their preceding H2 has >3.
+  // Orphan H3s before the first H2 are dropped. This keeps the outline compact
+  // for lightly-sectioned documents while exposing dense subsections.
+  const filtered: Parsed[] = [];
+  let index = 0;
+  while (index < parsedInputs.length) {
+    const current = parsedInputs[index];
+    if (current === undefined) break;
+    if (current.level === 2) {
+      // Orphan H3 — no preceding H2 in this window
+      index += 1;
+      continue;
+    }
+    // Current is H2 — collect following H3s until next H2
+    let next = index + 1;
+    const h3Group: Parsed[] = [];
+    while (next < parsedInputs.length && parsedInputs[next]?.level === 2) {
+      const h3 = parsedInputs[next];
+      if (h3 !== undefined) h3Group.push(h3);
+      next += 1;
+    }
+    filtered.push(current);
+    if (h3Group.length > 3) filtered.push(...h3Group);
+    index = next;
+  }
+
+  if (filtered.length < 2) return { generation, kind: "absent" };
+  if (filtered.length > ARTIFACT_OUTLINE_POLICY.maxHeadings) {
+    return invalidProjection(generation, "heading-count");
+  }
+
+  // Re-validate aggregate after filtering (filtered is subset, so if original passed
+  // this will pass, but keep the bound explicit for filtered publishing).
+  let filteredAggregate = 0;
+  for (const heading of filtered) filteredAggregate += heading.label.length;
+  if (filteredAggregate > ARTIFACT_OUTLINE_POLICY.maxAggregateLabelCodeUnits) {
+    return invalidProjection(generation, "aggregate-label-length");
+  }
+
+  const hasH3 = filtered.some((heading) => heading.level === 2);
+  const headings: OutlineHeading[] = filtered.map((heading) =>
+    hasH3
+      ? { key: heading.key, label: heading.label, level: heading.level }
+      : { key: heading.key, label: heading.label },
+  );
   return {
     generation,
     headings,
     kind: "complete",
   };
+};
+
+export const shouldShowInlineContents = (headings: readonly OutlineHeading[]): boolean => {
+  if (headings.length >= ARTIFACT_OUTLINE_POLICY.inlineContentsThreshold) return true;
+  const h2Count = headings.filter((heading) => (heading.level ?? 1) === 1).length;
+  return h2Count >= ARTIFACT_OUTLINE_POLICY.inlineContentsMinH2;
+};
+
+/** Hierarchical number for headings: "1", "2", "2.1"... Omitted levels are flat "1","2". */
+export const outlineHeadingNumber = (
+  headings: readonly OutlineHeading[],
+  targetIndex: number,
+): string | null => {
+  if (targetIndex < 0 || targetIndex >= headings.length) return null;
+  let section = 0;
+  let sub = 0;
+  for (let index = 0; index <= targetIndex; index += 1) {
+    const heading = headings[index];
+    if (heading === undefined) continue;
+    const level = heading.level === 2 ? 2 : 1;
+    if (level === 2) {
+      sub += 1;
+      if (index === targetIndex) return `${section}.${sub}`;
+    } else {
+      section += 1;
+      sub = 0;
+      if (index === targetIndex) return `${section}`;
+    }
+  }
+  return null;
 };
 
 export interface OutlineHeadingPosition {
@@ -900,6 +983,7 @@ export const validateOutlineSnapshot = (
   const headings: OutlineHeading[] = [];
   const keys = new Set<string>();
   let aggregateLabelLength = 0;
+  let hasSubsections = false;
   for (const candidate of value.headings) {
     if (!isRecord(candidate) || !isValidOutlineKey(candidate.key) || keys.has(candidate.key)) {
       return null;
@@ -910,8 +994,19 @@ export const validateOutlineSnapshot = (
     aggregateLabelLength += parsed.label.length;
     if (aggregateLabelLength > ARTIFACT_OUTLINE_POLICY.maxAggregateLabelCodeUnits) return null;
     keys.add(candidate.key);
-    headings.push({ key: candidate.key, label: parsed.label });
+    const level = candidate.level;
+    if (level !== undefined && level !== 1 && level !== 2) return null;
+    if (level === 2) hasSubsections = true;
+    headings.push(
+      level === undefined
+        ? { key: candidate.key, label: parsed.label }
+        : { key: candidate.key, label: parsed.label, level },
+    );
   }
+  // Enforce hierarchy: level 2 only valid when parent's group had >3,
+  // but snapshot validation stays permissive — runtime is the enforcer.
+  // Just ensure first heading is never a subsection.
+  if (hasSubsections && headings[0]?.level === 2) return null;
 
   if (value.activeKey !== null && !isValidOutlineKey(value.activeKey)) return null;
   if (value.activeKey !== null && !keys.has(value.activeKey)) return null;

@@ -59,12 +59,35 @@ Never fake the review loop, and never paste build instructions at the user.
    get feedback; keep each id unique within the document - duplicate ids are
    skipped during anchor resolution.
 
-   **For a long artifact, prefer semantic `h2` section headings.** Lucid can
-   derive an optional navigation outline from ordinary eligible `h2` elements.
-   This is a width-neutral enhancement: do not reserve a rail, prescribe a
-   content width, author a table of contents, or add `data-lucid-id` solely for
-   navigation. The artifact remains complete and reviewable when the outline is
-   absent, and heading navigation does not depend on authored IDs.
+   **For a long artifact, prefer semantic `h2`/`h3` headings with a clean visible hierarchy.** Lucid derives an optional navigation outline (artifact outline) from the same headings the reader sees: every eligible `h2` is a main item, and when an `h2` has **more than three** `h3` subsections those `h3`s surface as indented sub-items under it (numbered `1.1`, `1.2` …); otherwise only the `h2` appears, keeping the outline compact. Number your sections and subsections in the markup so the hierarchy is visible in-place (e.g. `1. Overview`, `1.1 Scope`, `2. Design`), and keep those numbers **in the heading text itself** — that is what the outline lists (the outline also prefixes an auto-number when you do not, so `Overview` still reads `1 Overview` in the rail). This is a width-neutral enhancement: do not reserve a rail, prescribe a content width, author a separate table of contents, or add `data-lucid-id` solely for navigation. The artifact remains complete and reviewable when the outline is absent, and heading navigation does not depend on authored IDs.
+
+   **When the document is long — ≥10 outline items or ≥8 H2s — open with a compact inline `Contents — two parts` block at the very top, before the first H2.** This is the dense scan the rail cannot replace at that size (your 15-item plan is the reference). Keep it width-neutral and self-contained: a two-column grid that reflows to one column on narrow widths.
+
+   ```html
+   <section data-lucid-id="contents" style="padding:16px 20px;border:1px solid #e7e5e4;background:#fafaf9">
+     <h2 style="margin:0 0 4px;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#57534e">Contents — two parts</h2>
+     <p style="margin:0 0 12px;font-size:11px;color:#78716c">1.x = live on main, 2.x = upcoming. Milestone tags (M17.5…) are build-track IDs, not order.</p>
+     <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;min-width:0">
+       <div style="min-width:0">
+         <h3 style="margin:0 0 8px;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#1c1917">Part 1 — How it works (live on main)</h3>
+         <ol style="margin:0;padding-left:18px;font-size:12px;line-height:1.6;color:#44403c">
+           <li><a href="lucid:section/overview">1.1 Overview — what Lucid is</a></li>
+           <li><a href="lucid:section/shape">1.2 Shape — shell / viewer / surface</a></li>
+           <!-- … 1.3 … 1.7 -->
+         </ol>
+       </div>
+       <div style="min-width:0">
+         <h3 style="margin:0 0 8px;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#1c1917">Part 2 — Upcoming (not yet plans)</h3>
+         <ol start="8" style="margin:0;padding-left:18px;font-size:12px;line-height:1.6;color:#44403c">
+           <li><a href="lucid:section/launcher">2.1 Launcher — where artifacts land</a></li>
+           <!-- … 2.8 -->
+         </ol>
+       </div>
+     </div>
+   </section>
+   ```
+
+   Group by leading number when you have a `1.x`/`2.x` plan (Part 1 = `1.*`, Part 2 = `2.*`); otherwise balance columns by count. Each entry links via `[Title](lucid:section/<data-lucid-id>)` so the chip scrolls and pulses. Omit this block below the threshold — the rail is enough and the duplication is noise.
 
    **Mark anything you want a yes or no on** with `data-lucid-decision` on the
    element that holds it - a recommended action, a proposed default, an option
@@ -99,6 +122,17 @@ Never fake the review loop, and never paste build instructions at the user.
    nothing itself. There is no opt-out flag. A path with no enclosing `.git` -
    an agent scratchpad - is accepted as-is, because there is no project folder
    for it to be in.
+
+   **Never create an artifact by hand-writing it into `.lucid/`** (e.g. `cat >
+   .lucid/foo.html`, `Write` to `.lucid/` without going through the CLI). That
+   writes a file with **no origin**: no `session_opened` provenance, no harness
+   attendant, no launch seed — so the hub has nothing to resume and no harness
+   to spawn, and the viewer shows `no agent session` with the default harness.
+   An artifact must be born through an **official origin**: either the human
+   clicks **New artifact** in the Lucid UI, or the agent runs `lucid open`
+   (which stamps the harness, session id, and model/effort). If you must
+   author the HTML yourself, write it elsewhere and then `lucid open` the
+   project path — let the CLI establish origin.
 
    **The review record is committable by default.** Its history (the log,
    `versions/`, `pasted/`, `forks/`) is meant to travel with the repo; only the

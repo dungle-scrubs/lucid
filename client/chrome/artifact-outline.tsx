@@ -10,6 +10,7 @@ import {
 import {
   ARTIFACT_OUTLINE_POLICY,
   createOutlinePresentation,
+  outlineHeadingNumber,
   type OutlinePresentationInput,
   type OutlinePresentationMode,
   type OutlinePresentationSendResult,
@@ -93,53 +94,70 @@ interface OutlinePanelProps {
   readonly snapshot: OutlineSnapshot;
 }
 
-const OutlinePanel = ({ mode, onActivate, snapshot }: OutlinePanelProps) => (
-  <div
-    data-test="artifact-outline-panel"
-    data-mode={mode.toLowerCase()}
-    // Only the TRANSIENT panel animates: it is the one that arrives, out of
-    // the rail a human just pointed at. A pinned panel is simply there.
-    className={`pointer-events-auto flex max-h-full min-h-0 w-full flex-col border border-ink-500 bg-ink-850/95 text-fg ${
-      mode === "PINNED" ? "" : "outline-panel-enter shadow-[0_8px_24px_rgba(0,0,0,0.42)]"
-    }`}
-  >
+const OutlinePanel = ({ mode, onActivate, snapshot }: OutlinePanelProps) => {
+  const manualNumber = /^\d+(\.\d+)*\.?\s+/u;
+  return (
     <div
-      className={`flex h-7 shrink-0 items-center gap-1.5 border-b border-ink-600 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-fg-muted ${
-        mode === "PINNED" ? "" : "outline-labels-enter"
+      data-test="artifact-outline-panel"
+      data-mode={mode.toLowerCase()}
+      // Only the TRANSIENT panel animates: it is the one that arrives, out of
+      // the rail a human just pointed at. A pinned panel is simply there.
+      className={`pointer-events-auto flex max-h-full min-h-0 w-full flex-col border border-ink-500 bg-ink-850/95 text-fg ${
+        mode === "PINNED" ? "" : "outline-panel-enter shadow-[0_8px_24px_rgba(0,0,0,0.42)]"
       }`}
     >
-      <span className="size-3.5" aria-hidden="true">
-        <ListIcon />
-      </span>
-      Sections
+      <div
+        className={`flex h-7 shrink-0 items-center gap-1.5 border-b border-ink-600 px-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-fg-muted ${
+          mode === "PINNED" ? "" : "outline-labels-enter"
+        }`}
+      >
+        <span className="size-3.5" aria-hidden="true">
+          <ListIcon />
+        </span>
+        Sections
+      </div>
+      <nav
+        aria-label="Artifact sections"
+        className={`min-h-0 overflow-y-auto py-1 ${mode === "PINNED" ? "" : "outline-labels-enter"}`}
+      >
+        {snapshot.headings.map((heading, index) => {
+          const current = heading.key === snapshot.activeKey;
+          const level = heading.level === 2 ? 2 : 1;
+          const number = outlineHeadingNumber(snapshot.headings, index);
+          const hasManualNumber = manualNumber.test(heading.label);
+          const showNumber = number !== null && !hasManualNumber;
+          return (
+            <Button
+              key={heading.key}
+              type="button"
+              variant="ghost"
+              size="xs"
+              aria-current={current ? "location" : undefined}
+              aria-label={showNumber && number ? `${number} ${heading.label}` : heading.label}
+              title={heading.label}
+              data-test="artifact-outline-item"
+              data-outline-key={heading.key}
+              data-outline-level={level}
+              onClick={(event) => onActivate(heading.key, event)}
+              className={`flex h-7 w-full cursor-pointer justify-start rounded-none text-left text-[11px] font-normal text-fg-muted hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline aria-[current=location]:bg-ink-700 aria-[current=location]:text-accent-bright ${
+                level === 2
+                  ? "pl-6 pr-2 text-[10px] text-steel-300 before:mr-2 before:h-px before:w-2 before:shrink-0 before:bg-ink-600 before:content-['']"
+                  : "px-2"
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-1.5 truncate">
+                {showNumber && number ? (
+                  <span className="shrink-0 tabular-nums text-steel-400">{number}</span>
+                ) : null}
+                <span className="truncate">{heading.label}</span>
+              </span>
+            </Button>
+          );
+        })}
+      </nav>
     </div>
-    <nav
-      aria-label="Artifact sections"
-      className={`min-h-0 overflow-y-auto py-1 ${mode === "PINNED" ? "" : "outline-labels-enter"}`}
-    >
-      {snapshot.headings.map((heading) => {
-        const current = heading.key === snapshot.activeKey;
-        return (
-          <Button
-            key={heading.key}
-            type="button"
-            variant="ghost"
-            size="xs"
-            aria-current={current ? "location" : undefined}
-            aria-label={heading.label}
-            title={heading.label}
-            data-test="artifact-outline-item"
-            data-outline-key={heading.key}
-            onClick={(event) => onActivate(heading.key, event)}
-            className="flex h-7 w-full cursor-pointer justify-start rounded-none px-2 text-left text-[11px] font-normal text-fg-muted hover:bg-ink-700 hover:text-fg-strong focus-visible:annot-outline aria-[current=location]:bg-ink-700 aria-[current=location]:text-accent-bright"
-          >
-            <span className="truncate">{heading.label}</span>
-          </Button>
-        );
-      })}
-    </nav>
-  </div>
-);
+  );
+};
 
 interface OutlineView {
   readonly mode: OutlinePresentationMode;
