@@ -44,7 +44,7 @@ describe("artifact outline labels", () => {
       paintClearancePx: 12,
       pinnedEnterClearancePx: 12,
       pinnedRetainClearancePx: 8,
-      proofElementLimit: 2_000,
+      proofElementLimit: 4_000,
       proofTimeBudgetMs: 8,
       quietLayoutMs: 40,
       railInsetPx: 18,

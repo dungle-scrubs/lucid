@@ -17,7 +17,14 @@ export const ARTIFACT_OUTLINE_POLICY = {
   outlineWidthPx: 240,
   railInsetPx: 18,
   paintClearancePx: 12,
-  proofElementLimit: 2_000,
+  // The pinned-gutter proof must visit every element to guarantee no heading
+  // is missed and no hostile paint overlaps the gutter. The bound is the
+  // largest legitimate plan document that should still earn an outline; a
+  // document over it gets no outline rather than a misleading partial one.
+  // 2_000 suppressed real artifacts (a 2_269-element plan bailed AO-004 on
+  // every cold pass); raised to 4_000 with time headroom (proofTimeBudgetMs
+  // still caps the cold traversal, and defer/retry retains one that exists).
+  proofElementLimit: 4_000,
   proofTimeBudgetMs: 8,
   quietLayoutMs: 40,
   pinnedEnterClearancePx: 12,
