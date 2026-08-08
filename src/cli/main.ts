@@ -278,7 +278,7 @@ const lucid = Command.make("lucid", {}, () => runEffect(() => runStatus())).pipe
 
 const cli = Command.run(lucid, {
   name: "Lucid - addressable HTML artifacts for agent-human review",
-  version: "0.5.0", // x-release-please-version
+  version: "0.6.0", // x-release-please-version
 });
 
 /**
