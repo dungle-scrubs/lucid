@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 1 - Repos and toolchain (M1.1)
+> Current focus: Phase 2 - Normalizer knowledge + interpretation (M2.1)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -15,26 +15,26 @@
 ### M1.1: Normalizer repo scaffold
 Source: implementation.md M1.1; D-005, D-010, D-014
 
-- [ ] `~/dev/harness-cli-normalizer` git-inited; private GitHub repo under dungle-scrubs
-- [ ] `package.json` name `@dungle-scrubs/harness-cli`; tsconfig strict
-- [ ] Biome + Lefthook wired; `pnpm check` runs lint+typecheck+test
-- [ ] `src/knowledge/`, `src/interpretation/`, `src/execution/` created, each with a module-level ownership comment
-- [ ] vitest (Node lane) green on an empty suite
-- [ ] `bun test` (Bun lane) green on an empty suite - run separately, both pass
+- [x] `~/dev/harness-cli-normalizer` git-inited; private GitHub repo under dungle-scrubs
+- [x] `package.json` name `@dungle-scrubs/harness-cli`; tsconfig strict
+- [x] Biome + Lefthook wired; `pnpm check` runs lint+typecheck+test
+- [x] `src/knowledge/`, `src/interpretation/`, `src/execution/` created, each with a module-level ownership comment
+- [x] vitest (Node lane) green on an empty suite
+- [x] `bun test` (Bun lane) green on an empty suite - run separately, both pass
 
 ### M1.2: lucid-v2 repo scaffold
 Source: implementation.md M1.2; D-015
 
-- [ ] `~/dev/lucid-v2` git-inited; private GitHub repo; `.plans/`, `spikes/`, `docs/` retained
-- [ ] `.gitignore` ignores machine-local run artifacts (`.lucid/*/run/`)
-- [ ] Bun-first package: bunfig, tsconfig strict, Biome, Lefthook; no Effect dependency
-- [ ] `src/protocol/`, `src/store/`, `src/modes/`, `src/tui/` created with module comments
-- [ ] `bun run check` green on an empty suite
+- [x] `~/dev/lucid-v2` git-inited; private GitHub repo; `.plans/`, `spikes/`, `docs/` retained
+- [x] `.gitignore` ignores machine-local run artifacts (`.lucid/*/run/`)
+- [x] Bun-first package: bunfig, tsconfig strict, Biome, Lefthook; no Effect dependency
+- [x] `src/protocol/`, `src/store/`, `src/modes/`, `src/tui/` created with module comments
+- [x] `bun run check` green on an empty suite
 
 ### Gate 1→2
-- [ ] Both repos push to private GitHub remotes
-- [ ] Normalizer Node lane AND Bun lane each executed and green
-- [ ] Every `src/*` module carries an ownership comment
+- [x] Both repos push to private GitHub remotes
+- [x] Normalizer Node lane AND Bun lane each executed and green
+- [x] Every `src/*` module carries an ownership comment
 
 ## Phase 2: Normalizer knowledge + interpretation
 
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 4 (milestone-0 spike evidence)
-- Remaining: 177
-- Current cutoff blockers: 177
+- Completed: 18 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3)
+- Remaining: 163
+- Current cutoff blockers: 163
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)

@@ -1,0 +1,9 @@
+pre-commit:
+  jobs:
+    - name: biome
+      glob: "*.{js,jsx,ts,tsx,json,jsonc,css}"
+      run: node_modules/.bin/biome check --write --no-errors-on-unmatched {staged_files}
+      stage_fixed: true
+    - name: types
+      glob: "*.{ts,tsx,json}"
+      run: node_modules/.bin/tsc --noEmit
