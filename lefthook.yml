@@ -1,10 +1,9 @@
 pre-commit:
-  parallel: true
   jobs:
     - name: biome
       glob: "*.{js,jsx,ts,tsx,json,jsonc,css}"
-      run: bunx biome check --write --no-errors-on-unmatched {staged_files}
+      run: node_modules/.bin/biome check --write --no-errors-on-unmatched {staged_files}
       stage_fixed: true
     - name: types
       glob: "*.{ts,tsx}"
-      run: bunx tsc --noEmit
+      run: node_modules/.bin/tsc --noEmit

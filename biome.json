@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["src/**", "test/**", "package.json", "tsconfig.json", "biome.json"]
+    "includes": ["**", "!spikes", "!docs", "!.plans"]
   },
   "formatter": {
     "enabled": true,
@@ -16,10 +16,7 @@
     "lineWidth": 100
   },
   "linter": {
-    "enabled": true,
-    "rules": {
-      "preset": "recommended"
-    }
+    "enabled": true
   },
   "javascript": {
     "formatter": {
