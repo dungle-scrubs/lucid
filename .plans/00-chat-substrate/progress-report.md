@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 2 - Normalizer knowledge + interpretation (M2.1)
+> Current focus: Phase 3 - Normalizer execution layer (M3.1)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -78,10 +78,10 @@ Source: implementation.md M2.3; D-003
 - [x] (D-003) claude vertical slice stays first; these are descriptor groundwork only
 
 ### Gate 2→3
-- [ ] Interpretation layer 100% pure (no I/O imports) - test-enforced
-- [ ] All 16 3.1 dimensions have an interpretation fn + RED test
-- [ ] Override merge throws with path
-- [ ] All four descriptors round-trip their v1 scars
+- [x] Interpretation layer 100% pure (no I/O imports) - test-enforced
+- [x] All 16 3.1 dimensions have an interpretation fn + RED test
+- [x] Override merge throws with path
+- [x] All four descriptors round-trip their v1 scars
 
 ## Phase 3: Normalizer execution layer
 
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 45 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5)
-- Remaining: 136
-- Current cutoff blockers: 136
+- Completed: 49 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5; Gate 2→3: 4)
+- Remaining: 132
+- Current cutoff blockers: 132
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
