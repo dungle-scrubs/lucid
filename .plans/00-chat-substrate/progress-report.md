@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 1 - Repos and toolchain (M1.1)
+> Current focus: Phase 2 - Normalizer knowledge + interpretation (M2.1)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -32,9 +32,9 @@ Source: implementation.md M1.2; D-015
 - [x] `bun run check` green on an empty suite
 
 ### Gate 1→2
-- [ ] Both repos push to private GitHub remotes
-- [ ] Normalizer Node lane AND Bun lane each executed and green
-- [ ] Every `src/*` module carries an ownership comment
+- [x] Both repos push to private GitHub remotes
+- [x] Normalizer Node lane AND Bun lane each executed and green
+- [x] Every `src/*` module carries an ownership comment
 
 ## Phase 2: Normalizer knowledge + interpretation
 
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 15 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5)
-- Remaining: 166
-- Current cutoff blockers: 166
+- Completed: 18 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3)
+- Remaining: 163
+- Current cutoff blockers: 163
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
