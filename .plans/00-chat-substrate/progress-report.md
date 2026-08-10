@@ -88,17 +88,17 @@ Source: implementation.md M2.3; D-003
 ### M3.1: streamTurn (spawn-per-turn runner)
 Source: implementation.md M3.1; D-005, D-022
 
-- [ ] `streamTurn(h, opts, {spawn, clock, signal, stallMs})` returns `AsyncIterable<HarnessEvent>`
-- [ ] Fake spawner + fake clock + fake signal injected; no direct `process.kill`
-- [ ] Drains both stdio streams concurrently
-- [ ] Emits typed HarnessEvents; identity deduped per D-022
-- [ ] Stall watchdog fires ONLY for `none`-granularity invocations
-- [ ] Limit detection emits `limit`
-- [ ] `done` carries classified exit cause (clean/limit/crash/stall)
-- [ ] RED: torn/interleaved output lines tolerated
-- [ ] RED: harness that never announces identity
-- [ ] RED: kill mid-stream via injected `signal`
-- [ ] Structured spawn/exit/stall events; argv logged with secret redaction
+- [x] `streamTurn(h, opts, {spawn, clock, signal, stallMs})` returns `AsyncIterable<HarnessEvent>`
+- [x] Fake spawner + fake clock + fake signal injected; no direct `process.kill`
+- [x] Drains both stdio streams concurrently
+- [x] Emits typed HarnessEvents; identity deduped per D-022
+- [x] Stall watchdog fires ONLY for `none`-granularity invocations
+- [x] Limit detection emits `limit`
+- [x] `done` carries classified exit cause (clean/limit/crash/stall)
+- [x] RED: torn/interleaved output lines tolerated
+- [x] RED: harness that never announces identity
+- [x] RED: kill mid-stream via injected `signal`
+- [x] Structured spawn/exit/stall events; argv logged with secret redaction
 
 ### M3.2: openSession (persistent session runner)
 Source: implementation.md M3.2; A-001 evidence
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 49 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5; Gate 2→3: 4)
-- Remaining: 132
-- Current cutoff blockers: 132
+- Completed: 60 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5; Gate 2→3: 4; M3.1: 11)
+- Remaining: 121
+- Current cutoff blockers: 121
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
