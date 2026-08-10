@@ -1,23 +1,31 @@
 /**
- * Frame codecs: the chat session protocol's wire vocabulary, validated at
- * the boundary. decodeFrame returns a structured verdict - ok with the
- * typed frame, or refused with a NAMED issue - and never a half-applied
- * frame: validation either accepts the whole record or rejects it with the
- * reason the host logs verbatim (a refused frame is the only operator-
- * visible auth/validation signal).
+ * Frame codecs: the chat session protocol's wire vocabulary (PLAN.md 4.3),
+ * validated at the boundary. decodeFrame turns an untrusted record into a
+ * typed Frame or a refused verdict with a NAMED issue, and CONSTRUCTS the
+ * result field by field from validated values - it never casts the raw
+ * record through, so extra/prototype-carried/getter-backed keys cannot
+ * ride into the durable log, and a value validated is the value used.
+ * A refused verdict is the only operator-visible auth/validation signal,
+ * so its issue names the exact reason and no frame is ever half-applied.
+ *
+ * Shapes follow PLAN.md exactly. `epoch` is the fencing token: every
+ * post-attach frame carries it (a takeover increments it; stale-epoch
+ * frames are refused, which is what makes the lease enforceable). `seq` is
+ * lucid's durable log authority; `n` is the source's per-epoch counter;
+ * `covers` references lucid's `seq`.
  */
 
 export const FRAME_KINDS = [
   "attach",
-  "attach-ok",
   "event",
-  "event-ack",
-  "input",
-  "disposition",
   "ack",
+  "disposition",
   "heartbeat",
   "detach",
+  "attach-ok",
   "refused",
+  "event-ack",
+  "input",
   "control",
   "lease",
   "credit",
@@ -25,83 +33,238 @@ export const FRAME_KINDS = [
 
 export type FrameKind = (typeof FRAME_KINDS)[number];
 
-export type DispositionState = "applied" | "queued" | "rejected";
-export type ControlOp = "end" | "switch-path";
-export type AttachPath = "interactive" | "headless-session" | "headless-turn";
+export type AttachProfile = "interactive" | "headless-session" | "headless-turn";
+export type Disposition = "applied" | "queued" | "rejected";
+export type DetachReason = "yield" | "shutdown";
+export type InputMode = "queue" | "steer";
+export type ControlAction = "pause" | "end" | "switch-path";
 
-export interface FrameBase {
-  readonly kind: FrameKind;
-  readonly conversationId: string;
+/** Bounds so a payload cannot become resident or forge a log line by luck
+ * of what a wire delivered. Ids/selectors match v1's 128-char stamp bound;
+ * text is generous but finite. Numbers must be safe integers (>= 2^53
+ * breaks monotonic seq/epoch/n comparison and never-expiring leases). */
+const ID_MAX = 128;
+const TEXT_MAX = 1_000_000;
+const TOKENS_MAX = 1_000_000;
+
+export interface Lease {
+  readonly expires: number;
+  readonly renewEvery: number;
 }
 
 export type Frame =
-  | (FrameBase & { kind: "attach"; secret: string; path: AttachPath; replayFrom?: number })
-  | (FrameBase & { kind: "attach-ok"; epoch: number; replayFrom: number })
-  | (FrameBase & { kind: "event"; epoch: number; n: number; event: Record<string, unknown> })
-  | (FrameBase & { kind: "event-ack"; seq: number })
-  | (FrameBase & { kind: "input"; epoch: number; id: string; text: string })
-  | (FrameBase & { kind: "disposition"; inputId: string; state: DispositionState })
-  | (FrameBase & { kind: "ack"; seq: number })
-  | (FrameBase & { kind: "heartbeat"; epoch: number })
-  | (FrameBase & { kind: "detach"; epoch: number })
-  | (FrameBase & { kind: "refused"; issue: string })
-  | (FrameBase & { kind: "control"; epoch: number; op: ControlOp })
-  | (FrameBase & { kind: "lease"; epoch: number; ttlMs: number })
-  | (FrameBase & { kind: "credit"; tokens: number });
+  // source -> lucid
+  | {
+      readonly kind: "attach";
+      readonly conversationId: string;
+      readonly profile: AttachProfile;
+      readonly secret: string;
+      readonly version: number;
+      readonly resumeFrom?: number;
+    }
+  | {
+      readonly kind: "event";
+      readonly epoch: number;
+      readonly n: number;
+      readonly turnId: string;
+      readonly event: Record<string, unknown>;
+    }
+  | { readonly kind: "ack"; readonly epoch: number; readonly covers: number }
+  | {
+      readonly kind: "disposition";
+      readonly epoch: number;
+      readonly inputId: string;
+      readonly outcome: Disposition;
+      readonly note?: string;
+    }
+  | { readonly kind: "heartbeat"; readonly epoch: number }
+  | { readonly kind: "detach"; readonly epoch: number; readonly reason: DetachReason }
+  // lucid -> source
+  | {
+      readonly kind: "attach-ok";
+      readonly epoch: number;
+      readonly lease: Lease;
+      readonly replayFrom: number;
+      readonly version: number;
+    }
+  | { readonly kind: "refused"; readonly issue: string }
+  | { readonly kind: "event-ack"; readonly epoch: number; readonly n: number }
+  | {
+      readonly kind: "input";
+      readonly seq: number;
+      readonly id: string;
+      readonly text: string;
+      readonly mode: InputMode;
+      readonly turnId?: string;
+    }
+  | { readonly kind: "control"; readonly seq: number; readonly action: ControlAction }
+  | { readonly kind: "lease"; readonly epoch: number; readonly expires: number }
+  | { readonly kind: "credit"; readonly epoch: number; readonly tokens: number };
 
 export type DecodeVerdict =
   | { readonly verdict: "ok"; readonly frame: Frame }
   | { readonly verdict: "refused"; readonly issue: string };
 
-type FieldSpec =
-  | "string"
-  | "nonempty-string"
-  | "nat"
-  | "object"
-  | { readonly enum: readonly string[] }
-  | { readonly optional: "nat" };
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters IS the guard - they forge log lines and collide dedupe keys
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
 
-const isNat = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 0;
-
-const FIELDS: Record<FrameKind, Record<string, FieldSpec>> = {
-  attach: {
-    secret: "nonempty-string",
-    path: { enum: ["interactive", "headless-session", "headless-turn"] },
-    replayFrom: { optional: "nat" },
-  },
-  "attach-ok": { epoch: "nat", replayFrom: "nat" },
-  event: { epoch: "nat", n: "nat", event: "object" },
-  "event-ack": { seq: "nat" },
-  input: { epoch: "nat", id: "nonempty-string", text: "string" },
-  disposition: {
-    inputId: "nonempty-string",
-    state: { enum: ["applied", "queued", "rejected"] },
-  },
-  ack: { seq: "nat" },
-  heartbeat: { epoch: "nat" },
-  detach: { epoch: "nat" },
-  refused: { issue: "nonempty-string" },
-  control: { epoch: "nat", op: { enum: ["end", "switch-path"] } },
-  lease: { epoch: "nat", ttlMs: "nat" },
-  credit: { tokens: "nat" },
+class Refused extends Error {
+  constructor(readonly issue: string) {
+    super(issue);
+  }
+}
+const refuse = (issue: string): never => {
+  throw new Refused(issue);
 };
 
-const fieldOk = (value: unknown, spec: FieldSpec): "ok" | "missing" | "wrong" => {
-  if (typeof spec === "object" && "optional" in spec) {
-    if (value === undefined) return "ok";
-    return isNat(value) ? "ok" : "wrong";
-  }
-  if (value === undefined) return "missing";
-  if (spec === "string") return typeof value === "string" ? "ok" : "wrong";
-  if (spec === "nonempty-string") {
-    if (typeof value !== "string") return "wrong";
-    return value === "" ? "missing" : "ok";
-  }
-  if (spec === "nat") return isNat(value) ? "ok" : "wrong";
-  if (spec === "object") {
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? "ok" : "wrong";
-  }
-  return (spec.enum as readonly string[]).includes(value as string) ? "ok" : "wrong";
+/** Reads that only ever touch OWN properties, validate, and return the
+ * validated value - the returned frame is built from these, never cast. */
+const own = (record: Record<string, unknown>, field: string): unknown =>
+  Object.hasOwn(record, field) ? record[field] : undefined;
+
+const str = (record: Record<string, unknown>, field: string, max: number): string => {
+  const v = own(record, field);
+  if (v === undefined) refuse("missing-field");
+  if (typeof v !== "string") refuse("wrong-type");
+  if ((v as string) === "") refuse("missing-field");
+  if ((v as string).length > max || CONTROL_CHARS.test(v as string)) refuse("wrong-type");
+  return v as string;
+};
+
+const text = (record: Record<string, unknown>, field: string): string => {
+  const v = own(record, field);
+  if (v === undefined) refuse("missing-field");
+  if (typeof v !== "string") refuse("wrong-type");
+  if ((v as string).length > TEXT_MAX) refuse("wrong-type");
+  return v as string;
+};
+
+const nat = (
+  record: Record<string, unknown>,
+  field: string,
+  max = Number.MAX_SAFE_INTEGER,
+): number => {
+  const v = own(record, field);
+  if (v === undefined) refuse("missing-field");
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0 || v > max) refuse("wrong-type");
+  return v as number;
+};
+
+const optNat = (record: Record<string, unknown>, field: string): number | undefined => {
+  if (!Object.hasOwn(record, field) || record[field] === undefined) return undefined;
+  return nat(record, field);
+};
+
+const optStr = (
+  record: Record<string, unknown>,
+  field: string,
+  max: number,
+): string | undefined => {
+  if (!Object.hasOwn(record, field) || record[field] === undefined) return undefined;
+  return str(record, field, max);
+};
+
+const enumOf = <T extends string>(
+  record: Record<string, unknown>,
+  field: string,
+  allowed: readonly T[],
+): T => {
+  const v = own(record, field);
+  if (v === undefined) refuse("missing-field");
+  if (typeof v !== "string" || !allowed.includes(v as T)) refuse("wrong-type");
+  return v as T;
+};
+
+/** The nested HarnessEvent object: the protocol does not re-validate the
+ * normalizer's event shape (the Part 0 seam forbids importing its types),
+ * but serializability and boundedness ARE protocol knowledge - a frame the
+ * store cannot JSON.stringify is not a valid frame. */
+const serializableObject = (
+  record: Record<string, unknown>,
+  field: string,
+): Record<string, unknown> => {
+  const v = own(record, field);
+  if (v === undefined) refuse("missing-field");
+  if (typeof v !== "object" || v === null || Array.isArray(v)) refuse("wrong-type");
+  const json = ((): string => {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return refuse("not-serializable");
+    }
+  })();
+  if (json.length > TEXT_MAX) refuse("wrong-type");
+  // Round-trip so Date/NaN/undefined normalize to their wire form and no
+  // getter or prototype key survives into the log.
+  return JSON.parse(json) as Record<string, unknown>;
+};
+
+const withEpoch = (record: Record<string, unknown>): number => nat(record, "epoch");
+
+const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
+  attach: (r) => ({
+    kind: "attach",
+    conversationId: str(r, "conversationId", ID_MAX),
+    profile: enumOf(r, "profile", ["interactive", "headless-session", "headless-turn"] as const),
+    secret: str(r, "secret", ID_MAX),
+    version: nat(r, "version"),
+    ...(optNat(r, "resumeFrom") !== undefined ? { resumeFrom: optNat(r, "resumeFrom") } : {}),
+  }),
+  event: (r) => ({
+    kind: "event",
+    epoch: withEpoch(r),
+    n: nat(r, "n"),
+    turnId: str(r, "turnId", ID_MAX),
+    event: serializableObject(r, "event"),
+  }),
+  ack: (r) => ({ kind: "ack", epoch: withEpoch(r), covers: nat(r, "covers") }),
+  disposition: (r) => ({
+    kind: "disposition",
+    epoch: withEpoch(r),
+    inputId: str(r, "inputId", ID_MAX),
+    outcome: enumOf(r, "outcome", ["applied", "queued", "rejected"] as const),
+    ...(optStr(r, "note", ID_MAX) !== undefined ? { note: optStr(r, "note", ID_MAX) } : {}),
+  }),
+  heartbeat: (r) => ({ kind: "heartbeat", epoch: withEpoch(r) }),
+  detach: (r) => ({
+    kind: "detach",
+    epoch: withEpoch(r),
+    reason: enumOf(r, "reason", ["yield", "shutdown"] as const),
+  }),
+  "attach-ok": (r) => {
+    const lease = own(r, "lease");
+    if (lease === undefined) refuse("missing-field");
+    if (typeof lease !== "object" || lease === null || Array.isArray(lease)) refuse("wrong-type");
+    return {
+      kind: "attach-ok",
+      epoch: withEpoch(r),
+      lease: {
+        expires: nat(lease as Record<string, unknown>, "expires"),
+        renewEvery: nat(lease as Record<string, unknown>, "renewEvery"),
+      },
+      replayFrom: nat(r, "replayFrom"),
+      version: nat(r, "version"),
+    };
+  },
+  refused: (r) => ({ kind: "refused", issue: str(r, "issue", ID_MAX) }),
+  "event-ack": (r) => ({ kind: "event-ack", epoch: withEpoch(r), n: nat(r, "n") }),
+  input: (r) => ({
+    kind: "input",
+    seq: nat(r, "seq"),
+    id: str(r, "id", ID_MAX),
+    text: text(r, "text"),
+    mode: enumOf(r, "mode", ["queue", "steer"] as const),
+    ...(optStr(r, "turnId", ID_MAX) !== undefined ? { turnId: optStr(r, "turnId", ID_MAX) } : {}),
+  }),
+  control: (r) => ({
+    kind: "control",
+    seq: nat(r, "seq"),
+    action: enumOf(r, "action", ["pause", "end", "switch-path"] as const),
+  }),
+  // `expires` is an absolute timestamp - a safe integer, no artificial cap;
+  // ttl bounds live on the reducer, which owns the injected clock.
+  lease: (r) => ({ kind: "lease", epoch: withEpoch(r), expires: nat(r, "expires") }),
+  credit: (r) => ({ kind: "credit", epoch: withEpoch(r), tokens: nat(r, "tokens", TOKENS_MAX) }),
 };
 
 export const decodeFrame = (raw: unknown): DecodeVerdict => {
@@ -109,17 +272,31 @@ export const decodeFrame = (raw: unknown): DecodeVerdict => {
     return { verdict: "refused", issue: "not-a-frame" };
   }
   const record = raw as Record<string, unknown>;
-  const kind = record.kind;
+  const kind = Object.hasOwn(record, "kind") ? record.kind : undefined;
   if (typeof kind !== "string" || !(FRAME_KINDS as readonly string[]).includes(kind)) {
     return { verdict: "refused", issue: "unknown-kind" };
   }
-  if (typeof record.conversationId !== "string" || record.conversationId === "") {
-    return { verdict: "refused", issue: "missing-field" };
+  try {
+    return { verdict: "ok", frame: DECODERS[kind as FrameKind](record) };
+  } catch (error) {
+    if (error instanceof Refused) return { verdict: "refused", issue: error.issue };
+    throw error;
   }
-  for (const [field, spec] of Object.entries(FIELDS[kind as FrameKind])) {
-    const state = fieldOk(record[field], spec);
-    if (state === "missing") return { verdict: "refused", issue: "missing-field" };
-    if (state === "wrong") return { verdict: "refused", issue: "wrong-type" };
+};
+
+/** Encode a typed frame to its wire string. Building from the typed Frame
+ * means extra fields are unrepresentable and a non-serializable payload
+ * fails at the sender, not the store. */
+export const encodeFrame = (frame: Frame): string => JSON.stringify(frame);
+
+/** The parse entry point: transport delivers text, this is the only path
+ * an untrusted string reaches decodeFrame. */
+export const parseFrame = (textLine: string): DecodeVerdict => {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(textLine);
+  } catch {
+    return { verdict: "refused", issue: "not-json" };
   }
-  return { verdict: "ok", frame: record as unknown as Frame };
+  return decodeFrame(raw);
 };
