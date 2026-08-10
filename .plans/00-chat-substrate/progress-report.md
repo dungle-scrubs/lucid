@@ -103,14 +103,14 @@ Source: implementation.md M3.1; D-005, D-022
 ### M3.2: openSession (persistent session runner)
 Source: implementation.md M3.2; A-001 evidence
 
-- [ ] `openSession(h, opts, deps)` returns `{turns, send, interrupt?, close}`
-- [ ] Turn boundaries detected from `result` events (A-001)
-- [ ] `send` during idle starts a turn
-- [ ] `send` during a turn is queued to the next boundary (A-001 disposition)
-- [ ] `close` drains cleanly
-- [ ] RED: process dies mid-turn
-- [ ] RED: consumer stops pulling (OS backpressure, nothing lost)
-- [ ] Session lifecycle + per-turn correlation events
+- [x] `openSession(h, opts, deps)` returns `{turns, send, interrupt?, close}`
+- [x] Turn boundaries detected from `result` events (A-001)
+- [x] `send` during idle starts a turn
+- [x] `send` during a turn is queued to the next boundary (A-001 disposition)
+- [x] `close` drains cleanly
+- [x] RED: process dies mid-turn
+- [x] RED: consumer stops pulling (OS backpressure, nothing lost)
+- [x] Session lifecycle + per-turn correlation events
 
 ### M3.3: Real-claude smoke
 Source: implementation.md M3.3
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 60 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5; Gate 2→3: 4; M3.1: 11)
-- Remaining: 121
-- Current cutoff blockers: 121
+- Completed: 68 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5; Gate 2→3: 4; M3.1: 11; M3.2: 8)
+- Remaining: 113
+- Current cutoff blockers: 113
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
