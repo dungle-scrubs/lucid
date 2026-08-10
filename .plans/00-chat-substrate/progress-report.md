@@ -63,10 +63,10 @@ Source: implementation.md M2.1; PLAN.md 3.1 table; A-001/A-005 evidence; D-006, 
 ### M2.2: Override file loading
 Source: implementation.md M2.2; D-006
 
-- [ ] Code defaults load
-- [ ] Validated override file merges; override wins
-- [ ] Malformed override throws with the file path in the message
-- [ ] Refusal names the file and the offending harness
+- [x] Code defaults load
+- [x] Validated override file merges; override wins
+- [x] Malformed override throws with the file path in the message
+- [x] Refusal names the file and the offending harness
 
 ### M2.3: codex, pi, muse descriptors
 Source: implementation.md M2.3; D-003
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 36 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18)
-- Remaining: 145
-- Current cutoff blockers: 145
+- Completed: 40 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4)
+- Remaining: 141
+- Current cutoff blockers: 141
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
