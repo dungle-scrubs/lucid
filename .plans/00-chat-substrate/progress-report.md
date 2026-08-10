@@ -132,10 +132,10 @@ Source: implementation.md M3.3
 ### M4.1: Frame schemas + validation
 Source: implementation.md M4.1
 
-- [ ] Codecs for all 13 frame kinds (attach, event, ack, disposition, heartbeat, detach, attach-ok, refused, event-ack, input, control, lease, credit)
-- [ ] Unknown kind refused
-- [ ] Malformed frame refused with a named `issue`, never half-applied
-- [ ] Codec returns structured `{verdict, issue}` the host logs (observability)
+- [x] Codecs for all 13 frame kinds (attach, event, ack, disposition, heartbeat, detach, attach-ok, refused, event-ack, input, control, lease, credit)
+- [x] Unknown kind refused
+- [x] Malformed frame refused with a named `issue`, never half-applied
+- [x] Codec returns structured `{verdict, issue}` the host logs (observability)
 
 ### M4.2: Reducer core - attach, epoch, lease, seq
 Source: implementation.md M4.2; D-002, D-004, D-021
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 77 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5; Gate 2→3: 4; M3.1: 11; M3.2: 8; M3.3: 5; Gate 3→4: 4)
-- Remaining: 104
-- Current cutoff blockers: 104
+- Completed: 81 (…phases 1-3: 77; M4.1: 4)
+- Remaining: 100
+- Current cutoff blockers: 100
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
