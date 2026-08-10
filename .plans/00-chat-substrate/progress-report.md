@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 3 - Normalizer execution layer (M3.1)
+> Current focus: Phase 4 - Protocol reducer (M4.1)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -115,17 +115,17 @@ Source: implementation.md M3.2; A-001 evidence
 ### M3.3: Real-claude smoke
 Source: implementation.md M3.3
 
-- [ ] Smoke script: headless single-turn with token deltas observed
-- [ ] Smoke: session multi-turn
-- [ ] Smoke: limit/error propagation
-- [ ] Smoke: kill + resume continuity
-- [ ] Green against installed claude; evidence in run log
+- [x] Smoke script: headless single-turn with token deltas observed
+- [x] Smoke: session multi-turn
+- [x] Smoke: limit/error propagation
+- [x] Smoke: kill + resume continuity
+- [x] Green against installed claude; evidence in run log
 
 ### Gate 3→4
-- [ ] Fake-spawner suite deterministic (identical across runs)
-- [ ] Runner-semantics REDs green (stall-only-for-none, mid-turn queue, close drains)
-- [ ] Real-claude smoke green
-- [ ] No normalizer file imports chat/protocol types (test-enforced)
+- [x] Fake-spawner suite deterministic (identical across runs)
+- [x] Runner-semantics REDs green (stall-only-for-none, mid-turn queue, close drains)
+- [x] Real-claude smoke green
+- [x] No normalizer file imports chat/protocol types (test-enforced)
 
 ## Phase 4: Protocol reducer
 
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 68 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5; Gate 2→3: 4; M3.1: 11; M3.2: 8)
-- Remaining: 113
-- Current cutoff blockers: 113
+- Completed: 77 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5; Gate 2→3: 4; M3.1: 11; M3.2: 8; M3.3: 5; Gate 3→4: 4)
+- Remaining: 104
+- Current cutoff blockers: 104
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
