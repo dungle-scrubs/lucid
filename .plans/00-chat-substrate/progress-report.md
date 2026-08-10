@@ -41,24 +41,24 @@ Source: implementation.md M1.2; D-015
 ### M2.1: Descriptor schema + claude descriptor + core interpretation
 Source: implementation.md M2.1; PLAN.md 3.1 table; A-001/A-005 evidence; D-006, D-008, D-018, D-022
 
-- [ ] Descriptor type covers all 16 PLAN.md 3.1 dimensions
-- [ ] `buildLaunchArgv` - claude argv, `{prompt}` before `--allowedTools`
-- [ ] `buildResumeArgv` - caller-assigned stable id, no rotation (D-018)
-- [ ] `buildSessionArgv` - stream-json in/out + `--include-partial-messages` + `--setting-sources project`
-- [ ] `decodeIdentity` - `system/init` deduped per-turn, emit identity on first-sight/id-change only (D-022), RED against `spikes/evidence/a001-raw.ndjson`
-- [ ] `parseResumeCommand` round-trips `{harness, sessionId, autonomy}`
-- [ ] `detectLimit` - claude limit matchers
-- [ ] `validateModel` / `validateEffort` - claude vocabulary
-- [ ] `capabilitiesOf(h, model, mode)` returns `{vision, images, streaming, session, source, confidence}`
-- [ ] streaming granularity pinned to the exact flag set (token) vs bare `-p` (none)
-- [ ] `storePath` resolves the transcript tail path
-- [ ] `isInteractive(sid)` / presence
-- [ ] `contextHook` maps to a `context` HarnessEvent
-- [ ] `stdin` rule (pi `< /dev/null`)
-- [ ] `provider`, `autonomy`, `tools`, `discoveryFlags` each have an interpretation fn
-- [ ] RED: positional prompt starting with `-` refused
-- [ ] RED: control characters in selectors bounded/refused
-- [ ] RED: empty tool grant refused
+- [x] Descriptor type covers all 16 PLAN.md 3.1 dimensions
+- [x] `buildLaunchArgv` - claude argv, `{prompt}` before `--allowedTools`
+- [x] `buildResumeArgv` - caller-assigned stable id, no rotation (D-018)
+- [x] `buildSessionArgv` - stream-json in/out + `--include-partial-messages` + `--setting-sources project`
+- [x] `decodeIdentity` - `system/init` deduped per-turn, emit identity on first-sight/id-change only (D-022), RED against `spikes/evidence/a001-raw.ndjson`
+- [x] `parseResumeCommand` round-trips `{harness, sessionId, autonomy}`
+- [x] `detectLimit` - claude limit matchers
+- [x] `validateModel` / `validateEffort` - claude vocabulary
+- [x] `capabilitiesOf(h, model, mode)` returns `{vision, images, streaming, session, source, confidence}`
+- [x] streaming granularity pinned to the exact flag set (token) vs bare `-p` (none)
+- [x] `storePath` resolves the transcript tail path
+- [x] `isInteractive(sid)` / presence
+- [x] `contextHook` maps to a `context` HarnessEvent
+- [x] `stdin` rule (pi `< /dev/null`)
+- [x] `provider`, `autonomy`, `tools`, `discoveryFlags` each have an interpretation fn
+- [x] RED: positional prompt starting with `-` refused
+- [x] RED: control characters in selectors bounded/refused
+- [x] RED: empty tool grant refused
 
 ### M2.2: Override file loading
 Source: implementation.md M2.2; D-006
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 18 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3)
-- Remaining: 163
-- Current cutoff blockers: 163
+- Completed: 36 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18)
+- Remaining: 145
+- Current cutoff blockers: 145
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
