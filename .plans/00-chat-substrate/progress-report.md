@@ -71,11 +71,11 @@ Source: implementation.md M2.2; D-006
 ### M2.3: codex, pi, muse descriptors
 Source: implementation.md M2.3; D-003
 
-- [ ] codex descriptor: thread-id discovery (stdout-jsonl), `--last` surface
-- [ ] pi descriptor: provider/discovery flags, stdin rule, runtime-extensible capability query
-- [ ] muse descriptor: positional resume
-- [ ] RED: `resumeLast` corroboration ranks two candidates, never guesses
-- [ ] (D-003) claude vertical slice stays first; these are descriptor groundwork only
+- [x] codex descriptor: thread-id discovery (stdout-jsonl), `--last` surface
+- [x] pi descriptor: provider/discovery flags, stdin rule, runtime-extensible capability query
+- [x] muse descriptor: positional resume
+- [x] RED: `resumeLast` corroboration ranks two candidates, never guesses
+- [x] (D-003) claude vertical slice stays first; these are descriptor groundwork only
 
 ### Gate 2→3
 - [ ] Interpretation layer 100% pure (no I/O imports) - test-enforced
@@ -330,8 +330,8 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 40 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4)
-- Remaining: 141
-- Current cutoff blockers: 141
+- Completed: 45 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5)
+- Remaining: 136
+- Current cutoff blockers: 136
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
