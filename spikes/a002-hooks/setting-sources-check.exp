@@ -1,0 +1,54 @@
+#!/usr/bin/expect -f
+# Minimal bounded check of the settings-source selection before A-002 proper.
+set timeout 180
+log_file -noappend setting-sources-pty.log
+spawn zsh -c {unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID CLAUDE_CODE_BRIDGE_SESSION_ID CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_PID CLAUDE_EFFORT HERDR_ENV; exec claude --setting-sources project --model sonnet --dangerously-skip-permissions}
+set claude_pid [exp_pid]
+set f [open "setting-sources-processes.log" "w"]
+puts $f "SPAWN claude pid=$claude_pid purpose=settings-sources-minimal-check"
+close $f
+expect {
+  "Allow external CLAUDE.md file imports?" { send "2"; sleep 1; send "\r"; exp_continue }
+  -re {Try} { }
+  timeout {
+    set f [open "setting-sources-processes.log" "a"]
+    puts $f "STOP claude pid=$claude_pid method=TERM reason=startup-prompt-timeout"
+    close $f
+    exec kill -TERM $claude_pid
+    exit 124
+  }
+}
+send -- "Reply with exactly: PROJECT-SETTINGS-CHECK"
+sleep 1
+send "\r"
+expect {
+  "PROJECT-SETTINGS-CHECK" {
+    # The first occurrence is the submitted prompt echo. The second is the
+    # assistant's visible answer, which proves an ordinary turn completed.
+    expect {
+      "PROJECT-SETTINGS-CHECK" { puts "MARK: project-settings-check-visible" }
+      timeout {
+        set f [open "setting-sources-processes.log" "a"]
+        puts $f "STOP claude pid=$claude_pid method=TERM reason=response-timeout"
+        close $f
+        exec kill -TERM $claude_pid
+        exit 124
+      }
+    }
+  }
+  timeout {
+    set f [open "setting-sources-processes.log" "a"]
+    puts $f "STOP claude pid=$claude_pid method=TERM reason=timeout"
+    close $f
+    exec kill -TERM $claude_pid
+    sleep 5
+    exit 124
+  }
+}
+send "/exit\r"
+expect {
+  eof { set f [open "setting-sources-processes.log" "a"]; puts $f "EXIT claude pid=$claude_pid fate=natural"; close $f }
+  timeout { set f [open "setting-sources-processes.log" "a"]; puts $f "STOP claude pid=$claude_pid method=TERM reason=exit-timeout"; close $f; exec kill -TERM $claude_pid }
+}
+catch { close }
+catch { wait }

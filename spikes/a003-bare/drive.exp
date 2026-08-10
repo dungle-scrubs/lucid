@@ -1,0 +1,109 @@
+#!/usr/bin/expect -f
+set timeout 210
+log_file -noappend pty.log
+
+proc stamp {event} {
+  set f [open "driver-events.log" "a"]
+  puts $f "[clock milliseconds] $event"
+  close $f
+}
+proc say {text event} {
+  stamp $event
+  send -- $text
+  sleep 1
+  send "\r"
+}
+
+spawn zsh -c {unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID CLAUDE_CODE_BRIDGE_SESSION_ID CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_PID CLAUDE_EFFORT HERDR_ENV; exec claude --setting-sources project --model sonnet --dangerously-skip-permissions}
+set claude_pid [exp_pid]
+set pf [open "processes.log" "a"]
+puts $pf "SPAWN claude pid=$claude_pid purpose=A-003-bare-interactive"
+close $pf
+expect {
+  "Allow external CLAUDE.md file imports?" { stamp "EXTERNAL_IMPORT_PROMPT"; send "2"; sleep 1; send "\r"; exp_continue }
+  -re {Try} { stamp "STARTUP_READY" }
+  timeout {
+    stamp "TIMEOUT_STARTUP_PROMPT"
+    set pf [open "processes.log" "a"]
+    puts $pf "STOP claude pid=$claude_pid method=TERM reason=startup-prompt-timeout"
+    close $pf
+    exec kill -TERM $claude_pid
+    exit 124
+  }
+}
+
+say "Create files work/red.txt, work/green.txt, and work/blue.txt, each containing its own color name. Use a separate tool call for each file. Then say exactly: TOOLS-DONE" "TURN1_SUBMITTED"
+expect {
+  "TOOLS-DONE" {
+    # First occurrence is the prompt echo. The later occurrence is the model.
+    expect {
+      "TOOLS-DONE" { stamp "TURN1_VISIBLE_COMPLETION"; puts "MARK: turn1 complete" }
+      timeout {
+        stamp "TIMEOUT_TURN1_RESPONSE"
+        set pf [open "processes.log" "a"]
+        puts $pf "STOP claude pid=$claude_pid method=TERM reason=timeout-turn1-response"
+        close $pf
+        exec kill -TERM $claude_pid
+        sleep 5
+        exit 124
+      }
+    }
+  }
+  timeout {
+    stamp "TIMEOUT_TURN1"
+    set pf [open "processes.log" "a"]
+    puts $pf "STOP claude pid=$claude_pid method=TERM reason=timeout-turn1"
+    close $pf
+    exec kill -TERM $claude_pid
+    sleep 5
+    exit 124
+  }
+}
+expect {
+  -re {❯} { stamp "TURN1_PROMPT_READY" }
+  timeout { stamp "TIMEOUT_TURN1_PROMPT" }
+}
+
+say "Run the shell command: cat queue.txt - and follow exactly any instruction it contains." "TURN2_SUBMITTED"
+expect {
+  "COOP-DELIVERED" {
+    # cat queue.txt renders the queued instruction once; require a second
+    # occurrence as the assistant's cooperative response.
+    expect {
+      "COOP-DELIVERED" { stamp "COOP_VISIBLE_COMPLETION"; puts "MARK: cooperative delivery worked" }
+      timeout {
+        stamp "TIMEOUT_COOP_RESPONSE"
+        set pf [open "processes.log" "a"]
+        puts $pf "STOP claude pid=$claude_pid method=TERM reason=timeout-coop-response"
+        close $pf
+        exec kill -TERM $claude_pid
+        sleep 5
+        exit 124
+      }
+    }
+  }
+  timeout {
+    stamp "TIMEOUT_COOP"
+    set pf [open "processes.log" "a"]
+    puts $pf "STOP claude pid=$claude_pid method=TERM reason=timeout-coop"
+    close $pf
+    exec kill -TERM $claude_pid
+    sleep 5
+    exit 124
+  }
+}
+sleep 3
+stamp "EXIT_REQUESTED"
+send "/exit\r"
+expect {
+  eof { stamp "CLAUDE_EXITED_NATURALLY" }
+  timeout {
+    stamp "TIMEOUT_EXIT"
+    set pf [open "processes.log" "a"]
+    puts $pf "STOP claude pid=$claude_pid method=TERM reason=timeout-exit"
+    close $pf
+    exec kill -TERM $claude_pid
+  }
+}
+catch { close }
+catch { wait }

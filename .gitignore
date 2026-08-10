@@ -1,0 +1,8 @@
+node_modules/
+.lucid/*/run/
+lucid-v2-plan/
+lucid-v2-plan.html
+coverage/
+*.tsbuildinfo
+.DS_Store
+.lefthook-local/
