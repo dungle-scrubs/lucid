@@ -41,7 +41,6 @@ export {
   type ChannelStatus,
   channelStatus,
   HEARTBEAT_MS,
-  type Presence,
 } from "./liveness.js";
 export {
   type Attachment,
@@ -55,7 +54,9 @@ export {
   LEASE_RENEW_EVERY_MS,
   LEASE_TTL_MS,
   PROTOCOL_VERSION,
+  type Presence,
   type QueuedInput,
+  type ReduceContext,
   type ReduceResult,
   type RefusalDetail,
   reduce,

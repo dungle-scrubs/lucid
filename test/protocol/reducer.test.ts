@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { DROPPABLE_QUEUE_MAX } from "../../src/protocol/events.js";
 import { FRAME_KINDS, type Frame, parseFrame } from "../../src/protocol/frames.js";
 import {
-  type ChannelState,
   enqueueInput,
   grantCredit,
   initialChannelState,
@@ -10,49 +9,9 @@ import {
   LEASE_RENEW_EVERY_MS,
   LEASE_TTL_MS,
   PROTOCOL_VERSION,
-  type ReduceResult,
   reduce,
 } from "../../src/protocol/reducer.js";
-
-const SECRET = "s3cret";
-
-const fresh = (): ChannelState => initialChannelState({ conversationId: "conv-1", secret: SECRET });
-
-const attach = (overrides: Partial<Extract<Frame, { kind: "attach" }>> = {}): Frame => ({
-  kind: "attach",
-  conversationId: "conv-1",
-  profile: "interactive",
-  secret: SECRET,
-  version: PROTOCOL_VERSION,
-  ...overrides,
-});
-
-// Default payload is LOSSLESS (message): most tests exercise fencing and
-// sequencing, not flow control - droppable payloads are credit-gated and
-// named explicitly in the credit tests.
-const event = (overrides: Partial<Extract<Frame, { kind: "event" }>> = {}): Frame => ({
-  kind: "event",
-  epoch: 1,
-  n: 1,
-  turnId: "t-1",
-  event: { kind: "message", text: "x" },
-  ...overrides,
-});
-
-const expectAccepted = (result: ReduceResult): Extract<ReduceResult, { verdict: "accepted" }> => {
-  if (result.verdict !== "accepted")
-    throw new Error(`expected accepted, got refusal: ${result.issue}`);
-  return result;
-};
-
-const expectRefused = (result: ReduceResult): Extract<ReduceResult, { verdict: "refused" }> => {
-  if (result.verdict !== "refused") throw new Error("expected refusal, got accepted");
-  return result;
-};
-
-/** Drive a sequence of accepted frames and return the final state. */
-const drive = (state: ChannelState, frames: readonly (readonly [Frame, number])[]): ChannelState =>
-  frames.reduce((current, [frame, at]) => expectAccepted(reduce(current, frame, at)).state, state);
+import { attach, drive, event, expectAccepted, expectRefused, fresh } from "./helpers.js";
 
 describe("reducer core (M4.2)", () => {
   test("attach with the right secret grants epoch 1, an attach-ok with lease + replayFrom, and a structured record", () => {
@@ -85,6 +44,7 @@ describe("reducer core (M4.2)", () => {
       epoch: 1,
       seq: 1,
       profile: "interactive",
+      presence: "unknown",
       now: 1_000,
     });
   });

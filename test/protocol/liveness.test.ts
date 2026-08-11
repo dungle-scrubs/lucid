@@ -1,34 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { Frame } from "../../src/protocol/frames.js";
 import { ATTACH_GRACE_MS, channelStatus, HEARTBEAT_MS } from "../../src/protocol/liveness.js";
-import {
-  type ChannelState,
-  initialChannelState,
-  LEASE_RENEW_EVERY_MS,
-  LEASE_TTL_MS,
-  PROTOCOL_VERSION,
-  type ReduceResult,
-  reduce,
-} from "../../src/protocol/reducer.js";
-
-const SECRET = "s3cret";
-
-const fresh = (): ChannelState => initialChannelState({ conversationId: "conv-1", secret: SECRET });
-
-const attach = (overrides: Partial<Extract<Frame, { kind: "attach" }>> = {}): Frame => ({
-  kind: "attach",
-  conversationId: "conv-1",
-  profile: "interactive",
-  secret: SECRET,
-  version: PROTOCOL_VERSION,
-  ...overrides,
-});
-
-const expectAccepted = (result: ReduceResult): Extract<ReduceResult, { verdict: "accepted" }> => {
-  if (result.verdict !== "accepted")
-    throw new Error(`expected accepted, got refusal: ${result.issue}`);
-  return result;
-};
+import { LEASE_RENEW_EVERY_MS, LEASE_TTL_MS, reduce } from "../../src/protocol/reducer.js";
+import { attach, expectAccepted, fresh } from "./helpers.js";
 
 describe("liveness + state machine (M4.4)", () => {
   test("the five conversation states derive from profile, lease liveness, and presence - and the grace constants ARE the lease clock, in one module", () => {
@@ -113,6 +86,64 @@ describe("liveness + state machine (M4.4)", () => {
 
     // The human's own adapter re-attaching is never presence-gated.
     expectAccepted(reduce(attached, attach(), expired, { presence: { processAlive: true } }));
+  });
+
+  test("presence fences CONTENDERS, never the incumbent's own recovery: a dead headless channel re-attaches even while an interactive process lives", () => {
+    // Lucid-owned headless-session incumbent; its lease lapses.
+    const headless = expectAccepted(
+      reduce(fresh(), attach({ profile: "headless-session" }), 1_000),
+    ).state;
+    const expired = 1_000 + ATTACH_GRACE_MS;
+
+    // An interactive process being alive somewhere must NOT strand the
+    // headless runner: presence guards interactively-held conversations,
+    // and this one was headless-held.
+    const recovered = expectAccepted(
+      reduce(headless, attach({ profile: "headless-session" }), expired, {
+        presence: { processAlive: true },
+      }),
+    );
+    expect(recovered.state.epoch).toBe(2);
+
+    // A NEVER-attached conversation with a live interactive process is
+    // interactively held in spirit: headless attach refused there.
+    const virgin = reduce(fresh(), attach({ profile: "headless-session" }), 1_000, {
+      presence: { processAlive: true },
+    });
+    expect(virgin.verdict).toBe("refused");
+    if (virgin.verdict === "refused") expect(virgin.issue).toBe("presence-holds");
+
+    // Ordering: while the lease is HELD, the refusal is lease-held - the
+    // presence gate only speaks for dead channels.
+    const live = expectAccepted(reduce(fresh(), attach(), 1_000)).state;
+    const contender = reduce(live, attach({ profile: "headless-session" }), 2_000, {
+      presence: { processAlive: true },
+    });
+    expect(contender.verdict).toBe("refused");
+    if (contender.verdict === "refused") expect(contender.issue).toBe("lease-held");
+  });
+
+  test("attach records carry the presence dimension, so a corroborated takeover and a blind one are distinguishable in the log", () => {
+    const attached = expectAccepted(reduce(fresh(), attach(), 1_000)).state;
+    const expired = 1_000 + ATTACH_GRACE_MS;
+
+    const corroborated = expectAccepted(
+      reduce(attached, attach({ profile: "headless-session" }), expired, {
+        presence: { processAlive: false },
+      }),
+    );
+    expect(corroborated.record.presence).toBe("gone");
+
+    const blind = expectAccepted(
+      reduce(attached, attach({ profile: "headless-session" }), expired),
+    );
+    expect(blind.record.presence).toBe("unknown");
+
+    const fenced = reduce(attached, attach({ profile: "headless-session" }), expired, {
+      presence: { processAlive: true },
+    });
+    if (fenced.verdict === "refused") expect(fenced.record.presence).toBe("alive");
+    expect(fenced.verdict).toBe("refused");
   });
 
   test("handoff is legal only at turn boundaries: a clean yield handoff aborts nothing; lease-expiry takeover is the one mid-turn exception", () => {

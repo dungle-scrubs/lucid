@@ -155,14 +155,25 @@ export interface TransitionRecord {
    * shows up in credits alone) and the outstanding balance after it. */
   readonly tokens?: number;
   readonly credits?: number;
+  /** Attach observability: what presence said when the verdict was made,
+   * so a corroborated takeover and a blind one differ in the log. */
+  readonly presence?: "alive" | "gone" | "unknown";
 }
 
-/** Host-corroborated facts a transition may consult. `presence` is the
- * normalizer's ps-level fact (M3.1); ABSENT means the host could not
- * corroborate - presence never proves a channel, so absence never blocks
- * (epoch fencing is the defense - D-021). */
+/** The normalizer's ps-level fact (M3.1), CONTRACTUALLY about the
+ * INTERACTIVE process only (PLAN.md: presence answers "is an interactive
+ * process attached now?"). Never feed it the liveness of lucid's own
+ * headless child - that would fence a stalled runner against its own
+ * recovery. */
+export interface Presence {
+  readonly processAlive: boolean;
+}
+
+/** Host-corroborated facts a transition may consult. ABSENT presence means
+ * the host could not corroborate - presence never proves a channel, so
+ * absence never blocks (epoch fencing is the defense - D-021). */
 export interface ReduceContext {
-  readonly presence?: { readonly processAlive: boolean };
+  readonly presence?: Presence;
 }
 
 export type ReduceResult =
@@ -250,7 +261,7 @@ const refusal = (
   issue: RefusalIssue,
   now: number,
   detail?: RefusalDetail,
-  extra?: Pick<TransitionRecord, "credits" | "queueDepth">,
+  extra?: Pick<TransitionRecord, "credits" | "queueDepth" | "presence">,
 ): ReduceResult => ({
   verdict: "refused",
   issue,
@@ -289,7 +300,10 @@ const accepted = (
   frame: Frame,
   now: number,
   effects: readonly Effect[],
-  extra?: Pick<TransitionRecord, "queueDepth" | "credits" | "inputStatus" | "rejections">,
+  extra?: Pick<
+    TransitionRecord,
+    "queueDepth" | "credits" | "inputStatus" | "rejections" | "presence"
+  >,
 ): ReduceResult => ({
   verdict: "accepted",
   state: next,
@@ -340,7 +354,7 @@ const refusedButAlive = (
   issue: RefusalIssue,
   now: number,
   detail?: RefusalDetail,
-  extra?: Pick<TransitionRecord, "credits" | "queueDepth">,
+  extra?: Pick<TransitionRecord, "credits" | "queueDepth" | "presence">,
 ): ReduceResult => {
   const renewed = renewAttachment(attachment, now);
   const next = renewed === attachment ? state : { ...state, attachment: renewed };
@@ -356,6 +370,9 @@ const reduceAttach = (
   now: number,
   ctx?: ReduceContext,
 ): ReduceResult => {
+  const presence: "alive" | "gone" | "unknown" =
+    ctx?.presence === undefined ? "unknown" : ctx.presence.processAlive ? "alive" : "gone";
+  const withPresence = { presence } as const;
   if (frame.conversationId !== state.conversationId)
     return refusal(state, frame, "wrong-conversation", now);
   if (frame.secret !== state.secret) return refusal(state, frame, "auth-failed", now);
@@ -364,14 +381,19 @@ const reduceAttach = (
       claimed: frame.version,
       head: PROTOCOL_VERSION,
     });
-  if (isLive(state, now)) return refusal(state, frame, "lease-held", now);
-  // interactive-unattached (dead channel, presence corroborates the
-  // process alive): a headless contender may not steal the conversation
-  // from a living human process (PLAN 4.6). Only a CORROBORATED presence
-  // blocks - unknown presence never does (D-021) - and the human's own
+  if (isLive(state, now)) return refusal(state, frame, "lease-held", now, undefined, withPresence);
+  // interactive-unattached (dead channel, presence corroborates the human
+  // process alive): a headless CONTENDER may not steal an interactively
+  // held (or never-attached) conversation (PLAN 4.6). The gate never
+  // fences a headless incumbent's own recovery, only a corroborated
+  // presence blocks (unknown never does - D-021), and the human's own
   // adapter re-attaching is never gated.
-  if (frame.profile !== "interactive" && ctx?.presence?.processAlive === true)
-    return refusal(state, frame, "presence-holds", now);
+  if (
+    frame.profile !== "interactive" &&
+    (state.attachment === null || state.attachment.profile === "interactive") &&
+    ctx?.presence?.processAlive === true
+  )
+    return refusal(state, frame, "presence-holds", now, undefined, withPresence);
   if (frame.resumeFrom !== undefined && frame.resumeFrom > state.seq)
     return refusal(state, frame, "resume-ahead-of-log", now, {
       claimed: frame.resumeFrom,
@@ -427,6 +449,7 @@ const reduceAttach = (
       },
       ...sendInputs(replayed),
     ],
+    withPresence,
   );
 };
 

@@ -11,19 +11,19 @@
  * every transition; this module only names the state the host acts on.
  */
 
-import type { ChannelState } from "./reducer.js";
+import type { ChannelState, Presence } from "./reducer.js";
 import { isLive, LEASE_RENEW_EVERY_MS, LEASE_TTL_MS } from "./reducer.js";
 
+export type { Presence } from "./reducer.js";
+
 /** PLAN.md's liveness names for the lease clock - aliases, not a second
- * clock, so grace constants live in exactly one module (reducer.ts). */
+ * clock, so grace constants live in exactly one module (reducer.ts).
+ * Because renewal is gated at renewEvery granularity, the real grace
+ * after a writer's LAST frame lies in [ATTACH_GRACE_MS - HEARTBEAT_MS,
+ * ATTACH_GRACE_MS]; hosts consult isLive/channelStatus, never arithmetic
+ * on these. */
 export const HEARTBEAT_MS = LEASE_RENEW_EVERY_MS;
 export const ATTACH_GRACE_MS = LEASE_TTL_MS;
-
-/** The normalizer's ps-level fact, injected (M3.1 provides the real one;
- * tests fake it). */
-export interface Presence {
-  readonly processAlive: boolean;
-}
 
 export type ChannelStatus =
   | "interactive-attached"
