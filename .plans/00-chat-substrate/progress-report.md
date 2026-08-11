@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 4 - Protocol reducer (M4.1)
+> Current focus: Phase 5 - Store, modes, claude adapters (M5.1)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -132,61 +132,62 @@ Source: implementation.md M3.3
 ### M4.1: Frame schemas + validation
 Source: implementation.md M4.1
 
-- [ ] Codecs for all 13 frame kinds (attach, event, ack, disposition, heartbeat, detach, attach-ok, refused, event-ack, input, control, lease, credit)
-- [ ] Unknown kind refused
-- [ ] Malformed frame refused with a named `issue`, never half-applied
-- [ ] Codec returns structured `{verdict, issue}` the host logs (observability)
+- [x] Codecs for all 13 frame kinds (attach, event, ack, disposition, heartbeat, detach, attach-ok, refused, event-ack, input, control, lease, credit)
+- [x] Unknown kind refused
+- [x] Malformed frame refused with a named `issue`, never half-applied
+- [x] Codec returns structured `{verdict, issue}` the host logs (observability)
 
 ### M4.2: Reducer core - attach, epoch, lease, seq
 Source: implementation.md M4.2; D-002, D-004, D-021
 
-- [ ] `(state, frame, now) -> {state, effects, record} | refusal`, injected clock
-- [ ] Attach handshake: secret check, epoch grant, replayFrom
-- [ ] Lease renew/expiry
-- [ ] Takeover increments epoch; stale-epoch frames refused
-- [ ] lucid-minted seq on acceptance
-- [ ] Per-epoch `n` gap/dupe detection
-- [ ] RED: two simultaneous attaches + stale-lease takeover (loser refused by epoch)
-- [ ] RED: lease expiry mid-turn aborts the in-flight turn
-- [ ] RED: channel-auth - wrong secret refused `auth-failed` on attach
-- [ ] RED: stale/wrong epoch/secret refused on event/input/control
-- [ ] RED: impersonated `control {end|switch-path}` on stale epoch rejected
+- [x] `(state, frame, now) -> {state, effects, record} | refusal`, injected clock
+- [x] Attach handshake: secret check, epoch grant, replayFrom
+- [x] Lease renew/expiry
+- [x] Takeover increments epoch; stale-epoch frames refused
+- [x] lucid-minted seq on acceptance
+- [x] Per-epoch `n` gap/dupe detection
+- [x] RED: two simultaneous attaches + stale-lease takeover (loser refused by epoch)
+- [x] RED: lease expiry mid-turn aborts the in-flight turn
+- [x] RED: channel-auth - wrong secret refused `auth-failed` on attach
+- [x] RED: stale/wrong epoch/secret refused on event/input/control
+- [x] RED: impersonated `control {end|switch-path}` on stale epoch rejected
+- [x] turnId validated on first sight (PLAN 4.3): conversation-wide reuse refused `turn-id-reused`; acked rebased from resumeFrom at attach (codex review findings)
 
 ### M4.3: Input delivery, dispositions, replay, backpressure
 Source: implementation.md M4.3
 
-- [ ] Input queue with idempotent ids
-- [ ] Disposition transitions (applied/queued/rejected)
-- [ ] Replay from `resumeFrom`
-- [ ] `host.grantCredit()` mints `credit {tokens}` for droppable class only
-- [ ] Queue bounded by `DROPPABLE_QUEUE_MAX`
-- [ ] Accepted = durable applied|queued; rejected returns to queue, never dropped
-- [ ] Death-before-ack: reconnect, replay, dedupe
-- [ ] Credit starvation coalesces token/progress/context (latest-wins), lossless never dropped
-- [ ] RED: heartbeat timeout vs slow-turn disambiguation
-- [ ] RED: malformed mid-stream
-- [ ] RED: cross-conversation isolation (no leakage)
+- [x] Input queue with idempotent ids
+- [x] Disposition transitions (applied/queued/rejected)
+- [x] Replay from `resumeFrom`
+- [x] `host.grantCredit()` mints `credit {tokens}` for droppable class only
+- [x] Queue bounded by `DROPPABLE_QUEUE_MAX`
+- [x] Accepted = durable applied|queued; rejected returns to queue, never dropped
+- [x] Death-before-ack: reconnect, replay, dedupe
+- [x] Credit starvation coalesces token/progress/context (latest-wins), lossless never dropped
+- [x] RED: heartbeat timeout vs slow-turn disambiguation
+- [x] RED: malformed mid-stream
+- [x] RED: cross-conversation isolation (no leakage)
 
 ### M4.4: Liveness + state machine
 Source: implementation.md M4.4; D-020
 
-- [ ] Five states modeled (interactive-attached/-unattached, agent-gone, headless-session, headless-turn)
-- [ ] HEARTBEAT_MS / ATTACH_GRACE_MS in one module, injected clock
-- [ ] Heartbeat timeout decides; transport close is a hint only
-- [ ] Presence corroborates unattached vs gone, never proves a channel
-- [ ] Headless takeover REFUSED while presence holds
-- [ ] Handoff legal only at turn boundaries except lease-expiry takeover (aborts turn)
-- [ ] (D-020) handoff exactly-once oracle deferred to M5.4, NOT claimed here
+- [x] Five states modeled (interactive-attached/-unattached, agent-gone, headless-session, headless-turn)
+- [x] HEARTBEAT_MS / ATTACH_GRACE_MS in one module, injected clock
+- [x] Heartbeat timeout decides; transport close is a hint only
+- [x] Presence corroborates unattached vs gone, never proves a channel
+- [x] Headless takeover REFUSED while presence holds
+- [x] Handoff legal only at turn boundaries except lease-expiry takeover (aborts turn)
+- [x] (D-020) handoff exactly-once oracle deferred to M5.4, NOT claimed here
 
 ### Gate 4→5
-- [ ] Exactly-one-writer under two attaches + stale-lease takeover (epoch-observable)
-- [ ] Lease expiry mid-turn aborts turn
-- [ ] Channel-auth refusals (attach + event/input/control; impersonated end/switch-path)
-- [ ] No-lost / no-duplicated input (durable disposition + idempotent ids)
-- [ ] Credit starvation coalesces droppable, never lossless; queue bounded
-- [ ] Heartbeat-vs-slow-turn; cross-conversation isolation
-- [ ] Reducer suite fully deterministic (injected clock, zero wall-clock reads)
-- [ ] Refusals carry named issues; no refusal path half-applies
+- [x] Exactly-one-writer under two attaches + stale-lease takeover (epoch-observable)
+- [x] Lease expiry mid-turn aborts turn
+- [x] Channel-auth refusals (attach + event/input/control; impersonated end/switch-path)
+- [x] No-lost / no-duplicated input (durable disposition + idempotent ids)
+- [x] Credit starvation coalesces droppable, never lossless; queue bounded
+- [x] Heartbeat-vs-slow-turn; cross-conversation isolation
+- [x] Reducer suite fully deterministic (injected clock, zero wall-clock reads)
+- [x] Refusals carry named issues; no refusal path half-applies
 
 ## Phase 5: Store, modes, claude adapters
 
@@ -329,9 +330,18 @@ Source: spikes/evidence/A-004.md
 - [x] ~~escape hatch 1 (if A-001 fails)~~ - retired, A-001 passed
 
 ## Summary
-- Total features: 181
-- Completed: 77 (milestone-0 spike evidence: 4; M1.1: 6; M1.2: 5; Gate 1→2: 3; M2.1: 18; M2.2: 4; M2.3: 5; Gate 2→3: 4; M3.1: 11; M3.2: 8; M3.3: 5; Gate 3→4: 4)
-- Remaining: 104
-- Current cutoff blockers: 104
+- Total features: 182
+- Completed: 119 (…phases 1-3: 77; phase 4: 42 incl. Gate 4→5: 8)
+- Remaining: 63
+- Current cutoff blockers: 63
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
+
+> Out-of-band (D-026, user-directed, normalizer PR #4): codex/pi/muse are
+> now driven end-to-end through the execution-layer runner (not the
+> protocol). Descriptor bugs fixed (codex --skip-git-repo-check +
+> close-required stdin; pi/muse structured-output flags on launch+resume;
+> per-harness content decoders added). `smoke:all` green 4/4 against
+> installed CLIs. This does NOT complete M7.2 (the full seven-scenario
+> compat smoke) - it brings its harness coverage forward at the runner
+> level. Tool-call decoding for codex/pi/muse remains a known gap.
