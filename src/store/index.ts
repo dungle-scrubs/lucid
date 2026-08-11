@@ -5,4 +5,12 @@
  * also writes the structured boundary logging that other layers consume, and it
  * is the only component permitted to advance the seq or to persist frames.
  */
-export {};
+export {
+  createConversationRecord,
+  type HostDeps,
+  openConversation,
+  type RecordPaths,
+  recordPaths,
+  StoreError,
+  type WireRecord,
+} from "./store.js";

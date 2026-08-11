@@ -194,16 +194,16 @@ Source: implementation.md M4.4; D-020
 ### M5.1: Durable conversation store (the host)
 Source: implementation.md M5.1; D-004, D-021
 
-- [ ] Append-only conversation log; seq authority
-- [ ] Crash-safe append; fold to state
-- [ ] Secret minted 0600 at record creation
-- [ ] `host.grantCredit()` wired
-- [ ] Presence polling calls normalizer `isInteractive(sid)` on a cadence
-- [ ] RED: torn trailing line tolerated; fold idempotent
-- [ ] RED: secret file permissions; refusal on missing/wrong secret
-- [ ] RED: presence alive + heartbeat timeout => interactive-unattached, not agent-gone
-- [ ] RED: concurrent unrelated conversations isolated
-- [ ] RED: headless-vs-headless concurrent resume - exactly one wins, other refused stale-epoch (D-021)
+- [x] Append-only conversation log; seq authority
+- [x] Crash-safe append; fold to state
+- [x] Secret minted 0600 at record creation
+- [x] `host.grantCredit()` wired
+- [x] Presence polling calls normalizer `isInteractive(sid)` on a cadence
+- [x] RED: torn trailing line tolerated; fold idempotent
+- [x] RED: secret file permissions; refusal on missing/wrong secret
+- [x] RED: presence alive + heartbeat timeout => interactive-unattached, not agent-gone
+- [x] RED: concurrent unrelated conversations isolated
+- [x] RED: headless-vs-headless concurrent resume - exactly one wins, other refused stale-epoch (D-021)
 
 ### M5.2: Headless modes mapped in
 Source: implementation.md M5.2
@@ -331,9 +331,9 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 182
-- Completed: 119 (…phases 1-3: 77; phase 4: 42 incl. Gate 4→5: 8)
-- Remaining: 63
-- Current cutoff blockers: 63
+- Completed: 129 (…phases 1-3: 77; phase 4: 42; M5.1: 10)
+- Remaining: 53
+- Current cutoff blockers: 53
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
 
