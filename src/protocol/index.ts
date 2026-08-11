@@ -37,6 +37,13 @@ export {
   type RefusalIssue,
 } from "./frames.js";
 export {
+  ATTACH_GRACE_MS,
+  type ChannelStatus,
+  channelStatus,
+  HEARTBEAT_MS,
+  type Presence,
+} from "./liveness.js";
+export {
   type Attachment,
   type ChannelState,
   type Effect,

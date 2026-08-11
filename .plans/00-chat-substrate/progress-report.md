@@ -171,13 +171,13 @@ Source: implementation.md M4.3
 ### M4.4: Liveness + state machine
 Source: implementation.md M4.4; D-020
 
-- [ ] Five states modeled (interactive-attached/-unattached, agent-gone, headless-session, headless-turn)
-- [ ] HEARTBEAT_MS / ATTACH_GRACE_MS in one module, injected clock
-- [ ] Heartbeat timeout decides; transport close is a hint only
-- [ ] Presence corroborates unattached vs gone, never proves a channel
-- [ ] Headless takeover REFUSED while presence holds
-- [ ] Handoff legal only at turn boundaries except lease-expiry takeover (aborts turn)
-- [ ] (D-020) handoff exactly-once oracle deferred to M5.4, NOT claimed here
+- [x] Five states modeled (interactive-attached/-unattached, agent-gone, headless-session, headless-turn)
+- [x] HEARTBEAT_MS / ATTACH_GRACE_MS in one module, injected clock
+- [x] Heartbeat timeout decides; transport close is a hint only
+- [x] Presence corroborates unattached vs gone, never proves a channel
+- [x] Headless takeover REFUSED while presence holds
+- [x] Handoff legal only at turn boundaries except lease-expiry takeover (aborts turn)
+- [x] (D-020) handoff exactly-once oracle deferred to M5.4, NOT claimed here
 
 ### Gate 4→5
 - [ ] Exactly-one-writer under two attaches + stale-lease takeover (epoch-observable)
@@ -331,9 +331,9 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 182
-- Completed: 104 (…phases 1-3: 77; M4.1: 4; M4.2: 12; M4.3: 11)
-- Remaining: 78
-- Current cutoff blockers: 78
+- Completed: 111 (…phases 1-3: 77; M4.1: 4; M4.2: 12; M4.3: 11; M4.4: 7)
+- Remaining: 71
+- Current cutoff blockers: 71
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
 

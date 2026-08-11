@@ -60,6 +60,7 @@ export const REFUSAL_ISSUES = [
   "version-unsupported",
   "resume-ahead-of-log",
   "lease-held",
+  "presence-holds",
   "not-attached",
   "stale-epoch",
   "future-epoch",

@@ -157,6 +157,14 @@ export interface TransitionRecord {
   readonly credits?: number;
 }
 
+/** Host-corroborated facts a transition may consult. `presence` is the
+ * normalizer's ps-level fact (M3.1); ABSENT means the host could not
+ * corroborate - presence never proves a channel, so absence never blocks
+ * (epoch fencing is the defense - D-021). */
+export interface ReduceContext {
+  readonly presence?: { readonly processAlive: boolean };
+}
+
 export type ReduceResult =
   | {
       readonly verdict: "accepted";
@@ -346,6 +354,7 @@ const reduceAttach = (
   state: ChannelState,
   frame: Extract<Frame, { kind: "attach" }>,
   now: number,
+  ctx?: ReduceContext,
 ): ReduceResult => {
   if (frame.conversationId !== state.conversationId)
     return refusal(state, frame, "wrong-conversation", now);
@@ -356,6 +365,13 @@ const reduceAttach = (
       head: PROTOCOL_VERSION,
     });
   if (isLive(state, now)) return refusal(state, frame, "lease-held", now);
+  // interactive-unattached (dead channel, presence corroborates the
+  // process alive): a headless contender may not steal the conversation
+  // from a living human process (PLAN 4.6). Only a CORROBORATED presence
+  // blocks - unknown presence never does (D-021) - and the human's own
+  // adapter re-attaching is never gated.
+  if (frame.profile !== "interactive" && ctx?.presence?.processAlive === true)
+    return refusal(state, frame, "presence-holds", now);
   if (frame.resumeFrom !== undefined && frame.resumeFrom > state.seq)
     return refusal(state, frame, "resume-ahead-of-log", now, {
       claimed: frame.resumeFrom,
@@ -675,10 +691,15 @@ export const grantCredit = (state: ChannelState, tokens: number, now: number): R
   };
 };
 
-export const reduce = (state: ChannelState, frame: Frame, now: number): ReduceResult => {
+export const reduce = (
+  state: ChannelState,
+  frame: Frame,
+  now: number,
+  ctx?: ReduceContext,
+): ReduceResult => {
   switch (frame.kind) {
     case "attach":
-      return reduceAttach(state, frame, now);
+      return reduceAttach(state, frame, now, ctx);
     case "event":
     case "ack":
     case "disposition":
