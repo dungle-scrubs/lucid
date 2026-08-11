@@ -156,17 +156,17 @@ Source: implementation.md M4.2; D-002, D-004, D-021
 ### M4.3: Input delivery, dispositions, replay, backpressure
 Source: implementation.md M4.3
 
-- [ ] Input queue with idempotent ids
-- [ ] Disposition transitions (applied/queued/rejected)
-- [ ] Replay from `resumeFrom`
-- [ ] `host.grantCredit()` mints `credit {tokens}` for droppable class only
-- [ ] Queue bounded by `DROPPABLE_QUEUE_MAX`
-- [ ] Accepted = durable applied|queued; rejected returns to queue, never dropped
-- [ ] Death-before-ack: reconnect, replay, dedupe
-- [ ] Credit starvation coalesces token/progress/context (latest-wins), lossless never dropped
-- [ ] RED: heartbeat timeout vs slow-turn disambiguation
-- [ ] RED: malformed mid-stream
-- [ ] RED: cross-conversation isolation (no leakage)
+- [x] Input queue with idempotent ids
+- [x] Disposition transitions (applied/queued/rejected)
+- [x] Replay from `resumeFrom`
+- [x] `host.grantCredit()` mints `credit {tokens}` for droppable class only
+- [x] Queue bounded by `DROPPABLE_QUEUE_MAX`
+- [x] Accepted = durable applied|queued; rejected returns to queue, never dropped
+- [x] Death-before-ack: reconnect, replay, dedupe
+- [x] Credit starvation coalesces token/progress/context (latest-wins), lossless never dropped
+- [x] RED: heartbeat timeout vs slow-turn disambiguation
+- [x] RED: malformed mid-stream
+- [x] RED: cross-conversation isolation (no leakage)
 
 ### M4.4: Liveness + state machine
 Source: implementation.md M4.4; D-020
@@ -331,9 +331,9 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 182
-- Completed: 93 (…phases 1-3: 77; M4.1: 4; M4.2: 12)
-- Remaining: 89
-- Current cutoff blockers: 89
+- Completed: 104 (…phases 1-3: 77; M4.1: 4; M4.2: 12; M4.3: 11)
+- Remaining: 78
+- Current cutoff blockers: 78
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
 

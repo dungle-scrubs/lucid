@@ -6,6 +6,14 @@
  * and deterministic. It is NOT responsible for durability or enforcement;
  * the store hosts it and enforces its verdicts.
  */
+
+export {
+  classOfEventKind,
+  coalesceDroppable,
+  DROPPABLE_KINDS,
+  DROPPABLE_QUEUE_MAX,
+  type EventClass,
+} from "./events.js";
 export {
   type AttachProfile,
   type ControlAction,
@@ -30,11 +38,15 @@ export {
   type Attachment,
   type ChannelState,
   type Effect,
+  enqueueInput,
+  grantCredit,
+  type InputStatus,
   initialChannelState,
   isLive,
   LEASE_RENEW_EVERY_MS,
   LEASE_TTL_MS,
   PROTOCOL_VERSION,
+  type QueuedInput,
   type ReduceResult,
   type RefusalDetail,
   reduce,

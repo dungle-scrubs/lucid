@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { FRAME_KINDS, type Frame } from "../../src/protocol/frames.js";
+import { DROPPABLE_QUEUE_MAX } from "../../src/protocol/events.js";
+import { FRAME_KINDS, type Frame, parseFrame } from "../../src/protocol/frames.js";
 import {
   type ChannelState,
+  enqueueInput,
+  grantCredit,
   initialChannelState,
   isLive,
   LEASE_RENEW_EVERY_MS,
@@ -24,12 +27,15 @@ const attach = (overrides: Partial<Extract<Frame, { kind: "attach" }>> = {}): Fr
   ...overrides,
 });
 
+// Default payload is LOSSLESS (message): most tests exercise fencing and
+// sequencing, not flow control - droppable payloads are credit-gated and
+// named explicitly in the credit tests.
 const event = (overrides: Partial<Extract<Frame, { kind: "event" }>> = {}): Frame => ({
   kind: "event",
   epoch: 1,
   n: 1,
   turnId: "t-1",
-  event: { kind: "token", text: "x" },
+  event: { kind: "message", text: "x" },
   ...overrides,
 });
 
@@ -398,13 +404,19 @@ describe("reducer core (M4.2)", () => {
   });
 
   test("disposition is accepted with a minted seq on the current epoch and fenced on a stale one", () => {
-    const state = drive(fresh(), [[attach(), 1_000]]);
+    const state = expectAccepted(
+      enqueueInput(
+        drive(fresh(), [[attach(), 1_000]]),
+        { id: "in-1", text: "a", mode: "queue" },
+        1_500,
+      ),
+    ).state;
 
     const applied = expectAccepted(
       reduce(state, { kind: "disposition", epoch: 1, inputId: "in-1", outcome: "applied" }, 2_000),
     );
-    expect(applied.state.seq).toBe(2);
-    expect(applied.record.seq).toBe(2);
+    expect(applied.state.seq).toBe(3);
+    expect(applied.record.seq).toBe(3);
 
     const stale = expectRefused(
       reduce(
@@ -571,6 +583,401 @@ describe("reducer core (M4.2)", () => {
     expect(liar.issue).toBe("resume-ahead-of-log");
     expect(liar.state).toBe(state);
     expect(liar.record.detail).toEqual({ claimed: 99, head: 3 });
+  });
+
+  test("enqueueInput mints a seq, stores the input as outstanding, and sends it to the attached source", () => {
+    const state = drive(fresh(), [[attach(), 1_000]]);
+
+    const result = expectAccepted(
+      enqueueInput(state, { id: "in-1", text: "hello", mode: "queue" }, 2_000),
+    );
+
+    expect(result.state.seq).toBe(2);
+    expect(result.state.inputs).toEqual([
+      { id: "in-1", seq: 2, text: "hello", mode: "queue", status: "outstanding", rejections: 0 },
+    ]);
+    expect(result.effects).toEqual([
+      { type: "send", frame: { kind: "input", seq: 2, id: "in-1", text: "hello", mode: "queue" } },
+    ]);
+    expect(result.record).toEqual({
+      verdict: "accepted",
+      kind: "input",
+      conversationId: "conv-1",
+      epoch: 1,
+      seq: 2,
+      inputId: "in-1",
+      queueDepth: 1,
+      now: 2_000,
+    });
+  });
+
+  test("enqueueInput with a reused id is refused input-id-reused - the idempotency key is never minted twice", () => {
+    const state = expectAccepted(
+      enqueueInput(
+        drive(fresh(), [[attach(), 1_000]]),
+        { id: "in-1", text: "a", mode: "queue" },
+        2_000,
+      ),
+    ).state;
+
+    const result = expectRefused(
+      enqueueInput(state, { id: "in-1", text: "b", mode: "queue" }, 2_001),
+    );
+
+    expect(result.issue).toBe("input-id-reused");
+    expect(result.state).toBe(state);
+    expect(result.effects).toEqual([
+      { type: "send", frame: { kind: "refused", issue: "input-id-reused" } },
+    ]);
+  });
+
+  test("disposition drives the input state machine: outstanding -> queued -> applied, and an unknown inputId is refused", () => {
+    const state = expectAccepted(
+      enqueueInput(
+        drive(fresh(), [[attach(), 1_000]]),
+        { id: "in-1", text: "a", mode: "queue" },
+        2_000,
+      ),
+    ).state;
+
+    const queued = expectAccepted(
+      reduce(state, { kind: "disposition", epoch: 1, inputId: "in-1", outcome: "queued" }, 3_000),
+    );
+    expect(queued.state.inputs[0]?.status).toBe("queued");
+    expect(queued.record.inputId).toBe("in-1");
+    expect(queued.record.queueDepth).toBe(1);
+
+    const applied = expectAccepted(
+      reduce(
+        queued.state,
+        { kind: "disposition", epoch: 1, inputId: "in-1", outcome: "applied" },
+        4_000,
+      ),
+    );
+    expect(applied.state.inputs[0]?.status).toBe("applied");
+    expect(applied.record.queueDepth).toBe(0);
+
+    const unknown = expectRefused(
+      reduce(
+        applied.state,
+        { kind: "disposition", epoch: 1, inputId: "in-9", outcome: "applied" },
+        5_000,
+      ),
+    );
+    expect(unknown.issue).toBe("unknown-input");
+    expect(unknown.record.inputId).toBe("in-9");
+  });
+
+  test("a rejected input returns to the queue - never dropped - and is re-sent at the next turn boundary", () => {
+    const withInput = expectAccepted(
+      enqueueInput(
+        drive(fresh(), [
+          [attach(), 1_000],
+          [event({ n: 1, turnId: "t-1" }), 1_500],
+        ]),
+        { id: "in-1", text: "hello", mode: "queue" },
+        2_000,
+      ),
+    ).state;
+
+    const rejected = expectAccepted(
+      reduce(
+        withInput,
+        { kind: "disposition", epoch: 1, inputId: "in-1", outcome: "rejected", note: "mid-turn" },
+        3_000,
+      ),
+    );
+    expect(rejected.state.inputs[0]).toMatchObject({ status: "outstanding", rejections: 1 });
+    expect(rejected.record.queueDepth).toBe(1);
+
+    // Mid-turn events do NOT redeliver; the boundary (a new turnId) does.
+    const midTurn = expectAccepted(reduce(rejected.state, event({ n: 2, turnId: "t-1" }), 3_500));
+    expect(midTurn.effects).toEqual([
+      { type: "send", frame: { kind: "event-ack", epoch: 1, n: 2 } },
+    ]);
+
+    const boundary = expectAccepted(reduce(midTurn.state, event({ n: 3, turnId: "t-2" }), 4_000));
+    expect(boundary.effects).toEqual([
+      { type: "send", frame: { kind: "event-ack", epoch: 1, n: 3 } },
+      {
+        type: "send",
+        frame: { kind: "input", seq: withInput.seq, id: "in-1", text: "hello", mode: "queue" },
+      },
+    ]);
+  });
+
+  test("attach replays non-applied inputs with seq > replayFrom, in seq order, after attach-ok", () => {
+    // Build: input 2 (applied), input 3 (outstanding), input 4 (outstanding),
+    // then the source detaches.
+    let state = drive(fresh(), [[attach(), 1_000]]);
+    state = expectAccepted(
+      enqueueInput(state, { id: "in-a", text: "a", mode: "queue" }, 1_100),
+    ).state;
+    state = expectAccepted(
+      enqueueInput(state, { id: "in-b", text: "b", mode: "queue" }, 1_200),
+    ).state;
+    state = expectAccepted(
+      enqueueInput(state, { id: "in-c", text: "c", mode: "queue" }, 1_300),
+    ).state;
+    state = drive(state, [
+      [{ kind: "disposition", epoch: 1, inputId: "in-a", outcome: "applied" }, 1_400],
+      [{ kind: "detach", epoch: 1, reason: "yield" }, 1_500],
+    ]);
+
+    // The source durably applied through seq 2 (input in-a).
+    const resumed = expectAccepted(reduce(state, attach({ resumeFrom: 2 }), 2_000));
+
+    const sends = resumed.effects.filter((e) => e.type === "send").map((e) => e.frame);
+    expect(sends[0]?.kind).toBe("attach-ok");
+    expect(sends.slice(1)).toEqual([
+      { kind: "input", seq: 3, id: "in-b", text: "b", mode: "queue" },
+      { kind: "input", seq: 4, id: "in-c", text: "c", mode: "queue" },
+    ]);
+  });
+
+  test("death-before-ack oracle: applied at the source, died before disposition - replay redelivers the same id, dedupe keeps it exactly-once", () => {
+    // Input delivered; the source applies it but dies before its
+    // disposition reaches lucid.
+    const sent = expectAccepted(
+      enqueueInput(
+        drive(fresh(), [[attach(), 1_000]]),
+        { id: "in-1", text: "go", mode: "queue" },
+        2_000,
+      ),
+    );
+    expect(sent.effects).toEqual([
+      { type: "send", frame: { kind: "input", seq: 2, id: "in-1", text: "go", mode: "queue" } },
+    ]);
+
+    // Reconnect after lease expiry. The source's durable log has the input
+    // applied, but its resumeFrom claim predates it (it crashed before
+    // fsyncing the watermark) - worst case, it claims nothing.
+    const reattached = expectAccepted(
+      reduce(sent.state, attach({ resumeFrom: 0 }), 1_000 + LEASE_TTL_MS),
+    );
+    const replayedInputs = reattached.effects
+      .filter((e) => e.type === "send")
+      .map((e) => e.frame)
+      .filter((f) => f.kind === "input");
+    // The SAME id and seq travel again - that identity is what lets the
+    // source dedupe instead of applying twice.
+    expect(replayedInputs).toEqual([
+      { kind: "input", seq: 2, id: "in-1", text: "go", mode: "queue" },
+    ]);
+
+    // The source dedupes, reports applied under the new epoch: exactly one
+    // durable application in lucid's accounting.
+    const applied = expectAccepted(
+      reduce(
+        reattached.state,
+        { kind: "disposition", epoch: 2, inputId: "in-1", outcome: "applied" },
+        1_001 + LEASE_TTL_MS,
+      ),
+    );
+    expect(applied.state.inputs).toEqual([
+      { id: "in-1", seq: 2, text: "go", mode: "queue", status: "applied", rejections: 0 },
+    ]);
+    expect(applied.record.queueDepth).toBe(0);
+
+    // A redelivered duplicate disposition is an idempotent no-op.
+    const dupe = expectAccepted(
+      reduce(
+        applied.state,
+        { kind: "disposition", epoch: 2, inputId: "in-1", outcome: "applied" },
+        1_002 + LEASE_TTL_MS,
+      ),
+    );
+    expect(dupe.state.inputs).toEqual(applied.state.inputs);
+  });
+
+  test("grantCredit mints a credit frame for the droppable class, clamped so outstanding credits never exceed DROPPABLE_QUEUE_MAX", () => {
+    const state = drive(fresh(), [[attach(), 1_000]]);
+
+    const granted = expectAccepted(grantCredit(state, 10, 2_000));
+    expect(granted.state.credits).toBe(10);
+    expect(granted.effects).toEqual([
+      { type: "send", frame: { kind: "credit", epoch: 1, tokens: 10 } },
+    ]);
+    expect(granted.record).toEqual({
+      verdict: "accepted",
+      kind: "credit",
+      conversationId: "conv-1",
+      epoch: 1,
+      tokens: 10,
+      credits: 10,
+      now: 2_000,
+    });
+
+    // A grant beyond the bound is clamped to the remaining headroom...
+    const clamped = expectAccepted(grantCredit(granted.state, DROPPABLE_QUEUE_MAX, 2_001));
+    expect(clamped.state.credits).toBe(DROPPABLE_QUEUE_MAX);
+    expect(clamped.effects).toEqual([
+      { type: "send", frame: { kind: "credit", epoch: 1, tokens: DROPPABLE_QUEUE_MAX - 10 } },
+    ]);
+
+    // ...and at the cap the grant is a no-op: no zero-token frame is sent.
+    const atCap = expectAccepted(grantCredit(clamped.state, 5, 2_002));
+    expect(atCap.state).toBe(clamped.state);
+    expect(atCap.effects).toEqual([]);
+
+    // No channel, no credit.
+    const dead = expectRefused(grantCredit(fresh(), 5, 2_003));
+    expect(dead.issue).toBe("not-attached");
+  });
+
+  test("droppable events consume a credit and are refused no-credit under starvation; the lossless class is never gated", () => {
+    const state = drive(fresh(), [[attach(), 1_000]]);
+
+    // Starvation from the start: no credit granted yet.
+    const starved = expectRefused(
+      reduce(state, event({ n: 1, event: { kind: "token", text: "x" } }), 2_000),
+    );
+    expect(starved.issue).toBe("no-credit");
+    // lastN untouched: the source resends the same n once credit arrives.
+    expect(starved.state.attachment?.lastN).toBe(0);
+
+    // Lossless flows regardless of credit.
+    const lossless = expectAccepted(
+      reduce(state, event({ n: 1, event: { kind: "message", text: "done" } }), 2_001),
+    );
+    expect(lossless.state.credits).toBe(0);
+
+    // With credit granted, droppable flows and the balance decrements.
+    const funded = expectAccepted(grantCredit(lossless.state, 2, 2_002)).state;
+    const first = expectAccepted(
+      reduce(funded, event({ n: 2, event: { kind: "token", text: "y" } }), 2_003),
+    );
+    expect(first.state.credits).toBe(1);
+    expect(first.record.credits).toBe(1);
+
+    const second = expectAccepted(
+      reduce(first.state, event({ n: 3, event: { kind: "progress", note: "…" } }), 2_004),
+    );
+    expect(second.state.credits).toBe(0);
+
+    // Balance exhausted: the next droppable is refused, lossless still flows.
+    const exhausted = expectRefused(
+      reduce(second.state, event({ n: 4, event: { kind: "context", pct: 50 } }), 2_005),
+    );
+    expect(exhausted.issue).toBe("no-credit");
+    expectAccepted(reduce(second.state, event({ n: 4, event: { kind: "done" } }), 2_006));
+  });
+
+  test("heartbeat-vs-slow-turn oracle: a long silent turn with current heartbeats is NOT takeover-eligible; stopped heartbeats are", () => {
+    // Turn starts, then 60s of silence - but heartbeats stay current.
+    let state = drive(fresh(), [
+      [attach(), 1_000],
+      [event({ n: 1, turnId: "t-1" }), 2_000],
+    ]);
+    for (let at = 7_000; at <= 62_000; at += LEASE_RENEW_EVERY_MS) {
+      state = drive(state, [[{ kind: "heartbeat", epoch: 1 }, at]]);
+    }
+
+    // Slow turn, live channel: a contender is refused - not unattached.
+    const contender = expectRefused(reduce(state, attach({ profile: "headless-session" }), 63_000));
+    expect(contender.issue).toBe("lease-held");
+    expect(isLive(state, 63_000)).toBe(true);
+
+    // Heartbeats stop; the lease runs out; NOW takeover is legal and the
+    // in-flight turn is aborted.
+    const expiresAt = 62_000 + LEASE_TTL_MS;
+    expect(isLive(state, expiresAt)).toBe(false);
+    const takeover = expectAccepted(
+      reduce(state, attach({ profile: "headless-session" }), expiresAt),
+    );
+    expect(takeover.effects[0]).toEqual({ type: "abort-turn", turnId: "t-1" });
+  });
+
+  test("malformed frames mid-stream never reach the reducer and never disturb continuity", () => {
+    const state = drive(fresh(), [
+      [attach(), 1_000],
+      [event({ n: 1 }), 2_000],
+    ]);
+
+    // A torn line, a non-frame, and an unknown kind arrive mid-stream: the
+    // codec refuses each with a named issue and no state exists to corrupt.
+    for (const [line, issue] of [
+      ['{"kind":"event","epoch":1', "not-json"],
+      ['"just a string"', "not-a-frame"],
+      ['{"kind":"teleport","epoch":1}', "unknown-kind"],
+      ['{"kind":"event","epoch":1,"n":2}', "missing-field"],
+    ] as const) {
+      expect(parseFrame(line)).toEqual({ verdict: "refused", issue });
+    }
+
+    // The stream continues exactly where it left off: n=2 is next.
+    const next = expectAccepted(reduce(state, event({ n: 2 }), 3_000));
+    expect(next.state.attachment?.lastN).toBe(2);
+  });
+
+  test("cross-conversation isolation oracle: one conversation's traffic cannot touch another's state", () => {
+    const stateA = drive(initialChannelState({ conversationId: "conv-a", secret: "secret-a" }), [
+      [
+        {
+          kind: "attach",
+          conversationId: "conv-a",
+          profile: "interactive",
+          secret: "secret-a",
+          version: PROTOCOL_VERSION,
+        },
+        1_000,
+      ],
+    ]);
+    const freshB = initialChannelState({ conversationId: "conv-b", secret: "secret-b" });
+
+    // A's attach (right secret, wrong conversation) is refused on B before
+    // the secret is even considered.
+    const misrouted = expectRefused(
+      reduce(
+        freshB,
+        {
+          kind: "attach",
+          conversationId: "conv-a",
+          profile: "interactive",
+          secret: "secret-a",
+          version: PROTOCOL_VERSION,
+        },
+        2_000,
+      ),
+    );
+    expect(misrouted.issue).toBe("wrong-conversation");
+    expect(misrouted.state).toBe(freshB);
+
+    // A's secret presented AS conv-b is an auth failure on B.
+    const stolen = expectRefused(
+      reduce(
+        freshB,
+        {
+          kind: "attach",
+          conversationId: "conv-b",
+          profile: "interactive",
+          secret: "secret-a",
+          version: PROTOCOL_VERSION,
+        },
+        2_001,
+      ),
+    );
+    expect(stolen.issue).toBe("auth-failed");
+
+    // A's epoch means nothing on B: no attachment there, frames refused.
+    const leaked = expectRefused(reduce(freshB, event({ epoch: 1, n: 1 }), 2_002));
+    expect(leaked.issue).toBe("not-attached");
+
+    // Input ids are per-conversation: the same id in both is no collision.
+    const bAttached = drive(freshB, [
+      [
+        {
+          kind: "attach",
+          conversationId: "conv-b",
+          profile: "interactive",
+          secret: "secret-b",
+          version: PROTOCOL_VERSION,
+        },
+        3_000,
+      ],
+    ]);
+    expectAccepted(enqueueInput(stateA, { id: "in-1", text: "for A", mode: "queue" }, 4_000));
+    expectAccepted(enqueueInput(bAttached, { id: "in-1", text: "for B", mode: "queue" }, 4_001));
   });
 
   test("attach addressed to another conversation or an unsupported protocol version is refused before any grant", () => {
