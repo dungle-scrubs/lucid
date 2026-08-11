@@ -208,6 +208,7 @@ immediately).
 - **Observability:** required (`append.start`/`append.ok`/`append.failed` with the under-lock pre-write byte offset; E005 typed error)
 - **Prototyping:** none
 - **Tasks:**
+  0. Seam ownership (M1.1 review carry-over): add the `<log>.lock` sibling path to `pathsForDir`/`RecordPaths` in `store.ts` so record layout stays owned in one place, and pass `paths` to the lock rather than re-deriving `.lock` in the store. Export the SAFE lock surface (`acquireAppendLock`, `lockBackend`, `LockError`, `heldLocks`, types) through the store barrel; keep `acquireWith` deep-import/`@internal` only.
   1. Seams under test: the store's lock-wrapped append (`appendTransaction`) and its catch-up-fold.
   2. RED: an append re-folds from the last byte offset and reduces against **current** state (a second writer's committed entry is seen before this reduce).
   3. GREEN: wrap the store append: acquire -> catch-up-fold -> reduce -> write-all -> `fsync` -> release (`D-005`).

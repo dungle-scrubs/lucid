@@ -5,22 +5,22 @@
 > are implemented - never mark a milestone complete until every
 > current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 1 - The append transaction
+> Current focus: Phase 1 - The append transaction (M1.1 done; next M1.2)
 
 ## Phase 1: The append transaction (workstream A)
 
 ### M1.1: The `flock` primitive
 Source: new `src/store/lock.ts`; port from `~/dev/lucid/src/core/lock.ts` (flock path only)
 
-- [ ] `acquire(path, {timeoutMs})` returns a held exclusive lock
-- [ ] a second `acquire` on the same path blocks, then times out to `E001 lock-timeout`
-- [ ] releasing the handle frees the lock for the next acquirer
-- [ ] `flock(2)` acquired via `bun:ffi` with `LOCK_EX|LOCK_NB` in a bounded retry loop
-- [ ] the lock is kernel-released when the holding process dies (dies-with-process)
-- [ ] `lockBackend()` reports the live backend (`flock`)
-- [ ] read-only-viewer fallback path is inspectable via `lockBackend()`
-- [ ] no O_EXCL / lockfile / stale-steal path is reachable
-- [ ] module comment names the rejected pid-file/stale-steal anti-patterns and what the module is NOT
+- [x] `acquire(path, {timeoutMs})` returns a held exclusive lock
+- [x] a second `acquire` on the same path blocks, then times out to `E001 lock-timeout`
+- [x] releasing the handle frees the lock for the next acquirer
+- [x] `flock(2)` acquired via `bun:ffi` with `LOCK_EX|LOCK_NB` in a bounded retry loop
+- [x] the lock is kernel-released when the holding process dies (dies-with-process)
+- [x] `lockBackend()` reports the live backend (`flock`)
+- [x] read-only-viewer fallback path is inspectable via `lockBackend()`
+- [x] no O_EXCL / lockfile / stale-steal path is reachable
+- [x] module comment names the rejected pid-file/stale-steal anti-patterns and what the module is NOT
 
 ### M1.2: The append transaction
 Source: `src/store/` (wraps the existing store append + catch-up-fold)
@@ -132,8 +132,8 @@ no checkboxes here.
 
 ## Summary
 - Total features: 73 (current-cutoff)
-- Completed: 0
-- Remaining: 73
-- Current cutoff blockers: 73
+- Completed: 9
+- Remaining: 64
+- Current cutoff blockers: 64
 - Accepted/deferred follow-up: 0
 - Superseded/obsolete checklist debt: 0
