@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 7 - Landing wrap (M7.3)
+> Current focus: COMPLETE - all current-cutoff features done; live tails deferred (DF-*)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -293,12 +293,12 @@ Source: implementation.md M7.2; D-034
 ### M7.3: Landing wrap
 Source: implementation.md M7.3; D-014
 
-- [ ] All phase PRs confirmed merged to main (were merged per-phase after each gate, not batched)
-- [ ] Normalizer tagged 0.1.0
+- [x] All phase PRs confirmed merged to main (phases 1-3: harness-cli-normalizer #1-3; phases 4-6: lucid-v2 #2-4; phase 1 also lucid-v2 #1)
+- [x] Normalizer tagged 0.1.0 (pushed; still private, npm publish a future decision)
 
 ### Gate 7→complete
-- [ ] Invariants + oracles + smoke all green
-- [ ] All phase PRs merged (`complete` = merged)
+- [x] Invariants + oracles all green (111 tests; 4.7 audit D-033); real-harness smoke mapped to proofs + normalizer smoke:seven, live conversation run deferred DF-SMOKE (D-034)
+- [x] All phase PRs merged (`complete` = merged) - 6 phases across both repos
 
 ## Milestone 0 (done) - SPIKE evidence
 
@@ -348,9 +348,9 @@ Source: implementation.md M5.3 D-023 part b; spikes/evidence/A-002.md
 
 ## Summary
 - Total features: 171
-- Completed: 167 (…through M7.1: 166; M7.2: 1)
-- Remaining: 4
-- Current cutoff blockers: 4
+- Completed: 171 (…through M7.2: 167; M7.3: 2; Gate 7→complete: 2)
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 8 (DF-1: 4, DF-2: 3, DF-3: 1)
 - Superseded/obsolete checklist debt: 9 (2 resolved; 2 Gate 5→6 waived; 1 M6.1 live-pty; 1 M6.2 cold-start; 1 Gate 6→7 waived D-032)
 
