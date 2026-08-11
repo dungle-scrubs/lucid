@@ -1,8 +1,8 @@
 /**
- * Owns the integration modes that map normalizer HarnessEvents into protocol
- * frames: headless-turn and headless-session batch modes, plus the interactive
- * adapters spanning the claude-hooks, cooperative, and observe-only rungs. It
- * only translates and delivers events and is NOT responsible for any protocol
- * decisions; those remain the sole domain of the hosted reducer.
+ * Owns the integration modes: the lucid-owned headless sources (session
+ * and per-turn) that drive harnesses through the normalizer's runners and
+ * speak the chat protocol to the store host, and (M5.3) the interactive
+ * adapter ladder. NOT responsible for durability or protocol enforcement -
+ * the store hosts the reducer; these modules are sources.
  */
-export {};
+export { type HeadlessDeps, openHeadlessSession, openHeadlessTurns } from "./headless.js";

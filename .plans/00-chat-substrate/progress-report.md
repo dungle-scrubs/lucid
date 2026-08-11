@@ -208,13 +208,13 @@ Source: implementation.md M5.1; D-004, D-021
 ### M5.2: Headless modes mapped in
 Source: implementation.md M5.2
 
-- [ ] HarnessEvent -> event frames
-- [ ] input -> send (session mode) or next-turn prompt (turn mode)
-- [ ] droppable/lossless mapping
-- [ ] RED (fake spawner): headless-session queue/steer dispositions
-- [ ] RED: headless-turn queues between turns
-- [ ] RED: limit/error terminates turn with durable record
-- [ ] turnId correlation runner-events -> frames -> dispositions
+- [x] HarnessEvent -> event frames
+- [x] input -> send (session mode) or next-turn prompt (turn mode)
+- [x] droppable/lossless mapping
+- [x] RED (fake spawner): headless-session queue/steer dispositions
+- [x] RED: headless-turn queues between turns
+- [x] RED: limit/error terminates turn with durable record
+- [x] turnId correlation runner-events -> frames -> dispositions
 
 ### M5.3: claude interactive ladder - rungs 1-3
 Source: implementation.md M5.3; A-002 evidence; D-008, D-017, D-023, D-025
@@ -331,9 +331,9 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 182
-- Completed: 129 (…phases 1-3: 77; phase 4: 42; M5.1: 10)
-- Remaining: 53
-- Current cutoff blockers: 53
+- Completed: 136 (…phases 1-3: 77; phase 4: 42; M5.1: 10; M5.2: 7)
+- Remaining: 46
+- Current cutoff blockers: 46
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
 
