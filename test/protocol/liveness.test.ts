@@ -146,6 +146,49 @@ describe("liveness + state machine (M4.4)", () => {
     expect(fenced.verdict).toBe("refused");
   });
 
+  test("D-021 concurrent headless-resume oracle: two headless contenders, both seeing presence=false - exactly one wins, loser refused by epoch, not luck", () => {
+    // A dead conversation (headless incumbent's lease lapsed). Two headless
+    // resumers race; presence corroborates nothing for either (both see
+    // the interactive process gone), so presence CANNOT decide - epoch
+    // fencing is the only defense, and it suffices.
+    const dead = expectAccepted(
+      reduce(fresh(), attach({ profile: "headless-session" }), 1_000),
+    ).state;
+    const expired = 1_000 + ATTACH_GRACE_MS;
+    const noOne = { presence: { processAlive: false } } as const;
+
+    // The reducer serializes: X lands first and wins the next epoch.
+    const x = expectAccepted(reduce(dead, attach({ profile: "headless-session" }), expired, noOne));
+    expect(x.state.epoch).toBe(2);
+
+    // Y lands a tick later with the same correct secret and the same
+    // presence=false: refused deterministically - X now holds the lease.
+    const y = reduce(x.state, attach({ profile: "headless-turn" }), expired + 1, noOne);
+    expect(y.verdict).toBe("refused");
+    if (y.verdict === "refused") expect(y.issue).toBe("lease-held");
+
+    // Whatever epoch Y presents, it is not current: every write is fenced.
+    for (const epoch of [1, 3]) {
+      const write = reduce(
+        x.state,
+        { kind: "event", epoch, n: 1, turnId: "t-y", event: { kind: "message", text: "y" } },
+        expired + 2,
+      );
+      expect(write.verdict).toBe("refused");
+      if (write.verdict === "refused")
+        expect(write.issue).toBe(epoch < 2 ? "stale-epoch" : "future-epoch");
+    }
+
+    // X is the one writer.
+    expectAccepted(
+      reduce(
+        x.state,
+        { kind: "event", epoch: 2, n: 1, turnId: "t-x", event: { kind: "message", text: "x" } },
+        expired + 3,
+      ),
+    );
+  });
+
   test("handoff is legal only at turn boundaries: a clean yield handoff aborts nothing; lease-expiry takeover is the one mid-turn exception", () => {
     // Turn ends (the source detaches at the boundary, turn already null in
     // this flow); successor attaches: NO abort anywhere in the handoff.

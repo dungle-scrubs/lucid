@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 4 - Protocol reducer (M4.4)
+> Current focus: Phase 5 - Store, modes, claude adapters (M5.1)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -180,14 +180,14 @@ Source: implementation.md M4.4; D-020
 - [x] (D-020) handoff exactly-once oracle deferred to M5.4, NOT claimed here
 
 ### Gate 4→5
-- [ ] Exactly-one-writer under two attaches + stale-lease takeover (epoch-observable)
-- [ ] Lease expiry mid-turn aborts turn
-- [ ] Channel-auth refusals (attach + event/input/control; impersonated end/switch-path)
-- [ ] No-lost / no-duplicated input (durable disposition + idempotent ids)
-- [ ] Credit starvation coalesces droppable, never lossless; queue bounded
-- [ ] Heartbeat-vs-slow-turn; cross-conversation isolation
-- [ ] Reducer suite fully deterministic (injected clock, zero wall-clock reads)
-- [ ] Refusals carry named issues; no refusal path half-applies
+- [x] Exactly-one-writer under two attaches + stale-lease takeover (epoch-observable)
+- [x] Lease expiry mid-turn aborts turn
+- [x] Channel-auth refusals (attach + event/input/control; impersonated end/switch-path)
+- [x] No-lost / no-duplicated input (durable disposition + idempotent ids)
+- [x] Credit starvation coalesces droppable, never lossless; queue bounded
+- [x] Heartbeat-vs-slow-turn; cross-conversation isolation
+- [x] Reducer suite fully deterministic (injected clock, zero wall-clock reads)
+- [x] Refusals carry named issues; no refusal path half-applies
 
 ## Phase 5: Store, modes, claude adapters
 
@@ -331,9 +331,9 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 182
-- Completed: 111 (…phases 1-3: 77; M4.1: 4; M4.2: 12; M4.3: 11; M4.4: 7)
-- Remaining: 71
-- Current cutoff blockers: 71
+- Completed: 119 (…phases 1-3: 77; phase 4: 42 incl. Gate 4→5: 8)
+- Remaining: 63
+- Current cutoff blockers: 63
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
 
