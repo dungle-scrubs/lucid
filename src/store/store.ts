@@ -212,18 +212,36 @@ export interface TranscriptEvent {
   readonly event: Record<string, unknown>;
 }
 
-/** The conversation's rendered history: the ordered event stream (across
- * every writer/epoch, strictly-increasing seqs - not contiguous, since
- * bookkeeping frames consume seqs too, D-028) plus the turnIds for which
- * an abort-turn was emitted at a writer boundary. `aborted` is the raw
- * abort signal, NOT a completed/interrupted verdict: it includes a clean
- * detach's dangling turn and a takeover's aborted turn alike, and the
- * protocol cannot see turn completion, so a turn whose `done` event is in
- * `events` actually finished and its abort is a host-reconciled no-op.
- * Distinguishing genuinely-interrupted turns from completed-then-retired
- * ones is the renderer's job, done by reconciling against `done`. */
+/** One human input in the durable order, with its LATEST disposition
+ * outcome for rendering. This survives the reducer trimming an applied
+ * input out of live ChannelState (only its id is kept there) - the
+ * transcript is the conversation history, so an applied human message
+ * stays visible with its ✓, and a rejected one is distinguishable from a
+ * never-dispositioned one. */
+export interface TranscriptInput {
+  readonly seq: number;
+  readonly id: string;
+  readonly text: string;
+  readonly mode: "queue" | "steer";
+  /** The last disposition seen; "outstanding" until one arrives. Unlike
+   * ChannelState.inputs (which resets a rejected input to outstanding and
+   * removes an applied one), this records what actually last HAPPENED. */
+  readonly status: "outstanding" | "queued" | "applied" | "rejected";
+}
+
+/** The conversation's rendered history: the ordered agent event stream and
+ * the human input stream (both seq-stamped; interleave by seq), plus the
+ * turnIds for which an abort-turn was emitted at a writer boundary. Seqs
+ * are strictly-increasing, not contiguous (bookkeeping frames consume seqs
+ * too, D-028). `aborted` is the raw abort signal, NOT a verdict: it
+ * includes a clean detach's dangling turn and a takeover's aborted turn
+ * alike, and the protocol cannot see turn completion, so a turn whose
+ * `done` event is in `events` actually finished and its abort is a
+ * host-reconciled no-op. Reconciling interrupted-vs-completed is the
+ * renderer's job, against `done`. */
 export interface Transcript {
   readonly events: readonly TranscriptEvent[];
+  readonly inputs: readonly TranscriptInput[];
   readonly aborted: readonly string[];
 }
 
@@ -271,18 +289,21 @@ const applyEntry = (
  * accepted event joins the ordered stream; an abort-turn effect marks its
  * turn superseded. Shared by fold (replay) and commit (live) so the
  * transcript is identical whether reconstructed or accumulated. */
+interface TranscriptAcc {
+  readonly events: TranscriptEvent[];
+  readonly inputs: TranscriptInput[];
+  readonly aborted: string[];
+}
+
 const collectTranscript = (
-  events: TranscriptEvent[],
-  aborted: string[],
+  acc: TranscriptAcc,
+  entry: LogEntry,
   frameOrNull: Frame | null,
   result: ReduceResult,
 ): void => {
-  if (
-    result.verdict === "accepted" &&
-    frameOrNull?.kind === "event" &&
-    result.record.seq !== undefined
-  )
-    events.push(
+  if (result.verdict !== "accepted") return;
+  if (frameOrNull?.kind === "event" && result.record.seq !== undefined)
+    acc.events.push(
       deepFreeze({
         seq: result.record.seq,
         epoch: result.record.epoch,
@@ -290,8 +311,27 @@ const collectTranscript = (
         event: frameOrNull.event,
       }),
     );
+  // A human input enters the durable conversation history here (it is
+  // never an "event" frame), keeping its text past the point the reducer
+  // trims an applied input out of live state.
+  if (entry.src === "input" && result.record.seq !== undefined)
+    acc.inputs.push({
+      seq: result.record.seq,
+      id: entry.input.id,
+      text: entry.input.text,
+      mode: entry.input.mode,
+      status: "outstanding",
+    });
+  // A disposition updates the last-known outcome of its input for display.
+  if (frameOrNull?.kind === "disposition") {
+    const at = acc.inputs.findIndex((i) => i.id === frameOrNull.inputId);
+    if (at !== -1) {
+      const prev = acc.inputs[at];
+      if (prev !== undefined) acc.inputs[at] = { ...prev, status: frameOrNull.outcome };
+    }
+  }
   for (const effect of result.effects)
-    if (effect.type === "abort-turn") aborted.push(effect.turnId);
+    if (effect.type === "abort-turn") acc.aborted.push(effect.turnId);
 };
 
 const NL = 0x0a;
@@ -309,14 +349,12 @@ const foldLog = (
   state: ChannelState;
   goodBytes: number;
   entries: number;
-  events: TranscriptEvent[];
-  aborted: string[];
+  transcript: TranscriptAcc;
 } => {
   let state = initialChannelState({ conversationId, secret });
   let offset = 0;
   let entries = 0;
-  const events: TranscriptEvent[] = [];
-  const aborted: string[] = [];
+  const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
     if (nl === -1) break; // torn trailing fragment: tolerated, repaired by caller
@@ -336,13 +374,13 @@ const foldLog = (
           "fold-refused",
           `log entry at byte ${offset} refused on fold (${result.issue}): the log only holds accepted transitions`,
         );
-      collectTranscript(events, aborted, frame, result);
+      collectTranscript(transcript, parsed, frame, result);
       state = result.state;
       entries += 1;
     }
     offset = nl + 1;
   }
-  return { state, goodBytes: offset, entries, events, aborted };
+  return { state, goodBytes: offset, entries, transcript };
 };
 
 const HEX_SECRET = /^[0-9a-f]{16,}$/;
@@ -369,8 +407,11 @@ export const openConversation = (dir: string, deps: HostDeps) => {
   let goodBytes = folded.goodBytes;
   // The live render history, seeded from replay and extended by commit -
   // one accumulator, never re-folded (the transcript() reader is O(1)).
-  const events: TranscriptEvent[] = [...folded.events];
-  const aborted: string[] = [...folded.aborted];
+  const transcript: TranscriptAcc = {
+    events: [...folded.transcript.events],
+    inputs: [...folded.transcript.inputs],
+    aborted: [...folded.transcript.aborted],
+  };
   const fd = openSync(paths.logPath, "a");
 
   deps.onRecord({
@@ -404,7 +445,7 @@ export const openConversation = (dir: string, deps: HostDeps) => {
       goodBytes += line.length;
     }
     state = result.state;
-    collectTranscript(events, aborted, frame, result);
+    collectTranscript(transcript, entry, frame, result);
     deps.onRecord(result.record);
     for (const effect of result.effects) deps.onEffect(effect);
     return result;
@@ -419,7 +460,11 @@ export const openConversation = (dir: string, deps: HostDeps) => {
      * a consumer resumes after the highest seq it durably applied. Events
      * are deep-frozen at collection, so this shares no mutable state with
      * the caller and a reopened host's transcript is byte-identical. */
-    transcript: (): Transcript => ({ events: [...events], aborted: [...aborted] }),
+    transcript: (): Transcript => ({
+      events: [...transcript.events],
+      inputs: [...transcript.inputs],
+      aborted: [...transcript.aborted],
+    }),
     /** One status tick = one presence sample: the caller's tick cadence IS
      * the polling cadence (MUSE F6). An uncorroborated sample counts as
      * not-alive for NAMING only - the reducer's takeover gate still treats

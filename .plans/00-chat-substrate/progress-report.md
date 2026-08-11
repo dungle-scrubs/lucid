@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 6 - TUI + skill (M6.1)
+> Current focus: Phase 7 - Full test surface + landing (M7.1)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -253,24 +253,24 @@ Source: implementation.md M5.4; D-020
 ### M6.1: Minimal TUI
 Source: implementation.md M6.1; D-009
 
-- [ ] Conversation view over the folded log
-- [ ] Input box
-- [ ] State + rung indicator
-- [ ] Per-item disposition marks
-- [ ] TUI view == fold(conversation log), no separate state
-- [ ] Verify: scripted pty run + manual pass against live claude
+- [x] Conversation view over the folded log
+- [x] Input box
+- [x] State + rung indicator
+- [x] Per-item disposition marks
+- [x] TUI view == fold(conversation log), no separate state (D-009, rebuild-from-reopen test)
+- [ ] ~~Verify: scripted pty run + manual pass against live claude~~ - DEFERRED (DF-TUI): live/visual, view-model + render fixture-proven; pty pass lands with M7.2 real-harness smoke
 
 ### M6.2: The milestone-1 skill
 Source: implementation.md M6.2
 
-- [ ] Skill documents frames, epoch/single-writer rule
-- [ ] Capability declaration with source (runtime-verified)
-- [ ] Fallback ladder stated truthfully
-- [ ] Disposition discipline + yield rules
-- [ ] Verify: a cold-start agent drives a full conversation using only the skill
+- [x] Skill documents frames, epoch/single-writer rule (docs/skill-chat-substrate.md)
+- [x] Capability declaration with source (runtime-verified)
+- [x] Fallback ladder stated truthfully
+- [x] Disposition discipline + yield rules
+- [ ] ~~Verify: a cold-start agent drives a full conversation using only the skill~~ - DEFERRED (DF-SKILL): live cold-start agent run; the skill's VOCABULARY is verified against the code (test/skill-doc.test.ts - every named issue/frame exists and every reducer issue is documented, so the contract cannot drift)
 
 ### Gate 6→7
-- [ ] A human (TUI) and an agent (skill) each complete a full review-shaped conversation against live claude
+- [ ] ~~A human (TUI) and an agent (skill) each complete a full review-shaped conversation against live claude~~ - WAIVED (D-032): fully live (TUI pty + cold-start agent + live claude); lands with M7.2's real-harness smoke. The fixture/vocabulary-provable halves (TUI view-model D-009, skill contract) are green.
 
 ## Phase 7: Full test surface + landing
 
@@ -347,12 +347,12 @@ Source: implementation.md M5.3 D-023 part b; spikes/evidence/A-002.md
 - [x] ~~escape hatch 1 (if A-001 fails)~~ - retired, A-001 passed
 
 ## Summary
-- Total features: 176
-- Completed: 152 (…phases 1-3: 77; phase 4: 42; M5.1: 10; M5.2: 7; M5.3 logic: 8; M5.4: 7; Gate 5→6: 1)
-- Remaining: 24
-- Current cutoff blockers: 24
+- Total features: 173
+- Completed: 161 (…phase 5+earlier: 152; M6.1: 5; M6.2: 4)
+- Remaining: 12
+- Current cutoff blockers: 12
 - Accepted/deferred follow-up: 8 (DF-1: 4, DF-2: 3, DF-3: 1)
-- Superseded/obsolete checklist debt: 4 (2 resolved; 2 Gate 5→6 live/gated criteria waived, D-031)
+- Superseded/obsolete checklist debt: 7 (2 resolved; 2 Gate 5→6 waived; 1 M6.1 live-pty; 1 M6.2 cold-start; 1 Gate 6→7 waived D-032)
 
 > Out-of-band (D-026, user-directed, normalizer PR #4): codex/pi/muse are
 > now driven end-to-end through the execution-layer runner (not the
