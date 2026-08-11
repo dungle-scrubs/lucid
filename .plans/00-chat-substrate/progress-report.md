@@ -140,17 +140,17 @@ Source: implementation.md M4.1
 ### M4.2: Reducer core - attach, epoch, lease, seq
 Source: implementation.md M4.2; D-002, D-004, D-021
 
-- [ ] `(state, frame, now) -> {state, effects, record} | refusal`, injected clock
-- [ ] Attach handshake: secret check, epoch grant, replayFrom
-- [ ] Lease renew/expiry
-- [ ] Takeover increments epoch; stale-epoch frames refused
-- [ ] lucid-minted seq on acceptance
-- [ ] Per-epoch `n` gap/dupe detection
-- [ ] RED: two simultaneous attaches + stale-lease takeover (loser refused by epoch)
-- [ ] RED: lease expiry mid-turn aborts the in-flight turn
-- [ ] RED: channel-auth - wrong secret refused `auth-failed` on attach
-- [ ] RED: stale/wrong epoch/secret refused on event/input/control
-- [ ] RED: impersonated `control {end|switch-path}` on stale epoch rejected
+- [x] `(state, frame, now) -> {state, effects, record} | refusal`, injected clock
+- [x] Attach handshake: secret check, epoch grant, replayFrom
+- [x] Lease renew/expiry
+- [x] Takeover increments epoch; stale-epoch frames refused
+- [x] lucid-minted seq on acceptance
+- [x] Per-epoch `n` gap/dupe detection
+- [x] RED: two simultaneous attaches + stale-lease takeover (loser refused by epoch)
+- [x] RED: lease expiry mid-turn aborts the in-flight turn
+- [x] RED: channel-auth - wrong secret refused `auth-failed` on attach
+- [x] RED: stale/wrong epoch/secret refused on event/input/control
+- [x] RED: impersonated `control {end|switch-path}` on stale epoch rejected
 
 ### M4.3: Input delivery, dispositions, replay, backpressure
 Source: implementation.md M4.3
@@ -330,9 +330,9 @@ Source: spikes/evidence/A-004.md
 
 ## Summary
 - Total features: 181
-- Completed: 81 (…phases 1-3: 77; M4.1: 4)
-- Remaining: 100
-- Current cutoff blockers: 100
+- Completed: 92 (…phases 1-3: 77; M4.1: 4; M4.2: 11)
+- Remaining: 89
+- Current cutoff blockers: 89
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
 
