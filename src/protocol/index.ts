@@ -13,6 +13,8 @@ export {
   DROPPABLE_KINDS,
   DROPPABLE_QUEUE_MAX,
   type EventClass,
+  isKnownEventKind,
+  LOSSLESS_KINDS,
 } from "./events.js";
 export {
   type AttachProfile,

@@ -69,6 +69,7 @@ export const REFUSAL_ISSUES = [
   "input-id-reused",
   "unknown-input",
   "no-credit",
+  "invalid-grant",
   "covers-ahead-of-log",
   "wrong-direction",
 ] as const;

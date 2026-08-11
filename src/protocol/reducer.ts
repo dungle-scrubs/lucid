@@ -17,6 +17,7 @@ import { classOfEventKind, DROPPABLE_QUEUE_MAX } from "./events.js";
 import type {
   AttachProfile,
   DetachReason,
+  Disposition,
   Frame,
   FrameKind,
   InputMode,
@@ -55,9 +56,14 @@ export interface QueuedInput {
   readonly text: string;
   readonly mode: InputMode;
   readonly turnId?: string;
-  readonly status: InputStatus;
+  /** Applied entries leave the queue (only the id survives, in
+   * appliedInputs), so an entry here is never "applied". */
+  readonly status: Exclude<InputStatus, "applied">;
   /** Times a reject disposition returned this input to the queue. */
   readonly rejections: number;
+  /** Armed by a reject disposition, consumed by the next delivery
+   * (boundary or replay): one redelivery per rejection, never a loop. */
+  readonly redeliver: boolean;
 }
 
 export interface ChannelState {
@@ -87,9 +93,15 @@ export interface ChannelState {
    * frame. Checked with Object.hasOwn - `in` would leak prototype keys
    * like "constructor" into the refusal path. */
   readonly seenTurns: { readonly [turnId: string]: true };
-  /** The outbound input queue: every input ever enqueued, with its
-   * disposition state. Applied entries stay for idempotency accounting. */
+  /** The outbound input queue: inputs awaiting or holding a non-applied
+   * disposition, in seq order. Applied entries are trimmed to
+   * appliedInputs so scans and persisted state stay bounded by the
+   * genuinely open set. */
   readonly inputs: readonly QueuedInput[];
+  /** Ids of inputs that reached the applied terminal, kept for idempotency
+   * (duplicate dispositions no-op, ids can never be reused). Grows per
+   * input; checked with Object.hasOwn like seenTurns. */
+  readonly appliedInputs: { readonly [id: string]: true };
   /** Flow credits granted but not yet consumed by droppable events.
    * Bounded by DROPPABLE_QUEUE_MAX, which is what bounds the number of
    * droppable frames in flight between render drains. */
@@ -129,8 +141,15 @@ export interface TransitionRecord {
    * (inputs not yet applied) after the transition. */
   readonly inputId?: string;
   readonly queueDepth?: number;
-  /** Credit observability: tokens granted/consumed by this transition and
-   * the outstanding balance after it. */
+  /** Disposition observability: what the source reported, the input's
+   * status AFTER the transition (a late outcome discarded against the
+   * applied terminal shows inputStatus "applied"), and the rejection
+   * count so a reject loop is visible. */
+  readonly outcome?: Disposition;
+  readonly inputStatus?: InputStatus;
+  readonly rejections?: number;
+  /** Credit observability: tokens GRANTED by this transition (consumption
+   * shows up in credits alone) and the outstanding balance after it. */
   readonly tokens?: number;
   readonly credits?: number;
 }
@@ -165,6 +184,7 @@ export const initialChannelState = (init: {
   acked: 0,
   seenTurns: {},
   inputs: [],
+  appliedInputs: {},
   credits: 0,
 });
 
@@ -174,21 +194,40 @@ export const isLive = (state: ChannelState, now: number): boolean =>
   state.attachment !== null && now < state.attachment.lease.expires;
 
 const NO_EFFECTS: readonly Effect[] = Object.freeze([]);
+const NO_INPUTS: readonly QueuedInput[] = Object.freeze([]);
 
 /** Record fields derived from the frame itself - ONE derivation for both
  * the accepted and refused constructors, so the two records cannot drift. */
 const frameFields = (
   stateEpoch: number,
   frame: Frame,
-): Pick<TransitionRecord, "frameEpoch" | "n" | "turnId" | "profile" | "reason" | "inputId"> => ({
-  ...("epoch" in frame && frame.epoch !== stateEpoch ? { frameEpoch: frame.epoch } : {}),
-  ...("n" in frame ? { n: frame.n } : {}),
-  ...("turnId" in frame && frame.turnId !== undefined ? { turnId: frame.turnId } : {}),
-  ...(frame.kind === "attach" ? { profile: frame.profile } : {}),
-  ...(frame.kind === "detach" ? { reason: frame.reason } : {}),
-  ...(frame.kind === "input" ? { inputId: frame.id } : {}),
-  ...(frame.kind === "disposition" ? { inputId: frame.inputId } : {}),
-});
+): Pick<
+  TransitionRecord,
+  "frameEpoch" | "n" | "turnId" | "profile" | "reason" | "inputId" | "outcome"
+> => {
+  // Built imperatively into ONE object: this runs on every transition,
+  // including every token event, so per-branch spread temporaries add up.
+  const fields: {
+    frameEpoch?: number;
+    n?: number;
+    turnId?: string;
+    profile?: AttachProfile;
+    reason?: DetachReason;
+    inputId?: string;
+    outcome?: Disposition;
+  } = {};
+  if ("epoch" in frame && frame.epoch !== stateEpoch) fields.frameEpoch = frame.epoch;
+  if ("n" in frame) fields.n = frame.n;
+  if ("turnId" in frame && frame.turnId !== undefined) fields.turnId = frame.turnId;
+  if (frame.kind === "attach") fields.profile = frame.profile;
+  if (frame.kind === "detach") fields.reason = frame.reason;
+  if (frame.kind === "input") fields.inputId = frame.id;
+  if (frame.kind === "disposition") {
+    fields.inputId = frame.inputId;
+    fields.outcome = frame.outcome;
+  }
+  return fields;
+};
 
 /** Every refusal is built here: the frame is never applied (`state` is the
  * caller's state - input identity except post-fence lease renewal), a
@@ -200,6 +239,7 @@ const refusal = (
   issue: RefusalIssue,
   now: number,
   detail?: RefusalDetail,
+  extra?: Pick<TransitionRecord, "credits" | "queueDepth">,
 ): ReduceResult => ({
   verdict: "refused",
   issue,
@@ -214,8 +254,22 @@ const refusal = (
     now,
     ...(detail === undefined ? {} : { detail }),
     ...frameFields(state.epoch, frame),
+    ...extra,
   },
 });
+
+/** A refusal of a HOST transition (lucid-side programming error): recorded
+ * for the operator, but no `refused` frame goes to the source - the wire
+ * signal is reserved for frames the source actually sent. */
+const hostRefusal = (
+  state: ChannelState,
+  frame: Frame,
+  issue: RefusalIssue,
+  now: number,
+): ReduceResult => {
+  const result = refusal(state, frame, issue, now);
+  return { ...result, effects: NO_EFFECTS };
+};
 
 /** Every acceptance is built here: the next state already carries the
  * minted seq, and the record mirrors it for the host's log. */
@@ -224,7 +278,7 @@ const accepted = (
   frame: Frame,
   now: number,
   effects: readonly Effect[],
-  extra?: Pick<TransitionRecord, "queueDepth" | "credits">,
+  extra?: Pick<TransitionRecord, "queueDepth" | "credits" | "inputStatus" | "rejections">,
 ): ReduceResult => ({
   verdict: "accepted",
   state: next,
@@ -275,11 +329,15 @@ const refusedButAlive = (
   issue: RefusalIssue,
   now: number,
   detail?: RefusalDetail,
+  extra?: Pick<TransitionRecord, "credits" | "queueDepth">,
 ): ReduceResult => {
   const renewed = renewAttachment(attachment, now);
   const next = renewed === attachment ? state : { ...state, attachment: renewed };
-  return refusal(next, frame, issue, now, detail);
+  return refusal(next, frame, issue, now, detail, extra);
 };
+
+const sendInputs = (inputs: readonly QueuedInput[]): readonly Effect[] =>
+  inputs.map((i) => ({ type: "send", frame: inputFrame(i) }));
 
 const reduceAttach = (
   state: ChannelState,
@@ -308,9 +366,12 @@ const reduceAttach = (
   // an abort for an already-finished turn as a no-op).
   const aborted = state.turn;
   const replayFrom = frame.resumeFrom ?? 0;
-  // Replay: every non-applied input past the source's durable watermark,
-  // in seq order - the idempotent id makes redelivery safe.
-  const replayed = state.inputs.filter((i) => i.status !== "applied" && i.seq > replayFrom);
+  // Replay EVERY input still awaiting an applied disposition, in seq
+  // order. Lucid's own disposition state gates this - never the source's
+  // resumeFrom claim, which speaks for the event log: trusting it here
+  // would let one bogus attach silently drop the whole queue, and the
+  // idempotent id already makes redelivery safe.
+  const replayed = state.inputs;
   return accepted(
     {
       ...state,
@@ -318,9 +379,15 @@ const reduceAttach = (
       epoch,
       attachment: { profile: frame.profile, lastN: 0, lease },
       turn: null,
-      // The watermark speaks for the CURRENT writer only: rebased from what
-      // this attach claims durably applied, never inherited from the last.
+      // The watermark and the credit balance speak for the CURRENT writer
+      // only: acked rebased from what this attach claims durably applied,
+      // credits zeroed (the new writer never received the old grants).
       acked: frame.resumeFrom ?? 0,
+      credits: 0,
+      // Replay IS this rejection's redelivery - disarm the flags.
+      inputs: state.inputs.some((i) => i.redeliver)
+        ? state.inputs.map((i) => (i.redeliver ? { ...i, redeliver: false } : i))
+        : state.inputs,
     },
     frame,
     now,
@@ -339,7 +406,7 @@ const reduceAttach = (
           version: PROTOCOL_VERSION,
         },
       },
-      ...replayed.map((i) => ({ type: "send", frame: inputFrame(i) }) as const),
+      ...sendInputs(replayed),
     ],
   );
 };
@@ -380,13 +447,19 @@ const reducePostAttach = (
       // leaves lastN untouched: the source coalesces and resends the same
       // n once credit arrives. Lossless is never gated.
       const droppable = classOfEventKind(frame.event.kind) === "droppable";
-      if (droppable && state.credits === 0)
-        return refusedButAlive(state, attachment, frame, "no-credit", now);
+      if (droppable && state.credits <= 0)
+        return refusedButAlive(state, attachment, frame, "no-credit", now, undefined, {
+          credits: state.credits,
+        });
       // A turn boundary is the redelivery point for inputs a disposition
-      // rejected: same idempotent id, so the source applies at most once.
-      const redelivered = sameTurn
-        ? []
-        : state.inputs.filter((i) => i.status === "outstanding" && i.rejections > 0);
+      // rejected (armed redeliver flag, consumed here): same idempotent
+      // id, so the source applies at most once. Mid-turn events take the
+      // ack-only path with zero scans or throwaway arrays.
+      const ack = {
+        type: "send",
+        frame: { kind: "event-ack", epoch: frame.epoch, n: frame.n },
+      } as const;
+      const redelivered = sameTurn ? NO_INPUTS : state.inputs.filter((i) => i.redeliver);
       return accepted(
         {
           ...state,
@@ -401,13 +474,14 @@ const reducePostAttach = (
             ? state.seenTurns
             : { ...state.seenTurns, [frame.turnId]: true as const },
           credits: droppable ? state.credits - 1 : state.credits,
+          inputs:
+            redelivered.length === 0
+              ? state.inputs
+              : state.inputs.map((i) => (i.redeliver ? { ...i, redeliver: false } : i)),
         },
         frame,
         now,
-        [
-          { type: "send", frame: { kind: "event-ack", epoch: frame.epoch, n: frame.n } },
-          ...redelivered.map((i) => ({ type: "send", frame: inputFrame(i) }) as const),
-        ],
+        redelivered.length === 0 ? [ack] : [ack, ...sendInputs(redelivered)],
         droppable ? { credits: state.credits - 1 } : undefined,
       );
     }
@@ -431,24 +505,50 @@ const reducePostAttach = (
     }
     case "disposition": {
       const target = state.inputs.find((i) => i.id === frame.inputId);
-      if (target === undefined)
+      if (target === undefined) {
+        // applied is terminal: a late or redelivered disposition against
+        // it is an idempotent no-op (which is what makes redelivery
+        // safe), and the record says so via inputStatus "applied".
+        if (Object.hasOwn(state.appliedInputs, frame.inputId))
+          return accepted(
+            { ...state, seq, attachment: renewAttachment(attachment, now) },
+            frame,
+            now,
+            NO_EFFECTS,
+            { inputStatus: "applied", queueDepth: queueDepth(state.inputs) },
+          );
         return refusedButAlive(state, attachment, frame, "unknown-input", now);
-      // applied is terminal: late or redelivered dispositions are
-      // idempotent no-ops, which is what makes redelivery safe.
+      }
+      if (frame.outcome === "applied") {
+        // Terminal: the entry leaves the queue; only the id survives.
+        const inputs = state.inputs.filter((i) => i.id !== target.id);
+        return accepted(
+          {
+            ...state,
+            seq,
+            inputs,
+            appliedInputs: { ...state.appliedInputs, [target.id]: true as const },
+            attachment: renewAttachment(attachment, now),
+          },
+          frame,
+          now,
+          NO_EFFECTS,
+          { inputStatus: "applied", rejections: target.rejections, queueDepth: queueDepth(inputs) },
+        );
+      }
+      // rejected returns to the queue armed for one boundary redelivery,
+      // never dropped; queued is the durable accepted disposition.
       const next: QueuedInput =
-        target.status === "applied"
-          ? target
-          : frame.outcome === "rejected"
-            ? { ...target, status: "outstanding", rejections: target.rejections + 1 }
-            : { ...target, status: frame.outcome };
-      const inputs =
-        next === target ? state.inputs : state.inputs.map((i) => (i.id === next.id ? next : i));
+        frame.outcome === "rejected"
+          ? { ...target, status: "outstanding", rejections: target.rejections + 1, redeliver: true }
+          : { ...target, status: "queued" };
+      const inputs = state.inputs.map((i) => (i.id === next.id ? next : i));
       return accepted(
         { ...state, seq, inputs, attachment: renewAttachment(attachment, now) },
         frame,
         now,
         NO_EFFECTS,
-        { queueDepth: queueDepth(inputs) },
+        { inputStatus: next.status, rejections: next.rejections, queueDepth: queueDepth(inputs) },
       );
     }
     case "heartbeat": {
@@ -472,9 +572,11 @@ const reducePostAttach = (
   }
 };
 
-/** Inputs not yet durably applied - the queue depth gauge the host logs. */
+/** Inputs still AWAITING a disposition - the gauge the host pages on.
+ * queued entries are accepted (the source holds them durably), so healthy
+ * queue-mode traffic drains this to zero. */
 const queueDepth = (inputs: readonly QueuedInput[]): number =>
-  inputs.filter((i) => i.status !== "applied").length;
+  inputs.filter((i) => i.status === "outstanding").length;
 
 /** Host transition: lucid queues an input for delivery to the source. The
  * minted seq and idempotent id travel on the wire, so replay and boundary
@@ -489,42 +591,30 @@ export const enqueueInput = (
   },
   now: number,
 ): ReduceResult => {
-  const seq = state.seq + 1;
-  const frame: Frame = {
-    kind: "input",
-    seq,
-    id: input.id,
-    text: input.text,
-    mode: input.mode,
-    ...(input.turnId === undefined ? {} : { turnId: input.turnId }),
-  };
-  if (state.inputs.some((existing) => existing.id === input.id))
-    return refusal(state, frame, "input-id-reused", now);
   const queued: QueuedInput = {
     id: input.id,
-    seq,
+    seq: state.seq + 1,
     text: input.text,
     mode: input.mode,
     ...(input.turnId === undefined ? {} : { turnId: input.turnId }),
     status: "outstanding",
     rejections: 0,
+    redeliver: false,
   };
+  const frame = inputFrame(queued);
+  if (
+    state.inputs.some((existing) => existing.id === input.id) ||
+    Object.hasOwn(state.appliedInputs, input.id)
+  )
+    return hostRefusal(state, frame, "input-id-reused", now);
   const inputs = [...state.inputs, queued];
-  return {
-    verdict: "accepted",
-    state: { ...state, seq, inputs },
-    effects: state.attachment === null ? NO_EFFECTS : [{ type: "send", frame }],
-    record: {
-      verdict: "accepted",
-      kind: "input",
-      conversationId: state.conversationId,
-      epoch: state.epoch,
-      seq,
-      inputId: input.id,
-      queueDepth: queueDepth(inputs),
-      now,
-    },
-  };
+  return accepted(
+    { ...state, seq: queued.seq, inputs },
+    frame,
+    now,
+    state.attachment === null ? NO_EFFECTS : [{ type: "send", frame }],
+    { queueDepth: queueDepth(inputs) },
+  );
 };
 
 /** Host transition: grant flow credits for the droppable class only
@@ -532,17 +622,25 @@ export const enqueueInput = (
  * DROPPABLE_QUEUE_MAX - that clamp IS the bounded queue: at most MAX
  * droppable frames can be accepted between render drains. */
 export const grantCredit = (state: ChannelState, tokens: number, now: number): ReduceResult => {
-  const frame: Frame = { kind: "credit", epoch: state.epoch, tokens };
-  if (state.attachment === null) return refusal(state, frame, "not-attached", now);
+  // The host-facing API is exactly as strict as the wire it mirrors
+  // (nat-bounded tokens): a negative or fractional grant would drive the
+  // balance off the non-negative integers and hold the gate open forever.
+  if (!Number.isSafeInteger(tokens) || tokens <= 0)
+    return hostRefusal(
+      state,
+      { kind: "credit", epoch: state.epoch, tokens: 0 },
+      "invalid-grant",
+      now,
+    );
+  if (state.attachment === null)
+    return hostRefusal(state, { kind: "credit", epoch: state.epoch, tokens }, "not-attached", now);
   const granted = Math.min(tokens, DROPPABLE_QUEUE_MAX - state.credits);
   const credits = state.credits + granted;
+  const frame: Frame = { kind: "credit", epoch: state.epoch, tokens: granted };
   return {
     verdict: "accepted",
     state: granted === 0 ? state : { ...state, credits },
-    effects:
-      granted === 0
-        ? NO_EFFECTS
-        : [{ type: "send", frame: { kind: "credit", epoch: state.epoch, tokens: granted } }],
+    effects: granted === 0 ? NO_EFFECTS : [{ type: "send", frame }],
     record: {
       verdict: "accepted",
       kind: "credit",

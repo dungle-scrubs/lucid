@@ -594,7 +594,15 @@ describe("reducer core (M4.2)", () => {
 
     expect(result.state.seq).toBe(2);
     expect(result.state.inputs).toEqual([
-      { id: "in-1", seq: 2, text: "hello", mode: "queue", status: "outstanding", rejections: 0 },
+      {
+        id: "in-1",
+        seq: 2,
+        text: "hello",
+        mode: "queue",
+        status: "outstanding",
+        rejections: 0,
+        redeliver: false,
+      },
     ]);
     expect(result.effects).toEqual([
       { type: "send", frame: { kind: "input", seq: 2, id: "in-1", text: "hello", mode: "queue" } },
@@ -626,9 +634,8 @@ describe("reducer core (M4.2)", () => {
 
     expect(result.issue).toBe("input-id-reused");
     expect(result.state).toBe(state);
-    expect(result.effects).toEqual([
-      { type: "send", frame: { kind: "refused", issue: "input-id-reused" } },
-    ]);
+    // A host-side programming error is never reported TO the source.
+    expect(result.effects).toEqual([]);
   });
 
   test("disposition drives the input state machine: outstanding -> queued -> applied, and an unknown inputId is refused", () => {
@@ -645,7 +652,10 @@ describe("reducer core (M4.2)", () => {
     );
     expect(queued.state.inputs[0]?.status).toBe("queued");
     expect(queued.record.inputId).toBe("in-1");
-    expect(queued.record.queueDepth).toBe(1);
+    expect(queued.record.outcome).toBe("queued");
+    expect(queued.record.inputStatus).toBe("queued");
+    // The gauge counts inputs AWAITING disposition - queued is accepted.
+    expect(queued.record.queueDepth).toBe(0);
 
     const applied = expectAccepted(
       reduce(
@@ -654,7 +664,9 @@ describe("reducer core (M4.2)", () => {
         4_000,
       ),
     );
-    expect(applied.state.inputs[0]?.status).toBe("applied");
+    // Applied entries leave the queue; only the id survives for dedupe.
+    expect(applied.state.inputs).toEqual([]);
+    expect(applied.record.inputStatus).toBe("applied");
     expect(applied.record.queueDepth).toBe(0);
 
     const unknown = expectRefused(
@@ -704,6 +716,20 @@ describe("reducer core (M4.2)", () => {
         frame: { kind: "input", seq: withInput.seq, id: "in-1", text: "hello", mode: "queue" },
       },
     ]);
+
+    // One redelivery per rejection: the NEXT boundary does not resend...
+    const later = expectAccepted(reduce(boundary.state, event({ n: 4, turnId: "t-3" }), 5_000));
+    expect(later.effects).toEqual([{ type: "send", frame: { kind: "event-ack", epoch: 1, n: 4 } }]);
+
+    // ...until a fresh rejection re-arms it.
+    const again = drive(later.state, [
+      [{ kind: "disposition", epoch: 1, inputId: "in-1", outcome: "rejected" }, 5_500],
+    ]);
+    const rearmed = expectAccepted(reduce(again, event({ n: 5, turnId: "t-4" }), 6_000));
+    expect(rearmed.effects[1]).toEqual({
+      type: "send",
+      frame: { kind: "input", seq: withInput.seq, id: "in-1", text: "hello", mode: "queue" },
+    });
   });
 
   test("attach replays non-applied inputs with seq > replayFrom, in seq order, after attach-ok", () => {
@@ -730,6 +756,17 @@ describe("reducer core (M4.2)", () => {
     const sends = resumed.effects.filter((e) => e.type === "send").map((e) => e.frame);
     expect(sends[0]?.kind).toBe("attach-ok");
     expect(sends.slice(1)).toEqual([
+      { kind: "input", seq: 3, id: "in-b", text: "b", mode: "queue" },
+      { kind: "input", seq: 4, id: "in-c", text: "c", mode: "queue" },
+    ]);
+
+    // Replay is gated by lucid's own disposition state, never by the
+    // source's claim: a resumeFrom at the log head still replays every
+    // non-applied input (ids make redelivery safe; trusting the claim
+    // would let one bogus attach silently drop the whole queue).
+    const claimant = expectAccepted(reduce(state, attach({ resumeFrom: state.seq }), 2_000));
+    const claimed = claimant.effects.filter((e) => e.type === "send").map((e) => e.frame);
+    expect(claimed.slice(1)).toEqual([
       { kind: "input", seq: 3, id: "in-b", text: "b", mode: "queue" },
       { kind: "input", seq: 4, id: "in-c", text: "c", mode: "queue" },
     ]);
@@ -774,9 +811,7 @@ describe("reducer core (M4.2)", () => {
         1_001 + LEASE_TTL_MS,
       ),
     );
-    expect(applied.state.inputs).toEqual([
-      { id: "in-1", seq: 2, text: "go", mode: "queue", status: "applied", rejections: 0 },
-    ]);
+    expect(applied.state.inputs).toEqual([]);
     expect(applied.record.queueDepth).toBe(0);
 
     // A redelivered duplicate disposition is an idempotent no-op.
@@ -820,9 +855,25 @@ describe("reducer core (M4.2)", () => {
     expect(atCap.state).toBe(clamped.state);
     expect(atCap.effects).toEqual([]);
 
-    // No channel, no credit.
+    // No channel, no credit - and no refused frame sent to nobody.
     const dead = expectRefused(grantCredit(fresh(), 5, 2_003));
     expect(dead.issue).toBe("not-attached");
+    expect(dead.effects).toEqual([]);
+
+    // A grant that is not a positive safe integer is a host bug: refused
+    // without touching the balance and without a wire frame.
+    for (const bad of [-5, 0.5, Number.NaN, 2 ** 53]) {
+      const invalid = expectRefused(grantCredit(clamped.state, bad, 2_004));
+      expect(invalid.issue, `tokens=${bad}`).toBe("invalid-grant");
+      expect(invalid.state).toBe(clamped.state);
+      expect(invalid.effects).toEqual([]);
+    }
+
+    // Credit is per-writer flow control: a takeover resets the balance
+    // exactly like acked (the new writer never received those grants).
+    const detached = drive(clamped.state, [[{ kind: "detach", epoch: 1, reason: "yield" }, 3_000]]);
+    const successor = expectAccepted(reduce(detached, attach(), 4_000));
+    expect(successor.state.credits).toBe(0);
   });
 
   test("droppable events consume a credit and are refused no-credit under starvation; the lossless class is never gated", () => {
@@ -833,6 +884,7 @@ describe("reducer core (M4.2)", () => {
       reduce(state, event({ n: 1, event: { kind: "token", text: "x" } }), 2_000),
     );
     expect(starved.issue).toBe("no-credit");
+    expect(starved.record.credits).toBe(0);
     // lastN untouched: the source resends the same n once credit arrives.
     expect(starved.state.attachment?.lastN).toBe(0);
 
@@ -912,50 +964,21 @@ describe("reducer core (M4.2)", () => {
 
   test("cross-conversation isolation oracle: one conversation's traffic cannot touch another's state", () => {
     const stateA = drive(initialChannelState({ conversationId: "conv-a", secret: "secret-a" }), [
-      [
-        {
-          kind: "attach",
-          conversationId: "conv-a",
-          profile: "interactive",
-          secret: "secret-a",
-          version: PROTOCOL_VERSION,
-        },
-        1_000,
-      ],
+      [attach({ conversationId: "conv-a", secret: "secret-a" }), 1_000],
     ]);
     const freshB = initialChannelState({ conversationId: "conv-b", secret: "secret-b" });
 
     // A's attach (right secret, wrong conversation) is refused on B before
     // the secret is even considered.
     const misrouted = expectRefused(
-      reduce(
-        freshB,
-        {
-          kind: "attach",
-          conversationId: "conv-a",
-          profile: "interactive",
-          secret: "secret-a",
-          version: PROTOCOL_VERSION,
-        },
-        2_000,
-      ),
+      reduce(freshB, attach({ conversationId: "conv-a", secret: "secret-a" }), 2_000),
     );
     expect(misrouted.issue).toBe("wrong-conversation");
     expect(misrouted.state).toBe(freshB);
 
     // A's secret presented AS conv-b is an auth failure on B.
     const stolen = expectRefused(
-      reduce(
-        freshB,
-        {
-          kind: "attach",
-          conversationId: "conv-b",
-          profile: "interactive",
-          secret: "secret-a",
-          version: PROTOCOL_VERSION,
-        },
-        2_001,
-      ),
+      reduce(freshB, attach({ conversationId: "conv-b", secret: "secret-a" }), 2_001),
     );
     expect(stolen.issue).toBe("auth-failed");
 
@@ -965,16 +988,7 @@ describe("reducer core (M4.2)", () => {
 
     // Input ids are per-conversation: the same id in both is no collision.
     const bAttached = drive(freshB, [
-      [
-        {
-          kind: "attach",
-          conversationId: "conv-b",
-          profile: "interactive",
-          secret: "secret-b",
-          version: PROTOCOL_VERSION,
-        },
-        3_000,
-      ],
+      [attach({ conversationId: "conv-b", secret: "secret-b" }), 3_000],
     ]);
     expectAccepted(enqueueInput(stateA, { id: "in-1", text: "for A", mode: "queue" }, 4_000));
     expectAccepted(enqueueInput(bAttached, { id: "in-1", text: "for B", mode: "queue" }, 4_001));
