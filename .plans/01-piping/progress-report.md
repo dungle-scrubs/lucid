@@ -5,7 +5,7 @@
 > are implemented - never mark a milestone complete until every
 > current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 2 - CLI, hooks, and interactive liveness (M2.1 next)
+> Current focus: Phase 3 - Same-machine handoff smoke (complete)
 
 ## Phase 1: The append transaction (workstream A)
 
@@ -51,76 +51,76 @@ Source: new integration test (spawns two real processes)
 ### M2.1: CLI frame mapping + `lucid send` + `lucid watch`
 Source: new `src/cli/`; reuse `src/tui/` view-model
 
-- [ ] `mapSubcommand(argv) -> Frame` maps each subcommand to its protocol frame
-- [ ] `lucid send <conversation> <text>` maps to a transient `input` append
-- [ ] the `send` input is folded by the NEXT `lucid run` (not delivered live, `D-011`)
-- [ ] `lucid watch` folds the log and emits the TUI view-model
-- [ ] `watch` refreshes as the log grows
-- [ ] `watch` holds no lock
-- [ ] `watch` dispatches nothing
-- [ ] `watch` reuses the `src/tui/` view-model shape (no duplication)
+- [x] `mapSubcommand(argv) -> Frame` maps each subcommand to its protocol frame
+- [x] `lucid send <conversation> <text>` maps to a transient `input` append
+- [x] the `send` input is folded by the NEXT `lucid run` (not delivered live, `D-011`)
+- [x] `lucid watch` folds the log and emits the TUI view-model
+- [x] `watch` refreshes as the log grows
+- [x] `watch` holds no lock
+- [x] `watch` dispatches nothing
+- [x] `watch` reuses the `src/tui/` view-model shape (no duplication)
 
 ### M2.2: `lucid run` (headless orchestration)
 Source: new `src/cli/run`; promotes `scripts/smoke-live.ts`
 
-- [ ] `run` creates/opens the conversation record
-- [ ] `run` folds the log ONCE at start
-- [ ] `run` acquires the presence lock
-- [ ] `run` opens a headless source on `nodeRunnerDeps`
-- [ ] `run` drives as the single live source (no tailer)
-- [ ] `run` emits a run-level boundary event keyed by `conversationId`
-- [ ] the promoted live smoke passes end-to-end through `lucid run`
+- [x] `run` creates/opens the conversation record
+- [x] `run` folds the log ONCE at start
+- [x] `run` acquires the presence lock
+- [x] `run` opens a headless source on `nodeRunnerDeps`
+- [x] `run` drives as the single live source (no tailer)
+- [x] `run` emits a run-level boundary event keyed by `conversationId`
+- [x] the promoted live smoke passes end-to-end through `lucid run`
 
 ### M2.3: Hooks - `announce` / `inject` with identity verification
 Source: new `src/cli/hooks/`; port env-stamp/self from v1; spike `spikes/evidence/A-002.md`
 
-- [ ] `announce` reads the SessionStart payload from stdin
-- [ ] `announce` resolves the record via the env-stamp
-- [ ] `announce` verifies identity against `meta.json`
-- [ ] `announce` appends `attach` (+ identity) on a match
-- [ ] `announce` on a `meta.json` mismatch exits non-destructively (E003), never writes the wrong record
-- [ ] `inject` on the PostToolUse boundary resolves + verifies the record
-- [ ] `inject` reads queued input
-- [ ] `inject` appends the delivery + `disposition`
-- [ ] `inject` emits the injection via hook stdout (`{decision: "block", reason}`)
-- [ ] `inject` on a reducer refusal reports the disposition class, no blind retry (E004)
-- [ ] injected input is chunked under a cap measured in encoded UTF-8 bytes (post-JSON-escape)
-- [ ] lucid detects and coexists with pre-existing project hooks; its `decision` output composes, never clobbers (`D-014` C2)
-- [ ] `HERDR_ENV` is unset for the child
-- [ ] the injection contract does not depend on the Stop hook firing (Stop is best-effort, `D-014`)
+- [x] `announce` reads the SessionStart payload from stdin
+- [x] `announce` resolves the record via the env-stamp
+- [x] `announce` verifies identity against `meta.json`
+- [x] `announce` appends `attach` (+ identity) on a match
+- [x] `announce` on a `meta.json` mismatch exits non-destructively (E003), never writes the wrong record
+- [x] `inject` on the PostToolUse boundary resolves + verifies the record
+- [x] `inject` reads queued input
+- [x] `inject` appends the delivery + `disposition`
+- [x] `inject` emits the injection via hook stdout (`{decision: "block", reason}`)
+- [x] `inject` on a reducer refusal reports the disposition class, no blind retry (E004)
+- [x] injected input is chunked under a cap measured in encoded UTF-8 bytes (post-JSON-escape)
+- [x] lucid detects and coexists with pre-existing project hooks; its `decision` output composes, never clobbers (`D-014` C2)
+- [x] `HERDR_ENV` is unset for the child
+- [x] the injection contract does not depend on the Stop hook firing (Stop is best-effort, `D-014`)
 
 ### M2.4: Env-stamp + self-invocation (port from v1)
 Source: port `~/dev/lucid/src/launch/env-stamp.ts`, `src/cli/self.ts`
 
-- [ ] `envStamp(record) -> env` sets the record dir + turn id
-- [ ] `selfInvocation() -> argv[]` reconstructs lucid's own invocation
-- [ ] hook commands use exec-form argument arrays, never interpolated shell strings
-- [ ] self-invocation uses exec-form argument arrays
-- [ ] a stale/reused `LUCID_RECORD_DIR` is caught by the M2.3 `meta.json` verification
+- [x] `envStamp(record) -> env` sets the record dir + turn id
+- [x] `selfInvocation() -> argv[]` reconstructs lucid's own invocation
+- [x] hook commands use exec-form argument arrays, never interpolated shell strings
+- [x] self-invocation uses exec-form argument arrays
+- [x] a stale/reused `LUCID_RECORD_DIR` is caught by the M2.3 `meta.json` verification
 
 ### M2.5: Presence-lock lifecycle
 Source: source-adapter wiring (not the reducer)
 
-- [ ] the presence lock is acquired at attach
-- [ ] the presence lock is held for the source's lifetime
-- [ ] release is bound to the claude process's death via pipe-EOF reap
-- [ ] killing the session process kernel-releases the presence lock
-- [ ] a false-alive cannot persist after death
-- [ ] "attached" tracks the held lock, not a clock
-- [ ] `presence.acquire` / `presence.released` events are emitted
+- [x] the presence lock is acquired at attach
+- [x] the presence lock is held for the source's lifetime
+- [x] release is bound to the claude process's death via pipe-EOF reap
+- [x] killing the session process kernel-releases the presence lock
+- [x] a false-alive cannot persist after death
+- [x] "attached" tracks the held lock, not a clock
+- [x] `presence.acquire` / `presence.released` events are emitted
 
 ## Phase 3: Same-machine handoff smoke (workstream D)
 
 ### M3.1: Two-process baton-pass handoff smoke
 Source: new `scripts/smoke-handoff.ts`; evidence to `spikes/evidence/`
 
-- [ ] two real processes share one conversation (a headless `lucid run` + a second participant)
-- [ ] the second participant `lucid send`s input in
-- [ ] the incumbent yields (its presence lock frees)
-- [ ] the successor folds the durable log and takes over
-- [ ] the handoff is ordered and at-least-once (no lost input; deduped on replay, the `D-020` property)
-- [ ] the reopened fold matches the live transcript across the handoff
-- [ ] the run is evidence-logged to `spikes/evidence/`
+- [x] two real processes share one conversation (a headless `lucid run` + a second participant)
+- [x] the second participant `lucid send`s input in
+- [x] the incumbent yields (its presence lock frees)
+- [x] the successor folds the durable log and takes over
+- [x] the handoff is ordered and at-least-once (no lost input; deduped on replay, the `D-020` property)
+- [x] the reopened fold matches the live transcript across the handoff
+- [x] the run is evidence-logged to `spikes/evidence/`
 
 ## Out of scope (future plan, not tracked here)
 
@@ -132,8 +132,8 @@ no checkboxes here.
 
 ## Summary
 - Total features: 73 (current-cutoff)
-- Completed: 25
-- Remaining: 48
-- Current cutoff blockers: 48
+- Completed: 73
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 0
 - Superseded/obsolete checklist debt: 0
