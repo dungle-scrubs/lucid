@@ -287,8 +287,8 @@ Source: implementation.md M7.1; PLAN.md 4.7; D-033
 Source: implementation.md M7.2; D-034
 
 - [x] Seven smokes mapped to their proofs (docs/smoke-seven.md): each has a deterministic fake-harness oracle + the normalizer's real-harness smoke:seven
-- [ ] ~~pi/codex/muse headless-scope smokes per descriptor~~ - DEFERRED (DF-SMOKE): live/on-demand; normalizer smoke:all covers the runner layer (D-026)
-- [ ] ~~Green run recorded; failures triaged to findings~~ - DEFERRED (DF-SMOKE): live claude conversation run, evidence to spikes/evidence/ when run
+- [x] Green run recorded (headless): the seven's headless subset - single-turn, session continuity, kill+resume - PASS live against claude 2.1.227 via scripts/smoke-live.ts, driven in a Herdr pane; fold matches live, evidence spikes/evidence/df-smoke.md
+- [ ] ~~pi/codex/muse headless-scope smokes per descriptor~~ - DEFERRED (DF-SMOKE): normalizer smoke:all covers the runner layer (D-026); interactive rung-1 injection proven by spike A-002
 
 ### M7.3: Landing wrap
 Source: implementation.md M7.3; D-014

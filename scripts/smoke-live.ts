@@ -1,0 +1,159 @@
+/**
+ * M7.2 DF-SMOKE - the live conversation smoke. Drives a REAL claude
+ * through the full lucid substrate: the durable store hosts the reducer,
+ * a headless-session source wired to the normalizer's real spawn adapter
+ * drives claude, and every event folds back into the store's transcript.
+ * This is the on-demand, evidence-logged run the plan defers from CI - it
+ * needs an installed claude and is nondeterministic. Evidence is written
+ * to spikes/evidence/df-smoke.md.
+ *
+ * Run: bun scripts/smoke-live.ts
+ */
+
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { nodeRunnerDeps } from "@dungle-scrubs/harness-cli/src/execution/node-deps.js";
+import { claudeCode } from "@dungle-scrubs/harness-cli/src/knowledge/claude-code.js";
+import { openHeadlessSession } from "../src/modes/headless.js";
+import type { Frame } from "../src/protocol/index.js";
+import { createConversationRecord, type HostRecord, openConversation } from "../src/store/store.js";
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const lines: string[] = [];
+const log = (s: string) => {
+  console.log(s);
+  lines.push(s);
+};
+
+const doneCount = (events: readonly { event: Record<string, unknown> }[]): number =>
+  events.filter((e) => e.event.kind === "done").length;
+
+const textOf = (events: readonly { event: Record<string, unknown> }[]): string =>
+  events
+    .filter((e) => e.event.kind === "message")
+    .map((e) => (typeof e.event.text === "string" ? e.event.text : ""))
+    .join(" ");
+
+/** Wait until the transcript shows `n` completed turns, or time out. */
+const waitForTurns = async (
+  host: ReturnType<typeof openConversation>,
+  n: number,
+  timeoutMs: number,
+): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (doneCount(host.transcript().events) >= n) return true;
+    await sleep(200);
+  }
+  return false;
+};
+
+const main = async (): Promise<void> => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-df-smoke-"));
+  const conversationId = "smoke-1";
+  const sessionId = crypto.randomUUID();
+  const { secret } = createConversationRecord(root, conversationId);
+  log(`# DF-SMOKE live conversation - claude, sessionId ${sessionId}`);
+  log(`record: ${join(root, conversationId)}`);
+
+  const records: HostRecord[] = [];
+  let receive: (frame: Frame) => void = () => {};
+  const host = openConversation(join(root, conversationId), {
+    now: () => Date.now(), // live wall-clock (determinism was for tests)
+    presence: () => undefined,
+    onRecord: (r) => records.push(r),
+    onEffect: (e) => {
+      if (e.type === "send") receive(e.frame);
+    },
+  });
+
+  let turnCount = 0;
+  const source = openHeadlessSession({
+    harness: claudeCode,
+    conversationId,
+    secret,
+    sessionId,
+    runner: nodeRunnerDeps(),
+    mintTurnId: () => `turn-${++turnCount}`,
+    sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
+  });
+  receive = source.receive;
+  log(`attached: epoch ${host.state().epoch}, profile ${host.state().attachment?.profile}`);
+
+  // Grant droppable credit so token deltas flow (lossless flows regardless).
+  host.grantCredit(1000);
+
+  let ok = true;
+
+  // Turn 1: establish a codeword.
+  log("\n## turn 1: establish codeword");
+  host.enqueueInput({
+    id: "in-1",
+    text: "Remember the codeword: pomegranate. Reply with only: OK",
+    mode: "queue",
+  });
+  if (!(await waitForTurns(host, 1, 90_000))) {
+    log("FAIL: turn 1 did not complete in 90s");
+    ok = false;
+  } else {
+    log(`turn 1 done; seq now ${host.state().seq}`);
+  }
+
+  // Turn 2: continuity - the session must remember the codeword.
+  log("\n## turn 2: session continuity");
+  host.enqueueInput({
+    id: "in-2",
+    text: "Reply with only the codeword I gave you.",
+    mode: "queue",
+  });
+  const twoDone = await waitForTurns(host, 2, 90_000);
+  const t = host.transcript();
+  const answer = textOf(t.events.filter((e) => e.turnId === "turn-2"));
+  const remembered = answer.toLowerCase().includes("pomegranate");
+  log(`turn 2 done=${twoDone}; answer="${answer.slice(0, 80)}"; remembered=${remembered}`);
+  if (!twoDone || !remembered) ok = false;
+
+  // Transcript shape: one identity, ordered strictly-increasing seqs.
+  const identities = t.events.filter((e) => e.event.kind === "identity").length;
+  const seqs = t.events.map((e) => e.seq);
+  const ordered = seqs.every((s, i) => i === 0 || s > (seqs[i - 1] ?? -1));
+  log(
+    `\n## transcript: ${t.events.length} events, identities=${identities}, ordered=${ordered}, epochs=${[...new Set(t.events.map((e) => e.epoch))].join(",")}`,
+  );
+  if (identities !== 1 || !ordered) ok = false;
+
+  // Kill + resume: close (which appends a detach, advancing the log),
+  // then reopen and assert the fold equals the live transcript AT THE SAME
+  // log position - so capture the live transcript AFTER close, not before.
+  log("\n## kill + resume: reopen the durable log");
+  source.close();
+  const tFinal = host.transcript();
+  const reopened = openConversation(join(root, conversationId), {
+    now: () => Date.now(),
+    presence: () => undefined,
+    onRecord: () => {},
+    onEffect: () => {},
+  });
+  const foldMatches = JSON.stringify(reopened.transcript()) === JSON.stringify(tFinal);
+  log(
+    `pre-close events=${t.events.length}; post-close seq=${host.state().seq}; reopened seq=${reopened.state().seq}; fold matches live=${foldMatches}`,
+  );
+  if (!foldMatches) ok = false;
+
+  // Evidence.
+  mkdirSync("spikes/evidence", { recursive: true });
+  writeFileSync(
+    "spikes/evidence/df-smoke.md",
+    `# DF-SMOKE - live conversation against claude ${sessionId}\n\n\`\`\`\n${lines.join("\n")}\n\`\`\`\n\nVerdict: ${ok ? "PASS" : "FAIL"}\n`,
+  );
+  rmSync(root, { recursive: true, force: true });
+
+  log(`\n=== DF-SMOKE ${ok ? "PASS" : "FAIL"} ===`);
+  process.exit(ok ? 0 : 1);
+};
+
+main().catch((cause) => {
+  log(`FATAL: ${String(cause)}`);
+  process.exit(1);
+});
