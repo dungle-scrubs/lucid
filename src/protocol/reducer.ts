@@ -14,15 +14,17 @@
  */
 
 import { classOfEventKind, DROPPABLE_QUEUE_MAX } from "./events.js";
-import type {
-  AttachProfile,
-  DetachReason,
-  Disposition,
-  Frame,
-  FrameKind,
-  InputMode,
-  Lease,
-  RefusalIssue,
+import {
+  type AttachProfile,
+  type DetachReason,
+  type Disposition,
+  type Frame,
+  type FrameKind,
+  type InputMode,
+  isWireId,
+  isWireText,
+  type Lease,
+  type RefusalIssue,
 } from "./frames.js";
 
 export type { RefusalIssue } from "./frames.js";
@@ -61,8 +63,9 @@ export interface QueuedInput {
   readonly status: Exclude<InputStatus, "applied">;
   /** Times a reject disposition returned this input to the queue. */
   readonly rejections: number;
-  /** Armed by a reject disposition, consumed by the next delivery
-   * (boundary or replay): one redelivery per rejection, never a loop. */
+  /** Armed whenever a delivery is owed - a reject disposition, or an
+   * enqueue with no live channel to send on - and consumed by the next
+   * delivery (turn boundary or attach replay). Never a loop. */
   readonly redeliver: boolean;
 }
 
@@ -591,6 +594,11 @@ export const enqueueInput = (
   },
   now: number,
 ): ReduceResult => {
+  // Delivery only into a LIVE lease: an expired attachment is takeover-
+  // eligible, and handing it new work invites double-application across
+  // the handoff. The input still queues, armed for boundary delivery
+  // (if this writer recovers) or attach replay (if another takes over).
+  const live = isLive(state, now);
   const queued: QueuedInput = {
     id: input.id,
     seq: state.seq + 1,
@@ -599,20 +607,31 @@ export const enqueueInput = (
     ...(input.turnId === undefined ? {} : { turnId: input.turnId }),
     status: "outstanding",
     rejections: 0,
-    redeliver: false,
+    redeliver: !live,
   };
   const frame = inputFrame(queued);
+  if (
+    !isWireId(input.id) ||
+    (input.turnId !== undefined && !isWireId(input.turnId)) ||
+    !isWireText(input.text)
+  )
+    return hostRefusal(state, frame, "invalid-input", now);
   if (
     state.inputs.some((existing) => existing.id === input.id) ||
     Object.hasOwn(state.appliedInputs, input.id)
   )
     return hostRefusal(state, frame, "input-id-reused", now);
+  // PLAN 4.4: steer only where the profile allows it - a headless-turn
+  // writer can never be interjected mid-turn, so the request itself is a
+  // host error there. Other profiles answer through `disposition`.
+  if (input.mode === "steer" && state.attachment?.profile === "headless-turn")
+    return hostRefusal(state, frame, "steer-unsupported", now);
   const inputs = [...state.inputs, queued];
   return accepted(
     { ...state, seq: queued.seq, inputs },
     frame,
     now,
-    state.attachment === null ? NO_EFFECTS : [{ type: "send", frame }],
+    live ? [{ type: "send", frame }] : NO_EFFECTS,
     { queueDepth: queueDepth(inputs) },
   );
 };
@@ -632,8 +651,11 @@ export const grantCredit = (state: ChannelState, tokens: number, now: number): R
       "invalid-grant",
       now,
     );
-  if (state.attachment === null)
+  if (!isLive(state, now))
     return hostRefusal(state, { kind: "credit", epoch: state.epoch, tokens }, "not-attached", now);
+  // No seq is minted: seq positions belong to inbound accepted frames and
+  // the replayable outbound kinds (input/control carry seq in the wire
+  // shapes - D-028's shapes-win rule); credit is unsequenced flow control.
   const granted = Math.min(tokens, DROPPABLE_QUEUE_MAX - state.credits);
   const credits = state.credits + granted;
   const frame: Frame = { kind: "credit", epoch: state.epoch, tokens: granted };

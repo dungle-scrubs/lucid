@@ -994,6 +994,102 @@ describe("reducer core (M4.2)", () => {
     expectAccepted(enqueueInput(bAttached, { id: "in-1", text: "for B", mode: "queue" }, 4_001));
   });
 
+  test("enqueueInput never sends into an expired lease: the input is queued, armed, and delivered on recovery or replay", () => {
+    const state = drive(fresh(), [[attach(), 1_000]]);
+    const expiresAt = 1_000 + LEASE_TTL_MS;
+
+    // Lease expired (takeover-eligible window): accept + queue, do NOT send.
+    const parked = expectAccepted(
+      enqueueInput(state, { id: "in-1", text: "wait", mode: "queue" }, expiresAt),
+    );
+    expect(parked.effects).toEqual([]);
+
+    // The writer recovers (heartbeat renews the lease): the armed input is
+    // delivered at the next turn boundary.
+    const recovered = drive(parked.state, [[{ kind: "heartbeat", epoch: 1 }, expiresAt + 1]]);
+    const boundary = expectAccepted(
+      reduce(recovered, event({ n: 1, turnId: "t-1" }), expiresAt + 2),
+    );
+    expect(boundary.effects[1]).toEqual({
+      type: "send",
+      frame: { kind: "input", seq: parked.state.seq, id: "in-1", text: "wait", mode: "queue" },
+    });
+
+    // grantCredit refuses on a dead channel instead of resupplying a
+    // takeover-eligible writer.
+    const dead = expectRefused(grantCredit(parked.state, 5, expiresAt));
+    expect(dead.issue).toBe("not-attached");
+    expect(dead.effects).toEqual([]);
+  });
+
+  test("enqueueInput is exactly as strict as the wire codec: invalid id/turnId/text refused before any state change", () => {
+    const state = drive(fresh(), [[attach(), 1_000]]);
+
+    for (const bad of [
+      { id: "", text: "x", mode: "queue" as const },
+      { id: "a\nb", text: "x", mode: "queue" as const },
+      { id: "in-1", text: "x", mode: "queue" as const, turnId: "t\u0000" },
+      { id: "in-1", text: "y".repeat(1_000_001), mode: "queue" as const },
+    ]) {
+      const result = expectRefused(enqueueInput(state, bad, 2_000));
+      expect(result.issue).toBe("invalid-input");
+      expect(result.state).toBe(state);
+      expect(result.effects).toEqual([]);
+    }
+  });
+
+  test("steer cannot be requested at a headless-turn attachment - a turn in flight cannot be interjected there", () => {
+    const state = drive(fresh(), [[attach({ profile: "headless-turn" }), 1_000]]);
+
+    const result = expectRefused(
+      enqueueInput(state, { id: "in-1", text: "x", mode: "steer" }, 2_000),
+    );
+    expect(result.issue).toBe("steer-unsupported");
+    expect(result.state).toBe(state);
+
+    // queue mode is always legal.
+    expectAccepted(enqueueInput(state, { id: "in-2", text: "x", mode: "queue" }, 2_001));
+  });
+
+  test("starvation delays boundary redelivery but never loses it: once credit resumes, the resent boundary event delivers", () => {
+    // Turn t-1 runs; an input is rejected (armed for boundary delivery);
+    // credit is exhausted.
+    const armed = drive(
+      expectAccepted(
+        enqueueInput(
+          drive(fresh(), [
+            [attach(), 1_000],
+            [event({ n: 1, turnId: "t-1" }), 1_500],
+          ]),
+          { id: "in-1", text: "go", mode: "queue" },
+          2_000,
+        ),
+      ).state,
+      [[{ kind: "disposition", epoch: 1, inputId: "in-1", outcome: "rejected" }, 2_500]],
+    );
+
+    // t-2 opens with a droppable while starved: refused, boundary NOT
+    // consumed, redelivery still armed. (Accepting first-of-turn tokens
+    // credit-free would let a source bypass flow control by minting
+    // turnIds, so refusal is correct - delivery is delayed, not lost.)
+    const starved = expectRefused(
+      reduce(armed, event({ n: 2, turnId: "t-2", event: { kind: "token", text: "x" } }), 3_000),
+    );
+    expect(starved.issue).toBe("no-credit");
+    expect(starved.state.turn).toEqual({ turnId: "t-1" });
+
+    // Credit resumes; the source resends the SAME n: accepted, boundary
+    // observed, armed input delivered.
+    const funded = expectAccepted(grantCredit(starved.state, 1, 3_500)).state;
+    const boundary = expectAccepted(
+      reduce(funded, event({ n: 2, turnId: "t-2", event: { kind: "token", text: "x" } }), 4_000),
+    );
+    expect(boundary.effects[1]).toEqual({
+      type: "send",
+      frame: { kind: "input", seq: 3, id: "in-1", text: "go", mode: "queue" },
+    });
+  });
+
   test("attach addressed to another conversation or an unsupported protocol version is refused before any grant", () => {
     const state = fresh();
 

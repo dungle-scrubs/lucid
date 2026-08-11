@@ -70,6 +70,8 @@ export const REFUSAL_ISSUES = [
   "unknown-input",
   "no-credit",
   "invalid-grant",
+  "invalid-input",
+  "steer-unsupported",
   "covers-ahead-of-log",
   "wrong-direction",
 ] as const;
@@ -239,6 +241,13 @@ const serializableObject = (
 };
 
 const withEpoch = (record: Record<string, unknown>): number => nat(record, "epoch");
+
+/** Wire-validity predicates for HOST-constructed values: the host API must
+ * be exactly as strict as the decoder, or a host-minted frame can poison
+ * the queue with something the wire refuses. */
+export const isWireId = (v: string): boolean =>
+  v !== "" && v.length <= ID_MAX && !CONTROL_CHARS.test(v);
+export const isWireText = (v: string): boolean => v.length <= TEXT_MAX;
 
 const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
   attach: (r) => ({
