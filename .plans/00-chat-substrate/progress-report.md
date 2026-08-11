@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 5 - Gate 5→6
+> Current focus: Phase 6 - TUI + skill (M6.1)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -244,9 +244,9 @@ Source: implementation.md M5.4; D-020
 - [x] RED: mid-flight exactly-once handoff (headless<->interactive, tokens in flight) via resumeFrom + acks (D-020)
 
 ### Gate 5→6
-- [ ] End-to-end fake-harness conversation across all three modes with mid-conversation handoff, exactly-once
-- [ ] Live claude: rung-1 session streams in + message injects at a tool boundary
-- [ ] rungs 2-3 on a bare session [waived-with-note if A-003 still deferred]
+- [x] End-to-end fake-harness conversation across all three modes with mid-conversation handoff, exactly-once (test/gate-5-6.test.ts)
+- [ ] ~~Live claude: rung-1 session streams in + message injects at a tool boundary~~ - WAIVED (D-031): live smoke, spike A-002 is the proof, code-level lands at M7.2 (DF-3)
+- [ ] ~~rungs 2-3 on a bare session~~ - WAIVED (D-031): A-003 deferred (DF-1); ladder falls back to observe-only
 
 ## Phase 6: TUI + skill
 
@@ -347,12 +347,12 @@ Source: implementation.md M5.3 D-023 part b; spikes/evidence/A-002.md
 - [x] ~~escape hatch 1 (if A-001 fails)~~ - retired, A-001 passed
 
 ## Summary
-- Total features: 178
-- Completed: 151 (…phases 1-3: 77; phase 4: 42; M5.1: 10; M5.2: 7; M5.3 logic: 8; M5.4: 7)
-- Remaining: 27
-- Current cutoff blockers: 27
+- Total features: 176
+- Completed: 152 (…phases 1-3: 77; phase 4: 42; M5.1: 10; M5.2: 7; M5.3 logic: 8; M5.4: 7; Gate 5→6: 1)
+- Remaining: 24
+- Current cutoff blockers: 24
 - Accepted/deferred follow-up: 8 (DF-1: 4, DF-2: 3, DF-3: 1)
-- Superseded/obsolete checklist debt: 2 (both resolved)
+- Superseded/obsolete checklist debt: 4 (2 resolved; 2 Gate 5→6 live/gated criteria waived, D-031)
 
 > Out-of-band (D-026, user-directed, normalizer PR #4): codex/pi/muse are
 > now driven end-to-end through the execution-layer runner (not the
