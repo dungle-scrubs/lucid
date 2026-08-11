@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 7 - Full test surface + landing (M7.1)
+> Current focus: Phase 7 - Full test surface + landing (M7.2/M7.3)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -275,13 +275,13 @@ Source: implementation.md M6.2
 ## Phase 7: Full test surface + landing
 
 ### M7.1: Oracle completion sweep
-Source: implementation.md M7.1; PLAN.md 4.7
+Source: implementation.md M7.1; PLAN.md 4.7; D-033
 
-- [ ] Audit 4.7 oracle list against the suite
-- [ ] RED (if missing): spawn-boundary security set (argvOrder, path traversal, control chars)
-- [ ] RED: resumeLast race
-- [ ] RED: credit-starvation classes
-- [ ] RED: identity collisions
+- [x] Audit 4.7 oracle list against the suite (D-033: all protocol/store oracles green; spawn/resume are normalizer-side)
+- [x] spawn-boundary security set - covered in harness-cli-normalizer (argv.test.ts), Gate 2→3; not re-implemented here
+- [x] resumeLast race - covered in harness-cli-normalizer (resume-last.test.ts), Gate 2→3; not re-implemented here
+- [x] RED: credit-starvation classes (per-kind completeness keyed off DROPPABLE_KINDS/LOSSLESS_KINDS)
+- [x] RED: identity collisions (cross-conversation isolation + intra-conversation id reuse)
 
 ### M7.2: Real-harness compatibility smoke (the seven)
 Source: implementation.md M7.2
@@ -348,9 +348,9 @@ Source: implementation.md M5.3 D-023 part b; spikes/evidence/A-002.md
 
 ## Summary
 - Total features: 173
-- Completed: 161 (…phase 5+earlier: 152; M6.1: 5; M6.2: 4)
-- Remaining: 12
-- Current cutoff blockers: 12
+- Completed: 166 (…through phase 6: 161; M7.1: 5)
+- Remaining: 7
+- Current cutoff blockers: 7
 - Accepted/deferred follow-up: 8 (DF-1: 4, DF-2: 3, DF-3: 1)
 - Superseded/obsolete checklist debt: 7 (2 resolved; 2 Gate 5→6 waived; 1 M6.1 live-pty; 1 M6.2 cold-start; 1 Gate 6→7 waived D-032)
 
