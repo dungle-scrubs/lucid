@@ -58,8 +58,15 @@ export interface ChannelState {
    * this may name an already-finished turn; the host owns turn lifecycle
    * and treats an abort-turn for a finished turn as a no-op. */
   readonly turn: { readonly turnId: string } | null;
-  /** Highest lucid seq the source claims durably applied (ack.covers). */
+  /** Highest lucid seq the CURRENT writer claims durably applied: rebased
+   * from resumeFrom at attach, then monotonic within the attachment
+   * (ack.covers). */
   readonly acked: number;
+  /** Every turnId ever accepted, keyed for O(1) first-sight validation
+   * (PLAN 4.3: unique within the conversation). Grows per TURN, not per
+   * frame. Checked with Object.hasOwn - `in` would leak prototype keys
+   * like "constructor" into the refusal path. */
+  readonly seenTurns: { readonly [turnId: string]: true };
 }
 
 export type Effect =
@@ -121,6 +128,7 @@ export const initialChannelState = (init: {
   attachment: null,
   turn: null,
   acked: 0,
+  seenTurns: {},
 });
 
 /** The ONE place the lease-expiry comparison lives. The host consults this
@@ -256,6 +264,9 @@ const reduceAttach = (
       epoch,
       attachment: { profile: frame.profile, lastN: 0, lease },
       turn: null,
+      // The watermark speaks for the CURRENT writer only: rebased from what
+      // this attach claims durably applied, never inherited from the last.
+      acked: frame.resumeFrom ?? 0,
     },
     frame,
     now,
@@ -305,6 +316,11 @@ const reducePostAttach = (
         return refusedButAlive(state, attachment, frame, "dupe-n", now);
       if (frame.n > attachment.lastN + 1)
         return refusedButAlive(state, attachment, frame, "gap-n", now);
+      // turnId validated on first sight (PLAN 4.3): a retired id can never
+      // come back - which is also what makes a takeover's abort final.
+      const sameTurn = state.turn !== null && state.turn.turnId === frame.turnId;
+      if (!sameTurn && Object.hasOwn(state.seenTurns, frame.turnId))
+        return refusedButAlive(state, attachment, frame, "turn-id-reused", now);
       return accepted(
         {
           ...state,
@@ -314,10 +330,10 @@ const reducePostAttach = (
             lastN: frame.n,
             lease: renewLease(attachment.lease, now),
           },
-          turn:
-            state.turn !== null && state.turn.turnId === frame.turnId
-              ? state.turn
-              : { turnId: frame.turnId },
+          turn: sameTurn ? state.turn : { turnId: frame.turnId },
+          seenTurns: sameTurn
+            ? state.seenTurns
+            : { ...state.seenTurns, [frame.turnId]: true as const },
         },
         frame,
         now,

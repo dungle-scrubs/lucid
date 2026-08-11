@@ -361,6 +361,32 @@ describe("reducer core (M4.2)", () => {
     expect(replayed.state.acked).toBe(4);
   });
 
+  test("takeover rebases acked from the NEW writer's resumeFrom - the old writer's watermark never speaks for the new one", () => {
+    const state = drive(fresh(), [
+      [attach(), 1_000],
+      [event({ n: 1 }), 2_000],
+      [event({ n: 2 }), 2_001],
+      [event({ n: 3 }), 2_002],
+      [{ kind: "ack", epoch: 1, covers: 4 }, 3_000],
+    ]);
+    expect(state.acked).toBe(4);
+
+    // A's lease lapses; B attaches having durably applied only through 2.
+    const takeover = expectAccepted(
+      reduce(state, attach({ profile: "headless-session", resumeFrom: 2 }), 1_000 + LEASE_TTL_MS),
+    );
+    expect(takeover.state.acked).toBe(2);
+
+    // A plain re-attach with no resumeFrom claims nothing applied.
+    const detached = drive(fresh(), [
+      [attach(), 1_000],
+      [{ kind: "ack", epoch: 1, covers: 1 }, 2_000],
+      [{ kind: "detach", epoch: 1, reason: "yield" }, 3_000],
+    ]);
+    const reattached = expectAccepted(reduce(detached, attach(), 4_000));
+    expect(reattached.state.acked).toBe(0);
+  });
+
   test("ack claiming a seq lucid never minted is refused covers-ahead-of-log with the comparison in the record", () => {
     const state = drive(fresh(), [[attach(), 1_000]]);
 
@@ -421,6 +447,36 @@ describe("reducer core (M4.2)", () => {
     expect(result.state.attachment).toBeNull();
     expect(result.effects).toEqual([{ type: "abort-turn", turnId: "t-1" }]);
     expect(result.record.reason).toBe("shutdown");
+  });
+
+  test("turnId is validated on first sight: a retired turnId can never come back, same epoch or after takeover", () => {
+    const state = drive(fresh(), [
+      [attach(), 1_000],
+      [event({ n: 1, turnId: "t-1" }), 2_000],
+      [event({ n: 2, turnId: "t-1" }), 2_001], // same turn continues: fine
+      [event({ n: 3, turnId: "t-2" }), 2_002], // turn boundary: t-1 retired
+    ]);
+
+    // Same epoch: the retired t-1 cannot be revived.
+    const revived = expectRefused(reduce(state, event({ n: 4, turnId: "t-1" }), 2_003));
+    expect(revived.issue).toBe("turn-id-reused");
+    expect(revived.state.turn).toEqual({ turnId: "t-2" });
+    expect(revived.record.turnId).toBe("t-1");
+
+    // Across a takeover: the aborted turn's id is dead too - the new
+    // writer must mint a fresh turnId, which enforces the abort.
+    const takeover = expectAccepted(
+      reduce(state, attach({ profile: "headless-session" }), 1_000 + LEASE_TTL_MS),
+    );
+    const resumedOld = expectRefused(
+      reduce(takeover.state, event({ epoch: 2, n: 1, turnId: "t-2" }), 1_001 + LEASE_TTL_MS),
+    );
+    expect(resumedOld.issue).toBe("turn-id-reused");
+
+    const freshTurn = expectAccepted(
+      reduce(takeover.state, event({ epoch: 2, n: 1, turnId: "t-3" }), 1_001 + LEASE_TTL_MS),
+    );
+    expect(freshTurn.state.turn).toEqual({ turnId: "t-3" });
   });
 
   test("channel-auth oracle: an impersonator cannot end or redirect the conversation with lucid->source frame kinds", () => {

@@ -65,6 +65,7 @@ export const REFUSAL_ISSUES = [
   "future-epoch",
   "gap-n",
   "dupe-n",
+  "turn-id-reused",
   "covers-ahead-of-log",
   "wrong-direction",
 ] as const;

@@ -151,6 +151,7 @@ Source: implementation.md M4.2; D-002, D-004, D-021
 - [x] RED: channel-auth - wrong secret refused `auth-failed` on attach
 - [x] RED: stale/wrong epoch/secret refused on event/input/control
 - [x] RED: impersonated `control {end|switch-path}` on stale epoch rejected
+- [x] turnId validated on first sight (PLAN 4.3): conversation-wide reuse refused `turn-id-reused`; acked rebased from resumeFrom at attach (codex review findings)
 
 ### M4.3: Input delivery, dispositions, replay, backpressure
 Source: implementation.md M4.3
@@ -329,8 +330,8 @@ Source: spikes/evidence/A-004.md
 - [x] ~~escape hatch 1 (if A-001 fails)~~ - retired, A-001 passed
 
 ## Summary
-- Total features: 181
-- Completed: 92 (…phases 1-3: 77; M4.1: 4; M4.2: 11)
+- Total features: 182
+- Completed: 93 (…phases 1-3: 77; M4.1: 4; M4.2: 12)
 - Remaining: 89
 - Current cutoff blockers: 89
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
