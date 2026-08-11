@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 5 - Store, modes, claude adapters (M5.4)
+> Current focus: Phase 5 - Gate 5→6
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -235,13 +235,13 @@ Source: implementation.md M5.3; A-002 evidence; D-008, D-017, D-023, D-025
 ### M5.4: States + handoff wired end to end
 Source: implementation.md M5.4; D-020
 
-- [ ] State machine drives per-conversation mode selection
-- [ ] RED: attached -> unattached (heartbeat)
-- [ ] RED: unattached -> gone (presence)
-- [ ] RED: gone -> headless takeover
-- [ ] RED: interactive reattach epoch++
-- [ ] RED: boundary-only handoff enforced
-- [ ] RED: mid-flight exactly-once handoff (headless<->interactive, tokens in flight) via resumeFrom + acks (D-020)
+- [x] State machine drives per-conversation mode selection
+- [x] RED: attached -> unattached (heartbeat)
+- [x] RED: unattached -> gone (presence)
+- [x] RED: gone -> headless takeover
+- [x] RED: interactive reattach epoch++
+- [x] RED: boundary-only handoff enforced
+- [x] RED: mid-flight exactly-once handoff (headless<->interactive, tokens in flight) via resumeFrom + acks (D-020)
 
 ### Gate 5→6
 - [ ] End-to-end fake-harness conversation across all three modes with mid-conversation handoff, exactly-once
@@ -348,9 +348,9 @@ Source: implementation.md M5.3 D-023 part b; spikes/evidence/A-002.md
 
 ## Summary
 - Total features: 178
-- Completed: 144 (…phases 1-3: 77; phase 4: 42; M5.1: 10; M5.2: 7; M5.3 logic: 8)
-- Remaining: 34
-- Current cutoff blockers: 34
+- Completed: 151 (…phases 1-3: 77; phase 4: 42; M5.1: 10; M5.2: 7; M5.3 logic: 8; M5.4: 7)
+- Remaining: 27
+- Current cutoff blockers: 27
 - Accepted/deferred follow-up: 8 (DF-1: 4, DF-2: 3, DF-3: 1)
 - Superseded/obsolete checklist debt: 2 (both resolved)
 
