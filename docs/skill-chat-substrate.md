@@ -31,14 +31,21 @@ Send `attach { conversationId, profile, secret, version, resumeFrom? }`:
   (a lucid-owned persistent process), or `headless-turn` (one process per
   turn).
 - `resumeFrom` - the last lucid `seq` you durably applied. lucid replies
-  `attach-ok { epoch, lease, replayFrom, version }`; `replayFrom` is the
-  exclusive watermark - lucid re-delivers everything after it, so you
-  never double-apply. Claiming a `resumeFrom` ahead of the log is refused
-  `resume-ahead-of-log`.
+  `attach-ok { epoch, lease, replayFrom, version }`. `replayFrom` echoes
+  your `resumeFrom` as the exclusive watermark for the **event render**:
+  read the durable event stream and resume after that seq. Claiming a
+  `resumeFrom` ahead of the log is refused `resume-ahead-of-log`.
+- **Input replay is NOT resumeFrom-based.** lucid re-delivers every input
+  it has not durably applied on attach, regardless of seq or your
+  `resumeFrom` - so you MUST dedupe delivered `input.id`s durably and
+  apply each at most once. `resumeFrom` scopes event rendering; the
+  idempotent `id` scopes input application. Do not conflate them.
 
-A headless source may not steal an interactively-held conversation while
-the human process is alive: that attach is refused `presence-holds`. Wait
-for a re-attach or for the process to exit.
+A headless source may not steal a conversation that a live human process
+holds - whether it is interactively attached OR never attached (a fresh
+record with a live human process) - while presence corroborates that
+process alive: the attach is refused `presence-holds`. Wait for a
+re-attach or for the process to exit.
 
 ## Sending events
 
@@ -49,11 +56,18 @@ Stream the harness's output as `event { epoch, n, turnId, event }`:
 - `turnId` - unique within the conversation; a reused id is refused
   `turn-id-reused`. Mint a fresh one per turn.
 - Event **classes** decide flow control. `token`, `progress`, `context`
-  are **droppable** - lucid grants `credit { tokens }` for them, and a
-  droppable event sent with no credit is refused `no-credit`. Under
-  starvation, **coalesce** droppables latest-wins per turn and resend when
-  credit arrives. `identity`, `message`, `tool`, `limit`, `error`, `done`
-  are **lossless** - never gated, never dropped.
+  are **droppable** - lucid grants `credit { epoch, tokens }` for them,
+  and a droppable event sent with no credit is refused `no-credit`.
+  `identity`, `message`, `tool`, `limit`, `error`, `done` are **lossless**
+  - never gated, never dropped.
+- **Coalescing under starvation, exactly:** keep at most one pending
+  droppable per **(turnId, kind)** - latest-wins, so a turn can hold one
+  pending `token` AND one `progress` AND one `context` at once, not one
+  total. When you send a **lossless** event for a turn, it **supersedes
+  and clears** that turn's pending droppables (the message carries the
+  whole text - a stale `token` must never land after it). Resend the
+  surviving pending droppables, under their own turnId, when credit
+  arrives.
 
 ## Receiving input
 
@@ -79,13 +93,31 @@ the `disposition` you send back:
   `covers`, so lucid can trim its replay buffer. `acked` only moves
   forward.
 
+## The full frame set
+
+You have now seen all six source→lucid frames: `attach`, `event`, `ack`,
+`disposition`, `heartbeat`, `detach`. lucid replies with seven
+lucid→source frames - you RECEIVE these, never send them (a lucid→source
+kind arriving AT lucid is refused `wrong-direction`):
+
+- `attach-ok { epoch, lease: { expires, renewEvery }, replayFrom, version }`
+- `refused { issue }` - a named refusal (below), never a half-applied frame
+- `event-ack { epoch, n }` - your event `n` is durable; trim your replay buffer to it
+- `input { seq, id, text, mode, turnId? }` - human input to deliver
+- `control { seq, action: pause | end | switch-path }` - a conversation control
+- `lease { epoch, expires }` - a lease renewal grant
+- `credit { epoch, tokens }` - flow credits for the droppable class only
+
 ## Capabilities - declare the source, never guess
 
-At attach, query the active harness's capabilities and pass them through
-**with their source**: `runtime-verified` (the registry confirmed the
-model), `curated` (a descriptor default), or `unknown` (degrade - no
-streaming/vision claims). Declaring a capability through the skill is not
-verification; the `source` field is how a reader knows which it is.
+Capabilities are carried on the **`identity` event** you emit at the start
+of a session (not an attach field): `{ sessionId, authority,
+capabilities: { …, source, confidence } }`. Query the active harness and
+pass them through **with their source**: `runtime-verified` (the registry
+confirmed the model), `curated` (a descriptor default), or `unknown`
+(degrade - no streaming/vision claims, `confidence: none`). Declaring a
+capability through the skill is not verification; the `source` field is
+how a reader knows which it is.
 
 ## The interactive ladder (truthfully)
 
@@ -103,10 +135,29 @@ Pick the highest rung the environment supports; fall back honestly.
 ## Refusals are the signal
 
 Every refusal names its `issue` from a closed set and **never
-half-applies** the frame. Read the issue, fix the cause, resend. The
-named issues you will meet: `auth-failed`, `wrong-conversation`,
-`version-unsupported`, `resume-ahead-of-log`, `lease-held`,
-`presence-holds`, `not-attached`, `stale-epoch`, `future-epoch`, `gap-n`,
-`dupe-n`, `turn-id-reused`, `input-id-reused`, `unknown-input`,
-`no-credit`, `invalid-grant`, `invalid-input`, `steer-unsupported`,
-`covers-ahead-of-log`, `wrong-direction`.
+half-applies** the frame. The right response depends on the class - "fix
+the cause and resend" is NOT universal:
+
+- **Re-attach, do not resend** - the epoch you hold is dead:
+  `stale-epoch`, `future-epoch`, `not-attached`. Re-run the attach
+  handshake to get a current epoch.
+- **Do not retry as-is** - the attach itself is rejected: `auth-failed`,
+  `wrong-conversation`, `version-unsupported`, `presence-holds`,
+  `lease-held`. Fix the identity/secret/version, or wait (lease-held,
+  presence-holds) - retrying the same attach immediately just refuses
+  again.
+- **Fix and resend the same frame** - a sequencing/validation problem:
+  `gap-n` / `dupe-n` (resend in order), `resume-ahead-of-log`,
+  `covers-ahead-of-log`, `invalid-input`, `invalid-grant`,
+  `turn-id-reused` (mint a fresh id), `input-id-reused`, `unknown-input`,
+  `steer-unsupported` (fall back to `queue`).
+- **Back off, then resend** - `no-credit`: coalesce and wait for a
+  `credit` grant.
+- **A bug, never expected** - `wrong-direction`: you sent a lucid→source
+  kind; do not.
+
+The reducer's refusal issues (above) are the ones your frames can draw.
+Before a frame decodes at all, a malformed wire line draws a **decode**
+issue instead - `not-json`, `not-a-frame`, `unknown-kind`,
+`missing-field`, `wrong-type`, `not-serializable` - both sets arrive as
+`refused { issue }`, so handle either.

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { FRAME_KINDS, REFUSAL_ISSUES } from "../src/protocol/index.js";
+import { DECODE_ISSUES, FRAME_KINDS, REFUSAL_ISSUES } from "../src/protocol/index.js";
 
 const skill = readFileSync(
   fileURLToPath(new URL("../docs/skill-chat-substrate.md", import.meta.url)),
@@ -15,17 +15,33 @@ const skill = readFileSync(
  * agent reads can never drift from the contract lucid enforces.
  */
 describe("milestone-1 skill doc (M6.2)", () => {
-  test("every named refusal issue in the skill exists in REFUSAL_ISSUES, and every issue the reducer raises is documented", () => {
-    // Pull the closed set the skill lists at the end.
-    for (const issue of REFUSAL_ISSUES) {
+  test("every issue the code can raise (refusal AND decode) is documented, and the doc invents no issue the code lacks", () => {
+    const allIssues = new Set<string>([...REFUSAL_ISSUES, ...DECODE_ISSUES]);
+    // code -> doc: every real issue appears backticked in the skill.
+    for (const issue of allIssues) {
       expect(skill, `skill must document issue \`${issue}\``).toContain(`\`${issue}\``);
     }
-    // No invented issues: every backticked kebab token that looks like an
-    // issue is a real one (guards against the doc drifting ahead of code).
-    const documented = new Set(REFUSAL_ISSUES as readonly string[]);
-    const backticked = [...skill.matchAll(/`([a-z]+(?:-[a-z]+)+)`/g)].map((m) => m[1]);
-    const issueShaped = backticked.filter((t) => documented.has(t ?? ""));
-    expect(issueShaped.length).toBeGreaterThanOrEqual(REFUSAL_ISSUES.length);
+
+    // doc -> code (the real anti-drift guard): every backticked kebab
+    // token that is NOT a known non-issue term MUST be a real issue. A
+    // fabricated `made-up-issue` in the doc fails here.
+    const NON_ISSUE_TERMS = new Set([
+      "headless-session",
+      "headless-turn",
+      "attach-ok",
+      "event-ack",
+      "switch-path",
+      "wait-poll",
+      "runtime-verified",
+      "setting-sources",
+      "lucid-aware",
+      "text-delta", // (not used, but a plausible kebab term)
+    ]);
+    const backticked = [...skill.matchAll(/`([a-z]+(?:-[a-z]+)+)`/g)].map((m) => m[1] ?? "");
+    const unknown = backticked.filter((t) => !allIssues.has(t) && !NON_ISSUE_TERMS.has(t));
+    expect(unknown, `skill has issue-shaped tokens not in the code: ${unknown.join(", ")}`).toEqual(
+      [],
+    );
   });
 
   test("the skill documents the load-bearing frame kinds and the single-writer/epoch rule", () => {

@@ -30,7 +30,6 @@ describe("TUI view-model (M6.1)", () => {
 
     const live = buildView({
       transcript: r.host.transcript(),
-      inputs: r.host.state().inputs,
       status: r.host.status(),
       rung: "hooks",
       draft: "typing…",
@@ -46,7 +45,6 @@ describe("TUI view-model (M6.1)", () => {
     });
     const rebuilt = buildView({
       transcript: reopened.transcript(),
-      inputs: reopened.state().inputs,
       status: reopened.status(),
       rung: "hooks",
       draft: "typing…",
@@ -63,7 +61,6 @@ describe("TUI view-model (M6.1)", () => {
 
     const view = buildView({
       transcript: r.host.transcript(),
-      inputs: r.host.state().inputs,
       status: r.host.status(),
       rung: "n/a",
       draft: "",
@@ -74,6 +71,55 @@ describe("TUI view-model (M6.1)", () => {
     expect(view.lines[0]).toMatchObject({ kind: "agent", text: "agent one" });
     // The human line carries its disposition mark (queued = accepted, held).
     expect(view.lines[1]).toMatchObject({ kind: "human", text: "human asks", mark: "»" });
+  });
+
+  test("an APPLIED human input stays in the conversation view with ✓, though the reducer trimmed it out of live state", () => {
+    const r = rig();
+    r.send(attach({ conversationId: "conv-1", secret: r.secret, profile: "headless-session" }));
+    r.host.enqueueInput({ id: "in-1", text: "do it", mode: "queue" });
+    r.send({ kind: "disposition", epoch: 1, inputId: "in-1", outcome: "applied" });
+    // The reducer trimmed the applied input out of live state...
+    expect(r.host.state().inputs).toEqual([]);
+
+    // ...but the durable transcript keeps it, so the view still shows it.
+    const view = buildView({
+      transcript: r.host.transcript(),
+      status: r.host.status(),
+      rung: "n/a",
+      draft: "",
+    });
+    const human = view.lines.find((l) => l.kind === "human");
+    expect(human).toMatchObject({ text: "do it", mark: "✓" });
+
+    // A rejected input is distinguishable from a never-dispositioned one.
+    r.host.enqueueInput({ id: "in-2", text: "nope", mode: "queue" });
+    r.send({ kind: "disposition", epoch: 1, inputId: "in-2", outcome: "rejected" });
+    const view2 = buildView({
+      transcript: r.host.transcript(),
+      status: r.host.status(),
+      rung: "n/a",
+      draft: "",
+    });
+    expect(view2.lines.find((l) => l.text === "nope")).toMatchObject({ mark: "✗" });
+  });
+
+  test("a turn's token deltas collapse once its message arrives - the text renders once, never token + message both", () => {
+    const r = rig();
+    r.send(attach({ conversationId: "conv-1", secret: r.secret, profile: "headless-session" }));
+    r.host.grantCredit(10);
+    r.send(event({ epoch: 1, n: 1, turnId: "t-1", event: { kind: "token", text: "Hel" } }));
+    r.send(event({ epoch: 1, n: 2, turnId: "t-1", event: { kind: "token", text: "lo" } }));
+    r.send(event({ epoch: 1, n: 3, turnId: "t-1", event: { kind: "message", text: "Hello" } }));
+
+    const view = buildView({
+      transcript: r.host.transcript(),
+      status: r.host.status(),
+      rung: "n/a",
+      draft: "",
+    });
+    // The turn's text appears exactly once, as the message - the tokens
+    // that fed it are suppressed.
+    expect(view.lines.map((l) => l.text)).toEqual(["Hello"]);
   });
 
   test("the status line shows channel state + rung + input box, and an aborted-but-not-done turn is flagged while a completed one is not", () => {
@@ -100,7 +146,6 @@ describe("TUI view-model (M6.1)", () => {
 
     const view = buildView({
       transcript: r.host.transcript(),
-      inputs: r.host.state().inputs,
       status: r.host.status(),
       rung: "observe",
       draft: "hi",
@@ -126,9 +171,9 @@ describe("TUI render (M6.1)", () => {
     const view = buildView({
       transcript: {
         events: [{ seq: 2, epoch: 1, turnId: "t-1", event: { kind: "message", text: "hi" } }],
+        inputs: [{ seq: 3, id: "in-1", text: "a question", mode: "queue", status: "applied" }],
         aborted: [],
       },
-      inputs: [],
       status: "interactive-attached",
       rung: "hooks",
       draft: "type here",
