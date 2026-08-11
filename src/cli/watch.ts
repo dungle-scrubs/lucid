@@ -16,6 +16,7 @@ import type { ChannelStatus } from "../protocol/index.js";
 import { viewConversation } from "../store/store.js";
 import type { TuiView } from "../tui/view.js";
 import { buildView } from "../tui/view.js";
+import { conversations } from "./conversations.js";
 
 export interface WatchOpts {
   readonly rootDir?: string;
@@ -28,15 +29,11 @@ export interface WatchOpts {
   readonly signal?: AbortSignal;
 }
 
-const defaultRoot = (): string =>
-  process.env.LUCID_ROOT ?? join(process.env.HOME ?? "/tmp", ".lucid", "records");
-
 /** Emit the current view and then refresh as the log grows. Resolves
  * when `signal` aborts, or never (long-lived) when no signal is given.
  * Holds no lock and dispatches nothing. */
 export const watchConversation = async (conversationId: string, opts: WatchOpts): Promise<void> => {
-  const rootDir = opts.rootDir ?? defaultRoot();
-  const dir = join(rootDir, conversationId);
+  const dir = conversations(opts.rootDir).dirFor(conversationId);
   const pollMs = opts.pollMs ?? 500;
 
   const emit = (): void => {

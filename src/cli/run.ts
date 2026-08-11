@@ -12,26 +12,24 @@
  * executor-lease / delivery-cursor machinery here - that is deferred.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { nodeRunnerDeps } from "@dungle-scrubs/harness-cli/src/execution/node-deps.js";
 import { claudeCode } from "@dungle-scrubs/harness-cli/src/knowledge/claude-code.js";
 import { openHeadlessSession } from "../modes/headless.js";
 import type { Frame } from "../protocol/index.js";
 import { acquirePresence, type PresenceEvent } from "../store/presence.js";
-import { createConversationRecord, type HostRecord, openConversation } from "../store/store.js";
+import { type HostRecord, openConversation } from "../store/store.js";
+import { conversations } from "./conversations.js";
 
 export interface RunOpts {
   readonly rootDir?: string;
   readonly conversationId?: string;
-  /** For tests: inject a custom runner. */
   readonly runner?: ReturnType<typeof nodeRunnerDeps>;
   readonly onRecord?: (r: HostRecord) => void;
   readonly onPresenceEvent?: (e: PresenceEvent) => void;
   readonly signal?: AbortSignal;
 }
-
-const defaultRoot = (): string =>
-  process.env.LUCID_ROOT ?? join(process.env.HOME ?? "/tmp", ".lucid", "records");
 
 /** Run a conversation headlessly. Resolves when the source closes
  * (claude exits). The presence lock is held for the source's lifetime
@@ -39,23 +37,19 @@ const defaultRoot = (): string =>
 export const runConversation = async (
   opts: RunOpts = {},
 ): Promise<{ conversationId: string; dir: string }> => {
-  const rootDir = opts.rootDir ?? defaultRoot();
+  const convs = conversations(opts.rootDir);
   const conversationId =
     opts.conversationId ?? `conv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  const dir = join(rootDir, conversationId);
+  const dir = convs.dirFor(conversationId);
 
   // Create or open the record. The open folds the log ONCE under the
   // append lock - no tailer, no second fold loop.
   let secret: string;
   try {
-    const created = createConversationRecord(rootDir, conversationId);
-    secret = created.secret;
+    const { secret: s } = convs.ensure(conversationId);
+    secret = s;
   } catch (e) {
     if (!(e instanceof Error) || !/exists/.test(e.message)) throw e;
-    // Exists - read secret via openConversation's own read (it will
-    // throw if missing, which is the correct error).
-    const { readFileSync, existsSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const secretPath = join(dir, "secret");
     if (!existsSync(secretPath)) throw e;
     secret = readFileSync(secretPath, "utf8").trim();

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { acquireAppendLock, type LockEvent } from "./lock.js";
+import { Flock, type LockEvent } from "./flock.js";
 
 export type PresenceEvent =
   | { readonly event: "presence.acquire"; readonly conversationId: string }
@@ -30,15 +30,8 @@ export const acquirePresence = (
   opts: { onEvent?: (e: PresenceEvent) => void; onLockEvent?: (e: LockEvent) => void } = {},
 ): PresenceHandle => {
   const lockPath = presenceLockPath(recordDir);
-  // Use the append-lock primitive but on the presence file - same flock
-  // guarantee, different file. We pass the base path (without .lock)
-  // so lock.ts derives the sibling correctly; but presence.lock is
-  // already the lock file itself, so we pass its stem.
-  const base = lockPath.replace(/\.lock$/, "");
-  const lock = acquireAppendLock(base, {
-    label: conversationId,
-    onEvent: opts.onLockEvent,
-  });
+  const flock = new Flock(lockPath, conversationId);
+  const lock = flock.acquire({ onEvent: opts.onLockEvent });
   let held = true;
   opts.onEvent?.({ event: "presence.acquire", conversationId });
 
