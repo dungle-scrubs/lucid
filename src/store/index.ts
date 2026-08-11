@@ -8,8 +8,11 @@
 export {
   createConversationRecord,
   type HostDeps,
+  type HostRecord,
   openConversation,
+  pathsForDir,
   type RecordPaths,
+  type RecoveryRecord,
   recordPaths,
   StoreError,
   type WireRecord,

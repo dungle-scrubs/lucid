@@ -1,17 +1,30 @@
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Effect, TransitionRecord } from "../../src/protocol/index.js";
-import { encodeFrame, type Frame, PROTOCOL_VERSION } from "../../src/protocol/index.js";
-import { createConversationRecord, openConversation, StoreError } from "../../src/store/store.js";
+import type { Effect } from "../../src/protocol/index.js";
+import { encodeFrame, type Frame } from "../../src/protocol/index.js";
+import {
+  createConversationRecord,
+  type HostRecord,
+  openConversation,
+  StoreError,
+} from "../../src/store/store.js";
+import { attach, event } from "../protocol/helpers.js";
 
 const freshRoot = (): string => mkdtempSync(join(tmpdir(), "lucid-store-"));
 
 interface Harness {
   readonly host: ReturnType<typeof openConversation>;
   readonly effects: Effect[];
-  readonly records: TransitionRecord[];
+  readonly records: HostRecord[];
   now: number;
   presence: boolean | undefined;
 }
@@ -22,7 +35,7 @@ const openHost = (
   overrides: { now?: number; presence?: boolean | undefined } = {},
 ): Harness => {
   const effects: Effect[] = [];
-  const records: TransitionRecord[] = [];
+  const records: HostRecord[] = [];
   const box = {
     now: overrides.now ?? 1_000,
     presence: "presence" in overrides ? overrides.presence : undefined,
@@ -31,7 +44,7 @@ const openHost = (
     now: () => box.now,
     presence: () => box.presence,
     onEffect: (e) => effects.push(e),
-    onRecord: (r) => records.push(r as TransitionRecord),
+    onRecord: (r) => records.push(r),
   });
   return {
     host,
@@ -58,14 +71,7 @@ const recordDir = (rootDir: string, conversationId: string): string =>
 const attachFrame = (
   secret: string,
   overrides: Partial<Extract<Frame, { kind: "attach" }>> = {},
-): Frame => ({
-  kind: "attach",
-  conversationId: "conv-1",
-  profile: "interactive",
-  secret,
-  version: PROTOCOL_VERSION,
-  ...overrides,
-});
+): Frame => attach({ secret, ...overrides });
 
 describe("durable conversation store (M5.1)", () => {
   test("record creation mints the secret 0600 with an empty log - and a second creation NEVER re-mints (first-attacker hole closed)", () => {
@@ -96,7 +102,9 @@ describe("durable conversation store (M5.1)", () => {
     // and NOTHING lands in the durable log.
     const refused = h.host.handleFrame(encodeFrame(attachFrame("wrong")));
     expect(refused.verdict).toBe("refused");
-    expect(h.records[0]?.issue).toBe("auth-failed");
+    expect(h.records[0]?.verdict).toBe("recovered");
+    if ("issue" in (h.records[1] ?? {}))
+      expect((h.records[1] as { issue: string }).issue).toBe("auth-failed");
     expect(h.effects[0]).toEqual({
       type: "send",
       frame: { kind: "refused", issue: "auth-failed" },
@@ -107,7 +115,7 @@ describe("durable conversation store (M5.1)", () => {
     const accepted = h.host.handleFrame(encodeFrame(attachFrame(secret)));
     expect(accepted.verdict).toBe("accepted");
     expect(h.host.state().epoch).toBe(1);
-    expect(h.records[1]?.verdict).toBe("accepted");
+    expect(h.records[2]?.verdict).toBe("accepted");
     expect(h.effects[1]?.type).toBe("send");
     const log = readFileSync(join(root, "conv-1", "log.ndjson"), "utf8");
     expect(log.endsWith("\n")).toBe(true);
@@ -274,7 +282,7 @@ describe("durable conversation store (M5.1)", () => {
       encodeFrame({ ...attachFrame(secret), profile: "headless-turn" } as Frame),
     );
     expect(y.verdict).toBe("refused");
-    if ("issue" in y) expect(y.issue).toBe("lease-held");
+    expect("issue" in y && y.issue).toBe("lease-held");
 
     // The loser writes on its stale guess: fenced, observably.
     const write = h.host.handleFrame(
@@ -286,9 +294,108 @@ describe("durable conversation store (M5.1)", () => {
         event: { kind: "message", text: "y" },
       }),
     );
-    if ("issue" in write) expect(write.issue).toBe("stale-epoch");
+    expect(write.verdict).toBe("refused");
+    expect("issue" in write && write.issue).toBe("stale-epoch");
 
     // The winner's epoch is what survives a crash: fold says epoch 2.
     expect(openHost(root, "conv-1").host.state().epoch).toBe(2);
+  });
+
+  test("the log is never a weaker copy of the credential: 0600 log in a 0700 dir, secret redacted before durability", () => {
+    const root = freshRoot();
+    const { secret, paths } = createConversationRecord(root, "conv-1");
+
+    expect(statSync(paths.dir).mode & 0o777).toBe(0o700);
+    expect(statSync(paths.logPath).mode & 0o777).toBe(0o600);
+
+    const h = openHost(root, "conv-1");
+    h.host.handleFrame(encodeFrame(attachFrame(secret)));
+    const log = readFileSync(paths.logPath, "utf8");
+    expect(log.includes(secret)).toBe(false);
+    expect(log.includes("redacted")).toBe(true);
+
+    // Fold re-injects the real secret: replay works, and a later attach
+    // under the folded state still authenticates.
+    const reopened = openHost(root, "conv-1", { now: 20_000 });
+    expect(reopened.host.state().epoch).toBe(1);
+    const re = reopened.host.handleFrame(encodeFrame(attachFrame(secret)));
+    expect(re.verdict).toBe("accepted");
+  });
+
+  test("crash repair is byte-accurate under non-ASCII content, and a corrupt newline-terminated line is corruption - never silently discarded", () => {
+    const root = freshRoot();
+    const { secret, paths } = createConversationRecord(root, "conv-1");
+    const h = openHost(root, "conv-1");
+    h.host.handleFrame(encodeFrame(attachFrame(secret)));
+    h.now = 2_000;
+    h.host.handleFrame(
+      encodeFrame(
+        event({
+          n: 1,
+          event: { kind: "message", text: "emoji \u00e9\u00e8 \ud83d\ude00 payload" },
+        }),
+      ),
+    );
+    const live = h.host.state();
+    const before = readFileSync(paths.logPath);
+
+    // Torn tail after multibyte content: repair must not eat good entries.
+    appendFileSync(paths.logPath, '{"v":1,"at":9,"src":"credit","tok');
+    const repaired = openHost(root, "conv-1");
+    expect(repaired.host.state()).toEqual(live);
+    expect(readFileSync(paths.logPath).equals(before)).toBe(true);
+
+    // A corrupt line WITH a newline is not a torn tail: typed corruption.
+    appendFileSync(paths.logPath, "NOT-JSON\n");
+    expect(() => openHost(root, "conv-1")).toThrow(StoreError);
+  });
+
+  test("identity lives in meta, not the path: a moved record still opens and folds under its own conversationId", () => {
+    const root = freshRoot();
+    const { secret } = createConversationRecord(root, "conv-1");
+    const h = openHost(root, "conv-1");
+    h.host.handleFrame(encodeFrame(attachFrame(secret)));
+
+    renameSync(join(root, "conv-1"), join(root, "moved-elsewhere"));
+    const moved = openHost(root, "moved-elsewhere");
+    expect(moved.host.state().conversationId).toBe("conv-1");
+    expect(moved.host.state().epoch).toBe(1);
+  });
+
+  test("record hygiene: path-escaping ids refused, provisioning whitespace in the secret file tolerated, recovery visible at the boundary", () => {
+    const root = freshRoot();
+    expect(() => createConversationRecord(root, "../evil")).toThrow(StoreError);
+    expect(() => createConversationRecord(root, "a/b")).toThrow(StoreError);
+    expect(() => createConversationRecord(root, "")).toThrow(StoreError);
+
+    const { secret, paths } = createConversationRecord(root, "conv-1");
+    writeFileSync(paths.secretPath, `${secret}\n`, { mode: 0o600 });
+    const h = openHost(root, "conv-1");
+    expect(h.host.handleFrame(encodeFrame(attachFrame(secret))).verdict).toBe("accepted");
+
+    // One canonical recovery line per open.
+    const reopened = openHost(root, "conv-1");
+    const recovery = reopened.records[0];
+    expect(recovery?.verdict).toBe("recovered");
+    if (recovery?.verdict === "recovered") {
+      expect(recovery.entries).toBe(1);
+      expect(recovery.discardedBytes).toBe(0);
+      expect(recovery.epoch).toBe(1);
+    }
+  });
+
+  test("a refused-but-alive frame renews the lease in host memory - the retrying writer is not fenced out by the store layer", () => {
+    const root = freshRoot();
+    const { secret } = createConversationRecord(root, "conv-1");
+    const h = openHost(root, "conv-1");
+    h.host.handleFrame(encodeFrame(attachFrame(secret)));
+    h.now = 2_000;
+    h.host.handleFrame(encodeFrame(event({ n: 1 })));
+
+    // Renewal due; the frame is a gap (refused) but the writer is alive.
+    h.now = 12_000;
+    const refused = h.host.handleFrame(encodeFrame(event({ n: 5 })));
+    expect(refused.verdict).toBe("refused");
+    expect(h.host.state().attachment?.lease.expires).toBe(12_000 + 15_000);
   });
 });
