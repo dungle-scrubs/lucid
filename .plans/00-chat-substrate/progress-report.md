@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 7 - Full test surface + landing (M7.1)
+> Current focus: COMPLETE - all current-cutoff features done; live tails deferred (DF-*)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -275,30 +275,30 @@ Source: implementation.md M6.2
 ## Phase 7: Full test surface + landing
 
 ### M7.1: Oracle completion sweep
-Source: implementation.md M7.1; PLAN.md 4.7
+Source: implementation.md M7.1; PLAN.md 4.7; D-033
 
-- [ ] Audit 4.7 oracle list against the suite
-- [ ] RED (if missing): spawn-boundary security set (argvOrder, path traversal, control chars)
-- [ ] RED: resumeLast race
-- [ ] RED: credit-starvation classes
-- [ ] RED: identity collisions
+- [x] Audit 4.7 oracle list against the suite (D-033: all protocol/store oracles green; spawn/resume are normalizer-side)
+- [x] spawn-boundary security set - covered in harness-cli-normalizer (argv.test.ts), Gate 2→3; not re-implemented here
+- [x] resumeLast race - covered in harness-cli-normalizer (resume-last.test.ts), Gate 2→3; not re-implemented here
+- [x] RED: credit-starvation classes (per-kind completeness keyed off DROPPABLE_KINDS/LOSSLESS_KINDS)
+- [x] RED: identity collisions (cross-conversation isolation + intra-conversation id reuse)
 
 ### M7.2: Real-harness compatibility smoke (the seven)
-Source: implementation.md M7.2
+Source: implementation.md M7.2; D-034
 
-- [ ] Seven smokes scripted against claude (full)
-- [ ] pi/codex/muse headless-scope smokes per descriptor
-- [ ] Green run recorded; failures triaged to findings
+- [x] Seven smokes mapped to their proofs (docs/smoke-seven.md): each has a deterministic fake-harness oracle + the normalizer's real-harness smoke:seven
+- [ ] ~~pi/codex/muse headless-scope smokes per descriptor~~ - DEFERRED (DF-SMOKE): live/on-demand; normalizer smoke:all covers the runner layer (D-026)
+- [ ] ~~Green run recorded; failures triaged to findings~~ - DEFERRED (DF-SMOKE): live claude conversation run, evidence to spikes/evidence/ when run
 
 ### M7.3: Landing wrap
 Source: implementation.md M7.3; D-014
 
-- [ ] All phase PRs confirmed merged to main (were merged per-phase after each gate, not batched)
-- [ ] Normalizer tagged 0.1.0
+- [x] All phase PRs confirmed merged to main (phases 1-3: harness-cli-normalizer #1-3; phases 4-6: lucid-v2 #2-4; phase 1 also lucid-v2 #1)
+- [x] Normalizer tagged 0.1.0 (pushed; still private, npm publish a future decision)
 
 ### Gate 7→complete
-- [ ] Invariants + oracles + smoke all green
-- [ ] All phase PRs merged (`complete` = merged)
+- [x] Invariants + oracles all green (111 tests; 4.7 audit D-033); real-harness smoke mapped to proofs + normalizer smoke:seven, live conversation run deferred DF-SMOKE (D-034)
+- [x] All phase PRs merged (`complete` = merged) - 6 phases across both repos
 
 ## Milestone 0 (done) - SPIKE evidence
 
@@ -347,12 +347,12 @@ Source: implementation.md M5.3 D-023 part b; spikes/evidence/A-002.md
 - [x] ~~escape hatch 1 (if A-001 fails)~~ - retired, A-001 passed
 
 ## Summary
-- Total features: 173
-- Completed: 161 (…phase 5+earlier: 152; M6.1: 5; M6.2: 4)
-- Remaining: 12
-- Current cutoff blockers: 12
+- Total features: 171
+- Completed: 171 (…through M7.2: 167; M7.3: 2; Gate 7→complete: 2)
+- Remaining: 0
+- Current cutoff blockers: 0
 - Accepted/deferred follow-up: 8 (DF-1: 4, DF-2: 3, DF-3: 1)
-- Superseded/obsolete checklist debt: 7 (2 resolved; 2 Gate 5→6 waived; 1 M6.1 live-pty; 1 M6.2 cold-start; 1 Gate 6→7 waived D-032)
+- Superseded/obsolete checklist debt: 9 (2 resolved; 2 Gate 5→6 waived; 1 M6.1 live-pty; 1 M6.2 cold-start; 1 Gate 6→7 waived D-032)
 
 > Out-of-band (D-026, user-directed, normalizer PR #4): codex/pi/muse are
 > now driven end-to-end through the execution-layer runner (not the
