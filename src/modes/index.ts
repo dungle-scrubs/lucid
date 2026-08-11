@@ -6,3 +6,18 @@
  * the store hosts the reducer; these modules are sources.
  */
 export { type HeadlessDeps, openHeadlessSession, openHeadlessTurns } from "./headless.js";
+export {
+  A003_GATE_OPEN,
+  type AnnounceAttach,
+  attachCapabilities,
+  chunkInjection,
+  INJECTION_CAP,
+  type LadderEnv,
+  parseAnnounce,
+  RUNGS,
+  type Rung,
+  type RungProfile,
+  selectRung,
+  type TailResult,
+  tailTranscript,
+} from "./interactive.js";

@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 5 - Store, modes, claude adapters (M5.1)
+> Current focus: Phase 5 - Store, modes, claude adapters (M5.4)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
@@ -216,21 +216,21 @@ Source: implementation.md M5.2
 - [x] RED: limit/error terminates turn with durable record
 - [x] turnId correlation runner-events -> frames -> dispositions
 
-### M5.3: claude interactive ladder - rungs 1-3
+### M5.3: claude interactive ladder - rung 1 logic (D-023 part a, fixture-proven)
 Source: implementation.md M5.3; A-002 evidence; D-008, D-017, D-023, D-025
 
-- [ ] Hooks adapter: SessionStart announce -> attach (requires `--setting-sources project` + HERDR_ENV unset, D-025)
-- [ ] Hooks adapter: PostToolUse/Stop boundary injection with disposition
-- [ ] Transcript tail -> message events
-- [ ] At attach, query `capabilitiesOf` (runtime-verified; degrade to curated/unknown)
-- [ ] Cooperative rung: wait-poll delivery [GATED on A-003 retry]
-- [ ] Observe-only rung: tail + queue with resume instruction [GATED on A-003 retry]
-- [ ] RED (logic, fixtures): rung degradation order
-- [ ] RED: input chunking under the 10k cap
-- [ ] RED: tail resumes after adapter restart without dupes (per-epoch n)
-- [ ] RED: capabilities source runtime-verified vs curated fallback
-- [ ] RED: forbidden path - headless resume while presence holds is refused
-- [ ] Verify (live smoke): rung-1 injection disposition + terminal rendering
+- [x] Hooks adapter: SessionStart announce -> attach intent (parseAnnounce; `--setting-sources project` + HERDR_ENV unset per D-025 is the launch precondition, LadderEnv.hooksIsolated)
+- [x] Transcript tail -> message events
+- [x] At attach, query `capabilitiesOf` (runtime-verified; degrade to curated/unknown)
+- [x] RED (logic, fixtures): rung degradation order (hooks -> cooperative -> observe)
+- [x] RED: input chunking under the 10k cap (INJECTION_CAP; A-004 measurement pending, DF-2)
+- [x] RED: tail resumes after adapter restart without dupes (byte-offset resume)
+- [x] RED: capabilities source runtime-verified vs curated fallback
+- [x] RED: forbidden path - headless resume while presence holds is refused (host-enforced presence-holds)
+
+> D-023 part b (injection CONTRACT) and rungs 2-3 are the test-after +
+> live-smoke / A-003-gated tail; they cannot be fixture-proven (MUSE F10)
+> and are tracked under DF-1 and DF-3 below, not as current-cutoff logic.
 
 ### M5.4: States + handoff wired end to end
 Source: implementation.md M5.4; D-020
@@ -314,7 +314,11 @@ Source: spikes/evidence/A-003.md
 
 - [ ] Retry with readiness-gated driver start; transcript tail mid-turn lag measured
 - [ ] Cooperative-poll delivery of a queued message confirmed
-- Gates M5.3 rung-2/3 tasks and the Gate 5→6 bare-session checkbox.
+- [ ] M5.3 cooperative rung: wait-poll delivery (adapter task, gated here)
+- [ ] M5.3 observe-only rung: tail + queue with resume instruction (adapter task, gated here)
+- Gates M5.3 rung-2/3 tasks and the Gate 5→6 bare-session checkbox. The
+  ladder already selects observe-only as the closed-gate fallback
+  (A003_GATE_OPEN=false), so no current-cutoff work is blocked.
 
 ### DF-2: A-004 constraint characterization
 Source: spikes/evidence/A-004.md
@@ -324,17 +328,30 @@ Source: spikes/evidence/A-004.md
 - [ ] Injected-text terminal rendering captured
 - No architectural impact; measured opportunistically at M5.3.
 
+### DF-3: M5.3 rung-1 injection contract (live smoke)
+Source: implementation.md M5.3 D-023 part b; spikes/evidence/A-002.md
+
+- [ ] Live-pty smoke: PostToolUse/Stop boundary injection with disposition
+      (applied|queued|rejected) + terminal rendering
+- Injection cannot be fixture-proven (MUSE F10); the SPIKE A-002 already
+  proved the contract end-to-end against live claude 2.1.226 (SessionStart
+  announce + mid-turn boundary injection + terminal continuity). This item
+  is the code-level regression smoke, which lands with M7.2's real-harness
+  compatibility sweep (the original seven) - "necessary but no longer the
+  proof." Not a current-cutoff blocker: the adapter logic is fixture-proven
+  and the contract is spike-proven.
+
 ## Superseded/obsolete checklist debt
 
 - [x] ~~openSession-semantics-differ risk~~ - resolved by A-001 pass
 - [x] ~~escape hatch 1 (if A-001 fails)~~ - retired, A-001 passed
 
 ## Summary
-- Total features: 182
-- Completed: 136 (…phases 1-3: 77; phase 4: 42; M5.1: 10; M5.2: 7)
-- Remaining: 46
-- Current cutoff blockers: 46
-- Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
+- Total features: 178
+- Completed: 144 (…phases 1-3: 77; phase 4: 42; M5.1: 10; M5.2: 7; M5.3 logic: 8)
+- Remaining: 34
+- Current cutoff blockers: 34
+- Accepted/deferred follow-up: 8 (DF-1: 4, DF-2: 3, DF-3: 1)
 - Superseded/obsolete checklist debt: 2 (both resolved)
 
 > Out-of-band (D-026, user-directed, normalizer PR #4): codex/pi/muse are
