@@ -5,7 +5,7 @@
 > built; never mark a milestone complete until every current-cutoff checkbox
 > under it is checked. Decisions are canonical in `plan.db`.
 
-> Current focus: Phase 4 - Protocol reducer (M4.3)
+> Current focus: Phase 4 - Protocol reducer (M4.4)
 
 > Milestone 0 (SPIKE) is COMPLETE - see `## Milestone 0 (done)` below; its
 > outputs are the entry evidence for Phases 3 and 5.
