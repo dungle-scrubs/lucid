@@ -36,17 +36,34 @@ export const isKnownEventKind = (kind: unknown): boolean =>
   ((DROPPABLE_KINDS as readonly string[]).includes(kind) ||
     (LOSSLESS_KINDS as readonly string[]).includes(kind));
 
+/** A droppable event waiting for credit, still owned by the turn that
+ * produced it - flushing must never re-stamp an event with a turn it did
+ * not belong to. */
+export interface PendingDroppable<E> {
+  readonly turnId: string;
+  readonly event: E;
+}
+
 /** Source-side starvation policy (PLAN 4.5): while credit is exhausted the
- * pending buffer keeps AT MOST one entry per droppable kind - latest-wins
- * in value AND position (the superseded entry is removed, the incoming one
- * appended, so a coalesced delta never jumps ahead of lossless events that
- * preceded it). Lossless events are appended untouched; how many of those
- * the caller buffers is the caller's drain cadence, not this module's
- * bound. Shared by every adapter so the policy exists exactly once. */
+ * pending buffer keeps AT MOST one entry per (turnId, droppable kind) -
+ * latest-wins in value AND position. Droppables ONLY: the caller sends
+ * lossless immediately (never buffered, never dropped) and calls
+ * supersedeTurn when a lossless event closes over a turn's deltas. Shared
+ * by every adapter so the policy exists exactly once. */
 export const coalesceDroppable = <E extends { readonly kind?: unknown }>(
-  pending: readonly E[],
+  pending: readonly PendingDroppable<E>[],
+  turnId: string,
   incoming: E,
-): readonly E[] =>
-  classOfEventKind(incoming.kind) === "lossless"
-    ? [...pending, incoming]
-    : [...pending.filter((e) => e.kind !== incoming.kind), incoming];
+): readonly PendingDroppable<E>[] => [
+  ...pending.filter((p) => !(p.turnId === turnId && p.event.kind === incoming.kind)),
+  { turnId, event: incoming },
+];
+
+/** A lossless event for a turn SUPERSEDES that turn's pending droppables:
+ * the trailing message/done carries the whole text (PLAN Part 0: a turn's
+ * text arrives twice by design - render one), so a stale delta must never
+ * land after it. */
+export const supersedeTurn = <E>(
+  pending: readonly PendingDroppable<E>[],
+  turnId: string,
+): readonly PendingDroppable<E>[] => pending.filter((p) => p.turnId !== turnId);

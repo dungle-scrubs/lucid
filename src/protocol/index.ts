@@ -15,6 +15,8 @@ export {
   type EventClass,
   isKnownEventKind,
   LOSSLESS_KINDS,
+  type PendingDroppable,
+  supersedeTurn,
 } from "./events.js";
 export {
   type AttachProfile,

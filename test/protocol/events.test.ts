@@ -6,6 +6,8 @@ import {
   DROPPABLE_QUEUE_MAX,
   isKnownEventKind,
   LOSSLESS_KINDS,
+  type PendingDroppable,
+  supersedeTurn,
 } from "../../src/protocol/events.js";
 
 describe("event classes + coalescing (M4.3)", () => {
@@ -26,27 +28,28 @@ describe("event classes + coalescing (M4.3)", () => {
     expect(DROPPABLE_QUEUE_MAX).toBeGreaterThan(0);
   });
 
-  test("under starvation, coalescing is latest-wins per droppable kind and never touches the lossless class", () => {
-    let pending: readonly Record<string, unknown>[] = [];
+  test("under starvation, coalescing is latest-wins per (turn, droppable kind), and a turn's lossless event supersedes its stale deltas", () => {
+    let pending: readonly PendingDroppable<Record<string, unknown>>[] = [];
 
-    pending = coalesceDroppable(pending, { kind: "token", text: "a" });
-    pending = coalesceDroppable(pending, { kind: "token", text: "ab" });
-    expect(pending).toEqual([{ kind: "token", text: "ab" }]);
+    pending = coalesceDroppable(pending, "t-1", { kind: "token", text: "a" });
+    pending = coalesceDroppable(pending, "t-1", { kind: "token", text: "ab" });
+    expect(pending).toEqual([{ turnId: "t-1", event: { kind: "token", text: "ab" } }]);
 
-    pending = coalesceDroppable(pending, { kind: "progress", note: "1/3" });
-    pending = coalesceDroppable(pending, { kind: "message", text: "kept" });
-    pending = coalesceDroppable(pending, { kind: "token", text: "abc" });
-    pending = coalesceDroppable(pending, { kind: "progress", note: "2/3" });
-    pending = coalesceDroppable(pending, { kind: "message", text: "also kept" });
-
-    // Latest-wins collapsed each droppable kind to one entry - and holds
-    // for POSITION too: the superseding value sits where it arrived, never
-    // ahead of lossless events that preceded it. Both messages survived.
+    // A different turn's deltas coalesce independently - flushing can
+    // never re-stamp an event with a turn it did not belong to.
+    pending = coalesceDroppable(pending, "t-1", { kind: "progress", note: "1/3" });
+    pending = coalesceDroppable(pending, "t-2", { kind: "token", text: "x" });
+    pending = coalesceDroppable(pending, "t-1", { kind: "token", text: "abc" });
     expect(pending).toEqual([
-      { kind: "message", text: "kept" },
-      { kind: "token", text: "abc" },
-      { kind: "progress", note: "2/3" },
-      { kind: "message", text: "also kept" },
+      { turnId: "t-1", event: { kind: "progress", note: "1/3" } },
+      { turnId: "t-2", event: { kind: "token", text: "x" } },
+      { turnId: "t-1", event: { kind: "token", text: "abc" } },
     ]);
+
+    // t-1's trailing message supersedes t-1's pending deltas (the message
+    // carries the whole text - a stale delta must never land after it);
+    // t-2's survive untouched.
+    pending = supersedeTurn(pending, "t-1");
+    expect(pending).toEqual([{ turnId: "t-2", event: { kind: "token", text: "x" } }]);
   });
 });
