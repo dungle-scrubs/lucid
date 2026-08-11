@@ -1,18 +1,36 @@
 /**
  * The durable conversation store: the impure shell that hosts the pure
  * protocol reducer and enforces its verdicts. Owns the record directory
- * (published ATOMICALLY at creation with a 0600 secret - D-004: a first
+ * (published atomically at creation with a 0600 secret - D-004: a first
  * attacher never mints, and a crash never leaves a half-built record),
  * the append-only NDJSON log that is the seq authority (append + fsync
  * BEFORE state advances and effects leave), and the structured boundary
  * record for every accepted/refused transition. The attach secret is
- * REDACTED before it is durable - the log must never be a second,
+ * redacted before it is durable - the log must never be a second,
  * weaker copy of the credential. Clock, presence, and both sinks are
  * injected, so tests are deterministic while permissions, atomicity, and
  * torn-line repair are proven against the real filesystem. NOT
- * responsible for transport (deferred by decision) or rendering.
- * Fold currently reads the whole log at open; compaction/checkpointing
- * is a deliberate later feature, not an M5.1 requirement.
+ * responsible for transport (deferred) or rendering.
+ *
+ * M1.2 - the append transaction (D-005, flock-only D-008):
+ * every mutation that appends to `log.ndjson` serializes under a real
+ * `flock(2)` on the sibling `log.ndjson.lock`. The transaction is:
+ * acquire -> catch-up-fold -> reduce -> write-all -> fsync -> release.
+ * The catch-up re-folds the log under the lock so the reduce sees
+ * current state (a second writer's committed entry is visible).
+ * The write loops on short `writeSync` returns; a partial write is
+ * never counted complete. A write/fsync failure truncates to the byte
+ * offset captured under the lock immediately before the write (never a
+ * stale open-time offset) and raises `append-failed` (E005). A torn-
+ * interior newline-terminated line seen under the lock is `corrupt-log`
+ * (E002) - it can only mean an unlocked writer. The fold that
+ * establishes the append offset or truncates holds the lock; a pure
+ * read-only viewer may fold lock-free and tolerate a torn trailing
+ * fragment.
+ *
+ * The transaction reuses the existing `foldLog` - no copy. Byte offsets
+ * are byte-accurate (Buffer.length), not UTF-16, so non-ASCII content
+ * never cascades into a bad truncate.
  */
 
 import {
@@ -46,6 +64,11 @@ import {
   reduce,
   type TransitionRecord,
 } from "../protocol/index.js";
+import { acquireAppendLock, type LockEvent } from "./lock.js";
+
+// ---------------------------------------------------------------------------
+// Errors and record layout
+// ---------------------------------------------------------------------------
 
 const SECRET_BYTES = 32;
 /** What replaces the credential in the durable log (fold re-injects the
@@ -75,15 +98,21 @@ export interface RecordPaths {
   readonly secretPath: string;
   readonly logPath: string;
   readonly metaPath: string;
+  /** Sibling `log.ndjson.lock` - the flock target for the append transaction. */
+  readonly lockPath: string;
 }
 
-/** The one place the record layout lives. */
-export const pathsForDir = (dir: string): RecordPaths => ({
-  dir,
-  secretPath: join(dir, "secret"),
-  logPath: join(dir, "log.ndjson"),
-  metaPath: join(dir, "meta.json"),
-});
+/** The one place the record layout lives (including the lock sibling). */
+export const pathsForDir = (dir: string): RecordPaths => {
+  const logPath = join(dir, "log.ndjson");
+  return {
+    dir,
+    secretPath: join(dir, "secret"),
+    logPath,
+    metaPath: join(dir, "meta.json"),
+    lockPath: `${logPath}.lock`,
+  };
+};
 
 export const recordPaths = (rootDir: string, conversationId: string): RecordPaths =>
   pathsForDir(join(rootDir, conversationId));
@@ -117,7 +146,6 @@ export const createConversationRecord = (
     writeFileSync(tmp.secretPath, secret, { mode: 0o600 });
     writeFileSync(tmp.logPath, "", { mode: 0o600 });
     writeFileSync(tmp.metaPath, JSON.stringify({ v: 1, conversationId }), { mode: 0o600 });
-    // mkdtemp already created the staging dir 0700; rename publishes it.
     renameSync(staging, paths.dir);
   } catch (cause) {
     rmSync(staging, { recursive: true, force: true });
@@ -125,6 +153,10 @@ export const createConversationRecord = (
   }
   return { secret, paths };
 };
+
+// ---------------------------------------------------------------------------
+// Log entry types and fold
+// ---------------------------------------------------------------------------
 
 /** One durable log entry: everything fold needs to reproduce the
  * transition deterministically - source, input, clock reading, and (for
@@ -176,6 +208,10 @@ export interface HostDeps {
   /** The always-on boundary record: one structured line per transition,
    * plus one recovery line per open. Logged verbatim by the caller. */
   readonly onRecord: (record: HostRecord) => void;
+  /** Structured lock boundary events (lock.acquire / lock.timeout / lock.release). */
+  readonly onLockEvent?: (event: LockEvent) => void;
+  /** Structured append boundary events (append.start / append.ok / append.failed). */
+  readonly onAppendEvent?: (event: AppendEvent) => void;
 }
 
 /** The boundary record for a line that never decoded into a frame. */
@@ -201,6 +237,23 @@ export interface RecoveryRecord {
 }
 
 export type HostRecord = TransitionRecord | WireRecord | RecoveryRecord;
+
+/** Structured append boundary events, always-on when a sink is wired,
+ * keyed by conversationId and carrying the under-lock pre-write offset. */
+export type AppendEvent =
+  | { readonly event: "append.start"; readonly conversationId: string; readonly offset: number }
+  | {
+      readonly event: "append.ok";
+      readonly conversationId: string;
+      readonly offset: number;
+      readonly bytes: number;
+    }
+  | {
+      readonly event: "append.failed";
+      readonly conversationId: string;
+      readonly offset: number;
+      readonly error: string;
+    };
 
 /** One rendered event in the durable order, stamped with the lucid seq
  * that makes exactly-once render possible: a consumer applies events in
@@ -267,8 +320,6 @@ const applyEntry = (
 ): { result: ReduceResult; frame: Frame | null } => {
   switch (entry.src) {
     case "frame": {
-      // The durable frame is already the DECODED shape; the credential was
-      // redacted before persisting, so re-inject it for attach replay.
       const raw = entry.frame.kind === "attach" ? { ...entry.frame, secret } : entry.frame;
       const decoded = decodeFrame(raw);
       if (decoded.verdict !== "ok")
@@ -311,9 +362,6 @@ const collectTranscript = (
         event: frameOrNull.event,
       }),
     );
-  // A human input enters the durable conversation history here (it is
-  // never an "event" frame), keeping its text past the point the reducer
-  // trims an applied input out of live state.
   if (entry.src === "input" && result.record.seq !== undefined)
     acc.inputs.push({
       seq: result.record.seq,
@@ -322,7 +370,6 @@ const collectTranscript = (
       mode: entry.input.mode,
       status: "outstanding",
     });
-  // A disposition updates the last-known outcome of its input for display.
   if (frameOrNull?.kind === "disposition") {
     const at = acc.inputs.findIndex((i) => i.id === frameOrNull.inputId);
     if (at !== -1) {
@@ -385,13 +432,41 @@ const foldLog = (
 
 const HEX_SECRET = /^[0-9a-f]{16,}$/;
 
+// ---------------------------------------------------------------------------
+// Observability helpers (never throw into the transaction)
+// ---------------------------------------------------------------------------
+
+const emitAppend = (deps: HostDeps, event: AppendEvent): void => {
+  try {
+    deps.onAppendEvent?.(event);
+  } catch {
+    // observability must never corrupt the transaction
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Durable write helpers (byte-accurate, loop on short writes)
+// ---------------------------------------------------------------------------
+
+/** Write the entire buffer to `fd`, looping on short returns. A partial
+ * write is never counted complete - the caller must truncate on failure. */
+const writeAllSync = (fd: number, buf: Buffer): void => {
+  let off = 0;
+  while (off < buf.length) {
+    const n = writeSync(fd, buf, off, buf.length - off, null);
+    if (n <= 0) throw new Error(`writeSync returned ${n} for ${buf.length - off} remaining`);
+    off += n;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Record creation and opening
+// ---------------------------------------------------------------------------
+
 export const openConversation = (dir: string, deps: HostDeps) => {
   const paths = pathsForDir(dir);
   if (!existsSync(paths.secretPath))
     throw new StoreError("missing-secret", `no secret in record dir: ${paths.secretPath}`);
-  // Trim the secret so external provisioning's trailing newline is not
-  // indistinguishable from an attacker; identity lives in meta, not the
-  // path, so a moved record still opens under its own id.
   const secret = readFileSync(paths.secretPath, "utf8").trim();
   if (!HEX_SECRET.test(secret))
     throw new StoreError("invalid-secret", `malformed secret file: ${paths.secretPath}`);
@@ -400,77 +475,196 @@ export const openConversation = (dir: string, deps: HostDeps) => {
         .conversationId
     : basename(dir);
 
-  const raw: Buffer = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
-  const folded = foldLog(conversationId, secret, raw);
-  if (folded.goodBytes < raw.length) truncateSync(paths.logPath, folded.goodBytes);
-  let state = folded.state;
-  let goodBytes = folded.goodBytes;
-  // The live render history, seeded from replay and extended by commit -
-  // one accumulator, never re-folded (the transcript() reader is O(1)).
-  const transcript: TranscriptAcc = {
-    events: [...folded.transcript.events],
-    inputs: [...folded.transcript.inputs],
-    aborted: [...folded.transcript.aborted],
+  // Shared helper: read the log, fold it, and repair a torn trailing
+  // fragment under the lock. The caller holds the lock, so the repair
+  // is race-free. Reuses the existing `foldLog` - not a copy. A
+  // torn-interior newline-terminated line under the lock will throw
+  // corrupt-log (E002) directly from foldLog - it can only mean an
+  // unlocked writer, so we do not catch it here.
+  const readFoldRepair = (): { raw: Buffer; folded: ReturnType<typeof foldLog> } => {
+    const raw: Buffer = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
+    const folded = foldLog(conversationId, secret, raw);
+    if (folded.goodBytes < raw.length) {
+      try {
+        truncateSync(paths.logPath, folded.goodBytes);
+      } catch {
+        // best-effort; in-memory goodBytes remains correct
+      }
+    }
+    return { raw, folded };
   };
-  const fd = openSync(paths.logPath, "a");
+
+  // Establish initial state under the append lock so the offset and any
+  // torn-tail repair are not races. A read-only viewer can use
+  // `viewConversation` lock-free, but any handle that will append must
+  // start from a lock-established offset.
+  const { raw: initialRaw, folded: initialFolded } = (() => {
+    const lock = acquireAppendLock(paths.lockPath, {
+      label: conversationId,
+      onEvent: deps.onLockEvent,
+    });
+    try {
+      return readFoldRepair();
+    } finally {
+      lock.release();
+    }
+  })();
+
+  const acc: TranscriptAcc = {
+    events: [...initialFolded.transcript.events],
+    inputs: [...initialFolded.transcript.inputs],
+    aborted: [...initialFolded.transcript.aborted],
+  };
+  let curState = initialFolded.state;
+  let curGoodBytes = initialFolded.goodBytes;
 
   deps.onRecord({
     verdict: "recovered",
     conversationId,
-    entries: folded.entries,
-    discardedBytes: raw.length - folded.goodBytes,
-    seq: state.seq,
-    epoch: state.epoch,
+    entries: initialFolded.entries,
+    discardedBytes: initialRaw.length - initialFolded.goodBytes,
+    seq: curState.seq,
+    epoch: curState.epoch,
   });
 
-  /** Durability first: append + fsync BEFORE state advances or any effect
-   * leaves, so a crash replays the transition instead of losing it. The
-   * reducer's state is adopted on refusals too - a refused-but-alive
-   * frame renews the lease, which is in-memory liveness accounting and
-   * deliberately NOT durable (a restart kills the channel anyway). */
-  const commit = (entry: LogEntry, result: ReduceResult, frame: Frame | null): ReduceResult => {
-    if (result.verdict === "accepted") {
-      const line = Buffer.from(`${JSON.stringify(entry)}\n`);
-      try {
-        writeSync(fd, line);
-        fsyncSync(fd);
-      } catch (cause) {
-        try {
-          ftruncateSync(fd, goodBytes);
-        } catch {
-          // best-effort repair; the typed error below is the signal
-        }
-        throw new StoreError("append-failed", `could not append to ${paths.logPath}`, { cause });
+  // -----------------------------------------------------------------------
+  // Append transaction (the M1.2 critical section)
+  // -----------------------------------------------------------------------
+
+  /** Run one transaction: acquire -> catch-up-fold -> reduce -> writeAll ->
+   * fsync -> release. The reduce sees current state because the fold is
+   * under the lock. Write loops on short returns; any write/fsync failure
+   * truncates to the under-lock pre-write offset (never a stale open-time
+   * offset) and raises append-failed (E005). A torn-interior line under
+   * the lock throws corrupt-log (E002). */
+  const transact = (
+    produce: (s: ChannelState) => {
+      entry: LogEntry | null;
+      result: ReduceResult;
+      frame: Frame | null;
+    },
+  ): ReduceResult => {
+    const lock = acquireAppendLock(paths.lockPath, {
+      label: conversationId,
+      onEvent: deps.onLockEvent,
+    });
+    let preWriteOffset: number | undefined;
+    try {
+      // Catch-up-fold under the lock: re-read and re-fold so a second
+      // writer's committed entry is visible before this reduce.
+      const { folded } = readFoldRepair();
+      // Adopt catch-up if the file grew (or shrank via repair).
+      if (
+        folded.goodBytes !== curGoodBytes ||
+        folded.state.seq !== curState.seq ||
+        folded.state.epoch !== curState.epoch
+      ) {
+        curState = folded.state;
+        curGoodBytes = folded.goodBytes;
+        acc.events.length = 0;
+        acc.events.push(...folded.transcript.events);
+        acc.inputs.length = 0;
+        acc.inputs.push(...folded.transcript.inputs);
+        acc.aborted.length = 0;
+        acc.aborted.push(...folded.transcript.aborted);
       }
-      goodBytes += line.length;
+
+      preWriteOffset = curGoodBytes;
+      emitAppend(deps, { event: "append.start", conversationId, offset: preWriteOffset });
+
+      const { entry, result, frame } = produce(curState);
+
+      // Refused (including wire-level) - no durability, but state still
+      // advances for lease renewal and the boundary record is emitted.
+      if (entry === null || result.verdict !== "accepted") {
+        curState = result.state;
+        // Even for refused, the reducer may have emitted effects that
+        // the host must see (e.g. lease renewal), but transcript only
+        // collects accepted transitions (see collectTranscript).
+        for (const effect of result.effects) deps.onEffect(effect);
+        deps.onRecord((result as unknown as { record: HostRecord }).record);
+        emitAppend(deps, { event: "append.ok", conversationId, offset: preWriteOffset, bytes: 0 });
+        return result;
+      }
+
+      // Accepted - durable commit: writeAll -> fsync, byte-accurate.
+      const line = Buffer.from(`${JSON.stringify(entry)}\n`);
+      const fd = openSync(paths.logPath, "a");
+      let writeSucceeded = false;
+      try {
+        writeAllSync(fd, line);
+        fsyncSync(fd);
+        writeSucceeded = true;
+      } catch (cause) {
+        // Truncate to the under-lock pre-write offset (never a stale
+        // open-time offset) and raise append-failed (E005).
+        try {
+          ftruncateSync(fd, preWriteOffset);
+        } catch {
+          try {
+            truncateSync(paths.logPath, preWriteOffset);
+          } catch {}
+        }
+        emitAppend(deps, {
+          event: "append.failed",
+          conversationId,
+          offset: preWriteOffset,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+        throw new StoreError("append-failed", `could not append to ${paths.logPath}`, { cause });
+      } finally {
+        try {
+          closeSync(fd);
+        } catch {}
+      }
+
+      if (writeSucceeded) {
+        curGoodBytes = preWriteOffset + line.length;
+        curState = result.state;
+        collectTranscript(acc, entry, frame, result);
+        for (const effect of result.effects) deps.onEffect(effect);
+        deps.onRecord(result.record);
+        emitAppend(deps, {
+          event: "append.ok",
+          conversationId,
+          offset: preWriteOffset,
+          bytes: line.length,
+        });
+      }
+      return result;
+    } catch (e) {
+      // Lock timeout (E001) and corrupt-log (E002) propagate as-is with
+      // their typed codes. Append-failed (E005) is already wrapped.
+      // Ensure a failed append does not also emit a spurious ok.
+      if (e instanceof StoreError && e.code === "append-failed") throw e;
+      if (
+        preWriteOffset !== undefined &&
+        !(e instanceof StoreError && e.code === "append-failed")
+      ) {
+        // For non-append failures after start, do not emit failed - the
+        // start/ok pair already covers the non-durable path. Only write
+        // failures emit failed (above).
+      }
+      throw e;
+    } finally {
+      lock.release();
     }
-    state = result.state;
-    collectTranscript(transcript, entry, frame, result);
-    deps.onRecord(result.record);
-    for (const effect of result.effects) deps.onEffect(effect);
-    return result;
   };
 
   return {
-    state: (): ChannelState => state,
-    close: (): void => closeSync(fd),
-    /** The conversation's rendered history (see Transcript): the ordered,
-     * strictly-increasing event stream across every writer/epoch and the
-     * raw abort-turn signals. The seqs make exactly-once render possible -
-     * a consumer resumes after the highest seq it durably applied. Events
-     * are deep-frozen at collection, so this shares no mutable state with
-     * the caller and a reopened host's transcript is byte-identical. */
+    state: (): ChannelState => curState,
+    close: (): void => {
+      // No long-lived fd to close - per-transaction fds are closed
+      // in transact. Kept for API compatibility.
+    },
     transcript: (): Transcript => ({
-      events: [...transcript.events],
-      inputs: [...transcript.inputs],
-      aborted: [...transcript.aborted],
+      events: [...acc.events],
+      inputs: [...acc.inputs],
+      aborted: [...acc.aborted],
     }),
-    /** One status tick = one presence sample: the caller's tick cadence IS
-     * the polling cadence (MUSE F6). An uncorroborated sample counts as
-     * not-alive for NAMING only - the reducer's takeover gate still treats
-     * unknown as never-blocking (D-021). */
     status: (): ChannelStatus =>
-      channelStatus(state, deps.now(), { processAlive: deps.presence() === true }),
+      channelStatus(curState, deps.now(), { processAlive: deps.presence() === true }),
+
     handleFrame: (
       line: string,
     ): ReduceResult | { verdict: "refused"; wire: true; issue: DecodeIssue } => {
@@ -486,6 +680,8 @@ export const openConversation = (dir: string, deps: HostDeps) => {
           ? ({ verdict: "refused", issue: "not-json" } as const)
           : decodeFrame(parsed);
       if (decoded.verdict !== "ok") {
+        // Wire-level refusal is not an append transaction - no lock, no
+        // durability, just the boundary record and refused-send effect.
         deps.onRecord({
           verdict: "refused",
           wire: true,
@@ -497,8 +693,6 @@ export const openConversation = (dir: string, deps: HostDeps) => {
         return { verdict: "refused", wire: true, issue: decoded.issue };
       }
       const presence = decoded.frame.kind === "attach" ? deps.presence() : undefined;
-      // The DECODED frame persists - never the raw wire object - and the
-      // credential is redacted so the log is not a second, weaker copy.
       const durable =
         decoded.frame.kind === "attach" ? { ...decoded.frame, secret: REDACTED } : decoded.frame;
       const entry: LogEntry = {
@@ -508,8 +702,12 @@ export const openConversation = (dir: string, deps: HostDeps) => {
         frame: durable as unknown as Record<string, unknown>,
         ...(presence === undefined ? {} : { presence }),
       };
-      return commit(entry, reduce(state, decoded.frame, at, ctxOf(presence)), decoded.frame);
+      return transact((s) => {
+        const result = reduce(s, decoded.frame, at, ctxOf(presence));
+        return { entry, result, frame: decoded.frame };
+      });
     },
+
     enqueueInput: (input: {
       readonly id: string;
       readonly text: string;
@@ -517,11 +715,55 @@ export const openConversation = (dir: string, deps: HostDeps) => {
       readonly turnId?: string;
     }): ReduceResult => {
       const at = deps.now();
-      return commit({ v: 1, at, src: "input", input }, enqueueInput(state, input, at), null);
+      const entry: LogEntry = { v: 1, at, src: "input", input };
+      return transact((s) => {
+        const result = enqueueInput(s, input, at);
+        return { entry, result, frame: null };
+      });
     },
+
     grantCredit: (tokens: number): ReduceResult => {
       const at = deps.now();
-      return commit({ v: 1, at, src: "credit", tokens }, grantCredit(state, tokens, at), null);
+      const entry: LogEntry = { v: 1, at, src: "credit", tokens };
+      return transact((s) => {
+        const result = grantCredit(s, tokens, at);
+        return { entry, result, frame: null };
+      });
     },
+  };
+};
+
+/**
+ * Lock-free view of a conversation's durable state. Tolerates a torn
+ * trailing line (crash mid-append) without acquiring the append lock
+ * and without repairing the file - the caller is a pure reader.
+ * A fold that establishes an append offset or repairs must hold the
+ * lock (see `openConversation`); this one is for `lucid watch` and
+ * similar readers (M1.2: "a pure read-only viewer may fold lock-free").
+ */
+export const viewConversation = (
+  dir: string,
+): { state: ChannelState; transcript: Transcript; goodBytes: number } => {
+  const paths = pathsForDir(dir);
+  if (!existsSync(paths.secretPath))
+    throw new StoreError("missing-secret", `no secret in record dir: ${paths.secretPath}`);
+  const secret = readFileSync(paths.secretPath, "utf8").trim();
+  if (!HEX_SECRET.test(secret))
+    throw new StoreError("invalid-secret", `malformed secret file: ${paths.secretPath}`);
+  const conversationId = existsSync(paths.metaPath)
+    ? (JSON.parse(readFileSync(paths.metaPath, "utf8")) as { conversationId: string })
+        .conversationId
+    : basename(dir);
+  const raw: Buffer = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
+  // Lock-free: fold tolerates torn trailing fragment (no throw, no truncate).
+  const folded = foldLog(conversationId, secret, raw);
+  return {
+    state: folded.state,
+    transcript: {
+      events: [...folded.transcript.events],
+      inputs: [...folded.transcript.inputs],
+      aborted: [...folded.transcript.aborted],
+    },
+    goodBytes: folded.goodBytes,
   };
 };

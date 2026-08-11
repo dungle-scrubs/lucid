@@ -163,10 +163,13 @@ export const acquireWith = (
     // No FFI flock: there is no safe write lock. Refuse rather than fall back
     // to an O_EXCL lockfile that cannot release on death (D-008). We bail
     // before touching the filesystem, so no stray lockfile is left behind.
+    const normalized = lockTargetPath.endsWith(".lock")
+      ? lockTargetPath.slice(0, -5)
+      : lockTargetPath;
     throw new LockError(
       "lock-unavailable",
-      lockTargetPath,
-      `no flock backend available; refusing an unsafe write lock on ${lockTargetPath}`,
+      normalized,
+      `no flock backend available; refusing an unsafe write lock on ${normalized}`,
     );
   }
   // A non-finite or negative timeout would make `now >= deadline` never true
@@ -175,7 +178,15 @@ export const acquireWith = (
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
     throw new RangeError(`acquireAppendLock timeoutMs must be a finite, non-negative number`);
   }
-  const lockPath = `${lockTargetPath}.lock`;
+  // Accept either the protected target (`.../log.ndjson`) or the sibling
+  // lock path itself (`.../log.ndjson.lock`) so the store can pass
+  // `paths.lockPath` without re-deriving the suffix. `held` is always
+  // keyed by the logical target (without `.lock`) so inspection is
+  // stable regardless of which form the caller used.
+  const normalizedTarget = lockTargetPath.endsWith(".lock")
+    ? lockTargetPath.slice(0, -5)
+    : lockTargetPath;
+  const lockPath = `${normalizedTarget}.lock`;
   mkdirSync(dirname(lockPath), { recursive: true });
   // `a` creates the sibling lockfile if absent and yields a real fd.
   const lockFd = openSync(lockPath, "a");
@@ -200,19 +211,19 @@ export const acquireWith = (
       if (performance.now() >= deadline) {
         emit(opts, {
           event: "lock.timeout",
-          target: lockTargetPath,
+          target: normalizedTarget,
           label: opts?.label,
           waitedMs: performance.now() - start,
         });
         throw new LockError(
           "lock-timeout",
-          lockTargetPath,
-          `timed out acquiring append lock on ${lockTargetPath}`,
+          normalizedTarget,
+          `timed out acquiring append lock on ${normalizedTarget}`,
         );
       }
       sleepSync(RETRY_MS);
     }
-    held.add(lockTargetPath);
+    held.add(normalizedTarget);
     // Build the handle BEFORE emitting, make release idempotent, and nest the
     // release finallys so neither a throwing sink, a double-release, nor a
     // throwing close can strand the lock or skip `held.delete`.
@@ -227,13 +238,13 @@ export const acquireWith = (
           try {
             closeSync(lockFd);
           } finally {
-            held.delete(lockTargetPath);
-            emit(opts, { event: "lock.release", target: lockTargetPath, label: opts?.label });
+            held.delete(normalizedTarget);
+            emit(opts, { event: "lock.release", target: normalizedTarget, label: opts?.label });
           }
         }
       },
     };
-    emit(opts, { event: "lock.acquire", target: lockTargetPath, label: opts?.label });
+    emit(opts, { event: "lock.acquire", target: normalizedTarget, label: opts?.label });
     handedOff = true;
     return lock;
   } finally {
@@ -245,7 +256,7 @@ export const acquireWith = (
       } catch {
         // fd may already be closed; nothing else to do
       }
-      held.delete(lockTargetPath);
+      held.delete(normalizedTarget);
     }
   }
 };

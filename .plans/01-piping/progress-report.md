@@ -5,7 +5,7 @@
 > are implemented - never mark a milestone complete until every
 > current-cutoff checkbox under it is checked.
 
-> Current focus: Phase 1 - The append transaction (M1.1 done; next M1.2)
+> Current focus: Phase 2 - CLI, hooks, and interactive liveness (M2.1 next)
 
 ## Phase 1: The append transaction (workstream A)
 
@@ -25,26 +25,26 @@ Source: new `src/store/lock.ts`; port from `~/dev/lucid/src/core/lock.ts` (flock
 ### M1.2: The append transaction
 Source: `src/store/` (wraps the existing store append + catch-up-fold)
 
-- [ ] an append re-folds from the last known byte offset under the lock
-- [ ] the reduce sees current state (a second writer's committed entry is visible before this reduce)
-- [ ] transaction sequence is acquire -> catch-up-fold -> reduce -> write-all -> `fsync` -> release
-- [ ] the write loops on a short `writeSync` return
-- [ ] a partial write is never counted complete
-- [ ] a write/`fsync` failure truncates to the byte offset captured under the lock immediately before the write
-- [ ] truncation never uses a stale open-time offset
-- [ ] a write/`fsync` failure raises `append-failed` (E005)
-- [ ] a torn-interior line seen under the lock is rejected as `corrupt-log` (E002)
-- [ ] the transaction reuses the store's existing fold, not a copy
-- [ ] a fold that establishes an append offset or truncates holds the append lock
-- [ ] a pure read-only viewer may fold lock-free, tolerating a torn trailing line
+- [x] an append re-folds from the last known byte offset under the lock
+- [x] the reduce sees current state (a second writer's committed entry is visible before this reduce)
+- [x] transaction sequence is acquire -> catch-up-fold -> reduce -> write-all -> `fsync` -> release
+- [x] the write loops on a short `writeSync` return
+- [x] a partial write is never counted complete
+- [x] a write/`fsync` failure truncates to the byte offset captured under the lock immediately before the write
+- [x] truncation never uses a stale open-time offset
+- [x] a write/`fsync` failure raises `append-failed` (E005)
+- [x] a torn-interior line seen under the lock is rejected as `corrupt-log` (E002)
+- [x] the transaction reuses the store's existing fold, not a copy
+- [x] a fold that establishes an append offset or truncates holds the append lock
+- [x] a pure read-only viewer may fold lock-free, tolerating a torn trailing line
 
 ### M1.3: Two-writer real-`flock` integration check
 Source: new integration test (spawns two real processes)
 
-- [ ] two real processes append to one log concurrently under the real `flock`
-- [ ] the resulting log has no torn lines
-- [ ] seqs are strictly increasing with no epoch/seq collision
-- [ ] the reopened fold matches the union of both writers' entries
+- [x] two real processes append to one log concurrently under the real `flock`
+- [x] the resulting log has no torn lines
+- [x] seqs are strictly increasing with no epoch/seq collision
+- [x] the reopened fold matches the union of both writers' entries
 
 ## Phase 2: CLI, hooks, and interactive liveness (workstream C)
 
@@ -132,8 +132,8 @@ no checkboxes here.
 
 ## Summary
 - Total features: 73 (current-cutoff)
-- Completed: 9
-- Remaining: 64
-- Current cutoff blockers: 64
+- Completed: 25
+- Remaining: 48
+- Current cutoff blockers: 48
 - Accepted/deferred follow-up: 0
 - Superseded/obsolete checklist debt: 0
