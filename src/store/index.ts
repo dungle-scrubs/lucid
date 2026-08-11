@@ -15,5 +15,7 @@ export {
   type RecoveryRecord,
   recordPaths,
   StoreError,
+  type Transcript,
+  type TranscriptEvent,
   type WireRecord,
 } from "./store.js";

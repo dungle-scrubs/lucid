@@ -31,7 +31,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, join } from "node:path";
-import type { Effect } from "../protocol/index.js";
+import type { Effect, Frame } from "../protocol/index.js";
 import {
   type ChannelState,
   type ChannelStatus,
@@ -202,10 +202,32 @@ export interface RecoveryRecord {
 
 export type HostRecord = TransitionRecord | WireRecord | RecoveryRecord;
 
+/** One rendered event in the durable order, stamped with the lucid seq
+ * that makes exactly-once render possible: a consumer applies events in
+ * seq order and resumes after the highest seq it durably applied. */
+export interface TranscriptEvent {
+  readonly seq: number;
+  readonly epoch: number;
+  readonly turnId: string;
+  readonly event: Record<string, unknown>;
+}
+
+/** The conversation's rendered history: the ordered, gap-free event
+ * stream (across every writer/epoch) plus the turnIds a takeover aborted,
+ * so a renderer never shows a superseded turn as live. */
+export interface Transcript {
+  readonly events: readonly TranscriptEvent[];
+  readonly aborted: readonly string[];
+}
+
 const ctxOf = (presence: boolean | undefined): { presence?: Presence } =>
   presence === undefined ? {} : { presence: { processAlive: presence } };
 
-const applyEntry = (state: ChannelState, entry: LogEntry, secret: string): ReduceResult => {
+const applyEntry = (
+  state: ChannelState,
+  entry: LogEntry,
+  secret: string,
+): { result: ReduceResult; frame: Frame | null } => {
   switch (entry.src) {
     case "frame": {
       // The durable frame is already the DECODED shape; the credential was
@@ -214,13 +236,41 @@ const applyEntry = (state: ChannelState, entry: LogEntry, secret: string): Reduc
       const decoded = decodeFrame(raw);
       if (decoded.verdict !== "ok")
         throw new StoreError("corrupt-log", `logged frame no longer decodes: ${decoded.issue}`);
-      return reduce(state, decoded.frame, entry.at, ctxOf(entry.presence));
+      return {
+        result: reduce(state, decoded.frame, entry.at, ctxOf(entry.presence)),
+        frame: decoded.frame,
+      };
     }
     case "input":
-      return enqueueInput(state, entry.input, entry.at);
+      return { result: enqueueInput(state, entry.input, entry.at), frame: null };
     case "credit":
-      return grantCredit(state, entry.tokens, entry.at);
+      return { result: grantCredit(state, entry.tokens, entry.at), frame: null };
   }
+};
+
+/** Collect the render-visible history from one accepted transition: an
+ * accepted event joins the ordered stream; an abort-turn effect marks its
+ * turn superseded. Shared by fold (replay) and commit (live) so the
+ * transcript is identical whether reconstructed or accumulated. */
+const collectTranscript = (
+  events: TranscriptEvent[],
+  aborted: string[],
+  frameOrNull: Frame | null,
+  result: ReduceResult,
+): void => {
+  if (
+    result.verdict === "accepted" &&
+    frameOrNull?.kind === "event" &&
+    result.record.seq !== undefined
+  )
+    events.push({
+      seq: result.record.seq,
+      epoch: result.record.epoch,
+      turnId: frameOrNull.turnId,
+      event: frameOrNull.event,
+    });
+  for (const effect of result.effects)
+    if (effect.type === "abort-turn") aborted.push(effect.turnId);
 };
 
 const NL = 0x0a;
@@ -234,10 +284,18 @@ const foldLog = (
   conversationId: string,
   secret: string,
   raw: Buffer,
-): { state: ChannelState; goodBytes: number; entries: number } => {
+): {
+  state: ChannelState;
+  goodBytes: number;
+  entries: number;
+  events: TranscriptEvent[];
+  aborted: string[];
+} => {
   let state = initialChannelState({ conversationId, secret });
   let offset = 0;
   let entries = 0;
+  const events: TranscriptEvent[] = [];
+  const aborted: string[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
     if (nl === -1) break; // torn trailing fragment: tolerated, repaired by caller
@@ -251,18 +309,19 @@ const foldLog = (
       }
       if (!validEntry(parsed))
         throw new StoreError("corrupt-log", `malformed log entry at byte ${offset}`);
-      const result = applyEntry(state, parsed, secret);
+      const { result, frame } = applyEntry(state, parsed, secret);
       if (result.verdict !== "accepted")
         throw new StoreError(
           "fold-refused",
           `log entry at byte ${offset} refused on fold (${result.issue}): the log only holds accepted transitions`,
         );
+      collectTranscript(events, aborted, frame, result);
       state = result.state;
       entries += 1;
     }
     offset = nl + 1;
   }
-  return { state, goodBytes: offset, entries };
+  return { state, goodBytes: offset, entries, events, aborted };
 };
 
 const HEX_SECRET = /^[0-9a-f]{16,}$/;
@@ -287,6 +346,10 @@ export const openConversation = (dir: string, deps: HostDeps) => {
   if (folded.goodBytes < raw.length) truncateSync(paths.logPath, folded.goodBytes);
   let state = folded.state;
   let goodBytes = folded.goodBytes;
+  // The live render history, seeded from replay and extended by commit -
+  // one accumulator, never re-folded (the transcript() reader is O(1)).
+  const events: TranscriptEvent[] = [...folded.events];
+  const aborted: string[] = [...folded.aborted];
   const fd = openSync(paths.logPath, "a");
 
   deps.onRecord({
@@ -303,7 +366,7 @@ export const openConversation = (dir: string, deps: HostDeps) => {
    * reducer's state is adopted on refusals too - a refused-but-alive
    * frame renews the lease, which is in-memory liveness accounting and
    * deliberately NOT durable (a restart kills the channel anyway). */
-  const commit = (entry: LogEntry, result: ReduceResult): ReduceResult => {
+  const commit = (entry: LogEntry, result: ReduceResult, frame: Frame | null): ReduceResult => {
     if (result.verdict === "accepted") {
       const line = Buffer.from(`${JSON.stringify(entry)}\n`);
       try {
@@ -320,6 +383,7 @@ export const openConversation = (dir: string, deps: HostDeps) => {
       goodBytes += line.length;
     }
     state = result.state;
+    collectTranscript(events, aborted, frame, result);
     deps.onRecord(result.record);
     for (const effect of result.effects) deps.onEffect(effect);
     return result;
@@ -328,6 +392,11 @@ export const openConversation = (dir: string, deps: HostDeps) => {
   return {
     state: (): ChannelState => state,
     close: (): void => closeSync(fd),
+    /** The conversation's rendered history: ordered gap-free event stream
+     * across every writer/epoch plus the turnIds a takeover aborted. The
+     * seqs make exactly-once render possible - a consumer resumes after
+     * the highest seq it durably applied. */
+    transcript: (): Transcript => ({ events: [...events], aborted: [...aborted] }),
     /** One status tick = one presence sample: the caller's tick cadence IS
      * the polling cadence (MUSE F6). An uncorroborated sample counts as
      * not-alive for NAMING only - the reducer's takeover gate still treats
@@ -371,7 +440,7 @@ export const openConversation = (dir: string, deps: HostDeps) => {
         frame: durable as unknown as Record<string, unknown>,
         ...(presence === undefined ? {} : { presence }),
       };
-      return commit(entry, reduce(state, decoded.frame, at, ctxOf(presence)));
+      return commit(entry, reduce(state, decoded.frame, at, ctxOf(presence)), decoded.frame);
     },
     enqueueInput: (input: {
       readonly id: string;
@@ -380,11 +449,11 @@ export const openConversation = (dir: string, deps: HostDeps) => {
       readonly turnId?: string;
     }): ReduceResult => {
       const at = deps.now();
-      return commit({ v: 1, at, src: "input", input }, enqueueInput(state, input, at));
+      return commit({ v: 1, at, src: "input", input }, enqueueInput(state, input, at), null);
     },
     grantCredit: (tokens: number): ReduceResult => {
       const at = deps.now();
-      return commit({ v: 1, at, src: "credit", tokens }, grantCredit(state, tokens, at));
+      return commit({ v: 1, at, src: "credit", tokens }, grantCredit(state, tokens, at), null);
     },
   };
 };

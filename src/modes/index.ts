@@ -5,6 +5,8 @@
  * adapter ladder. NOT responsible for durability or protocol enforcement -
  * the store hosts the reducer; these modules are sources.
  */
+
+export { type ControllerAction, type ControllerActionKind, decideAction } from "./controller.js";
 export { type HeadlessDeps, openHeadlessSession, openHeadlessTurns } from "./headless.js";
 export {
   A003_GATE_OPEN,
