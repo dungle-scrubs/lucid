@@ -17,10 +17,8 @@
  * and it does not depend on the Stop hook.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { openConversation } from "../../store/store.js";
-import { LUCID_RECORD_DIR } from "../env-stamp.js";
+import { resolveVerifiedRecord } from "./resolver.js";
 
 const CHUNK_CAP_BYTES = 4000; // cap per injected block (UTF-8, post-JSON-escape)
 
@@ -31,24 +29,6 @@ export interface InjectResult {
   readonly code?: "hook-resolution-failed" | "injection-refused";
   readonly message?: string;
 }
-
-const resolveRecordDir = (): string | undefined => {
-  const dir = process.env[LUCID_RECORD_DIR];
-  return dir && dir.length > 0 ? dir : undefined;
-};
-
-const verifyRecord = (recordDir: string): { conversationId: string } | { error: string } => {
-  const metaPath = join(recordDir, "meta.json");
-  if (!existsSync(metaPath)) return { error: `no meta.json at ${metaPath}` };
-  try {
-    const meta = JSON.parse(readFileSync(metaPath, "utf8")) as { conversationId?: string };
-    if (typeof meta.conversationId !== "string" || meta.conversationId.length === 0)
-      return { error: "meta.json missing conversationId" };
-    return { conversationId: meta.conversationId };
-  } catch (e) {
-    return { error: `could not read meta.json: ${e}` };
-  }
-};
 
 /** Measure the UTF-8 byte length of `text` after JSON-escaping (the cap
  * is post-JSON-escape, not code points). */
@@ -87,13 +67,12 @@ export const inject = async (stdin: string): Promise<InjectResult> => {
     return { ok: true };
   }
 
-  const recordDir = resolveRecordDir();
-  if (!recordDir) return { ok: true };
-
-  const verified = verifyRecord(recordDir);
-  if ("error" in verified) {
-    return { ok: false, code: "hook-resolution-failed", message: verified.error };
+  const resolved = resolveVerifiedRecord();
+  if ("notManaged" in resolved) return { ok: true };
+  if (!resolved.ok) {
+    return { ok: false, code: resolved.code, message: resolved.message };
   }
+  const recordDir = resolved.record.dir;
 
   // Read queued input: for v2, the queue is the set of `input` entries
   // with status outstanding/queued in the durable transcript. A `lucid
