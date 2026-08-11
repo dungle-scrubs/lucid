@@ -60,6 +60,13 @@ describe("interactive adapter ladder - rung 1 logic (M5.3)", () => {
     const c2 = chunkInjection("abcdef", 2);
     expect(c2).toEqual(["ab", "cd", "ef"]);
     expect(() => chunkInjection("x", 0)).toThrow();
+    expect(() => chunkInjection("x", 1.5)).toThrow();
+
+    // Astral chars are never split across chunks: each chunk is
+    // independently well-formed UTF-8 (no lone surrogate -> no U+FFFD).
+    const emoji = chunkInjection("a\u{1F600}b\u{1F601}c", 2);
+    for (const c of emoji) expect(Buffer.from(c, "utf8").toString("utf8")).toBe(c);
+    expect(emoji.join("")).toBe("a\u{1F600}b\u{1F601}c");
   });
 
   test("capabilities query is runtime-verified for a curated model and degrades to unknown otherwise (D-008)", () => {
@@ -73,40 +80,64 @@ describe("interactive adapter ladder - rung 1 logic (M5.3)", () => {
     expect(unknown.streaming).toBe("none");
   });
 
-  test("transcript tail emits assistant messages and resumes by byte offset without dupes after an adapter restart", () => {
-    const raw = readFileSync(transcriptPath, "utf8");
+  test("transcript tail decodes via the normalizer, resumes by BYTE offset without dupes, and byte offsets survive non-ASCII", () => {
+    const raw = readFileSync(transcriptPath); // Buffer - bytes, not chars
 
-    // First poll from the start reads the whole transcript.
-    const first = tailTranscript(raw, 0);
-    expect(first.events.length).toBeGreaterThan(0);
-    expect(first.events.every((e) => e.kind === "message")).toBe(true);
+    // First poll reads the whole transcript; the fixture has exactly two
+    // assistant text messages and several tool calls (all via the
+    // normalizer's decoder, so lucid is not claude-only).
+    const first = tailTranscript(claudeCode, raw, 0);
+    const messages = first.events.filter((e) => e.kind === "message");
+    // Two assistant text messages, decoded exactly (the second is the
+    // model flagging the spike's injected hook feedback as a prompt
+    // injection - proof the tail carries real assistant text verbatim).
+    expect(messages.length).toBe(2);
+    expect(messages[0]).toMatchObject({
+      kind: "message",
+      text: expect.stringContaining("check the directory first"),
+    });
+    expect(messages[1]).toMatchObject({
+      kind: "message",
+      text: expect.stringContaining("prompt injection"),
+    });
+    expect(first.events.some((e) => e.kind === "tool")).toBe(true);
+    // The offset is BYTES (the fixture has em dashes: bytes > code units).
     expect(first.offset).toBe(raw.length);
+    expect(raw.length).toBeGreaterThan(raw.toString("utf8").length);
 
-    // Adapter restarts and resumes from the recorded offset: nothing new,
-    // no re-emission of what it already saw.
-    const resumed = tailTranscript(raw, first.offset);
+    // Restart from the recorded byte offset: nothing new, no re-emission.
+    const resumed = tailTranscript(claudeCode, raw, first.offset);
     expect(resumed.events).toEqual([]);
     expect(resumed.offset).toBe(raw.length);
 
-    // Split the poll mid-stream: the union of two partial polls equals one
-    // full poll - no message dropped or duplicated across the seam.
-    const midNl = raw.indexOf("\n", Math.floor(raw.length / 2)) + 1;
-    const partA = tailTranscript(raw, 0 + 0); // fresh
-    void partA;
-    const upto = tailTranscript(raw.slice(0, midNl), 0);
-    const rest = tailTranscript(raw, upto.offset);
-    expect(upto.events.length + rest.events.length).toBe(first.events.length);
+    // Split mid-stream: the union of two partial polls equals one full
+    // poll exactly - ordering and payload preserved across the seam.
+    const midNl = raw.indexOf(0x0a, Math.floor(raw.length / 2)) + 1;
+    const upto = tailTranscript(claudeCode, raw.subarray(0, midNl), 0);
+    const rest = tailTranscript(claudeCode, raw, upto.offset);
+    expect([...upto.events, ...rest.events]).toEqual([...first.events]);
+  });
+
+  test("a transcript line that is valid JSON but not an object (null / primitive) is skipped, never a throw that kills the poll", () => {
+    const line = `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "kept" }] } })}\n`;
+    const raw = Buffer.from(`null\n42\n${line}`, "utf8");
+    const result = tailTranscript(claudeCode, raw, 0);
+    expect(
+      result.events
+        .filter((e) => e.kind === "message")
+        .map((e) => (e.kind === "message" ? e.text : "")),
+    ).toEqual(["kept"]);
+    expect(result.offset).toBe(raw.length);
   });
 
   test("a torn trailing transcript line is left unconsumed so the next poll re-reads it whole", () => {
-    const raw = readFileSync(transcriptPath, "utf8");
-    const lastNl = raw.lastIndexOf("\n");
-    // Chop the final newline: the last line is now torn (mid-append).
-    const torn = raw.slice(0, lastNl);
-    const withoutTail = torn.slice(0, torn.lastIndexOf("\n") + 1);
+    const raw = readFileSync(transcriptPath);
+    const lastNl = raw.lastIndexOf(0x0a);
+    const torn = raw.subarray(0, lastNl); // final newline chopped
+    const withoutTail = torn.subarray(0, torn.lastIndexOf(0x0a) + 1);
 
-    const result = tailTranscript(torn, 0);
-    // The offset stops at the last COMPLETE line, not the torn fragment.
+    const result = tailTranscript(claudeCode, torn, 0);
+    // The offset stops at the last COMPLETE line, in BYTES.
     expect(result.offset).toBe(withoutTail.length);
   });
 

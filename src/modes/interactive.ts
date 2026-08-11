@@ -23,11 +23,15 @@
  * injection with a disposition.
  */
 
-import type { HarnessEvent } from "@dungle-scrubs/harness-cli/src/execution/events.js";
 import {
   type CapabilityResult,
   capabilitiesOf,
 } from "@dungle-scrubs/harness-cli/src/interpretation/capabilities.js";
+import {
+  type ContentEvent,
+  contentEventsOf,
+} from "@dungle-scrubs/harness-cli/src/interpretation/content.js";
+import { asRecord } from "@dungle-scrubs/harness-cli/src/interpretation/shape.js";
 import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
 
 /** The rungs in descending capability; selection walks this order. */
@@ -85,10 +89,15 @@ export const INJECTION_CAP = 10_000;
  * Never splits an empty message into zero chunks - an empty input still
  * delivers one empty chunk so its disposition is real. */
 export const chunkInjection = (text: string, cap: number = INJECTION_CAP): readonly string[] => {
-  if (cap <= 0) throw new Error("injection cap must be positive");
-  if (text.length <= cap) return [text];
+  if (!Number.isSafeInteger(cap) || cap <= 0)
+    throw new Error("injection cap must be a positive safe integer");
+  // Iterate by CODE POINT (not UTF-16 unit): a cut inside a surrogate pair
+  // would deliver two lone surrogates in separate chunks, each corrupting
+  // to U+FFFD once the hook encodes them independently.
+  const points = [...text];
+  if (points.length <= cap) return [text];
   const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += cap) chunks.push(text.slice(i, i + cap));
+  for (let i = 0; i < points.length; i += cap) chunks.push(points.slice(i, i + cap).join(""));
   return chunks;
 };
 
@@ -113,18 +122,18 @@ export interface AnnounceAttach {
 }
 
 export const parseAnnounce = (line: string): AnnounceAttach | null => {
-  let row: {
-    hook?: unknown;
-    session_id?: unknown;
-    transcript_path?: unknown;
-    source?: unknown;
-  };
+  let parsed: unknown;
   try {
-    row = JSON.parse(line);
+    parsed = JSON.parse(line);
   } catch {
     return null;
   }
+  // JSON.parse("null") / a bare primitive parses fine but is not a record;
+  // narrow before touching fields so a truncated hook line is skipped, not
+  // a thrown TypeError.
+  const row = asRecord(parsed);
   if (
+    row === null ||
     row.hook !== "SessionStart" ||
     typeof row.session_id !== "string" ||
     row.session_id === "" ||
@@ -139,60 +148,47 @@ export const parseAnnounce = (line: string): AnnounceAttach | null => {
   };
 };
 
-/** One parsed transcript message plus the byte offset AFTER it, so a
- * restarted adapter resumes from exactly where it stopped - no dupes. */
+/** The forwarded content events plus the BYTE offset AFTER the last
+ * complete line, so a restarted adapter fs-seeks to exactly where it
+ * stopped - no dupes. Byte-accurate (the file is bytes; a UTF-16 offset
+ * would desync a seek on any non-ASCII transcript). */
 export interface TailResult {
-  readonly events: readonly HarnessEvent[];
-  /** Bytes consumed - feed back as `fromByte` on the next poll. */
+  readonly events: readonly ContentEvent[];
+  /** BYTES consumed - feed back as `fromByte` on the next poll / seek. */
   readonly offset: number;
 }
 
-interface TranscriptRow {
-  readonly type?: string;
-  readonly message?: { readonly role?: string; readonly content?: unknown };
-}
+const NL = 0x0a;
 
-/** Extract the plain text of an assistant message row (content is an array
- * of typed blocks; only text blocks render). */
-const assistantText = (content: unknown): string | null => {
-  if (!Array.isArray(content)) return null;
-  const parts: string[] = [];
-  for (const block of content) {
-    if (
-      typeof block === "object" &&
-      block !== null &&
-      (block as { type?: unknown }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string"
-    )
-      parts.push((block as { text: string }).text);
-  }
-  return parts.length === 0 ? null : parts.join("");
-};
-
-/** Parse whole transcript lines from `fromByte`, emitting a `message`
- * event per assistant text row. A torn trailing line (the writer is mid
- * append) is left unconsumed so the next poll re-reads it whole - the
- * offset only advances past complete lines, which is what makes restart
- * dupe-free. */
-export const tailTranscript = (raw: string, fromByte = 0): TailResult => {
-  const events: HarnessEvent[] = [];
-  let offset = fromByte;
+/** Parse whole transcript lines from byte `fromByte`, delegating record
+ * decoding to the normalizer (which OWNS the per-harness transcript
+ * vocabulary - lucid re-deriving it would drift and would be claude-only).
+ * lucid owns only the offset/torn-line policy: a torn trailing line (the
+ * writer is mid append) is left unconsumed so the next poll re-reads it
+ * whole, and the byte offset advances only past complete lines - that is
+ * what makes restart dupe-free. */
+export const tailTranscript = (
+  harness: HarnessDescriptor,
+  raw: Buffer,
+  fromByte = 0,
+): TailResult => {
+  const events: ContentEvent[] = [];
+  let offset = Math.min(fromByte, raw.length);
   while (offset < raw.length) {
-    const nl = raw.indexOf("\n", offset);
+    const nl = raw.indexOf(NL, offset);
     if (nl === -1) break; // torn trailing line: leave for the next poll
-    const line = raw.slice(offset, nl);
+    const line = raw.toString("utf8", offset, nl);
     offset = nl + 1;
     if (line === "") continue;
-    let row: TranscriptRow;
+    let parsed: unknown;
     try {
-      row = JSON.parse(line) as TranscriptRow;
+      parsed = JSON.parse(line);
     } catch {
       continue; // a non-JSON transcript line is not our concern; skip it
     }
-    if (row.type === "assistant" && row.message?.role === "assistant") {
-      const text = assistantText(row.message.content);
-      if (text !== null) events.push({ kind: "message", role: "assistant", text });
-    }
+    // asRecord inside contentEventsOf guards non-object rows (null,
+    // primitives) - a bad line yields zero events, never a throw.
+    for (const e of contentEventsOf(harness.name, parsed)) events.push(e);
   }
   return { events, offset };
 };
