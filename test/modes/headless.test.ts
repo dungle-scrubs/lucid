@@ -26,14 +26,16 @@ const assistant = (text: string) =>
   });
 const result = JSON.stringify({ type: "result", subtype: "success" });
 
-/** Full in-process rig: real store host + real openSession over a fake
- * process, wired frame-for-frame with no transport. */
-const rig = () => {
+/** Full in-process rig: real store host + real runners over fake
+ * processes, wired frame-for-frame with no transport. The late-bound
+ * `receive` closes the host->source loop exactly once, for both modes. */
+const rig = (opts: { mode?: "session" | "turn"; processes?: number } = {}) => {
   const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
   const { secret } = createConversationRecord(root, "conv-1");
   const clock = new FakeClock();
-  const proc = new FakeProcess();
-  const spawner = fakeSpawner([proc]);
+  const procs = Array.from({ length: opts.processes ?? 1 }, () => new FakeProcess());
+  const proc = procs[0] as FakeProcess;
+  const spawner = fakeSpawner([...procs]);
   const sig = fakeSignal();
   const records: HostRecord[] = [];
 
@@ -48,18 +50,41 @@ const rig = () => {
   });
 
   let turnCount = 0;
-  const source = openHeadlessSession({
+  const common = {
     harness: claudeCode,
     conversationId: "conv-1",
     secret,
-    sessionId: sid,
     runner: { spawn: spawner.spawn, clock, signal: sig.signal },
     mintTurnId: () => `turn-${++turnCount}`,
-    sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
-  });
+    sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
+  };
+  const source =
+    (opts.mode ?? "session") === "session"
+      ? openHeadlessSession({ ...common, sessionId: sid })
+      : openHeadlessTurns(common);
   receive = source.receive;
 
-  return { root, secret, clock, proc, host, source, records };
+  const reopen = () =>
+    openConversation(join(root, "conv-1"), {
+      now: () => 99_000,
+      presence: () => undefined,
+      onRecord: () => {},
+      onEffect: () => {},
+    });
+  const logEntries = () =>
+    readFileSync(join(root, "conv-1", "log.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .filter((line) => line !== "")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            src: string;
+            frame?: { kind: string; turnId?: string; event?: Record<string, unknown> };
+          },
+      );
+
+  return { root, secret, clock, proc, procs, spawner, host, source, records, reopen, logEntries };
 };
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -237,22 +262,31 @@ describe("headless modes (M5.2)", () => {
     // No token reached durability while starved.
     expect(loggedEventKinds().filter((k) => k === "token")).toEqual([]);
 
-    // Lossless still flows while droppables starve.
+    // Lossless still flows while droppables starve - AND it supersedes
+    // the turn's stale deltas: the message carries the whole text, so a
+    // coalesced fragment must never land after it.
     r.proc.emitLine(assistant("mid message"));
     await flush();
     expect(loggedEventKinds().at(-1)).toBe("message");
 
-    // Credit arrives: exactly ONE coalesced token frame lands (latest-wins
-    // collapsed three deltas into the last one).
     r.host.grantCredit(4);
     await flush();
-    expect(loggedEventKinds().filter((k) => k === "token")).toEqual(["token"]);
+    expect(loggedEventKinds().filter((k) => k === "token")).toEqual([]);
+
+    // With credit in hand, a FRESH delta flows immediately.
+    r.proc.emitLine(
+      JSON.stringify({
+        type: "stream_event",
+        event: { delta: { type: "text_delta", text: "next" } },
+      }),
+    );
+    await flush();
     const tokenEntry = readFileSync(join(r.root, "conv-1", "log.ndjson"), "utf8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as { frame?: { event?: { kind?: string; text?: string } } })
       .find((e) => e.frame?.event?.kind === "token");
-    expect(tokenEntry?.frame?.event?.text).toBe("abc");
+    expect(tokenEntry?.frame?.event?.text).toBe("next");
 
     r.proc.emitLine(result);
     await flush();
@@ -292,6 +326,78 @@ describe("headless modes (M5.2)", () => {
       onEffect: () => {},
     });
     expect(reopened.state().seq).toBe(r.host.state().seq);
-    expect(reopened.state().turn?.turnId).toBe("turn-1");
+    // The dead session released the channel: the pump's completion sent
+    // detach(shutdown), which aborts the dangling turn - no writer, no
+    // phantom in-flight turn.
+    expect(reopened.state().turn).toBeNull();
+    expect(reopened.state().attachment).toBeNull();
+  });
+
+  test("turn-mode credit flush keeps each delta under its OWN turn - no fabricated turnId, no wedge, and the stream survives", async () => {
+    const r = rig({ mode: "turn", processes: 2 });
+
+    r.host.enqueueInput({ id: "in-1", text: "first", mode: "queue" });
+    await flush();
+    r.proc.emitLine(init);
+    // Starved deltas coalesce under turn-1.
+    r.proc.emitLine(
+      JSON.stringify({ type: "stream_event", event: { delta: { type: "text_delta", text: "z" } } }),
+    );
+    await flush();
+
+    // Credit arrives MID-TURN: the flushed delta lands under turn-1 -
+    // never a fabricated id - and the live stream keeps flowing after.
+    r.host.grantCredit(2);
+    await flush();
+    const tokens = r.logEntries().filter((e) => e.frame?.event?.kind === "token");
+    expect(tokens.map((e) => e.frame?.turnId)).toEqual(["turn-1"]);
+
+    r.proc.emitLine(assistant("done text"));
+    r.proc.emitLine(result);
+    r.proc.exit(0);
+    await flush();
+    await flush();
+    // No turn-id-reused / gap-n wedge: the message and done were accepted.
+    const kinds = r.logEntries().map((e) => e.frame?.event?.kind);
+    expect(kinds).toContain("message");
+    expect(kinds).toContain("done");
+    expect(r.host.state().turn?.turnId).toBe("turn-1");
+  });
+
+  test("session mode: a queued input flips to applied when its turn starts, and a dead session answers rejected - never a throw", async () => {
+    const r = rig();
+
+    // First input starts a turn; second queues mid-turn.
+    r.host.enqueueInput({ id: "in-1", text: "first", mode: "queue" });
+    await flush();
+    r.proc.emitLine(init);
+    await flush();
+    r.host.enqueueInput({ id: "in-2", text: "second", mode: "queue" });
+    await flush();
+    expect(r.host.state().inputs.find((i) => i.id === "in-2")?.status).toBe("queued");
+
+    // Turn one ends; the runner starts the queued send: applied NOW.
+    r.proc.emitLine(result);
+    await flush();
+    await flush();
+    await flush();
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-1": true, "in-2": true });
+
+    // The process dies: the pump releases the channel (detach), so a
+    // further input is PARKED - outstanding, armed for the next attach's
+    // replay - rather than delivered to a corpse or thrown through the
+    // host. (session.send throwing inside the pre-detach window answers
+    // `rejected`; the reducer returns it to the queue either way.)
+    r.proc.emitLine(result);
+    r.proc.exit(0);
+    await flush();
+    await flush();
+    expect(r.host.state().attachment).toBeNull();
+    r.host.enqueueInput({ id: "in-3", text: "too late", mode: "queue" });
+    await flush();
+    const inThree = r.host.state().inputs.find((i) => i.id === "in-3");
+    expect(inThree?.status).toBe("outstanding");
+    // Nothing was sent anywhere: no attachment, no delivery.
+    expect(r.records.filter((rec) => "inputId" in rec && rec.inputId === "in-3").length).toBe(1); // the enqueue record only - no disposition ever followed
   });
 });
