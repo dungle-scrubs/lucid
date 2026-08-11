@@ -7,18 +7,29 @@
  * per-epoch n gap/dupe check on source events.
  *
  * Every transition - accepted or refused - returns a structured record the
- * host logs verbatim; a refusal names its issue, leaves state untouched
- * (never half-applied), and its `refused` send effect is the only
- * operator-visible auth signal. NOT responsible for durability, transport,
- * or enforcement: the store hosts the reducer and enforces its verdicts.
+ * host logs verbatim; a refusal names its issue, never applies the frame,
+ * and its `refused` send effect is the only operator-visible auth signal.
+ * NOT responsible for durability, transport, or enforcement: the store
+ * hosts the reducer and enforces its verdicts.
  */
 
-import type { AttachProfile, Frame, FrameKind, Lease } from "./frames.js";
+import type {
+  AttachProfile,
+  DetachReason,
+  Frame,
+  FrameKind,
+  Lease,
+  RefusalIssue,
+} from "./frames.js";
+
+export type { RefusalIssue } from "./frames.js";
 
 export const PROTOCOL_VERSION = 1;
 
 /** Lease constants live in one place; the reducer only ever compares them
- * against the injected `now`. */
+ * against the injected `now`. These realize PLAN.md's `renewEvery` /
+ * `expires`; the liveness detector constants (HEARTBEAT_MS,
+ * ATTACH_GRACE_MS - M4.4) must be added HERE, not in a second module. */
 export const LEASE_TTL_MS = 15_000;
 export const LEASE_RENEW_EVERY_MS = 5_000;
 
@@ -33,38 +44,39 @@ export interface ChannelState {
   readonly conversationId: string;
   /** Minted by the host at record creation (D-004); checked only at attach. */
   readonly secret: string;
-  /** Last lucid-minted seq - the durable log position. */
+  /** Last lucid-minted seq - the durable log position. Every accepted frame
+   * consumes one (PLAN.md: "every frame lucid accepts is assigned a seq"),
+   * so the space is sparse from a source's view: bookkeeping frames
+   * (heartbeat/ack/detach) hold seqs that are never replayable, and the
+   * host filters deliverable kinds when honoring replayFrom. */
   readonly seq: number;
   /** Current fencing token; 0 = never attached. Survives detach. */
   readonly epoch: number;
   readonly attachment: Attachment | null;
-  /** The in-flight turn, tracked from accepted events. */
+  /** The turnId of the last accepted event under the current writer. The
+   * protocol cannot see turn completion (the event payload is opaque), so
+   * this may name an already-finished turn; the host owns turn lifecycle
+   * and treats an abort-turn for a finished turn as a no-op. */
   readonly turn: { readonly turnId: string } | null;
   /** Highest lucid seq the source claims durably applied (ack.covers). */
   readonly acked: number;
 }
 
-export type RefusalIssue =
-  | "auth-failed"
-  | "wrong-conversation"
-  | "version-unsupported"
-  | "resume-ahead-of-log"
-  | "lease-held"
-  | "not-attached"
-  | "stale-epoch"
-  | "gap-n"
-  | "dupe-n"
-  | "covers-ahead-of-log"
-  | "wrong-direction";
-
 export type Effect =
   | { readonly type: "send"; readonly frame: Frame }
   | { readonly type: "abort-turn"; readonly turnId: string };
+
+/** For comparison refusals: what the frame claimed vs what lucid holds. */
+export interface RefusalDetail {
+  readonly claimed: number;
+  readonly head: number;
+}
 
 /** The wide event for one transition - the host logs it verbatim. */
 export interface TransitionRecord {
   readonly verdict: "accepted" | "refused";
   readonly kind: FrameKind;
+  readonly conversationId: string;
   /** State epoch after the transition (unchanged on refusal). */
   readonly epoch: number;
   readonly now: number;
@@ -74,7 +86,11 @@ export interface TransitionRecord {
   readonly n?: number;
   /** The epoch the frame carried, when it differs from the state epoch. */
   readonly frameEpoch?: number;
+  readonly turnId?: string;
+  readonly profile?: AttachProfile;
+  readonly reason?: DetachReason;
   readonly issue?: RefusalIssue;
+  readonly detail?: RefusalDetail;
 }
 
 export type ReduceResult =
@@ -87,7 +103,8 @@ export type ReduceResult =
   | {
       readonly verdict: "refused";
       readonly issue: RefusalIssue;
-      /** Always the input state, by identity - refusals never half-apply. */
+      /** The frame is NEVER applied. State differs from the input only when
+       * a post-fence refusal renews the lease (liveness accounting). */
       readonly state: ChannelState;
       readonly effects: readonly Effect[];
       readonly record: TransitionRecord;
@@ -106,14 +123,36 @@ export const initialChannelState = (init: {
   acked: 0,
 });
 
-/** Every refusal is built here: input state BY IDENTITY (never half-applied),
- * a `refused` send (the only operator-visible auth signal), and a record
+/** The ONE place the lease-expiry comparison lives. The host consults this
+ * when deciding channel liveness instead of re-deriving the comparison. */
+export const isLive = (state: ChannelState, now: number): boolean =>
+  state.attachment !== null && now < state.attachment.lease.expires;
+
+const NO_EFFECTS: readonly Effect[] = Object.freeze([]);
+
+/** Record fields derived from the frame itself - ONE derivation for both
+ * the accepted and refused constructors, so the two records cannot drift. */
+const frameFields = (
+  stateEpoch: number,
+  frame: Frame,
+): Pick<TransitionRecord, "frameEpoch" | "n" | "turnId" | "profile" | "reason"> => ({
+  ...("epoch" in frame && frame.epoch !== stateEpoch ? { frameEpoch: frame.epoch } : {}),
+  ...("n" in frame ? { n: frame.n } : {}),
+  ...("turnId" in frame && frame.turnId !== undefined ? { turnId: frame.turnId } : {}),
+  ...(frame.kind === "attach" ? { profile: frame.profile } : {}),
+  ...(frame.kind === "detach" ? { reason: frame.reason } : {}),
+});
+
+/** Every refusal is built here: the frame is never applied (`state` is the
+ * caller's state - input identity except post-fence lease renewal), a
+ * `refused` send (the only operator-visible auth signal), and a record
  * naming the issue. */
 const refusal = (
   state: ChannelState,
   frame: Frame,
   issue: RefusalIssue,
   now: number,
+  detail?: RefusalDetail,
 ): ReduceResult => ({
   verdict: "refused",
   issue,
@@ -122,17 +161,13 @@ const refusal = (
   record: {
     verdict: "refused",
     kind: frame.kind,
+    conversationId: state.conversationId,
     epoch: state.epoch,
     issue,
     now,
-    ...("epoch" in frame && frame.epoch !== state.epoch ? { frameEpoch: frame.epoch } : {}),
-    ...("n" in frame ? { n: frame.n } : {}),
+    ...(detail === undefined ? {} : { detail }),
+    ...frameFields(state.epoch, frame),
   },
-});
-
-const renewedLease = (now: number): Lease => ({
-  expires: now + LEASE_TTL_MS,
-  renewEvery: LEASE_RENEW_EVERY_MS,
 });
 
 /** Every acceptance is built here: the next state already carries the
@@ -142,7 +177,6 @@ const accepted = (
   frame: Frame,
   now: number,
   effects: readonly Effect[],
-  n?: number,
 ): ReduceResult => ({
   verdict: "accepted",
   state: next,
@@ -150,12 +184,44 @@ const accepted = (
   record: {
     verdict: "accepted",
     kind: frame.kind,
+    conversationId: next.conversationId,
     epoch: next.epoch,
     seq: next.seq,
     now,
-    ...(n === undefined ? {} : { n }),
+    ...frameFields(next.epoch, frame),
   },
 });
+
+/** PLAN.md: "a lease is renewed by any frame plus explicit lease grants."
+ * Re-minting is gated at renewEvery granularity so per-token frames do not
+ * churn lease identity: `expires` only ever moves forward, and a writer
+ * streaming frames always holds >= TTL - renewEvery of headroom. */
+const renewLease = (lease: Lease, now: number): Lease =>
+  now + LEASE_TTL_MS - lease.expires >= LEASE_RENEW_EVERY_MS
+    ? { expires: now + LEASE_TTL_MS, renewEvery: LEASE_RENEW_EVERY_MS }
+    : lease;
+
+const renewAttachment = (attachment: Attachment, now: number): Attachment => {
+  const lease = renewLease(attachment.lease, now);
+  return lease === attachment.lease ? attachment : { ...attachment, lease };
+};
+
+/** A refusal from the CURRENT writer still proves the channel alive: the
+ * frame is never applied, but the lease renews. Only post-fence refusals
+ * reach this - a stale or unauthenticated writer must never hold the
+ * lease open. */
+const refusedButAlive = (
+  state: ChannelState,
+  attachment: Attachment,
+  frame: Frame,
+  issue: RefusalIssue,
+  now: number,
+  detail?: RefusalDetail,
+): ReduceResult => {
+  const renewed = renewAttachment(attachment, now);
+  const next = renewed === attachment ? state : { ...state, attachment: renewed };
+  return refusal(next, frame, issue, now, detail);
+};
 
 const reduceAttach = (
   state: ChannelState,
@@ -165,16 +231,23 @@ const reduceAttach = (
   if (frame.conversationId !== state.conversationId)
     return refusal(state, frame, "wrong-conversation", now);
   if (frame.secret !== state.secret) return refusal(state, frame, "auth-failed", now);
-  if (frame.version !== PROTOCOL_VERSION) return refusal(state, frame, "version-unsupported", now);
-  if (state.attachment !== null && now < state.attachment.lease.expires)
-    return refusal(state, frame, "lease-held", now);
+  if (frame.version !== PROTOCOL_VERSION)
+    return refusal(state, frame, "version-unsupported", now, {
+      claimed: frame.version,
+      head: PROTOCOL_VERSION,
+    });
+  if (isLive(state, now)) return refusal(state, frame, "lease-held", now);
   if (frame.resumeFrom !== undefined && frame.resumeFrom > state.seq)
-    return refusal(state, frame, "resume-ahead-of-log", now);
+    return refusal(state, frame, "resume-ahead-of-log", now, {
+      claimed: frame.resumeFrom,
+      head: state.seq,
+    });
 
   const epoch = state.epoch + 1;
-  const lease = renewedLease(now);
-  // A stale-lease takeover is the one handoff allowed mid-turn, and it
-  // aborts the in-flight turn rather than letting two writers share it.
+  const lease: Lease = { expires: now + LEASE_TTL_MS, renewEvery: LEASE_RENEW_EVERY_MS };
+  // A stale-lease takeover is the one handoff allowed mid-turn; whatever
+  // turn the old writer may still be running is aborted (the host treats
+  // an abort for an already-finished turn as a no-op).
   const aborted = state.turn;
   return accepted(
     {
@@ -194,6 +267,9 @@ const reduceAttach = (
           kind: "attach-ok",
           epoch,
           lease,
+          // The exclusive replay watermark: resumeFrom is the last seq the
+          // source durably APPLIED, so replay (M4.3) delivers seq >
+          // replayFrom and never re-delivers the applied frame.
           replayFrom: frame.resumeFrom ?? 0,
           version: PROTOCOL_VERSION,
         },
@@ -209,7 +285,7 @@ type PostAttachFrame = Extract<
 
 /** The shared spine of every post-attach source frame: a live attachment,
  * the CURRENT epoch (the fencing check - D-002), a minted seq, and a lease
- * renewed by any accepted frame. */
+ * renewed by any frame from the current writer. */
 const reducePostAttach = (
   state: ChannelState,
   frame: PostAttachFrame,
@@ -217,42 +293,80 @@ const reducePostAttach = (
 ): ReduceResult => {
   const attachment = state.attachment;
   if (attachment === null) return refusal(state, frame, "not-attached", now);
-  if (frame.epoch !== state.epoch) return refusal(state, frame, "stale-epoch", now);
+  if (frame.epoch < state.epoch) return refusal(state, frame, "stale-epoch", now);
+  // An epoch ahead of state is a forged token, a split-brain host, or a
+  // state-restore bug - named separately so the operator looks forward.
+  if (frame.epoch > state.epoch) return refusal(state, frame, "future-epoch", now);
 
   const seq = state.seq + 1;
-  const renewed: Attachment = { ...attachment, lease: renewedLease(now) };
   switch (frame.kind) {
     case "event": {
-      if (frame.n <= attachment.lastN) return refusal(state, frame, "dupe-n", now);
-      if (frame.n > attachment.lastN + 1) return refusal(state, frame, "gap-n", now);
+      if (frame.n <= attachment.lastN)
+        return refusedButAlive(state, attachment, frame, "dupe-n", now);
+      if (frame.n > attachment.lastN + 1)
+        return refusedButAlive(state, attachment, frame, "gap-n", now);
       return accepted(
         {
           ...state,
           seq,
-          attachment: { ...renewed, lastN: frame.n },
-          turn: { turnId: frame.turnId },
+          attachment: {
+            profile: attachment.profile,
+            lastN: frame.n,
+            lease: renewLease(attachment.lease, now),
+          },
+          turn:
+            state.turn !== null && state.turn.turnId === frame.turnId
+              ? state.turn
+              : { turnId: frame.turnId },
         },
         frame,
         now,
         [{ type: "send", frame: { kind: "event-ack", epoch: frame.epoch, n: frame.n } }],
-        frame.n,
       );
     }
     case "ack": {
-      if (frame.covers > state.seq) return refusal(state, frame, "covers-ahead-of-log", now);
-      return accepted({ ...state, seq, acked: frame.covers, attachment: renewed }, frame, now, []);
+      if (frame.covers > state.seq)
+        return refusedButAlive(state, attachment, frame, "covers-ahead-of-log", now, {
+          claimed: frame.covers,
+          head: state.seq,
+        });
+      return accepted(
+        {
+          ...state,
+          seq,
+          acked: Math.max(state.acked, frame.covers),
+          attachment: renewAttachment(attachment, now),
+        },
+        frame,
+        now,
+        NO_EFFECTS,
+      );
     }
     case "disposition":
-      return accepted({ ...state, seq, attachment: renewed }, frame, now, []);
-    case "heartbeat":
+      return accepted(
+        { ...state, seq, attachment: renewAttachment(attachment, now) },
+        frame,
+        now,
+        NO_EFFECTS,
+      );
+    case "heartbeat": {
+      const renewed = renewAttachment(attachment, now);
       return accepted({ ...state, seq, attachment: renewed }, frame, now, [
         {
           type: "send",
           frame: { kind: "lease", epoch: state.epoch, expires: renewed.lease.expires },
         },
       ]);
+    }
     case "detach":
-      return accepted({ ...state, seq, attachment: null }, frame, now, []);
+      // The departing writer can never finish its turn - abort it now
+      // rather than leaving a dangling turn no writer could ever end.
+      return accepted(
+        { ...state, seq, attachment: null, turn: null },
+        frame,
+        now,
+        state.turn === null ? NO_EFFECTS : [{ type: "abort-turn", turnId: state.turn.turnId }],
+      );
   }
 };
 

@@ -9,6 +9,8 @@
 export {
   type AttachProfile,
   type ControlAction,
+  DECODE_ISSUES,
+  type DecodeIssue,
   type DecodeVerdict,
   type DetachReason,
   type Disposition,
@@ -19,18 +21,22 @@ export {
   type FrameKind,
   type InputMode,
   type Lease,
+  type ProtocolIssue,
   parseFrame,
+  REFUSAL_ISSUES,
+  type RefusalIssue,
 } from "./frames.js";
 export {
   type Attachment,
   type ChannelState,
   type Effect,
   initialChannelState,
+  isLive,
   LEASE_RENEW_EVERY_MS,
   LEASE_TTL_MS,
   PROTOCOL_VERSION,
   type ReduceResult,
-  type RefusalIssue,
+  type RefusalDetail,
   reduce,
   type TransitionRecord,
 } from "./reducer.js";

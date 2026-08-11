@@ -39,6 +39,40 @@ export type DetachReason = "yield" | "shutdown";
 export type InputMode = "queue" | "steer";
 export type ControlAction = "pause" | "end" | "switch-path";
 
+/** Issues a codec can raise: the frame never decoded. */
+export const DECODE_ISSUES = [
+  "not-json",
+  "not-a-frame",
+  "unknown-kind",
+  "missing-field",
+  "wrong-type",
+  "not-serializable",
+] as const;
+export type DecodeIssue = (typeof DECODE_ISSUES)[number];
+
+/** Issues the reducer can raise: the frame decoded but was not applied.
+ * Declared here because a `refused` frame carries them on the wire - the
+ * issue vocabulary IS wire vocabulary, and typing it keeps a typo'd issue
+ * from compiling. */
+export const REFUSAL_ISSUES = [
+  "auth-failed",
+  "wrong-conversation",
+  "version-unsupported",
+  "resume-ahead-of-log",
+  "lease-held",
+  "not-attached",
+  "stale-epoch",
+  "future-epoch",
+  "gap-n",
+  "dupe-n",
+  "covers-ahead-of-log",
+  "wrong-direction",
+] as const;
+export type RefusalIssue = (typeof REFUSAL_ISSUES)[number];
+
+const PROTOCOL_ISSUES = [...DECODE_ISSUES, ...REFUSAL_ISSUES] as const;
+export type ProtocolIssue = (typeof PROTOCOL_ISSUES)[number];
+
 /** Bounds so a payload cannot become resident or forge a log line by luck
  * of what a wire delivered. Ids/selectors match v1's 128-char stamp bound;
  * text is generous but finite. Numbers must be safe integers (>= 2^53
@@ -87,7 +121,7 @@ export type Frame =
       readonly replayFrom: number;
       readonly version: number;
     }
-  | { readonly kind: "refused"; readonly issue: string }
+  | { readonly kind: "refused"; readonly issue: ProtocolIssue }
   | { readonly kind: "event-ack"; readonly epoch: number; readonly n: number }
   | {
       readonly kind: "input";
@@ -103,17 +137,17 @@ export type Frame =
 
 export type DecodeVerdict =
   | { readonly verdict: "ok"; readonly frame: Frame }
-  | { readonly verdict: "refused"; readonly issue: string };
+  | { readonly verdict: "refused"; readonly issue: DecodeIssue };
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters IS the guard - they forge log lines and collide dedupe keys
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
 
 class Refused extends Error {
-  constructor(readonly issue: string) {
+  constructor(readonly issue: DecodeIssue) {
     super(issue);
   }
 }
-const refuse = (issue: string): never => {
+const refuse = (issue: DecodeIssue): never => {
   throw new Refused(issue);
 };
 
@@ -246,7 +280,7 @@ const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
       version: nat(r, "version"),
     };
   },
-  refused: (r) => ({ kind: "refused", issue: str(r, "issue", ID_MAX) }),
+  refused: (r) => ({ kind: "refused", issue: enumOf(r, "issue", PROTOCOL_ISSUES) }),
   "event-ack": (r) => ({ kind: "event-ack", epoch: withEpoch(r), n: nat(r, "n") }),
   input: (r) => ({
     kind: "input",
