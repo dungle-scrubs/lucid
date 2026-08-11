@@ -1,9 +1,0 @@
-RUN_TOKEN=a002b-1786454961682  claude=2.1.227  model=sonnet
-C1_injection=PASS (posttool_deliveries=1, feedback_seen=1)
-C2_corun=PASS (lucid_fires=2, other_project_fires=2)
-C3 window=[1786454970997,1786454972140]  sizes_in_window={16467,}  mtimes_in_window={1786454967,}
-C3 first_sample_after_window (t size mtime)= 1786454972451 17174 1786454972
-hook_counts:
-   2 PostToolUse lucid-inject
-corun_counts:
-   2 other-project

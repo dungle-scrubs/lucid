@@ -1,0 +1,16 @@
+# Transient per-run outputs of the A-002 harness. The harness (run.sh,
+# drive.exp, .claude/) is tracked; its run logs are not - the durable
+# evidence is spikes/evidence/A-002.md.
+announce.log
+co-run.log
+delivery.log
+driver-events.log
+hooks-fired.log
+processes.log
+pty.log
+queue.txt
+runner.out
+samples.log
+verdict.txt
+sampler.stop
+work/
