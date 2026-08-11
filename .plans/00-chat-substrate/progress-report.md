@@ -335,3 +335,12 @@ Source: spikes/evidence/A-004.md
 - Current cutoff blockers: 100
 - Accepted/deferred follow-up: 5 (DF-1: 2, DF-2: 3)
 - Superseded/obsolete checklist debt: 2 (both resolved)
+
+> Out-of-band (D-026, user-directed, normalizer PR #4): codex/pi/muse are
+> now driven end-to-end through the execution-layer runner (not the
+> protocol). Descriptor bugs fixed (codex --skip-git-repo-check +
+> close-required stdin; pi/muse structured-output flags on launch+resume;
+> per-harness content decoders added). `smoke:all` green 4/4 against
+> installed CLIs. This does NOT complete M7.2 (the full seven-scenario
+> compat smoke) - it brings its harness coverage forward at the runner
+> level. Tool-call decoding for codex/pi/muse remains a known gap.
