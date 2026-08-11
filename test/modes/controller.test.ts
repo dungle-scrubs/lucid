@@ -97,57 +97,91 @@ describe("conversation controller + handoff (M5.4)", () => {
     expect(r.host.transcript().aborted).toContain("t-1");
   });
 
-  test("D-020 exactly-once handoff oracle: headless->interactive with tokens in flight - the event transcript is ordered, gap-free, each event once, and the new writer resumes from acks not the wire", () => {
+  test("D-020 exactly-once handoff oracle: an event IN the replay window at handoff time - headless->interactive, resumeFrom scopes it exactly, survives reopen", () => {
     const r = rig();
-    // Headless writer A (epoch 1) streams a turn's worth of events.
+    // Headless writer A (epoch 1) streams two events but the renderer only
+    // durably applies + acks the FIRST. "two" is unacked and in flight at
+    // handoff - the case that actually exercises the replay boundary.
     r.send(attach({ conversationId: "conv-1", secret: r.secret, profile: "headless-session" }));
     r.send(event({ epoch: 1, n: 1, turnId: "t-1", event: { kind: "message", text: "one" } }));
+    const ackedThroughOne = r.host.state().seq;
+    r.send({ kind: "ack", epoch: 1, covers: ackedThroughOne });
     r.send(event({ epoch: 1, n: 2, turnId: "t-1", event: { kind: "message", text: "two" } }));
-    // A renderer durably applied through the second event's seq and acks it.
-    const appliedThrough = r.host.state().seq;
-    r.send({ kind: "ack", epoch: 1, covers: appliedThrough });
 
-    // A yields at the boundary; interactive writer B takes over, resuming
-    // from what it durably applied (the acked seq).
+    // A yields; interactive B resumes from what it durably applied (only
+    // "one"). "two" is unacked and MUST replay; "one" MUST NOT.
     r.send({ kind: "detach", epoch: 1, reason: "yield" });
     const b = r.send(
-      attach({ conversationId: "conv-1", secret: r.secret, resumeFrom: appliedThrough }),
+      attach({ conversationId: "conv-1", secret: r.secret, resumeFrom: ackedThroughOne }),
     );
     expect(b.verdict).toBe("accepted");
     if (b.verdict !== "accepted") return;
-    // attach-ok tells B exactly where to resume the render: after the ack.
     const okFrame = b.effects.find((e) => e.type === "send" && e.frame.kind === "attach-ok");
-    expect(
-      okFrame &&
-        okFrame.type === "send" &&
-        okFrame.frame.kind === "attach-ok" &&
-        okFrame.frame.replayFrom,
-    ).toBe(appliedThrough);
+    const replayFrom =
+      okFrame && okFrame.type === "send" && okFrame.frame.kind === "attach-ok"
+        ? okFrame.frame.replayFrom
+        : -1;
+    expect(replayFrom).toBe(ackedThroughOne);
 
-    // B (epoch 2) streams the rest of the conversation.
     r.send(event({ epoch: 2, n: 1, turnId: "t-2", event: { kind: "message", text: "three" } }));
 
-    // The durable transcript across BOTH writers is one strictly-ordered
-    // seq stream with each event applied exactly once. (Seqs are NOT
-    // contiguous - ack/detach/attach consume seqs too, the sparse seq
-    // space of D-028 - but they are strictly increasing and unique, which
-    // is what "ordered, exactly-once" means for the render.)
     const t = r.host.transcript();
     const seqs = t.events.map((e) => e.seq);
-    for (let i = 1; i < seqs.length; i += 1) expect(seqs[i]).toBeGreaterThan(seqs[i - 1] ?? -1); // strictly increasing
-    expect(new Set(seqs).size).toBe(seqs.length); // no duplicate application
+    for (let i = 1; i < seqs.length; i += 1) expect(seqs[i]).toBeGreaterThan(seqs[i - 1] ?? -1);
+    expect(new Set(seqs).size).toBe(seqs.length);
     expect(t.events.map((e) => (e.event as { text: string }).text)).toEqual([
       "one",
       "two",
       "three",
     ]);
-    // The handoff crossed an epoch mid-stream, yet the render order is
-    // seamless: epochs 1,1,2 in one ordered event stream.
     expect(t.events.map((e) => e.epoch)).toEqual([1, 1, 2]);
 
-    // Exactly-once render on the handoff: B replays only what it had not
-    // applied (seq > resumeFrom), so "one"/"two" are never re-rendered.
-    const toReplay = t.events.filter((e) => e.seq > appliedThrough);
-    expect(toReplay.map((e) => (e.event as { text: string }).text)).toEqual(["three"]);
+    // The boundary is genuinely exercised: at handoff, replayFrom scoped
+    // an event that WAS already durable ("two") into the replay window,
+    // and excluded the applied one ("one") - exactly-once, no gap.
+    const replayed = t.events
+      .filter((e) => e.seq > replayFrom)
+      .map((e) => (e.event as { text: string }).text);
+    expect(replayed).toEqual(["two", "three"]);
+    expect(replayed).not.toContain("one");
+
+    // Crash-safe end to end: a reopened host folds the log to the IDENTICAL
+    // transcript (events + aborted), so fold-replay and live-commit agree.
+    r.host.close();
+    const reopened = openConversation(join(r.root, "conv-1"), {
+      now: () => r.box.now,
+      presence: () => r.box.presence,
+      onRecord: () => {},
+      onEffect: () => {},
+    });
+    expect(reopened.transcript()).toEqual(t);
+  });
+
+  test("D-020 the other direction: interactive->headless mid-turn, exactly-once holds and the aborted turn is reconstructed by fold", () => {
+    const r = rig();
+    r.send(attach({ conversationId: "conv-1", secret: r.secret, profile: "interactive" }));
+    r.send(event({ epoch: 1, n: 1, turnId: "t-1", event: { kind: "message", text: "human" } }));
+    // Lease expires mid-turn (no detach): a headless takeover ABORTS t-1.
+    r.box.now = 1_000 + 15_000;
+    const takeover = r.send(
+      attach({ conversationId: "conv-1", secret: r.secret, profile: "headless-session" }),
+    );
+    expect(takeover.verdict).toBe("accepted");
+    r.send(event({ epoch: 2, n: 1, turnId: "t-2", event: { kind: "message", text: "agent" } }));
+
+    const t = r.host.transcript();
+    expect(t.events.map((e) => (e.event as { text: string }).text)).toEqual(["human", "agent"]);
+    expect(t.aborted).toContain("t-1"); // the interrupted turn is flagged
+
+    // Fold reconstructs the SAME transcript incl. the aborted turn - the
+    // fold branch of collectTranscript agrees with live-commit.
+    r.host.close();
+    const reopened = openConversation(join(r.root, "conv-1"), {
+      now: () => r.box.now,
+      presence: () => r.box.presence,
+      onRecord: () => {},
+      onEffect: () => {},
+    });
+    expect(reopened.transcript()).toEqual(t);
   });
 });

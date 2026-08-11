@@ -212,9 +212,16 @@ export interface TranscriptEvent {
   readonly event: Record<string, unknown>;
 }
 
-/** The conversation's rendered history: the ordered, gap-free event
- * stream (across every writer/epoch) plus the turnIds a takeover aborted,
- * so a renderer never shows a superseded turn as live. */
+/** The conversation's rendered history: the ordered event stream (across
+ * every writer/epoch, strictly-increasing seqs - not contiguous, since
+ * bookkeeping frames consume seqs too, D-028) plus the turnIds for which
+ * an abort-turn was emitted at a writer boundary. `aborted` is the raw
+ * abort signal, NOT a completed/interrupted verdict: it includes a clean
+ * detach's dangling turn and a takeover's aborted turn alike, and the
+ * protocol cannot see turn completion, so a turn whose `done` event is in
+ * `events` actually finished and its abort is a host-reconciled no-op.
+ * Distinguishing genuinely-interrupted turns from completed-then-retired
+ * ones is the renderer's job, done by reconciling against `done`. */
 export interface Transcript {
   readonly events: readonly TranscriptEvent[];
   readonly aborted: readonly string[];
@@ -222,6 +229,18 @@ export interface Transcript {
 
 const ctxOf = (presence: boolean | undefined): { presence?: Presence } =>
   presence === undefined ? {} : { presence: { processAlive: presence } };
+
+/** Freeze a decoded event tree so the transcript shares no mutable state
+ * with any caller (a mutation would diverge the live accumulator from a
+ * post-reopen fold reconstruction). The tree is already plain JSON data
+ * from the codec's round-trip, so a recursive freeze is total. */
+const deepFreeze = <T>(value: T): T => {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const key of Object.keys(value)) deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return value;
+};
 
 const applyEntry = (
   state: ChannelState,
@@ -263,12 +282,14 @@ const collectTranscript = (
     frameOrNull?.kind === "event" &&
     result.record.seq !== undefined
   )
-    events.push({
-      seq: result.record.seq,
-      epoch: result.record.epoch,
-      turnId: frameOrNull.turnId,
-      event: frameOrNull.event,
-    });
+    events.push(
+      deepFreeze({
+        seq: result.record.seq,
+        epoch: result.record.epoch,
+        turnId: frameOrNull.turnId,
+        event: frameOrNull.event,
+      }),
+    );
   for (const effect of result.effects)
     if (effect.type === "abort-turn") aborted.push(effect.turnId);
 };
@@ -392,10 +413,12 @@ export const openConversation = (dir: string, deps: HostDeps) => {
   return {
     state: (): ChannelState => state,
     close: (): void => closeSync(fd),
-    /** The conversation's rendered history: ordered gap-free event stream
-     * across every writer/epoch plus the turnIds a takeover aborted. The
-     * seqs make exactly-once render possible - a consumer resumes after
-     * the highest seq it durably applied. */
+    /** The conversation's rendered history (see Transcript): the ordered,
+     * strictly-increasing event stream across every writer/epoch and the
+     * raw abort-turn signals. The seqs make exactly-once render possible -
+     * a consumer resumes after the highest seq it durably applied. Events
+     * are deep-frozen at collection, so this shares no mutable state with
+     * the caller and a reopened host's transcript is byte-identical. */
     transcript: (): Transcript => ({ events: [...events], aborted: [...aborted] }),
     /** One status tick = one presence sample: the caller's tick cadence IS
      * the polling cadence (MUSE F6). An uncorroborated sample counts as
