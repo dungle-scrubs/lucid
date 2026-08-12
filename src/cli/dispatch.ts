@@ -61,6 +61,12 @@ export type DispatchResult =
   | { readonly kind: "send"; readonly conversationId: string; readonly inputId: string }
   | { readonly kind: "watch"; readonly conversationId: string }
   | { readonly kind: "run"; readonly conversationId: string; readonly dir: string }
+  | {
+      readonly kind: "await";
+      readonly conversationId: string;
+      readonly dir: string;
+      readonly resumeInstruction: string;
+    }
   | { readonly kind: "announce" }
   | { readonly kind: "inject" }
   | { readonly kind: "help"; readonly message: string };
@@ -116,11 +122,23 @@ export const dispatch = async (
       return { kind: "watch", conversationId: mapped.conversationId };
     }
     case "run": {
-      const result = await runFn({
+      const result = (await runFn({
         rootDir: effectiveRoot,
         conversationId: mapped.conversationId,
         harnessName: mapped.harnessName,
-      });
+      })) as unknown as {
+        conversationId: string;
+        dir: string;
+        awaitToken?: { resumeInstruction: string };
+      };
+      if (result.awaitToken) {
+        return {
+          kind: "await",
+          conversationId: result.conversationId,
+          dir: result.dir,
+          resumeInstruction: result.awaitToken.resumeInstruction,
+        };
+      }
       return { kind: "run", conversationId: result.conversationId, dir: result.dir };
     }
   }
@@ -169,5 +187,6 @@ export const runCli = async (
   const out = deps.onOutput ?? ((line: string) => console.log(line));
   if (result.kind === "help") out(result.message);
   else if (result.kind === "send") out(`sent to ${result.conversationId}`);
+  else if (result.kind === "await") out(result.resumeInstruction);
   return result;
 };

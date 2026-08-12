@@ -11,6 +11,18 @@
  * and its `refused` send effect is the only operator-visible auth signal.
  * NOT responsible for durability, transport, or enforcement: the store
  * hosts the reducer and enforces its verdicts.
+ *
+ * Deepening (A): the reducer is a facade over three internal ledgers —
+ * AttachmentLedger, InputLedger, and CreditLedger — each owning one
+ * discipline hidden behind a small interface. The public surface stays
+ * `reduce(state,frame,now,ctx)` plus `enqueueInput`/`grantCredit`/`isLive`,
+ * so callers see one seam. Fixing a lease grace touches AttachmentLedger;
+ * fixing disposition idempotency touches InputLedger; fixing credit clamp
+ * touches CreditLedger — no longer the whole 8-branch switch. The ledgers
+ * are internal (not exported from `protocol/index.ts`), but their
+ * invariants become unit-testable without building a full ChannelState.
+ * Deletion test: deleting a ledger would scatter its discipline back into
+ * the switch and into liveness — two clocks again.
  */
 
 import { classOfEventKind, DROPPABLE_QUEUE_MAX } from "./events.js";
@@ -34,7 +46,7 @@ export const PROTOCOL_VERSION = 1;
 /** Lease constants live in one place; the reducer only ever compares them
  * against the injected `now`. These realize PLAN.md's `renewEvery` /
  * `expires`; the liveness detector constants (HEARTBEAT_MS,
- * ATTACH_GRACE_MS - M4.4) must be added HERE, not in a second module. */
+ * ATTACH_GRACE_MS - M4.4) alias these — never a second clock. */
 export const LEASE_TTL_MS = 15_000;
 export const LEASE_RENEW_EVERY_MS = 5_000;
 
@@ -210,11 +222,6 @@ export const initialChannelState = (init: {
   credits: 0,
 });
 
-/** The ONE place the lease-expiry comparison lives. The host consults this
- * when deciding channel liveness instead of re-deriving the comparison. */
-export const isLive = (state: ChannelState, now: number): boolean =>
-  state.attachment !== null && now < state.attachment.lease.expires;
-
 const NO_EFFECTS: readonly Effect[] = Object.freeze([]);
 const NO_INPUTS: readonly QueuedInput[] = Object.freeze([]);
 
@@ -329,24 +336,63 @@ const inputFrame = (input: QueuedInput): Frame => ({
   ...(input.turnId === undefined ? {} : { turnId: input.turnId }),
 });
 
-/** PLAN.md: "a lease is renewed by any frame plus explicit lease grants."
- * Re-minting is gated at renewEvery granularity so per-token frames do not
- * churn lease identity: `expires` only ever moves forward, and a writer
- * streaming frames always holds >= TTL - renewEvery of headroom. */
-const renewLease = (lease: Lease, now: number): Lease =>
-  now + LEASE_TTL_MS - lease.expires >= LEASE_RENEW_EVERY_MS
-    ? { expires: now + LEASE_TTL_MS, renewEvery: LEASE_RENEW_EVERY_MS }
-    : lease;
+// ─────────────────────────────────────────────────────────────
+// AttachmentLedger — epoch fencing + lease accounting + attachment lifecycle
+// Owns: isLive, renewLease, renewAttachment, refusedButAlive, and the
+// attach-gate (auth, version, lease-held, presence-holds, resume-ahead).
+// A lease fix touches only this ledger, not the input or credit code.
+// ─────────────────────────────────────────────────────────────
 
-const renewAttachment = (attachment: Attachment, now: number): Attachment => {
-  const lease = renewLease(attachment.lease, now);
-  return lease === attachment.lease ? attachment : { ...attachment, lease };
-};
+const AttachmentLedger = {
+  /** The ONE place the lease-expiry comparison lives. */
+  isLive(state: ChannelState, now: number): boolean {
+    return state.attachment !== null && now < state.attachment.lease.expires;
+  },
 
-/** A refusal from the CURRENT writer still proves the channel alive: the
- * frame is never applied, but the lease renews. Only post-fence refusals
- * reach this - a stale or unauthenticated writer must never hold the
- * lease open. */
+  /** PLAN.md: "a lease is renewed by any frame plus explicit lease grants."
+   * Re-minting is gated at renewEvery granularity so per-token frames do not
+   * churn lease identity: `expires` only ever moves forward, and a writer
+   * streaming frames always holds >= TTL - renewEvery of headroom. */
+  renewLease(lease: Lease, now: number): Lease {
+    return now + LEASE_TTL_MS - lease.expires >= LEASE_RENEW_EVERY_MS
+      ? { expires: now + LEASE_TTL_MS, renewEvery: LEASE_RENEW_EVERY_MS }
+      : lease;
+  },
+
+  renewAttachment(attachment: Attachment, now: number): Attachment {
+    const lease = this.renewLease(attachment.lease, now);
+    return lease === attachment.lease ? attachment : { ...attachment, lease };
+  },
+
+  /** A refusal from the CURRENT writer still proves the channel alive: the
+   * frame is never applied, but the lease renews. Only post-fence refusals
+   * reach this - a stale or unauthenticated writer must never hold the
+   * lease open. */
+  refusedButAlive(
+    state: ChannelState,
+    attachment: Attachment,
+    frame: Frame,
+    issue: RefusalIssue,
+    now: number,
+    detail?: RefusalDetail,
+    extra?: Pick<TransitionRecord, "credits" | "queueDepth" | "presence">,
+  ): ReduceResult {
+    const renewed = this.renewAttachment(attachment, now);
+    const next = renewed === attachment ? state : { ...state, attachment: renewed };
+    return refusal(next, frame, issue, now, detail, extra);
+  },
+} as const;
+
+/** Exported live check delegates to the ledger — one clock, one owner.
+ * Hosts consult this, never arithmetic on HEARTBEAT_MS/ATTACH_GRACE_MS. */
+export const isLive = (state: ChannelState, now: number): boolean =>
+  AttachmentLedger.isLive(state, now);
+
+// Keep thin top-level aliases so existing call sites keep their names
+// but the logic lives in the ledger.
+const renewLease = (lease: Lease, now: number): Lease => AttachmentLedger.renewLease(lease, now);
+const renewAttachment = (attachment: Attachment, now: number): Attachment =>
+  AttachmentLedger.renewAttachment(attachment, now);
 const refusedButAlive = (
   state: ChannelState,
   attachment: Attachment,
@@ -355,11 +401,57 @@ const refusedButAlive = (
   now: number,
   detail?: RefusalDetail,
   extra?: Pick<TransitionRecord, "credits" | "queueDepth" | "presence">,
-): ReduceResult => {
-  const renewed = renewAttachment(attachment, now);
-  const next = renewed === attachment ? state : { ...state, attachment: renewed };
-  return refusal(next, frame, issue, now, detail, extra);
-};
+): ReduceResult =>
+  AttachmentLedger.refusedButAlive(state, attachment, frame, issue, now, detail, extra);
+
+// ─────────────────────────────────────────────────────────────
+// InputLedger — queue + disposition + redeliver
+// Owns: queueDepth, input validation, enqueueInput, disposition
+// state machine (outstanding→queued→applied, rejected→redeliver), and the
+// turn-boundary redelivery consumed on next event. An input fix touches
+// only this ledger.
+// ─────────────────────────────────────────────────────────────
+
+const InputLedger = {
+  /** Inputs still AWAITING a disposition - the gauge the host pages on. */
+  queueDepth(inputs: readonly QueuedInput[]): number {
+    return inputs.filter((i) => i.status === "outstanding").length;
+  },
+
+  /** inputs that need redelivery at a turn boundary */
+  redeliverable(inputs: readonly QueuedInput[], sameTurn: boolean): readonly QueuedInput[] {
+    if (sameTurn) return NO_INPUTS;
+    return inputs.filter((i) => i.redeliver);
+  },
+
+  /** Clear redeliver flags after they have been delivered */
+  clearRedeliver(inputs: readonly QueuedInput[], hadRedeliver: boolean): readonly QueuedInput[] {
+    if (!hadRedeliver) return inputs;
+    const flagged = inputs.some((i) => i.redeliver);
+    return flagged ? inputs.map((i) => (i.redeliver ? { ...i, redeliver: false } : i)) : inputs;
+  },
+} as const;
+
+const queueDepth = (inputs: readonly QueuedInput[]): number => InputLedger.queueDepth(inputs);
+
+// ─────────────────────────────────────────────────────────────
+// CreditLedger — droppable flow control
+// Owns: DROPPABLE_QUEUE_MAX clamp, grantCredit, and the no-credit gate
+// on droppable events. A credit fix touches only this ledger, not fencing
+// or disposition code.
+// ─────────────────────────────────────────────────────────────
+
+const CreditLedger = {
+  /** Whether a droppable event is starved */
+  isStarved(state: ChannelState): boolean {
+    return state.credits <= 0;
+  },
+
+  /** Clamped grant — the bounded queue invariant */
+  clampedGrant(state: ChannelState, tokens: number): number {
+    return Math.min(tokens, DROPPABLE_QUEUE_MAX - state.credits);
+  },
+} as const;
 
 const sendInputs = (inputs: readonly QueuedInput[]): readonly Effect[] =>
   inputs.map((i) => ({ type: "send", frame: inputFrame(i) }));
@@ -381,7 +473,8 @@ const reduceAttach = (
       claimed: frame.version,
       head: PROTOCOL_VERSION,
     });
-  if (isLive(state, now)) return refusal(state, frame, "lease-held", now, undefined, withPresence);
+  if (AttachmentLedger.isLive(state, now))
+    return refusal(state, frame, "lease-held", now, undefined, withPresence);
   // interactive-unattached (dead channel, presence corroborates the human
   // process alive): a headless CONTENDER may not steal an interactively
   // held (or never-attached) conversation (PLAN 4.6). The gate never
@@ -426,9 +519,7 @@ const reduceAttach = (
       acked: frame.resumeFrom ?? 0,
       credits: 0,
       // Replay IS this rejection's redelivery - disarm the flags.
-      inputs: state.inputs.some((i) => i.redeliver)
-        ? state.inputs.map((i) => (i.redeliver ? { ...i, redeliver: false } : i))
-        : state.inputs,
+      inputs: InputLedger.clearRedeliver(state.inputs, true),
     },
     frame,
     now,
@@ -489,7 +580,7 @@ const reducePostAttach = (
       // leaves lastN untouched: the source coalesces and resends the same
       // n once credit arrives. Lossless is never gated.
       const droppable = classOfEventKind(frame.event.kind) === "droppable";
-      if (droppable && state.credits <= 0)
+      if (droppable && CreditLedger.isStarved(state))
         return refusedButAlive(state, attachment, frame, "no-credit", now, undefined, {
           credits: state.credits,
         });
@@ -501,7 +592,7 @@ const reducePostAttach = (
         type: "send",
         frame: { kind: "event-ack", epoch: frame.epoch, n: frame.n },
       } as const;
-      const redelivered = sameTurn ? NO_INPUTS : state.inputs.filter((i) => i.redeliver);
+      const redelivered = InputLedger.redeliverable(state.inputs, sameTurn);
       return accepted(
         {
           ...state,
@@ -516,10 +607,7 @@ const reducePostAttach = (
             ? state.seenTurns
             : { ...state.seenTurns, [frame.turnId]: true as const },
           credits: droppable ? state.credits - 1 : state.credits,
-          inputs:
-            redelivered.length === 0
-              ? state.inputs
-              : state.inputs.map((i) => (i.redeliver ? { ...i, redeliver: false } : i)),
+          inputs: InputLedger.clearRedeliver(state.inputs, redelivered.length > 0),
         },
         frame,
         now,
@@ -614,12 +702,6 @@ const reducePostAttach = (
   }
 };
 
-/** Inputs still AWAITING a disposition - the gauge the host pages on.
- * queued entries are accepted (the source holds them durably), so healthy
- * queue-mode traffic drains this to zero. */
-const queueDepth = (inputs: readonly QueuedInput[]): number =>
-  inputs.filter((i) => i.status === "outstanding").length;
-
 /** Host transition: lucid queues an input for delivery to the source. The
  * minted seq and idempotent id travel on the wire, so replay and boundary
  * redelivery can re-deliver without double-application. */
@@ -637,7 +719,7 @@ export const enqueueInput = (
   // eligible, and handing it new work invites double-application across
   // the handoff. The input still queues, armed for boundary delivery
   // (if this writer recovers) or attach replay (if another takes over).
-  const live = isLive(state, now);
+  const live = AttachmentLedger.isLive(state, now);
   const queued: QueuedInput = {
     id: input.id,
     seq: state.seq + 1,
@@ -671,7 +753,7 @@ export const enqueueInput = (
     frame,
     now,
     live ? [{ type: "send", frame }] : NO_EFFECTS,
-    { queueDepth: queueDepth(inputs) },
+    { queueDepth: InputLedger.queueDepth(inputs) },
   );
 };
 
@@ -690,12 +772,12 @@ export const grantCredit = (state: ChannelState, tokens: number, now: number): R
       "invalid-grant",
       now,
     );
-  if (!isLive(state, now))
+  if (!AttachmentLedger.isLive(state, now))
     return hostRefusal(state, { kind: "credit", epoch: state.epoch, tokens }, "not-attached", now);
   // No seq is minted: seq positions belong to inbound accepted frames and
   // the replayable outbound kinds (input/control carry seq in the wire
   // shapes - D-028's shapes-win rule); credit is unsequenced flow control.
-  const granted = Math.min(tokens, DROPPABLE_QUEUE_MAX - state.credits);
+  const granted = CreditLedger.clampedGrant(state, tokens);
   const credits = state.credits + granted;
   const frame: Frame = { kind: "credit", epoch: state.epoch, tokens: granted };
   return {

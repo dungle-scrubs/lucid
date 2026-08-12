@@ -21,14 +21,28 @@
  * `announce` (which briefly acquires), and every test that needs abort
  * semantics.
  *
+ * B (controller cohesion): the runtime now consumes the controller as its
+ * takeover policy. Before, `controller.ts:decideAction` encoded D-021
+ * (interactive-unattached → await-reattach, agent-gone → headless-takeover)
+ * but had zero callers — runtime always seized the conversation. Now the
+ * runtime folds state → derives ChannelStatus via the single liveness
+ * module → consults the controller before acquiring the presence lock.
+ * An interactive-unattached channel returns an AwaitToken without ever
+ * acquiring presence or spawning a harness, so a living human session is
+ * waited on, never taken over. The deletion test passes: deleting the
+ * controller would scatter lease/presence arithmetic into runtime and
+ * watch again.
+ *
  * What it is NOT: it is not the durable log (ConversationLog), not the
  * flock primitive, and not the harness runner — it hosts them.
  */
 
 import { nodeRunnerDeps } from "@dungle-scrubs/harness-cli/src/execution/node-deps.js";
 import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
+import { decideAction } from "../modes/controller.js";
 import { openHeadlessSession, openHeadlessTurns } from "../modes/headless.js";
-import type { Frame } from "../protocol/index.js";
+import type { ChannelStatus, Frame } from "../protocol/index.js";
+import { channelStatus } from "../protocol/liveness.js";
 import { acquirePresence, type PresenceEvent } from "../store/presence.js";
 import { type HostRecord, openConversation } from "../store/store.js";
 import { type Conversations, conversations } from "./conversations.js";
@@ -46,18 +60,23 @@ export interface RuntimeDeps {
   readonly onRecord?: (r: HostRecord) => void;
   readonly onPresenceEvent?: (e: PresenceEvent) => void;
   readonly signal?: AbortSignal;
+  /** Interactive presence probe for D-021 (the ps-level fact). Defaults to unknown. Injected so tests assert takeover vs await deterministically. */
+  readonly presence?: () => boolean | undefined;
   // seams — injected in tests, defaulted in production
   readonly conversationsFactory?: (rootDir?: string) => Conversations;
   readonly acquirePresenceFn?: typeof acquirePresence;
   readonly openConversationFn?: typeof openConversation;
   readonly openHeadlessSessionFn?: typeof openHeadlessSession;
   readonly openHeadlessTurnsFn?: typeof openHeadlessTurns;
+  readonly channelStatusFn?: typeof channelStatus;
+  readonly decideActionFn?: typeof decideAction;
   readonly now?: () => number;
   readonly randomUUID?: () => string;
   readonly randomConversationSuffix?: () => string;
 }
 
 export interface RunningConversation {
+  readonly kind: "running";
   readonly conversationId: string;
   readonly dir: string;
   /** Resolves when the source closes or the signal aborts. */
@@ -68,6 +87,19 @@ export interface RunningConversation {
   readonly presenceHeld: () => boolean;
 }
 
+export interface AwaitToken {
+  readonly kind: "await-reattach";
+  readonly conversationId: string;
+  readonly dir: string;
+  readonly status: ChannelStatus;
+  /** Human-readable resume instruction for the operator. */
+  readonly resumeInstruction: string;
+}
+
+export type StartResult = RunningConversation | AwaitToken;
+
+export const isAwaitToken = (r: StartResult): r is AwaitToken => r.kind === "await-reattach";
+
 /**
  * Start a headless conversation. Acquires the presence lock for the
  * conversation's lifetime (kernel-released on death), opens the durable
@@ -76,17 +108,25 @@ export interface RunningConversation {
  * Presence is released exactly once — whether the source closes, the
  * signal aborts, or `abort()` is called. No monkey-patching, no dead
  * interval, no double-release.
+ *
+ * D-021 gate: before acquiring presence, derives ChannelStatus via the
+ * single liveness module and consults the controller. An
+ * interactive-unattached channel (live human process, dead lease) returns
+ * an AwaitToken without acquiring presence or spawning a harness.
  */
-export const startHeadless = (opts: RuntimeDeps = {}): RunningConversation => {
+export const startHeadless = (opts: RuntimeDeps = {}): StartResult => {
   const convsFactory = opts.conversationsFactory ?? conversations;
   const acquirePresenceFn = opts.acquirePresenceFn ?? acquirePresence;
   const openConversationFn = opts.openConversationFn ?? openConversation;
   const openHeadlessSessionFn = opts.openHeadlessSessionFn ?? openHeadlessSession;
   const openHeadlessTurnsFn = opts.openHeadlessTurnsFn ?? openHeadlessTurns;
+  const channelStatusFn = opts.channelStatusFn ?? channelStatus;
+  const decideActionFn = opts.decideActionFn ?? decideAction;
   const nowFn = opts.now ?? (() => Date.now());
   const uuidFn = opts.randomUUID ?? (() => crypto.randomUUID());
   const suffixFn = opts.randomConversationSuffix ?? (() => Math.random().toString(36).slice(2, 6));
   const harness = opts.harness ?? harnessForName(opts.harnessName);
+  const presenceProbe = opts.presence ?? (() => undefined);
 
   const convs = convsFactory(opts.rootDir);
   const conversationId = opts.conversationId ?? `conv-${Date.now()}-${suffixFn()}`;
@@ -99,12 +139,35 @@ export const startHeadless = (opts: RuntimeDeps = {}): RunningConversation => {
   let receive: ((frame: Frame) => void) | undefined;
   const host = openConversationFn(dir, {
     now: nowFn,
-    presence: () => undefined,
+    presence: () => presenceProbe(),
     onEffect: (eff) => {
       if (eff.type === "send") receive?.(eff.frame);
     },
     onRecord: (r) => opts.onRecord?.(r),
   });
+
+  // D-021 gate — derive status via the single liveness module and
+  // consult the controller before acquiring presence. This is the
+  // second adapter of the liveness seam (watch is the first), so the
+  // seam becomes real: one adapter = hypothetical, two = real.
+  const presenceVal = presenceProbe();
+  const status = channelStatusFn(host.state(), nowFn(), {
+    processAlive: presenceVal === true,
+  });
+  const action = decideActionFn(status);
+  if (action.action === "await-reattach") {
+    const resumeInstruction = `interactive session still attached for ${conversationId} — awaiting reattach (run will retry after the human yields or the lease expires)`;
+    try {
+      host.close();
+    } catch {}
+    return {
+      kind: "await-reattach",
+      conversationId,
+      dir,
+      status,
+      resumeInstruction,
+    };
+  }
 
   // Presence is held for the source's lifetime and kernel-released on
   // death; the runtime ensures a single explicit release.
@@ -204,6 +267,7 @@ export const startHeadless = (opts: RuntimeDeps = {}): RunningConversation => {
   // signal, not a poll.
 
   return {
+    kind: "running",
     conversationId,
     dir,
     done,
@@ -214,12 +278,17 @@ export const startHeadless = (opts: RuntimeDeps = {}): RunningConversation => {
 
 /**
  * Convenience: run until done. Preserves the original `runConversation`
- * promise shape for the CLI adapter.
+ * promise shape for the CLI adapter. When the controller gates the
+ * conversation as await-reattach, returns immediately without starting
+ * a harness — the caller (dispatch) surfaces the resume instruction.
  */
 export const runHeadless = async (
   opts: RuntimeDeps = {},
-): Promise<{ conversationId: string; dir: string }> => {
+): Promise<{ conversationId: string; dir: string; awaitToken?: AwaitToken }> => {
   const handle = startHeadless(opts);
+  if (isAwaitToken(handle)) {
+    return { conversationId: handle.conversationId, dir: handle.dir, awaitToken: handle };
+  }
   await handle.done;
   return { conversationId: handle.conversationId, dir: handle.dir };
 };
