@@ -22,16 +22,8 @@ import type { HarnessEvent } from "@dungle-scrubs/harness-cli/src/execution/even
 import { openSession } from "@dungle-scrubs/harness-cli/src/execution/open-session.js";
 import { streamTurn } from "@dungle-scrubs/harness-cli/src/execution/stream-turn.js";
 import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
-import {
-  classOfEventKind,
-  coalesceDroppable,
-  type Disposition,
-  type Frame,
-  type PendingDroppable,
-  PROTOCOL_VERSION,
-  type ReduceResult,
-  supersedeTurn,
-} from "../protocol/index.js";
+import type { Frame, ReduceResult } from "../protocol/index.js";
+import { createSequencer } from "./sequencer.js";
 
 /** What sendFrame returns: the host's verdict for the frame we sent (the
  * in-process transport hands it back directly). */
@@ -48,123 +40,15 @@ export interface HeadlessDeps {
   readonly sendFrame: (frame: Frame) => SendResult;
 }
 
-interface SourceChannel {
+export interface SourceChannel {
   /** Host -> source frames (input, control, credit, lease, event-ack). */
   readonly receive: (frame: Frame) => void;
   readonly close: () => void;
 }
 
-class HeadlessError extends Error {
-  override readonly name = "HeadlessError";
-}
-
-/** Shared source spine: attach handshake, transactional per-epoch n and
- * credit balance, turn-owned pending buffer, dispositions, detach-once. */
-const attachSource = (
-  deps: HeadlessDeps,
-  profile: "headless-session" | "headless-turn",
-  resumeFrom?: number,
-) => {
-  const result = deps.sendFrame({
-    kind: "attach",
-    conversationId: deps.conversationId,
-    profile,
-    secret: deps.secret,
-    version: PROTOCOL_VERSION,
-    ...(resumeFrom === undefined ? {} : { resumeFrom }),
-  });
-  if (result.verdict !== "accepted" || !("record" in result))
-    throw new HeadlessError(`attach refused: ${"issue" in result ? result.issue : "unknown"}`);
-  const epoch = result.record.epoch;
-  // Frames the host emitted WITH the attach grant (replayed inputs): the
-  // caller processes them once its receive machinery exists - they must
-  // not be lost to construction ordering.
-  const attachReplay: Frame[] = result.effects.flatMap((e) =>
-    e.type === "send" && e.frame.kind !== "attach-ok" ? [e.frame] : [],
-  );
-
-  let n = 0;
-  let credits = 0;
-  let pending: readonly PendingDroppable<HarnessEvent>[] = [];
-  let detached = false;
-
-  /** Transactional: n is committed only when the host accepts. On
-   * no-credit the event returns to its turn's pending slot and the local
-   * balance zeroes - the discipline reducer.ts documents (same n resent
-   * once credit arrives). Any other refusal rolls back and drops; the
-   * host already recorded the named issue. */
-  const sendEvent = (turnId: string, event: HarnessEvent): boolean => {
-    const attempt = n + 1;
-    const verdict = deps.sendFrame({
-      kind: "event",
-      epoch,
-      n: attempt,
-      turnId,
-      event: event as unknown as Record<string, unknown>,
-    });
-    if (verdict.verdict === "accepted") {
-      n = attempt;
-      return true;
-    }
-    if ("issue" in verdict && verdict.issue === "no-credit") {
-      credits = 0;
-      pending = coalesceDroppable(pending, turnId, event);
-    }
-    return false;
-  };
-
-  const flushPending = (): void => {
-    while (credits > 0 && pending.length > 0) {
-      const [next, ...rest] = pending;
-      pending = rest;
-      if (next !== undefined) {
-        credits -= 1;
-        // A refusal inside sendEvent re-queues and zeroes credits, which
-        // also terminates this loop.
-        sendEvent(next.turnId, next.event);
-      }
-    }
-  };
-
-  return {
-    epoch,
-    attachReplay,
-    /** Lossless flows unconditionally and supersedes its turn's stale
-     * deltas; droppables consume a credit or coalesce latest-wins under
-     * their OWN turn until credit arrives (PLAN 4.5). */
-    emit: (turnId: string, event: HarnessEvent): void => {
-      if (classOfEventKind(event.kind) === "lossless") {
-        pending = supersedeTurn(pending, turnId);
-        sendEvent(turnId, event);
-        return;
-      }
-      if (credits > 0) {
-        credits -= 1;
-        sendEvent(turnId, event);
-        return;
-      }
-      pending = coalesceDroppable(pending, turnId, event);
-    },
-    onCredit: (tokens: number): void => {
-      credits += tokens;
-      flushPending();
-    },
-    disposition: (inputId: string, outcome: Disposition, note?: string): void => {
-      deps.sendFrame({
-        kind: "disposition",
-        epoch,
-        inputId,
-        outcome,
-        ...(note === undefined ? {} : { note }),
-      });
-    },
-    detachOnce: (reason: "yield" | "shutdown"): void => {
-      if (detached) return;
-      detached = true;
-      deps.sendFrame({ kind: "detach", epoch, reason });
-    },
-  };
-};
+// Re-exported for backward compat — new code imports from the deep
+// `TurnSequencer` module directly.
+export { HeadlessError } from "./sequencer.js";
 
 /** Mode 2: one persistent process serves many turns. Inputs are sent into
  * the live session; the runner's answer (started vs queued) is what the
@@ -174,7 +58,7 @@ const attachSource = (
 export const openHeadlessSession = (
   deps: HeadlessDeps & { readonly sessionId: string },
 ): SourceChannel => {
-  const source = attachSource(deps, "headless-session");
+  const source = createSequencer(deps, "headless-session");
   const session = openSession(deps.harness, { sessionId: deps.sessionId }, deps.runner);
 
   let currentTurnId = deps.mintTurnId();
@@ -251,7 +135,7 @@ export const openHeadlessSession = (
 export const openHeadlessTurns = (
   deps: HeadlessDeps & { readonly resume?: string },
 ): SourceChannel => {
-  const source = attachSource(deps, "headless-turn");
+  const source = createSequencer(deps, "headless-turn");
   const queue: Array<{ id: string; text: string }> = [];
   let running = false;
   let closed = false;
