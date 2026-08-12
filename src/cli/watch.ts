@@ -1,21 +1,15 @@
 /**
- * `lucid watch`: the read-only TUI view-model emitter (C2).
+ * `lucid watch`: the read-only TUI view-model emitter (C2 + 01 snapshot).
  *
  * Folds the log and emits the `src/tui/view.ts` ConversationView,
- * refreshing as the log grows. Before, it hardcoded
+ * refreshing as the log grows. Before (C2), it hardcoded
  * `status = "interactive-unattached"` and never consulted the liveness
- * module — so a live `headless-session`, a `headless-turn`, or an
- * `agent-gone` conversation looked identical on screen, and
- * `protocol/liveness:channelStatus` had zero CLI consumers. Fixing
- * watch's status required understanding the lease clock in a second
- * place, with no injectable seam for tests.
- *
- * Now one module (the liveness projection) owns the policy and this
- * file hosts it: it reads `state` from the same `viewConversation`
- * fold, injects `now` (and optionally `presence`), and derives the real
- * `ChannelStatus` via `channelStatus`. The deletion test passes:
- * deleting the liveness module would scatter lease-expiry arithmetic
- * across `watch` and `store:status()` — two readers, two clocks.
+ * module. C2 made it host the liveness projection via
+ * `viewConversation` + `channelStatus`. 01 deepens the read path: the
+ * derivation now lives in `store:viewSnapshot` (fold once → status
+ * from same state + injected clock/presence), so watch is one call,
+ * not two. Deleting the snapshot helper would scatter fold+status
+ * re-derivation across every reader again.
  *
  * What it is NOT: it is not the rich TUI app (that lives above this),
  * not a live source, and not a holder of the presence lock. It holds
@@ -25,7 +19,8 @@
 import { watch as fsWatch } from "node:fs";
 import { join } from "node:path";
 import { channelStatus } from "../protocol/liveness.js";
-import { viewConversation } from "../store/store.js";
+// biome-ignore lint/style/useImportType: viewConversation used as typeof in WatchOpts — needed as value for typeof
+import { type ViewSnapshot, viewConversation, viewSnapshot } from "../store/store.js";
 import type { TuiView } from "../tui/view.js";
 import { buildView } from "../tui/view.js";
 import { conversations } from "./conversations.js";
@@ -46,8 +41,11 @@ export interface WatchOpts {
    * which `channelStatus` treats as `agent-gone` on a dead channel,
    * mirroring `store:status()`'s `presence() === true` check). */
   readonly presence?: () => boolean | undefined;
-  /** Seam for tests — defaults to the real `viewConversation`. */
+  /** Seam for tests — defaults to the real `viewConversation`. @deprecated prefer viewSnapshotFn */
   readonly viewConversationFn?: typeof viewConversation;
+  /** Preferred seam: atomic snapshot (state+transcript+status) in one
+   * derivation (01). When provided, `viewConversationFn` is ignored. */
+  readonly viewSnapshotFn?: (dir: string) => ViewSnapshot;
 }
 
 /** Emit the current view and then refresh as the log grows. Resolves
@@ -56,21 +54,33 @@ export interface WatchOpts {
 export const watchConversation = async (conversationId: string, opts: WatchOpts): Promise<void> => {
   const dir = conversations(opts.rootDir).dirFor(conversationId);
   const pollMs = opts.pollMs ?? 500;
-  const viewFn = opts.viewConversationFn ?? viewConversation;
   const nowFn = opts.now ?? (() => Date.now());
   const presenceFn = opts.presence ?? (() => undefined);
 
   const emit = (): void => {
     try {
-      const { transcript, state } = viewFn(dir);
-      // Derive the real status from the folded state + injected clock +
-      // presence, via the single liveness module (C2). Mirrors
-      // `store:status()`'s `presence() === true` mapping so unknown
-      // presence on a dead channel shows `agent-gone`, not a stale
-      // `interactive-unattached`.
-      const status = channelStatus(state, nowFn(), {
-        processAlive: presenceFn() === true,
-      });
+      let transcript: ViewSnapshot["transcript"];
+      let status: ViewSnapshot["status"];
+      if (opts.viewSnapshotFn) {
+        const snap = opts.viewSnapshotFn(dir);
+        transcript = snap.transcript;
+        status = snap.status;
+      } else if (opts.viewConversationFn) {
+        const viewFn = opts.viewConversationFn;
+        const { transcript: tr, state } = viewFn(dir);
+        transcript = tr;
+        // Derive status via the single liveness module (C2). Mirrors
+        // store:snapshot()'s presence() === true mapping.
+        status = channelStatus(state, nowFn(), {
+          processAlive: presenceFn() === true,
+        });
+      } else {
+        // The ONE derivation for the watch read path (01): fold once,
+        // derive status from that same state + injected clock/presence.
+        const snap = viewSnapshot(dir, { now: nowFn, presence: presenceFn });
+        transcript = snap.transcript;
+        status = snap.status;
+      }
       const view = buildView({ transcript, status, rung: "watch", draft: "" });
       opts.onView(view);
     } catch (e) {

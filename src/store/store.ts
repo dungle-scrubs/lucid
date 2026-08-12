@@ -109,6 +109,19 @@ export type HostRecord = TransitionRecord | WireRecord | RecoveryRecord;
 
 export type { AppendEvent, LogEntry, Transcript, TranscriptEvent, TranscriptInput } from "./log.js";
 
+export interface HostSnapshot {
+  readonly state: ChannelState;
+  readonly transcript: import("./log.js").Transcript;
+  readonly status: ChannelStatus;
+}
+
+export interface ViewSnapshot {
+  readonly state: ChannelState;
+  readonly transcript: import("./log.js").Transcript;
+  readonly status: ChannelStatus;
+  readonly goodBytes: number;
+}
+
 const ctxOf = (presence: boolean | undefined): { presence?: Presence } =>
   presence === undefined ? {} : { presence: { processAlive: presence } };
 
@@ -175,12 +188,28 @@ export const openConversation = (dir: string, deps: HostDeps) => {
     return result;
   };
 
+  /**
+   * The ONE derivation for the host's read path: one `log.state()` read,
+   * one transcript + one status derived from that same state + the
+   * injected clock/presence. Callers needing a consistent snapshot get
+   * it in one call; the leaf getters delegate here so fixing status
+   * projection fixes every consumer (01).
+   */
+  const snapshot = (): HostSnapshot => {
+    const s = log.state();
+    return {
+      state: s,
+      transcript: log.transcript(),
+      status: channelStatus(s, deps.now(), { processAlive: deps.presence() === true }),
+    };
+  };
+
   return {
-    state: (): ChannelState => log.state(),
+    snapshot,
+    state: (): ChannelState => snapshot().state,
     close: (): void => log.close(),
-    transcript: () => log.transcript(),
-    status: (): ChannelStatus =>
-      channelStatus(log.state(), deps.now(), { processAlive: deps.presence() === true }),
+    transcript: () => snapshot().transcript,
+    status: (): ChannelStatus => snapshot().status,
     handleFrame: (
       line: string,
     ): ReduceResult | { verdict: "refused"; wire: true; issue: DecodeIssue } => {
@@ -267,4 +296,21 @@ export const viewConversation = (
     },
     goodBytes: folded.goodBytes,
   };
+};
+
+/**
+ * Lock-free snapshot for pure readers (watch, hooks, TUI). Folds once
+ * and derives `status` from the same state + injected clock/presence,
+ * so every reader sees one consistent derivation (01). The viewer's
+ * counterpart to `host.snapshot()` — same policy, no lock.
+ */
+export const viewSnapshot = (
+  dir: string,
+  opts: { now?: () => number; presence?: () => boolean | undefined } = {},
+): ViewSnapshot => {
+  const { state, transcript, goodBytes } = viewConversation(dir);
+  const nowFn = opts.now ?? (() => Date.now());
+  const presenceFn = opts.presence ?? (() => undefined);
+  const status = channelStatus(state, nowFn(), { processAlive: presenceFn() === true });
+  return { state, transcript, status, goodBytes };
 };

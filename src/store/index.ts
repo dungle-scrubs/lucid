@@ -25,6 +25,7 @@ export {
   createConversationRecord,
   type HostDeps,
   type HostRecord,
+  type HostSnapshot,
   openConversation,
   pathsForDir,
   type RecordPaths,
@@ -33,5 +34,8 @@ export {
   StoreError,
   type Transcript,
   type TranscriptEvent,
+  type ViewSnapshot,
+  viewConversation,
+  viewSnapshot,
   type WireRecord,
 } from "./store.js";
