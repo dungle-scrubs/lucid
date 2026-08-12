@@ -29,10 +29,8 @@
  * `watch`'s paint step stays in `main.ts` and is injected as `onView`.
  */
 
-import type { Conversations } from "./conversations.js";
-import { conversations } from "./conversations.js";
 import { type MappedCommand, mapSubcommand } from "./mapping.js";
-import type { RunOpts } from "./run.js";
+import type { RunOpts, RunResult } from "./run.js";
 import { runConversation } from "./run.js";
 import type { SendOpts } from "./send.js";
 import { sendInput } from "./send.js";
@@ -43,12 +41,10 @@ import { watchConversation } from "./watch.js";
 export interface DispatchDeps {
   /** Record root override — defaults to `process.env.LUCID_ROOT`. One read, not three. */
   readonly rootDir?: string;
-  /** Factory for the Conversations seam — injected so tests never touch the filesystem. */
-  readonly conversationsFactory?: (rootDir?: string) => Conversations;
   /** Command seams — injected so dispatch is testable without a flock. */
   readonly sendInputFn?: (conversationId: string, opts: SendOpts) => { inputId: string };
   readonly watchConversationFn?: (conversationId: string, opts: WatchOpts) => Promise<void>;
-  readonly runConversationFn?: (opts: RunOpts) => Promise<{ conversationId: string; dir: string }>;
+  readonly runConversationFn?: (opts: RunOpts) => Promise<RunResult>;
   /** Sink for help / confirmation lines — defaults to `console.log` in `runCli`. */
   readonly onOutput?: (line: string) => void;
   /** For `watch`: view sink — injected in tests, defaulted to renderLines in `runCli`. */
@@ -91,7 +87,6 @@ export const dispatch = async (
 
   // One root resolution for the three record-touching commands. Not per-branch.
   const effectiveRoot = deps.rootDir ?? process.env.LUCID_ROOT;
-  const convsFactory = deps.conversationsFactory ?? conversations;
   const sendFn = deps.sendInputFn ?? sendInput;
   const watchFn = deps.watchConversationFn ?? watchConversation;
   const runFn = deps.runConversationFn ?? runConversation;
@@ -102,18 +97,11 @@ export const dispatch = async (
         rootDir: effectiveRoot,
         text: mapped.text,
       });
-      // Keep a single place that knows which factory is canonical: touch it
-      // once so a future factory-shaped change fails here, not in main.
-      void convsFactory;
       return { kind: "send", conversationId: mapped.conversationId, inputId };
     }
     case "watch": {
       // `watch` is long-lived — the caller (`runCli`) awaits it with a signal.
       // In tests the fake resolves immediately.
-      const dir = convsFactory(effectiveRoot).dirFor(mapped.conversationId);
-      void dir; // claim the factory seam — same reason as in `send`
-      // Delegate the actual tail — the view sink is injected.
-      // The dispatch owns *that it was dispatched*, not the paint.
       await watchFn(mapped.conversationId, {
         rootDir: effectiveRoot,
         onView: deps.onView ?? (() => {}),
@@ -122,15 +110,11 @@ export const dispatch = async (
       return { kind: "watch", conversationId: mapped.conversationId };
     }
     case "run": {
-      const result = (await runFn({
+      const result = await runFn({
         rootDir: effectiveRoot,
         conversationId: mapped.conversationId,
         harnessName: mapped.harnessName,
-      })) as unknown as {
-        conversationId: string;
-        dir: string;
-        awaitToken?: { resumeInstruction: string };
-      };
+      });
       if (result.awaitToken) {
         return {
           kind: "await",
