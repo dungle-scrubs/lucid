@@ -8,6 +8,7 @@
 
 export { type ControllerAction, type ControllerActionKind, decideAction } from "./controller.js";
 export { type HeadlessDeps, openHeadlessSession, openHeadlessTurns } from "./headless.js";
+export { createHeadlessHost, type SourceChannel } from "./host.js";
 export {
   A003_GATE_OPEN,
   type AnnounceAttach,

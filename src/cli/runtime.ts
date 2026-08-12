@@ -40,7 +40,7 @@
 import { nodeRunnerDeps } from "@dungle-scrubs/harness-cli/src/execution/node-deps.js";
 import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
 import { decideAction } from "../modes/controller.js";
-import { openHeadlessSession, openHeadlessTurns } from "../modes/headless.js";
+import { createHeadlessHost } from "../modes/host.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
 import { acquirePresence, type PresenceEvent } from "../store/presence.js";
@@ -66,8 +66,15 @@ export interface RuntimeDeps {
   readonly conversationsFactory?: (rootDir?: string) => Conversations;
   readonly acquirePresenceFn?: typeof acquirePresence;
   readonly openConversationFn?: typeof openConversation;
-  readonly openHeadlessSessionFn?: typeof openHeadlessSession;
-  readonly openHeadlessTurnsFn?: typeof openHeadlessTurns;
+  readonly createHeadlessHostFn?: typeof createHeadlessHost;
+  /** @deprecated — prefer createHeadlessHostFn (single strategy table) */
+  readonly openHeadlessSessionFn?: (
+    deps: Parameters<typeof createHeadlessHost>[0] & { sessionId: string },
+  ) => ReturnType<typeof createHeadlessHost>;
+  /** @deprecated — prefer createHeadlessHostFn */
+  readonly openHeadlessTurnsFn?: (
+    deps: Parameters<typeof createHeadlessHost>[0],
+  ) => ReturnType<typeof createHeadlessHost>;
   readonly channelStatusFn?: typeof channelStatus;
   readonly decideActionFn?: typeof decideAction;
   readonly now?: () => number;
@@ -118,8 +125,16 @@ export const startHeadless = (opts: RuntimeDeps = {}): StartResult => {
   const convsFactory = opts.conversationsFactory ?? conversations;
   const acquirePresenceFn = opts.acquirePresenceFn ?? acquirePresence;
   const openConversationFn = opts.openConversationFn ?? openConversation;
-  const openHeadlessSessionFn = opts.openHeadlessSessionFn ?? openHeadlessSession;
-  const openHeadlessTurnsFn = opts.openHeadlessTurnsFn ?? openHeadlessTurns;
+  const createHeadlessHostFn = opts.createHeadlessHostFn ?? createHeadlessHost;
+  // Backward compat: old tests inject openHeadlessSessionFn/TurnsFn — map them onto the single host
+  const openHeadlessSessionFn =
+    opts.openHeadlessSessionFn ??
+    ((deps: Parameters<typeof createHeadlessHostFn>[0]) =>
+      createHeadlessHostFn(deps, "headless-session"));
+  const openHeadlessTurnsFn =
+    opts.openHeadlessTurnsFn ??
+    ((deps: Parameters<typeof createHeadlessHostFn>[0]) =>
+      createHeadlessHostFn(deps, "headless-turn"));
   const channelStatusFn = opts.channelStatusFn ?? channelStatus;
   const decideActionFn = opts.decideActionFn ?? decideAction;
   const nowFn = opts.now ?? (() => Date.now());
@@ -186,30 +201,22 @@ export const startHeadless = (opts: RuntimeDeps = {}): StartResult => {
   let turnCount = 0;
   const sessionId = uuidFn();
 
-  // Choose the headless mode the harness actually supports: session where
-  // the descriptor declares it (claude), otherwise fall back to turn
-  // (codex/pi/muse) — same seam production and tests use, so the 4×2
-  // matrix is the test surface and a `lucid run --harness pi` works
-  // without a code change.
-  const useSession = supportsSession(harness);
-  const source = useSession
-    ? openHeadlessSessionFn({
-        harness,
-        conversationId,
-        secret,
-        sessionId,
-        runner: opts.runner ?? nodeRunnerDeps(),
-        mintTurnId: () => `turn-${++turnCount}`,
-        sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
-      })
-    : openHeadlessTurnsFn({
-        harness,
-        conversationId,
-        secret,
-        runner: opts.runner ?? nodeRunnerDeps(),
-        mintTurnId: () => `turn-${++turnCount}`,
-        sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
-      });
+  // Single headless entry — the Host's strategy table owns the mode
+  // split (session vs turn). The runtime only selects the profile via
+  // supportsSession, then delegates the whole lifecycle to the Host.
+  const profile = supportsSession(harness) ? "headless-session" : "headless-turn";
+  const baseDeps = {
+    harness,
+    conversationId,
+    secret,
+    runner: opts.runner ?? nodeRunnerDeps(),
+    mintTurnId: () => `turn-${++turnCount}`,
+    sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
+  } as const;
+  const source =
+    profile === "headless-session"
+      ? openHeadlessSessionFn({ ...baseDeps, sessionId })
+      : openHeadlessTurnsFn(baseDeps);
   receive = source.receive;
 
   // Wire termination: done resolves when the source is closed or the
