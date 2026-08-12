@@ -20,13 +20,15 @@ import { watch as fsWatch } from "node:fs";
 import { join } from "node:path";
 import { channelStatus } from "../protocol/liveness.js";
 // biome-ignore lint/style/useImportType: viewConversation used as typeof in WatchOpts — needed as value for typeof
-import { type ViewSnapshot, viewConversation, viewSnapshot } from "../store/store.js";
+import { type ViewSnapshot, viewConversation, viewSnapshot } from "../store/conversation-host.js";
 import type { TuiView } from "../tui/view.js";
 import { buildView } from "../tui/view.js";
-import { conversations } from "./conversations.js";
+import { type Conversations, conversations } from "./record-addressing.js";
 
 export interface WatchOpts {
   readonly rootDir?: string;
+  /** Injected addressing seam — CliHost provides the single `effectiveRoot`-bound factory. */
+  readonly conversationsFactory?: (rootDir?: string) => Conversations;
   /** How often to poll when fs.watch is unavailable (ms). */
   readonly pollMs?: number;
   /** Called for each fresh view. The CLI's paint step lives here in
@@ -52,7 +54,8 @@ export interface WatchOpts {
  * when `signal` aborts, or never (long-lived) when no signal is given.
  * Holds no lock and dispatches nothing. */
 export const watchConversation = async (conversationId: string, opts: WatchOpts): Promise<void> => {
-  const dir = conversations(opts.rootDir).dirFor(conversationId);
+  const factory = opts.conversationsFactory ?? conversations;
+  const dir = factory(opts.rootDir).dirFor(conversationId);
   const pollMs = opts.pollMs ?? 500;
   const nowFn = opts.now ?? (() => Date.now());
   const presenceFn = opts.presence ?? (() => undefined);

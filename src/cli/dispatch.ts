@@ -41,6 +41,7 @@ import { type AnnounceResult, announce } from "./hooks/announce.js";
 import { readStdin } from "./hooks/delivery.js";
 import { type InjectResult, inject } from "./hooks/inject.js";
 import { type MappedCommand, mapSubcommand } from "./mapping.js";
+import { type Conversations, conversations } from "./record-addressing.js";
 import type { RunOpts, RunResult } from "./run.js";
 import { runConversation } from "./run.js";
 import type { SendOpts } from "./send.js";
@@ -52,6 +53,8 @@ import { watchConversation } from "./watch.js";
 export interface DispatchDeps {
   /** Record root override — defaults to `process.env.LUCID_ROOT`. One read, not three. */
   readonly rootDir?: string;
+  /** Record addressing factory — injected so CliHost owns the single `effectiveRoot` → `Conversations` binding (2). */
+  readonly conversationsFactory?: (rootDir?: string) => Conversations;
   /** Command seams — injected so dispatch is testable without a flock. */
   readonly sendInputFn?: (conversationId: string, opts: SendOpts) => { inputId: string };
   readonly watchConversationFn?: (conversationId: string, opts: WatchOpts) => Promise<void>;
@@ -120,7 +123,17 @@ export const dispatch = async (
   }
 
   // One root resolution for the three record-touching commands. Not per-branch.
+  // The factory is bound once to that root so adapters reuse the same
+  // addressing discipline rather than re-deriving `conversations(rootDir)`
+  // independently (2 — shotgun tail). When a fake factory is injected the
+  // fake's binding is honored; otherwise the real `conversations` is used.
   const effectiveRoot = deps.rootDir ?? process.env.LUCID_ROOT;
+  const convFactory: (rootDir?: string) => Conversations =
+    deps.conversationsFactory ?? ((r?: string) => conversations(r ?? effectiveRoot));
+  // Stabilize the effective Conversations instance for this dispatch so
+  // `send`/`watch` share it when they use the default factory path.
+  const dispatchConvs = convFactory(effectiveRoot);
+  const boundFactory: (rootDir?: string) => Conversations = () => dispatchConvs;
   const sendFn = deps.sendInputFn ?? sendInput;
   const watchFn = deps.watchConversationFn ?? watchConversation;
   const runFn = deps.runConversationFn ?? runConversation;
@@ -130,6 +143,7 @@ export const dispatch = async (
       const { inputId } = sendFn(mapped.conversationId, {
         rootDir: effectiveRoot,
         text: mapped.text,
+        conversationsFactory: deps.conversationsFactory ? convFactory : boundFactory,
       });
       return { kind: "send", conversationId: mapped.conversationId, inputId };
     }
@@ -138,6 +152,7 @@ export const dispatch = async (
       // In tests the fake resolves immediately.
       await watchFn(mapped.conversationId, {
         rootDir: effectiveRoot,
+        conversationsFactory: deps.conversationsFactory ? convFactory : boundFactory,
         onView: deps.onView ?? (() => {}),
         signal: deps.signal,
       });
