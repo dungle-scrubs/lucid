@@ -14,7 +14,10 @@ export {
   type AnnounceAttach,
   attachCapabilities,
   chunkInjection,
+  createInteractiveHost,
+  type DeliveryResult,
   INJECTION_CAP,
+  type InteractiveHost,
   type LadderEnv,
   parseAnnounce,
   RUNGS,
@@ -23,4 +26,4 @@ export {
   selectRung,
   type TailResult,
   tailTranscript,
-} from "./interactive.js";
+} from "./interactive-host.js";
