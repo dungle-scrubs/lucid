@@ -42,7 +42,11 @@ const run = async (): Promise<void> => {
     case "run": {
       const { runConversation } = await import("./run.js");
       const rootDir = process.env.LUCID_ROOT;
-      await runConversation({ rootDir, conversationId: mapped.conversationId });
+      await runConversation({
+        rootDir,
+        conversationId: mapped.conversationId,
+        harnessName: mapped.harnessName,
+      });
       break;
     }
     case "announce": {

@@ -26,17 +26,22 @@
  */
 
 import { nodeRunnerDeps } from "@dungle-scrubs/harness-cli/src/execution/node-deps.js";
-import { claudeCode } from "@dungle-scrubs/harness-cli/src/knowledge/claude-code.js";
-import { openHeadlessSession } from "../modes/headless.js";
+import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
+import { openHeadlessSession, openHeadlessTurns } from "../modes/headless.js";
 import type { Frame } from "../protocol/index.js";
 import { acquirePresence, type PresenceEvent } from "../store/presence.js";
 import { type HostRecord, openConversation } from "../store/store.js";
 import { type Conversations, conversations } from "./conversations.js";
+import { harnessForName, supportsSession } from "./harness.js";
 
 /** Production deps for the runtime. All fields are injectable for tests. */
 export interface RuntimeDeps {
   readonly rootDir?: string;
   readonly conversationId?: string;
+  /** Harness to drive headlessly. Defaults to `claudeCode` (or `LUCID_HARNESS` env). */
+  readonly harness?: HarnessDescriptor;
+  /** Bare name override (`claude`|`codex`|`pi`|`muse`) — resolved via `harnessForName`. Takes precedence only when `harness` is not supplied. */
+  readonly harnessName?: string;
   readonly runner?: ReturnType<typeof nodeRunnerDeps>;
   readonly onRecord?: (r: HostRecord) => void;
   readonly onPresenceEvent?: (e: PresenceEvent) => void;
@@ -46,6 +51,7 @@ export interface RuntimeDeps {
   readonly acquirePresenceFn?: typeof acquirePresence;
   readonly openConversationFn?: typeof openConversation;
   readonly openHeadlessSessionFn?: typeof openHeadlessSession;
+  readonly openHeadlessTurnsFn?: typeof openHeadlessTurns;
   readonly now?: () => number;
   readonly randomUUID?: () => string;
   readonly randomConversationSuffix?: () => string;
@@ -76,9 +82,11 @@ export const startHeadless = (opts: RuntimeDeps = {}): RunningConversation => {
   const acquirePresenceFn = opts.acquirePresenceFn ?? acquirePresence;
   const openConversationFn = opts.openConversationFn ?? openConversation;
   const openHeadlessSessionFn = opts.openHeadlessSessionFn ?? openHeadlessSession;
+  const openHeadlessTurnsFn = opts.openHeadlessTurnsFn ?? openHeadlessTurns;
   const nowFn = opts.now ?? (() => Date.now());
   const uuidFn = opts.randomUUID ?? (() => crypto.randomUUID());
   const suffixFn = opts.randomConversationSuffix ?? (() => Math.random().toString(36).slice(2, 6));
+  const harness = opts.harness ?? harnessForName(opts.harnessName);
 
   const convs = convsFactory(opts.rootDir);
   const conversationId = opts.conversationId ?? `conv-${Date.now()}-${suffixFn()}`;
@@ -115,15 +123,30 @@ export const startHeadless = (opts: RuntimeDeps = {}): RunningConversation => {
   let turnCount = 0;
   const sessionId = uuidFn();
 
-  const source = openHeadlessSessionFn({
-    harness: claudeCode,
-    conversationId,
-    secret,
-    sessionId,
-    runner: opts.runner ?? nodeRunnerDeps(),
-    mintTurnId: () => `turn-${++turnCount}`,
-    sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
-  });
+  // Choose the headless mode the harness actually supports: session where
+  // the descriptor declares it (claude), otherwise fall back to turn
+  // (codex/pi/muse) — same seam production and tests use, so the 4×2
+  // matrix is the test surface and a `lucid run --harness pi` works
+  // without a code change.
+  const useSession = supportsSession(harness);
+  const source = useSession
+    ? openHeadlessSessionFn({
+        harness,
+        conversationId,
+        secret,
+        sessionId,
+        runner: opts.runner ?? nodeRunnerDeps(),
+        mintTurnId: () => `turn-${++turnCount}`,
+        sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
+      })
+    : openHeadlessTurnsFn({
+        harness,
+        conversationId,
+        secret,
+        runner: opts.runner ?? nodeRunnerDeps(),
+        mintTurnId: () => `turn-${++turnCount}`,
+        sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
+      });
   receive = source.receive;
 
   // Wire termination: done resolves when the source is closed or the
