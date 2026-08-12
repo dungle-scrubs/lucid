@@ -1,15 +1,36 @@
 /**
- * The TUI view-model: a PURE projection of the durable conversation into
- * exactly what the terminal shows (D-009 - the view IS fold(log), never a
- * second copy of state). Given the store's transcript, channel status,
- * the selected rung, and the in-progress input buffer, it produces the
- * renderable lines: the conversation, a per-item disposition mark, and
- * the state + rung indicator. Keeping this pure is what lets the rendering
- * be verified without a live terminal - the render() sibling only paints
- * these lines. NOT responsible for input handling, spawning, or the
- * protocol; it reads what the store already folded.
+ * ConversationView — the deep module that owns the conversation view
+ * projection (C1).
+ *
+ * Before, the transcript→view pipeline was split across three files:
+ * `src/store/log.ts:collectTranscript` assembled the durable history,
+ * `src/store/store.ts` re-exported it, and `src/tui/view.ts:buildView`
+ * projected it — with the filtering rules (token/message dedup, `done`
+ * exclusion, aborted-vs-completed reconciliation) fragmented across the
+ * pipeline and the HarnessEvent kind vocabulary mirrored as literals in
+ * `view.ts` (`KIND = {token, message, done, ...}`). Fixing a rendering
+ * edge required bouncing across `log + store + view` — three edits,
+ * three test files — and a normalizer rename silently broke the view
+ * (caught only by the live smoke).
+ *
+ * Now one module owns the whole render policy — which events render,
+ * token/message dedup, `done` marker suppression, aborted reconciliation,
+ * and the `eventText` extraction — and hides it behind a small, deep
+ * interface: `buildView({transcript, status, rung, draft}) → TuiView`.
+ * The kind vocabulary is imported once from `protocol/events:EventKind`,
+ * never mirrored, so a rename is a single edit. The durable
+ * `Transcript` shape stays in `store/log.ts`; this module is the view
+ * policy, not the durability. Deletion test: deleting this module would
+ * scatter `EventKind` imports, token/message suppression, `done` filtering,
+ * and abort reconciliation across every CLI and TUI consumer.
+ *
+ * Depth: small interface, large hidden policy. What it is NOT: it is not
+ * the durable log (ConversationLog owns fold/repair/flock), not the
+ * frame codec, and not the liveness/presence projection — it reads what
+ * the store already folded (D-009: the view IS fold(log)).
  */
 
+import { EventKind } from "../protocol/events.js";
 import type { ChannelStatus } from "../protocol/index.js";
 import type { Transcript, TranscriptInput } from "../store/store.js";
 
@@ -44,29 +65,17 @@ export interface TuiView {
   readonly inputBox: string;
 }
 
-/** The HarnessEvent kinds the view keys on, mirrored from the normalizer's
- * event vocabulary in one place so a rename is a single edit, not literals
- * scattered through the projection (a stray "done" literal that stopped
- * matching would silently break abort reconciliation). A cross-repo
- * rename is caught by the M7.2 real-harness smoke. */
-const KIND = {
-  token: "token",
-  message: "message",
-  done: "done",
-  tool: "tool",
-  progress: "progress",
-} as const;
-
 /** Extract renderable text from a folded event payload. Only the rendered
  * classes (message/token text, tool name, progress) surface; the view is
  * a projection, so an unclassifiable payload renders its kind, never a
- * crash. */
+ * crash. Kind strings are imported from the single `EventKind` vocabulary
+ * (`protocol/events`), never mirrored — a rename is a single edit. */
 const eventText = (event: Record<string, unknown>): string => {
   const kind = typeof event.kind === "string" ? event.kind : "event";
-  if ((kind === KIND.message || kind === KIND.token) && typeof event.text === "string")
+  if ((kind === EventKind.message || kind === EventKind.token) && typeof event.text === "string")
     return event.text;
-  if (kind === KIND.tool && typeof event.name === "string") return `⚙ ${event.name}`;
-  if (kind === KIND.progress && typeof event.label === "string") return `… ${event.label}`;
+  if (kind === EventKind.tool && typeof event.name === "string") return `⚙ ${event.name}`;
+  if (kind === EventKind.progress && typeof event.label === "string") return `… ${event.label}`;
   return `[${kind}]`;
 };
 
@@ -82,18 +91,20 @@ export const buildView = (input: {
   // `done` (the store's abort signal includes clean detaches, so a turn
   // with a done in the transcript actually completed - reconcile here).
   const completed = new Set(
-    events.filter((e) => (e.event.kind as string) === KIND.done).map((e) => e.turnId),
+    events.filter((e) => (e.event.kind as string) === EventKind.done).map((e) => e.turnId),
   );
   // A turn's text arrives twice by design (token deltas AND the trailing
   // message - events.ts); once the message exists, suppress that turn's
   // token deltas so the view shows the text once, never concatenated.
   const turnsWithMessage = new Set(
-    events.filter((e) => (e.event.kind as string) === KIND.message).map((e) => e.turnId),
+    events.filter((e) => (e.event.kind as string) === EventKind.message).map((e) => e.turnId),
   );
 
   const agentLines: ConversationLine[] = events
-    .filter((e) => !((e.event.kind as string) === KIND.token && turnsWithMessage.has(e.turnId)))
-    .filter((e) => (e.event.kind as string) !== KIND.done) // done is a marker, not a rendered line
+    .filter(
+      (e) => !((e.event.kind as string) === EventKind.token && turnsWithMessage.has(e.turnId)),
+    )
+    .filter((e) => (e.event.kind as string) !== EventKind.done) // done is a marker, not a rendered line
     .map((e) => ({
       kind: "agent",
       seq: e.seq,

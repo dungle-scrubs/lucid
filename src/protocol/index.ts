@@ -13,6 +13,8 @@ export {
   DROPPABLE_KINDS,
   DROPPABLE_QUEUE_MAX,
   type EventClass,
+  EventKind,
+  type HarnessEventKind,
   isKnownEventKind,
   LOSSLESS_KINDS,
   type PendingDroppable,

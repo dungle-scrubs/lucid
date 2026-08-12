@@ -13,11 +13,36 @@
  * class, which is never gated. */
 export const DROPPABLE_QUEUE_MAX = 256;
 
+/** Single vocabulary for HarnessEvent kinds — the ONE place the kind
+ * strings live. View, store, and protocol consumers import from here,
+ * never mirror literals (C1). The droppable/lossless partition is
+ * derived from the same strings so a rename is a single edit. */
+export const EventKind = {
+  token: "token",
+  progress: "progress",
+  context: "context",
+  identity: "identity",
+  message: "message",
+  tool: "tool",
+  limit: "limit",
+  error: "error",
+  done: "done",
+} as const;
+
+export type HarnessEventKind = (typeof EventKind)[keyof typeof EventKind];
+
 /** Droppable: coalescible under pressure, latest-wins, credit-gated. */
-export const DROPPABLE_KINDS = ["token", "progress", "context"] as const;
+export const DROPPABLE_KINDS = [EventKind.token, EventKind.progress, EventKind.context] as const;
 
 /** Lossless: never dropped, never credit-gated, replay-covered. */
-export const LOSSLESS_KINDS = ["identity", "message", "tool", "limit", "error", "done"] as const;
+export const LOSSLESS_KINDS = [
+  EventKind.identity,
+  EventKind.message,
+  EventKind.tool,
+  EventKind.limit,
+  EventKind.error,
+  EventKind.done,
+] as const;
 
 export type EventClass = "droppable" | "lossless";
 
