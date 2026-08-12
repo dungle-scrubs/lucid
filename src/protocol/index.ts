@@ -41,6 +41,18 @@ export {
   type RefusalIssue,
 } from "./frames.js";
 export {
+  AttachmentLedger,
+  CreditLedger,
+  clampedGrant,
+  clearRedeliver,
+  InputLedger,
+  isStarved,
+  queueDepth,
+  redeliverable,
+  renewAttachment,
+  renewLease,
+} from "./ledgers/index.js";
+export {
   ATTACH_GRACE_MS,
   type ChannelStatus,
   channelStatus,
