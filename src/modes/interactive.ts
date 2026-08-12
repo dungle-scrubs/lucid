@@ -33,6 +33,7 @@ import {
 } from "@dungle-scrubs/harness-cli/src/interpretation/content.js";
 import { asRecord } from "@dungle-scrubs/harness-cli/src/interpretation/shape.js";
 import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
+import { chunkHookInput as _chunkHookInput, HOOK_CHUNK_CAP_BYTES } from "../cli/hooks/delivery.js";
 
 /** The rungs in descending capability; selection walks this order. */
 export const RUNGS = ["hooks", "cooperative", "observe"] as const;
@@ -78,28 +79,23 @@ export const selectRung = (env: LadderEnv): RungProfile => {
   return PROFILES.observe;
 };
 
-/** The conservative injection cap (chars) pending the A-004 measurement,
- * which by its own impact note affects only this number and adapter
- * wording - no architecture. Named here so one edit moves it when A-004
- * lands. */
-export const INJECTION_CAP = 10_000;
+/**
+ * The hook injection cap — the `reason` field limit (A-004). The
+ * single source of truth lives in `src/cli/hooks/delivery.ts`
+ * (`HOOK_CHUNK_CAP_BYTES`, measured in encoded UTF-8 bytes); this
+ * alias keeps the interactive adapter's existing import path while the
+ * metric and cap converge (C02).
+ */
+export const INJECTION_CAP = HOOK_CHUNK_CAP_BYTES;
 
-/** Split an injected message into ordered chunks no larger than the cap,
- * so a long human message survives the hook's reason-field limit (A-004).
- * Never splits an empty message into zero chunks - an empty input still
- * delivers one empty chunk so its disposition is real. */
-export const chunkInjection = (text: string, cap: number = INJECTION_CAP): readonly string[] => {
-  if (!Number.isSafeInteger(cap) || cap <= 0)
-    throw new Error("injection cap must be a positive safe integer");
-  // Iterate by CODE POINT (not UTF-16 unit): a cut inside a surrogate pair
-  // would deliver two lone surrogates in separate chunks, each corrupting
-  // to U+FFFD once the hook encodes them independently.
-  const points = [...text];
-  if (points.length <= cap) return [text];
-  const chunks: string[] = [];
-  for (let i = 0; i < points.length; i += cap) chunks.push(points.slice(i, i + cap).join(""));
-  return chunks;
-};
+/** Split an injected message into ordered chunks — delegates to the
+ * deep `HookDelivery` chunker so surrogate safety and the encoded-byte
+ * metric apply uniformly. Preserves the original `cap`-by-caller
+ * signature for backward compat; the cap is still validated. */
+export const chunkInjection = (
+  text: string,
+  cap: number = HOOK_CHUNK_CAP_BYTES,
+): readonly string[] => _chunkHookInput(text, cap);
 
 /** Query the harness's capabilities at attach: runtime-verified when the
  * registry knows the model, degrading to curated/unknown otherwise

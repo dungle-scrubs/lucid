@@ -12,9 +12,8 @@
  * the Stop hook.
  */
 
-import type { encodeFrame } from "../../protocol/index.js";
 import { openConversation, StoreError } from "../../store/store.js";
-import { resolveVerifiedRecord } from "./resolver.js";
+import { exitHook, guardHookEntry, readStdin } from "./delivery.js";
 
 export interface AnnounceResult {
   readonly ok: boolean;
@@ -23,25 +22,9 @@ export interface AnnounceResult {
 }
 
 export const announce = async (stdin: string): Promise<AnnounceResult> => {
-  let payload: unknown;
-  try {
-    payload = JSON.parse(stdin);
-  } catch {
-    // Non-JSON stdin is a hook misfire; exit non-destructively.
-    return { ok: true };
-  }
-
-  const resolved = resolveVerifiedRecord();
-  if ("notManaged" in resolved) {
-    // No stamp - the session is not a lucid-managed one; do nothing.
-    return { ok: true };
-  }
-  if (!resolved.ok) {
-    // E003: hook-resolution-failure - exit non-destructively, never
-    // write the wrong record.
-    return { ok: false, code: resolved.code, message: resolved.message };
-  }
-  const { dir: recordDir, conversationId, secret } = resolved.record;
+  const guard = guardHookEntry(stdin);
+  if (!guard.proceed) return guard.result as AnnounceResult;
+  const { dir: recordDir, conversationId, secret } = guard.record;
 
   // Append attach (+ identity) via the store's lock-wrapped transaction.
   try {
@@ -58,16 +41,8 @@ export const announce = async (stdin: string): Promise<AnnounceResult> => {
       profile: "interactive" as const,
       version: 1,
     };
-    // Use the host's handleFrame path so the secret is redacted and the
-    // log is the seq authority.
-    const _line = JSON.stringify(frame);
-    // The frame must be encoded via the protocol's wire format; but for
-    // the store host we can pass the raw JSON string - the host will
-    // decode it. To include the version, we use the same shape as the
-    // test helper.
     const { encodeFrame } = await import("../../protocol/index.js");
     host.handleFrame(encodeFrame(frame as unknown as Parameters<typeof encodeFrame>[0]));
-    void payload;
   } catch (e) {
     if (e instanceof StoreError) {
       // A store error during attach is a hook-resolution failure
@@ -82,13 +57,7 @@ export const announce = async (stdin: string): Promise<AnnounceResult> => {
 
 /** CLI entry: read stdin, run announce, exit with appropriate code. */
 export const runAnnounce = async (): Promise<void> => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  const stdin = Buffer.concat(chunks).toString("utf8");
+  const stdin = await readStdin();
   const result = await announce(stdin);
-  if (!result.ok) {
-    process.stderr.write(`announce: ${result.code}: ${result.message}\n`);
-    process.exit(0); // non-destructive exit, never writes wrong record
-  }
-  process.exit(0);
+  exitHook(result);
 };
