@@ -1,68 +1,29 @@
 #!/usr/bin/env bun
 
 /**
- * `lucid` CLI entry point (M2.1-M2.4).
+ * `lucid` CLI entry point — thin adapter over the deep `CliHost`.
  *
- * Dispatches `lucid <subcommand>` via the pure `mapSubcommand` seam.
- * Hook commands use exec-form argument arrays, never interpolated shell
- * strings. `HERDR_ENV` is unset for the child (D-025).
+ * The `argv -> MappedCommand` parse, `LUCID_ROOT` resolution (once), and
+ * `send/watch/run` effect routing live in `src/cli/dispatch.ts`. This
+ * file is the process entry: it wires `process.argv`, the SIGINT/SIGTERM
+ * abort for `watch`, and the `console` sinks, then delegates to
+ * `runCli`. Hook commands (`announce`/`inject`) are also routed through
+ * the host so `LUCID_ROOT` never fans out again.
+ *
+ * What it is NOT: it does not parse, validate, or own the flock.
  */
 
-import { renderLines } from "../tui/render.js";
-import { mapSubcommand } from "./mapping.js";
+import { runCli } from "./dispatch.js";
 
 const run = async (): Promise<void> => {
   const argv = process.argv.slice(2);
-  const mapped = mapSubcommand(argv);
-
-  switch (mapped.kind) {
-    case "send": {
-      const { sendInput } = await import("./send.js");
-      const rootDir = process.env.LUCID_ROOT;
-      sendInput(mapped.conversationId, { rootDir, text: mapped.text });
-      console.log(`sent to ${mapped.conversationId}`);
-      break;
-    }
-    case "watch": {
-      const { watchConversation } = await import("./watch.js");
-      const rootDir = process.env.LUCID_ROOT;
-      const ac = new AbortController();
-      process.on("SIGINT", () => ac.abort());
-      process.on("SIGTERM", () => ac.abort());
-      await watchConversation(mapped.conversationId, {
-        rootDir,
-        onView: (view) => {
-          console.clear();
-          for (const line of renderLines(view)) console.log(line);
-        },
-        signal: ac.signal,
-      });
-      break;
-    }
-    case "run": {
-      const { runConversation } = await import("./run.js");
-      const rootDir = process.env.LUCID_ROOT;
-      await runConversation({
-        rootDir,
-        conversationId: mapped.conversationId,
-        harnessName: mapped.harnessName,
-      });
-      break;
-    }
-    case "announce": {
-      const { runAnnounce } = await import("./hooks/announce.js");
-      await runAnnounce();
-      break;
-    }
-    case "inject": {
-      const { runInject } = await import("./hooks/inject.js");
-      await runInject();
-      break;
-    }
-    case "help":
-      console.log(mapped.message);
-      break;
-  }
+  // `watch` is the only long-lived command — give it a signal that
+  // SIGINT/SIGTERM abort. The host forwards it; other commands ignore it.
+  const ac = new AbortController();
+  const onAbort = (): void => ac.abort();
+  process.on("SIGINT", onAbort);
+  process.on("SIGTERM", onAbort);
+  await runCli(argv, { signal: ac.signal });
 };
 
 run().catch((e) => {
