@@ -6,6 +6,21 @@
  * is the only component permitted to advance the seq or to persist frames.
  */
 
+export {
+  type ConversationHost,
+  createConversationHost,
+  type HostDeps,
+  type HostRecord,
+  type HostSnapshot,
+  openConversation,
+  type RecoveryRecord,
+  type Transcript,
+  type TranscriptEvent,
+  type ViewSnapshot,
+  viewConversation,
+  viewSnapshot,
+  type WireRecord,
+} from "./conversation-host.js";
 // Safe lock surface re-exported through the store barrel so callers do not
 // deep-import the lock module. `acquireWith` stays `@internal` (deep-import
 // only) because passing a fake flock would defeat the flock-only invariant
@@ -23,19 +38,8 @@ export {
 export type { AppendEvent } from "./store.js";
 export {
   createConversationRecord,
-  type HostDeps,
-  type HostRecord,
-  type HostSnapshot,
-  openConversation,
   pathsForDir,
   type RecordPaths,
-  type RecoveryRecord,
   recordPaths,
   StoreError,
-  type Transcript,
-  type TranscriptEvent,
-  type ViewSnapshot,
-  viewConversation,
-  viewSnapshot,
-  type WireRecord,
 } from "./store.js";
