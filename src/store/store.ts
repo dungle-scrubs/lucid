@@ -4,9 +4,11 @@
  * (published atomically at creation with a 0600 secret - D-004), the
  * append-only NDJSON log that is the seq authority, and the structured
  * boundary record for every accepted/refused transition. The log itself
- * - file, offset, flock, fold, repair - is now owned by the deep module
+ * - file, offset, flock, fold, repair - is owned by the deep module
  * `ConversationLog` (`src/store/log.ts`); this file owns the reducer,
- * the secret redaction, and the effect/record plumbing. What it is NOT:
+ * the secret redaction, and the single `transact` seam that funnels
+ * every entry (frame / input / credit) through one lock→catch-up→
+ * reduce→write→effects→record discipline (C01). What it is NOT:
  * transport, rendering, or the flock primitive.
  */
 
@@ -112,7 +114,10 @@ const ctxOf = (presence: boolean | undefined): { presence?: Presence } =>
 
 const HEX_SECRET = /^[0-9a-f]{16,}$/;
 
-export const openConversation = (dir: string, deps: HostDeps) => {
+/** Read the record's secret + identity — the single place both `openConversation` and `viewConversation` load it. */
+const readRecordFiles = (
+  dir: string,
+): { secret: string; conversationId: string; paths: RecordPaths } => {
   const paths = pathsForDir(dir);
   if (!existsSync(paths.secretPath))
     throw new StoreError("missing-secret", `no secret in record dir: ${paths.secretPath}`);
@@ -123,6 +128,11 @@ export const openConversation = (dir: string, deps: HostDeps) => {
     ? (JSON.parse(readFileSync(paths.metaPath, "utf8")) as { conversationId: string })
         .conversationId
     : basename(dir);
+  return { secret, conversationId, paths };
+};
+
+export const openConversation = (dir: string, deps: HostDeps) => {
+  const { secret, conversationId, paths } = readRecordFiles(dir);
 
   const log = createLog(paths, secret, conversationId, {
     onLockEvent: deps.onLockEvent,
@@ -139,6 +149,31 @@ export const openConversation = (dir: string, deps: HostDeps) => {
     seq: log.state().seq,
     epoch: log.state().epoch,
   });
+
+  /**
+   * The ONE place durability, effects, and boundary records meet.
+   * Every host transition — frame, input, credit — funnels through
+   * this seam so the lock→catch-up→reduce→write→effects→record
+   * discipline exists once, not three times (C01).
+   */
+  const transact = (
+    entry: LogEntry | null,
+    produce: (s: ChannelState) => {
+      result: ReduceResult;
+      frame: import("../protocol/index.js").Frame | null;
+    },
+  ): ReduceResult => {
+    const result = log.append((s) => {
+      const { result: r, frame } = produce(s);
+      // `entry: null` means wire-decode failed — nothing durable, but the
+      // reducer still produced a refused record; log treats null as no-op
+      // (0 bytes) and we surface effects/record here.
+      return { entry, result: r, frame };
+    });
+    for (const effect of result.effects) deps.onEffect(effect);
+    deps.onRecord((result as unknown as { record: HostRecord }).record);
+    return result;
+  };
 
   return {
     state: (): ChannelState => log.state(),
@@ -181,25 +216,10 @@ export const openConversation = (dir: string, deps: HostDeps) => {
         frame: durable as unknown as Record<string, unknown>,
         ...(presence === undefined ? {} : { presence }),
       };
-      const result = log.append((s) => {
+      return transact(entry, (s) => {
         const r = reduce(s, decoded.frame, at, ctxOf(presence));
-        return { entry, result: r, frame: decoded.frame };
+        return { result: r, frame: decoded.frame };
       });
-      for (const effect of result.effects) deps.onEffect(effect);
-      deps.onRecord((result as unknown as { record: HostRecord }).record);
-      // For refused, the log already emitted append.ok with 0 bytes and adopted state;
-      // we still need to surface the reducer's record/effects (already done via log's
-      // produce path, but we duplicated emission - so avoid double emit for refused?
-      // The log's append for refused already called onEffect/onRecord via store's deps?
-      // Actually log's append for refused does not call deps.onEffect/onRecord - it just
-      // adopts state and emits append.ok. So we do it here once.
-      // For accepted, log's append already collected transcript and emitted append.ok,
-      // but not onEffect/onRecord - so we do it.
-      // To avoid double, we handle both here and make log's append not emit store records.
-      // Simpler: keep this duplication but ensure log's append for refused does not emit
-      // store records. Our log's append for refused currently just adopts and emits append.ok,
-      // not store records. So this is correct.
-      return result;
     },
     enqueueInput: (input: {
       readonly id: string;
@@ -209,24 +229,18 @@ export const openConversation = (dir: string, deps: HostDeps) => {
     }): ReduceResult => {
       const at = deps.now();
       const entry: LogEntry = { v: 1, at, src: "input", input };
-      const result = log.append((s) => {
+      return transact(entry, (s) => {
         const r = enqueueInput(s, input, at);
-        return { entry, result: r, frame: null };
+        return { result: r, frame: null };
       });
-      for (const effect of result.effects) deps.onEffect(effect);
-      deps.onRecord((result as unknown as { record: HostRecord }).record);
-      return result;
     },
     grantCredit: (tokens: number): ReduceResult => {
       const at = deps.now();
       const entry: LogEntry = { v: 1, at, src: "credit", tokens };
-      const result = log.append((s) => {
+      return transact(entry, (s) => {
         const r = grantCredit(s, tokens, at);
-        return { entry, result: r, frame: null };
+        return { result: r, frame: null };
       });
-      for (const effect of result.effects) deps.onEffect(effect);
-      deps.onRecord((result as unknown as { record: HostRecord }).record);
-      return result;
     },
   };
 };
@@ -234,21 +248,14 @@ export const openConversation = (dir: string, deps: HostDeps) => {
 /**
  * Lock-free view of a conversation's durable state. Tolerates a torn
  * trailing line without acquiring the append lock and without repairing
- * the file - a pure reader for `lucid watch`.
+ * the file - a pure reader for `lucid watch`. Delegates to the same
+ * `readRecordFiles + foldLog` seam the host uses, so there is one
+ * reader discipline, not two (C01).
  */
 export const viewConversation = (
   dir: string,
 ): { state: ChannelState; transcript: import("./log.js").Transcript; goodBytes: number } => {
-  const paths = pathsForDir(dir);
-  if (!existsSync(paths.secretPath))
-    throw new StoreError("missing-secret", `no secret in record dir: ${paths.secretPath}`);
-  const secret = readFileSync(paths.secretPath, "utf8").trim();
-  if (!HEX_SECRET.test(secret))
-    throw new StoreError("invalid-secret", `malformed secret file: ${paths.secretPath}`);
-  const conversationId = existsSync(paths.metaPath)
-    ? (JSON.parse(readFileSync(paths.metaPath, "utf8")) as { conversationId: string })
-        .conversationId
-    : basename(dir);
+  const { secret, conversationId, paths } = readRecordFiles(dir);
   const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
   const folded = foldLog(conversationId, secret, raw);
   return {
