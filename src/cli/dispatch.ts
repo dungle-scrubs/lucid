@@ -13,12 +13,20 @@
  * the pure half had coverage. `run.ts` had decayed to a 1-line
  * forwarder — the seam already wanted to be deeper.
  *
+ * 02 deepens the hook seam: `announce`/`inject` were second-class —
+ * dispatch returned a bare `{kind:"announce"}` and `runCli` did a
+ * dynamic `await import("./hooks/announce.js")` outside the injected
+ * seam. All five commands now go through the same `dispatch` seam via
+ * injectable `announceFn`/`injectFn`/`readStdinFn`, so hook dispatch is
+ * testable without a filesystem or stdin pipe, and adding the future
+ * Stop hook is one injection, not a new import in `runCli`.
+ *
  * Now one module owns the whole discipline — `argv -> MappedCommand`
  * (via `mapSubcommand`), `rootDir` resolution once, and the effect
- * routing to the three record-touching commands — and hides it behind a
- * small, deep interface: `dispatch(argv, deps) -> DispatchResult` and
- * the production convenience `runCli(argv, deps)` that maps the result
- * to stdout. The adapters (`send`/`watch`/`run`) become thin
+ * routing to the five commands — and hides it behind a small, deep
+ * interface: `dispatch(argv, deps) -> DispatchResult` and the production
+ * convenience `runCli(argv, deps)` that maps the result to stdout.
+ * The adapters (`send`/`watch`/`run`/`announce`/`inject`) become thin
  * `(deps, parsed) -> effect` collaborators that never construct
  * `conversations()` themselves — the host does. The deletion test
  * passes: deleting this module would scatter `LUCID_ROOT` reads,
@@ -29,6 +37,9 @@
  * `watch`'s paint step stays in `main.ts` and is injected as `onView`.
  */
 
+import { type AnnounceResult, announce } from "./hooks/announce.js";
+import { readStdin } from "./hooks/delivery.js";
+import { type InjectResult, inject } from "./hooks/inject.js";
 import { type MappedCommand, mapSubcommand } from "./mapping.js";
 import type { RunOpts, RunResult } from "./run.js";
 import { runConversation } from "./run.js";
@@ -45,8 +56,13 @@ export interface DispatchDeps {
   readonly sendInputFn?: (conversationId: string, opts: SendOpts) => { inputId: string };
   readonly watchConversationFn?: (conversationId: string, opts: WatchOpts) => Promise<void>;
   readonly runConversationFn?: (opts: RunOpts) => Promise<RunResult>;
+  readonly announceFn?: (stdin: string) => Promise<AnnounceResult>;
+  readonly injectFn?: (stdin: string) => Promise<InjectResult>;
+  readonly readStdinFn?: () => Promise<string>;
   /** Sink for help / confirmation lines — defaults to `console.log` in `runCli`. */
   readonly onOutput?: (line: string) => void;
+  /** Sink for hook error lines (code: message) — defaults to stderr. */
+  readonly onStderr?: (line: string) => void;
   /** For `watch`: view sink — injected in tests, defaulted to renderLines in `runCli`. */
   readonly onView?: WatchOpts["onView"];
   /** For `watch`/`run`: abort signal — wired from SIGINT in `runCli`. */
@@ -82,8 +98,26 @@ export const dispatch = async (
 
   // Help is terminal — no seams, no root, no flock.
   if (mapped.kind === "help") return { kind: "help", message: mapped.message };
-  if (mapped.kind === "announce") return { kind: "announce" };
-  if (mapped.kind === "inject") return { kind: "inject" };
+  if (mapped.kind === "announce") {
+    const stdin = await (deps.readStdinFn ?? readStdin)();
+    const fn = deps.announceFn ?? announce;
+    const result = await fn(stdin);
+    if (!result.ok) {
+      const line = `${result.code ?? "hook-error"}: ${result.message ?? ""}\n`;
+      (deps.onStderr ?? ((m: string) => process.stderr.write(m)))(line);
+    }
+    return { kind: "announce" };
+  }
+  if (mapped.kind === "inject") {
+    const stdin = await (deps.readStdinFn ?? readStdin)();
+    const fn = deps.injectFn ?? inject;
+    const result = await fn(stdin);
+    if (!result.ok) {
+      const line = `${result.code ?? "hook-error"}: ${result.message ?? ""}\n`;
+      (deps.onStderr ?? ((m: string) => process.stderr.write(m)))(line);
+    }
+    return { kind: "inject" };
+  }
 
   // One root resolution for the three record-touching commands. Not per-branch.
   const effectiveRoot = deps.rootDir ?? process.env.LUCID_ROOT;
@@ -132,8 +166,8 @@ export const dispatch = async (
  * Production runner: `dispatch` + stdout mapping. Keeps `main.ts` a
  * 10-line adapter. Help and send-confirmation go to `onOutput`
  * (default `console.log`); `watch` gets a renderLines-backed sink if
- * none is injected. Hook commands (`announce`/`inject`) are executed
- * here so `main.ts` never re-derives the hook entry.
+ * none is injected. Hook execution now lives in `dispatch` (02), so
+ * this is a pure sink-mapper with no dynamic hook imports.
  */
 export const runCli = async (
   argv: readonly string[],
@@ -156,17 +190,6 @@ export const runCli = async (
     ...deps,
     onView: deps.onView ?? defaultOnView,
   });
-
-  if (result.kind === "announce") {
-    const { runAnnounce } = await import("./hooks/announce.js");
-    await runAnnounce();
-    return result;
-  }
-  if (result.kind === "inject") {
-    const { runInject } = await import("./hooks/inject.js");
-    await runInject();
-    return result;
-  }
 
   const out = deps.onOutput ?? ((line: string) => console.log(line));
   if (result.kind === "help") out(result.message);
