@@ -6,7 +6,7 @@
       "name": "lucid",
       "dependencies": {
         "@assistant-ui/react": "^0.14.29",
-        "@assistant-ui/react-markdown": "^0.14.9",
+        "@assistant-ui/react-markdown": "^0.14.10",
         "@base-ui/react": "^1.7.0",
         "@effect/cli": "^0.77.0",
         "@effect/platform": "^0.97.1",
@@ -44,7 +44,7 @@
 
     "@assistant-ui/react": ["@assistant-ui/react@0.14.29", "", { "dependencies": { "@assistant-ui/core": "^0.2.23", "@assistant-ui/store": "^0.2.22", "@assistant-ui/tap": "^0.9.6", "@radix-ui/primitive": "^1.1.7", "@radix-ui/react-collection": "^1.1.15", "@radix-ui/react-compose-refs": "^1.1.5", "@radix-ui/react-context": "^1.2.2", "@radix-ui/react-primitive": "^2.1.10", "@radix-ui/react-use-callback-ref": "^1.1.4", "@radix-ui/react-use-controllable-state": "^1.2.6", "@radix-ui/react-use-escape-keydown": "^1.1.5", "assistant-cloud": "^0.1.37", "assistant-stream": "^0.3.28", "nanoid": "^6.0.0", "radix-ui": "^1.6.7", "react-textarea-autosize": "^8.5.9", "safe-content-frame": "^0.0.25", "zod": "^4.4.3", "zustand": "^5.0.14" }, "peerDependencies": { "@types/react": "*", "@types/react-dom": "*", "react": "^18 || ^19", "react-dom": "^18 || ^19" }, "optionalPeers": ["@types/react", "@types/react-dom"] }, "sha512-QJkrFx1uaf5EiC892EDGSfTPsQ/K6HhXlfcLcuG7Ht8LRM2OKKyKRt79ZB4gzs8iMt81DcyifDXq+MScydTmMg=="],
 
-    "@assistant-ui/react-markdown": ["@assistant-ui/react-markdown@0.14.9", "", { "dependencies": { "@radix-ui/react-primitive": "^2.1.10", "@radix-ui/react-use-callback-ref": "^1.1.4", "classnames": "^2.5.1", "react-markdown": "^10.1.0" }, "peerDependencies": { "@assistant-ui/react": "^0.15.0", "@types/react": "*", "react": "^18 || ^19" }, "optionalPeers": ["@types/react"] }, "sha512-JxUfxkZRxuPQvOi795qplzE1RGOQ7rgV0ZP4Yoqy9ZX9wSUrOBCASyTI0rQzOAoTm38lUDJbzd5+v7blidI22A=="],
+    "@assistant-ui/react-markdown": ["@assistant-ui/react-markdown@0.14.10", "", { "dependencies": { "@radix-ui/react-primitive": "^2.1.10", "@radix-ui/react-use-callback-ref": "^1.1.4", "classnames": "^2.5.1", "react-markdown": "^10.1.0" }, "peerDependencies": { "@assistant-ui/react": "^0.15.0", "@types/react": "*", "react": "^18 || ^19" }, "optionalPeers": ["@types/react"] }, "sha512-5VM0ytLDu7NoVZCk4eSmmEC2wPSbsaWOvtCA/rcmmmMUQ0+p0PHfV87lwMpJsWVZ19tu0xk+hpMSOHe4xQSTXw=="],
 
     "@assistant-ui/store": ["@assistant-ui/store@0.2.22", "", { "dependencies": { "use-effect-event": "^2.0.3" }, "peerDependencies": { "@assistant-ui/tap": "^0.9.0", "@types/react": "*", "react": "^18 || ^19" }, "optionalPeers": ["@types/react"] }, "sha512-RdUFLOFJ3ZwIoOZYrRvps3OAODwnWoUAuNfqbROKrj5qtlQsIJRqxUNdLTjcf4AimhkjCwOaFacGHHm9lE4qBw=="],
 
