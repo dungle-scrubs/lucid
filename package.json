@@ -48,7 +48,7 @@
     "prototype:harness": "bun src/prototype-harness/index.ts"
   },
   "dependencies": {
-    "@assistant-ui/react": "^0.14.29",
+    "@assistant-ui/react": "^0.15.14",
     "@assistant-ui/react-markdown": "^0.14.9",
     "@base-ui/react": "^1.7.0",
     "@effect/cli": "^0.77.0",
