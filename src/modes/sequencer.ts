@@ -25,9 +25,8 @@
  * durable log, or the flock. It is the credit ledger, not the runner.
  */
 
-import type { RunnerDeps } from "@dungle-scrubs/harness-cli/src/execution/deps.js";
-import type { HarnessEvent } from "@dungle-scrubs/harness-cli/src/execution/events.js";
-import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
+import type { HarnessEvent } from "../harness/events.js";
+import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import {
   classOfEventKind,
   coalesceDroppable,
@@ -43,10 +42,10 @@ import {
 type SendResult = ReduceResult | { readonly verdict: "refused"; readonly issue: string };
 
 export interface SequencerDeps {
-  readonly harness: HarnessDescriptor;
+  readonly harness: HarnessName;
   readonly conversationId: string;
   readonly secret: string;
-  readonly runner: Pick<RunnerDeps, "spawn" | "clock" | "signal" | "stallMs" | "log">;
+  readonly runner: HarnessRunner;
   /** Lucid mints headless `turnIds` (PLAN 4.3); injected for determinism. */
   readonly mintTurnId: () => string;
   /** The in-process channel to the host — `sendFrame` IS the transport. */

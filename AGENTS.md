@@ -13,7 +13,7 @@ Individual gates:
 ```sh
 bun run lint         # biome check .
 bun run typecheck    # tsc --noEmit
-bun test             # 122 tests across 15 files (~1s, deterministic, fake harness)
+bun test             # 135 tests across 16 files (~1s, deterministic, fake hcn)
 bun scripts/smoke-handoff.ts   # handoff oracle, writes spikes/evidence/handoff-smoke.md
 ```
 
@@ -23,8 +23,8 @@ A patch is green only when `bun run check` is green. Do not skip gates via `-k n
 
 `bun test` is the proof (deterministic, clock-injected, fake harness). Full e2e adds a **live-harness confirmation** against a real model — nondeterministic, not gating CI, evidence-logged.
 
-- Deterministic proof: `test/modes/headless.test.ts`, `test/store/store.test.ts`, `test/protocol/*`, `test/gate-5-6.test.ts` — every smoke in `docs/smoke-seven.md` has a fake-harness oracle.
-- Live confirmation: `scripts/smoke-live.ts` (claude via normalizer's real spawn) and the handoff smoke. These are deferred (DF-SMOKE) — run on demand against an installed harness.
+- Deterministic proof: `test/harness/*`, `test/modes/headless.test.ts`, `test/store/store.test.ts`, `test/protocol/*`, `test/gate-5-6.test.ts` — every smoke in `docs/smoke-seven.md` has a fake-hcn oracle.
+- Live confirmation: `scripts/smoke-live.ts` (claude via a real `hcn session --json`) and the handoff smoke. These are deferred (DF-SMOKE) — run on demand against an installed harness.
 
 **Do not gate a deepening refactor on live models alone.** If deterministic gates are green and live confirmation shows transcript folding, the seam is proven.
 
@@ -70,9 +70,32 @@ Prefer `mini` for live-model handoff smokes that should not disturb `pro`'s `flo
 ## Verification discipline
 
 - Never weaken correct code to make a self-authored test pass — the repo's own tests are the oracle.
-- After any change that touches `src/store`, `src/protocol`, or `src/modes`, run the full suite, not just the file you changed: `bun test` (or `bun test test/modes/headless.test.ts` + `test/store/store.test.ts` + `test/protocol/reducer.test.ts` at minimum).
+- After any change that touches `src/store`, `src/protocol`, `src/modes`, or `src/harness`, run the full suite, not just the file you changed: `bun test` (or `bun test test/modes/headless.test.ts` + `test/store/store.test.ts` + `test/protocol/reducer.test.ts` at minimum).
 - `biome.json` is the lint gate — do not substitute `tsc` or `gofmt` for it.
 
-## Harness-cli
+## Harness access — through `hcn`, never around it
 
-Live-harness facts (argv shapes, resume grammar, stream granularity) live in `../harness-cli-normalizer` — the `descriptor` is the single source; do not re-derive flags or transcript vocabulary in lucid-v2. Import `EventKind` from `protocol/events`, never mirror literals.
+lucid drives a harness by spawning `hcn --json` and reading its NDJSON. It
+does not import the normalizer, and it holds no descriptor.
+
+- **The seam is `src/harness/`.** `HarnessRunner` is the whole interface:
+  `openSession`, `streamTurn`, `inspect`, `capabilities`. Above it nothing
+  knows what a descriptor is or how a harness frames a turn. Adding a mode or
+  a flag means changing that one module.
+- **The dependency is pinned exactly** (`@dungle-scrubs/harness-cli-normalizer`),
+  because `test/fixtures/hcn/*.ndjson` are recordings of one hcn version.
+  Bumping it is a deliberate commit that re-captures them with
+  `bun scripts/capture-hcn-fixtures.ts`. `HCN_MIN_VERSION` in
+  `src/harness/node-deps.ts` is the floor a running binary must meet.
+- **Never hand-write a fixture.** They are evidence. A test that needs a
+  sequence no recording shows composes it inline and says so.
+- **Do not re-derive hcn's behaviour.** Its flags, event kinds, failure
+  classes, and exit codes are documented in its own README and the `hcn`
+  skill. Import `EventKind` from `src/protocol/events.ts`; never mirror kind
+  literals.
+- **An unknown event kind is carried, not dropped.** hcn's kinds are additive
+  by contract, so `decodeHarnessLine` passes through what it does not know.
+  A decoder that threw there would turn a normalizer release into an outage.
+- **Which binary ran is resolved once** — `LUCID_HCN`, then
+  `node_modules/.bin/hcn`, then PATH — and logged. Set `LUCID_HCN` to test
+  against a different build.

@@ -24,6 +24,4 @@ export {
   type Rung,
   type RungProfile,
   selectRung,
-  type TailResult,
-  tailTranscript,
 } from "./interactive-host.js";

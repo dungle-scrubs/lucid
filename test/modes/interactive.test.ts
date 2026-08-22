@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claudeCode } from "@dungle-scrubs/harness-cli/src/knowledge/claude-code.js";
+import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import {
   A003_GATE_OPEN,
   attachCapabilities,
@@ -11,14 +11,11 @@ import {
   INJECTION_CAP,
   parseAnnounce,
   selectRung,
-  tailTranscript,
 } from "../../src/modes/interactive.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
+import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
 import { attach } from "../protocol/helpers.js";
 
-const transcriptPath = fileURLToPath(
-  new URL("../../spikes/evidence/a002-transcript.jsonl", import.meta.url),
-);
 const announcePath = fileURLToPath(
   new URL("../../spikes/evidence/a002-announce.log", import.meta.url),
 );
@@ -69,76 +66,43 @@ describe("interactive adapter ladder - rung 1 logic (M5.3)", () => {
     expect(emoji.join("")).toBe("a\u{1F600}b\u{1F601}c");
   });
 
-  test("capabilities query is runtime-verified for a curated model and degrades to unknown otherwise (D-008)", () => {
-    const known = attachCapabilities(claudeCode, "sonnet", "interactive");
-    expect(known.source).toBe("curated");
-    expect(known.confidence).not.toBe("none");
+  test("capabilities query is answered by hcn, curated for a known model and unknown otherwise (D-008)", async () => {
+    // The capability answer is hcn's, read at runtime - not a descriptor
+    // lucid holds a copy of. That is what makes it runtime-verified.
+    const ask = async (payload: unknown) => {
+      const proc = new FakeHcnProcess();
+      const spawner = fakeSpawner([proc]);
+      const runner = createHcnRunner({ spawn: spawner.spawn, bin: "/fake/hcn" });
+      const pending = attachCapabilities(runner, "claude", "sonnet");
+      proc.emitRaw(JSON.stringify(payload));
+      proc.exit(0);
+      return { result: await pending, argv: spawner.calls[0]?.argv ?? [] };
+    };
 
-    const unknown = attachCapabilities(claudeCode, "some-unreleased-model", "interactive");
-    expect(unknown.source).toBe("unknown");
-    expect(unknown.confidence).toBe("none");
-    expect(unknown.streaming).toBe("none");
-  });
-
-  test("transcript tail decodes via the normalizer, resumes by BYTE offset without dupes, and byte offsets survive non-ASCII", () => {
-    const raw = readFileSync(transcriptPath); // Buffer - bytes, not chars
-
-    // First poll reads the whole transcript; the fixture has exactly two
-    // assistant text messages and several tool calls (all via the
-    // normalizer's decoder, so lucid is not claude-only).
-    const first = tailTranscript(claudeCode, raw, 0);
-    const messages = first.events.filter((e) => e.kind === "message");
-    // Two assistant text messages, decoded exactly (the second is the
-    // model flagging the spike's injected hook feedback as a prompt
-    // injection - proof the tail carries real assistant text verbatim).
-    expect(messages.length).toBe(2);
-    expect(messages[0]).toMatchObject({
-      kind: "message",
-      text: expect.stringContaining("check the directory first"),
+    const known = await ask({
+      vision: true,
+      images: true,
+      streaming: "token",
+      session: true,
+      source: "curated",
+      confidence: "medium",
     });
-    expect(messages[1]).toMatchObject({
-      kind: "message",
-      text: expect.stringContaining("prompt injection"),
+    expect(known.result.source).toBe("curated");
+    expect(known.result.confidence).not.toBe("none");
+    // The mode reaches hcn: an interactive capability is not a headless one.
+    expect(known.argv).toContain("interactive");
+
+    const unknown = await ask({
+      vision: false,
+      images: false,
+      streaming: "none",
+      session: false,
+      source: "unknown",
+      confidence: "none",
     });
-    expect(first.events.some((e) => e.kind === "tool")).toBe(true);
-    // The offset is BYTES (the fixture has em dashes: bytes > code units).
-    expect(first.offset).toBe(raw.length);
-    expect(raw.length).toBeGreaterThan(raw.toString("utf8").length);
-
-    // Restart from the recorded byte offset: nothing new, no re-emission.
-    const resumed = tailTranscript(claudeCode, raw, first.offset);
-    expect(resumed.events).toEqual([]);
-    expect(resumed.offset).toBe(raw.length);
-
-    // Split mid-stream: the union of two partial polls equals one full
-    // poll exactly - ordering and payload preserved across the seam.
-    const midNl = raw.indexOf(0x0a, Math.floor(raw.length / 2)) + 1;
-    const upto = tailTranscript(claudeCode, raw.subarray(0, midNl), 0);
-    const rest = tailTranscript(claudeCode, raw, upto.offset);
-    expect([...upto.events, ...rest.events]).toEqual([...first.events]);
-  });
-
-  test("a transcript line that is valid JSON but not an object (null / primitive) is skipped, never a throw that kills the poll", () => {
-    const line = `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "kept" }] } })}\n`;
-    const raw = Buffer.from(`null\n42\n${line}`, "utf8");
-    const result = tailTranscript(claudeCode, raw, 0);
-    expect(
-      result.events
-        .filter((e) => e.kind === "message")
-        .map((e) => (e.kind === "message" ? e.text : "")),
-    ).toEqual(["kept"]);
-    expect(result.offset).toBe(raw.length);
-  });
-
-  test("a torn trailing transcript line is left unconsumed so the next poll re-reads it whole", () => {
-    const raw = readFileSync(transcriptPath);
-    const lastNl = raw.lastIndexOf(0x0a);
-    const torn = raw.subarray(0, lastNl); // final newline chopped
-    const withoutTail = torn.subarray(0, torn.lastIndexOf(0x0a) + 1);
-
-    const result = tailTranscript(claudeCode, torn, 0);
-    // The offset stops at the last COMPLETE line, in BYTES.
-    expect(result.offset).toBe(withoutTail.length);
+    expect(unknown.result.source).toBe("unknown");
+    expect(unknown.result.confidence).toBe("none");
+    expect(unknown.result.streaming).toBe("none");
   });
 
   test("SessionStart announce parses into lucid's attach intent - identity + transcript path, with zero agent cooperation (A-002)", () => {

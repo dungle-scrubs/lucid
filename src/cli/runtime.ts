@@ -37,8 +37,9 @@
  * flock primitive, and not the harness runner — it hosts them.
  */
 
-import { nodeRunnerDeps } from "@dungle-scrubs/harness-cli/src/execution/node-deps.js";
-import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
+import { createHcnRunner } from "../harness/hcn-runner.js";
+import { nodeHarnessDeps } from "../harness/node-deps.js";
+import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { decideAction } from "../modes/controller.js";
 import { createHeadlessHost } from "../modes/host.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
@@ -53,10 +54,10 @@ export interface RuntimeDeps {
   readonly rootDir?: string;
   readonly conversationId?: string;
   /** Harness to drive headlessly. Defaults to `claudeCode` (or `LUCID_HARNESS` env). */
-  readonly harness?: HarnessDescriptor;
+  readonly harness?: HarnessName;
   /** Bare name override (`claude`|`codex`|`pi`|`muse`) — resolved via `harnessForName`. Takes precedence only when `harness` is not supplied. */
   readonly harnessName?: string;
-  readonly runner?: ReturnType<typeof nodeRunnerDeps>;
+  readonly runner?: HarnessRunner;
   readonly onRecord?: (r: HostRecord) => void;
   readonly onPresenceEvent?: (e: PresenceEvent) => void;
   readonly signal?: AbortSignal;
@@ -121,7 +122,7 @@ export const isAwaitToken = (r: StartResult): r is AwaitToken => r.kind === "awa
  * interactive-unattached channel (live human process, dead lease) returns
  * an AwaitToken without acquiring presence or spawning a harness.
  */
-export const startHeadless = (opts: RuntimeDeps = {}): StartResult => {
+export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult> => {
   const convsFactory = opts.conversationsFactory ?? conversations;
   const acquirePresenceFn = opts.acquirePresenceFn ?? acquirePresence;
   const openConversationFn = opts.openConversationFn ?? openConversation;
@@ -204,12 +205,16 @@ export const startHeadless = (opts: RuntimeDeps = {}): StartResult => {
   // Single headless entry — the Host's strategy table owns the mode
   // split (session vs turn). The runtime only selects the profile via
   // supportsSession, then delegates the whole lifecycle to the Host.
-  const profile = supportsSession(harness) ? "headless-session" : "headless-turn";
+  // Runtime-verified, not guessed: hcn reads the descriptor and answers
+  // whether this harness holds a persistent session (PLAN D-008). One
+  // inspect per run, before the profile is chosen.
+  const runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
+  const profile = (await supportsSession(runner, harness)) ? "headless-session" : "headless-turn";
   const baseDeps = {
     harness,
     conversationId,
     secret,
-    runner: opts.runner ?? nodeRunnerDeps(),
+    runner,
     mintTurnId: () => `turn-${++turnCount}`,
     sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
   } as const;
@@ -292,7 +297,7 @@ export const startHeadless = (opts: RuntimeDeps = {}): StartResult => {
 export const runHeadless = async (
   opts: RuntimeDeps = {},
 ): Promise<{ conversationId: string; dir: string; awaitToken?: AwaitToken }> => {
-  const handle = startHeadless(opts);
+  const handle = await startHeadless(opts);
   if (isAwaitToken(handle)) {
     return { conversationId: handle.conversationId, dir: handle.dir, awaitToken: handle };
   }

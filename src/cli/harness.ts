@@ -1,39 +1,32 @@
 /**
- * Harness resolution — the single seam that owns `name → HarnessDescriptor`.
+ * Harness resolution — the single seam that owns `name -> HarnessName`, and
+ * the one question lucid asks about a harness before choosing a profile.
  *
- * Before, `src/cli/runtime.ts` hardcoded `claudeCode` and the matrix
- * (`harness × mode`) could only be tested via fake injection — production
- * could not switch harness without a code change (one adapter = hypothetical).
- * Now the runtime takes a `HarnessDescriptor` and this module is the one
- * place that interprets a CLI flag, an env var, or a bare name into that
- * descriptor. The CLI mapping parses the flag, the runtime consumes the
- * descriptor, and the headless modes receive it.
+ * lucid used to import the normalizer's four descriptors and read
+ * `sessionMode` off them. Those are internals of a package whose only
+ * supported surface is its CLI, so lucid now validates a name and asks `hcn`
+ * the capability question at runtime.
  *
  * What it is NOT: it does not know the flock, the store, or the presence.
  */
+import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 
-import { claudeCode } from "@dungle-scrubs/harness-cli/src/knowledge/claude-code.js";
-import { codexCli } from "@dungle-scrubs/harness-cli/src/knowledge/codex.js";
-import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
-import { museCode } from "@dungle-scrubs/harness-cli/src/knowledge/muse.js";
-import { piCli } from "@dungle-scrubs/harness-cli/src/knowledge/pi.js";
-
-const BY_NAME: Record<string, HarnessDescriptor> = {
-  claude: claudeCode,
-  "claude-code": claudeCode,
-  codex: codexCli,
-  "codex-cli": codexCli,
-  pi: piCli,
-  "pi-coding-agent": piCli,
-  muse: museCode,
-  opencode: museCode,
-  "opencode-ai": museCode,
+const BY_NAME: Record<string, HarnessName> = {
+  claude: "claude",
+  "claude-code": "claude",
+  codex: "codex",
+  "codex-cli": "codex",
+  pi: "pi",
+  "pi-coding-agent": "pi",
+  muse: "muse",
+  opencode: "muse",
+  "opencode-ai": "muse",
 };
 
-/** Resolve a harness name (CLI flag, env, or bare name) to its descriptor. */
-export const harnessForName = (name?: string): HarnessDescriptor => {
+/** Resolve a harness name (CLI flag, env, or bare name) to hcn's name. */
+export const harnessForName = (name?: string): HarnessName => {
   const raw = name ?? process.env.LUCID_HARNESS;
-  if (!raw || raw.trim() === "") return claudeCode;
+  if (!raw || raw.trim() === "") return "claude";
   const key = raw.trim().toLowerCase();
   const found = BY_NAME[key];
   if (!found)
@@ -43,6 +36,10 @@ export const harnessForName = (name?: string): HarnessDescriptor => {
 
 export const harnessNames = (): readonly string[] => Object.keys(BY_NAME);
 
-/** Whether this harness supports a persistent headless session (mode 2). */
-export const supportsSession = (harness: HarnessDescriptor): boolean =>
-  harness.sessionMode !== null && harness.capabilities.session === true;
+/** Whether this harness supports a persistent headless session (mode 2).
+ * Answered by hcn from the descriptor, so a harness that grows a session
+ * mode is usable the day its descriptor declares one - no lucid release. */
+export const supportsSession = async (
+  runner: HarnessRunner,
+  harness: HarnessName,
+): Promise<boolean> => (await runner.inspect(harness)).session;

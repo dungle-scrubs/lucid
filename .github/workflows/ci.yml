@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+
+      # The lockfile is the contract: an install that silently resolves a
+      # different hcn would invalidate every fixture in test/fixtures/hcn,
+      # which are recordings of one pinned version.
+      - run: bun install --frozen-lockfile
+
+      # Mirrors `bun run check` explicitly so each failed gate is named in
+      # Actions rather than hidden behind one composite step.
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun test
+
+      # The deterministic suite drives a fake hcn, so CI never spawns a
+      # harness and never needs credentials. The live lanes
+      # (scripts/smoke-live.ts, scripts/smoke-handoff.ts) are deferred by
+      # design - they need an installed claude and are nondeterministic. They
+      # are run on demand and their evidence is committed under
+      # spikes/evidence/.
+      - name: Confirm lucid imports no normalizer internals
+        run: |
+          if grep -rn 'harness-cli/src\|harness-cli/test' src test scripts; then
+            echo "lucid must reach a harness through the hcn binary only (RFC-02)" >&2
+            exit 1
+          fi

@@ -59,7 +59,8 @@ load-bearing, which is the exact inversion failure v2 exists to avoid.
 
 ## Part 0 - `harness-cli-normalizer` (the dependency)
 
-`~/dev/harness-cli-normalizer`, published as `@dungle-scrubs/harness-cli`. A
+`~/dev/harness-cli-normalizer`, published as
+`@dungle-scrubs/harness-cli-normalizer`. A
 standalone TypeScript library that gives any application direct, programmatic,
 headless access to a set of supported harness CLIs.
 
@@ -542,7 +543,10 @@ Ratified with the recommended option:
 8. **Capability authority: the adapter queries the active harness/registry
    at attach (runtime-verified); curated is the fallback.**
 9. **Human-facing test surface: minimal TUI.**
-10. **Package name: `@dungle-scrubs/harness-cli`.**
+10. **Package name: `@dungle-scrubs/harness-cli-normalizer`** (published;
+    the working name in this plan was `@dungle-scrubs/harness-cli`). lucid
+    depends on its `hcn` binary, not on the package as a library - see
+    `docs/rfc/02_consume-the-normalizer-through-hcn.rfc.md`.
 
 ---
 

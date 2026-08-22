@@ -20,6 +20,6 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@dungle-scrubs/harness-cli": "file:../harness-cli-normalizer"
+    "@dungle-scrubs/harness-cli-normalizer": "0.5.4"
   }
 }

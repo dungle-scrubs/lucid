@@ -28,11 +28,8 @@
  * via sendFrame, hosted by the store.
  */
 
-import type { RunnerDeps } from "@dungle-scrubs/harness-cli/src/execution/deps.js";
-import type { HarnessEvent } from "@dungle-scrubs/harness-cli/src/execution/events.js";
-import { openSession } from "@dungle-scrubs/harness-cli/src/execution/open-session.js";
-import { streamTurn } from "@dungle-scrubs/harness-cli/src/execution/stream-turn.js";
-import type { HarnessDescriptor } from "@dungle-scrubs/harness-cli/src/knowledge/descriptor.js";
+import type { HarnessEvent } from "../harness/events.js";
+import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import type { Frame, ReduceResult } from "../protocol/index.js";
 import { createSequencer } from "./sequencer.js";
 
@@ -40,10 +37,10 @@ import { createSequencer } from "./sequencer.js";
 type SendResult = ReduceResult | { readonly verdict: "refused"; readonly issue: string };
 
 export interface HeadlessDeps {
-  readonly harness: HarnessDescriptor;
+  readonly harness: HarnessName;
   readonly conversationId: string;
   readonly secret: string;
-  readonly runner: Pick<RunnerDeps, "spawn" | "clock" | "signal" | "stallMs" | "log">;
+  readonly runner: HarnessRunner;
   /** Lucid mints headless turnIds (PLAN 4.3); injected for determinism. */
   readonly mintTurnId: () => string;
   /** The in-process channel to the host. */
@@ -88,28 +85,51 @@ const sessionStrategy = (
   deps: HeadlessDeps & { readonly sessionId: string },
   ctx: HostContext,
 ): StrategyHandle => {
-  const session = openSession(deps.harness, { sessionId: deps.sessionId }, deps.runner);
+  // Opening crosses a process boundary now, so it is a promise. The host's
+  // surface stays synchronous: everything that needs the session awaits this
+  // one handle rather than the caller learning about the wait.
+  const opening = deps.runner.openSession({
+    harness: deps.harness,
+    sessionId: deps.sessionId,
+  });
+  // A failure to open must not become an unhandled rejection; the pump
+  // surfaces it by ending the turn stream.
+  opening.catch(() => {});
 
   return {
     onInput(id: string, text: string): void {
-      let sent: { disposition: "started" | "queued" };
-      try {
-        sent = session.send(text);
-      } catch {
-        ctx.sequencer.disposition(id, "rejected", "session closed");
-        return;
-      }
-      if (sent.disposition === "started") {
-        ctx.expected.push({ inputId: id, applied: true });
-        ctx.sequencer.disposition(id, "applied");
-      } else {
-        ctx.expected.push({ inputId: id, applied: false });
-        ctx.sequencer.disposition(id, "queued");
-      }
+      // hcn answers a send with exactly one disposition, and it answers
+      // before it opens the turn. So the reply is awaited and recorded when
+      // it lands: one disposition per input, the same as before, just no
+      // longer decided locally.
+      void opening
+        .then((session) => session.send(id, text))
+        .then((sent) => {
+          if (sent.disposition === "rejected") {
+            ctx.sequencer.disposition(id, "rejected", sent.reason ?? "send rejected");
+            return;
+          }
+          const started = sent.disposition === "started";
+          ctx.expected.push({ inputId: id, applied: started });
+          ctx.sequencer.disposition(id, started ? "applied" : "queued");
+        })
+        .catch(() => {
+          ctx.sequencer.disposition(id, "rejected", "session closed");
+        });
     },
-    turns: session.turns,
+    turns: {
+      async *[Symbol.asyncIterator]() {
+        let session: Awaited<typeof opening>;
+        try {
+          session = await opening;
+        } catch {
+          return; // the session never opened; the pump detaches
+        }
+        for await (const turn of session.turns) yield turn;
+      },
+    },
     close(): void {
-      void session.close();
+      void opening.then((session) => session.close()).catch(() => {});
     },
   };
 };
@@ -162,11 +182,12 @@ const turnStrategy = (
             // shift it. We therefore do NOT disposition here — Host will.
             // Instead we just create the turn iterable and capture
             // resumeId on identity events via a wrapper.
-            const raw = streamTurn(
-              deps.harness,
-              { prompt: next.text, ...(resumeId === undefined ? {} : { resume: resumeId }) },
-              { ...deps.runner, turnId },
-            );
+            const raw = deps.runner.streamTurn({
+              harness: deps.harness,
+              prompt: next.text,
+              turnId,
+              ...(resumeId === undefined ? {} : { resume: resumeId }),
+            });
             // Capture that this queued input's turn has started: if Host
             // hasn't yet disposed it, we need the waiter to be signaled.
             // Host's pump will shift expected; we already queued as
@@ -253,13 +274,29 @@ export const createHeadlessHost = (
       ? sessionStrategy(deps as HeadlessDeps & { sessionId: string }, ctx)
       : turnStrategy(deps as HeadlessDeps & { resume?: string }, ctx);
 
-  // Pump — single place that shifts expected at each turn boundary,
-  // emits events under the current turnId, and detaches once.
+  // Pump — one place that flips a queued input to applied when its turn
+  // starts, emits events under the current turnId, and detaches once.
+  //
+  // The match is by the id the turn carries, not by position. A positional
+  // shift assumed the disposition was recorded before the turn arrived, and
+  // once the disposition became hcn's answer over a pipe that ordering was
+  // no longer lucid's to guarantee: a lost race would have mis-attributed
+  // every later disposition by one. The runner tags each turn with the send
+  // that opened it precisely so this does not have to be inferred.
   const pump = (async () => {
     for await (const turn of strategy.turns) {
-      const exp = expected.shift();
-      if (exp !== undefined && !exp.applied) {
-        sequencer.disposition(exp.inputId, "applied", "queued turn started");
+      const inputId = (turn as { inputId?: string }).inputId;
+      const at =
+        inputId === undefined
+          ? expected.length > 0
+            ? 0
+            : -1
+          : expected.findIndex((e) => e.inputId === inputId);
+      if (at !== -1) {
+        const exp = expected.splice(at, 1)[0];
+        if (exp !== undefined && !exp.applied) {
+          sequencer.disposition(exp.inputId, "applied", "queued turn started");
+        }
       }
       for await (const event of turn) {
         sequencer.emit(currentTurnId, event);
