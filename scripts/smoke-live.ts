@@ -15,9 +15,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../src/harness/hcn-runner.js";
 import { nodeHarnessDeps } from "../src/harness/node-deps.js";
-import { openHeadlessSession } from "../src/modes/headless.js";
+import { openHeadlessSession, openHeadlessTurns } from "../src/modes/headless.js";
 import type { Frame } from "../src/protocol/index.js";
 import { createConversationRecord, type HostRecord, openConversation } from "../src/store/store.js";
+
+/** Which harness to drive. The seam made this a name, so the smoke takes it
+ * as one: `bun scripts/smoke-live.ts --harness pi`. */
+const HARNESS = ((): "claude" | "codex" | "pi" | "muse" => {
+  const i = process.argv.indexOf("--harness");
+  const v = i === -1 ? "claude" : (process.argv[i + 1] ?? "claude");
+  if (v !== "claude" && v !== "codex" && v !== "pi" && v !== "muse") {
+    throw new Error(`unknown harness ${v}`);
+  }
+  return v;
+})();
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** The runner's boundary log, read back for the evidence header so the file
@@ -47,6 +58,10 @@ const waitForTurns = async (
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (doneCount(host.transcript().events) >= n) return true;
+    // A source that died has nothing left to wait for. Polling the full
+    // budget after a refusal turns a two-second answer into a 90-second one,
+    // which is how a codex run (no session mode) used to read.
+    if (host.state().attachment === null) return false;
     await sleep(200);
   }
   return false;
@@ -57,7 +72,7 @@ const main = async (): Promise<void> => {
   const conversationId = "smoke-1";
   const sessionId = crypto.randomUUID();
   const { secret } = createConversationRecord(root, conversationId);
-  log(`# DF-SMOKE live conversation - claude, sessionId ${sessionId}`);
+  log(`# DF-SMOKE live conversation - ${HARNESS}, sessionId ${sessionId}`);
   log(`record: ${join(root, conversationId)}`);
 
   const records: HostRecord[] = [];
@@ -72,15 +87,22 @@ const main = async (): Promise<void> => {
   });
 
   let turnCount = 0;
-  const source = openHeadlessSession({
-    harness: "claude" as const,
+  const runner = createHcnRunner(nodeHarnessDeps((e) => hcnLog.push(e)));
+  // The profile is the harness's answer, not a constant: claude and pi hold a
+  // session, codex and muse do not and get one process per turn. Asking hcn
+  // is the same runtime-verified check `lucid run` makes.
+  const hasSession = (await runner.inspect(HARNESS)).session;
+  const common = {
+    harness: HARNESS,
     conversationId,
     secret,
-    sessionId,
-    runner: createHcnRunner(nodeHarnessDeps((e) => hcnLog.push(e))),
+    runner,
     mintTurnId: () => `turn-${++turnCount}`,
-    sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
-  });
+    sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
+  };
+  const source = hasSession
+    ? openHeadlessSession({ ...common, sessionId })
+    : openHeadlessTurns(common);
   receive = source.receive;
   log(`attached: epoch ${host.state().epoch}, profile ${host.state().attachment?.profile}`);
 
@@ -104,7 +126,7 @@ const main = async (): Promise<void> => {
   }
 
   // Turn 2: continuity - the session must remember the codeword.
-  log("\n## turn 2: session continuity");
+  log(hasSession ? "\n## turn 2: session continuity" : "\n## turn 2: second turn (new process)");
   host.enqueueInput({
     id: "in-2",
     text: "Reply with only the codeword I gave you.",
@@ -115,7 +137,12 @@ const main = async (): Promise<void> => {
   const answer = textOf(t.events.filter((e) => e.turnId === "turn-2"));
   const remembered = answer.toLowerCase().includes("pomegranate");
   log(`turn 2 done=${twoDone}; answer="${answer.slice(0, 80)}"; remembered=${remembered}`);
-  if (!twoDone || !remembered) ok = false;
+  if (!twoDone) ok = false;
+  // Only a session claims in-process memory. Turn mode gets a new process per
+  // turn, so continuity there would be a resume - a different lane, not this
+  // one. Asserting it here would be asserting something the mode never
+  // promised.
+  if (hasSession && !remembered) ok = false;
 
   // Transcript shape: one identity, ordered strictly-increasing seqs.
   const identities = t.events.filter((e) => e.event.kind === "identity").length;
@@ -124,7 +151,11 @@ const main = async (): Promise<void> => {
   log(
     `\n## transcript: ${t.events.length} events, identities=${identities}, ordered=${ordered}, epochs=${[...new Set(t.events.map((e) => e.epoch))].join(",")}`,
   );
-  if (identities !== 1 || !ordered) ok = false;
+  // One identity per PROCESS. A session is one process for the whole
+  // conversation, so exactly one; turn mode spawns per turn, so one each.
+  // Requiring 1 of both modes would fail turn mode for behaving correctly.
+  const expectedIdentities = hasSession ? 1 : 2;
+  if (identities !== expectedIdentities || !ordered) ok = false;
 
   // Kill + resume: close (which appends a detach, advancing the log),
   // then reopen and assert the fold equals the live transcript AT THE SAME
@@ -154,9 +185,9 @@ const main = async (): Promise<void> => {
   // The file is rewritten whole on every run, so anything a reader needs has
   // to be generated here. Prose appended by hand does not survive.
   writeFileSync(
-    "spikes/evidence/df-smoke.md",
+    `spikes/evidence/df-smoke${HARNESS === "claude" ? "" : `-${HARNESS}`}.md`,
     [
-      `# DF-SMOKE - live conversation against claude ${sessionId}`,
+      `# DF-SMOKE - live conversation against ${HARNESS} ${sessionId}`,
       "",
       "Generated by `bun scripts/smoke-live.ts`. Rewritten in full on every",
       "run - do not hand-edit, the next run will discard it.",

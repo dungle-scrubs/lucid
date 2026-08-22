@@ -92,8 +92,12 @@ const sessionStrategy = (
     harness: deps.harness,
     sessionId: deps.sessionId,
   });
-  // A failure to open must not become an unhandled rejection; the pump
-  // surfaces it by ending the turn stream.
+  // A failure to open must not become an unhandled rejection. It must also
+  // not be silent: a session hcn refuses (a harness with no session mode, an
+  // unknown model, a provider it cannot express) ends the source exactly like
+  // a clean shutdown, so without a record the durable log cannot tell a
+  // refusal from a crash. Found by running the seam against codex, which has
+  // no session mode: lucid detached correctly and said nothing.
   opening.catch(() => {});
 
   return {
@@ -122,8 +126,15 @@ const sessionStrategy = (
         let session: Awaited<typeof opening>;
         try {
           session = await opening;
-        } catch {
-          return; // the session never opened; the pump detaches
+        } catch (cause) {
+          // Record why before the pump detaches. This is the only place that
+          // knows, and the log is the only thing the operator will have.
+          ctx.sequencer.emit(ctx.getTurnId(), {
+            kind: "error",
+            message: `session did not open: ${cause instanceof Error ? cause.message : String(cause)}`,
+            terminal: true,
+          });
+          return;
         }
         for await (const turn of session.turns) yield turn;
       },

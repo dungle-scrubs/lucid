@@ -404,3 +404,59 @@ describe("headless modes (M5.2)", () => {
     expect(r.records.filter((rec) => "inputId" in rec && rec.inputId === "in-3").length).toBe(1); // the enqueue record only - no disposition ever followed
   });
 });
+
+describe("a session hcn refuses is recorded, not silent", () => {
+  test("the refusal reason lands in the durable log and the channel is released", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
+    const { secret } = createConversationRecord(root, "conv-1");
+    const proc = new FakeHcnProcess();
+    const spawner = fakeSpawner([proc]);
+    let receive: (frame: Frame) => void = () => {};
+    const host = openConversation(join(root, "conv-1"), {
+      now: () => 0,
+      presence: () => undefined,
+      onRecord: () => {},
+      onEffect: (e) => {
+        if (e.type === "send") receive(e.frame);
+      },
+    });
+    const source = openHeadlessSession({
+      harness: "codex",
+      conversationId: "conv-1",
+      secret,
+      runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      mintTurnId: () => "turn-1",
+      sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
+      sessionId: sid,
+    });
+    receive = source.receive;
+
+    // hcn refuses before spawning: failure, then closed, then exit 2. This is
+    // what a harness with no session mode actually produces.
+    proc.emit({
+      kind: "failure",
+      class: "rejected",
+      retryable: false,
+      issue: "no-session-mode",
+      message: "codex declares no persistent headless session mode",
+    });
+    proc.emit({ kind: "closed", exitCode: null, cause: "failed" });
+    proc.exit(2);
+    await flush();
+    await flush();
+    await flush();
+
+    // A refusal ends the source exactly like a clean shutdown, so without
+    // this record the log cannot tell one from the other.
+    const errors = readFileSync(join(root, "conv-1", "log.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { frame?: { event?: { kind?: string; message?: string } } })
+      .filter((e) => e.frame?.event?.kind === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.frame?.event?.message).toContain("session did not open");
+    expect(errors[0]?.frame?.event?.message).toContain("no persistent headless session mode");
+    // And the channel was released rather than held by a source that is gone.
+    expect(host.state().attachment).toBeNull();
+  });
+});
