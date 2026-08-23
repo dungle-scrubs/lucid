@@ -5,7 +5,7 @@
     "": {
       "name": "lucid-v2",
       "dependencies": {
-        "@dungle-scrubs/harness-cli-normalizer": "0.5.4",
+        "@dungle-scrubs/harness-cli-normalizer": "0.5.6",
       },
       "devDependencies": {
         "@biomejs/biome": "^2.5.7",
@@ -34,7 +34,7 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.7", "", { "os": "win32", "cpu": "x64" }, "sha512-V+0wu/nrj2S+MhP4EQ0uHNolP0IALEsz45pg0WoKkHfDeh0+ItHwP/p7bX5RPoMOl9NkpHYWdYPhIcy2mACHvQ=="],
 
-    "@dungle-scrubs/harness-cli-normalizer": ["@dungle-scrubs/harness-cli-normalizer@0.5.4", "", { "bin": { "hcn": "dist/cli.js" } }, "sha512-3TqIMU3fxgAJ9evJXiSzniSo9t1DSwOpTDgKZNAf4VR8m1pun8sot/Fetxh557xxsZcGJjzUF5H9wV6rVZLYxA=="],
+    "@dungle-scrubs/harness-cli-normalizer": ["@dungle-scrubs/harness-cli-normalizer@0.5.6", "", { "bin": { "hcn": "dist/cli.js" } }, "sha512-8DnBlopj25tH1kinvqfnQXzZe+1cXdeBNIhILKanLN2PpZmLsb30CLJdrO3fDbPGOjtWaacXJ3G4QgTBLIUUZQ=="],
 
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 

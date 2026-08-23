@@ -8,4 +8,4 @@
 {"kind":"progress","label":"hook_response"}
 {"kind":"failure","class":"native","retryable":false,"message":"NATIVE ERROR from harness: Error: Input must be provided either through stdin or as a prompt argument when using --print - the harness rejected or failed on its own arguments; this is not an hcn error","nativeExitCode":1}
 {"kind":"error","message":"Error: Input must be provided either through stdin or as a prompt argument when using --print"}
-{"kind":"done","exitCode":null,"cause":"crash","failure":{"class":"native","retryable":false,"message":"NATIVE ERROR from harness: Error: Input must be provided either through stdin or as a prompt argument when using --print - the harness rejected or failed on its own arguments; this is not an hcn error","nativeExitCode":1}}
+{"kind":"done","exitCode":null,"cause":"crash","failure":{"class":"native","retryable":false,"message":"NATIVE ERROR from harness: Error: Input must be provided either through stdin or as a prompt argument when using --print - the harness rejected or failed on its own arguments; this is not an hcn error","nativeExitCode":1},"escalation":{"mode":"ask","detection":"none"}}

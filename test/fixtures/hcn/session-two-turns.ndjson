@@ -1,16 +1,15 @@
-{"kind":"session","sessionId":"479c05c6-0c2b-416a-9700-2b04cf8ecf24","harness":"claude","hcn":"0.5.4","escalateQuestions":true}
+{"kind":"session","sessionId":"9afc79ad-43bf-4fc5-9e9e-64a9053ea9cc","harness":"claude","hcn":"0.5.6","questions":"ask","origin":"fresh"}
 {"kind":"disposition","id":"in-1","disposition":"started"}
-{"kind":"turn","turnId":"479c05c6-0c2b-416a-9700-2b04cf8ecf24:turn-1","id":"in-1"}
-{"kind":"identity","sessionId":"479c05c6-0c2b-416a-9700-2b04cf8ecf24","authority":"caller-assigned","capabilities":{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium"}}
+{"kind":"turn","turnId":"9afc79ad-43bf-4fc5-9e9e-64a9053ea9cc:turn-1","id":"in-1"}
+{"kind":"identity","sessionId":"9afc79ad-43bf-4fc5-9e9e-64a9053ea9cc","authority":"caller-assigned","capabilities":{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"claude","model":"","version":"2.1.235","date":"2026-08-19"}}}}
 {"kind":"progress","label":"status"}
-{"kind":"failure","class":"rate-limit","retryable":true,"message":"Rate limit hit (rate_limit_event status=allowed_warning) - retry after backoff or route to another provider","code":"rate-limit","resetsAt":1787425200000}
 {"kind":"token","text":"one"}
 {"kind":"message","role":"assistant","text":"one"}
-{"kind":"done","exitCode":null,"cause":"failed","failure":{"class":"rate-limit","retryable":true,"message":"Rate limit hit (rate_limit_event status=allowed_warning) - retry after backoff or route to another provider","code":"rate-limit","resetsAt":1787425200000}}
+{"kind":"done","exitCode":null,"cause":"clean","escalation":{"mode":"ask","detection":"none"}}
 {"kind":"disposition","id":"in-2","disposition":"started"}
-{"kind":"turn","turnId":"479c05c6-0c2b-416a-9700-2b04cf8ecf24:turn-2","id":"in-2"}
+{"kind":"turn","turnId":"9afc79ad-43bf-4fc5-9e9e-64a9053ea9cc:turn-2","id":"in-2"}
 {"kind":"progress","label":"status"}
 {"kind":"token","text":"two"}
 {"kind":"message","role":"assistant","text":"two"}
-{"kind":"done","exitCode":null,"cause":"clean"}
+{"kind":"done","exitCode":null,"cause":"clean","escalation":{"mode":"ask","detection":"none"}}
 {"kind":"closed","exitCode":0,"cause":"clean"}

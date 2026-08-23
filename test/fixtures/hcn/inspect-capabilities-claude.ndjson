@@ -1,1 +1,1 @@
-{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium"}
+{"vision":true,"images":true,"streaming":"token","session":true,"source":"curated","confidence":"medium","escalation":{"supported":true,"source":"runtime-verified","confidence":"high","observedOn":{"harness":"claude","model":"","version":"2.1.235","date":"2026-08-19"}}}
