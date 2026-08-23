@@ -79,6 +79,13 @@ const eventText = (event: Record<string, unknown>): string => {
   return `[${kind}]`;
 };
 
+/** Bookkeeping the human transcript does not show. `done` marks the end of a
+ * turn and `identity` names the session the harness minted - both belong in
+ * the durable log, and neither is anything a person said or was told. Left
+ * unfiltered, `identity` fell through to the `[kind]` fallback and printed a
+ * bare `[identity]` line between the question and the answer. */
+const UNRENDERED: ReadonlySet<string> = new Set([EventKind.done, EventKind.identity]);
+
 export const buildView = (input: {
   readonly transcript: Transcript;
   readonly status: ChannelStatus;
@@ -104,7 +111,7 @@ export const buildView = (input: {
     .filter(
       (e) => !((e.event.kind as string) === EventKind.token && turnsWithMessage.has(e.turnId)),
     )
-    .filter((e) => (e.event.kind as string) !== EventKind.done) // done is a marker, not a rendered line
+    .filter((e) => !UNRENDERED.has(e.event.kind as string))
     .map((e) => ({
       kind: "agent",
       seq: e.seq,

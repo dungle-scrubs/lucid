@@ -27,7 +27,15 @@ const doneClean = { kind: "done", exitCode: null, cause: "clean" };
 /** Full in-process rig: real store host + the real hcn adapter over a fake
  * hcn process, wired frame-for-frame with no transport. The late-bound
  * `receive` closes the host->source loop exactly once, for both modes. */
-const rig = (opts: { mode?: "session" | "turn"; processes?: number } = {}) => {
+const rig = (
+  opts: {
+    mode?: "session" | "turn";
+    processes?: number;
+    /** An input already in the record before any source attaches - the
+     * `lucid send` while nothing was running, folded by the next `run`. */
+    pendingInput?: { id: string; text: string };
+  } = {},
+) => {
   const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
   const { secret } = createConversationRecord(root, "conv-1");
   const nowMs = 0;
@@ -45,6 +53,10 @@ const rig = (opts: { mode?: "session" | "turn"; processes?: number } = {}) => {
       if (e.type === "send") receive(e.frame);
     },
   });
+
+  // Enqueued BEFORE the source exists, so it is outstanding at attach and
+  // comes back through the attach replay rather than the live effect sink.
+  if (opts.pendingInput !== undefined) host.enqueueInput({ ...opts.pendingInput, mode: "queue" });
 
   let turnCount = 0;
   const mode = opts.mode ?? "session";
@@ -166,6 +178,33 @@ describe("headless modes (M5.2)", () => {
     const reopened = r.reopen();
     expect(reopened.state().seq).toBe(r.host.state().seq);
     expect(reopened.state().turn?.turnId).toBe("turn-1");
+  });
+
+  test("an input the record was already holding is delivered on attach, not stranded", async () => {
+    // `lucid send` with nothing running, then `lucid run`. The input is
+    // outstanding when the source attaches, so it arrives on the attach
+    // replay rather than through the live effect sink. Nothing read that
+    // replay before: the run attached, held the input, and sat there - no
+    // turn, no reply, nothing in the log after the attach line.
+    const r = rig({ pendingInput: { id: "in-1", text: "held while nothing ran" } });
+    await flush();
+
+    const sends = r.proc.commands.filter((c) => c.op === "send" || c.id === "in-1");
+    expect(sends.length).toBe(1);
+    expect(sends[0]).toMatchObject({ id: "in-1", text: "held while nothing ran" });
+
+    // And it runs a real turn, so the reply lands in the durable record.
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(identity);
+    r.proc.emit(assistant("answered"));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    const kinds = r.logEntries().map((e) => e.frame?.event?.kind);
+    expect(kinds).toContain("message");
+    expect(kinds).toContain("done");
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-1": true });
   });
 
   test("session mode reports what HAPPENED: a steer mid-turn is a send like any other", async () => {
