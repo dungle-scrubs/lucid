@@ -233,10 +233,20 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
           const waiter = pendingSends.get(e.id);
           if (waiter !== undefined) {
             pendingSends.delete(e.id);
-            waiter({
-              disposition: e.disposition as Disposition,
-              ...(e.reason === undefined ? {} : { reason: e.reason }),
-            });
+            // Narrowed, not cast. hcn answers `started` or `rejected`; a
+            // cast would let a third value through as one of those and
+            // silently mark a turn started that never was. Anything else
+            // is refused with the value in the reason, so an hcn that
+            // grows a disposition says so in the log.
+            const known = e.disposition === "started" || e.disposition === "rejected";
+            waiter(
+              known
+                ? {
+                    disposition: e.disposition as Disposition,
+                    ...(e.reason === undefined ? {} : { reason: e.reason }),
+                  }
+                : { disposition: "rejected", reason: `unknown disposition: ${e.disposition}` },
+            );
           }
           continue;
         }

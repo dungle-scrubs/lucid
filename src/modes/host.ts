@@ -126,9 +126,12 @@ const sessionStrategy = (
             ctx.sequencer.disposition(id, "rejected", sent.reason ?? "send rejected");
             return;
           }
-          const started = sent.disposition === "started";
-          ctx.expected.push({ inputId: id, applied: started });
-          ctx.sequencer.disposition(id, started ? "applied" : "queued");
+          // Only `started` is left: `rejected` returned above, and hcn has
+          // no third answer since ADR 0007 removed its queue. So a send that
+          // was not refused opened a turn, and applied is the only truth to
+          // record.
+          ctx.expected.push({ inputId: id, applied: true });
+          ctx.sequencer.disposition(id, "applied");
         })
         .catch(() => {
           ctx.sequencer.disposition(id, "rejected", "session closed");

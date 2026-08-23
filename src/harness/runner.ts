@@ -44,7 +44,18 @@ export interface HarnessFacts {
   readonly verifiedAgainst: string;
 }
 
-export type Disposition = "started" | "queued" | "rejected";
+/**
+ * What hcn answers a send with. Two outcomes, not three: hcn supervises one
+ * process and answers before it opens the turn, so a send either started a
+ * turn or was refused. It used to carry a third, `queued`, from when hcn held
+ * a queue of its own; ADR 0007 removed the queue, and this followed it rather
+ * than keeping a value nothing can produce.
+ *
+ * lucid's own protocol disposition is a different type and still has three
+ * states - see `Disposition` in `src/protocol/frames.ts`. That one describes
+ * what lucid did with an input, which includes queueing it itself.
+ */
+export type Disposition = "started" | "rejected";
 
 export interface SendResult {
   readonly disposition: Disposition;
