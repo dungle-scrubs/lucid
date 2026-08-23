@@ -1068,3 +1068,120 @@ describe("reducer core (M4.2)", () => {
     });
   });
 });
+
+describe("RFC-03: the record remembers which harness held the session", () => {
+  const identity = (sessionId: string) => ({ kind: "identity", sessionId });
+  /** Attach, announce an identity, detach - one harness's turn at the record. */
+  // `at` advances past the previous lease: a takeover is the only way a
+  // second harness gets the record, which is exactly the sequence under test.
+  const heldBy = (
+    start: ReturnType<typeof fresh>,
+    harness: "claude" | "codex" | "pi" | "muse",
+    sessionId: string,
+    at: number,
+    n = 1,
+  ) => {
+    const a = reduce(start, attach({ profile: "headless-session", harness }), at);
+    if (a.verdict !== "accepted") throw new Error(`attach refused: ${a.issue}`);
+    const s = a.state;
+    const e = reduce(
+      s,
+      {
+        kind: "event",
+        epoch: s.epoch,
+        n,
+        turnId: `t-${harness}-${at}-${n}`,
+        event: identity(sessionId),
+      },
+      at,
+    );
+    if (e.verdict !== "accepted") throw new Error(`event refused: ${e.issue}`);
+    return e.state;
+  };
+
+  test("a headless attach without a harness is refused; interactive without one is fine", () => {
+    const noHarness = reduce(
+      fresh(),
+      {
+        ...(attach({ profile: "headless-session" }) as Record<string, unknown>),
+        harness: undefined,
+      } as never,
+      1_000,
+    );
+    expect(noHarness.verdict).toBe("refused");
+    if (noHarness.verdict === "refused") expect(noHarness.issue).toBe("invalid-grant");
+
+    // interactive never resumes, so it is not required to say.
+    const interactive = reduce(fresh(), attach({ profile: "interactive" }), 1_000);
+    expect(interactive.verdict).toBe("accepted");
+  });
+
+  test("attaching the same harness is told the session it last held", () => {
+    const afterClaude = heldBy(fresh(), "claude", "claude-session-1", 1_000);
+    const back = reduce(
+      afterClaude,
+      attach({ profile: "headless-session", harness: "claude" }),
+      20_000,
+    );
+    expect(back.verdict).toBe("accepted");
+    if (back.verdict !== "accepted") return;
+    const ok = back.effects.find((e) => e.type === "send" && e.frame.kind === "attach-ok") as
+      | { frame: { resumeSessionId?: string } }
+      | undefined;
+    expect(ok?.frame.resumeSessionId).toBe("claude-session-1");
+  });
+
+  test("attaching a DIFFERENT harness is told nothing, even though the record has a session", () => {
+    // The failure this exists to prevent: pi must not be handed claude's id.
+    const afterClaude = heldBy(fresh(), "claude", "claude-session-1", 1_000);
+    const pi = reduce(afterClaude, attach({ profile: "headless-session", harness: "pi" }), 20_000);
+    expect(pi.verdict).toBe("accepted");
+    if (pi.verdict !== "accepted") return;
+    const ok = pi.effects.find((e) => e.type === "send" && e.frame.kind === "attach-ok") as
+      | { frame: { resumeSessionId?: string } }
+      | undefined;
+    expect(ok?.frame.resumeSessionId).toBeUndefined();
+  });
+
+  test("attribution survives the epoch increment that discards the attachment", () => {
+    // ChannelState keeps only the CURRENT attachment, so this is the case a
+    // search over state would get wrong: claude's session must still be
+    // findable after pi has attached and detached in between.
+    let s = heldBy(fresh(), "claude", "claude-session-1", 1_000);
+    s = heldBy(s, "pi", "pi-session-1", 100_000);
+    expect(s.harnessSessions).toEqual({
+      claude: "claude-session-1",
+      pi: "pi-session-1",
+    });
+
+    const backToClaude = reduce(
+      s,
+      attach({ profile: "headless-session", harness: "claude" }),
+      200_000,
+    );
+    if (backToClaude.verdict !== "accepted") throw new Error("attach refused");
+    const ok = backToClaude.effects.find(
+      (e) => e.type === "send" && e.frame.kind === "attach-ok",
+    ) as { frame: { resumeSessionId?: string } } | undefined;
+    expect(ok?.frame.resumeSessionId).toBe("claude-session-1");
+  });
+
+  test("the newest identity of that harness wins", () => {
+    let s = heldBy(fresh(), "claude", "old-session", 1_000);
+    s = heldBy(s, "claude", "new-session", 100_000);
+    expect(s.harnessSessions.claude).toBe("new-session");
+  });
+
+  test("an interactive attachment attributes nothing", () => {
+    const a = reduce(fresh(), attach({ profile: "interactive" }), 1_000);
+    if (a.verdict !== "accepted") throw new Error("attach refused");
+    const e = reduce(
+      a.state,
+      { kind: "event", epoch: a.state.epoch, n: 1, turnId: "t1", event: identity("human-session") },
+      1_000,
+    );
+    if (e.verdict !== "accepted") throw new Error("event refused");
+    // lucid does not own that process and must never offer its id to anyone.
+    expect(e.state.harnessSessions).toEqual({});
+  });
+});

@@ -32,6 +32,7 @@ import {
   type Disposition,
   type Frame,
   type FrameKind,
+  type HarnessName,
   type InputMode,
   isWireId,
   isWireText,
@@ -52,6 +53,12 @@ export { LEASE_RENEW_EVERY_MS, LEASE_TTL_MS };
 
 export interface Attachment {
   readonly profile: AttachProfile;
+  /** Which harness this writer drives. Present for the headless profiles,
+   * absent for interactive, where lucid does not own the process and never
+   * resumes it (RFC-03). It is what attributes this writer's identity
+   * events, so a later attach of the SAME harness can be told which session
+   * to continue. */
+  readonly harness?: HarnessName;
   /** Last accepted per-epoch source counter; next event must carry lastN+1. */
   readonly lastN: number;
   readonly lease: Lease;
@@ -94,6 +101,17 @@ export interface ChannelState {
   /** Current fencing token; 0 = never attached. Survives detach. */
   readonly epoch: number;
   readonly attachment: Attachment | null;
+  /** The newest harness session id seen per harness, attributed by the
+   * attachment that was live when its identity event was accepted.
+   *
+   * A map rather than a walk over history: ChannelState keeps only the
+   * CURRENT attachment, so once an epoch increments the harness that held
+   * the previous one is gone and there is nothing to walk. Folding
+   * accumulates this as it goes, which costs one entry per harness and
+   * makes the attach-time lookup O(1). Empty for records written before
+   * RFC-03: their events carry no attribution, so they are un-resumable
+   * rather than guessed at. */
+  readonly harnessSessions: Readonly<Partial<Record<HarnessName, string>>>;
   /** The turnId of the last accepted event under the current writer. The
    * protocol cannot see turn completion (the event payload is opaque), so
    * this may name an already-finished turn; the host owns turn lifecycle
@@ -220,6 +238,7 @@ export const initialChannelState = (init: {
   inputs: [],
   appliedInputs: {},
   credits: 0,
+  harnessSessions: {},
 });
 
 const NO_EFFECTS: readonly Effect[] = Object.freeze([]);
@@ -407,6 +426,16 @@ const reduceAttach = (
       head: state.seq,
     });
 
+  // RFC-03 R001: a headless source must say which harness it drives. The
+  // frame is well formed - an unknown NAME is refused at the codec - so this
+  // is an unsupportable request rather than a malformed one.
+  const headless = frame.profile !== "interactive";
+  if (headless && frame.harness === undefined)
+    return refusal(state, frame, "invalid-grant", now, undefined);
+  // R008: interactive never resumes, so a harness on it is ignored rather
+  // than stored. Storing it would put ids in the map that no source may use.
+  const attachHarness = headless ? frame.harness : undefined;
+
   const epoch = state.epoch + 1;
   const lease: Lease = { expires: now + LEASE_TTL_MS, renewEvery: LEASE_RENEW_EVERY_MS };
   // A stale-lease takeover is the one handoff allowed mid-turn; whatever
@@ -425,7 +454,12 @@ const reduceAttach = (
       ...state,
       seq: state.seq + 1,
       epoch,
-      attachment: { profile: frame.profile, lastN: 0, lease },
+      attachment: {
+        profile: frame.profile,
+        lastN: 0,
+        lease,
+        ...(attachHarness === undefined ? {} : { harness: attachHarness }),
+      },
       turn: null,
       // The watermark and the credit balance speak for the CURRENT writer
       // only: acked rebased from what this attach claims durably applied,
@@ -450,6 +484,13 @@ const reduceAttach = (
           // and never re-delivers the applied frame.
           replayFrom,
           version: PROTOCOL_VERSION,
+          // The session this harness last held in THIS record, if any.
+          // Absent covers both an empty record and one whose sessions
+          // belong to other harnesses: the answer to "is there one of
+          // mine" is no either way (R006).
+          ...(attachHarness !== undefined && state.harnessSessions[attachHarness] !== undefined
+            ? { resumeSessionId: state.harnessSessions[attachHarness] }
+            : {}),
         },
       },
       ...sendInputs(replayed),
@@ -507,6 +548,16 @@ const reducePostAttach = (
         frame: { kind: "event-ack", epoch: frame.epoch, n: frame.n },
       } as const;
       const redelivered = InputLedger.redeliverable(state.inputs, sameTurn);
+      // RFC-03: attribute an identity to the harness that was live when it
+      // was accepted. This is the whole attribution mechanism - done as the
+      // fold goes, because after the next attach this attachment is gone.
+      const identitySessionId =
+        attachment.harness !== undefined &&
+        frame.event.kind === "identity" &&
+        typeof frame.event.sessionId === "string" &&
+        frame.event.sessionId !== ""
+          ? frame.event.sessionId
+          : undefined;
       return accepted(
         {
           ...state,
@@ -515,7 +566,18 @@ const reducePostAttach = (
             profile: attachment.profile,
             lastN: frame.n,
             lease: renewLease(attachment.lease, now),
+            // Carried, not rebuilt: dropping it here would lose attribution
+            // on the second event of every attachment.
+            ...(attachment.harness === undefined ? {} : { harness: attachment.harness }),
           },
+          ...(identitySessionId === undefined || attachment.harness === undefined
+            ? {}
+            : {
+                harnessSessions: {
+                  ...state.harnessSessions,
+                  [attachment.harness]: identitySessionId,
+                },
+              }),
           turn: sameTurn ? state.turn : { turnId: frame.turnId },
           seenTurns: sameTurn
             ? state.seenTurns

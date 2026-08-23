@@ -18,14 +18,21 @@ export const SECRET = "s3cret";
 export const fresh = (): ChannelState =>
   initialChannelState({ conversationId: "conv-1", secret: SECRET });
 
-export const attach = (overrides: Partial<Extract<Frame, { kind: "attach" }>> = {}): Frame => ({
-  kind: "attach",
-  conversationId: "conv-1",
-  profile: "interactive",
-  secret: SECRET,
-  version: PROTOCOL_VERSION,
-  ...overrides,
-});
+/** A headless attach must name its harness (RFC-03 R001); interactive must
+ * not be attributed at all (R008). The helper supplies a default for the
+ * former so a test that only cares about fencing does not have to. */
+export const attach = (overrides: Partial<Extract<Frame, { kind: "attach" }>> = {}): Frame => {
+  const profile = overrides.profile ?? "interactive";
+  return {
+    kind: "attach",
+    conversationId: "conv-1",
+    profile,
+    secret: SECRET,
+    version: PROTOCOL_VERSION,
+    ...(profile === "interactive" ? {} : { harness: "claude" as const }),
+    ...overrides,
+  };
+};
 
 // Default payload is LOSSLESS (message): most tests exercise fencing and
 // sequencing, not flow control - droppable payloads are credit-gated and

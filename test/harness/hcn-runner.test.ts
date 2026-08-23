@@ -84,6 +84,17 @@ describe("openSession over hcn session --json", () => {
   const sid = "479c05c6-0c2b-416a-9700-2b04cf8ecf24";
 
   test("a recorded two-turn session regroups into turns tagged by input id", async () => {
+    // Read the ids out of the recording rather than hardcoding them: a
+    // fixture re-capture changes the session id, and a test that pins it
+    // fails for the wrong reason.
+    const recorded = fixtureEvents("session-two-turns");
+    const recordedSid = String(
+      (recorded.find((e) => e.kind === "session") as { sessionId?: string } | undefined)
+        ?.sessionId ?? sid,
+    );
+    const firstTurnId = String(
+      (recorded.find((e) => e.kind === "turn") as { turnId?: string } | undefined)?.turnId ?? "",
+    );
     const r = rig();
     const opening = r.runner.openSession({ harness: "claude", sessionId: sid });
     r.proc.emit({
@@ -119,12 +130,14 @@ describe("openSession over hcn session --json", () => {
     expect(seen).toHaveLength(2);
     expect(seen[0]?.inputId).toBe("in-1");
     expect(seen[1]?.inputId).toBe("in-2");
-    expect(seen[0]?.turnId).toBe(`${sid}:turn-1`);
+    expect(seen[0]?.turnId).toBe(firstTurnId);
+    expect(firstTurnId).toBe(`${recordedSid}:turn-1`);
     // Each turn's events land inside it, ending with that turn's done.
     expect(seen[0]?.kinds.at(-1)).toBe("done");
     expect(seen[1]?.kinds.at(-1)).toBe("done");
-    // The turn that carried a rate-limit warning kept its failure event.
-    expect(seen[0]?.kinds).toContain("failure");
+    // Every event of a turn lands inside that turn and nowhere else.
+    expect(seen[0]?.kinds).toContain("message");
+    expect(seen[1]?.kinds).toContain("message");
   });
 
   test("send writes a command and resolves with the disposition hcn reports", async () => {
@@ -417,5 +430,48 @@ describe("an abandoned turn does not leave a child running", () => {
 
     expect(events).toHaveLength(1);
     expect(r.proc.signals).toHaveLength(0);
+  });
+});
+
+describe("a turn that carries a failure still delivers its events", () => {
+  const sid = "479c05c6-0c2b-416a-9700-2b04cf8ecf24";
+
+  // Composed inline, not recorded: an earlier fixture happened to catch a
+  // live rate-limit warning and a test leaned on it. That was luck, and the
+  // next capture did not reproduce it. The behaviour is worth pinning, so it
+  // is scripted rather than hoped for.
+  test("a non-fatal failure rides with the turn's events", async () => {
+    const r = rig();
+    const opening = r.runner.openSession({ harness: "claude", sessionId: sid });
+    r.proc.emit({
+      kind: "session",
+      sessionId: sid,
+      harness: "claude",
+      hcn: "0.5.6",
+      escalateQuestions: true,
+    });
+    const session = await opening;
+
+    const kinds: string[] = [];
+    const reading = (async () => {
+      for await (const turn of session.turns) {
+        for await (const e of turn) kinds.push(e.kind);
+      }
+    })();
+    r.proc.emit({ kind: "turn", turnId: `${sid}:turn-1`, id: "in-1" });
+    r.proc.emit({
+      kind: "failure",
+      class: "rate-limit",
+      retryable: true,
+      message: "rate limit warning",
+    });
+    r.proc.emit({ kind: "message", role: "assistant", text: "answered anyway" });
+    r.proc.emit({ kind: "done", exitCode: null, cause: "failed" });
+    r.proc.emit({ kind: "closed", exitCode: 0, cause: "clean" });
+    r.proc.exit(0);
+    await reading;
+
+    // The failure does not swallow the turn: the message still arrives.
+    expect(kinds).toEqual(["failure", "message", "done"]);
   });
 });

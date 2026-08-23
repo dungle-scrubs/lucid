@@ -56,6 +56,9 @@ export interface TurnSequencer {
   readonly epoch: number;
   /** Frames the host emitted WITH the attach grant (replayed inputs). */
   readonly attachReplay: readonly Frame[];
+  /** The harness session to continue, when the record holds one of this
+   * source's harness. Absent means open fresh (RFC-03 R006). */
+  readonly resumeSessionId?: string;
   /**
    * Emit a harness event toward the host. Lossless flows unconditionally
    * and supersedes its turn's stale deltas; droppables consume a credit
@@ -89,6 +92,10 @@ export const createSequencer = (
     profile,
     secret: deps.secret,
     version: PROTOCOL_VERSION,
+    // Which harness this source drives. A headless attach without it is
+    // refused: it is what attributes this writer's identity events, so a
+    // later attach of the same harness can be told which session to resume.
+    harness: deps.harness,
     ...(resumeFrom === undefined ? {} : { resumeFrom }),
   });
   if (result.verdict !== "accepted" || !("record" in result))
@@ -97,6 +104,15 @@ export const createSequencer = (
   const attachReplay: Frame[] = result.effects.flatMap((e) =>
     e.type === "send" && e.frame.kind !== "attach-ok" ? [e.frame] : [],
   );
+  // RFC-03: the harness session this source should continue, if the record
+  // holds one of this harness. Only lucid derives it - a source that computed
+  // its own from the transcript could disagree with the reducer, and only the
+  // reducer sees which harness produced which identity.
+  const attachOk = result.effects.find((e) => e.type === "send" && e.frame.kind === "attach-ok");
+  const resumeSessionId =
+    attachOk !== undefined && attachOk.type === "send" && attachOk.frame.kind === "attach-ok"
+      ? attachOk.frame.resumeSessionId
+      : undefined;
 
   let n = 0;
   let credits = 0;
@@ -137,6 +153,7 @@ export const createSequencer = (
   return {
     epoch,
     attachReplay,
+    ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
     emit: (turnId: string, event: HarnessEvent): void => {
       if (classOfEventKind(event.kind) === "lossless") {
         pending = supersedeTurn(pending, turnId);

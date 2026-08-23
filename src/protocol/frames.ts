@@ -34,6 +34,14 @@ export const FRAME_KINDS = [
 export type FrameKind = (typeof FRAME_KINDS)[number];
 
 export type AttachProfile = "interactive" | "headless-session" | "headless-turn";
+
+/** The harnesses lucid can drive, as hcn names them. Closed on purpose: a
+ * harness name partitions attribution in the log, so a typo that decoded
+ * would silently make a record un-resumable instead of failing loudly
+ * (RFC-03 R007). Kept here rather than imported from src/harness so the
+ * protocol layer depends on nothing below it. */
+export const HARNESS_NAMES = ["claude", "codex", "pi", "muse"] as const;
+export type HarnessName = (typeof HARNESS_NAMES)[number];
 export type Disposition = "applied" | "queued" | "rejected";
 export type DetachReason = "yield" | "shutdown";
 export type InputMode = "queue" | "steer";
@@ -103,6 +111,10 @@ export type Frame =
       readonly secret: string;
       readonly version: number;
       readonly resumeFrom?: number;
+      /** Which harness this source drives. REQUIRED for the two headless
+       * profiles; ignored for interactive, where lucid does not own the
+       * process and never resumes it (RFC-03 rule 1, R008). */
+      readonly harness?: HarnessName;
     }
   | {
       readonly kind: "event";
@@ -128,6 +140,12 @@ export type Frame =
       readonly lease: Lease;
       readonly replayFrom: number;
       readonly version: number;
+      /** The harness session this source SHOULD continue, when the record
+       * holds one of its own harness. Absent means open fresh - which covers
+       * both an empty record and one whose sessions belong to other
+       * harnesses (RFC-03 R006). Only lucid derives this; a source must not
+       * compute its own (rule 5). */
+      readonly resumeSessionId?: string;
     }
   | { readonly kind: "refused"; readonly issue: ProtocolIssue }
   | { readonly kind: "event-ack"; readonly epoch: number; readonly n: number }
@@ -258,6 +276,10 @@ const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
     secret: str(r, "secret", ID_MAX),
     version: nat(r, "version"),
     ...(optNat(r, "resumeFrom") !== undefined ? { resumeFrom: optNat(r, "resumeFrom") } : {}),
+    // Unknown name refuses at the codec as wrong-type, the same as a bad
+    // profile. A MISSING one is a reducer concern (invalid-grant), because a
+    // well-formed frame making an unsupportable request is a different fault.
+    ...(own(r, "harness") !== undefined ? { harness: enumOf(r, "harness", HARNESS_NAMES) } : {}),
   }),
   event: (r) => ({
     kind: "event",
@@ -293,6 +315,9 @@ const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
       },
       replayFrom: nat(r, "replayFrom"),
       version: nat(r, "version"),
+      ...(own(r, "resumeSessionId") !== undefined
+        ? { resumeSessionId: str(r, "resumeSessionId", ID_MAX) }
+        : {}),
     };
   },
   refused: (r) => ({ kind: "refused", issue: enumOf(r, "issue", PROTOCOL_ISSUES) }),
