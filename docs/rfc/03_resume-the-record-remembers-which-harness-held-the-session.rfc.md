@@ -322,16 +322,38 @@ once, and the conversation proceeds.
 
 ## Versioning
 
-- `PROTOCOL_VERSION` MUST be incremented. `attach` and `attach-ok` both gain a
-  field, and a source that sends the old attach against a new reducer is
-  refused by R001 rather than silently un-resumable.
-- Both new fields are OPTIONAL in the wire types, so an existing `log.ndjson`
-  still decodes and folds. Events recorded before this RFC carry no
-  attribution and are skipped by the search, so an old record loses nothing it
-  had - it simply cannot resume, which is its behaviour today.
-- The reducer MUST NOT infer a harness for an unattributed historical
-  attachment. Guessing "it was probably claude" would resume the wrong session
-  in exactly the cross-harness records this RFC is written for.
+**`PROTOCOL_VERSION` MUST NOT be bumped for this change.** An earlier draft of
+this RFC said to bump it and claimed an existing `log.ndjson` would still fold.
+That is false, and the cost of being wrong is every record in existence.
+
+The reducer checks `frame.version !== PROTOCOL_VERSION` and refuses
+`version-unsupported` (`src/protocol/reducer.ts:385`) - an exact match, not a
+floor. The fold replays every entry back through the reducer and throws
+`fold-refused` the moment one is refused (`src/store/log.ts:241-245`). So a
+bump does not make old records un-resumable; it makes them **unopenable**.
+Measured, not reasoned: folding a record whose attach frame carries
+`PROTOCOL_VERSION - 1` throws `log entry at byte 0 refused on fold
+(version-unsupported)`.
+
+Both new fields are additive and OPTIONAL, so no bump is needed:
+
+- An old source omits `harness` on a headless attach and is refused by R001,
+  which is the outcome a bump was wanted for, reached by the rule that
+  actually describes the problem.
+- An old record folds unchanged. Its attachments carry no harness, its
+  identity events are unattributed, and the search skips them - the record
+  opens and simply cannot resume, which is its behaviour today.
+- A new source attaching to an old record works: attribution starts from this
+  attachment forward.
+
+The reducer MUST NOT infer a harness for an unattributed historical
+attachment. Guessing "it was probably claude" would resume the wrong session
+in exactly the cross-harness records this RFC is written for.
+
+A genuinely breaking protocol change still needs a version story, and this RFC
+does not provide one. Before any such change, the version check has to become
+a compatibility range and the fold has to tolerate an older accepted frame.
+That is its own decision and out of scope here.
 
 ## Implementation Notes
 
@@ -339,7 +361,7 @@ Ordered so each step is green before the next, as RFC-02's steps were.
 
 1. **`frames.ts`**: add `harness` to `attach` and `resumeSessionId` to
    `attach-ok`, with validators. `harness` validates against the closed name
-   set. Bump `PROTOCOL_VERSION`.
+   set. Do NOT touch `PROTOCOL_VERSION` - see Versioning.
 2. **`reducer.ts`**: carry `harness` onto `Attachment`; refuse a headless
    attach without it (R001). Attribute accepted `identity` events to the live
    attachment's harness, and add the descending-seq search that produces
