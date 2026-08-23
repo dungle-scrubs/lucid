@@ -2,7 +2,7 @@
 number: 03
 title: "Resume: the record remembers which harness held the session"
 type: protocol
-status: Draft
+status: Implemented
 author: Kevin Frilot
 date: 2026-08-23
 ---
