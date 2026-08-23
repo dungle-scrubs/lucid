@@ -159,7 +159,7 @@ describe("openSession over hcn session --json", () => {
     expect(await sent).toEqual({ disposition: "started" });
   });
 
-  test("a queued disposition resolves its own send, not another", async () => {
+  test("a disposition resolves its own send, not another", async () => {
     const r = rig();
     const opening = r.runner.openSession({ harness: "claude", sessionId: sid });
     r.proc.emit({
@@ -175,10 +175,35 @@ describe("openSession over hcn session --json", () => {
     const second = session.send("in-2", "two");
     await tick();
     // Answer them out of order: each waiter is keyed by its own id.
-    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "queued" });
+    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "rejected", reason: "busy" });
     r.proc.emit({ kind: "disposition", id: "in-1", disposition: "started" });
-    expect(await second).toEqual({ disposition: "queued" });
+    expect(await second).toEqual({ disposition: "rejected", reason: "busy" });
     expect(await first).toEqual({ disposition: "started" });
+  });
+
+  test("a disposition hcn does not have is refused, not passed through", async () => {
+    // hcn answers `started` or `rejected`. If it ever grows a third, lucid
+    // must not read it as one of the two it knows - marking a turn started
+    // that never opened would strand the pump waiting for events. Refusing
+    // names the value instead, so the log says what arrived.
+    const r = rig();
+    const opening = r.runner.openSession({ harness: "claude", sessionId: sid });
+    r.proc.emit({
+      kind: "session",
+      sessionId: sid,
+      harness: "claude",
+      hcn: "0.5.6",
+      escalateQuestions: true,
+    });
+    const session = await opening;
+
+    const sent = session.send("in-1", "one");
+    await tick();
+    r.proc.emit({ kind: "disposition", id: "in-1", disposition: "queued" });
+    expect(await sent).toEqual({
+      disposition: "rejected",
+      reason: "unknown disposition: queued",
+    });
   });
 
   test("a rejected send carries its reason", async () => {

@@ -99,7 +99,9 @@ const rig = (opts: { mode?: "session" | "turn"; processes?: number } = {}) => {
     proc.emit({ kind: "disposition", id: inputId, disposition });
     if (disposition === "started") proc.emit({ kind: "turn", turnId, id: inputId });
   };
-  /** The boundary delivery of an input that was queued behind a live turn. */
+  /** hcn opens the turn for an input it already answered `started`. A send
+   * that arrived mid-turn gets its turn at the boundary, which is one event
+   * later than the disposition, not one disposition later. */
   const startQueued = (inputId: string, turnId: string): void => {
     proc.emit({ kind: "turn", turnId, id: inputId });
   };
@@ -166,7 +168,7 @@ describe("headless modes (M5.2)", () => {
     expect(reopened.state().turn?.turnId).toBe("turn-1");
   });
 
-  test("session mode reports what HAPPENED: steer requested mid-turn, queued delivered", async () => {
+  test("session mode reports what HAPPENED: a steer mid-turn is a send like any other", async () => {
     const r = rig();
 
     // Start a turn, then interject with mode steer while it streams.
@@ -179,17 +181,21 @@ describe("headless modes (M5.2)", () => {
 
     r.host.enqueueInput({ id: "in-2", text: "interject", mode: "steer" });
     await flush();
-    // hcn queues mid-turn (A-001): the disposition is queued, not the steer
-    // that was requested. lucid reports what happened, not what was asked.
-    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "queued" });
+    // hcn writes a mid-turn send straight to the harness and answers
+    // `started`. It used to answer `queued` here (A-001), and lucid reported
+    // that; ADR 0007 removed its queue, so there is no longer a state
+    // between accepted and running for lucid to report.
+    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "started" });
     await flush();
 
-    const inTwo = r.host.state().inputs.find((i) => i.id === "in-2");
-    expect(inTwo?.status).toBe("queued");
+    // An applied input leaves `inputs` and lands in `appliedInputs`: the
+    // pending list stays bounded by what is still outstanding.
+    expect(r.host.state().inputs.find((i) => i.id === "in-2")).toBeUndefined();
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-2": true });
     const dispositions = r.records.filter(
       (rec) => "kind" in rec && rec.kind === "disposition" && rec.inputId === "in-2",
     );
-    expect(dispositions[0]).toMatchObject({ outcome: "queued", inputStatus: "queued" });
+    expect(dispositions[0]).toMatchObject({ outcome: "applied", inputStatus: "applied" });
   });
 
   test("turn mode queues between turns: one process per input, dispositions queued -> applied, never interleaved", async () => {
@@ -361,10 +367,10 @@ describe("headless modes (M5.2)", () => {
     expect(r.host.state().turn?.turnId).toBe("turn-1");
   });
 
-  test("session mode: a queued input flips to applied when its turn starts, and a dead session answers rejected - never a throw", async () => {
+  test("session mode: a mid-turn send is applied at once and gets its turn at the boundary, and a dead session answers rejected - never a throw", async () => {
     const r = rig();
 
-    // First input starts a turn; second queues mid-turn.
+    // First input starts a turn; second arrives while it is still running.
     r.host.enqueueInput({ id: "in-1", text: "first", mode: "queue" });
     await flush();
     r.accept("in-1", "turn-1");
@@ -373,12 +379,14 @@ describe("headless modes (M5.2)", () => {
     await flush();
     r.host.enqueueInput({ id: "in-2", text: "second", mode: "queue" });
     await flush();
-    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "queued" });
+    // hcn wrote it to the harness already, so it is applied now - not
+    // pending some later flip. This is what ADR 0007 changed.
+    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "started" });
     await flush();
-    expect(r.host.state().inputs.find((i) => i.id === "in-2")?.status).toBe("queued");
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-2": true });
 
-    // Turn one ends; hcn delivers the queued send at the boundary and tags
-    // the new turn with its id: applied NOW.
+    // Turn one ends; hcn opens in-2's turn at the boundary. The input was
+    // already applied, so the turn adds a turn, not a status change.
     r.proc.emit(doneClean);
     r.startQueued("in-2", "turn-2");
     await flush();

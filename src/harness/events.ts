@@ -74,7 +74,11 @@ export type HarnessEvent =
   | {
       readonly kind: "disposition";
       readonly id: string;
-      readonly disposition: "started" | "queued" | "rejected";
+      /** Whatever arrived, unchecked. hcn answers `started` or `rejected`,
+       * but this decoder reads a JSON field rather than validating one, and
+       * typing it as the union would state a guarantee nothing here made.
+       * `createHcnRunner` narrows it and refuses anything else. */
+      readonly disposition: string;
       readonly reason?: string;
     }
   | {
