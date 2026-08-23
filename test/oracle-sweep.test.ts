@@ -130,6 +130,7 @@ describe("oracle sweep (M7.1): identity collisions", () => {
       kind: "attach",
       conversationId: "conv-a",
       profile: "headless-session",
+      harness: "claude" as const,
       secret: a.secret,
       version: 1,
     });

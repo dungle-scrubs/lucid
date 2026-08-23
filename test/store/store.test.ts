@@ -240,11 +240,12 @@ describe("durable conversation store (M5.1)", () => {
     // A's source dies mid-turn and its lease lapses; a takeover happens on A.
     hostA.now = 1_000 + 15_000;
     hostA.host.handleFrame(
-      encodeFrame({
-        ...attachFrame(a.secret),
-        conversationId: "conv-a",
-        profile: "headless-session",
-      } as Frame),
+      encodeFrame(
+        attachFrame(a.secret, {
+          conversationId: "conv-a",
+          profile: "headless-session",
+        }) as Frame,
+      ),
     );
     expect(hostA.host.state().epoch).toBe(2);
 
@@ -265,15 +266,13 @@ describe("durable conversation store (M5.1)", () => {
     const h = openHost(root, "conv-1", { presence: false });
 
     // Dead headless incumbent.
-    h.host.handleFrame(
-      encodeFrame({ ...attachFrame(secret), profile: "headless-session" } as Frame),
-    );
+    h.host.handleFrame(encodeFrame(attachFrame(secret, { profile: "headless-session" }) as Frame));
     h.now = 1_000 + 15_000;
 
     // Two contenders race openSession(--resume); the store serializes.
     // Both see presence=false, so presence cannot decide (D-021).
     const x = h.host.handleFrame(
-      encodeFrame({ ...attachFrame(secret), profile: "headless-session" } as Frame),
+      encodeFrame(attachFrame(secret, { profile: "headless-session" }) as Frame),
     );
     expect(x.verdict).toBe("accepted");
     expect(h.host.state().epoch).toBe(2);

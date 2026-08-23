@@ -89,6 +89,10 @@ export const createSequencer = (
     profile,
     secret: deps.secret,
     version: PROTOCOL_VERSION,
+    // Which harness this source drives. A headless attach without it is
+    // refused: it is what attributes this writer's identity events, so a
+    // later attach of the same harness can be told which session to resume.
+    harness: deps.harness,
     ...(resumeFrom === undefined ? {} : { resumeFrom }),
   });
   if (result.verdict !== "accepted" || !("record" in result))
