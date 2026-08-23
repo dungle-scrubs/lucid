@@ -4,10 +4,24 @@
  *
  * The hcn adapter needs this twice - once for the stream of turns, once for
  * each turn's events - because hcn's stdout is flat and lucid's host consumes
- * nested iterables. Kept deliberately small: no backpressure, because the
- * bounding happens in hcn (its channel stalls the harness) and in lucid's own
- * credit ledger. A second bound here would be a third opinion about the same
- * flow.
+ * nested iterables.
+ *
+ * It has no backpressure, and the reason is narrower than it first looks.
+ * hcn's own channel stalls the HARNESS when hcn's consumer stops reading, but
+ * lucid's adapter never stops reading: it drains hcn's stdout in a tight loop
+ * and pushes here without awaiting. So hcn's channel does not bound this one.
+ * Nor does the credit ledger, which gates what the sequencer FORWARDS to the
+ * host and sits downstream of this queue entirely.
+ *
+ * What actually bounds it is that the consumer never awaits. The host pump
+ * calls `sequencer.emit`, which is synchronous, into a store whose
+ * `handleFrame` is synchronous, so this queue is drained as fast as it is
+ * filled and holds a handful of events at most.
+ *
+ * That is a real bound and a fragile one. The day the store write becomes
+ * asynchronous - a socket transport, an awaited fsync - this queue becomes
+ * the unbounded one, and it will need a high-water mark that propagates back
+ * by not reading hcn's stdout. Change that and change this.
  *
  * What it is NOT: it is not the protocol's credit ledger and it does not
  * coalesce droppable events. That policy lives in the reducer.
