@@ -460,3 +460,83 @@ describe("a session hcn refuses is recorded, not silent", () => {
     expect(host.state().attachment).toBeNull();
   });
 });
+
+describe("RFC-03 R002: a stale resume hint does not cost the turn", () => {
+  test("a refused resume is retried fresh, and the reason is recorded", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
+    const { secret } = createConversationRecord(root, "conv-1");
+    // Two processes: the first refuses the resume, the second runs fresh.
+    const refuser = new FakeHcnProcess();
+    const fresh = new FakeHcnProcess();
+    const spawner = fakeSpawner([refuser, fresh]);
+    let receive: (frame: Frame) => void = () => {};
+    const host = openConversation(join(root, "conv-1"), {
+      now: () => 0,
+      presence: () => undefined,
+      onRecord: () => {},
+      onEffect: (e) => {
+        if (e.type === "send") receive(e.frame);
+      },
+    });
+    const source = openHeadlessTurns({
+      harness: "claude",
+      conversationId: "conv-1",
+      secret,
+      runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      mintTurnId: () => "turn-1",
+      sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
+      // The hint a reopened record would supply.
+      resume: "stale-session-id",
+    });
+    receive = source.receive;
+
+    host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+
+    // hcn refuses an unknown id before spawn: failure(rejected) then done.
+    refuser.emit({
+      kind: "failure",
+      class: "rejected",
+      retryable: false,
+      message: "no claude session stale-session-id found",
+    });
+    refuser.emit({ kind: "done", exitCode: null, cause: "failed" });
+    refuser.exit(2);
+    await flush();
+    await flush();
+
+    // The same input runs again, without the stale id.
+    expect(spawner.calls).toHaveLength(2);
+    expect(spawner.calls[0]?.argv).toContain("--resume");
+    expect(spawner.calls[1]?.argv).not.toContain("--resume");
+    expect(spawner.calls[1]?.argv.join(" ")).toContain("go");
+
+    fresh.emit(identity);
+    fresh.emit(assistant("answered fresh"));
+    fresh.emit(doneClean);
+    fresh.exit(0);
+    await flush();
+    await flush();
+
+    // The turn is not lost, and the record says why the resume did not hold.
+    const kinds = r0LogKinds(root);
+    expect(kinds).toContain("message");
+    const errors = readFileSync(join(root, "conv-1", "log.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { frame?: { event?: { kind?: string; message?: string } } })
+      .filter((e) => e.frame?.event?.kind === "error");
+    expect(errors.some((e) => String(e.frame?.event?.message).includes("stale-session-id"))).toBe(
+      true,
+    );
+  });
+});
+
+/** Event kinds durable in a record, for the assertion above. */
+const r0LogKinds = (root: string): string[] =>
+  readFileSync(join(root, "conv-1", "log.ndjson"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l) as { frame?: { kind?: string; event?: { kind?: string } } })
+    .filter((e) => e.frame?.kind === "event")
+    .map((e) => e.frame?.event?.kind ?? "?");

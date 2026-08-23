@@ -77,7 +77,14 @@ export interface SessionHandle {
 
 export interface OpenSessionOptions {
   readonly harness: HarnessName;
+  /** The id this session will be KNOWN BY. Names a session; does not
+   * continue one. */
   readonly sessionId: string;
+  /** The id of a session to CONTINUE. Distinct from sessionId on purpose:
+   * conflating them is what hcn issue #86 reported, where passing an
+   * existing id re-entered the id and not the conversation. hcn refuses an
+   * unknown id before spawn. */
+  readonly resume?: string;
   readonly model?: string;
   readonly provider?: string;
   readonly cwd?: string;

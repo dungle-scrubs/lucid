@@ -66,6 +66,9 @@ export { HeadlessError } from "./sequencer.js";
 
 interface HostContext {
   readonly sequencer: ReturnType<typeof createSequencer>;
+  /** The harness session lucid says to continue, from attach-ok. Absent
+   * means open fresh (RFC-03). */
+  readonly resumeSessionId?: string;
   getTurnId(): string;
   nextTurnId(): string;
   readonly expected: Array<{ inputId: string; applied: boolean }>;
@@ -96,6 +99,9 @@ const sessionStrategy = (
   const opening = deps.runner.openSession({
     harness: deps.harness,
     sessionId: deps.sessionId,
+    // Continue the session this harness last held in this record, if lucid
+    // found one. The id comes from attach-ok and nowhere else.
+    ...(ctx.resumeSessionId === undefined ? {} : { resume: ctx.resumeSessionId }),
     ...(deps.model === undefined ? {} : { model: deps.model }),
     ...(deps.provider === undefined ? {} : { provider: deps.provider }),
   });
@@ -162,7 +168,11 @@ const turnStrategy = (
 ): StrategyHandle => {
   const queue: Array<{ id: string; text: string }> = [];
   let closed = false;
-  let resumeId: string | undefined = deps.resume;
+  // Seeded from the record, not just from this source's own first turn.
+  // Holding it only in memory is why a restart used to start from nothing.
+  let resumeId: string | undefined = deps.resume ?? ctx.resumeSessionId;
+  // A resume hint is tried at most once. A second attempt would re-refuse.
+  let resumeTried = false;
   let activeTurn: AsyncIterator<HarnessEvent> | null = null;
   let resolveWaiting: (() => void) | null = null;
 
@@ -200,13 +210,52 @@ const turnStrategy = (
             // shift it. We therefore do NOT disposition here — Host will.
             // Instead we just create the turn iterable and capture
             // resumeId on identity events via a wrapper.
-            const raw = deps.runner.streamTurn({
+            // RFC-03 R002: a resume id read out of the record is a HINT. The
+            // harness may no longer have that session - hcn refuses an
+            // unknown id before spawn, which is a refusal, not an outage.
+            // Try it once, and if it is refused run the same input fresh
+            // rather than losing the turn to a stale id.
+            const attemptResume = resumeId !== undefined && !resumeTried;
+            if (attemptResume) resumeTried = true;
+            let raw = deps.runner.streamTurn({
               harness: deps.harness,
               prompt: next.text,
               turnId,
               ...(deps.model === undefined ? {} : { model: deps.model }),
-              ...(resumeId === undefined ? {} : { resume: resumeId }),
+              ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
             });
+            if (attemptResume) {
+              const buffered: HarnessEvent[] = [];
+              let refusedResume = false;
+              for await (const e of raw) {
+                buffered.push(e);
+                if (e.kind === "failure" && (e as { class?: string }).class === "rejected") {
+                  refusedResume = true;
+                }
+              }
+              if (refusedResume) {
+                // The stale id is not this conversation's problem any more.
+                const staleId = resumeId;
+                resumeId = undefined;
+                ctx.sequencer.emit(turnId, {
+                  kind: "error",
+                  message: `could not resume harness session ${staleId}; continuing fresh`,
+                });
+                raw = deps.runner.streamTurn({
+                  harness: deps.harness,
+                  prompt: next.text,
+                  turnId,
+                  ...(deps.model === undefined ? {} : { model: deps.model }),
+                });
+              } else {
+                // It worked: replay what was read while deciding.
+                raw = {
+                  async *[Symbol.asyncIterator]() {
+                    for (const e of buffered) yield e;
+                  },
+                };
+              }
+            }
             // Capture that this queued input's turn has started: if Host
             // hasn't yet disposed it, we need the waiter to be signaled.
             // Host's pump will shift expected; we already queued as
@@ -280,6 +329,9 @@ export const createHeadlessHost = (
 
   const ctx: HostContext = {
     sequencer,
+    ...(sequencer.resumeSessionId === undefined
+      ? {}
+      : { resumeSessionId: sequencer.resumeSessionId }),
     getTurnId: () => currentTurnId,
     nextTurnId: () => {
       currentTurnId = deps.mintTurnId();

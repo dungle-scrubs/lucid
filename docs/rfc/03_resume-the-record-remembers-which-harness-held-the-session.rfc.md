@@ -243,36 +243,42 @@ interface Attachment {
 
 The attribution has to outlive the attachment that produced it, and
 `ChannelState` does not keep it: it holds one `attachment`, and a new attach
-replaces it (`src/protocol/reducer.ts:428`). After an epoch increment the
-harness that held the previous epoch is gone from state entirely. A search
-over `ChannelState` would therefore either match everything or nothing, and in
-a cross-harness record it would resume the wrong session - the exact failure
+replaces it (`src/protocol/reducer.ts`). After an epoch increment the harness
+that held the previous epoch is gone from state entirely. A search over
+`ChannelState` would therefore match everything or nothing, and in a
+cross-harness record it would resume the wrong session - the exact failure
 this RFC exists to prevent.
 
-Attribution happens during the fold instead, into the **transcript**, which is
-derived on every open and never stored:
+Revision 2 specified walking the folded transcript in descending `seq`.
+Implementation replaced that with an equivalent and simpler mechanism, and
+this section records what was built:
 
-- `TranscriptEvent` (`src/store/log.ts:88`) gains `harness?: HarnessName`.
-- `collectTranscript` (`src/store/log.ts:174`) already receives the
-  `ReduceResult`. For an accepted `event` frame the reduce does not change the
-  attachment, so `result.state.attachment?.harness` IS the harness that was
-  live when that event was accepted. It is written onto the transcript entry
-  as it goes.
-- The log format does not change. No new frame, no field on `LogEntry`, no
-  attachment history in `ChannelState`. A record written before this RFC folds
-  to a transcript whose events carry no `harness`, which is exactly the
-  un-resumable case.
+**`ChannelState` gains `harnessSessions`**, a map from harness name to the
+newest session id that harness announced.
 
-Given that, lucid MUST derive `resumeSessionId` as:
+- On an accepted `event` frame whose payload `kind` is `identity` and whose
+  live attachment names a harness, the reducer MUST set
+  `harnessSessions[harness] = payload.sessionId`.
+- On attach, lucid MUST read `harnessSessions[frame.harness]`. Present means
+  resume it; absent means open fresh.
 
-1. Walk the folded transcript's events in descending `seq`.
-2. Skip any whose payload `kind` is not `identity`.
-3. Skip any whose `harness` is absent, or is not the harness the attach named.
-4. Take the first remaining event's `sessionId`. That is the answer.
-5. If none remains, report nothing.
+Why the map rather than the walk:
 
-The walk MUST consider only the record being attached to. There is no global
-index of sessions and this RFC does not add one.
+- The reducer is pure over `ChannelState` and never sees the transcript, so a
+  transcript walk could not live in the reducer at all - and only the reducer
+  builds `attach-ok`.
+- The lookup is O(1) at attach instead of a scan of the whole history.
+- It costs one entry per harness, bounded by four.
+- It folds naturally: replaying the log rebuilds the map, because the map is
+  built by the same reduce the fold replays.
+
+The reducer already reads `frame.event.kind` to classify droppable events, so
+reading `sessionId` off an identity is an extension of an existing read rather
+than a new dependency on an opaque payload.
+
+Records written before this RFC have no attribution: their events were
+accepted under attachments with no harness, so the map stays empty and they
+are un-resumable rather than guessed at.
 
 ## State Machine
 
@@ -496,11 +502,13 @@ attach frame and still started every reopened turn with `resumeId` undefined.
    Versioning.
 2. **`reducer.ts`**: carry `harness` onto `Attachment`; refuse a headless
    attach without it (R001); ignore one on an interactive attach (R008).
-3. **`log.ts`**: `TranscriptEvent` gains `harness`, written by
-   `collectTranscript` from `result.state.attachment?.harness`. This is the
-   whole of the attribution mechanism and it changes no stored bytes.
-4. **`reducer.ts`, the search**: descending-seq walk over the folded
-   transcript, producing `resumeSessionId` for `attach-ok`.
+3. **`reducer.ts`, attribution**: `ChannelState` gains `harnessSessions`; an
+   accepted identity event under a harness-bearing attachment records its
+   session id there. The attachment MUST be carried, not rebuilt, on the
+   event path - rebuilding it from profile/lastN/lease drops the harness and
+   attribution then works exactly once per attachment.
+4. **`reducer.ts`, the lookup**: `attach-ok` carries
+   `harnessSessions[frame.harness]` when present. No walk, no transcript.
 5. **`sequencer.ts`**: send `harness` on attach; read `resumeSessionId` off
    the `attach-ok` effect and expose it, next to `epoch` and `attachReplay`
    which it already exposes.
@@ -554,9 +562,12 @@ nothing supplied `deps.resume`.
 
 One line per review finding.
 
-- F1 (blocking, the search had nowhere to read from): attribution moves into
-  the fold and onto `TranscriptEvent`, because `ChannelState` keeps only the
-  current attachment. New step 3; "Finding the id" rewritten.
+- F1 (blocking, the search had nowhere to read from): attribution accumulates
+  into `ChannelState.harnessSessions` as the fold goes, because `ChannelState`
+  keeps only the current attachment and the reducer never sees the
+  transcript. "Finding the id" rewritten; steps 3 and 4 rewritten. Revision 2
+  proposed a transcript walk and implementation replaced it with the map -
+  recorded here rather than silently diverging.
 - F2 (blocking, the version bump): already corrected before the review, and by
   running it - folding a record one version behind throws `fold-refused`.
   Versioning now says do not bump, and why.

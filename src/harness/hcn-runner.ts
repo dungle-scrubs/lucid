@@ -171,8 +171,10 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       "session",
       opts.harness,
       "--json",
-      "--session-id",
-      opts.sessionId,
+      // --resume continues a conversation; --session-id only names one, and
+      // hcn refuses the two together. Resuming wins when both are known: the
+      // caller asked to continue something specific.
+      ...(opts.resume === undefined ? ["--session-id", opts.sessionId] : ["--resume", opts.resume]),
       ...flag("--model", opts.model),
       ...flag("--provider", opts.provider),
       ...flag("--stall", opts.stallSeconds === undefined ? undefined : String(opts.stallSeconds)),
