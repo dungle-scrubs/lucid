@@ -513,9 +513,11 @@ The ten below (D-001..D-010) were ratified in the artifact review,
 create-interview choices, the adapter fallback ladder, the spike-derived
 resume-identity and hook-isolation findings, and the pre-CONVERGE review
 outcomes). **The canonical, complete decision ledger lives in
-`.plans/00-chat-substrate/plan.db`** - query it with `plan-db
-query-decisions`; this prose is a summary and defers to it rather than
-re-enumerating every code. Resolved in this revision:
+`docs/decisions.md`** - all 48 decisions from both planning passes, each
+with the reason it was taken. It was exported from the retired plan-db
+tooling; this prose is a summary and defers to it rather than
+re-enumerating every code. Note that codes are per-plan: a bare `D-011` is
+ambiguous between the two passes. Resolved in this revision:
 
 1. **Protocol ownership (was 7.1): lucid-v2 owns it.** Inside lucid-v2 the
    protocol is a pure reducer (frame schemas + `(state, frame) -> state |

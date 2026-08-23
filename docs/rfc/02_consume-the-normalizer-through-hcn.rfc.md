@@ -462,7 +462,9 @@ without diffing anything.
 
 - `PLAN.md` Part 0 and "Decisions" D-008 (runtime-verified capability),
   D-010 (package name, superseded by the normalizer's published name).
-- `.plans/01-piping/progress-report.md` - the completed plan this follows.
+- The completed `01-piping` plan this follows. Its artifacts were removed
+  with the retired plan-db tooling; read them at `git log -- .plans/`, and
+  its decisions in `docs/decisions.md`.
 - `docs/smoke-seven.md`, `spikes/evidence/df-smoke.md` - the live lanes
   step 7 re-runs.
 - harness-cli-normalizer `docs/audits/2026-08-21-readiness/report.md` -
