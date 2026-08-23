@@ -99,22 +99,31 @@ interpretation - pure functions over the data: buildLaunchArgv, buildResumeArgv,
                  detectLimit, capabilitiesOf(h, model, mode) -> CapabilityResult,
                  isInteractive(sessionId) -> boolean, validateModel/Effort.
 
-execution      - A HEADLESS RUNNER with two shapes, one the degenerate case of
-                 the other:
+execution      - A HEADLESS RUNNER with two shapes, one the degenerate case
+                 of the other. SUPERSEDED as an interface lucid calls: these
+                 are hcn's internals, and hcn's only supported surface is its
+                 binary (its ADR 0001). lucid reaches both shapes as
+                 subprocesses and owns no descriptor. See
+                 `docs/rfc/02_consume-the-normalizer-through-hcn.rfc.md` and
+                 `src/harness/` for what lucid actually calls.
 
-                 openSession(h, opts, { spawn, clock, stallMs })
-                   -> { turns, send, interrupt?, close }
-                 One lucid-owned process, many turns. `turns` yields one
-                 AsyncIterable<HarnessEvent> per turn (each ending in `done`);
-                 `send` delivers a message into the session (queued or
-                 steering per the declared capability); `close` ends the
-                 process. Only for harnesses whose sessionMode supports it
-                 (claude via stream-json in/out; pi via RPC mode).
+                 `hcn session <harness> --json`
+                 One hcn-owned process, many turns. NDJSON events on stdout -
+                 a `turn` line opens each turn, its events follow, a
+                 turn-scoped `done` ends it, one `closed` line ends the
+                 process. NDJSON commands on stdin: send, answer, close. Only
+                 for harnesses whose descriptor declares a sessionMode
+                 (claude via stream-json in/out; pi via RPC mode); codex and
+                 muse refuse, and lucid records the refusal.
 
-                 streamTurn(h, opts, { spawn, clock, stallMs })
-                   -> AsyncIterable<HarnessEvent>
+                 `hcn run <harness> --json`
                  The one-turn degenerate case: spawn, drain, watchdog, done.
                  For harnesses with no persistent mode, and for one-shot work.
+
+                 Runtime primitives stay injected on LUCID's side of the
+                 boundary (`src/harness/process.ts`), so what tests fake is
+                 the hcn process - its argv, stdin, NDJSON, exit code - and
+                 not a harness's own framing.
 
                  Runtime primitives (spawn, clock, signalling) are INJECTED so
                  Node/Bun is a real portability boundary and tests run against
@@ -139,8 +148,9 @@ type HarnessEvent =
   | { kind: "context"; usedPct?; used?; total? }  // contextHook's outlet
   | { kind: "limit"; code; message }
   | { kind: "error"; message }
-  | { kind: "done"; exitCode? };         // turn-scoped; a session's close is
-                                         // the openSession handle, not an event
+  | { kind: "done"; exitCode? };         // turn-scoped. A session's end is a
+                                         // separate `closed` line on the
+                                         // stream (RFC-01), not this event
 
 type CapabilityResult = {
   vision: boolean; images: boolean;
@@ -195,13 +205,14 @@ capabilities through the skill is not verification.
 The convergence is at the **chat protocol**, not at `AgentEvent`. Three
 sources map into it:
 
-1. **headless turn** - the normalizer's `streamTurn`; lucid owns a process per
-   turn. The fallback that works everywhere.
-2. **headless session** - the normalizer's `openSession`; lucid owns ONE
-   process across many turns, with mid-session input and (for claude) token
-   streaming. The preferred headless mode where `capabilities.session` is
-   true - it removes fork-per-turn id churn and makes `queue`/`steer` real
-   for headless claude.
+1. **headless turn** - `hcn run <harness> --json`, one process per turn. The
+   fallback that works everywhere; today codex and muse.
+2. **headless session** - `hcn session <harness> --json`, ONE process across
+   many turns, with mid-session input and (for claude) token streaming. The
+   preferred headless mode where the descriptor declares a session - today
+   claude and pi. It removes fork-per-turn id churn and makes mid-turn input
+   real. Which of the two lucid uses is hcn's answer, asked once per run via
+   `hcn inspect`, never a local assumption.
 3. **interactive adapter** - a per-harness adapter subscribed to a session a
    HUMAN owns, per the adapter contract below. lucid does not own the process.
 
@@ -565,6 +576,9 @@ Ratified with the recommended option:
    claude-code, then codex, pi, muse.
 3. **Execution layer.** `openSession()` + `streamTurn()` with injected
    spawn/clock/stall, returning `HarnessEvent`. Prove with a fake spawner.
+   (Done, inside hcn. lucid reaches both as `hcn run|session --json`
+   subprocesses; the fake it proves against is the hcn process, not a
+   harness.)
 4. **The protocol reducer in lucid-v2.** Frames, epoch fencing, leases,
    replay - with the invariants as tests against a fake harness and an
    injected clock.
