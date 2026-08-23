@@ -9,8 +9,6 @@ export {
   decodeHarnessLine,
   type HarnessEvent,
   type HarnessFailure,
-  isClosed,
-  isDone,
 } from "./events.js";
 export { createHcnRunner } from "./hcn-runner.js";
 export {

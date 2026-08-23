@@ -384,3 +384,38 @@ describe("review fixes: what the cross-family review found", () => {
     expect(turnIds).toEqual([`${sid2}:turn-1`, `${sid2}:turn-2`]);
   });
 });
+
+describe("an abandoned turn does not leave a child running", () => {
+  test("breaking out of a turn's events kills the hcn process", async () => {
+    const r = rig();
+    const turn = r.runner.streamTurn({ harness: "claude", prompt: "hi", turnId: "t1" });
+    const it = turn[Symbol.asyncIterator]();
+    r.proc.emit({ kind: "identity", sessionId: "s", authority: "caller-assigned" });
+    await it.next();
+
+    // The consumer walks away mid-turn, which is what the host does when it
+    // closes while a turn is streaming.
+    await it.return?.(undefined);
+    expect(r.proc.signals).toContain("SIGTERM");
+  });
+
+  test("a turn that runs to completion is not signalled", async () => {
+    const r = rig();
+    const events: unknown[] = [];
+    const pull = (async () => {
+      for await (const e of r.runner.streamTurn({
+        harness: "claude",
+        prompt: "hi",
+        turnId: "t1",
+      })) {
+        events.push(e);
+      }
+    })();
+    r.proc.emit({ kind: "done", exitCode: 0, cause: "clean" });
+    r.proc.exit(0);
+    await pull;
+
+    expect(events).toHaveLength(1);
+    expect(r.proc.signals).toHaveLength(0);
+  });
+});

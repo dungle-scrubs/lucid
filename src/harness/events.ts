@@ -17,7 +17,7 @@
  * What it is NOT: it is not the protocol reducer, the store, or the frame
  * vocabulary. It decodes a subprocess's stdout line.
  */
-import { EventKind } from "../protocol/events.js";
+import type { EventKind } from "../protocol/events.js";
 
 /** hcn's failure taxonomy, as lucid reads it. Additive: an unknown class is
  * carried through as a string rather than refused. */
@@ -103,11 +103,3 @@ export const decodeHarnessLine = (line: string): HarnessEvent | null => {
   if (typeof record.kind !== "string" || record.kind === "") return null;
   return record as unknown as HarnessEvent;
 };
-
-/** Terminal for a turn. */
-export const isDone = (e: HarnessEvent): e is Extract<HarnessEvent, { kind: "done" }> =>
-  e.kind === EventKind.done;
-
-/** Terminal for a session process. */
-export const isClosed = (e: HarnessEvent): e is Extract<HarnessEvent, { kind: "closed" }> =>
-  e.kind === "closed";

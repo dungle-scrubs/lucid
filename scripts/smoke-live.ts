@@ -30,6 +30,18 @@ const HARNESS = ((): "claude" | "codex" | "pi" | "muse" => {
   return v;
 })();
 
+/** Optional routing, for the local-provider lane: pi against LM Studio. */
+const flagValue = (flag: string): string | undefined => {
+  const i = process.argv.indexOf(flag);
+  return i === -1 ? undefined : process.argv[i + 1];
+};
+const PROVIDER = flagValue("--provider");
+const MODEL = flagValue("--model");
+/** Per-turn budget. A local model on LM Studio is far slower than a hosted
+ * one, so the lane that routes there raises it rather than reading a slow
+ * model as a failure. */
+const TURN_BUDGET_MS = Number(flagValue("--turn-budget") ?? "90000");
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** The runner's boundary log, read back for the evidence header so the file
  * names the binary and version that actually ran. */
@@ -101,7 +113,12 @@ const main = async (): Promise<void> => {
     sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
   };
   const source = hasSession
-    ? openHeadlessSession({ ...common, sessionId })
+    ? openHeadlessSession({
+        ...common,
+        sessionId,
+        ...(PROVIDER === undefined ? {} : { provider: PROVIDER }),
+        ...(MODEL === undefined ? {} : { model: MODEL }),
+      })
     : openHeadlessTurns(common);
   receive = source.receive;
   log(`attached: epoch ${host.state().epoch}, profile ${host.state().attachment?.profile}`);
@@ -118,7 +135,7 @@ const main = async (): Promise<void> => {
     text: "Remember the codeword: pomegranate. Reply with only: OK",
     mode: "queue",
   });
-  if (!(await waitForTurns(host, 1, 90_000))) {
+  if (!(await waitForTurns(host, 1, TURN_BUDGET_MS))) {
     log("FAIL: turn 1 did not complete in 90s");
     ok = false;
   } else {
@@ -132,7 +149,7 @@ const main = async (): Promise<void> => {
     text: "Reply with only the codeword I gave you.",
     mode: "queue",
   });
-  const twoDone = await waitForTurns(host, 2, 90_000);
+  const twoDone = await waitForTurns(host, 2, TURN_BUDGET_MS);
   const t = host.transcript();
   const answer = textOf(t.events.filter((e) => e.turnId === "turn-2"));
   const remembered = answer.toLowerCase().includes("pomegranate");

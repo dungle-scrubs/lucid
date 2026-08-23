@@ -42,11 +42,24 @@ a regression test pins it. The smoke also polled its full 90-second budget
 waiting for a turn that could never arrive; it now stops when the channel is
 released.
 
-## Not covered here
+## Since closed
 
-- Resume as its own lane. Turn mode exercises it incidentally; there is no
-  smoke that kills a conversation and resumes it deliberately.
-- pi against a local provider (`--provider lmstudio`). The seam passes the
-  flag and hcn renders it; no live run yet.
-- Concurrent harnesses in one conversation. The protocol fences on epoch, but
-  nothing has driven two at once.
+- **Cross-harness handoff: PASS**, four pairs. One record, two harnesses; the
+  successor learns the conversation from lucid's log because it cannot
+  inherit a session it never had. `spikes/evidence/cross-harness-handoff.md`.
+- **pi against a local provider: PASS.** `bun scripts/smoke-live.ts --harness
+  pi --provider lmstudio --model qwen3.6-35b-a3b-ud-mlx --turn-budget 360000`.
+  A whole conversation with no hosted model in it. The budget flag exists
+  because a local model is slower than a hosted one, and reading that as a
+  failure would be wrong.
+- **Resume: FAILS, deliberately.** `spikes/evidence/resume.md` carries the
+  diagnosis. lucid never persists the harness session id, so a reopened
+  record cannot attempt a resume; and hcn's session surface cannot restore
+  context even when given the id (hcn issue #86). Not in CI - it specifies
+  work rather than guarding behaviour.
+
+## Still not covered
+
+- Two harnesses driving one conversation AT ONCE. The protocol fences one
+  writer by epoch, so this is a non-goal rather than a gap; sequential
+  takeover is the supported shape and it passes.

@@ -143,11 +143,24 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     drainStderr(proc, opts.turnId);
     return {
       async *[Symbol.asyncIterator]() {
-        for await (const line of lines(proc.stdout)) {
-          const event = decodeHarnessLine(line);
-          if (event !== null) yield event;
+        let drained = false;
+        try {
+          for await (const line of lines(proc.stdout)) {
+            const event = decodeHarnessLine(line);
+            if (event !== null) yield event;
+          }
+          drained = true;
+          await proc.exited;
+        } finally {
+          // Abandonment is not an ending. A consumer that stops reading -
+          // the host closing mid-turn, a `break`, a thrown error - leaves
+          // this hcn child and the harness under it running with nobody to
+          // stop them. Whoever walks away owns ending it.
+          if (!drained) {
+            log({ event: "hcn_run_abandoned", turnId: opts.turnId, harness: opts.harness });
+            proc.kill("SIGTERM");
+          }
         }
-        await proc.exited;
       },
     };
   };

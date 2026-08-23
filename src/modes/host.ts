@@ -41,6 +41,11 @@ export interface HeadlessDeps {
   readonly conversationId: string;
   readonly secret: string;
   readonly runner: HarnessRunner;
+  /** Routing, passed through to hcn: a model within the harness, and a
+   * provider for the harnesses that express one (pi). Absent means the
+   * harness's own default. */
+  readonly model?: string;
+  readonly provider?: string;
   /** Lucid mints headless turnIds (PLAN 4.3); injected for determinism. */
   readonly mintTurnId: () => string;
   /** The in-process channel to the host. */
@@ -91,6 +96,8 @@ const sessionStrategy = (
   const opening = deps.runner.openSession({
     harness: deps.harness,
     sessionId: deps.sessionId,
+    ...(deps.model === undefined ? {} : { model: deps.model }),
+    ...(deps.provider === undefined ? {} : { provider: deps.provider }),
   });
   // A failure to open must not become an unhandled rejection. It must also
   // not be silent: a session hcn refuses (a harness with no session mode, an
@@ -197,6 +204,7 @@ const turnStrategy = (
               harness: deps.harness,
               prompt: next.text,
               turnId,
+              ...(deps.model === undefined ? {} : { model: deps.model }),
               ...(resumeId === undefined ? {} : { resume: resumeId }),
             });
             // Capture that this queued input's turn has started: if Host
