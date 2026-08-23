@@ -384,19 +384,36 @@ export const createHeadlessHost = (
       sequencer.detachOnce("shutdown");
     });
 
+  const receive = (frame: Frame): void => {
+    switch (frame.kind) {
+      case "input":
+        strategy.onInput(frame.id, frame.text);
+        return;
+      case "credit":
+        sequencer.onCredit(frame.tokens);
+        return;
+      default:
+        return;
+    }
+  };
+
+  // Inputs the record was already holding, delivered through the same path
+  // as a live one.
+  //
+  // Attach replays every input still awaiting an applied disposition - that
+  // is what makes `lucid send` while nothing is attached mean anything. The
+  // sequencer captured them off the attach result, because at that instant
+  // the host's effect sink is not wired yet: the source attaches while it is
+  // being constructed, so an effect emitted then has nowhere to go. Nothing
+  // read them back. A record with a pending input would attach, hold it, and
+  // sit there: no turn, no reply, nothing in the log after the attach line.
+  //
+  // Drained here because this is the first moment `strategy` exists. Same
+  // idempotent input id, so a replay that races a live delivery applies once.
+  for (const frame of sequencer.attachReplay) receive(frame);
+
   return {
-    receive: (frame: Frame): void => {
-      switch (frame.kind) {
-        case "input":
-          strategy.onInput(frame.id, frame.text);
-          return;
-        case "credit":
-          sequencer.onCredit(frame.tokens);
-          return;
-        default:
-          return;
-      }
-    },
+    receive,
     close: (): void => {
       sequencer.detachOnce("shutdown");
       try {
