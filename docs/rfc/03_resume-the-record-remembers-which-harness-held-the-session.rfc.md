@@ -9,6 +9,17 @@ date: 2026-08-23
 
 # RFC-03: Resume: the record remembers which harness held the session
 
+> Revision 2. Answers the review
+> `03_resume-the-record-remembers-which-harness-held-the-session.review-draft-2026-08-23.md`
+> (validator pass; one cross-family reviewer, muse). Two blocking findings.
+> One was that the search this RFC specified had nowhere to read from -
+> `ChannelState` keeps only the current attachment, so the harness that held a
+> prior epoch is gone the moment the epoch increments. That is fixed by
+> attributing during the fold, into the transcript, which is derived rather
+> than stored. The other was the version bump, already corrected before the
+> review arrived and by running it rather than reading it. The per-point log
+> is at the end.
+
 ## Abstract
 
 A lucid conversation survives losing its process: the durable log is reopened
@@ -157,10 +168,16 @@ Rules:
    when, and only when, the folded log holds an `identity` event attributed to
    the SAME harness the attach frame named. When several exist, lucid MUST
    report the most recent by `seq`.
-5. A source MUST NOT use a `resumeSessionId` it derived itself from the
-   transcript. The value comes from `attach-ok` or the source does not resume.
-   Two readers of the same log deriving the same answer separately is a
-   divergence waiting to happen, and only the reducer sees attribution.
+5. Two different ids exist and MUST NOT be conflated.
+   - **The requested id** is `resumeSessionId` on `attach-ok`. Only lucid
+     derives it, from the folded transcript. A source MUST NOT derive one
+     itself: two readers of the same log deriving the same answer separately
+     is a divergence waiting to happen, and only the fold sees attribution.
+   - **The reported id** is `sessionId` on the harness's `identity` event. The
+     harness chooses it. It flows to lucid as an ordinary event and is
+     attributed like any other. R005 is about this one, and reading it is not
+     a source deriving a resume id - it is a source reporting what the harness
+     said.
 6. A source that receives no `resumeSessionId` MUST open a fresh harness
    session. A conversation with no prior turn from this harness is the normal
    case, not an error.
@@ -184,8 +201,11 @@ Rules:
 ```
 
 `harness` is OPTIONAL in the type so an interactive attach omits it, and so a
-frame written by an older source still decodes. A headless attach without it
-is refused; see Error Handling.
+frame written by an older source still decodes. It MUST be validated at the
+codec against the closed `HarnessName` set (`src/harness/runner.ts`), the same
+way `profile` is, so an unknown name is `wrong-type` at decode (R007) and a
+missing one on a headless attach is `invalid-grant` at reduce (R001). Those
+are different faults and stay distinguishable.
 
 ### `attach-ok`, extended
 
@@ -199,6 +219,11 @@ is refused; see Error Handling.
   resumeSessionId?: string;   // NEW. Present only when one was found.
 }
 ```
+
+`resumeSessionId` MUST be validated as a wire id (`isWireId`,
+`src/protocol/frames.ts:249`, bounded at `ID_MAX`), the same as every other id
+that crosses this boundary. A harness id longer than that is refused rather
+than truncated.
 
 Absent means "no harness session of yours in this record". It does not mean
 the record is empty, and it does not mean an error.
@@ -216,18 +241,38 @@ interface Attachment {
 
 ### Finding the id
 
-lucid MUST derive `resumeSessionId` from the folded log alone, with no state
-outside the record:
+The attribution has to outlive the attachment that produced it, and
+`ChannelState` does not keep it: it holds one `attachment`, and a new attach
+replaces it (`src/protocol/reducer.ts:428`). After an epoch increment the
+harness that held the previous epoch is gone from state entirely. A search
+over `ChannelState` would therefore either match everything or nothing, and in
+a cross-harness record it would resume the wrong session - the exact failure
+this RFC exists to prevent.
 
-1. Walk accepted `event` frames in descending `seq`.
-2. Skip any whose payload is not an `identity` event.
-3. Skip any whose attributed harness is not the harness the attach names.
+Attribution happens during the fold instead, into the **transcript**, which is
+derived on every open and never stored:
+
+- `TranscriptEvent` (`src/store/log.ts:88`) gains `harness?: HarnessName`.
+- `collectTranscript` (`src/store/log.ts:174`) already receives the
+  `ReduceResult`. For an accepted `event` frame the reduce does not change the
+  attachment, so `result.state.attachment?.harness` IS the harness that was
+  live when that event was accepted. It is written onto the transcript entry
+  as it goes.
+- The log format does not change. No new frame, no field on `LogEntry`, no
+  attachment history in `ChannelState`. A record written before this RFC folds
+  to a transcript whose events carry no `harness`, which is exactly the
+  un-resumable case.
+
+Given that, lucid MUST derive `resumeSessionId` as:
+
+1. Walk the folded transcript's events in descending `seq`.
+2. Skip any whose payload `kind` is not `identity`.
+3. Skip any whose `harness` is absent, or is not the harness the attach named.
 4. Take the first remaining event's `sessionId`. That is the answer.
 5. If none remains, report nothing.
 
-The walk MUST consider only events accepted under an attachment that named a
-harness. Events recorded before this RFC have no attribution and MUST be
-skipped, which makes an old record simply un-resumable rather than wrong.
+The walk MUST consider only the record being attached to. There is no global
+index of sessions and this RFC does not add one.
 
 ## State Machine
 
@@ -235,22 +280,57 @@ Attachment states, from the source's view:
 
 ```
 DETACHED  -> ATTACHING   (on: attach frame sent)
-ATTACHING -> FRESH       (on: attach-ok with no resumeSessionId)
+ATTACHING -> FRESH       (on: attach-ok, no resumeSessionId - see R003/R006)
 ATTACHING -> RESUMING    (on: attach-ok with resumeSessionId)
-ATTACHING -> REFUSED     (on: refused; issue says why)
+ATTACHING -> REFUSED     (on: refused; the issue says why)
 RESUMING  -> ATTACHED    (on: the harness accepted the id; identity observed)
-RESUMING  -> FRESH       (on: the harness refused the id - see E003)
+RESUMING  -> FRESH       (on: the harness refused the id - R002)
+RESUMING  -> DETACHED    (on: takeover - this source's epoch went stale)
 FRESH     -> ATTACHED    (on: identity observed for a new session)
-ATTACHED  -> DETACHED    (on: detach, or the source's process ending)
+FRESH     -> DETACHED    (on: takeover)
+ATTACHED  -> DETACHED    (on: detach, the process ending, or takeover)
 ```
+
+REFUSED keeps every issue the reducer already produces, unchanged. This RFC
+adds no refusal issue and renames none: `auth-failed`, `wrong-conversation`,
+`version-unsupported`, `lease-held`, `presence-holds`, and
+`resume-ahead-of-log` (`src/protocol/reducer.ts:382-408`) behave exactly as
+today. R001 is `invalid-grant`, which already exists.
+
+Takeover during RESUMING is a real state, not a corner. A source can sit in
+RESUMING while it waits for the harness to announce identity, and a second
+source can win the next attach once the lease lapses. The straggler's epoch is
+then stale and its next event is refused `stale-epoch`
+(`src/protocol/reducer.ts:476`). It MUST treat that as DETACHED and end its
+harness process rather than continue driving one nobody is reading.
 
 Invalid transitions:
 
 - A source MUST NOT move from ATTACHED back to RESUMING. Resume is decided
   once, at attach.
 - A source that never observes an `identity` event MUST still be treated as
-  ATTACHED for lease purposes. Some harnesses announce identity late, and the
+  ATTACHED for lease purposes. Some harnesses announce identity late and the
   lease cannot wait on the harness.
+
+### Two attachers, one harness session
+
+Rule 7 stops one attachment changing its mind. It does not stop two
+attachments deciding the same thing. After a lease lapses, a second source of
+the same harness folds the same log, is told the same `resumeSessionId`, and
+opens the same harness session while the first is possibly still inside it.
+
+lucid MUST NOT rely on the harness to arbitrate this. The protocol already
+has the answer and it is the epoch: only one attachment holds the lease, and
+the loser's events are refused `stale-epoch`. So:
+
+- A source MUST NOT open its harness process until its attach has been
+  accepted. Opening first and attaching second would let a refused source
+  drive a session anyway.
+- A source whose epoch goes stale MUST end its harness process, as above.
+
+That bounds the overlap to the window between the lease lapsing and the
+straggler noticing, which is the same window the single-writer rule already
+tolerates for every other frame.
 
 ## Error Handling
 
@@ -282,6 +362,32 @@ R004 - two identities from the same harness with the same seq
        in a well-formed log. A fold that observes it MUST refuse the record as
        `corrupt-log` rather than pick one.
 
+R006 - no session of this harness in the record (severity: info)
+       Two causes that look the same on the wire and MUST stay
+       distinguishable to the source: the record has no identity at all
+       (a new conversation), or its identities belong to other harnesses
+       (R003). Both produce an absent `resumeSessionId`, because the answer
+       to "is there a session of mine" is no in both cases.
+       A source that wants to tell them apart reads the folded transcript it
+       already has - that is a presentation question, not a protocol one, and
+       it is what a caller composing cross-harness context does today.
+
+R007 - unknown harness name on attach (severity: critical)
+       A name outside the closed set. Refused at the CODEC, as `wrong-type`,
+       the same way a bad `profile` is - not at the reducer. Keeping the
+       layer boundary means a typo surfaces identically to every other
+       malformed field instead of as a grant problem.
+       R001 stays `invalid-grant`: a MISSING harness on a headless attach is
+       a well-formed frame making an unsupportable request, which is what
+       that issue means.
+
+R008 - an interactive attach carrying a harness (severity: warning)
+       The reducer MUST ignore it and MUST NOT store it. lucid does not own
+       an interactive process and never resumes it, so attributing its events
+       would put ids in the search that no source may use. Ignoring rather
+       than refusing keeps a caller that sets the field uniformly from being
+       broken by it.
+
 R005 - the harness reports a session id different from the one resumed
        (severity: warning)
        The identity event carries an id lucid did not ask for. lucid MUST
@@ -290,6 +396,28 @@ R005 - the harness reports a session id different from the one resumed
        Silently accepting it would make the next resume target a session that
        was never confirmed.
 ```
+
+### `resumeFrom` and `resumeSessionId` are orthogonal
+
+They answer different questions and MUST NOT be coupled:
+
+- `resumeFrom` is about LUCID's log - the watermark below which the source
+  already has the frames, gating input replay
+  (`src/protocol/reducer.ts:404-417`).
+- `resumeSessionId` is about the HARNESS's store - which conversation the
+  harness should continue.
+
+A source MAY send `resumeFrom` and receive `resumeSessionId` in the same
+attach. Neither constrains the other, and the reducer MUST NOT adjust one
+because of the other. In particular, falling back to a fresh harness session
+(R002) MUST NOT rebase `resumeFrom`: lucid's replay obligation is unchanged by
+the harness having lost its context, and rebasing it there would drop the
+un-applied input queue, which is the failure the replay gating already warns
+about.
+
+The error event R002 and R005 require is an ordinary event frame at the next
+`seq` under the current attachment. It carries `kind: "error"`, so the search
+skips it by step 2 and it cannot become a resume target.
 
 Retry policy: lucid never retries a resume. A refused id falls back to fresh,
 once, and the conversation proceeds.
@@ -357,32 +485,44 @@ That is its own decision and out of scope here.
 
 ## Implementation Notes
 
-Ordered so each step is green before the next, as RFC-02's steps were.
+Ordered so each step is green before the next, as RFC-02's steps were. The
+read path is spelled out because the review showed the earlier draft waved at
+it: an implementor following the old steps would have added `harness` to the
+attach frame and still started every reopened turn with `resumeId` undefined.
 
 1. **`frames.ts`**: add `harness` to `attach` and `resumeSessionId` to
-   `attach-ok`, with validators. `harness` validates against the closed name
-   set. Do NOT touch `PROTOCOL_VERSION` - see Versioning.
+   `attach-ok`. Validate `harness` against the closed `HarnessName` set and
+   `resumeSessionId` with `isWireId`. Do NOT touch `PROTOCOL_VERSION` - see
+   Versioning.
 2. **`reducer.ts`**: carry `harness` onto `Attachment`; refuse a headless
-   attach without it (R001). Attribute accepted `identity` events to the live
-   attachment's harness, and add the descending-seq search that produces
-   `resumeSessionId` for `attach-ok`.
-3. **`sequencer.ts` / `host.ts`**: pass the harness on attach, and surface the
-   `resumeSessionId` from `attach-ok` to the strategy.
-4. **`host.ts` strategies**: session mode passes it to `openSession` as a
-   resume; turn mode seeds `resumeId` with it instead of `undefined`, which
-   makes turn-mode resume work with the currently released hcn. Session mode
-   needs the hcn release carrying ticket #97.
-5. **`src/harness/runner.ts`**: `OpenSessionOptions` gains `resume`, distinct
-   from `sessionId`. They are different requests and conflating them is the
-   bug hcn issue #86 reported.
-6. **Tests**: the reducer's search over a synthetic cross-harness log; R001,
-   R002, R005; and `scripts/smoke-resume.ts` flipping from its documented
-   failure to a pass, first for turn mode, then for session mode when hcn
-   ships.
+   attach without it (R001); ignore one on an interactive attach (R008).
+3. **`log.ts`**: `TranscriptEvent` gains `harness`, written by
+   `collectTranscript` from `result.state.attachment?.harness`. This is the
+   whole of the attribution mechanism and it changes no stored bytes.
+4. **`reducer.ts`, the search**: descending-seq walk over the folded
+   transcript, producing `resumeSessionId` for `attach-ok`.
+5. **`sequencer.ts`**: send `harness` on attach; read `resumeSessionId` off
+   the `attach-ok` effect and expose it, next to `epoch` and `attachReplay`
+   which it already exposes.
+6. **`host.ts`**: `HeadlessDeps` gains the harness it already has as a name,
+   and both strategies take the resume id from the sequencer BEFORE their
+   first open. Turn mode seeds `resumeId` with it instead of `undefined`;
+   `streamTurn` already forwards `--resume`, so **turn-mode resume works at
+   this step against released hcn**. Session mode needs step 7.
+7. **`runner.ts` and `hcn-runner.ts`**: `OpenSessionOptions` gains `resume`,
+   distinct from `sessionId`, and `openSession` renders `--resume`. Blocked on
+   the hcn release carrying ticket #97; until then session mode ignores the id
+   and opens fresh, which is its behaviour today.
+8. **Tests**: the search over a synthetic cross-harness transcript; R001,
+   R002, R005, R007, R008; a takeover during RESUMING; and
+   `scripts/smoke-resume.ts` flipping from its documented failure to a pass -
+   turn mode at step 6, session mode at step 7.
 
-The turn-mode half is testable against hcn 0.5.5 today. The session-mode half
-is blocked on the hcn release, and the RFC is written so that landing steps
-1-4 delivers turn-mode resume without waiting for it.
+The incremental claim, stated precisely this time: **steps 1-6 deliver
+turn-mode resume against hcn 0.5.5.** Session mode needs step 7 and the hcn
+release. The earlier draft claimed steps 1-4 sufficed; they do not, because
+the sequencer never read `attach-ok` for anything but epoch and replay, and
+nothing supplied `deps.resume`.
 
 ## Open Questions
 
@@ -409,6 +549,34 @@ is blocked on the hcn release, and the RFC is written so that landing steps
    historical identities from some heuristic. Recommended: leave them; the
    only records that exist are development ones, and a wrong guess resumes the
    wrong conversation. Machine-made default: leave them.
+
+## What changed in revision 2
+
+One line per review finding.
+
+- F1 (blocking, the search had nowhere to read from): attribution moves into
+  the fold and onto `TranscriptEvent`, because `ChannelState` keeps only the
+  current attachment. New step 3; "Finding the id" rewritten.
+- F2 (blocking, the version bump): already corrected before the review, and by
+  running it - folding a record one version behind throws `fold-refused`.
+  Versioning now says do not bump, and why.
+- F3 (major, rules 3/5/R005 conflict): rule 5 now separates the id lucid
+  REQUESTS from the id the harness REPORTS. Reading the second is not deriving
+  the first.
+- F4 (major, the incremental claim): Implementation Notes spell out the read
+  path and the claim becomes steps 1-6, not 1-4.
+- F5 (major, uncovered states): the state machine gains takeover during
+  RESUMING and FRESH, states that every existing refusal issue is unchanged,
+  and adds a section on two attachers resuming one session - answered by the
+  epoch, with a rule that a source attaches before it opens.
+- F6 (major, resumeFrom): a section saying the two are orthogonal, and that a
+  fallback to fresh MUST NOT rebase `resumeFrom`.
+- F7 (minor, harness validation): unknown name is `wrong-type` at the codec
+  (R007), missing name is `invalid-grant` at the reducer (R001); an
+  interactive attach carrying one is ignored (R008).
+- F8 (minor, wire bound): `resumeSessionId` validated with `isWireId`. The
+  no-session-versus-empty-record distinction is named as R006 and left to the
+  source's own transcript read.
 
 ## References
 
