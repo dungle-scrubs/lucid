@@ -53,11 +53,19 @@ import {
 } from "../protocol/index.js";
 import { pathsForDir, type RecordPaths, StoreError } from "./errors.js";
 import type { LockEvent } from "./lock.js";
-import { type AppendEvent, createLog, foldLog, type LogEntry } from "./log.js";
+import { type AppendEvent, type CollectedBatch, createLog, foldLog, type LogEntry } from "./log.js";
 
 const REDACTED = "redacted";
 
-export type { AppendEvent, LogEntry, Transcript, TranscriptEvent, TranscriptInput } from "./log.js";
+export type {
+  AppendEvent,
+  CollectedBatch,
+  CollectedEntry,
+  LogEntry,
+  Transcript,
+  TranscriptEvent,
+  TranscriptInput,
+} from "./log.js";
 
 export interface HostDeps {
   readonly now: () => number;
@@ -155,6 +163,10 @@ export interface ConversationHost {
     readonly turnId?: string;
   }): ReduceResult;
   grantCredit(tokens: number): ReduceResult;
+  /** Fold the log under the append lock and collect effects from `fromOffset`.
+   * Thin delegation to the log's seam — the lock, repair, and return-
+   * never-dispatch discipline lives in `ConversationLog`. */
+  collectEffects(fromOffset: number): CollectedBatch;
 }
 
 export const createConversationHost = (dir: string, deps: HostDeps): ConversationHost => {
@@ -205,6 +217,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       status: channelStatus(s, deps.now(), { processAlive: deps.presence() === true }),
     };
   };
+
+  const collectEffects = (fromOffset: number): CollectedBatch => log.collectEffects(fromOffset);
 
   return {
     conversationId,
@@ -278,6 +292,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         return { result: r, frame: null };
       });
     },
+    collectEffects,
   };
 };
 
