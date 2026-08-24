@@ -89,62 +89,59 @@ against a real process. `AGENTS.md` lists them.
 
 ## How to use it
 
-There is no install yet: no `bin` entry, no build. Run it from the repo.
-
-**`run` holds the terminal until you stop it.** It drives the conversation
-for as long as it lives, so it is not a command that returns - do not paste
-it in a block with others, or everything after it waits behind it. It says so
-on start:
-
-```
-demo · claude · headless-session
-record /Users/you/.lucid/records/demo
-following the log — send to this conversation from anywhere; Ctrl-C to stop
-  ✓ delivered send-1787560136641-p274w6
-```
-
-One terminal, with the driver in the background:
+Build the binary once. It installs as **`lucid2`**, not `lucid` - `lucid` is
+the v1 project, which is still in use and is not being retired.
 
 ```sh
+bun run build          # produces dist/lucid2
 export LUCID_ROOT=~/.lucid/records
-bun src/cli/main.ts run demo --harness claude >/tmp/lucid-run.log 2>&1 &
-bun src/cli/main.ts watch demo
 ```
 
-Then send from anywhere, including a second terminal:
+One window, which is the way in:
 
 ```sh
-bun src/cli/main.ts send demo "your question"
+./dist/lucid2 chat demo --harness claude
 ```
+
+It drives the conversation, renders it, and reads the keyboard. Enter sends.
+Alt+Enter interrupts a running turn. Ctrl+C leaves the terminal as it found
+it. When the harness asks a question, answering it here sends an answer rather
+than a new turn.
+
+The pieces are still separate commands, for scripting and for a second pair of
+eyes:
+
+```sh
+./dist/lucid2 run demo --harness claude    # drive only; holds the terminal
+./dist/lucid2 watch demo                   # render only; read-only
+./dist/lucid2 send demo "your question"    # append an input from anywhere
+```
+
+`run` does not return - it drives for as long as it lives, so it is not a
+command to paste in a block with others.
 
 Two hook commands exist for a session lucid does not own - `announce` for
-SessionStart and `inject` for Stop. They are invoked by the harness, not by a
-person.
+SessionStart and `inject` for Stop. A harness invokes them, not a person.
 
-Today that is still two places: something driving, and something sending.
-The viewer paints an input box, but nothing reads it yet, which is the first
-thing on the list below.
+Without a build, every command works as `bun src/cli/main.ts <command>`.
 
 ## What is not built
 
 - **Artifacts.** An agent's output is text in a transcript. Nothing renders
   as a document.
 - **Annotation.** Nothing to mark up, and no way to mark it.
-- **One window.** The viewer paints an input box but nothing drives it, so
-  sending means another terminal.
-- **An install.** No `bin`, no build, no published package.
+- **A published package.** There is a `bin` and a build, but nothing is
+  published; `bun run build` is the install.
 - **A browser.** By design, until the substrate was proven. It now is.
 
 ## What is next, in order
 
-1. **The conversation, rendered well, in one window.** Most of this exists -
-   the viewer already renders the exchange. What is missing is that the input
-   box does nothing, so the loop is not closed in a single place.
-2. **An artifact in the conversation, and annotation beside it.** An agent
+1. **An artifact in the conversation, and annotation beside it.** An agent
    emits a self-contained document as a message kind; the conversation renders
    it inline and makes it addressable; annotation attaches to an address.
 
-Both need an RFC before code, per the pipeline below.
+That needs an RFC before code, per the pipeline below. The first item on this
+list - the conversation in one window - is done, and is RFC-05.
 
 ## Where authority lives
 

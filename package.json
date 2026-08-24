@@ -11,7 +11,8 @@
     "lint": "biome check .",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "prepare": "git config --local core.hooksPath .git/hooks && lefthook install --force"
+    "prepare": "git config --local core.hooksPath .git/hooks && lefthook install --force",
+    "build": "bun build --compile --outfile dist/lucid2 src/cli/main.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
@@ -21,5 +22,11 @@
   },
   "dependencies": {
     "@dungle-scrubs/harness-cli-normalizer": "0.5.7"
-  }
+  },
+  "bin": {
+    "lucid2": "./dist/lucid2"
+  },
+  "files": [
+    "dist"
+  ]
 }

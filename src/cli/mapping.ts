@@ -36,14 +36,14 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "send": {
       const conversationId = rest[0];
       if (!conversationId)
-        return { kind: "help", message: "usage: lucid send <conversation> <text>" };
+        return { kind: "help", message: "usage: lucid2 send <conversation> <text>" };
       const text = rest.slice(1).join(" ");
-      if (!text) return { kind: "help", message: "usage: lucid send <conversation> <text>" };
+      if (!text) return { kind: "help", message: "usage: lucid2 send <conversation> <text>" };
       return { kind: "send", conversationId, text };
     }
     case "watch": {
       const conversationId = rest[0];
-      if (!conversationId) return { kind: "help", message: "usage: lucid watch <conversation>" };
+      if (!conversationId) return { kind: "help", message: "usage: lucid2 watch <conversation>" };
       return { kind: "watch", conversationId };
     }
     case "run": {
@@ -56,7 +56,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
           if (!harnessName)
             return {
               kind: "help",
-              message: "usage: lucid run [conversation] [--harness <claude|codex|pi|muse>]",
+              message: "usage: lucid2 run [conversation] [--harness <claude|codex|pi|muse>]",
             };
           i++;
         } else if (arg.startsWith("--")) {
@@ -80,7 +80,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
           if (!harnessName)
             return {
               kind: "help",
-              message: "usage: lucid chat [conversation] [--harness <claude|codex|pi|muse>]",
+              message: "usage: lucid2 chat [conversation] [--harness <claude|codex|pi|muse>]",
             };
           i++;
         } else if (arg.startsWith("--")) {
@@ -104,7 +104,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "-h":
       return {
         kind: "help",
-        message: "usage: lucid <send|watch|run|chat|announce|inject> [...]",
+        message: "usage: lucid2 <send|watch|run|chat|announce|inject> [...]",
       };
     default:
       return { kind: "help", message: `unknown command: ${cmd}` };
