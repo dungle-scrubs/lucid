@@ -30,6 +30,7 @@ import {
 import type { ChannelState } from "../protocol/index.js";
 import {
   decodeFrame,
+  type Effect,
   enqueueInput,
   grantCredit,
   initialChannelState,
@@ -120,6 +121,30 @@ export interface Transcript {
   readonly events: readonly TranscriptEvent[];
   readonly inputs: readonly TranscriptInput[];
   readonly aborted: readonly string[];
+}
+
+// ---------------------------------------------------------------------------
+// Collected effects (RFC-04 step 5)
+// ---------------------------------------------------------------------------
+
+/** One entry's effects paired with the byte offset that produced them.
+ * The offset is the entry's starting byte in log.ndjson — stable, ordered,
+ * and already unique, so RFC-04 R4 can use it as the effect's identity
+ * without a second structure. Effects are collected under the append lock
+ * and returned, never dispatched inside the lock (a harness write appends,
+ * so dispatching there would deadlock against the held lock). */
+export interface CollectedEntry {
+  readonly offset: number;
+  readonly effects: readonly Effect[];
+}
+
+export interface CollectedBatch {
+  readonly state: ChannelState;
+  readonly transcript: Transcript;
+  readonly goodBytes: number;
+  /** In log order. A caller that wants each effect on its own flattens
+   * this; a caller that advances a cursor per entry does not. */
+  readonly entries: readonly CollectedEntry[];
 }
 
 interface TranscriptAcc {
@@ -276,6 +301,77 @@ export const foldLog = (
 };
 
 // ---------------------------------------------------------------------------
+// Pure collecting fold (RFC-04 step 5)
+// ---------------------------------------------------------------------------
+
+/** Pure fold that also collects per-entry effects. The state evolution is
+ * identical to `foldLog`: an envelope-valid entry with an unrecognised
+ * `src` is carried (bytes counted, no state change, no effects), and a
+ * reducer refusal contributes no effects but still advances the state to
+ * the refusal's state so a later entry folds against the right snapshot.
+ * Only accepted entries with non-empty effects that start at or after
+ * `fromOffset` are emitted, in log order. Does no I/O, takes no lock. */
+export const foldCollect = (
+  conversationId: string,
+  secret: string,
+  raw: Buffer,
+  fromOffset = 0,
+): {
+  state: ChannelState;
+  goodBytes: number;
+  entries: number;
+  transcript: TranscriptAcc;
+  collected: CollectedEntry[];
+} => {
+  let state = initialChannelState({ conversationId, secret });
+  let offset = 0;
+  let entries = 0;
+  const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
+  const collected: CollectedEntry[] = [];
+  while (offset < raw.length) {
+    const nl = raw.indexOf(NL, offset);
+    if (nl === -1) break;
+    const line = raw.toString("utf8", offset, nl);
+    const entryOffset = offset;
+    if (line.length > 0) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch (cause) {
+        throw new StoreError("corrupt-log", `unparseable log line at byte ${offset}`, { cause });
+      }
+      if (!validEntry(parsed))
+        throw new StoreError("corrupt-log", `malformed log entry at byte ${offset}`);
+      if (knownEntry(parsed)) {
+        const { result, frame } = applyEntry(state, parsed, secret);
+        if (result.verdict === "accepted") {
+          collectTranscript(transcript, parsed, frame, result);
+          state = result.state;
+          entries += 1;
+          if (entryOffset >= fromOffset && result.effects.length > 0) {
+            collected.push({
+              offset: entryOffset,
+              effects: Object.freeze([...result.effects]) as readonly Effect[],
+            });
+          }
+        } else {
+          // Refused entry contributes no effects and no transcript, but
+          // its state still advances so the next entry folds correctly.
+          // Do not count it as an accepted entry — same as foldLog would
+          // (which would have thrown before counting).
+          state = result.state;
+        }
+      }
+    }
+    offset = nl + 1;
+  }
+  return { state, goodBytes: offset, entries, transcript, collected };
+};
+
+/** Convenience pure helper returning the same shape `foldLog` would but
+ * with collected effects included. Thin alias over `foldCollect`. */
+
+// ---------------------------------------------------------------------------
 // I/O helpers
 // ---------------------------------------------------------------------------
 
@@ -309,6 +405,25 @@ const readFoldRepair = (
   return { raw, folded };
 };
 
+/** Shared append-lock wrapper — the single place the lock is acquired
+ * for any locked read. Both `foldUnderAppendLock` (the tailer's read)
+ * and `collectEffectsUnderAppendLock` (the range fold) go through here,
+ * so there is one lock path, not two (ticket: reuse, not duplicate). */
+const withAppendLock = <T>(
+  paths: RecordPaths,
+  conversationId: string,
+  opts: { onLockEvent?: (e: LockEvent) => void },
+  fn: () => T,
+): T => {
+  const flock = new Flock(paths.lockPath, conversationId);
+  const lock = flock.acquire({ onEvent: opts.onLockEvent });
+  try {
+    return fn();
+  } finally {
+    lock.release();
+  }
+};
+
 /** Read the log under the append lock: fold every good byte and repair a
  * torn trailing fragment - `append`'s catch-up discipline offered to
  * readers that act on what they read. The tailer's locked read (RFC-04
@@ -319,10 +434,8 @@ export const foldUnderAppendLock = (
   conversationId: string,
   secret: string,
   opts: { onLockEvent?: (e: LockEvent) => void } = {},
-): { state: ChannelState; transcript: Transcript; goodBytes: number } => {
-  const flock = new Flock(paths.lockPath, conversationId);
-  const lock = flock.acquire({ onEvent: opts.onLockEvent });
-  try {
+): { state: ChannelState; transcript: Transcript; goodBytes: number } =>
+  withAppendLock(paths, conversationId, opts, () => {
     const { folded } = readFoldRepair(paths, conversationId, secret);
     return {
       state: folded.state,
@@ -333,10 +446,56 @@ export const foldUnderAppendLock = (
       },
       goodBytes: folded.goodBytes,
     };
-  } finally {
-    lock.release();
-  }
-};
+  });
+
+/** Collect the effects produced by log entries at or after `fromOffset`,
+ * under the append lock. Reuses the same `readFoldRepair` discipline
+ * `foldUnderAppendLock` does (and `append`'s catch-up does): the file is
+ * read and folded while holding the flock, a torn trailing fragment is
+ * repaired, and the lock is released before effects are returned — never
+ * dispatched inside the lock, so a harness write (which appends) cannot
+ * deadlock against it. The pure fold is `foldCollect`; this is its
+ * locked I/O wrapper, not a second fold path. */
+export const collectEffectsUnderAppendLock = (
+  paths: RecordPaths,
+  conversationId: string,
+  secret: string,
+  fromOffset: number,
+  opts: { onLockEvent?: (e: LockEvent) => void } = {},
+): CollectedBatch =>
+  withAppendLock(paths, conversationId, opts, () => {
+    const raw: Buffer = (() => {
+      try {
+        return readFileSync(paths.logPath);
+      } catch {
+        return Buffer.alloc(0);
+      }
+    })();
+    // Use the collecting fold directly so we do not pay for a second pass,
+    // but keep the repair discipline identical: fold, then truncate a torn
+    // tail under the same lock.
+    const { state, goodBytes, transcript, collected } = foldCollect(
+      conversationId,
+      secret,
+      raw,
+      fromOffset,
+    );
+    if (goodBytes < raw.length) {
+      try {
+        truncateSync(paths.logPath, goodBytes);
+      } catch {}
+    }
+    return {
+      state,
+      transcript: {
+        events: [...transcript.events],
+        inputs: [...transcript.inputs],
+        aborted: [...transcript.aborted],
+      },
+      goodBytes,
+      entries: collected as readonly CollectedEntry[],
+    };
+  });
 
 // ---------------------------------------------------------------------------
 // ConversationLog - the deep module
@@ -363,6 +522,15 @@ export interface ConversationLog {
       frame: import("../protocol/index.js").Frame | null;
     },
   ): ReduceResult;
+  /** Fold the log under the append lock and collect the effects produced
+   * by entries at or after `fromOffset`, in log order. Each effect is
+   * paired with the byte offset of the entry that produced it (RFC-04 R4:
+   * the offset is the effect's identity). Unknown-source entries and
+   * reducer-refused entries contribute no effects. The fold reuses the
+   * same lock and repair discipline as `append`'s catch-up; effects are
+   * returned, never dispatched inside the lock (a harness write appends,
+   * so dispatching there would deadlock). */
+  collectEffects(fromOffset: number): CollectedBatch;
   /** Lock-free view (tolerates torn trailing, does not repair). */
   view(): { state: ChannelState; transcript: Transcript; goodBytes: number };
   close(): void;
@@ -507,6 +675,24 @@ export const createLog = (
     };
   };
 
+  const collectEffects: ConversationLog["collectEffects"] = (fromOffset) => {
+    const batch = collectEffectsUnderAppendLock(paths, conversationId, secret, fromOffset, {
+      onLockEvent: deps.onLockEvent,
+    });
+    // Keep the host's cached snapshot consistent with what the locked fold
+    // just saw, so a subsequent state()/transcript() call does not go stale
+    // after another process appended.
+    curState = batch.state;
+    curGoodBytes = batch.goodBytes;
+    acc.events.length = 0;
+    acc.events.push(...batch.transcript.events);
+    acc.inputs.length = 0;
+    acc.inputs.push(...batch.transcript.inputs);
+    acc.aborted.length = 0;
+    acc.aborted.push(...batch.transcript.aborted);
+    return batch;
+  };
+
   return {
     paths,
     conversationId,
@@ -518,6 +704,7 @@ export const createLog = (
     }),
     goodBytes: () => curGoodBytes,
     append,
+    collectEffects,
     view,
     close: () => {},
     recovery: () => ({ entries: recovery.entries, discardedBytes: recovery.discardedBytes }),

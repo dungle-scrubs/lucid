@@ -70,4 +70,16 @@ export {
   viewSnapshot,
   type WireRecord,
 } from "./conversation-host.js";
-export type { AppendEvent, LogEntry, Transcript, TranscriptEvent, TranscriptInput } from "./log.js";
+export type {
+  AppendEvent,
+  CollectedBatch,
+  CollectedEntry,
+  LogEntry,
+  Transcript,
+  TranscriptEvent,
+  TranscriptInput,
+} from "./log.js";
+export {
+  collectEffectsUnderAppendLock,
+  foldCollect,
+} from "./log.js";
