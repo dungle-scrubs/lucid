@@ -1037,12 +1037,28 @@ describe("reducer core (M4.2)", () => {
     // INPUT_MODES itself, the same array the codec checks against. Answer
     // needs its turnId to be wire-valid; other modes need none.
     for (const mode of INPUT_MODES) {
-      const input =
-        mode === "answer"
-          ? { id: `in-${mode}`, text: "x", mode, turnId: "t-1" }
-          : { id: `in-${mode}`, text: "x", mode };
-      const ok = expectAccepted(enqueueInput(state, input, 2_002));
-      expect(ok.state.inputs.some((i) => i.id === `in-${mode}`)).toBe(true);
+      if (mode === "answer") {
+        const qState = expectAccepted(
+          reduce(
+            state,
+            {
+              kind: "event",
+              epoch: 1,
+              n: 1,
+              turnId: "t-1",
+              event: { kind: "question", question: "Q?" },
+            } as unknown as Frame,
+            2_001,
+          ),
+        ).state;
+        const input = { id: `in-${mode}`, text: "x", mode, turnId: "t-1" };
+        const ok = expectAccepted(enqueueInput(qState, input, 2_002));
+        expect(ok.state.inputs.some((i) => i.id === `in-${mode}`)).toBe(true);
+      } else {
+        const input = { id: `in-${mode}`, text: "x", mode } as const;
+        const ok = expectAccepted(enqueueInput(state, input, 2_002));
+        expect(ok.state.inputs.some((i) => i.id === `in-${mode}`)).toBe(true);
+      }
     }
   });
 
