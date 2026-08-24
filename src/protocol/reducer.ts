@@ -301,7 +301,7 @@ const refusal = (
   issue: RefusalIssue,
   now: number,
   detail?: RefusalDetail,
-  extra?: Pick<TransitionRecord, "credits" | "queueDepth" | "presence">,
+  extra?: Pick<TransitionRecord, "credits" | "queueDepth" | "presence" | "inFlightInputs">,
 ): ReduceResult => ({
   verdict: "refused",
   issue,
@@ -328,8 +328,9 @@ const hostRefusal = (
   frame: Frame,
   issue: RefusalIssue,
   now: number,
+  extra?: Pick<TransitionRecord, "credits" | "queueDepth" | "presence" | "inFlightInputs">,
 ): ReduceResult => {
-  const result = refusal(state, frame, issue, now);
+  const result = refusal(state, frame, issue, now, undefined, extra);
   return { ...result, effects: NO_EFFECTS };
 };
 
@@ -728,7 +729,11 @@ const reducePostAttach = (
 
 /** Host transition: lucid queues an input for delivery to the source. The
  * minted seq and idempotent id travel on the wire, so replay and boundary
- * redelivery can re-deliver without double-application. */
+ * redelivery can re-deliver without double-application. Refuses
+ * `input-queue-full` when the conversation already holds INPUT_QUEUE_MAX
+ * inputs in flight (RFC-04): the refusal is the whole answer - this is a
+ * policy on durable state, and blocking would hang a caller that has
+ * nothing to wait on. */
 export const enqueueInput = (
   state: ChannelState,
   input: {
@@ -771,6 +776,18 @@ export const enqueueInput = (
   // host error there. Other profiles answer through `disposition`.
   if (input.mode === "steer" && state.attachment?.profile === "headless-turn")
     return hostRefusal(state, frame, "steer-unsupported", now);
+  // RFC-04: the input-direction bound. The gauge it reads is durable
+  // state, so the refusal is too - a conversation already holding
+  // INPUT_QUEUE_MAX delivered-but-unfinished turns says no to the next
+  // send instead of letting the backlog grow past the bound silently.
+  // Checked after the id checks on purpose: a retried id at the bound is
+  // a redelivery asking after an input lucid already holds, and
+  // input-id-reused is the true answer for it.
+  if (InputLedger.atCapacity(state.inFlightInputs))
+    return hostRefusal(state, frame, "input-queue-full", now, {
+      queueDepth: queueDepth(state.inputs),
+      inFlightInputs: state.inFlightInputs,
+    });
   const inputs = [...state.inputs, queued];
   return accepted(
     { ...state, seq: queued.seq, inputs },

@@ -12,6 +12,7 @@
  * D-011), not a session creator, and not a viewer.
  */
 
+import { INPUT_QUEUE_MAX, type RefusalIssue } from "../protocol/index.js";
 import { createConversationHost } from "../store/conversation-host.js";
 import { type Conversations, conversations } from "./record-addressing.js";
 
@@ -25,9 +26,39 @@ export interface SendOpts {
   readonly makeId?: () => string;
 }
 
+/** The reducer refused the send. Thrown (not returned) so the command
+ * exits non-zero: `main.ts` maps a rejected `runCli` to the message on
+ * stderr and `process.exit(1)`, which is the script-visible half of the
+ * input bound's contract (RFC-04) - a shell must be able to notice. The
+ * issue rides along typed so callers and tests can branch on it without
+ * string-matching the message. */
+export class SendRefused extends Error {
+  constructor(
+    readonly issue: RefusalIssue,
+    message: string,
+  ) {
+    super(message);
+    this.name = "SendRefused";
+  }
+}
+
+/** The refusal an operator reads, as one line: the issue names the
+ * condition, the measured gauges say why it tripped. */
+const refusalMessage = (
+  issue: RefusalIssue,
+  record: { readonly inFlightInputs?: number },
+): string => {
+  if (issue !== "input-queue-full") return `${issue}: send refused`;
+  const inFlight = record.inFlightInputs ?? 0;
+  return `input-queue-full: ${inFlight} of ${INPUT_QUEUE_MAX} inputs in flight on this conversation; wait for a turn to finish before sending again`;
+};
+
 /** Append `text` as a transient `input` to `conversationId`'s log.
  * Creates the record if it does not exist (first send mints it).
  * Returns the enqueued input id so a test can assert at-least-once.
+ * Throws `SendRefused` when the reducer refuses the input - the record
+ * is unchanged either way (a refused transition never writes), so the
+ * command's only job left is to say so and exit non-zero.
  *
  * The addressing seam (`conversations`) and host creation are injected so
  * `dispatch` — the deep CliHost — owns the single `effectiveRoot`
@@ -52,6 +83,10 @@ export const sendInput = (conversationId: string, opts: SendOpts): { inputId: st
   });
 
   const inputId = opts.makeId?.() ?? `send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  host.enqueueInput({ id: inputId, text: opts.text, mode: "queue" });
+  const result = host.enqueueInput({ id: inputId, text: opts.text, mode: "queue" });
+  if (result.verdict === "refused") {
+    const { issue, record } = result;
+    throw new SendRefused(issue, refusalMessage(issue, record));
+  }
   return { inputId };
 };

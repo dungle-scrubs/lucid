@@ -29,9 +29,13 @@
  *
  * queueDepth keeps its name and meaning: it is still the right number for
  * "awaiting a disposition". It is simply not the backlog.
+ *
+ * RFC-04's input bound gates on the in-flight gauge here: `atCapacity`
+ * is the check `enqueueInput` refuses `input-queue-full` through, so the
+ * bound and the quantity it bounds live in one module.
  */
 
-import { EventKind } from "../events.js";
+import { EventKind, INPUT_QUEUE_MAX } from "../events.js";
 import type { QueuedInput } from "../reducer.js";
 
 const NO_INPUTS: readonly QueuedInput[] = Object.freeze([]);
@@ -44,6 +48,15 @@ const NO_INPUTS: readonly QueuedInput[] = Object.freeze([]);
 const TERMINAL_EVENT_KINDS: readonly unknown[] = [EventKind.done];
 
 export const InputLedger = {
+  /** The input bound's gate (RFC-04): a conversation already holding
+   * INPUT_QUEUE_MAX in-flight inputs refuses new sends. Reads the
+   * in-flight gauge, never queueDepth - queueDepth counts inputs awaiting
+   * a disposition and reads zero under the exact backlog this catches
+   * (ADR 0007), which is the trap revision 1 fell into. */
+  atCapacity(inFlight: number): boolean {
+    return inFlight >= INPUT_QUEUE_MAX;
+  },
+
   /** Inputs still AWAITING a disposition — the gauge the host pages on.
    * Measures disposition round-trip, not backlog, since hcn stopped
    * queueing (ADR 0007): an accepted send is answered applied at once. */
@@ -80,6 +93,7 @@ export const InputLedger = {
 
 export const queueDepth = (inputs: readonly QueuedInput[]): number =>
   InputLedger.queueDepth(inputs);
+export const atCapacity = (inFlight: number): boolean => InputLedger.atCapacity(inFlight);
 export const redeliverable = (
   inputs: readonly QueuedInput[],
   sameTurn: boolean,

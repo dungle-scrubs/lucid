@@ -14,6 +14,7 @@ export {
 } from "./attachment.js";
 export { CreditLedger, clampedGrant, isStarved } from "./credit.js";
 export {
+  atCapacity,
   clearRedeliver,
   InputLedger,
   queueDepth,

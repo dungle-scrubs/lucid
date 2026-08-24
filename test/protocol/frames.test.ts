@@ -5,6 +5,7 @@ import {
   FRAME_KINDS,
   type Frame,
   parseFrame,
+  REFUSAL_ISSUES,
 } from "../../src/protocol/frames.js";
 
 const cid = "conv-1";
@@ -193,5 +194,24 @@ describe("frame codecs (M4.1)", () => {
       turnId: "t-9",
     });
     expect(ok.verdict).toBe("ok");
+  });
+
+  test("every refusal issue rides a refused frame, input-queue-full included, and an unknown issue still fails closed", () => {
+    // REFUSAL_ISSUES is wire vocabulary: a `refused` frame carries the
+    // issue, so the codec must accept each one the reducer can raise -
+    // input-queue-full (RFC-04) is why this test exists - while anything
+    // outside the list refuses wrong-type. That fail-closed is the whole
+    // compatibility story for a reader one issue behind: it refuses a
+    // frame it cannot interpret rather than guessing at it.
+    expect(REFUSAL_ISSUES).toContain("input-queue-full");
+    for (const issue of REFUSAL_ISSUES) {
+      const decoded = parseFrame(encodeFrame({ kind: "refused", issue }));
+      expect(decoded.verdict, issue).toBe("ok");
+      if (decoded.verdict === "ok") expect(decoded.frame).toEqual({ kind: "refused", issue });
+    }
+    expect(decodeFrame({ kind: "refused", issue: "not-an-issue" })).toEqual({
+      verdict: "refused",
+      issue: "wrong-type",
+    });
   });
 });

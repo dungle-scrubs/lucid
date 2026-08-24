@@ -15,6 +15,7 @@ export {
   type EventClass,
   EventKind,
   type HarnessEventKind,
+  INPUT_QUEUE_MAX,
   isKnownEventKind,
   LOSSLESS_KINDS,
   type PendingDroppable,
@@ -42,6 +43,7 @@ export {
 } from "./frames.js";
 export {
   AttachmentLedger,
+  atCapacity,
   CreditLedger,
   clampedGrant,
   clearRedeliver,
