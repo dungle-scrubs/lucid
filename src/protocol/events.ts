@@ -42,6 +42,13 @@ export const EventKind = {
   tool: "tool",
   limit: "limit",
   error: "error",
+  /** The harness is asking the human something. hcn parses an
+   * `hcn-question` block out of a turn and emits this beside the message
+   * that carried it. Lossless by class - a question nobody sees is a
+   * conversation that stops - and it was already treated that way, because
+   * an unknown kind defaults to lossless. Naming it here stops the drift
+   * probe reporting a kind hcn documents. */
+  question: "question",
   done: "done",
 } as const;
 
