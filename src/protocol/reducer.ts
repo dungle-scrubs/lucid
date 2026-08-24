@@ -455,6 +455,17 @@ const nextQuestionOpenAfterEvent = (
     };
   }
   if (current === null) return null;
+  // The harness can disagree that a question is open: hcn's session holds
+  // its own notion of what was asked, and an answer to lucid's newer
+  // question can come back `no-open-question`. The demotion path records
+  // the divergence as a non-terminal error on the current turn and clears
+  // lucid's view, because the harness has said it was wrong.
+  if (
+    ev.kind === EventKind.error &&
+    typeof ev.message === "string" &&
+    ev.message.includes("no-open-question")
+  )
+    return null;
   // Nothing here reads the terminal cause, and that is the point rather
   // than an omission. The `done` that ends an asking turn - cause
   // `awaiting-input`, named in `harness/events` - carries the asking
