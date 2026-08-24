@@ -195,4 +195,61 @@ describe("TUI render (M6.1)", () => {
     expect(out).toContain("> type here");
     expect(out.startsWith("\x1b[2J")).toBe(true); // cleared before paint
   });
+
+  test("a question renders as a question, not as a wall of JSON", () => {
+    // The shape hcn actually emits (src/execution/open-session.ts): the
+    // parsed block beside the message that carried it. lucid had no
+    // `question` kind at all, so this fell to the `[kind]` fallback and
+    // rendered as a bare `[question]` under the raw fenced block - which is
+    // what a live conversation looked like the first time a harness asked
+    // anything.
+    const view = buildView({
+      transcript: {
+        events: [
+          {
+            seq: 2,
+            turnId: "t1",
+            event: {
+              kind: "message",
+              role: "assistant",
+              text: 'No task came through.\n\n```hcn-question\n{"question":"x"}\n```\n',
+            },
+          },
+          {
+            seq: 3,
+            turnId: "t1",
+            event: {
+              kind: "question",
+              question: "What should I work on?",
+              options: ["Draft the RFC", "Run the smoke lanes"],
+              recommended: "Draft the RFC",
+            },
+          },
+        ],
+        inputs: [],
+        aborted: [],
+      } as unknown as Parameters<typeof buildView>[0]["transcript"],
+      status: "headless-session",
+      rung: "watch",
+      draft: "",
+    });
+    const text = view.lines.map((l) => l.text).join("\n");
+
+    // The fence is protocol, not prose: the projection drops it. The log
+    // still holds the message verbatim.
+    expect(text).not.toContain("hcn-question");
+    expect(text).toContain("No task came through.");
+
+    // And the question reads as one.
+    expect(text).toContain("? What should I work on?");
+    expect(text).toContain("1. Draft the RFC");
+    expect(text).toContain("2. Run the smoke lanes");
+    expect(text).toContain("recommended: Draft the RFC");
+    expect(text).not.toContain("[question]");
+
+    // Every row of a multi-row line stays in the conversation gutter.
+    const painted = renderLines(view);
+    const optionRows = painted.filter((r) => r.includes("Draft the RFC"));
+    for (const row of optionRows) expect(row.startsWith("  ")).toBe(true);
+  });
 });

@@ -70,10 +70,32 @@ export interface TuiView {
  * a projection, so an unclassifiable payload renders its kind, never a
  * crash. Kind strings are imported from the single `EventKind` vocabulary
  * (`protocol/events`), never mirrored — a rename is a single edit. */
+/** hcn's question protocol travels in the message text as a fenced
+ * `hcn-question` block AND as a `question` event beside it. The block is
+ * protocol, not prose: rendering it raw puts a wall of JSON in the middle
+ * of a conversation, which is what it looked like the first time a harness
+ * asked something. The log keeps the message verbatim; this projection
+ * drops the fence, and the `question` event carries the meaning. */
+const stripQuestionBlock = (text: string): string =>
+  text
+    .replace(/```hcn-question[\s\S]*?```/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
 const eventText = (event: Record<string, unknown>): string => {
   const kind = typeof event.kind === "string" ? event.kind : "event";
-  if ((kind === EventKind.message || kind === EventKind.token) && typeof event.text === "string")
-    return event.text;
+  if (kind === EventKind.message && typeof event.text === "string")
+    return stripQuestionBlock(event.text);
+  if (kind === EventKind.token && typeof event.text === "string") return event.text;
+  if (kind === EventKind.question && typeof event.question === "string") {
+    const options = Array.isArray(event.options) ? event.options : [];
+    const recommended = typeof event.recommended === "string" ? event.recommended : undefined;
+    return [
+      `? ${event.question}`,
+      ...options.map((o, i) => `    ${i + 1}. ${String(o)}`),
+      ...(recommended === undefined ? [] : [`    → recommended: ${recommended}`]),
+    ].join("\n");
+  }
   if (kind === EventKind.tool && typeof event.name === "string") return `⚙ ${event.name}`;
   if (kind === EventKind.progress && typeof event.label === "string") return `… ${event.label}`;
   return `[${kind}]`;

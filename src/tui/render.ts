@@ -13,9 +13,13 @@ import type { TuiView } from "./view.js";
  * then the status/rung line, then the input box. Pure - the live smoke
  * verifies these lines actually reach a terminal. */
 export const renderLines = (view: TuiView): readonly string[] => {
-  const body = view.lines.map((line) => {
-    if (line.kind === "agent") return line.aborted ? `  ⌁ ${line.text}` : `  ${line.text}`;
-    return `  ${line.mark ?? "…"} ${line.text}`;
+  // A line's text may be several physical lines - a question renders its
+  // options one per row. Indent every row, not just the first, or the
+  // continuation escapes the conversation's gutter.
+  const body = view.lines.flatMap((line) => {
+    const rows = line.text.split("\n");
+    const lead = line.kind === "agent" ? (line.aborted ? "  ⌁ " : "  ") : `  ${line.mark ?? "…"} `;
+    return rows.map((row, i) => (i === 0 ? `${lead}${row}` : `${" ".repeat(lead.length)}${row}`));
   });
   return [...body, "─".repeat(40), `${view.status} ${view.rung}`, view.inputBox];
 };
