@@ -16,6 +16,7 @@ import {
   type HostRecord,
   openConversation,
   StoreError,
+  viewConversation,
 } from "../../src/store/store.js";
 import { attach, event } from "../protocol/helpers.js";
 
@@ -347,6 +348,66 @@ describe("durable conversation store (M5.1)", () => {
     // A corrupt line WITH a newline is not a torn tail: typed corruption.
     appendFileSync(paths.logPath, "NOT-JSON\n");
     expect(() => openHost(root, "conv-1")).toThrow(StoreError);
+  });
+
+  test("an envelope-valid entry whose src this build does not know is carried, not applied (RFC-04 P1): the record opens, nothing is contributed, and its bytes count as good", () => {
+    const root = freshRoot();
+    const { secret, paths } = createConversationRecord(root, "conv-1");
+    const h = openHost(root, "conv-1");
+    h.host.handleFrame(encodeFrame(attachFrame(secret)));
+    h.host.grantCredit(5);
+    const before = h.host.state();
+    const transcriptBefore = h.host.transcript();
+
+    // Hand-composed line: no writer produces an unknown src yet. The
+    // delivery cursor of RFC-04 will be exactly such an entry, and this
+    // test is the prerequisite that keeps it from bricking the record.
+    appendFileSync(paths.logPath, '{"v":1,"at":9,"src":"cursor","offset":42}\n');
+
+    // The record opens, and the unknown entry contributed nothing.
+    const reopened = openHost(root, "conv-1");
+    expect(reopened.host.state()).toEqual(before);
+    expect(reopened.host.transcript()).toEqual(transcriptBefore);
+    const recovery = reopened.records[0];
+    expect(recovery?.verdict).toBe("recovered");
+    if (recovery?.verdict === "recovered") expect(recovery.entries).toBe(2);
+
+    // Byte accounting is unchanged: the unknown line's bytes are good
+    // (the fold did not treat them as a torn tail), through the lock-free
+    // reader too.
+    const raw = readFileSync(paths.logPath);
+    expect(viewConversation(recordDir(root, "conv-1")).goodBytes).toBe(raw.length);
+
+    // Later entries still fold past it, and a subsequent append lands
+    // after it rather than over it.
+    reopened.now = 3_000;
+    reopened.host.grantCredit(1);
+    const after = viewConversation(recordDir(root, "conv-1"));
+    expect(after.state.credits).toBe(6);
+    expect(after.goodBytes).toBe(readFileSync(paths.logPath).length);
+    expect(readFileSync(paths.logPath, "utf8").includes('"src":"cursor"')).toBe(true);
+  });
+
+  test("envelope corruption is still refused whatever the src: a bad version or a missing timestamp is corruption, not an unknown entry (RFC-04 P1 keeps the envelope)", () => {
+    const root = freshRoot();
+    const { secret, paths } = createConversationRecord(root, "conv-1");
+    const h = openHost(root, "conv-1");
+    h.host.handleFrame(encodeFrame(attachFrame(secret)));
+
+    // Bad version.
+    appendFileSync(paths.logPath, '{"v":2,"at":9,"src":"cursor","offset":42}\n');
+    expect(() => openHost(root, "conv-1")).toThrow(StoreError);
+    expect(() => openHost(root, "conv-1")).toThrow(/malformed log entry/);
+
+    // Missing timestamp, on a second clean record: the first file is
+    // already refused for its own reason.
+    const root2 = freshRoot();
+    const made2 = createConversationRecord(root2, "conv-1");
+    const h2 = openHost(root2, "conv-1");
+    h2.host.handleFrame(encodeFrame(attachFrame(made2.secret)));
+    appendFileSync(made2.paths.logPath, '{"v":1,"src":"cursor","offset":42}\n');
+    expect(() => openHost(root2, "conv-1")).toThrow(StoreError);
+    expect(() => openHost(root2, "conv-1")).toThrow(/malformed log entry/);
   });
 
   test("identity lives in meta, not the path: a moved record still opens and folds under its own conversationId", () => {

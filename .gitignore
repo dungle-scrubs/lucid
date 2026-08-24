@@ -1,4 +1,6 @@
-node_modules/
+# Bare, not `node_modules/`: a trailing slash matches a directory only, and a
+# symlink named node_modules slips straight past it into a commit.
+node_modules
 .lucid/*/run/
 lucid-v2-plan/
 lucid-v2-plan.html
