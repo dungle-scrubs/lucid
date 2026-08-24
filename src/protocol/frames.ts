@@ -77,6 +77,7 @@ export const REFUSAL_ISSUES = [
   "turn-id-reused",
   "input-id-reused",
   "unknown-input",
+  "input-queue-full",
   "no-credit",
   "invalid-grant",
   "invalid-input",

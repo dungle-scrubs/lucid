@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { DROPPABLE_QUEUE_MAX } from "../../src/protocol/events.js";
+import { DROPPABLE_QUEUE_MAX, INPUT_QUEUE_MAX } from "../../src/protocol/events.js";
 import { FRAME_KINDS, type Frame, parseFrame } from "../../src/protocol/frames.js";
 import { InputLedger } from "../../src/protocol/ledgers/input.js";
 import {
+  type ChannelState,
   enqueueInput,
   grantCredit,
   initialChannelState,
@@ -1120,32 +1121,45 @@ describe("RFC-04 P2: the in-flight input gauge", () => {
     expect(finished.state.inFlightInputs).toBe(0);
   });
 
-  test("the two gauges disagree: 100 applied sends leave queueDepth at zero while the harness is 100 turns behind", () => {
+  test("the two gauges disagree: applied sends leave queueDepth at zero while the harness is turns behind", () => {
     // The ADR-0007 scenario the RFC's prototype ran: hcn answers every
-    // send `started` at once, so all 100 inputs are applied and out of the
+    // send `started` at once, so inputs are applied and out of the
     // disposition queue before a single turn finishes. queueDepth reports
     // the disposition round-trip (microseconds); only in-flight sees the
-    // backlog. This disagreement is why the second gauge exists.
+    // backlog. This disagreement is why the second gauge exists. The
+    // input bound (RFC-04) caps the demonstration at INPUT_QUEUE_MAX
+    // concurrent in-flight inputs, so the run goes in batches: fill the
+    // backlog to the bound, let the harness finish the batch, repeat.
     let state = drive(fresh(), [[attach({ profile: "headless-session" }), 1_000]]);
-    for (let i = 1; i <= 100; i++) {
-      state = expectAccepted(
-        enqueueInput(state, { id: `in-${i}`, text: `task ${i}`, mode: "queue" }, 1_000 + i),
-      ).state;
-      const answered = expectAccepted(reduce(state, applied(`in-${i}`), 1_000 + i));
-      expect(answered.record.queueDepth).toBe(0);
-      expect(answered.record.inFlightInputs).toBe(i);
-      state = answered.state;
+    let sent = 0;
+    let ev = 0;
+    for (let batch = 0; batch < 4; batch++) {
+      for (let i = 1; i <= INPUT_QUEUE_MAX; i++) {
+        sent++;
+        state = expectAccepted(
+          enqueueInput(
+            state,
+            { id: `in-${sent}`, text: `task ${sent}`, mode: "queue" },
+            1_000 + sent,
+          ),
+        ).state;
+        const answered = expectAccepted(reduce(state, applied(`in-${sent}`), 1_000 + sent));
+        expect(answered.record.queueDepth).toBe(0);
+        expect(answered.record.inFlightInputs).toBe(i);
+        state = answered.state;
+      }
+      expect(state.inFlightInputs).toBe(INPUT_QUEUE_MAX);
+      // Turns finish one at a time: the backlog falls one per done event
+      // and the next batch starts from an empty one.
+      for (let i = 1; i <= INPUT_QUEUE_MAX; i++) {
+        ev++;
+        state = expectAccepted(reduce(state, done(ev, `t-${ev}`), 2_000 + ev)).state;
+      }
+      expect(state.inFlightInputs).toBe(0);
     }
 
     expect(InputLedger.queueDepth(state.inputs)).toBe(0);
-    expect(state.inFlightInputs).toBe(100);
-
-    // Turns finish one at a time: the backlog falls one per done event.
-    for (let i = 1; i <= 100; i++) {
-      state = expectAccepted(reduce(state, done(i, `t-${i}`), 2_000 + i)).state;
-    }
     expect(state.inFlightInputs).toBe(0);
-    expect(InputLedger.queueDepth(state.inputs)).toBe(0);
   });
 
   test("a redelivered applied disposition is idempotent for the gauge too - one input, one rise", () => {
@@ -1227,6 +1241,125 @@ describe("RFC-04 P2: the in-flight input gauge", () => {
     const replayed = expectRefused(reduce(state, done(2, "t-2"), 2_100));
     expect(replayed.issue).toBe("dupe-n");
     expect(replayed.state.inFlightInputs).toBe(1);
+  });
+});
+
+describe("RFC-04: the input bound", () => {
+  const applied = (id: string): Frame => ({
+    kind: "disposition",
+    epoch: 1,
+    inputId: id,
+    outcome: "applied",
+  });
+  const done = (n: number, turnId: string): Frame =>
+    event({ n, turnId, event: { kind: "done", exitCode: 0, cause: "end" } });
+
+  /** Attach once, then deliver `count` inputs (enqueue + applied each):
+   * the harness has taken them and no turn has finished - exactly the
+   * backlog INPUT_QUEUE_MAX bounds. */
+  const backlogged = (count: number): ChannelState => {
+    let state = drive(fresh(), [[attach({ profile: "headless-session" }), 1_000]]);
+    for (let i = 1; i <= count; i++) {
+      state = expectAccepted(
+        enqueueInput(state, { id: `in-${i}`, text: `task ${i}`, mode: "queue" }, 1_000 + i),
+      ).state;
+      state = expectAccepted(reduce(state, applied(`in-${i}`), 1_100 + i)).state;
+    }
+    expect(state.inFlightInputs).toBe(count);
+    return state;
+  };
+
+  test("the bound is decided: 8, one named constant beside the outbound bound (RFC-04 Open Question 1)", () => {
+    // The RFC left the number to implementation once P2's gauge existed.
+    // 8 is small on purpose - the reason is recorded at the constant. It
+    // imports from the module that owns DROPPABLE_QUEUE_MAX, which is the
+    // "one named constant beside the outbound bound" requirement, and
+    // pinning the value here makes changing it a visible decision.
+    expect(INPUT_QUEUE_MAX).toBe(8);
+    expect(INPUT_QUEUE_MAX).toBeLessThan(DROPPABLE_QUEUE_MAX);
+  });
+
+  test("a send at the bound is refused input-queue-full: state untouched, no effects, and the record names the condition with both gauges", () => {
+    const state = backlogged(INPUT_QUEUE_MAX);
+    const result = expectRefused(
+      enqueueInput(state, { id: "in-9", text: "one too many", mode: "queue" }, 9_000),
+    );
+
+    expect(result.issue).toBe("input-queue-full");
+    // A refusal never applies - same state object - and a host refusal
+    // sends nothing on the wire: there is nothing to write and nothing
+    // to dispatch, so the record is unchanged (the store's refused
+    // transitions never write a log line).
+    expect(result.state).toBe(state);
+    expect(result.effects).toEqual([]);
+    expect(result.record.verdict).toBe("refused");
+    expect(result.record.issue).toBe("input-queue-full");
+    expect(result.record.inputId).toBe("in-9");
+    expect(result.record.queueDepth).toBe(0);
+    expect(result.record.inFlightInputs).toBe(INPUT_QUEUE_MAX);
+  });
+
+  test("the bound reads the in-flight gauge, not queueDepth - the revision-1 trap", () => {
+    // hcn answers every send applied at once (ADR 0007), so at the bound
+    // the disposition queue is EMPTY: queueDepth reads 0 under exactly
+    // the backlog this exists to catch. A bound on queueDepth - what RFC-04
+    // revision 1 proposed - never trips; this one refuses.
+    const state = backlogged(INPUT_QUEUE_MAX);
+    expect(InputLedger.queueDepth(state.inputs)).toBe(0);
+    expect(state.inFlightInputs).toBe(INPUT_QUEUE_MAX);
+    const refused = expectRefused(
+      enqueueInput(state, { id: "in-next", text: "x", mode: "queue" }, 9_000),
+    );
+    expect(refused.issue).toBe("input-queue-full");
+  });
+
+  test("below the bound, sending is unaffected", () => {
+    const state = backlogged(INPUT_QUEUE_MAX - 1);
+    const ok = expectAccepted(
+      enqueueInput(state, { id: "in-next", text: "still room", mode: "queue" }, 9_000),
+    );
+    expect(ok.state.inputs.some((i) => i.id === "in-next")).toBe(true);
+    expect(ok.state.inFlightInputs).toBe(INPUT_QUEUE_MAX - 1);
+  });
+
+  test("a finished turn opens a slot: the backlog falls and the next send is accepted again", () => {
+    let state = backlogged(INPUT_QUEUE_MAX);
+    state = expectAccepted(reduce(state, done(1, "t-1"), 9_000)).state;
+    expect(state.inFlightInputs).toBe(INPUT_QUEUE_MAX - 1);
+    expectAccepted(enqueueInput(state, { id: "in-next", text: "room now", mode: "queue" }, 9_100));
+  });
+
+  test("the bound holds on durable state alone: a lapsed lease opens no slot, the takeover that zeroes the gauge does", () => {
+    // No writer is attached - the lease lapsed without a takeover - yet
+    // the record still says 8 turns are unanswered. The bound is policy
+    // on durable state, not on live writers, so the send still refuses.
+    // The successor's attach resets the gauge (P2), and only that opens
+    // the door again - which is also what keeps a dead incumbent's
+    // backlog from fencing the conversation forever.
+    const state = backlogged(INPUT_QUEUE_MAX);
+    const lapsed = 1_000 + LEASE_TTL_MS + 5_000;
+    expect(isLive(state, lapsed)).toBe(false);
+    expectRefused(
+      enqueueInput(state, { id: "in-next", text: "no one is driving", mode: "queue" }, lapsed),
+    );
+
+    const takeover = expectAccepted(reduce(state, attach({ profile: "headless-session" }), lapsed));
+    expect(takeover.state.inFlightInputs).toBe(0);
+    expectAccepted(
+      enqueueInput(
+        takeover.state,
+        { id: "in-next", text: "fresh writer", mode: "queue" },
+        lapsed + 10,
+      ),
+    );
+  });
+
+  test("a reused id still answers input-id-reused at the bound - a retried send is a redelivery question, not a capacity one", () => {
+    const state = backlogged(INPUT_QUEUE_MAX);
+    const result = expectRefused(
+      enqueueInput(state, { id: "in-1", text: "retry", mode: "queue" }, 9_000),
+    );
+    expect(result.issue).toBe("input-id-reused");
   });
 });
 

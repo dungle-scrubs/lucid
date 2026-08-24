@@ -1,17 +1,33 @@
 /**
  * Owns the event-class policy PLAN.md Part 0 declares and Part 1 uses:
  * which HarnessEvent kinds are droppable (coalescible under pressure,
- * latest-wins) vs lossless (never dropped, replay-covered), and the one
- * named constant bounding outstanding flow credits. Pure vocabulary +
- * policy only - NOT responsible for enforcing credits (the reducer does)
- * or for transport.
+ * latest-wins) vs lossless (never dropped, replay-covered), and the named
+ * constants bounding the outbound and input directions. Pure vocabulary +
+ * policy only - NOT responsible for enforcing credits (the reducer does),
+ * for the input bound (the reducer refuses), or for transport.
  */
 
-/** The one named bound (PLAN 4.5): grantCredit clamps so credits
+/** The outbound bound (PLAN 4.5): grantCredit clamps so credits
  * outstanding never exceed this, which bounds how many droppable frames
  * lucid can accept between render drains. It does NOT bound the lossless
  * class, which is never gated. */
 export const DROPPABLE_QUEUE_MAX = 256;
+
+/** The input bound (RFC-04, its Open Question 1 - decided here, on the
+ * gauge P2 added). It bounds IN-FLIGHT inputs: delivered to a harness,
+ * their turn not terminal yet, which is what InputLedger counts. 8, not
+ * the 256 beside it: that bound absorbs machine-paced render traffic,
+ * while one in-flight input is a turn a sender is waiting on, and neither
+ * a human steering a chat nor a script batching work holds 8 unanswered
+ * turns before the next reply - a sender past that is flooding, not
+ * steering, and the refusal should name it. Small is safe only because
+ * the gauge is real: queueDepth, which revision 1 proposed bounding,
+ * reads zero under exactly the backlog this exists to catch (ADR 0007).
+ * When `enqueueInput` refuses here (`input-queue-full`) it refuses
+ * outright, never blocks - the bound is policy on durable state, and a
+ * short-lived `lucid send` invoked from a shell has no caller to wait on
+ * behalf of; a shell that hangs is worse than one that says no. */
+export const INPUT_QUEUE_MAX = 8;
 
 /** Single vocabulary for HarnessEvent kinds — the ONE place the kind
  * strings live. View, store, and protocol consumers import from here,

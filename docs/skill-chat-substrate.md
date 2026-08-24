@@ -83,6 +83,12 @@ the `disposition` you send back:
   `queue`s between turns. `steer` is only legal where the profile allows
   it - a steer at a `headless-turn` attachment is refused.
 
+lucid bounds the input direction itself: a conversation holds at most 8
+delivered-but-unfinished inputs, and a send past that is refused
+`input-queue-full` at lucid's own boundary - never against a frame you
+sent. Finish turns and the bound reopens. The issue is in the `refused`
+vocabulary, so decode it like any other rather than crashing on it.
+
 ## Leaving
 
 - `detach { epoch, reason: yield | shutdown }` at a turn boundary. A clean
