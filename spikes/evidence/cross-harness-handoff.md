@@ -21,7 +21,7 @@ harness yet; this script composes the prompt by hand.
 
 ```
 # cross-harness handoff: claude -> pi
-record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-xharness-UxouMg/xh-1
+record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-xharness-zpHm8W/xh-1
 
 ## claude establishes the codeword
 claude attached: profile headless-session

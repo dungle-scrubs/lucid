@@ -1,5 +1,17 @@
 # lucid-v2 - plan
 
+> **Status: delivered.** This is the RFC of record for the chat substrate,
+> kept because RFC-02 and the decision register cite it. It is history, not
+> the front door.
+>
+> Build order steps 1 through 7 are done. Step 8 - artifact, annotation, the
+> review surface - is the live work and is scoped in `docs/rfc/`, not here.
+> For what lucid is, what the words mean, and what works today, read
+> `CONTEXT.md`. For decisions and their reasons, `docs/decisions.md`.
+>
+> Nothing below is edited to match later changes. Where a later RFC
+> supersedes something here, the RFC says so.
+
 <!-- D-012 --> Registered as the RFC for the `00-chat-substrate` plan;
 RFC+REVIEW treated as externally satisfied (Codex+Muse round 1, Claude Code
 round 2, lucid ratification of all decisions). Revision history retained
