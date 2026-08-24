@@ -205,6 +205,14 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
       cursor: () => host.cursor(),
       collectEffects: (from: number) => host.collectEffects(from),
       advanceCursor: (off: number) => host.advanceCursor(off),
+      artifactIndex: () => host.artifactIndex(),
+      writeArtifact: (params: {
+        readonly artifactId: string;
+        readonly version: number;
+        readonly author: string;
+        readonly contentType: string;
+        readonly bytes: string;
+      }) => host.writeArtifact(params),
     },
   } as const;
 

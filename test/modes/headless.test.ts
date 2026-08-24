@@ -154,7 +154,13 @@ describe("headless modes (M5.2)", () => {
     await flush();
     // The command reached hcn's stdin as a send op carrying lucid's id.
     expect(
-      r.proc.commands.some((c) => c.op === "send" && c.text === "do the thing" && c.id === "in-1"),
+      r.proc.commands.some(
+        (c) =>
+          c.op === "send" &&
+          typeof c.text === "string" &&
+          c.text.includes("do the thing") &&
+          c.id === "in-1",
+      ),
     ).toBe(true);
     r.accept("in-1", "turn-1");
     await flush();
@@ -195,7 +201,10 @@ describe("headless modes (M5.2)", () => {
 
     const sends = r.proc.commands.filter((c) => c.op === "send" || c.id === "in-1");
     expect(sends.length).toBe(1);
-    expect(sends[0]).toMatchObject({ id: "in-1", text: "held while nothing ran" });
+    expect(sends[0]).toMatchObject({ id: "in-1" });
+    expect(
+      typeof sends[0]?.text === "string" && sends[0].text.includes("held while nothing ran"),
+    ).toBe(true);
 
     // And it runs a real turn, so the reply lands in the durable record.
     r.accept("in-1", "turn-1");

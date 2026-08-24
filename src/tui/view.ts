@@ -30,6 +30,7 @@
  * the store already folded (D-009: the view IS fold(log)).
  */
 
+import { stripArtifactBlocks } from "../protocol/artifacts.js";
 import { EventKind } from "../protocol/events.js";
 import type { ChannelStatus } from "../protocol/index.js";
 import type { Transcript, TranscriptInput } from "../store/store.js";
@@ -82,10 +83,18 @@ const stripQuestionBlock = (text: string): string =>
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
+const stripMessageBlocks = (text: string): string => {
+  // Artifact and question are both protocol fences carried in message text.
+  // The log keeps the raw text; the view drops the fence and shows the
+  // structured meaning. Artifact placeholder is named reference, never bytes.
+  const withoutArtifact = stripArtifactBlocks(text);
+  return stripQuestionBlock(withoutArtifact);
+};
+
 const eventText = (event: Record<string, unknown>): string => {
   const kind = typeof event.kind === "string" ? event.kind : "event";
   if (kind === EventKind.message && typeof event.text === "string")
-    return stripQuestionBlock(event.text);
+    return stripMessageBlocks(event.text);
   if (kind === EventKind.token && typeof event.text === "string") return event.text;
   if (kind === EventKind.question && typeof event.question === "string") {
     const options = Array.isArray(event.options) ? event.options : [];
