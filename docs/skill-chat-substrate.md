@@ -21,7 +21,7 @@ this.
 
 ## Attaching
 
-Send `attach { conversationId, profile, secret, version, resumeFrom? }`:
+Send `attach { conversationId, profile, secret, version, harness?, resumeFrom? }`:
 
 - `secret` - read it from the conversation record's `secret` file (mode
   0600). Possession of read access IS your authorization. A wrong secret
@@ -30,8 +30,16 @@ Send `attach { conversationId, profile, secret, version, resumeFrom? }`:
 - `profile` - `interactive` (a human-owned process), `headless-session`
   (a lucid-owned persistent process), or `headless-turn` (one process per
   turn).
+- `harness` - which harness you drive: `claude`, `codex`, `pi`, or `muse`.
+  A headless profile MUST send it; omitting it is refused `invalid-grant`.
+  An interactive attach SHOULD NOT send one and is not refused for it -
+  lucid ignores the field there, because an interactive session is not a
+  harness lucid can reopen, and storing the id would put a session in the
+  record that no source may resume. A name outside the four fails at the
+  codec as `wrong-type`, so a typo never reaches the reducer.
 - `resumeFrom` - the last lucid `seq` you durably applied. lucid replies
-  `attach-ok { epoch, lease, replayFrom, version }`. `replayFrom` echoes
+  `attach-ok { epoch, lease, replayFrom, version, resumeSessionId? }`.
+  `replayFrom` echoes
   your `resumeFrom` as the exclusive watermark for the **event render**:
   read the durable event stream and resume after that seq. Claiming a
   `resumeFrom` ahead of the log is refused `resume-ahead-of-log`.
@@ -40,6 +48,25 @@ Send `attach { conversationId, profile, secret, version, resumeFrom? }`:
   `resumeFrom` - so you MUST dedupe delivered `input.id`s durably and
   apply each at most once. `resumeFrom` scopes event rendering; the
   idempotent `id` scopes input application. Do not conflate them.
+
+### Continuing the harness session you last held
+
+`attach-ok` carries `resumeSessionId` when this record already holds a
+session for **your** harness. Open your harness against that session
+instead of a fresh one, and the conversation keeps its own memory across
+your process dying.
+
+Two things make it safe to use and safe to ignore:
+
+- It is scoped to the harness you named on attach. A record whose newest
+  session belongs to a different harness is ordinary - cross-harness
+  handoff is supported - so the absence of the field means "none of
+  yours", not "none at all". Never resume a session id you did not get
+  back for your own harness.
+- **It is a hint, not a promise.** The session may be gone, or the harness
+  may refuse it. Try it once; if the harness rejects it, run the same
+  input fresh and record why. A stale hint costs the harness's context,
+  never the turn.
 
 A headless source may not steal a conversation that a live human process
 holds - whether it is interactively attached OR never attached (a fresh
@@ -71,7 +98,11 @@ Stream the harness's output as `event { epoch, n, turnId, event }`:
 
 ## Receiving input
 
-lucid delivers human input as `input { seq, id, text, mode }`. `mode` is
+lucid delivers human input as `input { seq, id, text, mode }`. It may
+arrive at any time, including from a process other than the one you are
+talking to - a conversation can be written to while you drive it, and
+lucid delivers what it finds. Nothing about that changes your side of the
+contract; it only means input is not confined to the moments you expect. `mode` is
 what lucid **requests** (`queue` or `steer`); what actually happened is
 the `disposition` you send back:
 
@@ -79,9 +110,18 @@ the `disposition` you send back:
 - `applied` - you acted on it (delivered into the turn). `queued` - held
   for a boundary. `rejected` - you could not; it returns to lucid's queue
   and is redelivered, **never dropped**.
-- In `headless-turn`, a turn in flight is never interjected: input
-  `queue`s between turns. `steer` is only legal where the profile allows
-  it - a steer at a `headless-turn` attachment is refused.
+- **`queue` waits for the turn boundary; `steer` does not.** An input in
+  `queue` mode that arrives while a turn is running is held and delivered
+  when that turn produces its terminal event. A `steer` goes through at
+  once. With no turn running, a `queue` input is delivered straight away -
+  holding it for a boundary that will never come is a hang, not a policy.
+- In `headless-turn` there is nothing to interject: one process per turn
+  means every input already waits for a boundary. `steer` is only legal
+  where the profile allows it, and a steer at a `headless-turn` attachment
+  is refused `steer-unsupported`. Fall back to `queue`.
+- The boundary for a live human process is the same idea by a different
+  route: the Stop hook fires at one, which is why the headless and
+  interactive paths agree on when an interjection lands.
 
 lucid bounds the input direction itself: a conversation holds at most 8
 delivered-but-unfinished inputs, and a send past that is refused
@@ -106,7 +146,7 @@ You have now seen all six source→lucid frames: `attach`, `event`, `ack`,
 lucid→source frames - you RECEIVE these, never send them (a lucid→source
 kind arriving AT lucid is refused `wrong-direction`):
 
-- `attach-ok { epoch, lease: { expires, renewEvery }, replayFrom, version }`
+- `attach-ok { epoch, lease: { expires, renewEvery }, replayFrom, version, resumeSessionId? }`
 - `refused { issue }` - a named refusal (below), never a half-applied frame
 - `event-ack { epoch, n }` - your event `n` is durable; trim your replay buffer to it
 - `input { seq, id, text, mode, turnId? }` - human input to deliver
