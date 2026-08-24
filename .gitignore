@@ -9,3 +9,7 @@ coverage/
 .DS_Store
 .lefthook-local/
 dist/
+
+# bun build --compile drops a temp artifact beside the output. It is not
+# output and it is not source; it got committed once.
+*.bun-build
