@@ -8,12 +8,15 @@
  * cannot inherit a session it never had and learns the conversation from
  * lucid's record instead.
  *
- * PASSES for claude, pi, and codex since RFC-03. It fails for muse, and the
- * reason is below lucid: muse's identity event reports a session id that is
- * not a key in muse's own store, so hcn refuses the resume before spawn
- * (`no muse session <id> found at ~/.local/share/muse/sessions`). lucid
- * handles that correctly - RFC-03 R002 - by running the turn fresh and
- * recording why, so a stale hint costs the context and never the turn.
+ * PASSES for all four harnesses. muse was the last holdout and the reason
+ * was below lucid: its identity event reported a session id that hcn could
+ * not find, because the guard probed a path where muse files sessions in a
+ * nested store. Fixed in hcn 0.5.7 (their #104, from lucid's #103).
+ *
+ * lucid needed no change for it. RFC-03 R002 already treats a resume id as a
+ * hint: tried once, and on a rejected failure the turn runs fresh with the
+ * reason recorded. A stale hint costs the context, never the turn - which is
+ * why muse degraded rather than broke for the months it was wrong.
  *
  * Run: bun scripts/smoke-resume.ts [--harness claude]
  * Evidence: spikes/evidence/resume.md
@@ -197,10 +200,11 @@ const main = async (): Promise<void> => {
       "because cross-harness handoff is supported: a record whose newest",
       "identity came from a different harness is ordinary.",
       "",
-      "claude, pi and codex pass. muse fails, below lucid: its identity event",
-      "reports an id that is not a key in muse's own store, so hcn refuses the",
-      "resume before spawn. lucid then runs the turn fresh and records why",
-      "(R002) - a stale hint costs the context, never the turn.",
+      "All four harnesses pass. muse was last, and its failure was below",
+      "lucid: hcn could not find the session its own identity event named,",
+      "because muse files sessions in a nested store the resume guard did",
+      "not search. Fixed in hcn 0.5.7. lucid needed no change - R002 treats",
+      "a resume id as a hint, so muse degraded rather than broke.",
       "",
       "## Run",
       "",

@@ -16,16 +16,17 @@ so a successor is never handed another harness's session. That matters
 because cross-harness handoff is supported: a record whose newest
 identity came from a different harness is ordinary.
 
-claude, pi and codex pass. muse fails, below lucid: its identity event
-reports an id that is not a key in muse's own store, so hcn refuses the
-resume before spawn. lucid then runs the turn fresh and records why
-(R002) - a stale hint costs the context, never the turn.
+All four harnesses pass. muse was last, and its failure was below
+lucid: hcn could not find the session its own identity event named,
+because muse files sessions in a nested store the resume guard did
+not search. Fixed in hcn 0.5.7. lucid needed no change - R002 treats
+a resume id as a hint, so muse degraded rather than broke.
 
 ## Run
 
 ```
-# resume - muse, sessionId 9a68a7dc-1363-4b2a-9a9b-5e8155f985b7
-record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-resume-u3p9rg/res-1
+# resume - muse, sessionId 093e0559-81d3-439c-b391-771fec1e40b7
+record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-resume-nYugQg/res-1
 
 ## establish, then lose the process
 first turn done; seq 7
@@ -33,11 +34,11 @@ source closed; attachment released
 
 ## reopen the record and resume the same session
 folded: seq 9, events 3
-answered; codeword recalled by the harness itself: false
+answered; codeword recalled by the harness itself: true
 
 ## one record across the restart
 turnIds: pre-1, post-1
 both halves in one fold: true
 ```
 
-Verdict: FAIL
+Verdict: PASS
