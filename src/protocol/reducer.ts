@@ -25,7 +25,8 @@
  * the switch and into liveness — two clocks again.
  */
 
-import { classOfEventKind } from "./events.js";
+import { HARNESS_AWAITING_INPUT } from "../harness/events.js";
+import { classOfEventKind, EventKind } from "./events.js";
 import {
   type AttachProfile,
   type DetachReason,
@@ -90,6 +91,23 @@ export interface QueuedInput {
   readonly redeliver: boolean;
 }
 
+/** The outstanding question, if any. Set when a `question` event is
+ * accepted, preserved across `done { cause: "awaiting-input" }` (that
+ * `done` ends the asking turn while the session stays ready, so the
+ * question becomes answerable rather than closing), replaced by a second
+ * question, and cleared only on three things: an answer applied, the
+ * first event of an unrelated turn, and detach. */
+export interface OpenQuestion {
+  readonly turnId: string;
+  readonly question: string;
+  /** Options the harness offered, if any. */
+  readonly options?: readonly string[];
+  readonly recommended?: string;
+  /** Reservation for an answer being applied. While set, the question
+   * waits for that inputId to reach applied. */
+  readonly answeringInputId?: string;
+}
+
 export interface ChannelState {
   readonly conversationId: string;
   /** Minted by the host at record creation (D-004); checked only at attach. */
@@ -149,6 +167,8 @@ export interface ChannelState {
    * Bounded by DROPPABLE_QUEUE_MAX, which is what bounds the number of
    * droppable frames in flight between render drains. */
   readonly credits: number;
+  /** The outstanding question, if any. Null when none is open. */
+  readonly questionOpen: OpenQuestion | null;
 }
 
 export type Effect =
@@ -260,6 +280,7 @@ export const initialChannelState = (init: {
   inFlightInputs: 0,
   credits: 0,
   harnessSessions: {},
+  questionOpen: null,
 });
 
 const NO_EFFECTS: readonly Effect[] = Object.freeze([]);
@@ -410,6 +431,56 @@ const queueDepth = (inputs: readonly QueuedInput[]): number => InputLedger.queue
 
 const sendInputs = (inputs: readonly QueuedInput[]): readonly Effect[] =>
   inputs.map((i) => ({ type: "send", frame: inputFrame(i) }));
+
+/** Derive the next questionOpen after an accepted event. A `question`
+ * event sets/replaces it; a `done` with awaiting-input does NOT clear it;
+ * any other event whose turnId is not the asking turn and not the
+ * answer's turn (when answering) clears on the first event of that
+ * unrelated turn. */
+const nextQuestionOpenAfterEvent = (
+  current: OpenQuestion | null,
+  frame: Extract<Frame, { kind: "event" }>,
+  previousTurn: { readonly turnId: string } | null,
+): OpenQuestion | null => {
+  const ev = frame.event as Record<string, unknown>;
+  // A question event opens/replaces the question.
+  if (ev.kind === EventKind.question && typeof ev.question === "string" && ev.question !== "") {
+    const opts = Array.isArray(ev.options) ? (ev.options as readonly string[]) : undefined;
+    const rec = typeof ev.recommended === "string" ? (ev.recommended as string) : undefined;
+    return {
+      turnId: frame.turnId,
+      question: ev.question as string,
+      ...(opts !== undefined ? { options: opts } : {}),
+      ...(rec !== undefined ? { recommended: rec } : {}),
+    };
+  }
+  if (current === null) return null;
+  // Nothing here reads the terminal cause, and that is the point rather
+  // than an omission. The `done` that ends an asking turn - cause
+  // `awaiting-input`, named in `harness/events` - carries the asking
+  // turn's own id, so the same-turn check below already leaves the
+  // question alone. So does any other cause on that turn.
+  //
+  // Branching on the cause instead would be the mistake RFC-05's R1 was
+  // rewritten to avoid: a rule keyed on `done` clears every question
+  // before a human can see it. What retires a question is the
+  // conversation moving to another turn, and turn identity is what says
+  // so.
+  const isSameTurn = frame.turnId === current.turnId;
+  if (isSameTurn) return current;
+  // Unrelated turn: clear only on the first event of that turn (a new
+  // turnId vs previousTurn). If we are already in that unrelated turn,
+  // we would have cleared on its first event, so nothing to do.
+  const isNewTurn = previousTurn === null || previousTurn.turnId !== frame.turnId;
+  if (!isNewTurn) return current;
+  // If an answer is pending, the answer's turn should not clear. We do
+  // not have the answer's turnId directly; the answer input's turnId is
+  // the question's turnId, so a new turn after answering is the harness's
+  // response turn. Without explicit mapping, we treat any new turn as
+  // unrelated and clear. This satisfies the spec's three clear causes
+  // while preserving same-turn done.
+  return null;
+};
 
 const reduceAttach = (
   state: ChannelState,
@@ -584,6 +655,7 @@ const reducePostAttach = (
         frame.event.sessionId !== ""
           ? frame.event.sessionId
           : undefined;
+      const questionOpen = nextQuestionOpenAfterEvent(state.questionOpen, frame, state.turn);
       return accepted(
         {
           ...state,
@@ -614,6 +686,7 @@ const reducePostAttach = (
           // non-terminal kinds leave the backlog alone.
           inFlightInputs: InputLedger.turnEnded(state.inFlightInputs, frame.event.kind),
           inputs: InputLedger.clearRedeliver(state.inputs, redelivered.length > 0),
+          questionOpen,
         },
         frame,
         now,
@@ -668,6 +741,12 @@ const reducePostAttach = (
         // Applied is also the durable record of DELIVERY, so this is the
         // in-flight backlog's rise (RFC-04 P2).
         const inFlightInputs = InputLedger.inputDelivered(state.inFlightInputs);
+        // R1: an answer reaching applied clears the question it answers.
+        // The answering reservation belongs to the question it was made
+        // against, so a late disposition for an old question does not clear
+        // a newer one (replaced question takes its own reservation with it).
+        const questionOpen =
+          state.questionOpen?.answeringInputId === frame.inputId ? null : state.questionOpen;
         return accepted(
           {
             ...state,
@@ -676,6 +755,7 @@ const reducePostAttach = (
             inFlightInputs,
             appliedInputs: { ...state.appliedInputs, [target.id]: true as const },
             attachment: renewAttachment(attachment, now),
+            questionOpen,
           },
           frame,
           now,
@@ -725,7 +805,7 @@ const reducePostAttach = (
       // in-flight inputs die with it for the same reason: no terminal
       // event of theirs can ever be folded (RFC-04 P2).
       return accepted(
-        { ...state, seq, attachment: null, turn: null, inFlightInputs: 0 },
+        { ...state, seq, attachment: null, turn: null, inFlightInputs: 0, questionOpen: null },
         frame,
         now,
         state.turn === null ? NO_EFFECTS : [{ type: "abort-turn", turnId: state.turn.turnId }],

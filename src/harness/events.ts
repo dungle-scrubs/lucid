@@ -32,7 +32,14 @@ export interface HarnessFailure {
 
 /** Why a turn or a session ended. Mirrors hcn's ExitCause; carried as a
  * string so a new cause does not need a lucid release. */
-export type HarnessCause = string;
+export const HARNESS_AWAITING_INPUT = "awaiting-input" as const;
+
+/** Why a turn or a session ended. Mirrors hcn's ExitCause; carried as a
+ * string so a new cause does not need a lucid release. The
+ * "awaiting-input" cause is named because it means the asking turn ended
+ * while the session stays ready - the question becoming answerable, not
+ * closing. */
+export type HarnessCause = typeof HARNESS_AWAITING_INPUT | string;
 
 /** One decoded line of `hcn --json`. The turn kinds lucid's protocol already
  * knows, the two hcn adds, and the four session control events. */
