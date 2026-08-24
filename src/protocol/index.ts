@@ -73,6 +73,7 @@ export {
   isLive,
   LEASE_RENEW_EVERY_MS,
   LEASE_TTL_MS,
+  type OpenQuestion,
   PROTOCOL_VERSION,
   type Presence,
   type QueuedInput,
