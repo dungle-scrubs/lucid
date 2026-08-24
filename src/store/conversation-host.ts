@@ -176,6 +176,22 @@ export interface ConversationHost {
   cursor(): number;
   /** Durably advance the delivery cursor. See `ConversationLog.advanceCursor`. */
   advanceCursor(offset: number): void;
+  /** Seek index built during the fold that already happens at open — reading
+   * a version is a seek, not a fold. */
+  artifactIndex(): ReadonlyMap<string, number>;
+  /** Read an artifact version by seek. */
+  readArtifact(artifactId: string, version: number): import("./log.js").ArtifactVersion | null;
+  /** Append an artifact version. Over-size is refused and the record still
+   * opens; hash is written for every version from the first. */
+  writeArtifact(params: {
+    readonly artifactId: string;
+    readonly version: number;
+    readonly author: string;
+    readonly contentType: string;
+    readonly bytes: string;
+  }):
+    | { verdict: "accepted"; version: import("./log.js").ArtifactVersion }
+    | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" };
 }
 
 export const createConversationHost = (dir: string, deps: HostDeps): ConversationHost => {
@@ -231,6 +247,21 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   const collectEffects = (fromOffset: number): CollectedBatch => log.collectEffects(fromOffset);
   const cursor = (): number => log.cursor();
   const advanceCursor = (offset: number): void => log.advanceCursor(offset, deps.now());
+  const artifactIndex = (): ReadonlyMap<string, number> => log.artifactIndex();
+  const readArtifact = (
+    artifactId: string,
+    version: number,
+  ): import("./log.js").ArtifactVersion | null => log.readArtifact(artifactId, version);
+  const writeArtifact = (params: {
+    readonly artifactId: string;
+    readonly version: number;
+    readonly author: string;
+    readonly contentType: string;
+    readonly bytes: string;
+  }):
+    | { verdict: "accepted"; version: import("./log.js").ArtifactVersion }
+    | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" } =>
+    log.writeArtifact(params);
 
   return {
     conversationId,
@@ -243,6 +274,9 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     cursor,
     advanceCursor,
     collectEffects,
+    artifactIndex,
+    readArtifact,
+    writeArtifact,
     handleFrame: (
       line: string,
     ): ReduceResult | { verdict: "refused"; wire: true; issue: DecodeIssue } => {
