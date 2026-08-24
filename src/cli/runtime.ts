@@ -46,6 +46,7 @@ import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
 import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
 import { type HostRecord, openConversation } from "../store/store.js";
+import { followRecord } from "../store/tailer.js";
 import { type Conversations, conversations } from "./conversations.js";
 import { harnessForName, supportsSession } from "./harness.js";
 
@@ -81,6 +82,7 @@ export interface RuntimeDeps {
   readonly now?: () => number;
   readonly randomUUID?: () => string;
   readonly randomConversationSuffix?: () => string;
+  readonly pollMs?: number;
 }
 
 export interface RunningConversation {
@@ -236,10 +238,22 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
       advanceCursor: (off: number) => host.advanceCursor(off),
     },
   } as const;
-  const source =
-    profile === "headless-session"
-      ? openHeadlessSessionFn({ ...baseDeps, sessionId })
-      : openHeadlessTurnsFn(baseDeps);
+  // A second driver must not strand a presence lock it cannot attach
+  // behind: if acquiring succeeded but attaching then fails, release
+  // presence and close the host before propagating the failure.
+  let source: ReturnType<typeof createHeadlessHost>;
+  try {
+    source =
+      profile === "headless-session"
+        ? openHeadlessSessionFn({ ...baseDeps, sessionId })
+        : openHeadlessTurnsFn(baseDeps);
+  } catch (e) {
+    try {
+      host.close();
+    } catch {}
+    doRelease();
+    throw e;
+  }
   receive = source.receive;
 
   // Wire termination: done resolves when the source is closed or the
@@ -250,9 +264,18 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   });
 
   let doneResolved = false;
+  // Bind the tailer's lifetime to the runtime's abort, so abort() and
+  // done stop it.
+  const tailerAbort = new AbortController();
   const finish = (): void => {
     if (doneResolved) return;
     doneResolved = true;
+    try {
+      tailerAbort.abort();
+    } catch {}
+    try {
+      host.close();
+    } catch {}
     doRelease();
     resolveDone();
   };
@@ -260,6 +283,9 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   // Abort helper — idempotent, releases presence exactly once.
   const abort = (): void => {
     if (doneResolved) return;
+    try {
+      tailerAbort.abort();
+    } catch {}
     try {
       source.close();
     } catch {}
@@ -288,13 +314,70 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     }
   };
 
-  // Ensure finish also handles process-level cleanup when the source's
-  // internal pump detaches (the pump calls detachOnce but not close;
-  // the explicit close path above covers operator abort. For harness
-  // exit without an explicit close, the caller should call abort/done.
-  // We also finish when the host's presence is externally released.)
-  // No dead setInterval — the host's heartbeat/lease is the liveness
-  // signal, not a poll.
+  // The durable cursor records what was DISPATCHED, not what was looked
+  // at. A cursor entry is itself new bytes, so writing one past a
+  // no-effect range puts goodBytes past the cursor again and the next
+  // tick writes another — an idle conversation then grows its log
+  // forever. Track how far we have looked in a process-local variable
+  // and persist only after real dispatch.
+  let lookedAt = host.cursor();
+  const onTrigger = (tailer: import("../store/tailer.js").RecordTailer): void => {
+    // peek() is lock-free and may see a torn tail — only for DECIDING
+    // whether to bother. Anything we act on goes through the locked
+    // collect.
+    let snap: { goodBytes: number };
+    try {
+      snap = tailer.peek();
+    } catch {
+      return;
+    }
+    if (snap.goodBytes <= lookedAt) return;
+    let batch: ReturnType<typeof host.collectEffects>;
+    try {
+      batch = host.collectEffects(lookedAt);
+    } catch {
+      return;
+    }
+    // No effects in this range — we have looked but not dispatched,
+    // so advance the process-local cursor only and do not persist.
+    if (batch.entries.length === 0) {
+      lookedAt = batch.goodBytes;
+      return;
+    }
+    // Never dispatch while holding the append lock. Collect above held
+    // it, this loop does not. Check the lease between effects and stop
+    // before the next one if it is lost. Do not advance the cursor
+    // after a loss — an effect already handed to a harness cannot be
+    // recalled, and the successor will redeliver the batch.
+    for (const entry of batch.entries) {
+      for (const eff of entry.effects) {
+        if (presenceHandle?.held() !== true) return;
+        if (eff.type === "send") {
+          try {
+            receive?.(eff.frame);
+          } catch {}
+        }
+      }
+    }
+    if (presenceHandle?.held() !== true) return;
+    // Advance AFTER dispatch, never before. A crash in the gap repeats
+    // the batch; advancing first would lose it.
+    try {
+      host.advanceCursor(batch.goodBytes);
+    } catch {}
+    lookedAt = batch.goodBytes;
+  };
+
+  // Fire and forget, but never unobserved: a rejection here would
+  // otherwise be an unhandled one, and the symptom - a conversation that
+  // records an input and never answers it - gives no hint where to look.
+  void followRecord({
+    dir,
+    pollMs: opts.pollMs ?? 500,
+    signal: tailerAbort.signal,
+    tailerDeps: { now: nowFn, presence: () => presenceProbe() },
+    onTrigger,
+  }).catch(() => {});
 
   return {
     kind: "running",
