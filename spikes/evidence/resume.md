@@ -25,8 +25,8 @@ a resume id as a hint, so muse degraded rather than broke.
 ## Run
 
 ```
-# resume - muse, sessionId 093e0559-81d3-439c-b391-771fec1e40b7
-record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-resume-nYugQg/res-1
+# resume - muse, sessionId 3af18689-6daa-4b1e-a6d1-ebafdcb8793a
+record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-resume-JVnA1s/res-1
 
 ## establish, then lose the process
 first turn done; seq 7

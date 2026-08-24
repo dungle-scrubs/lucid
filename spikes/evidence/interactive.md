@@ -19,21 +19,21 @@ the mode with a spike (A-002) but no lane.
 
 ```
 # interactive adapter - claude, hooks in project scope
-record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-interactive-EksN7s/int-1
+record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-interactive-gxngtU/int-1
 
 ## queued before the session started
-input send-1787558814116-eg47qr
+input send-1787559021493-xpctqf
 
 ## start a claude session lucid does not own
-claude exited 0; said: READY
+claude exited 0; said: pomegranate
 
 ## what the record shows
-lucid attached at profile interactive: false
-the queued input reached the session: false
-  (told to say READY; said "READY")
-transcript: 0 events, 1 inputs
+lucid attached at profile interactive: true
+the queued input reached the session: true
+  (told to say READY; said "pomegranate")
+transcript: 0 events, 2 inputs
 
-## one record, folded the same twice: true (seq 1)
+## one record, folded the same twice: true (seq 3)
 ```
 
-Verdict: FAIL
+Verdict: PASS

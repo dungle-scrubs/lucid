@@ -1,6 +1,8 @@
 # Agent conventions — lucid-v2
 
-Coding-agent rules for this repo. `PLAN.md` wins on product scope; `docs/smoke-seven.md` wins on smoke semantics.
+Coding-agent rules for this repo. `CONTEXT.md` wins on what lucid is, what
+the words mean, and what is next; `docs/smoke-seven.md` wins on smoke
+semantics. `PLAN.md` is the delivered substrate RFC, kept as history.
 
 ## Build and verify — single command
 
