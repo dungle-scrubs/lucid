@@ -104,8 +104,11 @@ const ctxOf = (presence: boolean | undefined): { presence?: Presence } =>
 
 const HEX_SECRET = /^[0-9a-f]{16,}$/;
 
-/** Single place both the host and the lock-free readers load the record. */
-const readRecordFiles = (
+/** Single place the host, the lock-free readers, and the tailer load
+ * the record (secret + identity + paths). Thrown per call, not at
+ * construction, so a reader that starts before the record exists can
+ * surface the error and pick the record up once it appears. */
+export const readRecordFiles = (
   dir: string,
 ): { secret: string; conversationId: string; paths: RecordPaths } => {
   const paths = pathsForDir(dir);

@@ -43,3 +43,12 @@ export {
   recordPaths,
   StoreError,
 } from "./store.js";
+export {
+  createTailer,
+  DEFAULT_POLL_MS,
+  type FollowOpts,
+  followRecord,
+  type RecordTailer,
+  type Tail,
+  type TailerDeps,
+} from "./tailer.js";
