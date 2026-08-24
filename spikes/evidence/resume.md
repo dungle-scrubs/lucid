@@ -24,8 +24,8 @@ resume before spawn. lucid then runs the turn fresh and records why
 ## Run
 
 ```
-# resume - claude, sessionId 48f8244c-7ffa-4779-90e5-4a6f5f214c9f
-record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-resume-1EkESu/res-1
+# resume - claude, sessionId 44de5d28-b8ab-4004-b794-41e6505c0560
+record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-resume-vOpAkG/res-1
 
 ## establish, then lose the process
 first turn done; seq 6
