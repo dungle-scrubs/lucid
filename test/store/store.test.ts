@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Effect } from "../../src/protocol/index.js";
-import { encodeFrame, type Frame } from "../../src/protocol/index.js";
+import { encodeFrame, type Frame, queueDepth } from "../../src/protocol/index.js";
 import {
   createConversationRecord,
   type HostRecord,
@@ -174,6 +174,45 @@ describe("durable conversation store (M5.1)", () => {
     afterCrash.now = 3_000;
     afterCrash.host.grantCredit(1);
     expect(openHost(root, "conv-1").host.state().credits).toBe(6);
+  });
+
+  test("the in-flight input gauge survives the fold: a reopened record reports the same backlog (RFC-04 P2)", () => {
+    const root = freshRoot();
+    const { secret } = createConversationRecord(root, "conv-1");
+    const h = openHost(root, "conv-1");
+
+    // The ADR-0007 backlog shape: three sends answered applied at once, one
+    // turn finished. queueDepth is zero throughout; the backlog exists only
+    // in the in-flight count, so this is the quantity a reopen must reproduce.
+    h.host.handleFrame(encodeFrame(attachFrame(secret, { profile: "headless-session" })));
+    for (const [i, id] of ["in-1", "in-2", "in-3"].entries()) {
+      h.now = 2_000 + i;
+      h.host.enqueueInput({ id, text: `task ${i}`, mode: "queue" });
+      h.host.handleFrame(
+        encodeFrame({ kind: "disposition", epoch: 1, inputId: id, outcome: "applied" }),
+      );
+    }
+    h.now = 3_000;
+    h.host.handleFrame(
+      encodeFrame({
+        kind: "event",
+        epoch: 1,
+        n: 1,
+        turnId: "t-1",
+        event: { kind: "done", exitCode: 0, cause: "end" },
+      }),
+    );
+
+    const live = h.host.state();
+    expect(live.inFlightInputs).toBe(2);
+    expect(queueDepth(live.inputs)).toBe(0);
+
+    // Reopen: the fold replays the same dispositions and terminal events,
+    // so the successor reading the record sees the true backlog, not zero.
+    const reopened = openHost(root, "conv-1");
+    expect(reopened.host.state()).toEqual(live);
+    expect(reopened.host.state().inFlightInputs).toBe(2);
+    expect(queueDepth(reopened.host.state().inputs)).toBe(0);
   });
 
   test("presence is polled on the status cadence: alive + heartbeat timeout is interactive-unattached, NEVER agent-gone", () => {

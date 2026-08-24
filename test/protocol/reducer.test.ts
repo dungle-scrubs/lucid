@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DROPPABLE_QUEUE_MAX } from "../../src/protocol/events.js";
 import { FRAME_KINDS, type Frame, parseFrame } from "../../src/protocol/frames.js";
+import { InputLedger } from "../../src/protocol/ledgers/input.js";
 import {
   enqueueInput,
   grantCredit,
@@ -575,6 +576,7 @@ describe("reducer core (M4.2)", () => {
       seq: 2,
       inputId: "in-1",
       queueDepth: 1,
+      inFlightInputs: 0,
       now: 2_000,
     });
   });
@@ -1066,6 +1068,165 @@ describe("reducer core (M4.2)", () => {
       claimed: PROTOCOL_VERSION + 1,
       head: PROTOCOL_VERSION,
     });
+  });
+});
+
+describe("RFC-04 P2: the in-flight input gauge", () => {
+  const applied = (id: string): Frame => ({
+    kind: "disposition",
+    epoch: 1,
+    inputId: id,
+    outcome: "applied",
+  });
+  const done = (n: number, turnId: string): Frame =>
+    event({ n, turnId, event: { kind: "done", exitCode: 0, cause: "end" } });
+
+  test("rises on the applied disposition (delivery) and falls on the turn's terminal event - never at enqueue or queued", () => {
+    let state = drive(fresh(), [[attach({ profile: "headless-session" }), 1_000]]);
+
+    // Enqueue hands the input to the host, not to the harness: no rise.
+    const enqueued = expectAccepted(
+      enqueueInput(state, { id: "in-1", text: "go", mode: "queue" }, 1_500),
+    );
+    expect(enqueued.state.inFlightInputs).toBe(0);
+    expect(enqueued.record.queueDepth).toBe(1);
+    expect(enqueued.record.inFlightInputs).toBe(0);
+    state = enqueued.state;
+
+    // The turn strategy's queued disposition parks the input in lucid's
+    // own queue - still not delivered.
+    const queued = expectAccepted(
+      reduce(state, { kind: "disposition", epoch: 1, inputId: "in-1", outcome: "queued" }, 1_600),
+    );
+    expect(queued.state.inFlightInputs).toBe(0);
+    state = queued.state;
+
+    // Applied is the durable record of delivery: the rise.
+    const delivered = expectAccepted(reduce(state, applied("in-1"), 1_700));
+    expect(delivered.state.inFlightInputs).toBe(1);
+    expect(delivered.record.inFlightInputs).toBe(1);
+    // queueDepth has already drained: the input left the disposition queue.
+    expect(delivered.record.queueDepth).toBe(0);
+    state = delivered.state;
+
+    // Non-terminal events of the turn do not retire it.
+    state = drive(state, [
+      [event({ n: 1, turnId: "t-1", event: { kind: "message", text: "thinking" } }), 1_800],
+    ]);
+    expect(state.inFlightInputs).toBe(1);
+
+    // The turn's terminal event retires it.
+    const finished = expectAccepted(reduce(state, done(2, "t-1"), 1_900));
+    expect(finished.state.inFlightInputs).toBe(0);
+  });
+
+  test("the two gauges disagree: 100 applied sends leave queueDepth at zero while the harness is 100 turns behind", () => {
+    // The ADR-0007 scenario the RFC's prototype ran: hcn answers every
+    // send `started` at once, so all 100 inputs are applied and out of the
+    // disposition queue before a single turn finishes. queueDepth reports
+    // the disposition round-trip (microseconds); only in-flight sees the
+    // backlog. This disagreement is why the second gauge exists.
+    let state = drive(fresh(), [[attach({ profile: "headless-session" }), 1_000]]);
+    for (let i = 1; i <= 100; i++) {
+      state = expectAccepted(
+        enqueueInput(state, { id: `in-${i}`, text: `task ${i}`, mode: "queue" }, 1_000 + i),
+      ).state;
+      const answered = expectAccepted(reduce(state, applied(`in-${i}`), 1_000 + i));
+      expect(answered.record.queueDepth).toBe(0);
+      expect(answered.record.inFlightInputs).toBe(i);
+      state = answered.state;
+    }
+
+    expect(InputLedger.queueDepth(state.inputs)).toBe(0);
+    expect(state.inFlightInputs).toBe(100);
+
+    // Turns finish one at a time: the backlog falls one per done event.
+    for (let i = 1; i <= 100; i++) {
+      state = expectAccepted(reduce(state, done(i, `t-${i}`), 2_000 + i)).state;
+    }
+    expect(state.inFlightInputs).toBe(0);
+    expect(InputLedger.queueDepth(state.inputs)).toBe(0);
+  });
+
+  test("a redelivered applied disposition is idempotent for the gauge too - one input, one rise", () => {
+    let state = drive(fresh(), [[attach({ profile: "headless-session" }), 1_000]]);
+    state = expectAccepted(
+      enqueueInput(state, { id: "in-1", text: "go", mode: "queue" }, 1_500),
+    ).state;
+    state = expectAccepted(reduce(state, applied("in-1"), 1_600)).state;
+    expect(state.inFlightInputs).toBe(1);
+
+    // The crash-redelivery window: the same applied disposition folds again.
+    const dupe = expectAccepted(reduce(state, applied("in-1"), 1_700));
+    expect(dupe.state.inFlightInputs).toBe(1);
+    expect(dupe.record.inFlightInputs).toBe(1);
+  });
+
+  test("the gauge is scoped to the attachment: takeover and detach both reset it, so dead turns cannot strand a backlog", () => {
+    // A dead incumbent's turns are aborted by the takeover and fenced
+    // stale-epoch: their terminal events can never be folded, so anything
+    // still counted could never fall out. A successor attaching must not
+    // inherit it - otherwise churn would accrue a phantom backlog until
+    // INPUT_QUEUE_MAX refuses every send.
+    let state = drive(fresh(), [[attach({ profile: "headless-session" }), 1_000]]);
+    state = expectAccepted(
+      enqueueInput(state, { id: "in-1", text: "go", mode: "queue" }, 1_500),
+    ).state;
+    state = expectAccepted(
+      enqueueInput(state, { id: "in-2", text: "again", mode: "queue" }, 1_600),
+    ).state;
+    state = drive(state, [
+      [applied("in-1"), 1_700],
+      [applied("in-2"), 1_800],
+    ]);
+    expect(state.inFlightInputs).toBe(2);
+
+    const takeover = expectAccepted(
+      reduce(state, attach({ profile: "headless-session" }), 1_000 + LEASE_TTL_MS),
+    );
+    expect(takeover.state.inFlightInputs).toBe(0);
+
+    // The successor builds its own backlog and detaches: detach resets too.
+    let next = expectAccepted(
+      enqueueInput(takeover.state, { id: "in-3", text: "fresh", mode: "queue" }, 20_000),
+    ).state;
+    next = expectAccepted(
+      reduce(next, { kind: "disposition", epoch: 2, inputId: "in-3", outcome: "applied" }, 20_100),
+    ).state;
+    expect(next.inFlightInputs).toBe(1);
+
+    const detached = expectAccepted(
+      reduce(next, { kind: "detach", epoch: 2, reason: "shutdown" }, 20_200),
+    );
+    expect(detached.state.inFlightInputs).toBe(0);
+  });
+
+  test("a turn no input opened cannot drive the gauge negative, and refused frames never move it", () => {
+    let state = drive(fresh(), [[attach({ profile: "headless-session" }), 1_000]]);
+
+    // A harness-spontaneous turn ends before any input was delivered.
+    const bare = expectAccepted(reduce(state, done(1, "t-1"), 1_500));
+    expect(bare.state.inFlightInputs).toBe(0);
+
+    // Two delivered, one retired, then the same done replayed: the replay
+    // is refused dupe-n and never applies, so the gauge holds at one.
+    state = bare.state;
+    state = expectAccepted(
+      enqueueInput(state, { id: "in-1", text: "a", mode: "queue" }, 1_600),
+    ).state;
+    state = expectAccepted(
+      enqueueInput(state, { id: "in-2", text: "b", mode: "queue" }, 1_700),
+    ).state;
+    state = drive(state, [
+      [applied("in-1"), 1_800],
+      [applied("in-2"), 1_900],
+      [done(2, "t-2"), 2_000],
+    ]);
+    expect(state.inFlightInputs).toBe(1);
+
+    const replayed = expectRefused(reduce(state, done(2, "t-2"), 2_100));
+    expect(replayed.issue).toBe("dupe-n");
+    expect(replayed.state.inFlightInputs).toBe(1);
   });
 });
 

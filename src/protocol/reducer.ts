@@ -135,6 +135,14 @@ export interface ChannelState {
    * (duplicate dispositions no-op, ids can never be reused). Grows per
    * input; checked with Object.hasOwn like seenTurns. */
   readonly appliedInputs: { readonly [id: string]: true };
+  /** Inputs delivered to a harness whose turn has not produced a terminal
+   * event — the input backlog (RFC-04 P2), and the quantity
+   * INPUT_QUEUE_MAX will bound. Not derivable from `inputs`: a delivered
+   * input has already left it. Rises on the applied disposition (the
+   * durable delivery record), falls on a turn-terminal event, and resets
+   * when the attachment ends because an aborted turn's terminal event is
+   * fenced stale-epoch and can never land. InputLedger owns the edges. */
+  readonly inFlightInputs: number;
   /** Flow credits granted but not yet consumed by droppable events.
    * Bounded by DROPPABLE_QUEUE_MAX, which is what bounds the number of
    * droppable frames in flight between render drains. */
@@ -170,10 +178,16 @@ export interface TransitionRecord {
   readonly reason?: DetachReason;
   readonly issue?: RefusalIssue;
   readonly detail?: RefusalDetail;
-  /** Input-delivery observability: which input, and the queue depth gauge
-   * (inputs not yet applied) after the transition. */
+  /** Input-delivery observability: which input, and the two depth gauges
+   * after the transition. queueDepth counts inputs AWAITING a disposition;
+   * inFlightInputs counts delivered inputs whose turn has no terminal
+   * event yet (RFC-04 P2). They disagree by design since hcn stopped
+   * queueing (ADR 0007): an accepted send is answered applied at once, so
+   * queueDepth drains to zero while the harness is still behind — only
+   * inFlightInputs sees the backlog. */
   readonly inputId?: string;
   readonly queueDepth?: number;
+  readonly inFlightInputs?: number;
   /** Disposition observability: what the source reported, the input's
    * status AFTER the transition (a late outcome discarded against the
    * applied terminal shows inputStatus "applied"), and the rejection
@@ -237,6 +251,7 @@ export const initialChannelState = (init: {
   seenTurns: {},
   inputs: [],
   appliedInputs: {},
+  inFlightInputs: 0,
   credits: 0,
   harnessSessions: {},
 });
@@ -327,7 +342,7 @@ const accepted = (
   effects: readonly Effect[],
   extra?: Pick<
     TransitionRecord,
-    "queueDepth" | "credits" | "inputStatus" | "rejections" | "presence"
+    "queueDepth" | "credits" | "inputStatus" | "rejections" | "presence" | "inFlightInputs"
   >,
 ): ReduceResult => ({
   verdict: "accepted",
@@ -466,6 +481,10 @@ const reduceAttach = (
       // credits zeroed (the new writer never received the old grants).
       acked: frame.resumeFrom ?? 0,
       credits: 0,
+      // Same scope for the input backlog: the takeover aborted the old
+      // writer's turns, whose terminal events would be refused stale-epoch,
+      // so anything still counted in-flight could never fall out (RFC-04 P2).
+      inFlightInputs: 0,
       // Replay IS this rejection's redelivery - disarm the flags.
       inputs: InputLedger.clearRedeliver(state.inputs, true),
     },
@@ -583,6 +602,10 @@ const reducePostAttach = (
             ? state.seenTurns
             : { ...state.seenTurns, [frame.turnId]: true as const },
           credits: droppable ? state.credits - 1 : state.credits,
+          // A turn's terminal event retires one in-flight input (RFC-04
+          // P2): turns finish in order, so count-down by one is exact, and
+          // non-terminal kinds leave the backlog alone.
+          inFlightInputs: InputLedger.turnEnded(state.inFlightInputs, frame.event.kind),
           inputs: InputLedger.clearRedeliver(state.inputs, redelivered.length > 0),
         },
         frame,
@@ -621,25 +644,41 @@ const reducePostAttach = (
             frame,
             now,
             NO_EFFECTS,
-            { inputStatus: "applied", queueDepth: queueDepth(state.inputs) },
+            // The gauge holds: this input already rose when its FIRST
+            // applied disposition landed — the duplicate must not
+            // double-count it (RFC-04 P2).
+            {
+              inputStatus: "applied",
+              queueDepth: queueDepth(state.inputs),
+              inFlightInputs: state.inFlightInputs,
+            },
           );
         return refusedButAlive(state, attachment, frame, "unknown-input", now);
       }
       if (frame.outcome === "applied") {
         // Terminal: the entry leaves the queue; only the id survives.
         const inputs = state.inputs.filter((i) => i.id !== target.id);
+        // Applied is also the durable record of DELIVERY, so this is the
+        // in-flight backlog's rise (RFC-04 P2).
+        const inFlightInputs = InputLedger.inputDelivered(state.inFlightInputs);
         return accepted(
           {
             ...state,
             seq,
             inputs,
+            inFlightInputs,
             appliedInputs: { ...state.appliedInputs, [target.id]: true as const },
             attachment: renewAttachment(attachment, now),
           },
           frame,
           now,
           NO_EFFECTS,
-          { inputStatus: "applied", rejections: target.rejections, queueDepth: queueDepth(inputs) },
+          {
+            inputStatus: "applied",
+            rejections: target.rejections,
+            queueDepth: queueDepth(inputs),
+            inFlightInputs,
+          },
         );
       }
       // rejected returns to the queue armed for one boundary redelivery,
@@ -654,7 +693,14 @@ const reducePostAttach = (
         frame,
         now,
         NO_EFFECTS,
-        { inputStatus: next.status, rejections: next.rejections, queueDepth: queueDepth(inputs) },
+        {
+          inputStatus: next.status,
+          rejections: next.rejections,
+          queueDepth: queueDepth(inputs),
+          // Neither edge of this disposition delivers anything: queued
+          // parks the input in lucid's own queue, rejected hands it back.
+          inFlightInputs: state.inFlightInputs,
+        },
       );
     }
     case "heartbeat": {
@@ -668,9 +714,11 @@ const reducePostAttach = (
     }
     case "detach":
       // The departing writer can never finish its turn - abort it now
-      // rather than leaving a dangling turn no writer could ever end.
+      // rather than leaving a dangling turn no writer could ever end. Its
+      // in-flight inputs die with it for the same reason: no terminal
+      // event of theirs can ever be folded (RFC-04 P2).
       return accepted(
-        { ...state, seq, attachment: null, turn: null },
+        { ...state, seq, attachment: null, turn: null, inFlightInputs: 0 },
         frame,
         now,
         state.turn === null ? NO_EFFECTS : [{ type: "abort-turn", turnId: state.turn.turnId }],
@@ -729,7 +777,10 @@ export const enqueueInput = (
     frame,
     now,
     live ? [{ type: "send", frame }] : NO_EFFECTS,
-    { queueDepth: InputLedger.queueDepth(inputs) },
+    // Enqueue is not delivery: the backlog rises only when the applied
+    // disposition lands. The pair on one line shows both gauges where an
+    // operator pages on them (RFC-04 P2).
+    { queueDepth: InputLedger.queueDepth(inputs), inFlightInputs: state.inFlightInputs },
   );
 };
 
