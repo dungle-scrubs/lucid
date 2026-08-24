@@ -140,7 +140,7 @@ describe("the range fold that hands back effects (RFC-04 step 5)", () => {
     const all = host.collectEffects(0).entries;
     // attach + first input, not the duplicate's (refused)
     expect(all.length).toBe(2);
-    expect(all[0]?.effects[0]?.type).toBe("send"); // biome-ignore lint/style/noNonNullAssertion: test asserts existence above
+    expect(all[0]?.effects[0]?.type).toBe("send");
 
     // Pure helper also does not throw, and reports the refusal like
     // foldLog does - same fold, not a second policy.

@@ -20,9 +20,7 @@ const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 const sid = "eb04301d-8756-4a8b-ae3e-aac0e71f7265";
 const BIN = "/fake/hcn";
-const identity = { kind: "identity", sessionId: sid, authority: "caller-assigned" };
 const assistant = (text: string) => ({ kind: "message", role: "assistant", text });
-const token = (text: string) => ({ kind: "token", text });
 const doneClean = { kind: "done", exitCode: null, cause: "clean" };
 
 const rig = (
@@ -90,7 +88,7 @@ const rig = (
 };
 
 const artifactFence = (id: string, replaces: number | null, contentType: string, bytes: string) =>
-  "```lucid-artifact\n" + JSON.stringify({ id, replaces, contentType }) + "\n" + bytes + "\n```";
+  `\`\`\`lucid-artifact\n${JSON.stringify({ id, replaces, contentType })}\n${bytes}\n\`\`\``;
 
 describe("artifact preamble", () => {
   test("headless-session preamble is composed once per session", () => {
@@ -119,16 +117,14 @@ describe("artifact fence parser", () => {
     const text = artifactFence("doc-1", null, "text/html", "<h1>hi</h1>");
     const blocks = detectArtifactBlocks(text);
     expect(blocks.length).toBe(1);
-    expect("block" in blocks[0]! && blocks[0].block.header.id).toBe("doc-1");
+    const first = blocks[0];
+    expect(first !== undefined && "block" in first && first.block.header.id).toBe("doc-1");
     expect(
       (blocks[0] as { block: { header: { replaces: number | null } } }).block.header.replaces,
     ).toBeNull();
   });
   test("two blocks in one message both land in order", () => {
-    const t =
-      artifactFence("a", null, "text/html", "one") +
-      "\n\n" +
-      artifactFence("b", null, "text/html", "two");
+    const t = `${artifactFence("a", null, "text/html", "one")}\n\n${artifactFence("b", null, "text/html", "two")}`;
     const blocks = detectArtifactBlocks(t);
     expect(blocks.length).toBe(2);
     expect((blocks[0] as { block: { header: { id: string } } }).block.header.id).toBe("a");
@@ -138,7 +134,8 @@ describe("artifact fence parser", () => {
     const bad = "```lucid-artifact\nnot json\n```";
     const blocks = detectArtifactBlocks(bad);
     expect(blocks.length).toBe(1);
-    expect("malformed" in blocks[0]!).toBe(true);
+    const only = blocks[0];
+    expect(only !== undefined && "malformed" in only).toBe(true);
   });
 });
 
@@ -267,7 +264,7 @@ describe("artifact emission via headless host", () => {
     await flush();
     const bad = "```lucid-artifact\nnot json\n```";
     const good = artifactFence("doc-1", null, "text/html", "ok");
-    r.proc.emit(assistant(bad + "\n" + good));
+    r.proc.emit(assistant(`${bad}\n${good}`));
     r.proc.emit(doneClean);
     await flush();
     await flush();

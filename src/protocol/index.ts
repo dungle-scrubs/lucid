@@ -70,6 +70,7 @@ export {
   grantCredit,
   type InputStatus,
   initialChannelState,
+  inputFrame,
   isLive,
   LEASE_RENEW_EVERY_MS,
   LEASE_TTL_MS,

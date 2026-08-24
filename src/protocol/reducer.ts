@@ -387,7 +387,11 @@ const accepted = (
   },
 });
 
-const inputFrame = (input: QueuedInput): Frame => ({
+/** The `input` frame for a queued input. Exported because live delivery
+ * redelivers armed inputs from state (see `runtime.ts`), and a second
+ * hand-built frame there would be a mirror of this one — the thing this
+ * repo does not do with wire shapes. */
+export const inputFrame = (input: QueuedInput): Frame => ({
   kind: "input",
   seq: input.seq,
   id: input.id,

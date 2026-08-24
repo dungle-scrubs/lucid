@@ -43,6 +43,7 @@ import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { decideAction } from "../modes/controller.js";
 import { createHeadlessHost } from "../modes/host.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
+import { inputFrame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
 import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
 import { type HostRecord, openConversation } from "../store/store.js";
@@ -338,6 +339,52 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   // forever. Track how far we have looked in a process-local variable
   // and persist only after real dispatch.
   let lookedAt = host.cursor();
+
+  /** Inputs this process has already handed to the harness, by id.
+   *
+   * Redelivery is at-least-once and the harness dedupes by id, so a repeat
+   * is safe. It is not free: without this set an armed input would be
+   * re-sent on every tick until its disposition landed. */
+  const handed = new Set<string>();
+
+  /** Deliver inputs the reducer armed for redelivery but that no boundary
+   * is coming for.
+   *
+   * `enqueueInput` sets `redeliver: !live` — an input written while this
+   * driver's lease had lapsed is queued, not delivered, and armed instead.
+   * The arming drains at a turn boundary or at the next attach. A driver
+   * sitting idle reaches neither: it has no turn to end, and it does not
+   * re-attach while it lives.
+   *
+   * The lease lapses after LEASE_TTL_MS with nothing written, and waiting
+   * for a person to type is exactly that. So the common case — open a
+   * conversation, think for a minute, send — armed the input and then had
+   * nowhere to drain it, and the send was never answered. The record kept
+   * it `outstanding` forever.
+   *
+   * The rule this restores is already the contract's
+   * (`docs/skill-chat-substrate.md`): with no turn running an input is
+   * delivered straight away, because holding it for a boundary that will
+   * never come is a hang, not a policy. */
+  const drainArmed = (): void => {
+    if (receive === undefined) return;
+    let inputs: readonly import("../protocol/index.js").QueuedInput[];
+    try {
+      inputs = host.state().inputs;
+    } catch {
+      return;
+    }
+    for (const queued of inputs) {
+      if (queued.status !== "outstanding" || queued.redeliver !== true) continue;
+      if (handed.has(queued.id)) continue;
+      if (presenceHandle?.held() !== true) return;
+      handed.add(queued.id);
+      try {
+        receive(inputFrame(queued));
+      } catch {}
+    }
+  };
+
   const onTrigger = (tailer: import("../store/tailer.js").RecordTailer): void => {
     // peek() is lock-free and may see a torn tail — only for DECIDING
     // whether to bother. Anything we act on goes through the locked
@@ -355,9 +402,13 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     } catch {
       return;
     }
-    // No effects in this range — we have looked but not dispatched,
-    // so advance the process-local cursor only and do not persist.
+    // No effects in this range — we have looked but not dispatched, so
+    // advance the process-local cursor only and do not persist. An input
+    // that produced no effect because the lease had lapsed is in this
+    // range, and advancing past it is why it was lost: nothing re-reads a
+    // range once looked at. Drain the arming before advancing.
     if (batch.entries.length === 0) {
+      drainArmed();
       lookedAt = batch.goodBytes;
       return;
     }
@@ -382,6 +433,9 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     try {
       host.advanceCursor(batch.goodBytes);
     } catch {}
+    // An armed input can sit in the same range as a delivered one, so the
+    // drain runs on both paths, not just the empty one.
+    drainArmed();
     lookedAt = batch.goodBytes;
   };
 
