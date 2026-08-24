@@ -28,7 +28,10 @@ const backlogged = (count: number) => {
 
 describe("answer mode (RFC-05 R2,R3,R6 T45)", () => {
   test("an input can carry the answer mode, and the turn it answers", () => {
-    const state = drive(fresh(), [[attach(), 1_000]]);
+    const state = drive(fresh(), [
+      [attach(), 1_000],
+      [event({ n: 1, turnId: "t-7", event: { kind: EventKind.question, question: "Q?" } }), 1_500],
+    ]);
     const ok = expectAccepted(
       enqueueInput(state, { id: "ans-1", text: "yes", mode: "answer", turnId: "t-7" }, 2_000),
     );
@@ -103,7 +106,10 @@ describe("answer mode (RFC-05 R2,R3,R6 T45)", () => {
   test("an answer is never held for a turn boundary - it exists to unblock a turn", () => {
     // When live, answer is sent straight through (effect present), like steer.
     // Enqueue does not arm redeliver for live channel.
-    const live = drive(fresh(), [[attach({ profile: "headless-session" }), 1_000]]);
+    const live = drive(fresh(), [
+      [attach({ profile: "headless-session" }), 1_000],
+      [event({ n: 1, turnId: "t-1", event: { kind: EventKind.question, question: "Q?" } }), 1_500],
+    ]);
     const ansLive = expectAccepted(
       enqueueInput(live, { id: "ans-1", text: "yes", mode: "answer", turnId: "t-1" }, 2_000),
     );
@@ -113,9 +119,18 @@ describe("answer mode (RFC-05 R2,R3,R6 T45)", () => {
     // The host's session strategy treats answer like steer: immediate even when a turn is running.
     // We verify via protocol's InputLedger that redeliver is not armed for live - the boundary hold is the redeliver flag.
     // A queue input while not live IS armed; answer when live is not.
-    const notLive = fresh(); // no attachment -> not live
+    // Not-live with a question: lease expired but question remains open - attach replay will deliver it.
+    const notLiveBase = drive(fresh(), [
+      [attach({ profile: "headless-session" }), 1_000],
+      [event({ n: 1, turnId: "t-1", event: { kind: EventKind.question, question: "Q?" } }), 1_500],
+    ]);
+    // Past lease TTL (15s), so not live
     const ansNotLive = expectAccepted(
-      enqueueInput(notLive, { id: "ans-2", text: "yes", mode: "answer", turnId: "t-1" }, 2_000),
+      enqueueInput(
+        notLiveBase,
+        { id: "ans-2", text: "yes", mode: "answer", turnId: "t-1" },
+        20_000,
+      ),
     );
     // When not live, even answer is queued with redeliver true - there is no channel to send on, so attach replay will deliver it.
     // The "never held for boundary" rule is about mid-turn holding, not about absent channel.
@@ -189,9 +204,20 @@ describe("answer mode (RFC-05 R2,R3,R6 T45)", () => {
       const full = backlogged(INPUT_QUEUE_MAX);
       const r = expectRefused(enqueueInput(full, { id: "next", text: "x", mode: "queue" }, 9_000));
       expect(r.issue).toBe("input-queue-full");
-      // and a valid answer at capacity also draws capacity when profile allows it
+      // and a valid answer at capacity also draws capacity when question matches (stale is before capacity)
+      const fullWithQuestion = expectAccepted(
+        reduce(
+          full,
+          event({ n: 1, turnId: "t-1", event: { kind: EventKind.question, question: "Q?" } }),
+          9_000,
+        ),
+      ).state;
       const r2 = expectRefused(
-        enqueueInput(full, { id: "ans-next", text: "x", mode: "answer", turnId: "t-1" }, 9_001),
+        enqueueInput(
+          fullWithQuestion,
+          { id: "ans-next", text: "x", mode: "answer", turnId: "t-1" },
+          9_001,
+        ),
       );
       expect(r2.issue).toBe("input-queue-full");
     }
