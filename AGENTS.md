@@ -24,7 +24,20 @@ A patch is green only when `bun run check` is green. Do not skip gates via `-k n
 `bun test` is the proof (deterministic, clock-injected, fake harness). Full e2e adds a **live-harness confirmation** against a real model — nondeterministic, not gating CI, evidence-logged.
 
 - Deterministic proof: `test/harness/*`, `test/modes/headless.test.ts`, `test/store/store.test.ts`, `test/protocol/*`, `test/gate-5-6.test.ts` — every smoke in `docs/smoke-seven.md` has a fake-hcn oracle.
-- Live confirmation: `scripts/smoke-live.ts` (claude via a real `hcn session --json`) and the handoff smoke. These are deferred (DF-SMOKE) — run on demand against an installed harness.
+- Live confirmation, one lane per thing that can only be proven against a
+  real process. All deferred (DF-SMOKE) — run on demand:
+  - `scripts/smoke-live.ts` — a harness driven through `hcn`, per harness
+  - `scripts/smoke-resume.ts` — a harness recalls its own session after the
+    process is lost
+  - `scripts/smoke-cross-harness.ts` — one record, two different harnesses
+  - `scripts/smoke-handoff.ts` — two processes, baton-passed
+  - `scripts/smoke-interactive.ts` — the mode with no `hcn` in it at all: a
+    claude session lucid does not own, reached through project-scope hooks
+
+  The interactive lane is the one that closes PLAN.md's gate on the artifact
+  layer ("tested through every integration mode"). It has a negative control:
+  with the hooks removed the session answers its own prompt and lucid never
+  attaches.
 
 **Do not gate a deepening refactor on live models alone.** If deterministic gates are green and live confirmation shows transcript folding, the seam is proven.
 
