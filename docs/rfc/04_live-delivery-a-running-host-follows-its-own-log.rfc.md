@@ -2,7 +2,7 @@
 number: 04
 title: "Live delivery: a running host follows its own log"
 type: protocol
-status: Draft
+status: Implemented
 author: Kevin Frilot
 date: 2026-08-23
 ---
