@@ -30,6 +30,7 @@
 
 import type { HarnessEvent } from "../harness/events.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
+import { EventKind } from "../protocol/events.js";
 import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
 import type { CollectedBatch } from "../store/log.js";
 import { createSequencer } from "./sequencer.js";
@@ -193,16 +194,32 @@ const sessionStrategy = (
           // Wrapped so the boundary is observed where it actually happens:
           // when this turn's events are exhausted. `finally` also covers a
           // consumer that abandons the turn early.
+          const boundary = (): void => {
+            if (!turnRunning) return;
+            turnRunning = false;
+            if (closed) return;
+            const due = waiting.splice(0, waiting.length);
+            for (const w of due) sendNow(w.id, w.text);
+          };
           const bounded: AsyncIterable<HarnessEvent> = {
             async *[Symbol.asyncIterator]() {
               try {
-                yield* turn;
-              } finally {
-                turnRunning = false;
-                if (!closed) {
-                  const due = waiting.splice(0, waiting.length);
-                  for (const w of due) sendNow(w.id, w.text);
+                for await (const event of turn) {
+                  yield event;
+                  // The boundary is the terminal event, not the end of the
+                  // stream. In session mode hcn holds a turn's stream open
+                  // past its `done` - the next turn line closes it - so
+                  // waiting for the iterator to finish waits for a turn that
+                  // only a send would start, and the send is the thing being
+                  // held. That deadlocked the second turn of every session
+                  // conversation. The fake harness closes turns promptly, so
+                  // only the live lanes caught it.
+                  if (event.kind === EventKind.done) boundary();
                 }
+              } finally {
+                // Backstop for a turn that ends without a terminal event: an
+                // abandoned iterator, or a process that died mid-turn.
+                boundary();
               }
             },
           };
