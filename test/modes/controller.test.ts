@@ -15,6 +15,7 @@ const rig = () => {
   const host = openConversation(join(root, "conv-1"), {
     now: () => box.now,
     presence: () => box.presence,
+    executorLease: () => false,
     onRecord: () => {},
     onEffect: () => {},
   });
@@ -151,6 +152,7 @@ describe("conversation controller + handoff (M5.4)", () => {
     const reopened = openConversation(join(r.root, "conv-1"), {
       now: () => r.box.now,
       presence: () => r.box.presence,
+      executorLease: () => false,
       onRecord: () => {},
       onEffect: () => {},
     });
@@ -179,6 +181,7 @@ describe("conversation controller + handoff (M5.4)", () => {
     const reopened = openConversation(join(r.root, "conv-1"), {
       now: () => r.box.now,
       presence: () => r.box.presence,
+      executorLease: () => false,
       onRecord: () => {},
       onEffect: () => {},
     });

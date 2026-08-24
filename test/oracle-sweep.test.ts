@@ -78,6 +78,7 @@ describe("oracle sweep (M7.1): identity collisions", () => {
     const host = openConversation(join(root, id), {
       now: () => box.now,
       presence: () => box.presence,
+      executorLease: () => false,
       onRecord: () => {},
       onEffect: () => {},
     });

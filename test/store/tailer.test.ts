@@ -25,6 +25,9 @@ const writer = (root: string, conversationId: string, now = 1_000) =>
   openConversation(join(root, conversationId), {
     now: () => now,
     presence: () => undefined,
+    // A second writer never holds the lease: it appends and leaves the
+    // effects for whoever is driving, exactly as `lucid send` does.
+    executorLease: () => false,
     onEffect: () => {},
     onRecord: () => {},
   });

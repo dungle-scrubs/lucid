@@ -16,8 +16,9 @@
  *
  * Now one module owns the whole host discipline — record-file reading
  * (secret + identity, D-004), the single `transact` seam
- * (lock→catch-up→reduce→write→effects→record, C01), secret redaction,
- * recovery emission, and the single snapshot derivation
+ * (lock→catch-up→reduce→write→lease-gated effects→record, C01 + RFC-04
+ * R2), secret redaction, recovery emission, and the single snapshot
+ * derivation
  * (`log.state()` once → transcript + status from that same state +
  * injected clock/presence, 01). Callers see a small, deep interface:
  * `createConversationHost(dir, deps) → ConversationHost` with
@@ -60,7 +61,20 @@ export type { AppendEvent, LogEntry, Transcript, TranscriptEvent, TranscriptInpu
 
 export interface HostDeps {
   readonly now: () => number;
+  /** The normalizer's ps-level INTERACTIVE-process probe. Liveness
+   * arithmetic and the attach reducer's presence corroboration read it.
+   * It is NOT flock ownership: a headless runtime that holds the record's
+   * presence lock can still answer `undefined` here, and a living
+   * interactive process says `true` while holding nothing. Ownership is
+   * `executorLease` (RFC-04 M2: the two must never be conflated). */
   readonly presence: () => boolean | undefined;
+  /** RFC-04 R2: does THIS process hold the record's presence lock — the
+   * executor lease. The only gate on acting on effects: a process that
+   * does not hold it still writes, and the effects stay on the result and
+   * in the log for the holder to rediscover on its catch-up fold. The
+   * runtime passes a closure over the `PresenceHandle` it actually holds;
+   * callers that never acquire the lock state `() => false`. */
+  readonly executorLease: () => boolean;
   readonly onEffect: (effect: Effect) => void;
   readonly onRecord: (record: HostRecord) => void;
   readonly onLockEvent?: (event: LockEvent) => void;
@@ -172,7 +186,13 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
       const { result: r, frame } = produce(s);
       return { entry, result: r, frame };
     });
-    for (const effect of result.effects) deps.onEffect(effect);
+    // RFC-04 R2: only the presence-lock holder acts on effects. A
+    // non-holder's write still lands and the reduce still returns its
+    // effects — the holder rediscovers them on its catch-up fold — but
+    // this process hands none to its own sink. The gate reads
+    // `executorLease`, never `presence`: that probe reports the
+    // interactive process's liveness, not this process's lock ownership.
+    if (deps.executorLease()) for (const effect of result.effects) deps.onEffect(effect);
     deps.onRecord((result as unknown as { record: HostRecord }).record);
     return result;
   };
@@ -216,6 +236,9 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
           conversationId,
           now: at,
         });
+        // Exempt from the R2 gate: this never reached `transact` — it is a
+        // local answer to a frame that would not decode, not conversation
+        // work, and the sender is owed it whichever process read the wire.
         deps.onEffect({ type: "send", frame: { kind: "refused", issue: decoded.issue } });
         return { verdict: "refused", wire: true, issue: decoded.issue };
       }

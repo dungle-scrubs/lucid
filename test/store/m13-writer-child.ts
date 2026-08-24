@@ -19,6 +19,7 @@ if (!dir || !writerId) {
 const host = openConversation(dir, {
   now: () => Date.now(),
   presence: () => undefined,
+  executorLease: () => false,
   onEffect: () => {},
   onRecord: () => {},
 });

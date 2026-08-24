@@ -92,6 +92,8 @@ const main = async (): Promise<void> => {
   const host = openConversation(join(root, conversationId), {
     now: () => Date.now(), // live wall-clock (determinism was for tests)
     presence: () => undefined,
+    // The smoke's in-process rig is the de-facto holder (R2).
+    executorLease: () => true,
     onRecord: (r) => records.push(r),
     onEffect: (e) => {
       if (e.type === "send") receive(e.frame);
@@ -183,6 +185,7 @@ const main = async (): Promise<void> => {
   const reopened = openConversation(join(root, conversationId), {
     now: () => Date.now(),
     presence: () => undefined,
+    executorLease: () => false,
     onRecord: () => {},
     onEffect: () => {},
   });

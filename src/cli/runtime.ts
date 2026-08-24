@@ -44,7 +44,7 @@ import { decideAction } from "../modes/controller.js";
 import { createHeadlessHost } from "../modes/host.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
-import { acquirePresence, type PresenceEvent } from "../store/presence.js";
+import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
 import { type HostRecord, openConversation } from "../store/store.js";
 import { type Conversations, conversations } from "./conversations.js";
 import { harnessForName, supportsSession } from "./harness.js";
@@ -153,9 +153,18 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   const { secret } = convs.ensure(conversationId);
 
   let receive: ((frame: Frame) => void) | undefined;
+  // RFC-04 R2: the host's dispatch gate must read the presence handle
+  // this runtime actually holds — not `presence` above, the ps-level
+  // interactive-process probe, which is a different fact. The handle does
+  // not exist yet when the host is opened (the D-021 gate below may
+  // return without ever acquiring), so the seam reads it through this
+  // closure: until acquisition it answers false, which is the truth —
+  // this process holds nothing.
+  let presenceHandle: PresenceHandle | undefined;
   const host = openConversationFn(dir, {
     now: nowFn,
     presence: () => presenceProbe(),
+    executorLease: () => presenceHandle?.held() === true,
     onEffect: (eff) => {
       if (eff.type === "send") receive?.(eff.frame);
     },
@@ -190,6 +199,10 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   const presence = acquirePresenceFn(dir, conversationId, {
     onEvent: opts.onPresenceEvent,
   });
+  // Publish the handle to the host's R2 gate: from here on, transacts in
+  // this process see themselves as the holder, and after `release()` (or
+  // a takeover) they stop dispatching.
+  presenceHandle = presence;
   let released = false;
   const doRelease = (): void => {
     if (released) return;

@@ -42,6 +42,7 @@ describe("two-writer real-flock integration (M1.3)", () => {
       const host = openConversation(dir, {
         now: () => 1_000,
         presence: () => undefined,
+        executorLease: () => false,
         onEffect: () => {},
         onRecord: () => {},
       });
@@ -96,6 +97,7 @@ describe("two-writer real-flock integration (M1.3)", () => {
     const reopened = openConversation(dir, {
       now: () => 10_000,
       presence: () => undefined,
+      executorLease: () => false,
       onEffect: () => {},
       onRecord: () => {},
     });
