@@ -159,10 +159,25 @@ export const dispatch = async (
       return { kind: "watch", conversationId: mapped.conversationId };
     }
     case "run": {
+      // `run` holds the terminal until Ctrl-C, so it must say so. Silence
+      // reads as a hang - and did, to the first person who pasted the three
+      // commands from the docs as one block and watched nothing happen.
+      const say = deps.onOutput ?? ((line: string) => console.log(line));
       const result = await runFn({
         rootDir: effectiveRoot,
         conversationId: mapped.conversationId,
         harnessName: mapped.harnessName,
+        onStart: (running) => {
+          say(`${running.conversationId} · ${running.harness} · ${running.profile}`);
+          say(`record ${running.dir}`);
+          say(`following the log — send to this conversation from anywhere; Ctrl-C to stop`);
+        },
+        onRecord: (r) => {
+          if (!("verdict" in r) || r.verdict !== "accepted") return;
+          if (r.kind === "input") say(`  → input ${r.inputId ?? ""}`.trimEnd());
+          if (r.kind === "disposition" && r.outcome === "applied")
+            say(`  ✓ delivered ${r.inputId ?? ""}`.trimEnd());
+        },
       });
       if (result.awaitToken) {
         return {
