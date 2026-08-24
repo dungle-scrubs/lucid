@@ -99,6 +99,86 @@ const knownEntry = (e: Envelope): e is LogEntry =>
   (ENTRY_SOURCES as readonly string[]).includes(e.src);
 
 // ---------------------------------------------------------------------------
+// Delivery cursor (RFC-04 R3/R4, step 7)
+// ---------------------------------------------------------------------------
+
+/** The cursor entry is an ordinary log line, so it carries the same
+ * envelope every entry does (`v`, `at`, `src`). Its `offset` is the
+ * byte offset up to which the holder has finished dispatching — that is,
+ * `goodBytes` at the time the cursor was written. An effect's identity
+ * is the starting offset of the entry that produced it, so "have I
+ * already done this" is "is its offset < cursor". */
+export interface CursorEntry {
+  readonly v: 1;
+  readonly at: number;
+  readonly src: "cursor";
+  readonly offset: number;
+}
+
+const _isCursorEnvelope = (e: Envelope): boolean => e.src === "cursor";
+
+const validCursorOffset = (raw: unknown): boolean => {
+  if (typeof raw !== "object" || raw === null) return false;
+  const o = (raw as Record<string, unknown>).offset;
+  return typeof o === "number" && Number.isSafeInteger(o) && o >= 0;
+};
+
+/** Scan the good prefix of `raw` for cursor entries and return the
+ * greatest offset among them, or 0 if none. A cursor whose offset is
+ * past `goodBytes` is corruption: the holder claims to have dispatched
+ * effects that are not in the good log, so a successor must refuse to
+ * drive rather than reset and repeat from an unknown point. A torn
+ * trailing cursor sits behind `goodBytes` and is not scanned — it reads
+ * as an earlier cursor, and the repeat is absorbed by the dedup check. */
+export const scanCursor = (raw: Buffer, goodBytes: number): number => {
+  let cursor = 0;
+  let offset = 0;
+  while (offset < goodBytes) {
+    const nl = raw.indexOf(NL, offset);
+    if (nl === -1) break;
+    // Only scan within the good prefix; torn tail is not good.
+    if (nl + 1 > goodBytes) break;
+    const line = raw.toString("utf8", offset, nl);
+    if (line.length > 0) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        // foldLog would have thrown for unparseable line; cursor scan
+        // is only called on good bytes, so this is unreachable — but
+        // tolerate it as non-cursor rather than throwing a second error.
+        offset = nl + 1;
+        continue;
+      }
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        (parsed as Record<string, unknown>).src === "cursor"
+      ) {
+        // Envelope must be valid, otherwise the fold would have thrown
+        // corrupt-log — treat same here.
+        if (!validEntry(parsed)) {
+          throw new StoreError("corrupt-log", `malformed log entry at byte ${offset}`);
+        }
+        if (!validCursorOffset(parsed)) {
+          throw new StoreError("corrupt-log", `malformed cursor entry at byte ${offset}`);
+        }
+        const off = (parsed as CursorEntry).offset;
+        if (off > goodBytes) {
+          throw new StoreError(
+            "corrupt-log",
+            `cursor at byte ${offset} claims offset ${off} past good log end ${goodBytes}`,
+          );
+        }
+        if (off > cursor) cursor = off;
+      }
+    }
+    offset = nl + 1;
+  }
+  return cursor;
+};
+
+// ---------------------------------------------------------------------------
 // Transcript (rendered history) - re-exported via store.ts for stability
 // ---------------------------------------------------------------------------
 
@@ -436,7 +516,9 @@ export const foldUnderAppendLock = (
   opts: { onLockEvent?: (e: LockEvent) => void } = {},
 ): { state: ChannelState; transcript: Transcript; goodBytes: number } =>
   withAppendLock(paths, conversationId, opts, () => {
-    const { folded } = readFoldRepair(paths, conversationId, secret);
+    const { raw, folded } = readFoldRepair(paths, conversationId, secret);
+    // Cursor ahead of goodBytes is corruption — refuse to drive
+    scanCursor(raw, folded.goodBytes);
     return {
       state: folded.state,
       transcript: {
@@ -485,6 +567,9 @@ export const collectEffectsUnderAppendLock = (
         truncateSync(paths.logPath, goodBytes);
       } catch {}
     }
+    // Cursor ahead of goodBytes is corruption — refuse to drive.
+    // Scan only the good prefix, so a torn trailing cursor is not seen.
+    scanCursor(raw, goodBytes);
     return {
       state,
       transcript: {
@@ -512,6 +597,21 @@ export interface ConversationLog {
   state(): ChannelState;
   transcript(): Transcript;
   goodBytes(): number;
+  /** The delivery cursor: the offset up to which effects have been
+   * dispatched (RFC-04 R4). 0 if no cursor has been written. A cursor
+   * whose offset is past `goodBytes` is corruption — the log claims
+   * effects were dispatched that are not in the good log, so a successor
+   * must refuse to drive rather than reset and repeat. */
+  cursor(): number;
+  /** Durably advance the delivery cursor to `offset`. The cursor is an
+   * ordinary log entry (`{v:1, at, src:"cursor", offset}`), so it is
+   * ordered against the entries it describes and fsynced. MUST be called
+   * only after every effect at or before `offset` has been acted on —
+   * writing it first would make a crash in the gap at-most-once (the
+   * inverse of the guarantee). The offset must be \u2264 current
+   * `goodBytes` at the time of the write; otherwise it would be a
+   * cursor-ahead corruption. */
+  advanceCursor(offset: number, at: number): void;
   /** Append via the lock-wrapped transaction. The `produce` closure is
    * called under the lock after the catch-up fold, so the reduce sees
    * current state. */
@@ -552,12 +652,19 @@ export const createLog = (
     }
   };
 
-  // Establish initial state under the append lock
-  const { raw: initialRaw, folded: initialFolded } = (() => {
+  // Establish initial state under the append lock, and validate
+  // the delivery cursor (RFC-04: cursor past goodBytes is corruption).
+  const {
+    raw: initialRaw,
+    folded: initialFolded,
+    cursor: initialCursor,
+  } = (() => {
     const flock = new Flock(paths.lockPath, conversationId);
     const lock = flock.acquire({ onEvent: deps.onLockEvent });
     try {
-      return readFoldRepair(paths, conversationId, secret);
+      const { raw, folded } = readFoldRepair(paths, conversationId, secret);
+      const cursor = scanCursor(raw, folded.goodBytes);
+      return { raw, folded, cursor };
     } finally {
       lock.release();
     }
@@ -570,6 +677,7 @@ export const createLog = (
   };
   let curState = initialFolded.state;
   let curGoodBytes = initialFolded.goodBytes;
+  let curCursor = initialCursor;
   const recoveredEntries = initialFolded.entries;
   const discardedBytes = initialRaw.length - initialFolded.goodBytes;
 
@@ -586,7 +694,8 @@ export const createLog = (
     const lock = flock.acquire({ onEvent: deps.onLockEvent });
     let preWriteOffset: number | undefined;
     try {
-      const { folded } = readFoldRepair(paths, conversationId, secret);
+      const { raw: refreshedRaw, folded } = readFoldRepair(paths, conversationId, secret);
+      curCursor = scanCursor(refreshedRaw, folded.goodBytes);
       if (
         folded.goodBytes !== curGoodBytes ||
         folded.state.seq !== curState.seq ||
@@ -679,6 +788,12 @@ export const createLog = (
     const batch = collectEffectsUnderAppendLock(paths, conversationId, secret, fromOffset, {
       onLockEvent: deps.onLockEvent,
     });
+    // Refresh cursor from the same raw the batch saw — collectEffectsUnderAppendLock
+    // already validated torn tail, but need cursor scan. Re-read raw for cursor.
+    try {
+      const raw = readFileSync(paths.logPath);
+      curCursor = scanCursor(raw, batch.goodBytes);
+    } catch {}
     // Keep the host's cached snapshot consistent with what the locked fold
     // just saw, so a subsequent state()/transcript() call does not go stale
     // after another process appended.
@@ -693,6 +808,85 @@ export const createLog = (
     return batch;
   };
 
+  const cursor: ConversationLog["cursor"] = () => curCursor;
+
+  const advanceCursor: ConversationLog["advanceCursor"] = (offset, at) => {
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new StoreError(
+        "corrupt-log",
+        `cursor offset must be a non-negative safe integer, got ${offset}`,
+      );
+    }
+    const flock = new Flock(paths.lockPath, conversationId);
+    const lock = flock.acquire({ onEvent: deps.onLockEvent });
+    try {
+      const { raw, folded } = readFoldRepair(paths, conversationId, secret);
+      // Validate existing cursor before advancing — corruption must be reported
+      const current = scanCursor(raw, folded.goodBytes);
+      curCursor = current;
+      curState = folded.state;
+      curGoodBytes = folded.goodBytes;
+      acc.events.length = 0;
+      acc.events.push(...folded.transcript.events);
+      acc.inputs.length = 0;
+      acc.inputs.push(...folded.transcript.inputs);
+      acc.aborted.length = 0;
+      acc.aborted.push(...folded.transcript.aborted);
+
+      if (offset > folded.goodBytes) {
+        throw new StoreError(
+          "corrupt-log",
+          `cursor advance to ${offset} past good log end ${folded.goodBytes}`,
+        );
+      }
+      // Monotonicity is not strictly required for safety (going back
+      // just repeats), but advancing past goodBytes is always wrong.
+      // Allow idempotent re-advance to same offset.
+      if (offset < curCursor) {
+        // Going backwards is allowed but wasteful — still write? No, just return
+        // without writing, since the later cursor already covers this.
+        return;
+      }
+      if (offset === curCursor && offset !== 0) {
+        // Already at this cursor — check if a cursor entry at this offset
+        // already exists at the tail to avoid duplicate lines? Still
+        // idempotent: no need to write again.
+        // But if curCursor came from scan, there is already a cursor entry
+        // for it. We can skip writing to avoid duplicate cursor lines.
+        // To decide, scan tail for duplicate — simpler to just skip.
+        return;
+      }
+
+      const entry: CursorEntry = { v: 1, at, src: "cursor", offset };
+      const line = Buffer.from(`${JSON.stringify(entry)}\n`);
+      const fd = openSync(paths.logPath, "a");
+      let writeSucceeded = false;
+      try {
+        writeAllSync(fd, line);
+        fsyncSync(fd);
+        writeSucceeded = true;
+      } catch (cause) {
+        try {
+          ftruncateSync(fd, folded.goodBytes);
+        } catch {}
+        try {
+          truncateSync(paths.logPath, folded.goodBytes);
+        } catch {}
+        throw new StoreError("append-failed", `could not advance cursor to ${offset}`, { cause });
+      } finally {
+        try {
+          closeSync(fd);
+        } catch {}
+      }
+      if (writeSucceeded) {
+        curGoodBytes = folded.goodBytes + line.length;
+        curCursor = offset;
+      }
+    } finally {
+      lock.release();
+    }
+  };
+
   return {
     paths,
     conversationId,
@@ -703,6 +897,8 @@ export const createLog = (
       aborted: [...acc.aborted],
     }),
     goodBytes: () => curGoodBytes,
+    cursor,
+    advanceCursor,
     append,
     collectEffects,
     view,

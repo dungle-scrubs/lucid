@@ -167,6 +167,10 @@ export interface ConversationHost {
    * Thin delegation to the log's seam — the lock, repair, and return-
    * never-dispatch discipline lives in `ConversationLog`. */
   collectEffects(fromOffset: number): CollectedBatch;
+  /** The delivery cursor (RFC-04 R4). See `ConversationLog.cursor`. */
+  cursor(): number;
+  /** Durably advance the delivery cursor. See `ConversationLog.advanceCursor`. */
+  advanceCursor(offset: number): void;
 }
 
 export const createConversationHost = (dir: string, deps: HostDeps): ConversationHost => {
@@ -219,6 +223,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   };
 
   const collectEffects = (fromOffset: number): CollectedBatch => log.collectEffects(fromOffset);
+  const cursor = (): number => log.cursor();
+  const advanceCursor = (offset: number): void => log.advanceCursor(offset, deps.now());
 
   return {
     conversationId,
@@ -228,6 +234,9 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     close: (): void => log.close(),
     transcript: () => snapshot().transcript,
     status: (): ChannelStatus => snapshot().status,
+    cursor,
+    advanceCursor,
+    collectEffects,
     handleFrame: (
       line: string,
     ): ReduceResult | { verdict: "refused"; wire: true; issue: DecodeIssue } => {
@@ -292,7 +301,6 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         return { result: r, frame: null };
       });
     },
-    collectEffects,
   };
 };
 
