@@ -460,10 +460,15 @@ describe("durable conversation store (M5.1)", () => {
     );
 
     // The wire path refuses the same value at the codec; the fold must
-    // name the same issue for the same value, not a softer one.
+    // name the same issue for the same value, not a softer one. "answer"
+    // without a turnId is now answer-needs-turn (T45), not wrong-type; a
+    // truly unknown mode still draws wrong-type.
     expect(decodeFrame({ kind: "input", seq: 42, id: "ans-1", text: "x", mode: "answer" })).toEqual(
-      { verdict: "refused", issue: "wrong-type" },
+      { verdict: "refused", issue: "answer-needs-turn" },
     );
+    expect(
+      decodeFrame({ kind: "input", seq: 42, id: "ans-1", text: "x", mode: "yolo" as never }),
+    ).toEqual({ verdict: "refused", issue: "wrong-type" });
 
     // The record opens: the refusal is carried, not fatal.
     const reopened = openHost(root, "conv-1");
@@ -481,7 +486,7 @@ describe("durable conversation store (M5.1)", () => {
 
     // The fold itself reports the refusal, with its offset and issue.
     const folded = foldLog("conv-1", secret, readFileSync(paths.logPath));
-    expect(folded.refusedInputs).toEqual([{ offset: unknownOffset, issue: "wrong-type" }]);
+    expect(folded.refusedInputs).toEqual([{ offset: unknownOffset, issue: "answer-needs-turn" }]);
     expect(folded.entries).toBe(1);
 
     // Later entries still fold past it, and a subsequent append lands
