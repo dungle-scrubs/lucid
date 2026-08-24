@@ -132,14 +132,61 @@ const sessionStrategy = (
   let turnRunning = false;
   let closed = false;
   // Inputs that arrived mid-turn in `queue` mode, waiting for the boundary. Answers and steers are never held (RFC-05 R3).
-  const waiting: Array<{ id: string; text: string }> = [];
+  const waiting: Array<{ id: string; text: string; mode: InputMode }> = [];
 
-  const sendNow = (id: string, text: string): void => {
+  const sendNow = (id: string, text: string, mode: InputMode): void => {
     if (closed) return;
     // hcn answers a send with exactly one disposition, and it answers
     // before it opens the turn. So the reply is awaited and recorded when
     // it lands: one disposition per input, the same as before, just no
     // longer decided locally.
+    if (mode === "answer") {
+      // An answer is delivered through the harness's answer path, not its
+      // send path. lucid passes raw text and lets hcn compose the wrapper
+      // (RFC-05 R7) — the same discipline as never mirroring the harness
+      // normaliser's vocabulary anywhere else.
+      void opening
+        .then((session) => session.answer(id, text))
+        .then((ans) => {
+          if (ans.disposition === "rejected" && ans.reason === "no-open-question") {
+            // The harness disagrees that a question is open. lucid replaced
+            // it, the harness did not. The answer is refused as an internal
+            // step, not a result — exactly one outcome is recorded per input
+            // id, and it is the outcome of the whole attempt.
+            // The divergence is a non-terminal error on the current turn,
+            // not a note on the disposition (that reaches the durable frame
+            // but never the transcript).
+            ctx.sequencer.emit(ctx.getTurnId(), {
+              kind: EventKind.error,
+              message: `answer demoted: no-open-question for ${id}`,
+              terminal: false,
+            });
+            return opening
+              .then((session) => session.send(id, text))
+              .then((sent) => {
+                if (sent.disposition === "rejected") {
+                  ctx.sequencer.disposition(id, "rejected", sent.reason ?? "send rejected");
+                  return;
+                }
+                ctx.expected.push({ inputId: id, applied: true });
+                ctx.sequencer.disposition(id, "applied");
+              })
+              .catch(() => {
+                ctx.sequencer.disposition(id, "rejected", "session closed");
+              });
+          }
+          if (ans.disposition === "rejected") {
+            ctx.sequencer.disposition(id, "rejected", ans.reason ?? "answer rejected");
+            return;
+          }
+          ctx.expected.push({ inputId: id, applied: true });
+          ctx.sequencer.disposition(id, "applied");
+        })
+        .catch(() => {
+          ctx.sequencer.disposition(id, "rejected", "session closed");
+        });
+      return;
+    }
     void opening
       .then((session) => session.send(id, text))
       .then((sent) => {
@@ -169,10 +216,10 @@ const sessionStrategy = (
       // With no turn running there is no boundary coming, so holding the
       // input would be a hang rather than a policy.
       if (mode === "steer" || mode === "answer" || !turnRunning) {
-        sendNow(id, text);
+        sendNow(id, text, mode);
         return;
       }
-      waiting.push({ id, text });
+      waiting.push({ id, text, mode });
     },
     turns: {
       async *[Symbol.asyncIterator]() {
@@ -199,7 +246,7 @@ const sessionStrategy = (
             turnRunning = false;
             if (closed) return;
             const due = waiting.splice(0, waiting.length);
-            for (const w of due) sendNow(w.id, w.text);
+            for (const w of due) sendNow(w.id, w.text, w.mode);
           };
           const bounded: AsyncIterable<HarnessEvent> = {
             async *[Symbol.asyncIterator]() {
