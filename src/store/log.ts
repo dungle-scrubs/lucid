@@ -17,6 +17,7 @@
  * offsets, torn-tail handling, and flock retry across every writer.
  */
 
+import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -65,9 +66,20 @@ export type LogEntry =
         readonly turnId?: string;
       };
     }
-  | { readonly v: 1; readonly at: number; readonly src: "credit"; readonly tokens: number };
+  | { readonly v: 1; readonly at: number; readonly src: "credit"; readonly tokens: number }
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "artifact";
+      readonly artifactId: string;
+      readonly version: number;
+      readonly author: string;
+      readonly contentType: string;
+      readonly hash: string;
+      readonly bytes: string;
+    };
 
-const ENTRY_SOURCES = ["frame", "input", "credit"] as const;
+const ENTRY_SOURCES = ["frame", "input", "credit", "artifact"] as const;
 
 /** The envelope every entry carries, whatever its source. The fold checks
  * this much and no more before deciding whether it knows the source:
@@ -107,6 +119,87 @@ const knownEntry = (e: Envelope): e is LogEntry =>
 export interface FoldRefusal {
   readonly offset: number;
   readonly issue: ProtocolIssue;
+}
+
+// ---------------------------------------------------------------------------
+// Artifact versions (RFC-06 storage) — the bytes live in their own entry kind
+// ---------------------------------------------------------------------------
+
+/** RFC-06: an artifact is capped at 1 MB, the same bound TEXT_MAX guards. */
+export const ARTIFACT_BYTES_MAX = 1_000_000;
+
+/** One stored version of an artifact — the bytes and their hash. */
+export interface ArtifactVersion {
+  readonly artifactId: string;
+  readonly version: number;
+  readonly author: string;
+  readonly contentType: string;
+  readonly hash: string;
+  readonly bytes: string;
+  readonly at: number;
+}
+
+/** Hash of artifact bytes: sha256 hex, written for every version from the first. */
+export const hashArtifactBytes = (bytes: string): string =>
+  createHash("sha256").update(bytes, "utf8").digest("hex");
+
+/** Wire-safe field: non-empty, <=128, no control chars — mirrors isWireId. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: artifact fields must not contain control chars — mirrors frames.ts guard
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
+const isArtifactField = (v: unknown): boolean =>
+  typeof v === "string" && v.length > 0 && v.length <= 128 && !CONTROL_CHARS.test(v);
+const isHashHex = (v: unknown): boolean => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
+
+/** Key for the (artifactId, version) -> offset index. \0 is safe because ids have no control chars. */
+export const artifactKey = (artifactId: string, version: number): string =>
+  `${artifactId}\0${version}`;
+
+export type ArtifactIndex = ReadonlyMap<string, number>;
+
+/** Validate an envelope-valid entry claiming src artifact. Returns the typed entry or throws corrupt-log. */
+const coerceArtifactEntry = (raw: unknown, offset: number): LogEntry & { src: "artifact" } => {
+  const r = raw as Record<string, unknown>;
+  const artifactId = r.artifactId;
+  const version = r.version;
+  const author = r.author;
+  const contentType = r.contentType;
+  const hash = r.hash;
+  const bytes = r.bytes;
+  const at = (r as { at: unknown }).at;
+  if (!isArtifactField(artifactId))
+    throw new StoreError("corrupt-log", `malformed artifact entry at byte ${offset}: artifactId`);
+  if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1)
+    throw new StoreError("corrupt-log", `malformed artifact entry at byte ${offset}: version`);
+  if (!isArtifactField(author))
+    throw new StoreError("corrupt-log", `malformed artifact entry at byte ${offset}: author`);
+  if (!isArtifactField(contentType))
+    throw new StoreError("corrupt-log", `malformed artifact entry at byte ${offset}: contentType`);
+  // Hash must be present for every version from the first — cannot be added later.
+  if (!isHashHex(hash))
+    throw new StoreError("corrupt-log", `malformed artifact entry at byte ${offset}: hash`);
+  if (typeof bytes !== "string")
+    throw new StoreError("corrupt-log", `malformed artifact entry at byte ${offset}: bytes`);
+  if (typeof at !== "number" || !Number.isSafeInteger(at) || at < 0)
+    throw new StoreError("corrupt-log", `malformed artifact entry at byte ${offset}: at`);
+  return {
+    v: 1,
+    at: at as number,
+    src: "artifact",
+    artifactId: artifactId as string,
+    version: version as number,
+    author: author as string,
+    contentType: contentType as string,
+    hash: hash as string,
+    bytes: bytes as string,
+  };
+};
+
+/** An artifact entry that was carried but refused because bytes exceeded the size limit. */
+export interface ArtifactRefusal {
+  readonly offset: number;
+  readonly issue: "artifact-too-large";
+  readonly artifactId: string;
+  readonly version: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +393,25 @@ const applyEntry = (
       return { result: enqueueInput(state, entry.input, entry.at), frame: null };
     case "credit":
       return { result: grantCredit(state, entry.tokens, entry.at), frame: null };
+    case "artifact":
+      // Artifacts are not reduced into ChannelState or the transcript — they
+      // reuse the same skip path as an unknown src, but are still validated
+      // and indexed. Returning an accepted no-op keeps the fold pure.
+      return {
+        result: {
+          verdict: "accepted",
+          state,
+          effects: [],
+          record: {
+            verdict: "accepted",
+            kind: "event",
+            conversationId: state.conversationId,
+            epoch: state.epoch,
+            now: entry.at,
+          } as unknown as import("../protocol/index.js").TransitionRecord,
+        },
+        frame: null,
+      };
   }
 };
 
@@ -357,12 +469,16 @@ export const foldLog = (
   entries: number;
   transcript: TranscriptAcc;
   refusedInputs: readonly FoldRefusal[];
+  artifactIndex: Map<string, number>;
+  artifactRefusals: readonly ArtifactRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
   let offset = 0;
   let entries = 0;
   const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
   const refusedInputs: FoldRefusal[] = [];
+  const artifactIndex = new Map<string, number>();
+  const artifactRefusals: ArtifactRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
     if (nl === -1) break;
@@ -377,26 +493,56 @@ export const foldLog = (
       if (!validEntry(parsed))
         throw new StoreError("corrupt-log", `malformed log entry at byte ${offset}`);
       if (knownEntry(parsed)) {
-        const { result, frame } = applyEntry(state, parsed, secret);
-        if (result.verdict !== "accepted") {
-          // lucid appends only entries its own reducer accepted, so a
-          // refused FRAME or CREDIT entry is log/reducer disagreement -
-          // corruption, and fatal. A refused INPUT entry is different:
-          // it is a payload a newer build understood and this one does
-          // not (RFC-05 B4), so it is carried - state advances to the
-          // refusal's (unchanged) state, its bytes count as read - and
-          // the refusal is reported, not thrown.
-          if (parsed.src !== "input")
-            throw new StoreError(
-              "fold-refused",
-              `log entry at byte ${offset} refused on fold (${result.issue})`,
-            );
-          refusedInputs.push({ offset, issue: result.issue });
-          state = result.state;
+        // Artifact entries are validated and indexed here — they do not
+        // reduce into ChannelState or the transcript, reusing the same
+        // carry path an unknown src uses for state (bytes count, no
+        // effect), but still building the seek index during the fold
+        // that already happens at open (RFC-06 storage).
+        if ((parsed as LogEntry).src === "artifact") {
+          const art = coerceArtifactEntry(parsed, offset);
+          // Size limit: oversize is refused but the record still opens —
+          // the entry is carried (bytes counted) yet not indexed, so a
+          // later valid version still folds. This is the only artifact
+          // refusal that is not corruption.
+          if (art.bytes.length > ARTIFACT_BYTES_MAX) {
+            artifactRefusals.push({
+              offset,
+              issue: "artifact-too-large",
+              artifactId: art.artifactId,
+              version: art.version,
+            });
+          } else {
+            // Every artifact version must carry its hash; coerceArtifactEntry
+            // already enforced presence and hex shape. Index is built here
+            // so reading a version is a seek, not a fold.
+            const key = artifactKey(art.artifactId, art.version);
+            // First writer wins for a given (id, version) — later duplicate
+            // is ignored rather than overwriting, since versions are never
+            // rewritten (RFC-06: every version is a new entry).
+            if (!artifactIndex.has(key)) artifactIndex.set(key, offset);
+          }
         } else {
-          collectTranscript(transcript, parsed, frame, result);
-          state = result.state;
-          entries += 1;
+          const { result, frame } = applyEntry(state, parsed as LogEntry, secret);
+          if (result.verdict !== "accepted") {
+            // lucid appends only entries its own reducer accepted, so a
+            // refused FRAME or CREDIT entry is log/reducer disagreement -
+            // corruption, and fatal. A refused INPUT entry is different:
+            // it is a payload a newer build understood and this one does
+            // not (RFC-05 B4), so it is carried - state advances to the
+            // refusal's (unchanged) state, its bytes count as read - and
+            // the refusal is reported, not thrown.
+            if (parsed.src !== "input")
+              throw new StoreError(
+                "fold-refused",
+                `log entry at byte ${offset} refused on fold (${result.issue})`,
+              );
+            refusedInputs.push({ offset, issue: result.issue });
+            state = result.state;
+          } else {
+            collectTranscript(transcript, parsed as LogEntry, frame, result);
+            state = result.state;
+            entries += 1;
+          }
         }
       }
     }
@@ -404,7 +550,15 @@ export const foldLog = (
     // past its bytes either way, so a later entry still folds.
     offset = nl + 1;
   }
-  return { state, goodBytes: offset, entries, transcript, refusedInputs };
+  return {
+    state,
+    goodBytes: offset,
+    entries,
+    transcript,
+    refusedInputs,
+    artifactIndex,
+    artifactRefusals,
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -433,6 +587,8 @@ export const foldCollect = (
   transcript: TranscriptAcc;
   collected: CollectedEntry[];
   refusedInputs: readonly FoldRefusal[];
+  artifactIndex: Map<string, number>;
+  artifactRefusals: readonly ArtifactRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
   let offset = 0;
@@ -440,6 +596,8 @@ export const foldCollect = (
   const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
   const collected: CollectedEntry[] = [];
   const refusedInputs: FoldRefusal[] = [];
+  const artifactIndex = new Map<string, number>();
+  const artifactRefusals: ArtifactRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
     if (nl === -1) break;
@@ -455,36 +613,112 @@ export const foldCollect = (
       if (!validEntry(parsed))
         throw new StoreError("corrupt-log", `malformed log entry at byte ${offset}`);
       if (knownEntry(parsed)) {
-        const { result, frame } = applyEntry(state, parsed, secret);
-        if (result.verdict === "accepted") {
-          collectTranscript(transcript, parsed, frame, result);
-          state = result.state;
-          entries += 1;
-          if (entryOffset >= fromOffset && result.effects.length > 0) {
-            collected.push({
+        if ((parsed as LogEntry).src === "artifact") {
+          const art = coerceArtifactEntry(parsed, entryOffset);
+          if (art.bytes.length > ARTIFACT_BYTES_MAX) {
+            artifactRefusals.push({
               offset: entryOffset,
-              effects: Object.freeze([...result.effects]) as readonly Effect[],
+              issue: "artifact-too-large",
+              artifactId: art.artifactId,
+              version: art.version,
             });
+          } else {
+            const key = artifactKey(art.artifactId, art.version);
+            if (!artifactIndex.has(key)) artifactIndex.set(key, entryOffset);
           }
         } else {
-          // Refused entry contributes no effects and no transcript, but
-          // its state still advances so the next entry folds correctly.
-          // Never counted as an accepted entry: foldLog throws for a
-          // refused FRAME or CREDIT entry and carries a refused INPUT one
-          // (RFC-05 B4) - and reports it, as here.
-          if (parsed.src === "input")
-            refusedInputs.push({ offset: entryOffset, issue: result.issue });
-          state = result.state;
+          const { result, frame } = applyEntry(state, parsed as LogEntry, secret);
+          if (result.verdict === "accepted") {
+            collectTranscript(transcript, parsed as LogEntry, frame, result);
+            state = result.state;
+            entries += 1;
+            if (entryOffset >= fromOffset && result.effects.length > 0) {
+              collected.push({
+                offset: entryOffset,
+                effects: Object.freeze([...result.effects]) as readonly Effect[],
+              });
+            }
+          } else {
+            // Refused entry contributes no effects and no transcript, but
+            // its state still advances so the next entry folds correctly.
+            // Never counted as an accepted entry: foldLog throws for a
+            // refused FRAME or CREDIT entry and carries a refused INPUT one
+            // (RFC-05 B4) - and reports it, as here.
+            if (parsed.src === "input")
+              refusedInputs.push({ offset: entryOffset, issue: result.issue });
+            state = result.state;
+          }
         }
       }
     }
     offset = nl + 1;
   }
-  return { state, goodBytes: offset, entries, transcript, collected, refusedInputs };
+  return {
+    state,
+    goodBytes: offset,
+    entries,
+    transcript,
+    collected,
+    refusedInputs,
+    artifactIndex,
+    artifactRefusals,
+  };
 };
 
 /** Convenience pure helper returning the same shape `foldLog` would but
  * with collected effects included. Thin alias over `foldCollect`. */
+
+// ---------------------------------------------------------------------------
+// Artifact seek (RFC-06 storage: reading a version is a seek, not a fold)
+// ---------------------------------------------------------------------------
+
+/** Seek to `offset` in `raw` and return the artifact version there, or null
+ * if the line at that offset is not an artifact entry. Validates hash
+ * presence and that the stored hash matches the bytes — a mismatch is
+ * corruption, since slice three's snapshot guard relies on the hash to
+ * detect unreadable bytes (RFC-06 error handling). */
+export const readArtifactAtOffset = (raw: Buffer, offset: number): ArtifactVersion | null => {
+  if (offset < 0 || offset >= raw.length) return null;
+  const nl = raw.indexOf(NL, offset);
+  if (nl === -1) return null;
+  const line = raw.toString("utf8", offset, nl);
+  if (line.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!validEntry(parsed)) return null;
+  if ((parsed as { src: string }).src !== "artifact") return null;
+  const art = coerceArtifactEntry(parsed, offset);
+  if (art.bytes.length > ARTIFACT_BYTES_MAX) return null;
+  return {
+    artifactId: art.artifactId,
+    version: art.version,
+    author: art.author,
+    contentType: art.contentType,
+    hash: art.hash,
+    bytes: art.bytes,
+    at: art.at,
+  };
+};
+
+/** Seek an artifact version by (artifactId, version) using an index built
+ * during the fold that already happens at open. Returns null if not found.
+ * The index maps `artifactKey(id, version) -> offset`, so this is a seek,
+ * not a fold — it reads one line. */
+export const readArtifactVersion = (
+  raw: Buffer,
+  artifactId: string,
+  version: number,
+  index: ReadonlyMap<string, number>,
+): ArtifactVersion | null => {
+  const key = artifactKey(artifactId, version);
+  const offset = index.get(key);
+  if (offset === undefined) return null;
+  return readArtifactAtOffset(raw, offset);
+};
 
 // ---------------------------------------------------------------------------
 // I/O helpers
@@ -632,6 +866,27 @@ export interface ConversationLog {
   state(): ChannelState;
   transcript(): Transcript;
   goodBytes(): number;
+  /** Seek index for (artifactId, version) -> offset, built during the fold
+   * that already happens when the record opens. Reading a version is a seek,
+   * not a fold (RFC-06 storage). */
+  artifactIndex(): ReadonlyMap<string, number>;
+  /** Read an artifact version by seek using the fold-built index. Returns
+   * null if that version was never written or was refused for size. */
+  readArtifact(artifactId: string, version: number): ArtifactVersion | null;
+  /** Append an artifact version. Validates size (TEXT_MAX) and that the hash
+   * is computed from bytes — a version over the size limit is refused and
+   * the record still opens (the oversize entry is carried but not indexed).
+   * The hash is written for every version from the first; missing hash is
+   * corruption and cannot be added later. */
+  writeArtifact(params: {
+    readonly artifactId: string;
+    readonly version: number;
+    readonly author: string;
+    readonly contentType: string;
+    readonly bytes: string;
+  }):
+    | { verdict: "accepted"; version: ArtifactVersion }
+    | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" };
   /** The delivery cursor: the offset up to which effects have been
    * dispatched (RFC-04 R4). 0 if no cursor has been written. A cursor
    * whose offset is past `goodBytes` is corruption — the log claims
@@ -713,6 +968,10 @@ export const createLog = (
   let curState = initialFolded.state;
   let curGoodBytes = initialFolded.goodBytes;
   let curCursor = initialCursor;
+  // RFC-06: index built during the fold that already happens at open — reading is a seek.
+  let curArtifactIndex = new Map<string, number>(initialFolded.artifactIndex);
+  // biome-ignore lint/correctness/noUnusedVariables: refusals tracked for future diagnostics; index is the primary artifact surface
+  let curArtifactRefusals = [...initialFolded.artifactRefusals] as readonly ArtifactRefusal[];
   const recoveredEntries = initialFolded.entries;
   const discardedBytes = initialRaw.length - initialFolded.goodBytes;
   const refusedInputs = initialFolded.refusedInputs.length;
@@ -733,6 +992,10 @@ export const createLog = (
     try {
       const { raw: refreshedRaw, folded } = readFoldRepair(paths, conversationId, secret);
       curCursor = scanCursor(refreshedRaw, folded.goodBytes);
+      // Keep artifact index consistent with the catch-up fold — a concurrent
+      // writer may have appended artifact versions while we were out.
+      curArtifactIndex = new Map<string, number>(folded.artifactIndex);
+      curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
       if (
         folded.goodBytes !== curGoodBytes ||
         folded.state.seq !== curState.seq ||
@@ -833,7 +1096,8 @@ export const createLog = (
     } catch {}
     // Keep the host's cached snapshot consistent with what the locked fold
     // just saw, so a subsequent state()/transcript() call does not go stale
-    // after another process appended.
+    // after another process appended. Same for the artifact index — a
+    // concurrent artifact append must be visible to the next readArtifact.
     curState = batch.state;
     curGoodBytes = batch.goodBytes;
     acc.events.length = 0;
@@ -842,6 +1106,14 @@ export const createLog = (
     acc.inputs.push(...batch.transcript.inputs);
     acc.aborted.length = 0;
     acc.aborted.push(...batch.transcript.aborted);
+    // foldCollect now returns the artifact index; keep the log's copy fresh.
+    curArtifactIndex = new Map<string, number>(
+      (batch as unknown as { artifactIndex: Map<string, number> }).artifactIndex ?? new Map(),
+    );
+    curArtifactRefusals = [
+      ...((batch as unknown as { artifactRefusals: readonly ArtifactRefusal[] }).artifactRefusals ??
+        []),
+    ] as readonly ArtifactRefusal[];
     return batch;
   };
 
@@ -863,6 +1135,8 @@ export const createLog = (
       curCursor = current;
       curState = folded.state;
       curGoodBytes = folded.goodBytes;
+      curArtifactIndex = new Map<string, number>(folded.artifactIndex);
+      curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
       acc.events.length = 0;
       acc.events.push(...folded.transcript.events);
       acc.inputs.length = 0;
@@ -924,6 +1198,166 @@ export const createLog = (
     }
   };
 
+  const artifactIndex: ConversationLog["artifactIndex"] = () => new Map(curArtifactIndex);
+
+  const readArtifact: ConversationLog["readArtifact"] = (artifactId, version) => {
+    const key = artifactKey(artifactId, version);
+    const offset = curArtifactIndex.get(key);
+    if (offset === undefined) return null;
+    // Refresh index if file grew since our last catch-up — a concurrent
+    // writer may have appended a version we haven't indexed yet. Do a
+    // lightweight fold repair under lock if we miss.
+    try {
+      const raw = readFileSync(paths.logPath);
+      // If offset is still within goodBytes, seek directly; otherwise try
+      // refolding to pick up new entries (keeps index consistent across
+      // processes without requiring the caller to know about the log).
+      if (offset < raw.length) {
+        const found = readArtifactAtOffset(raw, offset);
+        if (found !== null) return found;
+      }
+      // Miss or stale offset — refold under lock and retry once.
+      const flock = new Flock(paths.lockPath, conversationId);
+      const lock = flock.acquire();
+      try {
+        const { raw: refreshed, folded } = readFoldRepair(paths, conversationId, secret);
+        curArtifactIndex = new Map<string, number>(folded.artifactIndex);
+        curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
+        curState = folded.state;
+        curGoodBytes = folded.goodBytes;
+        acc.events.length = 0;
+        acc.events.push(...folded.transcript.events);
+        acc.inputs.length = 0;
+        acc.inputs.push(...folded.transcript.inputs);
+        acc.aborted.length = 0;
+        acc.aborted.push(...folded.transcript.aborted);
+        const retry = curArtifactIndex.get(key);
+        if (retry === undefined) return null;
+        return readArtifactAtOffset(refreshed, retry);
+      } finally {
+        lock.release();
+      }
+    } catch {
+      return null;
+    }
+  };
+
+  const writeArtifact: ConversationLog["writeArtifact"] = (params) => {
+    // Size check before acquiring the lock — cheap and gives the same
+    // refusal the fold would produce, without writing an oversize entry.
+    if (params.bytes.length > ARTIFACT_BYTES_MAX) {
+      return { verdict: "refused", issue: "artifact-too-large" };
+    }
+    if (
+      !isArtifactField(params.artifactId) ||
+      !isArtifactField(params.author) ||
+      !isArtifactField(params.contentType)
+    ) {
+      throw new StoreError("corrupt-log", "malformed artifact fields on write");
+    }
+    if (!Number.isSafeInteger(params.version) || params.version < 1) {
+      throw new StoreError("corrupt-log", "malformed artifact version on write");
+    }
+    const hash = hashArtifactBytes(params.bytes);
+    const at = Date.now();
+    const entry: LogEntry = {
+      v: 1,
+      at,
+      src: "artifact",
+      artifactId: params.artifactId,
+      version: params.version,
+      author: params.author,
+      contentType: params.contentType,
+      hash,
+      bytes: params.bytes,
+    };
+    const flock = new Flock(paths.lockPath, conversationId);
+    const lock = flock.acquire({ onEvent: deps.onLockEvent });
+    try {
+      const { raw: refreshedRaw, folded } = readFoldRepair(paths, conversationId, secret);
+      curArtifactIndex = new Map<string, number>(folded.artifactIndex);
+      curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
+      curState = folded.state;
+      curGoodBytes = folded.goodBytes;
+      acc.events.length = 0;
+      acc.events.push(...folded.transcript.events);
+      acc.inputs.length = 0;
+      acc.inputs.push(...folded.transcript.inputs);
+      acc.aborted.length = 0;
+      acc.aborted.push(...folded.transcript.aborted);
+      curCursor = scanCursor(refreshedRaw, folded.goodBytes);
+
+      // Nothing is ever rewritten, so a version that already exists is
+      // never replaced. What that means for the caller depends on whether
+      // they are writing the same thing twice or a different thing.
+      //
+      // Same bytes: accepted, idempotently. A retry after a crash between
+      // the write and its acknowledgement lands here, and reporting it as
+      // a failure would make the caller write a version that already
+      // exists under a new number.
+      //
+      // Different bytes: REFUSED. The first cut returned the existing
+      // version with verdict "accepted", which discards the caller's
+      // content and tells them it worked. If lucid ever computes the next
+      // version wrongly, that silently loses an artifact version and
+      // reports success - the failure mode RFC-06 refuses a stale
+      // `replaces` to avoid, at the layer underneath it.
+      const existingKey = artifactKey(params.artifactId, params.version);
+      if (curArtifactIndex.has(existingKey)) {
+        const existing = readArtifactAtOffset(
+          refreshedRaw,
+          curArtifactIndex.get(existingKey) as number,
+        );
+        if (existing !== null && existing.bytes === params.bytes && existing.hash === hash) {
+          return { verdict: "accepted", version: existing };
+        }
+        return { verdict: "refused", issue: "artifact-version-exists" };
+      }
+
+      const line = Buffer.from(`${JSON.stringify(entry)}\n`);
+      const preWriteOffset = curGoodBytes;
+      const fd = openSync(paths.logPath, "a");
+      let ok = false;
+      try {
+        writeAllSync(fd, line);
+        fsyncSync(fd);
+        ok = true;
+      } catch (cause) {
+        try {
+          ftruncateSync(fd, preWriteOffset);
+        } catch {
+          try {
+            truncateSync(paths.logPath, preWriteOffset);
+          } catch {}
+        }
+        throw new StoreError("append-failed", `could not append artifact to ${paths.logPath}`, {
+          cause,
+        });
+      } finally {
+        try {
+          closeSync(fd);
+        } catch {}
+      }
+      if (ok) {
+        curGoodBytes = preWriteOffset + line.length;
+        curArtifactIndex.set(existingKey, preWriteOffset);
+        const written: ArtifactVersion = {
+          artifactId: params.artifactId,
+          version: params.version,
+          author: params.author,
+          contentType: params.contentType,
+          hash,
+          bytes: params.bytes,
+          at,
+        };
+        return { verdict: "accepted", version: written };
+      }
+      return { verdict: "refused", issue: "artifact-too-large" };
+    } finally {
+      lock.release();
+    }
+  };
+
   return {
     paths,
     conversationId,
@@ -934,6 +1368,9 @@ export const createLog = (
       aborted: [...acc.aborted],
     }),
     goodBytes: () => curGoodBytes,
+    artifactIndex,
+    readArtifact,
+    writeArtifact,
     cursor,
     advanceCursor,
     append,

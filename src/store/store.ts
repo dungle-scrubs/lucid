@@ -72,6 +72,9 @@ export {
 } from "./conversation-host.js";
 export type {
   AppendEvent,
+  ArtifactIndex,
+  ArtifactRefusal,
+  ArtifactVersion,
   CollectedBatch,
   CollectedEntry,
   LogEntry,
@@ -80,6 +83,11 @@ export type {
   TranscriptInput,
 } from "./log.js";
 export {
+  ARTIFACT_BYTES_MAX,
+  artifactKey,
   collectEffectsUnderAppendLock,
   foldCollect,
+  hashArtifactBytes,
+  readArtifactAtOffset,
+  readArtifactVersion,
 } from "./log.js";
