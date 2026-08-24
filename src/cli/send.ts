@@ -43,6 +43,10 @@ export const sendInput = (conversationId: string, opts: SendOpts): { inputId: st
   const host = createHost(recordDir, {
     now: opts.now ?? (() => Date.now()),
     presence: () => undefined,
+    // R2: `send` never acquires the presence lock, so it acts on none of
+    // the effects its own append produces — the live holder's catch-up
+    // fold finds them (RFC-04).
+    executorLease: () => false,
     onEffect: () => {},
     onRecord: () => {},
   });

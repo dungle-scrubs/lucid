@@ -70,6 +70,8 @@ const main = async (): Promise<void> => {
     const host = openConversation(dir, {
       now: () => Date.now(),
       presence: () => undefined,
+      // The smoke's in-process rig is the de-facto holder (R2).
+      executorLease: () => true,
       onRecord: () => {},
       onEffect: (e) => {
         if (e.type === "send") receive(e.frame);
@@ -161,6 +163,7 @@ const main = async (): Promise<void> => {
   const reopened = openConversation(dir, {
     now: () => Date.now(),
     presence: () => undefined,
+    executorLease: () => false,
     onRecord: () => {},
     onEffect: () => {},
   });

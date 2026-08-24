@@ -48,6 +48,9 @@ const rig = (
   const host = openConversation(join(root, "conv-1"), {
     now: () => nowMs,
     presence: () => undefined,
+    // The rig stands in for the lease-holding runtime, so it acts on
+    // the effects it produces (RFC-04 R2).
+    executorLease: () => true,
     onRecord: (r) => records.push(r),
     onEffect: (e) => {
       if (e.type === "send") receive(e.frame);
@@ -90,6 +93,7 @@ const rig = (
     openConversation(join(root, "conv-1"), {
       now: () => 99_000,
       presence: () => undefined,
+      executorLease: () => false,
       onRecord: () => {},
       onEffect: () => {},
     });
@@ -249,6 +253,7 @@ describe("headless modes (M5.2)", () => {
     const host = openConversation(join(root, "conv-1"), {
       now: () => 0,
       presence: () => undefined,
+      executorLease: () => true,
       onRecord: (rec) => records.push(rec),
       onEffect: (e) => {
         if (e.type === "send") receive(e.frame);
@@ -462,6 +467,7 @@ describe("a session hcn refuses is recorded, not silent", () => {
     const host = openConversation(join(root, "conv-1"), {
       now: () => 0,
       presence: () => undefined,
+      executorLease: () => true,
       onRecord: () => {},
       onEffect: (e) => {
         if (e.type === "send") receive(e.frame);
@@ -520,6 +526,7 @@ describe("RFC-03 R002: a stale resume hint does not cost the turn", () => {
     const host = openConversation(join(root, "conv-1"), {
       now: () => 0,
       presence: () => undefined,
+      executorLease: () => true,
       onRecord: () => {},
       onEffect: (e) => {
         if (e.type === "send") receive(e.frame);

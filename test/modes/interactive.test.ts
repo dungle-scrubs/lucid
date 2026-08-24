@@ -128,6 +128,7 @@ describe("interactive adapter ladder - rung 1 logic (M5.3)", () => {
     const host = openConversation(join(root, "conv-1"), {
       now: () => clock.t,
       presence: () => true, // the human's process is alive
+      executorLease: () => false,
       onRecord: () => {},
       onEffect: () => {},
     });

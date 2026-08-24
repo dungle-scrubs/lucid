@@ -28,22 +28,27 @@ interface Harness {
   readonly records: HostRecord[];
   now: number;
   presence: boolean | undefined;
+  /** The R2 executor-lease box: flip it to simulate acquiring or losing
+   * the presence lock without a real flock. */
+  lease: boolean;
 }
 
 const openHost = (
   rootDir: string,
   conversationId: string,
-  overrides: { now?: number; presence?: boolean | undefined } = {},
+  overrides: { now?: number; presence?: boolean | undefined; lease?: boolean } = {},
 ): Harness => {
   const effects: Effect[] = [];
   const records: HostRecord[] = [];
   const box = {
     now: overrides.now ?? 1_000,
     presence: "presence" in overrides ? overrides.presence : undefined,
+    lease: overrides.lease ?? true,
   };
   const host = openConversation(recordDir(rootDir, conversationId), {
     now: () => box.now,
     presence: () => box.presence,
+    executorLease: () => box.lease,
     onEffect: (e) => effects.push(e),
     onRecord: (r) => records.push(r),
   });
@@ -62,6 +67,12 @@ const openHost = (
     },
     set presence(v: boolean | undefined) {
       box.presence = v;
+    },
+    get lease() {
+      return box.lease;
+    },
+    set lease(v: boolean) {
+      box.lease = v;
     },
   };
 };
@@ -228,6 +239,7 @@ describe("durable conversation store (M5.1)", () => {
         polls += 1;
         return alive;
       },
+      executorLease: () => true,
       onEffect: (e) => effects.push(e),
       onRecord: () => {},
     });
@@ -496,5 +508,112 @@ describe("durable conversation store (M5.1)", () => {
     const refused = h.host.handleFrame(encodeFrame(event({ n: 5 })));
     expect(refused.verdict).toBe("refused");
     expect(h.host.state().attachment?.lease.expires).toBe(12_000 + 15_000);
+  });
+});
+
+describe("RFC-04 R2: only the presence-lock holder acts on effects", () => {
+  test("a non-holder writes, produces the effects, and acts on none of them", () => {
+    const root = freshRoot();
+    const { secret } = createConversationRecord(root, "conv-1");
+    // The running host: attaches while holding the lease, and its
+    // attach-ok IS dispatched - a holder behaves exactly as before.
+    const holder = openHost(root, "conv-1", { lease: true });
+    holder.host.handleFrame(encodeFrame(attachFrame(secret, { profile: "headless-session" })));
+    expect(holder.effects.map((e) => e.type)).toEqual(["send"]);
+
+    // `lucid send` in another process: folds the same record, sees the
+    // live lease, so its reduce PRODUCES the input send - and acts on
+    // none of it. The write is durable; the effect is left in the log
+    // for the holder to find.
+    const sender = openHost(root, "conv-1", { lease: false });
+    const written = sender.host.enqueueInput({
+      id: "in-1",
+      text: "from a non-holder",
+      mode: "queue",
+    });
+    expect(written.verdict).toBe("accepted");
+    expect(written.effects).toHaveLength(1);
+    expect(written.effects[0]).toMatchObject({
+      type: "send",
+      frame: { kind: "input", id: "in-1" },
+    });
+    expect(sender.effects).toHaveLength(0);
+    expect(viewConversation(join(root, "conv-1")).transcript.inputs.map((i) => i.id)).toEqual([
+      "in-1",
+    ]);
+  });
+
+  test("a holder that loses the lease stops acting mid-life - the gate reads the handle live, not once at construction", () => {
+    const root = freshRoot();
+    const { secret } = createConversationRecord(root, "conv-1");
+    const h = openHost(root, "conv-1", { lease: true });
+    h.host.handleFrame(encodeFrame(attachFrame(secret, { profile: "headless-session" })));
+    expect(h.effects).toHaveLength(1); // attach-ok dispatched as a holder
+
+    // Presence released or stolen: writes continue, effects are still
+    // produced on the result, and none are acted on.
+    h.lease = false;
+    const after = h.host.enqueueInput({ id: "in-2", text: "lost the lease", mode: "queue" });
+    expect(after.verdict).toBe("accepted");
+    expect(after.effects).toHaveLength(1);
+    expect(h.effects).toHaveLength(1);
+
+    // Re-acquired: dispatch resumes, exactly as before.
+    h.lease = true;
+    const resumed = h.host.enqueueInput({ id: "in-3", text: "holder again", mode: "queue" });
+    expect(resumed.verdict).toBe("accepted");
+    expect(h.effects).toHaveLength(2);
+    expect(h.effects[1]).toMatchObject({ type: "send", frame: { kind: "input", id: "in-3" } });
+  });
+
+  test("a malformed frame's refused reply is exempt - a local answer, not conversation work; a reducer refusal is gated", () => {
+    const root = freshRoot();
+    createConversationRecord(root, "conv-1");
+    const h = openHost(root, "conv-1", { lease: false });
+
+    // A line that never decodes never reached `transact`: the sender is
+    // owed its answer whichever process happens to read the wire.
+    const torn = h.host.handleFrame('{"kind":"attach","secret":"x"');
+    expect(torn).toMatchObject({ verdict: "refused", wire: true });
+    expect(h.effects).toEqual([{ type: "send", frame: { kind: "refused", issue: "not-json" } }]);
+
+    // A decoder-clean frame the reducer refuses (wrong secret) IS
+    // conversation work: it rode `transact`, so a non-holder leaves the
+    // effect unacted - the effect is still on the returned result.
+    const wrong = h.host.handleFrame(encodeFrame(attachFrame("wrong")));
+    expect(wrong.verdict).toBe("refused");
+    expect("issue" in wrong && wrong.issue).toBe("auth-failed");
+    expect("effects" in wrong ? wrong.effects : []).toEqual([
+      { type: "send", frame: { kind: "refused", issue: "auth-failed" } },
+    ]);
+    expect(h.effects).toHaveLength(1); // still only the decode refusal
+  });
+
+  test("the attach replay stays on the reduce result - reading effects there needs no lease", () => {
+    const root = freshRoot();
+    const { secret } = createConversationRecord(root, "conv-1");
+    const writer = openHost(root, "conv-1", { lease: false });
+
+    // Nothing attached, so the input queues armed for replay - the write
+    // a non-holder leaves behind.
+    writer.host.enqueueInput({ id: "in-1", text: "held while nothing ran", mode: "queue" });
+    expect(writer.effects).toHaveLength(0);
+
+    // The next attacher reads the replay straight off the attach's
+    // ReduceResult (`createSequencer`'s path), not through the effect
+    // sink - so R2's gate on the sink costs it nothing. Proven here with
+    // the attacher itself a non-holder: the result still carries the
+    // replay frames.
+    const attachResult = writer.host.handleFrame(
+      encodeFrame(attachFrame(secret, { profile: "headless-session" })),
+    );
+    expect(attachResult.verdict).toBe("accepted");
+    if (!("effects" in attachResult))
+      throw new Error("expected a reduce result, not a wire refusal");
+    const replayed = attachResult.effects.flatMap((e) =>
+      e.type === "send" && e.frame.kind === "input" ? [e.frame.id] : [],
+    );
+    expect(replayed).toEqual(["in-1"]);
+    expect(writer.effects).toHaveLength(0);
   });
 });

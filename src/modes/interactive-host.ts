@@ -184,6 +184,9 @@ export const deliverFirstQueued = (recordDir: string): HookDeliverResult => {
     const host = openConversation(recordDir, {
       now: () => Date.now(),
       presence: () => true,
+      // R2: the Stop hook is a transient writer, never the lease holder —
+      // the running host picks the chunks up (RFC-04).
+      executorLease: () => false,
       onEffect: () => {},
       onRecord: () => {},
     });

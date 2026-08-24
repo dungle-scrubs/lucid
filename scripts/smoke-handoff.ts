@@ -29,6 +29,9 @@ const main = async (): Promise<void> => {
   const hostA = openConversation(dir, {
     now: () => Date.now(),
     presence: () => incumbentPresence.held(),
+    // R2: the incumbent IS the lease holder while it runs - the gate
+    // reads the presence handle this smoke actually holds.
+    executorLease: () => incumbentPresence.held(),
     onEffect: () => {},
     onRecord: () => {},
   });
@@ -65,6 +68,7 @@ const main = async (): Promise<void> => {
   const hostB = openConversation(dir, {
     now: () => Date.now(),
     presence: () => successorPresence.held(),
+    executorLease: () => successorPresence.held(),
     onEffect: () => {},
     onRecord: () => {},
   });
@@ -99,6 +103,7 @@ const main = async (): Promise<void> => {
   const reopened = openConversation(dir, {
     now: () => Date.now(),
     presence: () => undefined,
+    executorLease: () => false,
     onEffect: () => {},
     onRecord: () => {},
   });

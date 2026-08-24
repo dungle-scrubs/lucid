@@ -22,6 +22,7 @@ describe("Gate 5→6: end-to-end fake-harness conversation across all three mode
     const host = openConversation(join(root, "conv-1"), {
       now: () => box.now,
       presence: () => box.presence,
+      executorLease: () => false,
       onRecord: () => {},
       onEffect: () => {},
     });
@@ -96,6 +97,7 @@ describe("Gate 5→6: end-to-end fake-harness conversation across all three mode
     const reopened = openConversation(join(root, "conv-1"), {
       now: () => box.now,
       presence: () => false,
+      executorLease: () => false,
       onRecord: () => {},
       onEffect: () => {},
     });

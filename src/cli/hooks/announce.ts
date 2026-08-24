@@ -31,6 +31,9 @@ export const announce = async (stdin: string): Promise<AnnounceResult> => {
     const host = openConversation(recordDir, {
       now: () => Date.now(),
       presence: () => true,
+      // R2: the hook never holds the presence lock — attach is a write,
+      // and its effects are the holder's to find (RFC-04).
+      executorLease: () => false,
       onEffect: () => {},
       onRecord: () => {},
     });
