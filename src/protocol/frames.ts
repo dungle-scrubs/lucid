@@ -51,7 +51,7 @@ export type DetachReason = "yield" | "shutdown";
  * reducer during a fold without ever passing the codec, so the reducer's
  * check is the one the compatibility claim rests on (RFC-05, "Validation
  * lives where both paths meet"). */
-export const INPUT_MODES = ["queue", "steer"] as const;
+export const INPUT_MODES = ["queue", "steer", "answer"] as const;
 export type InputMode = (typeof INPUT_MODES)[number];
 export type ControlAction = "pause" | "end" | "switch-path";
 
@@ -63,6 +63,7 @@ export const DECODE_ISSUES = [
   "missing-field",
   "wrong-type",
   "not-serializable",
+  "answer-needs-turn",
 ] as const;
 export type DecodeIssue = (typeof DECODE_ISSUES)[number];
 
@@ -89,7 +90,10 @@ export const REFUSAL_ISSUES = [
   "no-credit",
   "invalid-grant",
   "invalid-input",
+  "answer-needs-turn",
   "steer-unsupported",
+  "answer-unsupported",
+  "stale-answer",
   "covers-ahead-of-log",
   "wrong-direction",
 ] as const;
@@ -337,14 +341,34 @@ const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
   },
   refused: (r) => ({ kind: "refused", issue: enumOf(r, "issue", PROTOCOL_ISSUES) }),
   "event-ack": (r) => ({ kind: "event-ack", epoch: withEpoch(r), n: nat(r, "n") }),
-  input: (r) => ({
-    kind: "input",
-    seq: nat(r, "seq"),
-    id: str(r, "id", ID_MAX),
-    text: text(r, "text"),
-    mode: enumOf(r, "mode", INPUT_MODES),
-    ...(optStr(r, "turnId", ID_MAX) !== undefined ? { turnId: optStr(r, "turnId", ID_MAX) } : {}),
-  }),
+  input: (r) => {
+    const mode = enumOf(r, "mode", INPUT_MODES);
+    const rawTurnId = own(r, "turnId");
+    // RFC-05 R2 + B3: an answer MUST carry a wire-valid turnId. A malformed
+    // frame is not a stale one - reporting one as the other sends someone
+    // looking in the wrong place, so the codec owns this check with its
+    // own issue before any other refusal could.
+    if (mode === "answer") {
+      if (typeof rawTurnId !== "string" || !isWireId(rawTurnId)) refuse("answer-needs-turn");
+      return {
+        kind: "input",
+        seq: nat(r, "seq"),
+        id: str(r, "id", ID_MAX),
+        text: text(r, "text"),
+        mode,
+        turnId: rawTurnId as string,
+      };
+    }
+    const turnId = optStr(r, "turnId", ID_MAX);
+    return {
+      kind: "input",
+      seq: nat(r, "seq"),
+      id: str(r, "id", ID_MAX),
+      text: text(r, "text"),
+      mode,
+      ...(turnId !== undefined ? { turnId } : {}),
+    };
+  },
   control: (r) => ({
     kind: "control",
     seq: nat(r, "seq"),

@@ -110,15 +110,21 @@ the `disposition` you send back:
 - `applied` - you acted on it (delivered into the turn). `queued` - held
   for a boundary. `rejected` - you could not; it returns to lucid's queue
   and is redelivered, **never dropped**.
-- **`queue` waits for the turn boundary; `steer` does not.** An input in
+- **`queue` waits for the turn boundary; `steer` and `answer` do not.** An input in
   `queue` mode that arrives while a turn is running is held and delivered
-  when that turn produces its terminal event. A `steer` goes through at
-  once. With no turn running, a `queue` input is delivered straight away -
-  holding it for a boundary that will never come is a hang, not a policy.
-- In `headless-turn` there is nothing to interject: one process per turn
-  means every input already waits for a boundary. `steer` is only legal
-  where the profile allows it, and a steer at a `headless-turn` attachment
-  is refused `steer-unsupported`. Fall back to `queue`.
+  when that turn produces its terminal event. A `steer` or `answer` goes through
+  at once - an answer exists to unblock a turn, so holding it until that
+  turn ends is a deadlock. With no turn running, a `queue` input is delivered straight
+  away - holding it for a boundary that will never come is a hang, not a policy.
+- In `headless-turn` there is nothing to interject or answer into: one process per
+  turn means every input already waits for a boundary and there is no session to
+  answer into. `steer` and `answer` are only legal where the profile allows it; a
+  steer at a `headless-turn` attachment is refused `steer-unsupported`, an answer
+  `answer-unsupported`. Fall back to `queue`.
+- An `answer` MUST carry the `turnId` of the question it answers; missing or
+  non-wire-valid `turnId` is refused `answer-needs-turn` at the codec as a malformed
+  frame, not as `stale-answer`. A stale answer (wrong question) is refused
+  `stale-answer` by the reducer when a question is no longer open.
 - The boundary for a live human process is the same idea by a different
   route: the Stop hook fires at one, which is why the headless and
   interactive paths agree on when an interjection lands.
@@ -194,9 +200,10 @@ the cause and resend" is NOT universal:
   again.
 - **Fix and resend the same frame** - a sequencing/validation problem:
   `gap-n` / `dupe-n` (resend in order), `resume-ahead-of-log`,
-  `covers-ahead-of-log`, `invalid-input`, `invalid-grant`,
+  `covers-ahead-of-log`, `invalid-input`, `answer-needs-turn`,
   `turn-id-reused` (mint a fresh id), `input-id-reused`, `unknown-input`,
-  `steer-unsupported` (fall back to `queue`).
+  `steer-unsupported` (fall back to `queue`), `answer-unsupported`,
+  `stale-answer`.
 - **Back off, then resend** - `no-credit`: coalesce and wait for a
   `credit` grant.
 - **A bug, never expected** - `wrong-direction`: you sent a lucid→source
@@ -205,5 +212,5 @@ the cause and resend" is NOT universal:
 The reducer's refusal issues (above) are the ones your frames can draw.
 Before a frame decodes at all, a malformed wire line draws a **decode**
 issue instead - `not-json`, `not-a-frame`, `unknown-kind`,
-`missing-field`, `wrong-type`, `not-serializable` - both sets arrive as
+`missing-field`, `wrong-type`, `not-serializable`, `answer-needs-turn` - both sets arrive as
 `refused { issue }`, so handle either.

@@ -857,6 +857,12 @@ export const enqueueInput = (
   // issue the codec gives the same value on the wire - whatever else the
   // payload carries.
   if (!isInputMode(input.mode)) return hostRefusal(state, frame, "wrong-type", now);
+  // RFC-05 B3 + Message Formats: an answer without a wire-valid turnId is
+  // malformed, not stale. Wire validity is first in the fixed refusal
+  // order so a malformed frame reports that instead of a staleness
+  // problem that would send someone looking in the wrong place.
+  if (input.mode === "answer" && (input.turnId === undefined || !isWireId(input.turnId)))
+    return hostRefusal(state, frame, "answer-needs-turn", now);
   if (
     !isWireId(input.id) ||
     (input.turnId !== undefined && !isWireId(input.turnId)) ||
@@ -868,11 +874,15 @@ export const enqueueInput = (
     Object.hasOwn(state.appliedInputs, input.id)
   )
     return hostRefusal(state, frame, "input-id-reused", now);
-  // PLAN 4.4: steer only where the profile allows it - a headless-turn
-  // writer can never be interjected mid-turn, so the request itself is a
-  // host error there. Other profiles answer through `disposition`.
+  // PLAN 4.4 + RFC-05 R6: steer and answer only where the profile allows
+  // it - a headless-turn writer has no session to steer or answer into,
+  // so the request itself is a host error there. A dedicated issue
+  // rather than a generic one, and checked before staleness or capacity
+  // in the fixed order.
   if (input.mode === "steer" && state.attachment?.profile === "headless-turn")
     return hostRefusal(state, frame, "steer-unsupported", now);
+  if (input.mode === "answer" && state.attachment?.profile === "headless-turn")
+    return hostRefusal(state, frame, "answer-unsupported", now);
   // RFC-04: the input-direction bound. The gauge it reads is durable
   // state, so the refusal is too - a conversation already holding
   // INPUT_QUEUE_MAX delivered-but-unfinished turns says no to the next
@@ -880,6 +890,11 @@ export const enqueueInput = (
   // Checked after the id checks on purpose: a retried id at the bound is
   // a redelivery asking after an input lucid already holds, and
   // input-id-reused is the true answer for it.
+  // RFC-05 R4 stale-answer is next-ticket state; this ticket reserves
+  // its place in the order (after profile, before capacity) so the
+  // specified order is fixed even though the condition is not yet
+  // implemented. Capacity is last because it is the only one that stops
+  // being true on its own.
   if (InputLedger.atCapacity(state.inFlightInputs))
     return hostRefusal(state, frame, "input-queue-full", now, {
       queueDepth: queueDepth(state.inputs),

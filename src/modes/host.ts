@@ -131,7 +131,7 @@ const sessionStrategy = (
   // event the pump already sees, so nothing here polls for it.
   let turnRunning = false;
   let closed = false;
-  // Inputs that arrived mid-turn in `queue` mode, waiting for the boundary.
+  // Inputs that arrived mid-turn in `queue` mode, waiting for the boundary. Answers and steers are never held (RFC-05 R3).
   const waiting: Array<{ id: string; text: string }> = [];
 
   const sendNow = (id: string, text: string): void => {
@@ -161,14 +161,14 @@ const sessionStrategy = (
 
   return {
     onInput(id: string, text: string, mode: InputMode): void {
-      // A steer is a request to interrupt, so it goes through mid-turn.
+      // A steer or answer is a request to interrupt/unblock, so it goes through mid-turn.
       // Everything else waits for the answer in progress to finish, which
       // is what the interactive path already does - the Stop hook fires at
       // a boundary, and the headless path now agrees with it.
       //
       // With no turn running there is no boundary coming, so holding the
       // input would be a hang rather than a policy.
-      if (mode === "steer" || !turnRunning) {
+      if (mode === "steer" || mode === "answer" || !turnRunning) {
         sendNow(id, text);
         return;
       }

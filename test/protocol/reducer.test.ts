@@ -1010,19 +1010,15 @@ describe("reducer core (M4.2)", () => {
   test("an input whose mode is outside INPUT_MODES is refused wrong-type, wherever it came from (RFC-05 B4)", () => {
     const state = drive(fresh(), [[attach(), 1_000]]);
 
-    // "answer" is RFC-05's not-yet-shipped mode. The cast is the fold
-    // path in miniature: a durable input's payload is JSON typed only by
-    // claim (validEntry checks the envelope), so the InputMode annotation
-    // on the parameter proves nothing at runtime. On the wire the codec
-    // refuses this value with wrong-type; the reducer must refuse it with
-    // the SAME issue, or a folded entry is silently reinterpreted as an
-    // ordinary send.
+    // A truly unknown mode is the fold path in miniature: a durable input's
+    // payload is JSON typed only by claim (validEntry checks the envelope),
+    // so the InputMode annotation on the parameter proves nothing at runtime.
+    // On the wire the codec refuses this value with wrong-type; the reducer
+    // must refuse it with the SAME issue, or a folded entry is silently
+    // reinterpreted as an ordinary send. "answer" is now known (T45) and
+    // tested separately.
     const refused = expectRefused(
-      enqueueInput(
-        state,
-        { id: "ans-1", text: "x", mode: "answer" as unknown as InputMode },
-        2_000,
-      ),
+      enqueueInput(state, { id: "ans-1", text: "x", mode: "yolo" as unknown as InputMode }, 2_000),
     );
     expect(refused.issue).toBe("wrong-type");
     expect(refused.state).toBe(state);
@@ -1038,9 +1034,14 @@ describe("reducer core (M4.2)", () => {
     expect(garbage.issue).toBe("wrong-type");
 
     // Every mode this build DOES know still enqueues - the closed set is
-    // INPUT_MODES itself, the same array the codec checks against.
+    // INPUT_MODES itself, the same array the codec checks against. Answer
+    // needs its turnId to be wire-valid; other modes need none.
     for (const mode of INPUT_MODES) {
-      const ok = expectAccepted(enqueueInput(state, { id: `in-${mode}`, text: "x", mode }, 2_002));
+      const input =
+        mode === "answer"
+          ? { id: `in-${mode}`, text: "x", mode, turnId: "t-1" }
+          : { id: `in-${mode}`, text: "x", mode };
+      const ok = expectAccepted(enqueueInput(state, input, 2_002));
       expect(ok.state.inputs.some((i) => i.id === `in-${mode}`)).toBe(true);
     }
   });

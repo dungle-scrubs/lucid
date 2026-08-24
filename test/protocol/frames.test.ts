@@ -84,13 +84,14 @@ describe("frame codecs (M4.1)", () => {
   });
 
   test("the codec keeps its own input-mode check: a value outside INPUT_MODES refuses wrong-type at the boundary", () => {
-    // "answer" is RFC-05's future mode. This build refuses it before the
-    // reducer ever sees it; the reducer carries the same check for the
-    // fold path (RFC-05 B4), and this one is the early failure that keeps
-    // most unknown modes from reaching it at all.
+    // A truly unknown mode is refused before the reducer ever sees it; the
+    // reducer carries the same check for the fold path (RFC-05 B4), and this
+    // one is the early failure that keeps most unknown modes from reaching it
+    // at all. "answer" is now a known mode (RFC-05 T45) and needs its own
+    // turnId rule - that is tested below, not here.
     const input = SAMPLES.find((f) => f.kind === "input");
     if (input === undefined) throw new Error("input sample is missing");
-    expect(decodeFrame({ ...input, mode: "answer" })).toEqual({
+    expect(decodeFrame({ ...input, mode: "yolo" as never })).toEqual({
       verdict: "refused",
       issue: "wrong-type",
     });
