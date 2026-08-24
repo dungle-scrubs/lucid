@@ -13,7 +13,7 @@ Individual gates:
 ```sh
 bun run lint         # biome check .
 bun run typecheck    # tsc --noEmit
-bun test             # 135 tests across 16 files (~1s, deterministic, fake hcn)
+bun test             # deterministic, clock-injected, fake hcn; ~1s
 bun scripts/smoke-handoff.ts   # handoff oracle, writes spikes/evidence/handoff-smoke.md
 ```
 
