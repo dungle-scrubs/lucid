@@ -31,6 +31,7 @@
 import type { HarnessEvent } from "../harness/events.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import type { Frame, ReduceResult } from "../protocol/index.js";
+import type { CollectedBatch } from "../store/log.js";
 import { createSequencer } from "./sequencer.js";
 
 /** What sendFrame returns. */
@@ -50,6 +51,15 @@ export interface HeadlessDeps {
   readonly mintTurnId: () => string;
   /** The in-process channel to the host. */
   readonly sendFrame: (frame: Frame) => SendResult;
+  /** The record, for delivery-cursor bookkeeping (RFC-04 R3). When present
+   * the host advances the cursor after the attach drain. Optional only
+   * because in-process tests build a source without one; delivery does not
+   * depend on it, so its absence changes nothing that is dispatched. */
+  readonly host?: {
+    cursor(): number;
+    collectEffects(fromOffset: number): CollectedBatch;
+    advanceCursor(offset: number): void;
+  };
 }
 
 export interface SourceChannel {
@@ -410,7 +420,29 @@ export const createHeadlessHost = (
   //
   // Drained here because this is the first moment `strategy` exists. Same
   // idempotent input id, so a replay that races a live delivery applies once.
+  //
+  // RFC-04 R3: the cursor records how far dispatch has got, and it is
+  // written AFTER the dispatch it covers, never before. A crash in the gap
+  // repeats the batch, which is the at-least-once window; advancing first
+  // would lose it, which is the inverse of the guarantee.
+  //
+  // Delivery itself stays with attachReplay, which is the reducer's set of
+  // inputs still awaiting an applied disposition. Dispatching the collected
+  // batch instead would redeliver every input in the record, applied ones
+  // included: a record with no cursor starts at offset 0, so a conversation
+  // written before cursors existed would re-send its whole history to the
+  // harness on the next open. Proven against a record with one applied
+  // input - the batch offered it, attachReplay correctly did not.
+  //
+  // Offset dedup is the store's, tested there, and comes into its own in the
+  // tailing work, where effects arrive that attachReplay cannot see because
+  // another process appended them.
   for (const frame of sequencer.attachReplay) receive(frame);
+  if (deps.host !== undefined) {
+    const cur = deps.host.cursor();
+    const batch = deps.host.collectEffects(cur);
+    if (batch.goodBytes > cur) deps.host.advanceCursor(batch.goodBytes);
+  }
 
   return {
     receive,

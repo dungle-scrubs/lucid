@@ -230,6 +230,11 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     runner,
     mintTurnId: () => `turn-${++turnCount}`,
     sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
+    host: {
+      cursor: () => host.cursor(),
+      collectEffects: (from: number) => host.collectEffects(from),
+      advanceCursor: (off: number) => host.advanceCursor(off),
+    },
   } as const;
   const source =
     profile === "headless-session"
