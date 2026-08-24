@@ -27,7 +27,7 @@ import {
   truncateSync,
   writeSync,
 } from "node:fs";
-import type { ChannelState } from "../protocol/index.js";
+import type { ChannelState, InputMode, ProtocolIssue } from "../protocol/index.js";
 import {
   decodeFrame,
   type Effect,
@@ -61,7 +61,7 @@ export type LogEntry =
       readonly input: {
         readonly id: string;
         readonly text: string;
-        readonly mode: "queue" | "steer";
+        readonly mode: InputMode;
         readonly turnId?: string;
       };
     }
@@ -97,6 +97,17 @@ const validEntry = (raw: unknown): raw is Envelope => {
  * it - the same contract the pre-P1 guard had. */
 const knownEntry = (e: Envelope): e is LogEntry =>
   (ENTRY_SOURCES as readonly string[]).includes(e.src);
+
+/** A durable input entry the reducer refused on the fold: carried (its
+ * bytes count as good, later entries still fold), never applied, and
+ * reported here rather than dropped. RFC-05 B4: the fold is where this
+ * build meets payloads only a newer build understands - an input mode
+ * this build does not know is the first of them, and refusing it MUST
+ * NOT brick the record the way a refused frame entry still does. */
+export interface FoldRefusal {
+  readonly offset: number;
+  readonly issue: ProtocolIssue;
+}
 
 // ---------------------------------------------------------------------------
 // Delivery cursor (RFC-04 R3/R4, step 7)
@@ -193,7 +204,7 @@ export interface TranscriptInput {
   readonly seq: number;
   readonly id: string;
   readonly text: string;
-  readonly mode: "queue" | "steer";
+  readonly mode: InputMode;
   readonly status: "outstanding" | "queued" | "applied" | "rejected";
 }
 
@@ -329,11 +340,13 @@ const collectTranscript = (
 
 const NL = 0x0a;
 
-/** Fold the log into state, byte-accurate. Two things are tolerated: a
- * torn trailing fragment (no newline), and an envelope-valid entry whose
+/** Fold the log into state, byte-accurate. Three things are tolerated: a
+ * torn trailing fragment (no newline), an envelope-valid entry whose
  * `src` this build does not recognise - RFC-04 P1: its bytes count as
- * read and its content contributes nothing. Anything else corrupt
- * throws. */
+ * read and its content contributes nothing - and a durable input entry
+ * the reducer refuses (RFC-05 B4: an input mode only a newer build
+ * knows is carried and reported through `refusedInputs`, never applied
+ * and never fatal). Anything else corrupt throws. */
 export const foldLog = (
   conversationId: string,
   secret: string,
@@ -343,11 +356,13 @@ export const foldLog = (
   goodBytes: number;
   entries: number;
   transcript: TranscriptAcc;
+  refusedInputs: readonly FoldRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
   let offset = 0;
   let entries = 0;
   const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
+  const refusedInputs: FoldRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
     if (nl === -1) break;
@@ -363,21 +378,33 @@ export const foldLog = (
         throw new StoreError("corrupt-log", `malformed log entry at byte ${offset}`);
       if (knownEntry(parsed)) {
         const { result, frame } = applyEntry(state, parsed, secret);
-        if (result.verdict !== "accepted")
-          throw new StoreError(
-            "fold-refused",
-            `log entry at byte ${offset} refused on fold (${result.issue})`,
-          );
-        collectTranscript(transcript, parsed, frame, result);
-        state = result.state;
-        entries += 1;
+        if (result.verdict !== "accepted") {
+          // lucid appends only entries its own reducer accepted, so a
+          // refused FRAME or CREDIT entry is log/reducer disagreement -
+          // corruption, and fatal. A refused INPUT entry is different:
+          // it is a payload a newer build understood and this one does
+          // not (RFC-05 B4), so it is carried - state advances to the
+          // refusal's (unchanged) state, its bytes count as read - and
+          // the refusal is reported, not thrown.
+          if (parsed.src !== "input")
+            throw new StoreError(
+              "fold-refused",
+              `log entry at byte ${offset} refused on fold (${result.issue})`,
+            );
+          refusedInputs.push({ offset, issue: result.issue });
+          state = result.state;
+        } else {
+          collectTranscript(transcript, parsed, frame, result);
+          state = result.state;
+          entries += 1;
+        }
       }
     }
     // An unrecognised src is carried, not applied: the offset advances
     // past its bytes either way, so a later entry still folds.
     offset = nl + 1;
   }
-  return { state, goodBytes: offset, entries, transcript };
+  return { state, goodBytes: offset, entries, transcript, refusedInputs };
 };
 
 // ---------------------------------------------------------------------------
@@ -389,6 +416,9 @@ export const foldLog = (
  * `src` is carried (bytes counted, no state change, no effects), and a
  * reducer refusal contributes no effects but still advances the state to
  * the refusal's state so a later entry folds against the right snapshot.
+ * Refused INPUT entries are reported through `refusedInputs` exactly as
+ * `foldLog` reports them - this is the same fold, not a second policy
+ * (RFC-05 B4).
  * Only accepted entries with non-empty effects that start at or after
  * `fromOffset` are emitted, in log order. Does no I/O, takes no lock. */
 export const foldCollect = (
@@ -402,12 +432,14 @@ export const foldCollect = (
   entries: number;
   transcript: TranscriptAcc;
   collected: CollectedEntry[];
+  refusedInputs: readonly FoldRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
   let offset = 0;
   let entries = 0;
   const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
   const collected: CollectedEntry[] = [];
+  const refusedInputs: FoldRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
     if (nl === -1) break;
@@ -437,15 +469,18 @@ export const foldCollect = (
         } else {
           // Refused entry contributes no effects and no transcript, but
           // its state still advances so the next entry folds correctly.
-          // Do not count it as an accepted entry — same as foldLog would
-          // (which would have thrown before counting).
+          // Never counted as an accepted entry: foldLog throws for a
+          // refused FRAME or CREDIT entry and carries a refused INPUT one
+          // (RFC-05 B4) - and reports it, as here.
+          if (parsed.src === "input")
+            refusedInputs.push({ offset: entryOffset, issue: result.issue });
           state = result.state;
         }
       }
     }
     offset = nl + 1;
   }
-  return { state, goodBytes: offset, entries, transcript, collected };
+  return { state, goodBytes: offset, entries, transcript, collected, refusedInputs };
 };
 
 /** Convenience pure helper returning the same shape `foldLog` would but
@@ -635,7 +670,7 @@ export interface ConversationLog {
   view(): { state: ChannelState; transcript: Transcript; goodBytes: number };
   close(): void;
   /** Recovery info from the initial fold (for the store's boundary record). */
-  recovery(): { entries: number; discardedBytes: number };
+  recovery(): { entries: number; discardedBytes: number; refusedInputs: number };
 }
 
 export const createLog = (
@@ -680,11 +715,13 @@ export const createLog = (
   let curCursor = initialCursor;
   const recoveredEntries = initialFolded.entries;
   const discardedBytes = initialRaw.length - initialFolded.goodBytes;
+  const refusedInputs = initialFolded.refusedInputs.length;
 
   // Expose recovery info for the store to emit
   const recovery = {
     entries: recoveredEntries,
     discardedBytes,
+    refusedInputs,
     seq: curState.seq,
     epoch: curState.epoch,
   };
@@ -903,6 +940,10 @@ export const createLog = (
     collectEffects,
     view,
     close: () => {},
-    recovery: () => ({ entries: recovery.entries, discardedBytes: recovery.discardedBytes }),
+    recovery: () => ({
+      entries: recovery.entries,
+      discardedBytes: recovery.discardedBytes,
+      refusedInputs: recovery.refusedInputs,
+    }),
   };
 };

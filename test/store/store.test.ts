@@ -10,7 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Effect } from "../../src/protocol/index.js";
-import { encodeFrame, type Frame, queueDepth } from "../../src/protocol/index.js";
+import { decodeFrame, encodeFrame, type Frame, queueDepth } from "../../src/protocol/index.js";
+import { foldLog } from "../../src/store/log.js";
 import {
   createConversationRecord,
   type HostRecord,
@@ -437,6 +438,60 @@ describe("durable conversation store (M5.1)", () => {
     expect(after.state.credits).toBe(6);
     expect(after.goodBytes).toBe(readFileSync(paths.logPath).length);
     expect(readFileSync(paths.logPath, "utf8").includes('"src":"cursor"')).toBe(true);
+  });
+
+  test("a durable input whose mode this build does not know is refused on the fold with the wire's own issue, visibly, without bricking the record (RFC-05 B4)", () => {
+    const root = freshRoot();
+    const { secret, paths } = createConversationRecord(root, "conv-1");
+    const h = openHost(root, "conv-1");
+    h.host.handleFrame(encodeFrame(attachFrame(secret)));
+    const before = h.host.state();
+    const transcriptBefore = h.host.transcript();
+
+    // Hand-composed line: no writer produces an unknown mode yet.
+    // RFC-05's answer mode will be exactly such an entry, and a build
+    // without it must refuse it rather than fold it straight into the
+    // queue as an ordinary send - the silent reinterpretation the
+    // compatibility claim says cannot happen.
+    const unknownOffset = statSync(paths.logPath).size;
+    appendFileSync(
+      paths.logPath,
+      '{"v":1,"at":9,"src":"input","input":{"id":"ans-1","text":"Draft the RFC","mode":"answer"}}\n',
+    );
+
+    // The wire path refuses the same value at the codec; the fold must
+    // name the same issue for the same value, not a softer one.
+    expect(decodeFrame({ kind: "input", seq: 42, id: "ans-1", text: "x", mode: "answer" })).toEqual(
+      { verdict: "refused", issue: "wrong-type" },
+    );
+
+    // The record opens: the refusal is carried, not fatal.
+    const reopened = openHost(root, "conv-1");
+    const recovery = reopened.records[0];
+    expect(recovery?.verdict).toBe("recovered");
+    if (recovery?.verdict === "recovered") {
+      expect(recovery.entries).toBe(1); // the attach only
+      expect(recovery.refusedInputs).toBe(1); // the refusal is visible
+    }
+
+    // Refused, not silently delivered: state and transcript are exactly
+    // what they were before the line landed. No seq was minted for it.
+    expect(reopened.host.state()).toEqual(before);
+    expect(reopened.host.transcript()).toEqual(transcriptBefore);
+
+    // The fold itself reports the refusal, with its offset and issue.
+    const folded = foldLog("conv-1", secret, readFileSync(paths.logPath));
+    expect(folded.refusedInputs).toEqual([{ offset: unknownOffset, issue: "wrong-type" }]);
+    expect(folded.entries).toBe(1);
+
+    // Later entries still fold past it, and a subsequent append lands
+    // after it rather than over it; its bytes count as good.
+    reopened.now = 3_000;
+    reopened.host.grantCredit(1);
+    const after = viewConversation(recordDir(root, "conv-1"));
+    expect(after.state.credits).toBe(1);
+    expect(after.goodBytes).toBe(readFileSync(paths.logPath).length);
+    expect(readFileSync(paths.logPath, "utf8").includes('"mode":"answer"')).toBe(true);
   });
 
   test("envelope corruption is still refused whatever the src: a bad version or a missing timestamp is corruption, not an unknown entry (RFC-04 P1 keeps the envelope)", () => {

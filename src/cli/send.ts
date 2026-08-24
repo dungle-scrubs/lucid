@@ -12,7 +12,7 @@
  * D-011), not a session creator, and not a viewer.
  */
 
-import { INPUT_QUEUE_MAX, type RefusalIssue } from "../protocol/index.js";
+import { INPUT_QUEUE_MAX, type ProtocolIssue } from "../protocol/index.js";
 import { createConversationHost } from "../store/conversation-host.js";
 import { type Conversations, conversations } from "./record-addressing.js";
 
@@ -31,10 +31,12 @@ export interface SendOpts {
  * stderr and `process.exit(1)`, which is the script-visible half of the
  * input bound's contract (RFC-04) - a shell must be able to notice. The
  * issue rides along typed so callers and tests can branch on it without
- * string-matching the message. */
+ * string-matching the message. ProtocolIssue, not RefusalIssue, because
+ * it is whatever the reducer said, and the reducer can refuse a
+ * codec-class issue (RFC-05 B4's `wrong-type`). */
 export class SendRefused extends Error {
   constructor(
-    readonly issue: RefusalIssue,
+    readonly issue: ProtocolIssue,
     message: string,
   ) {
     super(message);
@@ -45,7 +47,7 @@ export class SendRefused extends Error {
 /** The refusal an operator reads, as one line: the issue names the
  * condition, the measured gauges say why it tripped. */
 const refusalMessage = (
-  issue: RefusalIssue,
+  issue: ProtocolIssue,
   record: { readonly inFlightInputs?: number },
 ): string => {
   if (issue !== "input-queue-full") return `${issue}: send refused`;

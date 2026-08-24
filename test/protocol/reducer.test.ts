@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { DROPPABLE_QUEUE_MAX, INPUT_QUEUE_MAX } from "../../src/protocol/events.js";
-import { FRAME_KINDS, type Frame, parseFrame } from "../../src/protocol/frames.js";
+import {
+  FRAME_KINDS,
+  type Frame,
+  INPUT_MODES,
+  type InputMode,
+  parseFrame,
+} from "../../src/protocol/frames.js";
 import { InputLedger } from "../../src/protocol/ledgers/input.js";
 import {
   type ChannelState,
@@ -998,6 +1004,44 @@ describe("reducer core (M4.2)", () => {
       expect(result.issue).toBe("invalid-input");
       expect(result.state).toBe(state);
       expect(result.effects).toEqual([]);
+    }
+  });
+
+  test("an input whose mode is outside INPUT_MODES is refused wrong-type, wherever it came from (RFC-05 B4)", () => {
+    const state = drive(fresh(), [[attach(), 1_000]]);
+
+    // "answer" is RFC-05's not-yet-shipped mode. The cast is the fold
+    // path in miniature: a durable input's payload is JSON typed only by
+    // claim (validEntry checks the envelope), so the InputMode annotation
+    // on the parameter proves nothing at runtime. On the wire the codec
+    // refuses this value with wrong-type; the reducer must refuse it with
+    // the SAME issue, or a folded entry is silently reinterpreted as an
+    // ordinary send.
+    const refused = expectRefused(
+      enqueueInput(
+        state,
+        { id: "ans-1", text: "x", mode: "answer" as unknown as InputMode },
+        2_000,
+      ),
+    );
+    expect(refused.issue).toBe("wrong-type");
+    expect(refused.state).toBe(state);
+    expect(refused.state.inputs).toEqual([]);
+    expect(refused.effects).toEqual([]);
+
+    // Garbage is the same refusal, and it wins over the wire-shape checks
+    // deliberately: a mode this build cannot even name is the more
+    // fundamental fault.
+    const garbage = expectRefused(
+      enqueueInput(state, { id: "", text: "x", mode: "urgent" as unknown as InputMode }, 2_001),
+    );
+    expect(garbage.issue).toBe("wrong-type");
+
+    // Every mode this build DOES know still enqueues - the closed set is
+    // INPUT_MODES itself, the same array the codec checks against.
+    for (const mode of INPUT_MODES) {
+      const ok = expectAccepted(enqueueInput(state, { id: `in-${mode}`, text: "x", mode }, 2_002));
+      expect(ok.state.inputs.some((i) => i.id === `in-${mode}`)).toBe(true);
     }
   });
 

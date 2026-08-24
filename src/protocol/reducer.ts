@@ -34,9 +34,11 @@ import {
   type FrameKind,
   type HarnessName,
   type InputMode,
+  isInputMode,
   isWireId,
   isWireText,
   type Lease,
+  type ProtocolIssue,
   type RefusalIssue,
 } from "./frames.js";
 import { AttachmentLedger, LEASE_RENEW_EVERY_MS, LEASE_TTL_MS } from "./ledgers/attachment.js";
@@ -176,7 +178,11 @@ export interface TransitionRecord {
   readonly turnId?: string;
   readonly profile?: AttachProfile;
   readonly reason?: DetachReason;
-  readonly issue?: RefusalIssue;
+  /** ProtocolIssue, not RefusalIssue: a host transition can carry a
+   * codec-class issue - `enqueueInput` refuses an unknown mode with
+   * `wrong-type` (RFC-05 B4), the same issue the codec gives the same
+   * value on the wire. */
+  readonly issue?: ProtocolIssue;
   readonly detail?: RefusalDetail;
   /** Input-delivery observability: which input, and the two depth gauges
    * after the transition. queueDepth counts inputs AWAITING a disposition;
@@ -229,7 +235,7 @@ export type ReduceResult =
     }
   | {
       readonly verdict: "refused";
-      readonly issue: RefusalIssue;
+      readonly issue: ProtocolIssue;
       /** The frame is NEVER applied. State differs from the input only when
        * a post-fence refusal renews the lease (liveness accounting). */
       readonly state: ChannelState;
@@ -298,7 +304,7 @@ const frameFields = (
 const refusal = (
   state: ChannelState,
   frame: Frame,
-  issue: RefusalIssue,
+  issue: ProtocolIssue,
   now: number,
   detail?: RefusalDetail,
   extra?: Pick<TransitionRecord, "credits" | "queueDepth" | "presence" | "inFlightInputs">,
@@ -326,7 +332,7 @@ const refusal = (
 const hostRefusal = (
   state: ChannelState,
   frame: Frame,
-  issue: RefusalIssue,
+  issue: ProtocolIssue,
   now: number,
   extra?: Pick<TransitionRecord, "credits" | "queueDepth" | "presence" | "inFlightInputs">,
 ): ReduceResult => {
@@ -760,6 +766,17 @@ export const enqueueInput = (
     redeliver: !live,
   };
   const frame = inputFrame(queued);
+  // RFC-05 B4: a durable input is a log entry whose payload reaches this
+  // reducer during a fold without ever passing decodeFrame - the fold
+  // types it by claim (`validEntry` checks the envelope only), so the
+  // InputMode annotation above proves nothing at runtime. The codec's
+  // enumOf check stays (failing early is better); THIS check is the one
+  // the compatibility claim rests on, because every input reaches it,
+  // from the wire or out of a file. Checked before the id/text checks so
+  // a mode this build cannot even name reports `wrong-type` - the same
+  // issue the codec gives the same value on the wire - whatever else the
+  // payload carries.
+  if (!isInputMode(input.mode)) return hostRefusal(state, frame, "wrong-type", now);
   if (
     !isWireId(input.id) ||
     (input.turnId !== undefined && !isWireId(input.turnId)) ||

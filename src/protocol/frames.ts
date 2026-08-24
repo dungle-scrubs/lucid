@@ -44,7 +44,15 @@ export const HARNESS_NAMES = ["claude", "codex", "pi", "muse"] as const;
 export type HarnessName = (typeof HARNESS_NAMES)[number];
 export type Disposition = "applied" | "queued" | "rejected";
 export type DetachReason = "yield" | "shutdown";
-export type InputMode = "queue" | "steer";
+/** The input modes this build knows - ONE closed set behind both checks.
+ * The codec's `enumOf` refuses an unknown mode early (failing at the
+ * boundary is better), and the reducer's `enqueueInput` refuses it again:
+ * a durable input is a `src: "input"` log entry whose payload reaches the
+ * reducer during a fold without ever passing the codec, so the reducer's
+ * check is the one the compatibility claim rests on (RFC-05, "Validation
+ * lives where both paths meet"). */
+export const INPUT_MODES = ["queue", "steer"] as const;
+export type InputMode = (typeof INPUT_MODES)[number];
 export type ControlAction = "pause" | "end" | "switch-path";
 
 /** Issues a codec can raise: the frame never decoded. */
@@ -269,6 +277,12 @@ export const isWireId = (v: string): boolean =>
   v !== "" && v.length <= ID_MAX && !CONTROL_CHARS.test(v);
 export const isWireText = (v: string): boolean => v.length <= TEXT_MAX;
 
+/** The same discipline for `mode`: a fold-path input is trusted JSON
+ * typed only by claim (`validEntry` checks the envelope), so the reducer
+ * re-checks the value against INPUT_MODES exactly as the codec would. */
+export const isInputMode = (v: unknown): v is InputMode =>
+  typeof v === "string" && (INPUT_MODES as readonly string[]).includes(v);
+
 const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
   attach: (r) => ({
     kind: "attach",
@@ -328,7 +342,7 @@ const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
     seq: nat(r, "seq"),
     id: str(r, "id", ID_MAX),
     text: text(r, "text"),
-    mode: enumOf(r, "mode", ["queue", "steer"] as const),
+    mode: enumOf(r, "mode", INPUT_MODES),
     ...(optStr(r, "turnId", ID_MAX) !== undefined ? { turnId: optStr(r, "turnId", ID_MAX) } : {}),
   }),
   control: (r) => ({

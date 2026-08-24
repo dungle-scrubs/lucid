@@ -83,6 +83,19 @@ describe("frame codecs (M4.1)", () => {
     expect(parseFrame("{not json")).toEqual({ verdict: "refused", issue: "not-json" });
   });
 
+  test("the codec keeps its own input-mode check: a value outside INPUT_MODES refuses wrong-type at the boundary", () => {
+    // "answer" is RFC-05's future mode. This build refuses it before the
+    // reducer ever sees it; the reducer carries the same check for the
+    // fold path (RFC-05 B4), and this one is the early failure that keeps
+    // most unknown modes from reaching it at all.
+    const input = SAMPLES.find((f) => f.kind === "input");
+    if (input === undefined) throw new Error("input sample is missing");
+    expect(decodeFrame({ ...input, mode: "answer" })).toEqual({
+      verdict: "refused",
+      issue: "wrong-type",
+    });
+  });
+
   test("each required field, deleted in turn, refuses with missing-field", () => {
     for (const sample of SAMPLES) {
       for (const field of Object.keys(sample)) {
