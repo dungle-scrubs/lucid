@@ -6,6 +6,15 @@
  * this directory. The view-model (buildView) is a pure projection of the
  * store's transcript (D-009: the view IS fold(log)); render/paint only paint it.
  */
+
+export {
+  type InputOptions,
+  type InputResult,
+  NotTTYError,
+  readInput,
+  runInputLoop,
+  type SubmitMode,
+} from "./input.js";
 export { paint, renderLines } from "./render.js";
 export {
   buildView,
