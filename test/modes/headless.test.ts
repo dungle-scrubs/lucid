@@ -421,19 +421,22 @@ describe("headless modes (M5.2)", () => {
     await flush();
     r.proc.emit(identity);
     await flush();
+    // Queue mode mid-turn is held until the boundary, not sent immediately.
     r.host.enqueueInput({ id: "in-2", text: "second", mode: "queue" });
     await flush();
-    // hcn wrote it to the harness already, so it is applied now - not
-    // pending some later flip. This is what ADR 0007 changed.
-    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "started" });
-    await flush();
-    expect(r.host.state().appliedInputs).toMatchObject({ "in-2": true });
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-1": true });
+    expect(r.proc.commands.some((c) => c.id === "in-2")).toBe(false);
 
-    // Turn one ends; hcn opens in-2's turn at the boundary. The input was
-    // already applied, so the turn adds a turn, not a status change.
+    // Turn one ends; the queued input is drained at the boundary (defined
+    // event, not a poll) and sent now.
     r.proc.emit(doneClean);
     r.startQueued("in-2", "turn-2");
     await flush();
+    // Drain happened at the turn boundary: in-2 has now been sent.
+    expect(r.proc.commands.some((c) => c.id === "in-2")).toBe(true);
+    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "started" });
+    await flush();
+    expect(r.host.state().appliedInputs).toMatchObject({ "in-2": true });
     await flush();
     await flush();
     expect(r.host.state().appliedInputs).toMatchObject({ "in-1": true, "in-2": true });
@@ -594,3 +597,47 @@ const r0LogKinds = (root: string): string[] =>
     .map((l) => JSON.parse(l) as { frame?: { kind?: string; event?: { kind?: string } } })
     .filter((e) => e.frame?.kind === "event")
     .map((e) => e.frame?.event?.kind ?? "?");
+
+test("session mode: queue mid-turn is held until terminal event, steer is immediate (T22)", async () => {
+  const r = rig();
+  r.host.enqueueInput({ id: "in-1", text: "first", mode: "queue" });
+  await flush();
+  r.accept("in-1", "turn-1");
+  await flush();
+  r.proc.emit(identity);
+  await flush();
+  // queue held
+  r.host.enqueueInput({ id: "in-q", text: "queued", mode: "queue" });
+  await flush();
+  expect(r.proc.commands.some((c) => c.id === "in-q")).toBe(false);
+  // steer goes through at once
+  r.host.enqueueInput({ id: "in-s", text: "steered", mode: "steer" });
+  await flush();
+  expect(r.proc.commands.some((c) => c.id === "in-s")).toBe(true);
+  r.proc.emit({ kind: "disposition", id: "in-s", disposition: "started" });
+  await flush();
+  expect(r.host.state().appliedInputs["in-s"]).toBe(true);
+  expect(r.host.state().appliedInputs["in-q"]).toBeUndefined();
+  // close turn-1: queued drains now
+  r.proc.emit(doneClean);
+  r.startQueued("in-q", "turn-2");
+  await flush();
+  expect(r.proc.commands.some((c) => c.id === "in-q")).toBe(true);
+  r.proc.emit({ kind: "disposition", id: "in-q", disposition: "started" });
+  await flush();
+  expect(r.host.state().appliedInputs["in-q"]).toBe(true);
+});
+
+test("session mode: queued input with no turn running is delivered straight away (T22)", async () => {
+  const r = rig();
+  // No turn active yet
+  r.host.enqueueInput({ id: "in-1", text: "no-turn", mode: "queue" });
+  await flush();
+  expect(r.proc.commands.some((c) => c.id === "in-1")).toBe(true);
+  r.accept("in-1", "turn-1");
+  await flush();
+  r.proc.emit(identity);
+  r.proc.emit(doneClean);
+  r.proc.emit({ kind: "turn", turnId: "turn-1", id: "in-1" });
+  await flush();
+});

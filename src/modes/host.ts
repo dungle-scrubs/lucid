@@ -30,7 +30,7 @@
 
 import type { HarnessEvent } from "../harness/events.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
-import type { Frame, ReduceResult } from "../protocol/index.js";
+import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
 import type { CollectedBatch } from "../store/log.js";
 import { createSequencer } from "./sequencer.js";
 
@@ -86,8 +86,10 @@ interface HostContext {
 
 interface StrategyHandle {
   /** Handle an input arrival — must disposition via sequencer and arrange
-   *  the prompt for the runner (send now vs queue). */
-  onInput(id: string, text: string): void;
+   *  the prompt for the runner (send now vs queue). `mode` decides whether
+   *  a mid-turn arrival interrupts: `steer` goes through at once, `queue`
+   *  waits for the boundary. */
+  onInput(id: string, text: string, mode: InputMode): void;
   /** Async iterable of turns, each turn iterable of HarnessEvents. The host
    *  pumps this, shifting expected at each boundary and emitting events
    *  under the current turnId. */
@@ -123,29 +125,53 @@ const sessionStrategy = (
   // no session mode: lucid detached correctly and said nothing.
   opening.catch(() => {});
 
+  // Whether a turn is running right now. Set when the pump takes a turn off
+  // the session and cleared when that turn's events end - the boundary is an
+  // event the pump already sees, so nothing here polls for it.
+  let turnRunning = false;
+  let closed = false;
+  // Inputs that arrived mid-turn in `queue` mode, waiting for the boundary.
+  const waiting: Array<{ id: string; text: string }> = [];
+
+  const sendNow = (id: string, text: string): void => {
+    if (closed) return;
+    // hcn answers a send with exactly one disposition, and it answers
+    // before it opens the turn. So the reply is awaited and recorded when
+    // it lands: one disposition per input, the same as before, just no
+    // longer decided locally.
+    void opening
+      .then((session) => session.send(id, text))
+      .then((sent) => {
+        if (sent.disposition === "rejected") {
+          ctx.sequencer.disposition(id, "rejected", sent.reason ?? "send rejected");
+          return;
+        }
+        // Only `started` is left: `rejected` returned above, and hcn has
+        // no third answer since ADR 0007 removed its queue. So a send that
+        // was not refused opened a turn, and applied is the only truth to
+        // record.
+        ctx.expected.push({ inputId: id, applied: true });
+        ctx.sequencer.disposition(id, "applied");
+      })
+      .catch(() => {
+        ctx.sequencer.disposition(id, "rejected", "session closed");
+      });
+  };
+
   return {
-    onInput(id: string, text: string): void {
-      // hcn answers a send with exactly one disposition, and it answers
-      // before it opens the turn. So the reply is awaited and recorded when
-      // it lands: one disposition per input, the same as before, just no
-      // longer decided locally.
-      void opening
-        .then((session) => session.send(id, text))
-        .then((sent) => {
-          if (sent.disposition === "rejected") {
-            ctx.sequencer.disposition(id, "rejected", sent.reason ?? "send rejected");
-            return;
-          }
-          // Only `started` is left: `rejected` returned above, and hcn has
-          // no third answer since ADR 0007 removed its queue. So a send that
-          // was not refused opened a turn, and applied is the only truth to
-          // record.
-          ctx.expected.push({ inputId: id, applied: true });
-          ctx.sequencer.disposition(id, "applied");
-        })
-        .catch(() => {
-          ctx.sequencer.disposition(id, "rejected", "session closed");
-        });
+    onInput(id: string, text: string, mode: InputMode): void {
+      // A steer is a request to interrupt, so it goes through mid-turn.
+      // Everything else waits for the answer in progress to finish, which
+      // is what the interactive path already does - the Stop hook fires at
+      // a boundary, and the headless path now agrees with it.
+      //
+      // With no turn running there is no boundary coming, so holding the
+      // input would be a hang rather than a policy.
+      if (mode === "steer" || !turnRunning) {
+        sendNow(id, text);
+        return;
+      }
+      waiting.push({ id, text });
     },
     turns: {
       async *[Symbol.asyncIterator]() {
@@ -162,10 +188,42 @@ const sessionStrategy = (
           });
           return;
         }
-        for await (const turn of session.turns) yield turn;
+        for await (const turn of session.turns) {
+          turnRunning = true;
+          // Wrapped so the boundary is observed where it actually happens:
+          // when this turn's events are exhausted. `finally` also covers a
+          // consumer that abandons the turn early.
+          const bounded: AsyncIterable<HarnessEvent> = {
+            async *[Symbol.asyncIterator]() {
+              try {
+                yield* turn;
+              } finally {
+                turnRunning = false;
+                if (!closed) {
+                  const due = waiting.splice(0, waiting.length);
+                  for (const w of due) sendNow(w.id, w.text);
+                }
+              }
+            },
+          };
+          // The pump matches a turn to the send that opened it by the id the
+          // turn carries, so the wrapper has to carry it too. Copied rather
+          // than re-derived: inventing one here would mis-attribute every
+          // later disposition by one.
+          Object.assign(bounded, {
+            turnId: (turn as { turnId?: string }).turnId,
+            inputId: (turn as { inputId?: string }).inputId,
+          });
+          yield bounded;
+        }
       },
     },
     close(): void {
+      // Anything still waiting for a boundary is dropped here, not lost: it
+      // has no applied disposition, so it is still outstanding in the record
+      // and the next attach replays it.
+      closed = true;
+      waiting.length = 0;
       void opening.then((session) => session.close()).catch(() => {});
     },
   };
@@ -313,7 +371,11 @@ const turnStrategy = (
   };
 
   return {
-    onInput(id: string, text: string): void {
+    onInput(id: string, text: string, _mode: InputMode): void {
+      // Turn mode runs one process per turn, so every input already waits
+      // for a boundary and there is nothing a steer could interrupt. The
+      // reducer refuses `steer` on this profile with `steer-unsupported`
+      // before it ever reaches here, so the mode is accepted and ignored.
       queue.push({ id, text });
       ctx.expected.push({ inputId: id, applied: false });
       ctx.sequencer.disposition(id, "queued");
@@ -397,7 +459,10 @@ export const createHeadlessHost = (
   const receive = (frame: Frame): void => {
     switch (frame.kind) {
       case "input":
-        strategy.onInput(frame.id, frame.text);
+        // The mode travels with the input all the way to the strategy. It
+        // used to stop here, which made `steer` and `queue` mean the same
+        // thing to a harness.
+        strategy.onInput(frame.id, frame.text, frame.mode);
         return;
       case "credit":
         sequencer.onCredit(frame.tokens);
