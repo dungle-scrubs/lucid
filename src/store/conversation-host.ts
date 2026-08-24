@@ -46,6 +46,7 @@ import {
   decodeFrame,
   enqueueInput,
   grantCredit,
+  type InputMode,
   type Presence,
   type ReduceResult,
   reduce,
@@ -102,6 +103,10 @@ export interface RecoveryRecord {
   readonly conversationId: string;
   readonly entries: number;
   readonly discardedBytes: number;
+  /** Durable input entries the fold carried and the reducer refused -
+   * RFC-05 B4's visibility: an input mode only a newer build knows is
+   * refused and reported here, never applied and never fatal. */
+  readonly refusedInputs: number;
   readonly seq: number;
   readonly epoch: number;
 }
@@ -159,7 +164,7 @@ export interface ConversationHost {
   enqueueInput(input: {
     readonly id: string;
     readonly text: string;
-    readonly mode: "queue" | "steer";
+    readonly mode: InputMode;
     readonly turnId?: string;
   }): ReduceResult;
   grantCredit(tokens: number): ReduceResult;
@@ -187,6 +192,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     conversationId,
     entries: rec.entries,
     discardedBytes: rec.discardedBytes,
+    refusedInputs: rec.refusedInputs,
     seq: log.state().seq,
     epoch: log.state().epoch,
   });
@@ -283,7 +289,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     enqueueInput: (input: {
       readonly id: string;
       readonly text: string;
-      readonly mode: "queue" | "steer";
+      readonly mode: InputMode;
       readonly turnId?: string;
     }): ReduceResult => {
       const at = deps.now();

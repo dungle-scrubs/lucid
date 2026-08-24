@@ -125,6 +125,7 @@ describe("the range fold that hands back effects (RFC-04 step 5)", () => {
     // Manually append a second input with the same id — the reducer will
     // refuse it (input-id-reused) and the collecting fold must produce no
     // effects for it, not throw.
+    const dupOffset = statSync(join(root, "conv-1", "log.ndjson")).size;
     const dupLine =
       JSON.stringify({
         v: 1,
@@ -134,17 +135,20 @@ describe("the range fold that hands back effects (RFC-04 step 5)", () => {
       }) + "\n";
     appendFileSync(join(root, "conv-1", "log.ndjson"), dupLine);
 
-    // The plain fold would throw fold-refused, but the collecting fold
-    // carries it and yields no effects for that offset.
+    // A refused INPUT entry is carried, not fatal (RFC-05 B4): the
+    // collecting fold yields no effects for that offset, and both folds
+    // report the refusal rather than dropping it silently.
     const all = host.collectEffects(0).entries;
     // attach + first input, not the duplicate's (refused)
     expect(all.length).toBe(2);
     expect(all[0]?.effects[0]?.type).toBe("send"); // biome-ignore lint/style/noNonNullAssertion: test asserts existence above
 
-    // Pure helper also does not throw
+    // Pure helper also does not throw, and reports the refusal like
+    // foldLog does - same fold, not a second policy.
     const raw = readFileSync(join(root, "conv-1", "log.ndjson"));
     const pure = foldCollect("conv-1", secret, raw, 0);
     expect(pure.collected.length).toBe(2);
+    expect(pure.refusedInputs).toEqual([{ offset: dupOffset, issue: "input-id-reused" }]);
   });
 
   test("an entry with an unrecognised source contributes no effects and does not break later entries", () => {
