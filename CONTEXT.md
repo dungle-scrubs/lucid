@@ -91,19 +91,39 @@ against a real process. `AGENTS.md` lists them.
 
 There is no install yet: no `bin` entry, no build. Run it from the repo.
 
+**`run` holds the terminal until you stop it.** It drives the conversation
+for as long as it lives, so it is not a command that returns - do not paste
+it in a block with others, or everything after it waits behind it. It says so
+on start:
+
+```
+demo · claude · headless-session
+record /Users/you/.lucid/records/demo
+following the log — send to this conversation from anywhere; Ctrl-C to stop
+  ✓ delivered send-1787560136641-p274w6
+```
+
+One terminal, with the driver in the background:
+
 ```sh
 export LUCID_ROOT=~/.lucid/records
+bun src/cli/main.ts run demo --harness claude >/tmp/lucid-run.log 2>&1 &
+bun src/cli/main.ts watch demo
+```
 
-bun src/cli/main.ts send demo "your question"       # write into the record
-bun src/cli/main.ts run demo --harness claude       # drive a harness against it
-bun src/cli/main.ts watch demo                      # render it
+Then send from anywhere, including a second terminal:
+
+```sh
+bun src/cli/main.ts send demo "your question"
 ```
 
 Two hook commands exist for a session lucid does not own - `announce` for
 SessionStart and `inject` for Stop. They are invoked by the harness, not by a
 person.
 
-Today that is three terminals: one running, one watching, one sending.
+Today that is still two places: something driving, and something sending.
+The viewer paints an input box, but nothing reads it yet, which is the first
+thing on the list below.
 
 ## What is not built
 

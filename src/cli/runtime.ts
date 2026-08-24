@@ -60,6 +60,11 @@ export interface RuntimeDeps {
   readonly harnessName?: string;
   readonly runner?: HarnessRunner;
   readonly onRecord?: (r: HostRecord) => void;
+  /** Called once the conversation is running and before the caller blocks on
+   * `done`. `run` holds the terminal for the life of the session, so without
+   * this it printed nothing at all - which is indistinguishable from a hang,
+   * and is exactly how it read to the first person who used it. */
+  readonly onStart?: (running: RunningConversation) => void;
   readonly onPresenceEvent?: (e: PresenceEvent) => void;
   readonly signal?: AbortSignal;
   /** Interactive presence probe for D-021 (the ps-level fact). Defaults to unknown. Injected so tests assert takeover vs await deterministically. */
@@ -89,6 +94,10 @@ export interface RunningConversation {
   readonly kind: "running";
   readonly conversationId: string;
   readonly dir: string;
+  /** Which harness, and which profile hcn said it supports. Reported so the
+   * CLI can say what it is driving without asking a second time. */
+  readonly harness: HarnessName;
+  readonly profile: "headless-session" | "headless-turn";
   /** Resolves when the source closes or the signal aborts. */
   readonly done: Promise<void>;
   /** Abort the conversation: detaches the source and releases presence once. */
@@ -383,6 +392,8 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     kind: "running",
     conversationId,
     dir,
+    harness,
+    profile,
     done,
     abort,
     presenceHeld: () => presence.held() && !released,
@@ -402,6 +413,7 @@ export const runHeadless = async (
   if (isAwaitToken(handle)) {
     return { conversationId: handle.conversationId, dir: handle.dir, awaitToken: handle };
   }
+  opts.onStart?.(handle);
   await handle.done;
   return { conversationId: handle.conversationId, dir: handle.dir };
 };
