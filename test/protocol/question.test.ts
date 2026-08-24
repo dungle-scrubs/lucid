@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { HARNESS_AWAITING_INPUT } from "../../src/harness/events.js";
 import { EventKind } from "../../src/protocol/events.js";
-import { enqueueInput, reduce } from "../../src/protocol/reducer.js";
+import { reduce } from "../../src/protocol/reducer.js";
 import { foldLog } from "../../src/store/log.js";
 import { attach, drive, event, fresh } from "./helpers.js";
 
