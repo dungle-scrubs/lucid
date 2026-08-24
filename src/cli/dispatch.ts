@@ -37,6 +37,7 @@
  * `watch`'s paint step stays in `main.ts` and is injected as `onView`.
  */
 
+import { type ChatOpts, chatConversation } from "./chat.js";
 import { type AnnounceResult, announce } from "./hooks/announce.js";
 import { readStdin } from "./hooks/delivery.js";
 import { type InjectResult, inject } from "./hooks/inject.js";
@@ -70,6 +71,16 @@ export interface DispatchDeps {
   readonly onView?: WatchOpts["onView"];
   /** For `watch`/`run`: abort signal — wired from SIGINT in `runCli`. */
   readonly signal?: AbortSignal;
+  /** Must match `chatConversation` exactly - one options object. The first
+   * shape of this seam declared a `conversationId` parameter the real
+   * function does not take, and TypeScript accepted the mismatch because a
+   * function of fewer parameters is assignable to one of more. So the id
+   * was passed, ignored, and every `lucid chat <name>` opened a conversation
+   * named conv-<timestamp> instead. A seam that does not match its
+   * implementation hides exactly this. */
+  readonly chatConversationFn?: (opts: ChatOpts) => Promise<void>;
+  readonly chatKeys?: AsyncIterable<string>;
+  readonly chatNow?: () => number;
 }
 
 export type DispatchResult =
@@ -82,6 +93,7 @@ export type DispatchResult =
       readonly dir: string;
       readonly resumeInstruction: string;
     }
+  | { readonly kind: "chat"; readonly conversationId: string }
   | { readonly kind: "announce" }
   | { readonly kind: "inject" }
   | { readonly kind: "help"; readonly message: string };
@@ -158,6 +170,26 @@ export const dispatch = async (
       });
       return { kind: "watch", conversationId: mapped.conversationId };
     }
+    case "chat": {
+      const chatFn = deps.chatConversationFn ?? chatConversation;
+      // The id goes in the options, not as a first argument.
+      // `chatConversation` takes one object, so a positional id was
+      // accepted by the call and dropped on the floor - `lucid chat demo`
+      // opened a conversation named conv-<timestamp>. TypeScript could not
+      // see it: an extra argument to a one-parameter function is not an
+      // error when the parameter has a default.
+      await chatFn({
+        conversationId: mapped.conversationId,
+        rootDir: effectiveRoot,
+        harnessName: mapped.harnessName,
+        conversationsFactory: deps.conversationsFactory ? convFactory : boundFactory,
+        signal: deps.signal,
+        keys: deps.chatKeys,
+        now: deps.chatNow,
+        onView: deps.onView as unknown as ChatOpts["onView"],
+      });
+      return { kind: "chat", conversationId: mapped.conversationId ?? "" };
+    }
     case "run": {
       // `run` holds the terminal until Ctrl-C, so it must say so. Silence
       // reads as a hang - and did, to the first person who pasted the three
@@ -205,7 +237,7 @@ export const runCli = async (
 ): Promise<DispatchResult> => {
   // Only `watch` needs a paint sink — avoid importing the renderer for
   // every `send`/`run` invocation.
-  const isWatch = argv[0] === "watch";
+  const isWatch = argv[0] === "watch" || argv[0] === "chat";
   let defaultOnView: WatchOpts["onView"] | undefined;
   if (isWatch && !deps.onView) {
     const { renderLines } = await import("../tui/render.js");

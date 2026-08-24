@@ -78,7 +78,7 @@ describe("the range fold that hands back effects (RFC-04 step 5)", () => {
     const offsets: number[] = [];
     for (const line of lines) {
       offsets.push(byte);
-      byte += Buffer.byteLength(line + "\n");
+      byte += Buffer.byteLength(`${line}\n`);
     }
     // The log has attach + 2 inputs = 3 lines. All 3 produced effects (attach-ok + 2 sends).
     expect(lines.length).toBe(3);
@@ -126,13 +126,12 @@ describe("the range fold that hands back effects (RFC-04 step 5)", () => {
     // refuse it (input-id-reused) and the collecting fold must produce no
     // effects for it, not throw.
     const dupOffset = statSync(join(root, "conv-1", "log.ndjson")).size;
-    const dupLine =
-      JSON.stringify({
-        v: 1,
-        at: 9_999,
-        src: "input",
-        input: { id: "in-1", text: "again", mode: "queue" },
-      }) + "\n";
+    const dupLine = `${JSON.stringify({
+      v: 1,
+      at: 9_999,
+      src: "input",
+      input: { id: "in-1", text: "again", mode: "queue" },
+    })}\n`;
     appendFileSync(join(root, "conv-1", "log.ndjson"), dupLine);
 
     // A refused INPUT entry is carried, not fatal (RFC-05 B4): the
@@ -158,7 +157,7 @@ describe("the range fold that hands back effects (RFC-04 step 5)", () => {
     host.handleFrame(encodeFrame(attachFrame(secret, { profile: "headless-session" })));
     const goodBefore = statSync(join(root, "conv-1", "log.ndjson")).size;
     // Unknown source — RFC-04 P1 says it is carried, not applied
-    const unknown = JSON.stringify({ v: 1, at: 2_000, src: "cursor", offset: 123 }) + "\n";
+    const unknown = `${JSON.stringify({ v: 1, at: 2_000, src: "cursor", offset: 123 })}\n`;
     appendFileSync(join(root, "conv-1", "log.ndjson"), unknown);
     const unknownOffset = goodBefore;
     host.enqueueInput({ id: "in-after", text: "after unknown", mode: "queue" });

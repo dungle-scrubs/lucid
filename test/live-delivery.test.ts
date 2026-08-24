@@ -143,7 +143,7 @@ describe("live delivery — a running conversation answers an input sent by anot
     // Need a conversation to have an attachment first; do it via the running host's sendFrame if available,
     // otherwise via writer? The log must have an attach before inputs are accepted.
     // Use writer to attach as well (since running host's fake did not attach, writer can)
-    const attachRes = writer.handleFrame(
+    const _attachRes = writer.handleFrame(
       encodeFrame(attach({ secret, conversationId: convId, profile: "headless-session" })),
     );
     // If attach was already done by running host, this may be refused as already attached; handle both
@@ -324,7 +324,7 @@ describe("live delivery — a running conversation answers an input sent by anot
         harnessName: "claude",
         runner: fakeRunner,
         acquirePresenceFn: ((d: string, id: string) => {
-          const f = new Flock(join(d, "presence.lock"), id);
+          const _f = new Flock(join(d, "presence.lock"), id);
           return { release: () => {}, held: () => true } as unknown as ReturnType<
             typeof realAcquire
           >;

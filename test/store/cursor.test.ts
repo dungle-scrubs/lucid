@@ -120,7 +120,7 @@ describe("delivery cursor (RFC-04 R3/R4 + step7)", () => {
     const good = h.collectEffects(0).goodBytes;
     appendFileSync(
       join(root, "conv-1", "log.ndjson"),
-      JSON.stringify({ v: 1, at: 9999, src: "cursor", offset: good + 9999 }) + "\n",
+      `${JSON.stringify({ v: 1, at: 9999, src: "cursor", offset: good + 9999 })}\n`,
     );
     expect(() =>
       openConversation(recordDir(root, "conv-1"), {
@@ -256,7 +256,7 @@ describe("delivery cursor (RFC-04 R3/R4 + step7)", () => {
     h.handleFrame(encodeFrame(attachFrame(secret)));
     appendFileSync(
       join(root, "conv-1", "log.ndjson"),
-      JSON.stringify({ at: 9999, src: "cursor", offset: 0 }) + "\n",
+      `${JSON.stringify({ at: 9999, src: "cursor", offset: 0 })}\n`,
     );
     expect(() =>
       openConversation(recordDir(root, "conv-1"), {

@@ -18,6 +18,11 @@ export type MappedCommand =
       readonly conversationId: string | undefined;
       readonly harnessName?: string;
     }
+  | {
+      readonly kind: "chat";
+      readonly conversationId: string | undefined;
+      readonly harnessName?: string;
+    }
   | { readonly kind: "announce" }
   | { readonly kind: "inject" }
   | { readonly kind: "help"; readonly message: string };
@@ -65,6 +70,30 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
         ? { kind: "run", conversationId }
         : { kind: "run", conversationId, harnessName };
     }
+    case "chat": {
+      let harnessName: string | undefined;
+      const positionals: string[] = [];
+      for (let i = 0; i < rest.length; i++) {
+        const arg = rest[i] as string;
+        if (arg === "--harness" || arg === "--harness-name") {
+          harnessName = rest[i + 1];
+          if (!harnessName)
+            return {
+              kind: "help",
+              message: "usage: lucid chat [conversation] [--harness <claude|codex|pi|muse>]",
+            };
+          i++;
+        } else if (arg.startsWith("--")) {
+          return { kind: "help", message: `unknown flag for chat: ${arg}` };
+        } else {
+          positionals.push(arg);
+        }
+      }
+      const conversationId = positionals[0];
+      return harnessName === undefined
+        ? { kind: "chat", conversationId }
+        : { kind: "chat", conversationId, harnessName };
+    }
     case "announce":
       return { kind: "announce" };
     case "inject":
@@ -75,7 +104,7 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
     case "-h":
       return {
         kind: "help",
-        message: "usage: lucid <send|watch|run|announce|inject> [...]",
+        message: "usage: lucid <send|watch|run|chat|announce|inject> [...]",
       };
     default:
       return { kind: "help", message: `unknown command: ${cmd}` };

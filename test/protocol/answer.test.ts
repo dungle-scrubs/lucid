@@ -12,7 +12,7 @@ const applied = (inputId: string) => ({
   inputId,
   outcome: "applied" as const,
 });
-const done = (n: number, turnId: string) =>
+const _done = (n: number, turnId: string) =>
   event({ n, turnId, event: { kind: EventKind.done, exitCode: 0, cause: "stop" } });
 
 const backlogged = (count: number) => {
@@ -168,10 +168,10 @@ describe("answer mode (RFC-05 R2,R3,R6 T45)", () => {
 
     // 3. impossible (answer-unsupported) beats capacity (input-queue-full)
     {
-      const full = backlogged(INPUT_QUEUE_MAX);
+      const _full = backlogged(INPUT_QUEUE_MAX);
       // move to headless-turn profile: attach takeover to get headless-turn with same backlog gauge reset? Backlogged is headless-session; need to fill then takeover to headless-turn?
       // Instead construct full state that is headless-turn: attach headless-turn then fill via queue mode.
-      const state = drive(fresh(), [[attach({ profile: "headless-turn" }), 1_000]]);
+      const _state = drive(fresh(), [[attach({ profile: "headless-turn" }), 1_000]]);
       // need to bypass input-queue-full for setup - fill via lapsed? Instead use backlogged helper which builds headless-session, then we check impossible vs full on headless-turn with manually built inFlight.
       // For this check, use a state that is both headless-turn and at capacity: build capacity on headless-session then take over as headless-turn would reset gauge, so instead manually set inFlight.
       // Simpler: test that answer-unsupported is reported even when at capacity, by using a state at capacity but with headless-turn attachment.

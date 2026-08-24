@@ -97,6 +97,12 @@ const eventText = (event: Record<string, unknown>): string => {
     ].join("\n");
   }
   if (kind === EventKind.tool && typeof event.name === "string") return `⚙ ${event.name}`;
+  // An error you cannot read is worse than no error: it says something went
+  // wrong and refuses to say what. This fell to the `[kind]` fallback, so a
+  // live session that failed to open showed a bare `[error]` while the log
+  // held "session did not open: could not spawn hcn ...".
+  if ((kind === EventKind.error || kind === EventKind.limit) && typeof event.message === "string")
+    return `${kind === EventKind.error ? "✗" : "!"} ${event.message}`;
   if (kind === EventKind.progress && typeof event.label === "string") return `… ${event.label}`;
   return `[${kind}]`;
 };

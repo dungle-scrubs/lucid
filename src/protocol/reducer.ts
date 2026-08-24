@@ -25,7 +25,6 @@
  * the switch and into liveness — two clocks again.
  */
 
-import { HARNESS_AWAITING_INPUT } from "../harness/events.js";
 import { classOfEventKind, EventKind } from "./events.js";
 import {
   type AttachProfile,
