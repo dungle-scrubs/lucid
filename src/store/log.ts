@@ -68,7 +68,18 @@ export type LogEntry =
 
 const ENTRY_SOURCES = ["frame", "input", "credit"] as const;
 
-const validEntry = (raw: unknown): raw is LogEntry => {
+/** The envelope every entry carries, whatever its source. The fold checks
+ * this much and no more before deciding whether it knows the source:
+ * RFC-04 P1 makes an envelope-valid entry with an unrecognised `src`
+ * skippable rather than corrupt, so the log vocabulary can grow without
+ * making records written by a newer build unopenable. */
+interface Envelope {
+  readonly v: 1;
+  readonly at: number;
+  readonly src: string;
+}
+
+const validEntry = (raw: unknown): raw is Envelope => {
   if (typeof raw !== "object" || raw === null) return false;
   const e = raw as Record<string, unknown>;
   return (
@@ -76,10 +87,15 @@ const validEntry = (raw: unknown): raw is LogEntry => {
     typeof e.at === "number" &&
     Number.isSafeInteger(e.at) &&
     e.at >= 0 &&
-    typeof e.src === "string" &&
-    (ENTRY_SOURCES as readonly string[]).includes(e.src)
+    typeof e.src === "string"
   );
 };
+
+/** Narrow an envelope-valid entry to a source this build knows how to
+ * fold. The payload is trusted exactly as far as `applyEntry` re-checks
+ * it - the same contract the pre-P1 guard had. */
+const knownEntry = (e: Envelope): e is LogEntry =>
+  (ENTRY_SOURCES as readonly string[]).includes(e.src);
 
 // ---------------------------------------------------------------------------
 // Transcript (rendered history) - re-exported via store.ts for stability
@@ -208,8 +224,11 @@ const collectTranscript = (
 
 const NL = 0x0a;
 
-/** Fold the log into state, byte-accurate. Only a torn trailing fragment
- * (no newline) is tolerated; a corrupt newline-terminated line throws. */
+/** Fold the log into state, byte-accurate. Two things are tolerated: a
+ * torn trailing fragment (no newline), and an envelope-valid entry whose
+ * `src` this build does not recognise - RFC-04 P1: its bytes count as
+ * read and its content contributes nothing. Anything else corrupt
+ * throws. */
 export const foldLog = (
   conversationId: string,
   secret: string,
@@ -237,16 +256,20 @@ export const foldLog = (
       }
       if (!validEntry(parsed))
         throw new StoreError("corrupt-log", `malformed log entry at byte ${offset}`);
-      const { result, frame } = applyEntry(state, parsed, secret);
-      if (result.verdict !== "accepted")
-        throw new StoreError(
-          "fold-refused",
-          `log entry at byte ${offset} refused on fold (${result.issue})`,
-        );
-      collectTranscript(transcript, parsed, frame, result);
-      state = result.state;
-      entries += 1;
+      if (knownEntry(parsed)) {
+        const { result, frame } = applyEntry(state, parsed, secret);
+        if (result.verdict !== "accepted")
+          throw new StoreError(
+            "fold-refused",
+            `log entry at byte ${offset} refused on fold (${result.issue})`,
+          );
+        collectTranscript(transcript, parsed, frame, result);
+        state = result.state;
+        entries += 1;
+      }
     }
+    // An unrecognised src is carried, not applied: the offset advances
+    // past its bytes either way, so a later entry still folds.
     offset = nl + 1;
   }
   return { state, goodBytes: offset, entries, transcript };
