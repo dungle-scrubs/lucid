@@ -30,9 +30,11 @@
 
 import type { HarnessEvent } from "../harness/events.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
+import { composeArtifactPrompt, detectArtifactBlocks } from "../protocol/artifacts.js";
 import { EventKind } from "../protocol/events.js";
 import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
 import type { CollectedBatch } from "../store/log.js";
+import { ARTIFACT_BYTES_MAX } from "../store/log.js";
 import { createSequencer } from "./sequencer.js";
 
 /** What sendFrame returns. */
@@ -60,6 +62,14 @@ export interface HeadlessDeps {
     cursor(): number;
     collectEffects(fromOffset: number): CollectedBatch;
     advanceCursor(offset: number): void;
+    artifactIndex?: () => ReadonlyMap<string, number>;
+    writeArtifact?: (params: {
+      readonly artifactId: string;
+      readonly version: number;
+      readonly author: string;
+      readonly contentType: string;
+      readonly bytes: string;
+    }) => { verdict: "accepted"; version: unknown } | { verdict: "refused"; issue: string };
   };
 }
 
@@ -70,6 +80,118 @@ export interface SourceChannel {
 }
 
 export { HeadlessError } from "./sequencer.js";
+
+// Artifact handling helper — owns version assignment and refusal recording.
+// Lucid assigns version, author, hash; agent chooses id and replaces.
+// See RFC-06 Emission.
+const handleArtifactMessage = (
+  text: string,
+  turnId: string,
+  deps: HeadlessDeps,
+  ctx: HostContext,
+): void => {
+  const detections = detectArtifactBlocks(text);
+  if (detections.length === 0) return;
+  // Local map for versions assigned earlier in this same message, so two
+  // blocks with same id in one message see each other in order.
+  const localVersions = new Map<string, number>();
+  for (const d of detections) {
+    if ("malformed" in d) {
+      ctx.sequencer.emit(turnId, {
+        kind: EventKind.error,
+        message: `artifact malformed: ${d.malformed}`,
+        terminal: false,
+      });
+      continue;
+    }
+    const { header, bytes } = d.block;
+    if (bytes.length > ARTIFACT_BYTES_MAX) {
+      ctx.sequencer.emit(turnId, {
+        kind: EventKind.error,
+        message: `artifact ${header.id} too large: ${bytes.length} > ${ARTIFACT_BYTES_MAX}`,
+        terminal: false,
+      });
+      continue;
+    }
+    if (
+      deps.host === undefined ||
+      deps.host.artifactIndex === undefined ||
+      deps.host.writeArtifact === undefined
+    ) {
+      // No durable host to write to — still report that we saw it, but
+      // cannot store. This path is exercised in in-process tests that
+      // build a source without a host; production always has one.
+      ctx.sequencer.emit(turnId, {
+        kind: EventKind.error,
+        message: `artifact ${header.id} not stored: no host`,
+        terminal: false,
+      });
+      continue;
+    }
+    // Determine current version for this id — max of durable index and
+    // local assignments within this message.
+    let current = 0;
+    const idx = deps.host.artifactIndex?.() ?? new Map<string, number>();
+    for (const [key] of idx) {
+      const sep = key.indexOf("\0");
+      if (sep === -1) continue;
+      const id = key.slice(0, sep);
+      if (id === header.id) {
+        const v = Number(key.slice(sep + 1));
+        if (Number.isSafeInteger(v) && v > current) current = v;
+      }
+    }
+    const local = localVersions.get(header.id);
+    if (local !== undefined && local > current) current = local;
+
+    if (current === 0) {
+      // Unknown id — starts new artifact at v1, regardless of replaces.
+      const res = deps.host.writeArtifact?.({
+        artifactId: header.id,
+        version: 1,
+        author: "agent",
+        contentType: header.contentType,
+        bytes,
+      });
+      if (res?.verdict === "accepted") {
+        localVersions.set(header.id, 1);
+      } else {
+        ctx.sequencer.emit(turnId, {
+          kind: EventKind.error,
+          message: `artifact ${header.id} not stored: ${res?.issue ?? "no host"}`,
+          terminal: false,
+        });
+      }
+      continue;
+    }
+    // Known id — replaces must be current, else stale.
+    if (header.replaces !== current) {
+      ctx.sequencer.emit(turnId, {
+        kind: EventKind.error,
+        message: `artifact ${header.id} stale replaces: agent said ${String(header.replaces)}, current is ${current}`,
+        terminal: false,
+      });
+      continue;
+    }
+    const next = current + 1;
+    const res = deps.host.writeArtifact({
+      artifactId: header.id,
+      version: next,
+      author: "agent",
+      contentType: header.contentType,
+      bytes,
+    });
+    if (res?.verdict === "accepted") {
+      localVersions.set(header.id, next);
+    } else {
+      ctx.sequencer.emit(turnId, {
+        kind: EventKind.error,
+        message: `artifact ${header.id} v${next} not stored: ${res?.issue ?? "no host"}`,
+        terminal: false,
+      });
+    }
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Shared host context — sequencer + turnId + expected FIFO owned once
@@ -134,8 +256,21 @@ const sessionStrategy = (
   // Inputs that arrived mid-turn in `queue` mode, waiting for the boundary. Answers and steers are never held (RFC-05 R3).
   const waiting: Array<{ id: string; text: string; mode: InputMode }> = [];
 
+  let artifactPreambleSent = false;
   const sendNow = (id: string, text: string, mode: InputMode): void => {
     if (closed) return;
+    // RFC-06: headless-session preamble once per session, not for answers
+    // (an answer is raw text through the harness answer path, not a prompt).
+    let composed = text;
+    if (mode !== "answer" && !artifactPreambleSent) {
+      const maybe = composeArtifactPrompt(text, "headless-session");
+      if (maybe !== text) {
+        composed = maybe;
+        artifactPreambleSent = true;
+      } else if (text.startsWith("[lucid artifact protocol]")) {
+        artifactPreambleSent = true;
+      }
+    }
     // hcn answers a send with exactly one disposition, and it answers
     // before it opens the turn. So the reply is awaited and recorded when
     // it lands: one disposition per input, the same as before, just no
@@ -146,7 +281,7 @@ const sessionStrategy = (
       // (RFC-05 R7) — the same discipline as never mirroring the harness
       // normaliser's vocabulary anywhere else.
       void opening
-        .then((session) => session.answer(id, text))
+        .then((session) => session.answer(id, composed))
         .then((ans) => {
           if (ans.disposition === "rejected" && ans.reason === "no-open-question") {
             // The harness disagrees that a question is open. lucid replaced
@@ -188,7 +323,7 @@ const sessionStrategy = (
       return;
     }
     void opening
-      .then((session) => session.send(id, text))
+      .then((session) => session.send(id, composed))
       .then((sent) => {
         if (sent.disposition === "rejected") {
           ctx.sequencer.disposition(id, "rejected", sent.reason ?? "send rejected");
@@ -352,9 +487,10 @@ const turnStrategy = (
             // rather than losing the turn to a stale id.
             const attemptResume = resumeId !== undefined && !resumeTried;
             if (attemptResume) resumeTried = true;
+            const composedPrompt = composeArtifactPrompt(next.text, "headless-turn");
             let raw = deps.runner.streamTurn({
               harness: deps.harness,
-              prompt: next.text,
+              prompt: composedPrompt,
               turnId,
               ...(deps.model === undefined ? {} : { model: deps.model }),
               ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
@@ -376,9 +512,10 @@ const turnStrategy = (
                   kind: "error",
                   message: `could not resume harness session ${staleId}; continuing fresh`,
                 });
+                const retryPrompt = composeArtifactPrompt(next.text, "headless-turn");
                 raw = deps.runner.streamTurn({
                   harness: deps.harness,
-                  prompt: next.text,
+                  prompt: retryPrompt,
                   turnId,
                   ...(deps.model === undefined ? {} : { model: deps.model }),
                 });
@@ -509,6 +646,15 @@ export const createHeadlessHost = (
         }
       }
       for await (const event of turn) {
+        // RFC-06 Emission: parse artifact fences out of message events and
+        // store versions. Malformed/oversize/stale are refused with reason
+        // recorded, turn still completes.
+        if (
+          event.kind === EventKind.message &&
+          typeof (event as { text?: unknown }).text === "string"
+        ) {
+          handleArtifactMessage((event as { text: string }).text, currentTurnId, deps, ctx);
+        }
         sequencer.emit(currentTurnId, event);
       }
       currentTurnId = deps.mintTurnId();

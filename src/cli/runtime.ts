@@ -245,6 +245,14 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
       cursor: () => host.cursor(),
       collectEffects: (from: number) => host.collectEffects(from),
       advanceCursor: (off: number) => host.advanceCursor(off),
+      artifactIndex: () => host.artifactIndex(),
+      writeArtifact: (params: {
+        readonly artifactId: string;
+        readonly version: number;
+        readonly author: string;
+        readonly contentType: string;
+        readonly bytes: string;
+      }) => host.writeArtifact(params),
     },
   } as const;
   // A second driver must not strand a presence lock it cannot attach
