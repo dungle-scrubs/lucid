@@ -120,7 +120,17 @@ export interface FollowOpts {
 export const followRecord = async (opts: FollowOpts): Promise<void> => {
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
   const tailer = createTailer(opts.dir, opts.tailerDeps ?? {});
-  const trigger = (): void => opts.onTrigger(tailer);
+  // A trigger that throws must not take the follower down with it. The
+  // first one runs before the watcher and the poll exist, so an unguarded
+  // throw there escaped `followRecord` entirely: no watcher, no interval,
+  // and a conversation deaf for the rest of the process with nothing in
+  // the log to say why. Found by a live send that was recorded and never
+  // answered, intermittently, depending on what the first trigger hit.
+  const trigger = (): void => {
+    try {
+      opts.onTrigger(tailer);
+    } catch {}
+  };
 
   trigger();
 
