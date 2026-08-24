@@ -289,6 +289,56 @@ const writeAllSync = (fd: number, buf: Buffer): void => {
 };
 
 // ---------------------------------------------------------------------------
+// The locked read (offered to the tailer; RFC-04 R1)
+// ---------------------------------------------------------------------------
+
+const readFoldRepair = (
+  paths: RecordPaths,
+  conversationId: string,
+  secret: string,
+): { raw: Buffer; folded: ReturnType<typeof foldLog> } => {
+  const raw: Buffer = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
+  const folded = foldLog(conversationId, secret, raw);
+  if (folded.goodBytes < raw.length) {
+    try {
+      truncateSync(paths.logPath, folded.goodBytes);
+    } catch {
+      // best-effort
+    }
+  }
+  return { raw, folded };
+};
+
+/** Read the log under the append lock: fold every good byte and repair a
+ * torn trailing fragment - `append`'s catch-up discipline offered to
+ * readers that act on what they read. The tailer's locked read (RFC-04
+ * R1): a caller MUST NOT act on a tail it only peeked, because the
+ * lock-free peek tolerates a torn trailing line without repairing it. */
+export const foldUnderAppendLock = (
+  paths: RecordPaths,
+  conversationId: string,
+  secret: string,
+  opts: { onLockEvent?: (e: LockEvent) => void } = {},
+): { state: ChannelState; transcript: Transcript; goodBytes: number } => {
+  const flock = new Flock(paths.lockPath, conversationId);
+  const lock = flock.acquire({ onEvent: opts.onLockEvent });
+  try {
+    const { folded } = readFoldRepair(paths, conversationId, secret);
+    return {
+      state: folded.state,
+      transcript: {
+        events: [...folded.transcript.events],
+        inputs: [...folded.transcript.inputs],
+        aborted: [...folded.transcript.aborted],
+      },
+      goodBytes: folded.goodBytes,
+    };
+  } finally {
+    lock.release();
+  }
+};
+
+// ---------------------------------------------------------------------------
 // ConversationLog - the deep module
 // ---------------------------------------------------------------------------
 
@@ -334,25 +384,12 @@ export const createLog = (
     }
   };
 
-  const readFoldRepair = (): { raw: Buffer; folded: ReturnType<typeof foldLog> } => {
-    const raw: Buffer = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
-    const folded = foldLog(conversationId, secret, raw);
-    if (folded.goodBytes < raw.length) {
-      try {
-        truncateSync(paths.logPath, folded.goodBytes);
-      } catch {
-        // best-effort
-      }
-    }
-    return { raw, folded };
-  };
-
   // Establish initial state under the append lock
   const { raw: initialRaw, folded: initialFolded } = (() => {
     const flock = new Flock(paths.lockPath, conversationId);
     const lock = flock.acquire({ onEvent: deps.onLockEvent });
     try {
-      return readFoldRepair();
+      return readFoldRepair(paths, conversationId, secret);
     } finally {
       lock.release();
     }
@@ -381,7 +418,7 @@ export const createLog = (
     const lock = flock.acquire({ onEvent: deps.onLockEvent });
     let preWriteOffset: number | undefined;
     try {
-      const { folded } = readFoldRepair();
+      const { folded } = readFoldRepair(paths, conversationId, secret);
       if (
         folded.goodBytes !== curGoodBytes ||
         folded.state.seq !== curState.seq ||

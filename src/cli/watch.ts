@@ -11,16 +11,24 @@
  * not two. Deleting the snapshot helper would scatter fold+status
  * re-derivation across every reader again.
  *
+ * RFC-04 step 4: the watch-and-poll loop no longer lives here. The
+ * viewer is now an adapter over the shared tailer
+ * (`store:followRecord` + `tailer.peek()`), so a live host and the
+ * viewer run one mechanism, not two. The viewer only paints, so it
+ * reads the lock-free peek; it never acts on what it reads, and a torn
+ * tail the peek tolerates shows as a slightly-stale view until the
+ * next trigger — correct for a viewer, forbidden for a dispatcher
+ * (which is why the tailer keeps `read()` separate).
+ *
  * What it is NOT: it is not the rich TUI app (that lives above this),
  * not a live source, and not a holder of the presence lock. It holds
  * NO append lock and dispatches nothing — a pure reader (M1.2).
  */
 
-import { watch as fsWatch } from "node:fs";
-import { join } from "node:path";
 import { channelStatus } from "../protocol/liveness.js";
 // biome-ignore lint/style/useImportType: viewConversation used as typeof in WatchOpts — needed as value for typeof
-import { type ViewSnapshot, viewConversation, viewSnapshot } from "../store/conversation-host.js";
+import { type ViewSnapshot, viewConversation } from "../store/conversation-host.js";
+import { followRecord, type RecordTailer } from "../store/tailer.js";
 import type { TuiView } from "../tui/view.js";
 import { buildView } from "../tui/view.js";
 import { type Conversations, conversations } from "./record-addressing.js";
@@ -56,11 +64,10 @@ export interface WatchOpts {
 export const watchConversation = async (conversationId: string, opts: WatchOpts): Promise<void> => {
   const factory = opts.conversationsFactory ?? conversations;
   const dir = factory(opts.rootDir).dirFor(conversationId);
-  const pollMs = opts.pollMs ?? 500;
   const nowFn = opts.now ?? (() => Date.now());
   const presenceFn = opts.presence ?? (() => undefined);
 
-  const emit = (): void => {
+  const emit = (tailer: RecordTailer): void => {
     try {
       let transcript: ViewSnapshot["transcript"];
       let status: ViewSnapshot["status"];
@@ -78,9 +85,10 @@ export const watchConversation = async (conversationId: string, opts: WatchOpts)
           processAlive: presenceFn() === true,
         });
       } else {
-        // The ONE derivation for the watch read path (01): fold once,
-        // derive status from that same state + injected clock/presence.
-        const snap = viewSnapshot(dir, { now: nowFn, presence: presenceFn });
+        // The ONE derivation for the watch read path (01): the shared
+        // tailer's lock-free peek — fold once, derive status from that
+        // same state + injected clock/presence.
+        const snap = tailer.peek();
         transcript = snap.transcript;
         status = snap.status;
       }
@@ -100,28 +108,11 @@ export const watchConversation = async (conversationId: string, opts: WatchOpts)
     }
   };
 
-  emit();
-
-  if (opts.signal?.aborted) return;
-
-  return new Promise<void>((resolve) => {
-    const abort = (): void => {
-      watcher?.close();
-      clearInterval(poll);
-      resolve();
-    };
-    if (opts.signal) opts.signal.addEventListener("abort", abort, { once: true });
-
-    let watcher: ReturnType<typeof fsWatch> | undefined;
-    try {
-      watcher = fsWatch(join(dir, "log.ndjson"), emit);
-      watcher.on("error", () => {});
-    } catch {
-      // Record dir may not exist yet; poll will pick it up.
-    }
-    const poll = setInterval(emit, pollMs);
-    // Also poll on an interval as a fallback for filesystems where
-    // fs.watch is unreliable (network FS is out of scope, D-004, but
-    // polling keeps the viewer live even there).
+  return followRecord({
+    dir,
+    pollMs: opts.pollMs,
+    signal: opts.signal,
+    tailerDeps: { now: nowFn, presence: presenceFn },
+    onTrigger: emit,
   });
 };
