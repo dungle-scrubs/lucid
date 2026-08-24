@@ -9,6 +9,27 @@ date: 2026-08-24
 
 # RFC-05: One window: the conversation you can talk back to
 
+> **Revision 2.** Answers
+> `05_one-window-the-conversation-you-can-talk-back-to.review-draft-2026-08-24.md`,
+> two independent cross-family reviews (`muse-spark-1.2-contributor@muse`,
+> `gpt-5.6-sol@codex`). Five blocking findings between them, barely
+> overlapping. What changed:
+>
+> - **B1** "Asking turn retired" was undefined, and both readings of it fail.
+>   Replaced with hcn's own signal: `done { cause: "awaiting-input" }`.
+> - **B2** An answer inherited the turn-boundary rule, which is wrong for the
+>   one input that exists to unblock a turn. An answer is immediate.
+> - **B3** `turnId` was "REQUIRED for `mode: answer`" with no codec rule to
+>   enforce it. Now a cross-field check with its own issue.
+> - **B4** The compatibility claim was checked on the frame codec and the
+>   **fold does not go through it**. A reviewer ran it: an old reader accepts
+>   `mode: "answer"` silently. Validation moves to where both paths meet.
+> - **B5** `answer` exists only on a persistent session, so half the harnesses
+>   had no route. Now profile-gated, like `steer`.
+> - **B6** Attach replay bypasses the staleness rule entirely.
+>
+> Six majors folded in below and marked where they land.
+>
 > First of the two things `CONTEXT.md` names as next. This one makes the
 > conversation usable; RFC-06 will put an artifact in it.
 >
@@ -140,32 +161,74 @@ the keypress loop that neither has.
                      questionOpen = null
 ```
 
-**R1 - the reducer owns whether a question is open.** `ChannelState` gains
-`questionOpen`. It is set when a `question` event is accepted and cleared
-when an answer is applied, when the turn that asked it is retired, or on
-detach. No other component may decide this: the log is the truth and the
-reducer is its only interpreter.
+**R1 - a question opens on `question` and is confirmed by `awaiting-input`.**
+`ChannelState` gains `questionOpen: { turnId, text } | null`. It is set when a
+`question` event is accepted.
 
-**R2 - an answer is an input, not a new frame.** The `input` frame's `mode`
-gains `answer`. That reuses the idempotent id, the disposition lifecycle, the
-replay-on-attach discipline, and the input bound - all of which an answer
-needs and none of which is worth duplicating. A new frame kind would need
-every one of them again.
+*(B1.)* Revision 1 said it clears when "the asking turn is retired" and never
+said what retires a turn. Both readings fail. Keying on `done` clears every
+question before a human can see it. Keying on any new `turnId` cannot express
+the replace rule below.
 
-**R3 - an answer names the question it answers.** The frame carries the
-`turnId` of the question. lucid refuses an answer whose `turnId` is not the
-outstanding one with `stale-answer`. Without this, an answer typed slowly and
-submitted after the question was retired would be delivered as the answer to
-whatever came next.
+hcn already answers this. A turn that ends by asking emits
+`done { cause: "awaiting-input" }`, and hcn's own reference says that cause
+"ends the ASKING TURN while the session stays ready". So the asking turn
+ending is not the question closing - it is the question being *ready to
+answer*. lucid MUST NOT clear `questionOpen` on a `done` whose cause is
+`awaiting-input`. `HarnessCause` is typed `string` in lucid today; this RFC
+names `awaiting-input` the way RFC-05's predecessor named the `question`
+kind, for the same reason: a value hcn documents should not reach lucid as an
+unknown.
 
-**R4 - a source MUST NOT invent the answer wrapper.** hcn composes it
-(`The user answered the question: "..." with: ...`). lucid passes the raw
-text to `session.answer` and lets hcn wrap it, the same discipline as never
-mirroring hcn's event kinds.
+`questionOpen` clears on exactly three things, and nothing else:
+
+1. an answer to it reaching an `applied` disposition,
+2. the first accepted event of a turn that is neither the asking turn nor the
+   answer's turn - a conversation that moved on,
+3. `detach`.
+
+A second `question` while one is open REPLACES it. The older question's
+`turnId` then fails R4, which is correct: an answer to a superseded question
+is stale.
+
+**R2 - an answer is an input, not a new frame.** `input.mode` gains `answer`.
+That reuses the idempotent id, the disposition lifecycle, the input bound and
+the replay discipline. A new frame kind would need every one of them again.
+
+**R3 - an answer is delivered immediately, never held to a boundary.**
+*(B2.)* RFC-04's boundary rule holds a `queue` input until the running turn
+produces its terminal event. Revision 1 said an answer inherits that. It must
+not. An answer exists to unblock a turn; holding it until that turn ends is
+either a deadlock or, once `awaiting-input` has already fired, a delivery
+into a conversation that has moved past the question. An answer follows
+`steer`'s path - straight through - and for the same reason `steer` has one.
+
+**R4 - an answer names the question it answers.** The frame carries the
+`turnId` of the question. An answer whose `turnId` is not the currently open
+question's is refused `stale-answer`.
+
+**R5 - one answer at a time.** *(gpt M4.)* `questionOpen` gains an
+`answering` reservation: the id of an answer accepted and not yet dispositioned.
+While it is set, a second answer-mode input is refused `stale-answer`. Without
+it, two submissions both satisfy "a question is open", the first consumes
+hcn's question and the second is demoted into a turn nobody asked for.
+
+**R6 - answering is a session-mode capability.** *(B5.)* `session.answer`
+exists only on a persistent session. `headless-turn` - one process per turn,
+today codex and muse - has no session to answer into. An answer-mode input at
+a `headless-turn` attachment is refused `answer-unsupported`, exactly as
+`steer` is refused `steer-unsupported` there, and by the same reducer check.
+The chat window MUST show this before the human types, not after they submit:
+the status line already carries the profile.
+
+**R7 - a source MUST NOT invent the answer wrapper.** hcn composes it
+(`The user answered the question: "..." with: ...`). lucid passes raw text to
+`session.answer`, the same discipline as never mirroring hcn's event kinds.
 
 ## Message Formats
 
-No new frame kinds. Two additions and one refusal.
+No new frame kinds. Two additions, three refusals, and one validation rule
+that matters more than any of them.
 
 ### `input.mode` gains `answer`
 
@@ -174,42 +237,130 @@ No new frame kinds. Two additions and one refusal.
   "mode": "answer", "turnId": "turn-7" }
 ```
 
-`turnId` is already an optional field on `input`. For `mode: "answer"` it is
-REQUIRED and names the turn whose question is being answered.
+`turnId` is already optional on `input`. For `mode: "answer"` it is REQUIRED.
+
+*(B3.)* Revision 1 asserted that requirement and specified nothing to enforce
+it. The codec validates `mode` with `enumOf` and `turnId` with `optStr`,
+independently, with no cross-field rule - so an answer with no `turnId` would
+decode fine, reach `enqueueInput` with `turnId` undefined, and be refused
+`stale-answer`, reporting a staleness problem for what is a malformed frame.
+
+The codec MUST reject `mode: "answer"` without a wire-valid `turnId`, with its
+own issue:
+
+```
+"answer-needs-turn"
+```
+
+### Validation lives where both paths meet
+
+*(B4. This is the finding that changed the most.)*
+
+Revision 1's compatibility story was: an older reader refuses `mode: "answer"`
+at `enumOf` with `wrong-type`, so an answer can never be silently
+reinterpreted as an ordinary send.
+
+That is true of the frame codec and **false of the log**. A durable input is
+not a stored frame. It is a `src: "input"` log entry whose payload goes
+straight to `enqueueInput` during a fold, never through `decodeFrame`.
+`validEntry` checks the envelope only. A reviewer folded an entry carrying
+`mode: "answer"` through the current reader and it was accepted, mode and
+`turnId` intact, ready to be delivered as an ordinary send.
+
+So the guarantee has to move to where both paths meet. `enqueueInput` MUST
+validate `mode` against the modes this build knows and refuse an unknown one
+with `wrong-type`. The codec keeps its check - failing early is still better -
+but the reducer's check is the one that makes the claim true, because every
+input reaches it, whether it arrived on a wire or out of a file.
+
+This is the second time an RFC in this repo has checked the frame path and
+not the fold path. RFC-04 did it with the delivery cursor. Worth stating as a
+rule for the next one: **a claim about what an older reader does is a claim
+about `foldLog`, not about `decodeFrame`.**
 
 ### `attach-ok` is unchanged
 
-An attaching source learns about an outstanding question the same way it
-learns everything else: by folding the log. Adding it to `attach-ok` would
-put a second source of truth beside the one the fold already gives.
+An attaching source learns about an outstanding question by folding the log,
+like everything else. Putting it in `attach-ok` would create a second source
+of truth beside the fold.
 
-### One new refusal issue
+### Three new refusal issues
 
 ```
-"stale-answer"
+"stale-answer"        the answer names a turn that is not the open question,
+                      or no question is open, or another answer is pending
+"answer-needs-turn"   mode is answer and turnId is missing or not a wire id
+"answer-unsupported"  the attachment's profile has no session to answer into
 ```
 
-Returned when `mode: "answer"` names a turn that is not the outstanding
-question, including when no question is open at all. An older reader fails
-closed at `enumOf` with `wrong-type`, as with every other issue.
+All three are ordinary `REFUSAL_ISSUES` values. An older reader decoding one
+fails closed at `enumOf` with `wrong-type`.
+
+### Refusal order is specified, not incidental
+
+*(muse M4.)* `input-id-reused`, `input-queue-full`, `answer-needs-turn`,
+`answer-unsupported` and `stale-answer` can be true of one frame at once, and
+which one is reported decides what the human is told. The order is:
+
+1. wire validity - `invalid-input`, `answer-needs-turn`
+2. identity - `input-id-reused`
+3. profile capability - `steer-unsupported`, `answer-unsupported`
+4. conversation state - `stale-answer`
+5. capacity - `input-queue-full`
+
+Malformed beats duplicated beats impossible beats stale beats full. Capacity
+is last because it is the only one that becomes false on its own.
 
 ## State Machine
 
 ### The question
 
 ```
-   none ──── question event accepted ────► open { turnId, text }
-    ▲                                            │
-    │  answer applied                            │
-    │  asking turn retired                       │
-    │  detach                                    │
-    └────────────────────────────────────────────┘
+   none ───── question event accepted ─────►  open { turnId, text }
+    ▲                                              │        ▲
+    │                                    answer accepted    │ done{awaiting-input}
+    │                                              ▼        │ does NOT clear
+    │                                    open + answering { inputId }
+    │                                              │
+    │◄── answer applied ───────────────────────────┘
+    │◄── first event of an unrelated turn accepted
+    │◄── detach
 ```
 
-A second `question` event while one is open REPLACES it. That is not a
-merge: a harness that asks twice has changed its mind, and the newer question
-is the live one. The older question's turnId then fails R3, which is correct -
-an answer to a superseded question is stale.
+Three things and only three clear it: an answer reaching `applied`, the first
+accepted event of a turn that is neither the asking turn nor the answer's, and
+`detach`.
+
+**`done { cause: "awaiting-input" }` does not clear it.** That `done` ends the
+asking turn, which is what makes the question answerable rather than what ends
+it. Any other `done` cause ends a turn that was not asking, and leaves an open
+question alone.
+
+**A second question replaces the first**, and takes its own `answering`
+reservation with it - a reservation belongs to the question it was made
+against. *(gpt M4.)* Revision 1's unqualified "clear when an answer is
+applied" would have let a late disposition for the old question clear the new
+one.
+
+### A question hcn still holds after lucid replaced it
+
+*(muse M6.)* lucid replacing a question is lucid's view. hcn's session holds
+its own notion of what was asked, and an answer to lucid's newer question can
+come back `no-open-question` because hcn wanted the older one.
+
+lucid does not try to reconcile this. The demotion path below handles it: the
+text is delivered as an ordinary send and the divergence is recorded. A
+harness that asks twice without waiting has made the first question
+unanswerable, and pretending otherwise would mean lucid keeping a queue of
+questions that hcn does not have.
+
+### Text typed before a question arrived
+
+*(muse M6, gpt M7.)* A human submits while nothing is asked; a `question`
+event lands one entry later. That input is already appended and dispositioned.
+It MUST NOT become an answer retroactively. The view renders both in `seq`
+order, so the question appears below the input - which is what happened, and
+the transcript's job is what happened.
 
 ### The chat process
 
@@ -217,48 +368,103 @@ an answer to a superseded question is stale.
    start
      │
      ├── controller says await-reattach ──► exit, reporting why
-     │
-     ├── presence lock unavailable ───────► exit, reporting who holds it
-     │
+     ├── presence unavailable ────────────► exit, naming the holder
      ▼
-   RUNNING ── keypress ──► draft
+   LEADING ── keypress ──► draft
      │  ▲                    │
-     │  │                    └── submit ──► input or answer
-     │  │
+     │  │                    └── submit ──► input / answer
      │  └── log grew ──► fold ──► render
      │
-     └── Ctrl-C ──► detach, release, exit
+     ├── lease lost ──► FOLLOWING (render only, say so, keep the draft)
+     └── Ctrl-C ──► detach, release, restore the terminal, exit
 ```
 
-`chat` MUST refuse to start rather than take over a conversation another
-process is driving. `watch` remains available in that case, read-only, which
-is the whole reason `watch` does not gain the ability to drive: a viewer that
-sometimes drives has to explain to the human which mode it is in, and the
-answer changes under it when another process starts or stops.
+**`FOLLOWING` is new.** *(muse M7.)* Revision 1 said `chat` refuses to start
+without the lease and said nothing about losing it while running. A keypress
+loop that stays alive after the lease is gone would keep appending inputs
+nobody will dispatch until a new leader appears. On lease loss `chat` MUST
+stop accepting submissions, keep rendering, and say the conversation moved.
+It does not exit: the record is still worth reading, and the draft is still
+worth keeping.
+
+`watch` does not gain the ability to drive, for the same reason: a viewer
+that sometimes drives has to tell the human which it is, and the answer
+changes under it.
 
 ### Submitting
 
 | Condition | What is sent |
 |---|---|
-| A question is open | `input { mode: "answer", turnId }` |
+| A question is open, profile is `headless-session`, no answer pending | `input { mode: "answer", turnId }` |
+| A question is open, profile is `headless-turn` | Nothing. The box says answering needs a session profile |
+| A question is open and an answer is pending | Nothing. The box says one is in flight |
 | No question, no turn running | `input { mode: "queue" }`, delivered at once |
 | No question, a turn running | `input { mode: "queue" }`, held to the boundary |
-| No question, a turn running, and the human asked to interrupt | `input { mode: "steer" }` |
+| No question, a turn running, interrupt requested | `input { mode: "steer" }` |
 
-The last row needs a keybinding, not a mode change: the mode already exists.
-Open Question 2 covers which key.
+Refusing in the window beats submitting a frame that will be refused: the
+human learns before they lose the shape of what they typed.
+
+### Replay, and why an answer is not replayed as one
+
+*(B6.)* Attach replays every input still awaiting an applied disposition,
+straight from `state.inputs` through `receive` - it does not call
+`enqueueInput` again, so no staleness check runs. An answer valid when it was
+appended can be replayed long after its question is gone, and hcn's `answer`
+carries no lucid `turnId` to catch it.
+
+So R4 and replay cannot both hold as revision 1 wrote them. The rule:
+
+**An answer-mode input is replayed as `queue`, never as `answer`.** The
+replay path rewrites the mode. Its text is what the human meant; its
+answer-ness was true of a moment that has passed. Delivering it as an ordinary
+input keeps the words and drops a claim that can no longer be checked.
 
 ## Error Handling
 
+### The demotion, specified
+
+*(muse M5, gpt M6.)* Revision 1 said: on `no-open-question`, deliver as an
+ordinary send, record the demotion, clear `questionOpen`. Both reviewers
+found the same hole - that produces two dispositions for one input id, and
+`rejected` arms the input for boundary redelivery, so the demoted answer can
+be delivered a second time.
+
+Exactly one disposition is written per input id, and it is the outcome of the
+whole attempt:
+
+1. The host calls `session.answer`. It comes back rejected `no-open-question`.
+2. The host does **not** record that rejection. It is an internal step, not
+   an outcome.
+3. The host calls `session.send` with the same id and text.
+4. The disposition it records is that send's - `applied` or `rejected` - and
+   nothing else.
+5. `questionOpen` is cleared, because hcn has told lucid its view was wrong.
+
+The divergence is recorded as an `error` event on the current turn, non-terminal,
+naming what happened. That is the same shape RFC-03's R002 used when a resume
+id was refused, and for the same reason: the log MUST say why lucid did
+something other than what it was asked to.
+
+*(gpt M6.)* `disposition.note` is not the place: it reaches the durable frame
+but is absent from `TransitionRecord` and from the transcript projection, so
+recording it there would be recording it where nobody looks.
+
+### The table
+
 | Code | Condition | Handling |
 |---|---|---|
-| **`stale-answer`** | An answer names a turn that is not the open question | Refuse. The draft is NOT lost: the box keeps the text so the human can resend it as an ordinary input. Losing typing to a race is the worst possible outcome here. |
-| **`no-open-question` from hcn** | lucid thought a question was open; hcn disagrees | lucid's view of the log and hcn's view of its own session have diverged. Deliver the text as an ordinary send instead, record that it was demoted, and clear `questionOpen`. The turn still happens - the same discipline as RFC-03's R002, where a stale resume id costs context and never the turn. |
-| **`input-queue-full`** | The bound from RFC-04 | Refuse, keep the draft, show the count. A person who cannot send should be told why in the window they are typing in, not by an exit code they never see. |
-| **Presence unavailable at start** | Another process drives this conversation | Do not start. Say who holds it and that `watch` works read-only. |
-| **Lease lost while running** | Taken over, or the lock was released | Stop driving, keep rendering, tell the human the conversation moved. Do not exit: the record is still worth reading. |
+| **`answer-needs-turn`** | `mode: "answer"` with no wire-valid `turnId` | Refuse at the codec. A malformed frame, not a stale one. |
+| **`answer-unsupported`** | Answer at a `headless-turn` attachment | Refuse. The window should have prevented it; the reducer refuses anyway, because a source is not the window. |
+| **`stale-answer`** | Names a turn that is not the open question, or none is open, or one is already pending | Refuse. **The draft is kept.** Losing typing to a race is the worst outcome here, and a race is exactly what this is. |
+| **Resending a kept draft** | The human resends after `stale-answer` | The window MUST mint a **new** input id. *(muse M4.)* Reusing the refused id draws `input-id-reused`, which would refuse the same keystrokes twice for two different reasons. |
+| **`no-open-question` from hcn** | lucid's view and hcn's session diverged | The demotion above. One disposition, an `error` event, `questionOpen` cleared. The turn still happens. |
+| **`input-queue-full`** | RFC-04's bound | Refuse, keep the draft, show the count. A person who cannot send should be told in the window they are typing in. |
+| **Presence unavailable at start** | Another process drives this conversation | Do not start. Name the holder and say `watch` works read-only. |
+| **Lease lost while running** | Taken over, or released | `FOLLOWING`. Stop accepting submissions, keep rendering, keep the draft, say the conversation moved. |
 | **The terminal is not a TTY** | Piped or redirected | Render once and exit non-zero rather than painting escape codes into a file. |
-| **Ctrl-C with a non-empty draft** | The human typed and quit | The draft is lost. It was never durable, and RFC-04's Open Question 4 territory - persisting it would mean writing something the human did not submit. |
+| **A throw anywhere in the loop** | Any | Restore raw mode first, then propagate. A terminal left raw after a crash is the worst small bug in this RFC. |
+| **Ctrl-C with a non-empty draft** | The human typed and quit | The draft is lost. It was never durable, and persisting unsent text is a decision this RFC does not make. |
 
 ## Security Considerations
 
@@ -303,69 +509,92 @@ correct rather than silent.
 
 ## Implementation Notes
 
-Order, each step green on its own.
+Order, each step green on its own. The first four touch no terminal.
 
-1. **`questionOpen` in the reducer.** Set on an accepted `question` event,
-   cleared on answer / turn retirement / detach. No consumer yet. Pure, and
-   testable without a terminal.
-2. **`mode: "answer"` and `stale-answer`.** The codec, the reducer's routing,
-   and the refusal. Still no terminal.
-3. **`session.answer` gets its first caller.** The host routes an answer-mode
-   input to `answer` instead of `send`, with the `no-open-question`
-   demotion. This is the step that makes the existing seam load-bearing.
-4. **The keypress loop.** A driver module that owns raw mode, assembles a
-   draft, and calls back on submit. It MUST be injectable: the tests drive it
-   with a synthetic key source, not a pty.
-5. **`lucid chat`.** Compose `startHeadless`, the view, the tailer and the
-   keypress loop. Mostly assembly.
+1. **`awaiting-input` as a named cause, and `questionOpen` in the reducer.**
+   Set on `question`, preserved across `done { awaiting-input }`, cleared on
+   the three things R1 names. Pure and testable without a terminal.
+2. **Mode validation in `enqueueInput`.** *(B4.)* Before any new mode exists,
+   make the reducer refuse an unknown mode with `wrong-type`. This is the
+   step that makes the compatibility claim true, and it is worth landing on
+   its own so the fix is reviewable apart from the feature.
+3. **`answer` mode, its three refusals, and the refusal order.** Codec cross-field
+   rule, profile gate, staleness, reservation.
+4. **`session.answer` gets its first caller**, with the demotion path. The
+   step that makes an existing seam load-bearing.
+5. **The keypress loop.** Its own module, owning raw mode and its restoration.
+   MUST be injectable: tests drive it with a synthetic key source, not a pty.
+6. **`lucid chat`.** Assembly of `startHeadless`, the view, the tailer and the
+   loop.
 
 Notes:
 
+- **Use the tailer's locking read, not the viewer's.** *(muse M8.)* `watch` is
+  a pure reader and tolerates a torn tail without repairing it. `chat` holds
+  the lease and acts on what it reads, so it MUST take the lock-taking path.
+  RFC-04's review raised this against sharing `watch.ts`; the split already
+  exists in `src/store/tailer.ts` as `peek` and `read`, and `chat` uses
+  `read`.
+- **The draft lives in the chat process and nowhere else.** Passed into
+  `buildView` on every paint, which is what the existing `draft` field is
+  for. It survives a repaint and does not survive the process.
 - **Do not widen `TuiView` for artifacts here.** RFC-06 will add a line kind
-  that is not text. Leaving `ConversationLine` as it is - a kind, a text, a
-  mark - keeps that a widening rather than a rewrite. Resist the temptation
-  to generalise it now for a shape not yet specified.
-- **Raw mode is a process-global.** Restore it on every exit path, including
-  a throw. A terminal left in raw mode after a crash is the worst small bug
-  in this whole RFC.
-- **The paint already clears the screen** (`\x1b[2J\x1b[H`). With a live
-  keypress loop it will need to not fight the cursor. This is the one place
-  a live-pty check earns its cost; the deterministic tests cover `buildView`
-  and `renderLines`, which is where the logic is.
-- **`run` and `watch` stay.** `run` is what a script uses; `watch` is what a
-  second pair of eyes uses. `chat` is what a person uses.
+  that is not text. Leaving `ConversationLine` as it is keeps that a widening
+  rather than a rewrite.
+- **`run` and `watch` stay.** `run` is what a script uses, `watch` is what a
+  second pair of eyes uses, `chat` is what a person uses.
 
 ## Open Questions
 
 1. **Does `chat` replace `run` in the docs, or sit beside it?**
-   `CONTEXT.md` currently teaches `run` + `watch` + `send`, which is three
-   terminals. Once `chat` exists that is the wrong first thing to show.
-   Recommend: `chat` becomes the documented way in, and `run`/`watch`/`send`
-   are documented as the pieces, for scripting and for a second viewer.
-   Decider: this RFC's review.
+   `CONTEXT.md` teaches `run` + `watch` + `send`, which is three terminals.
+   Recommend `chat` becomes the documented way in, with the others documented
+   as the pieces, for scripting and for a second viewer.
+   Decider: this RFC's next review.
 
 2. **Which key interrupts a running turn?**
-   `steer` exists in the protocol and nothing in the terminal reaches it.
-   Options: a modifier on submit, a dedicated key, or a mode toggle shown in
-   the status line. Recommend a modifier on submit, because interrupting is
-   a property of *this* message rather than a mode the human has to remember
-   they are in.
-   Decider: this RFC's review.
+   `steer` exists and nothing in the terminal reaches it. Recommend a modifier
+   on submit rather than a mode toggle: interrupting is a property of this
+   message, not a state the human has to remember being in.
+   Decider: this RFC's next review.
 
-3. **What happens to the draft when the view repaints?**
-   The log can grow while the human is typing, and the paint clears the
-   screen. The draft must survive that, which is a rendering ordering
-   question rather than a protocol one. Recommend: the draft lives in the
-   chat process and is passed into `buildView` on every paint, which is
-   already what the `draft` field is for.
-   Decider: implementation.
+3. **What does answering mean for a turn-mode harness?** *(New, from B5,
+   and its premise is now checked.)*
+   Revision 2 first wrote this as "if hcn cannot emit `question` outside a
+   session, this is moot". It can. `stream-turn.ts` emits `kind: "question"`
+   the same way the session path does, so codex and muse can ask - and
+   neither hcn nor lucid has anywhere to route an answer, because the process
+   that asked is gone the moment the turn ends.
 
-4. **Should an answer be visible as an answer in the transcript?**
-   It is an input with a mode, so today it renders like any other input.
-   Options: render it under the question it answers, mark it, or leave it.
-   Recommend leaving it for now and revisiting with RFC-06, which changes
-   what a conversation line can be anyway.
+   So `answer-unsupported` is correct rather than merely convenient: there is
+   nothing to answer *into*. What is left is a product gap this RFC should
+   name rather than hide. In session mode hcn composes the wrapper, so the
+   harness sees "the user answered X with Y". In turn mode the human's reply
+   is an ordinary input to a fresh process that has no memory of asking, so
+   the question's text has to reach the harness some other way or the reply
+   is context-free.
+
+   Options: lucid composes the wrapper for turn mode only, breaking R7 in a
+   bounded way; hcn grows a way to carry an answer into a fresh turn; or the
+   window simply shows the question and the human quotes what they are
+   answering. The third costs nothing and is honest about who is doing the
+   work.
+   Criterion: whether lucid composing a prompt fragment is a line worth
+   crossing for two of four harnesses.
+   Decider: this RFC's next review.
+
+4. **Should an answer render as an answer?**
+   It is an input with a mode, so today it renders like any input. Recommend
+   leaving it and revisiting with RFC-06, which changes what a conversation
+   line can be anyway.
    Decider: RFC-06.
+
+5. **Is `stale-answer` the right response to a pending answer?** *(New, from
+   gpt M4.)* R5 refuses a second answer with `stale-answer`, but the second
+   one is not stale - it is early. A distinct issue would say so. Against
+   that: a fourth issue for a case the window already prevents may be
+   vocabulary for its own sake.
+   Decider: this RFC's next review.
 
 ## References
 
