@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "Preserve",
     "moduleResolution": "bundler",
     "strict": true,
@@ -10,8 +10,8 @@
     "skipLibCheck": true,
     "noEmit": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["bun"]
+    "jsx": "react-jsx",
+    "types": []
   },
-  "include": ["src", "test"],
-  "exclude": ["src/server/client"]
+  "include": ["."]
 }

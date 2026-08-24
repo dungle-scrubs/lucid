@@ -107,7 +107,7 @@ export type ProtocolIssue = (typeof PROTOCOL_ISSUES)[number];
  * text is generous but finite. Numbers must be safe integers (>= 2^53
  * breaks monotonic seq/epoch/n comparison and never-expiring leases). */
 const ID_MAX = 128;
-const TEXT_MAX = 1_000_000;
+export const TEXT_MAX = 1_000_000;
 const TOKENS_MAX = 1_000_000;
 
 export interface Lease {

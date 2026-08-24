@@ -9,19 +9,24 @@
   "scripts": {
     "check": "bun run lint && bun run typecheck && bun run test",
     "lint": "biome check .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src/server/client",
     "test": "bun test",
-    "prepare": "git config --local core.hooksPath .git/hooks && lefthook install --force",
+    "prepare": "test -d .git/hooks && git config --local core.hooksPath .git/hooks && lefthook install --force || true",
     "build": "bun build --compile --outfile dist/lucid2 src/cli/main.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
     "@types/bun": "^1.3.14",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
     "lefthook": "^2.1.10",
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@dungle-scrubs/harness-cli-normalizer": "0.5.7"
+    "@assistant-ui/react": "^0.10",
+    "@dungle-scrubs/harness-cli-normalizer": "0.5.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "bin": {
     "lucid2": "./dist/lucid2"

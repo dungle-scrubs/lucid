@@ -25,6 +25,7 @@ export type MappedCommand =
     }
   | { readonly kind: "announce" }
   | { readonly kind: "inject" }
+  | { readonly kind: "serve" }
   | { readonly kind: "help"; readonly message: string };
 
 /** Map `argv` (without the `lucid` binary prefix) to a structured command.
@@ -98,13 +99,15 @@ export const mapSubcommand = (argv: readonly string[]): MappedCommand => {
       return { kind: "announce" };
     case "inject":
       return { kind: "inject" };
+    case "serve":
+      return { kind: "serve" };
     case undefined:
     case "help":
     case "--help":
     case "-h":
       return {
         kind: "help",
-        message: "usage: lucid2 <send|watch|run|chat|announce|inject> [...]",
+        message: "usage: lucid2 <send|watch|run|chat|serve|announce|inject> [...]",
       };
     default:
       return { kind: "help", message: `unknown command: ${cmd}` };

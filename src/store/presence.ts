@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { Flock, type LockEvent } from "./flock.js";
+import { acquireAppendLock, Flock, LockError, type LockEvent } from "./flock.js";
 
 export type PresenceEvent =
   | { readonly event: "presence.acquire"; readonly conversationId: string }
@@ -57,4 +57,31 @@ export const bindToProcess = (
   child: { readonly pid?: number; on: (event: "exit", cb: () => void) => void },
 ): void => {
   child.on("exit", () => handle.release());
+};
+
+/** Whether some process holds this record's presence lock — that is,
+ * whether anything is driving the conversation right now.
+ *
+ * A reader cannot ask the log this. The lease in the durable state says
+ * when the driver last wrote, not whether it is alive, and an idle driver
+ * lets its lease lapse while sitting perfectly healthy. The lock is the
+ * fact: it is a `flock`, so the kernel releases it when the holder dies,
+ * and a holder that is alive still holds it however long it has been
+ * quiet.
+ *
+ * Asked without blocking. A failed acquire means someone else holds it;
+ * a successful one is released at once, so probing never keeps a driver
+ * out — its own acquire retries. `undefined` when there is no flock
+ * backend to ask, which is the same "unknown" every other presence
+ * probe reports rather than guessing.
+ */
+export const presenceHeld = (recordDir: string): boolean | undefined => {
+  const lockPath = presenceLockPath(recordDir);
+  try {
+    acquireAppendLock(lockPath, { timeoutMs: 0 }).release();
+    return false;
+  } catch (cause) {
+    if (cause instanceof LockError && cause.code === "lock-timeout") return true;
+    return undefined;
+  }
 };

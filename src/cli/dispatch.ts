@@ -47,6 +47,7 @@ import type { RunOpts, RunResult } from "./run.js";
 import { runConversation } from "./run.js";
 import type { SendOpts } from "./send.js";
 import { sendInput } from "./send.js";
+import type { ServeOpts } from "./serve.js";
 import type { WatchOpts } from "./watch.js";
 import { watchConversation } from "./watch.js";
 
@@ -60,6 +61,7 @@ export interface DispatchDeps {
   readonly sendInputFn?: (conversationId: string, opts: SendOpts) => { inputId: string };
   readonly watchConversationFn?: (conversationId: string, opts: WatchOpts) => Promise<void>;
   readonly runConversationFn?: (opts: RunOpts) => Promise<RunResult>;
+  readonly serveFn?: (opts: ServeOpts) => Promise<void>;
   readonly announceFn?: (stdin: string) => Promise<AnnounceResult>;
   readonly injectFn?: (stdin: string) => Promise<InjectResult>;
   readonly readStdinFn?: () => Promise<string>;
@@ -94,6 +96,7 @@ export type DispatchResult =
       readonly resumeInstruction: string;
     }
   | { readonly kind: "chat"; readonly conversationId: string }
+  | { readonly kind: "serve" }
   | { readonly kind: "announce" }
   | { readonly kind: "inject" }
   | { readonly kind: "help"; readonly message: string };
@@ -151,6 +154,15 @@ export const dispatch = async (
   const runFn = deps.runConversationFn ?? runConversation;
 
   switch (mapped.kind) {
+    case "serve": {
+      // `serve` is long-lived, like `watch`: it holds the process open
+      // until the terminal stops it, and says where it is on its own.
+      const serveFn =
+        deps.serveFn ??
+        (async (opts: ServeOpts) => (await import("./serve.js")).serveConversation(opts));
+      await serveFn({ rootDir: effectiveRoot });
+      return { kind: "serve" };
+    }
     case "send": {
       const { inputId } = sendFn(mapped.conversationId, {
         rootDir: effectiveRoot,

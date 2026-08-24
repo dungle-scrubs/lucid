@@ -1,0 +1,265 @@
+/**
+ * The loopback server, against a real record.
+ *
+ * Every test starts a server on port 0 (the kernel picks a free one), so
+ * the suite never collides with a server a person is running.
+ *
+ * What is proven here is the ticket's own list: the token gates the API, a
+ * foreign origin is refused, the record secret never leaves the machine's
+ * own process, an append lands with nothing driving, and a restart makes
+ * every old token useless.
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { sendInput } from "../../src/cli/send.js";
+import { startServe } from "../../src/cli/serve.js";
+import { acquirePresence } from "../../src/store/presence.js";
+import { createConversationRecord } from "../../src/store/store.js";
+
+const CONV = "srv-1";
+
+let root: string;
+let server: Awaited<ReturnType<typeof startServe>>;
+
+const url = (path: string): string => `${server.url}${path}`;
+
+/** Every API call needs the token; the tests that check refusal pass their
+ * own headers instead of using this. */
+const api = (path: string, init: RequestInit = {}): Promise<Response> =>
+  fetch(url(path), {
+    ...init,
+    headers: { "x-lucid-token": server.token, ...(init.headers ?? {}) },
+  });
+
+beforeEach(async () => {
+  root = mkdtempSync(join(tmpdir(), "lucid-server-"));
+  createConversationRecord(root, CONV);
+  server = await startServe({ rootDir: root, port: 0 });
+});
+
+afterEach(async () => {
+  await server.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+describe("the way in", () => {
+  test("binds loopback, and the port is the one the kernel gave back", () => {
+    expect(server.port).toBeGreaterThan(0);
+    expect(server.url).toBe(`http://127.0.0.1:${server.port}`);
+  });
+
+  test("serves one page for every record; the conversation comes from the URL", async () => {
+    const a = await fetch(url("/c/srv-1"));
+    const b = await fetch(url("/c/another"));
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect((a.headers.get("content-type") ?? "").includes("text/html")).toBe(true);
+  });
+
+  test("the page is served from this origin, never from a CDN", async () => {
+    const html = await (await fetch(url("/c/srv-1"))).text();
+    expect(html).not.toContain("esm.sh");
+    expect(html).not.toContain("unpkg");
+    expect(html).not.toContain("cdn.");
+    // Its script is a same-origin path, so the bundle cannot be swapped by
+    // anyone but this server.
+    const src = html.match(/<script[^>]+src="([^"]+)"/)?.[1];
+    expect(src).toBeDefined();
+    expect(src?.startsWith("/")).toBe(true);
+  });
+});
+
+describe("a page that has not proved itself cannot read or write", () => {
+  test("no token is refused", async () => {
+    expect((await fetch(url(`/api/conversations/${CONV}`))).status).toBe(401);
+  });
+
+  test("a wrong token is refused", async () => {
+    const res = await fetch(url(`/api/conversations/${CONV}`), {
+      headers: { "x-lucid-token": "not-the-token" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("writing without the token is refused, and nothing is appended", async () => {
+    const before = readFileSync(join(root, CONV, "log.ndjson"), "utf8");
+    const res = await fetch(url(`/api/conversations/${CONV}/input`), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "should not land" }),
+    });
+    expect(res.status).toBe(401);
+    expect(readFileSync(join(root, CONV, "log.ndjson"), "utf8")).toBe(before);
+  });
+
+  test("the token is minted per start, so a restart invalidates every page", async () => {
+    const old = server.token;
+    await server.close();
+    server = await startServe({ rootDir: root, port: 0 });
+    expect(server.token).not.toBe(old);
+    const res = await fetch(url(`/api/conversations/${CONV}`), {
+      headers: { "x-lucid-token": old },
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("a request from anywhere else is refused before it arrives", () => {
+  test("a foreign origin is refused even holding the token", async () => {
+    const res = await api(`/api/conversations/${CONV}`, {
+      headers: { origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("a drive-by post from a site you visited is refused, and appends nothing", async () => {
+    const before = readFileSync(join(root, CONV, "log.ndjson"), "utf8");
+    const res = await fetch(url(`/api/conversations/${CONV}/input`), {
+      method: "POST",
+      headers: { origin: "https://evil.example", "content-type": "text/plain" },
+      body: JSON.stringify({ text: "drive-by" }),
+    });
+    expect(res.status).toBe(403);
+    expect(readFileSync(join(root, CONV, "log.ndjson"), "utf8")).toBe(before);
+  });
+
+  test("this server's own origin is allowed", async () => {
+    const res = await api(`/api/conversations/${CONV}`, { headers: { origin: server.url } });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("the record secret never reaches the browser", () => {
+  test("neither the page nor the API carries it", async () => {
+    const secret = readFileSync(join(root, CONV, "secret"), "utf8").trim();
+    expect(secret.length).toBeGreaterThan(8);
+    sendInput(CONV, { rootDir: root, text: "hello" });
+    const page = await (await fetch(url(`/c/${CONV}`))).text();
+    const body = await (await api(`/api/conversations/${CONV}`)).text();
+    expect(page).not.toContain(secret);
+    expect(body).not.toContain(secret);
+  });
+});
+
+describe("reading a conversation", () => {
+  test("shows what was said, through the same projection the terminal uses", async () => {
+    sendInput(CONV, { rootDir: root, text: "a question from the terminal" });
+    const res = await api(`/api/conversations/${CONV}`);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { lines: { kind: string; text: string }[] };
+    expect(data.lines.some((l) => l.text.includes("a question from the terminal"))).toBe(true);
+  });
+
+  test("a record that does not exist is empty, not an error", async () => {
+    const res = await api("/api/conversations/never-made");
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { lines: unknown[]; damaged: boolean };
+    expect(data.lines).toEqual([]);
+    expect(data.damaged).toBe(false);
+  });
+
+  test("a damaged record says so rather than rendering as silence", async () => {
+    sendInput(CONV, { rootDir: root, text: "before the damage" });
+    const log = join(root, CONV, "log.ndjson");
+    writeFileSync(log, `${readFileSync(log, "utf8")}{ this is not json\n`);
+    const data = (await (await api(`/api/conversations/${CONV}`)).json()) as {
+      lines: { text: string }[];
+      damaged: boolean;
+      status: string;
+    };
+    expect(data.damaged).toBe(true);
+    // The fold refuses a log it cannot read rather than folding part of it,
+    // so there is nothing to show. What matters is that the page is told,
+    // instead of being handed an empty conversation that looks the same as
+    // one nobody has spoken in.
+    expect(data.lines).toEqual([]);
+    expect(data.status).toBe("damaged");
+  });
+
+  test("an invalid conversation id is refused", async () => {
+    const res = await api("/api/conversations/..%2Fescape");
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("writing reaches the record with nothing driving", () => {
+  test("an append lands and waits, exactly as sending from a terminal does", async () => {
+    const res = await api(`/api/conversations/${CONV}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "from the browser" }),
+    });
+    expect(res.status).toBe(200);
+    const { inputId, verdict } = (await res.json()) as { inputId: string; verdict: string };
+    expect(verdict).toBe("accepted");
+    expect(inputId.startsWith("browser-")).toBe(true);
+
+    const raw = readFileSync(join(root, CONV, "log.ndjson"), "utf8");
+    expect(raw).toContain("from the browser");
+    expect(raw).toContain(inputId);
+  });
+
+  test("the server never drives: it takes no presence lock and emits no effect", async () => {
+    await api(`/api/conversations/${CONV}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "no driving" }),
+    });
+    // The delivery cursor is written by whoever acts on the log. A server
+    // that never drives never writes one, so its absence is the evidence
+    // that this append waited for a driver instead of being dispatched.
+    const raw = readFileSync(join(root, CONV, "log.ndjson"), "utf8");
+    expect(raw).not.toContain('"src":"cursor"');
+  });
+
+  test("empty text is refused", async () => {
+    const res = await api(`/api/conversations/${CONV}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "   " }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("text past the protocol's own bound is refused, not truncated", async () => {
+    const res = await api(`/api/conversations/${CONV}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "x".repeat(1_000_001) }),
+    });
+    expect(res.status).toBe(413);
+    expect(readFileSync(join(root, CONV, "log.ndjson"), "utf8")).not.toContain("xxxxxxxxxx");
+  });
+
+  test("a body that is not JSON is refused", async () => {
+    const res = await api(`/api/conversations/${CONV}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not json at all",
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("the page says whether anything is driving", () => {
+  test("with no driver the status is not a live one", async () => {
+    sendInput(CONV, { rootDir: root, text: "nobody is driving" });
+    const data = (await (await api(`/api/conversations/${CONV}`)).json()) as { status: string };
+    expect(data.status).toBe("agent-gone");
+  });
+
+  test("a held presence lock is reported as a live channel, however stale the lease", async () => {
+    // The lease is what goes stale while a driver sits idle; the lock is
+    // what stays true. Holding the lock without writing anything is exactly
+    // the state that used to read as "agent-gone" while an agent answered.
+    const handle = acquirePresence(join(root, CONV), CONV);
+    try {
+      const data = (await (await api(`/api/conversations/${CONV}`)).json()) as { status: string };
+      expect(data.status).not.toBe("agent-gone");
+    } finally {
+      handle.release();
+    }
+  });
+});
