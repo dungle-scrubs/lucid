@@ -206,3 +206,23 @@ describe("two modes, so one click does one thing", () => {
     expect(out).toContain('if (mode === "use" && selected.length > 0)');
   });
 });
+
+describe("a document that gave itself no background", () => {
+  test("gets a light ground it can override", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // Agent HTML routinely sets a text colour and no background, then
+    // relies on the browser default of white. In a frame with no background
+    // of its own that was dark text on a dark page.
+    expect(out).toContain(":where(html)");
+    expect(out).toContain("background: #fff");
+  });
+
+  test("the ground carries no specificity, so the document wins", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // Written as :where(html), never as a bare html rule — a document that
+    // sets a dark background of its own must keep it.
+    const at = out.indexOf("background: #fff");
+    const before = out.slice(Math.max(0, at - 120), at);
+    expect(before).toContain(":where(html)");
+  });
+});
