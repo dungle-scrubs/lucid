@@ -31,7 +31,12 @@
 import type { HarnessEvent } from "../harness/events.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
-import { composeArtifactPrompt, detectArtifactBlocks } from "../protocol/artifacts.js";
+import {
+  type ArtifactState,
+  composeArtifactPrompt,
+  composeArtifactState,
+  detectArtifactBlocks,
+} from "../protocol/artifacts.js";
 import { EventKind } from "../protocol/events.js";
 import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
 import type { CollectedBatch } from "../store/log.js";
@@ -48,6 +53,38 @@ import { createSequencer } from "./sequencer.js";
  * session held eight inputs for ninety minutes and the log said nothing at
  * all between them. */
 export const STALL_MS = 90_000;
+
+/** What the record currently holds, read fresh so a save made a second ago
+ * is in it. Headers only — the document bytes are read to get at the author
+ * and the values and are not kept. */
+const artifactState = (deps: HeadlessDeps): readonly ArtifactState[] => {
+  const index = deps.host?.artifactIndex?.();
+  if (index === undefined || deps.host?.readArtifact === undefined) return [];
+  const current = new Map<string, number>();
+  for (const key of index.keys()) {
+    const sep = key.indexOf("\0");
+    if (sep === -1) continue;
+    const id = key.slice(0, sep);
+    const v = Number(key.slice(sep + 1));
+    if (!Number.isSafeInteger(v)) continue;
+    if ((current.get(id) ?? 0) < v) current.set(id, v);
+  }
+  const out: ArtifactState[] = [];
+  for (const [artifactId, version] of [...current.entries()].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    const one = deps.host.readArtifact(artifactId, version);
+    if (one === null) continue;
+    out.push({
+      artifactId,
+      version,
+      author: one.author,
+      ...(one.basedOn === undefined ? {} : { basedOn: one.basedOn }),
+      ...(one.values === undefined ? {} : { values: one.values }),
+    });
+  }
+  return out;
+};
 
 /** What sendFrame returns. */
 type SendResult = ReduceResult | { readonly verdict: "refused"; readonly issue: string };
@@ -82,6 +119,16 @@ export interface HeadlessDeps {
     collectEffects(fromOffset: number): CollectedBatch;
     advanceCursor(offset: number): void;
     artifactIndex?: () => ReadonlyMap<string, number>;
+    /** Read one version's header — author, basedOn, values — so the prompt
+     * can say what the record currently holds. */
+    readArtifact?: (
+      artifactId: string,
+      version: number,
+    ) => {
+      readonly author: string;
+      readonly basedOn?: number;
+      readonly values?: Readonly<Record<string, string>>;
+    } | null;
     writeArtifact?: (params: {
       readonly artifactId: string;
       readonly version: number;
@@ -224,6 +271,9 @@ interface HostContext {
   getTurnId(): string;
   nextTurnId(): string;
   readonly expected: Array<{ inputId: string; applied: boolean }>;
+  /** Say that a reason this session is over is already in the record. The
+   * pump reports the end too, and without this one failure reads as two. */
+  reported(): void;
 }
 
 interface StrategyHandle {
@@ -282,7 +332,10 @@ const sessionStrategy = (
     // (an answer is raw text through the harness answer path, not a prompt).
     let composed = text;
     if (mode !== "answer" && !artifactPreambleSent) {
-      const maybe = composeArtifactPrompt(composeAnnotationPrompt(text), "headless-session");
+      const maybe = composeArtifactState(
+        composeArtifactPrompt(composeAnnotationPrompt(text), "headless-session"),
+        artifactState(deps),
+      );
       if (maybe !== text) {
         composed = maybe;
         artifactPreambleSent = true;
@@ -388,6 +441,7 @@ const sessionStrategy = (
             message: `session did not open: ${cause instanceof Error ? cause.message : String(cause)}`,
             terminal: true,
           });
+          ctx.reported();
           return;
         }
         for await (const turn of session.turns) {
@@ -506,9 +560,9 @@ const turnStrategy = (
             // rather than losing the turn to a stale id.
             const attemptResume = resumeId !== undefined && !resumeTried;
             if (attemptResume) resumeTried = true;
-            const composedPrompt = composeArtifactPrompt(
-              composeAnnotationPrompt(next.text),
-              "headless-turn",
+            const composedPrompt = composeArtifactState(
+              composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
+              artifactState(deps),
             );
             let raw = deps.runner.streamTurn({
               harness: deps.harness,
@@ -534,9 +588,9 @@ const turnStrategy = (
                   kind: "error",
                   message: `could not resume harness session ${staleId}; continuing fresh`,
                 });
-                const retryPrompt = composeArtifactPrompt(
-                  composeAnnotationPrompt(next.text),
-                  "headless-turn",
+                const retryPrompt = composeArtifactState(
+                  composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
+                  artifactState(deps),
                 );
                 raw = deps.runner.streamTurn({
                   harness: deps.harness,
@@ -628,8 +682,19 @@ export const createHeadlessHost = (
   let currentTurnId = deps.mintTurnId();
   const expected: Array<{ inputId: string; applied: boolean }> = [];
 
+  // The pump ending IS the session ending: the turn stream completing means
+  // the harness has no more turns to give. Both outcomes were swallowed —
+  // the rejection by an empty catch, the clean end by saying nothing — and
+  // what a person saw was a driver still holding the presence lock, already
+  // detached, with nothing in the record to say why. Nothing else could take
+  // over, and nothing said anything was wrong.
+  let ended = false;
+
   const ctx: HostContext = {
     sequencer,
+    reported: () => {
+      ended = true;
+    },
     ...(sequencer.resumeSessionId === undefined
       ? {}
       : { resumeSessionId: sequencer.resumeSessionId }),
@@ -725,8 +790,25 @@ export const createHeadlessHost = (
       currentTurnId = deps.mintTurnId();
     }
   })();
+  const sessionEnded = (why: string): void => {
+    if (ended) return;
+    ended = true;
+    try {
+      ctx.sequencer.emit(ctx.getTurnId(), {
+        kind: EventKind.error,
+        message: `the harness session ended (${why}); this driver is no longer answering`,
+        terminal: false,
+      });
+    } catch {
+      // Emitting is best effort. If the channel is already gone, the detach
+      // below is still the right thing to do.
+    }
+  };
   pump
-    .catch(() => {})
+    .then(() => sessionEnded("the harness closed its turn stream"))
+    .catch((cause: unknown) => {
+      sessionEnded(cause instanceof Error ? cause.message : String(cause));
+    })
     .finally(() => {
       sequencer.detachOnce("shutdown");
     });

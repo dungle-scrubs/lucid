@@ -212,3 +212,58 @@ export const artifactPlaceholder = (header: ArtifactHeader): string => {
   const v = header.replaces === null ? 1 : header.replaces + 1;
   return `[artifact ${header.id} v${v}]`;
 };
+
+/** What the agent is told about the artifacts already in the record.
+ *
+ * Never the document bytes. The current version number, who wrote it, and
+ * — when a person saved it — the values of the controls they left, which
+ * are small and structured and are the half of a save that a document
+ * cannot express on its own. */
+export interface ArtifactState {
+  readonly artifactId: string;
+  readonly version: number;
+  readonly author: string;
+  /** Present when this version was saved by a person. */
+  readonly basedOn?: number;
+  readonly values?: Readonly<Record<string, string>>;
+}
+
+export const ARTIFACT_STATE_MARKER = "[lucid artifact state]";
+
+/** Tell the agent what the record currently holds.
+ *
+ * Two failures this answers, both seen in a live conversation:
+ *
+ * 1. The agent guessed at `replaces`. It had emitted version 1, a person
+ *    saved version 2, and nothing told it — so its next revision would have
+ *    named a stale version and been refused, for a reason neither side
+ *    could see.
+ * 2. A save was invisible. A person ticked boxes and typed a name, and the
+ *    agent had no way to know any of it had happened.
+ *
+ * The document itself is not included. It can be large, most turns do not
+ * need it, and the annotation path already carries the person's own text in
+ * the snippet when they wrote about something they had edited. */
+export const composeArtifactState = (
+  prompt: string,
+  artifacts: readonly ArtifactState[],
+): string => {
+  if (artifacts.length === 0) return prompt;
+  if (prompt.startsWith(ARTIFACT_STATE_MARKER)) return prompt;
+  const lines = [ARTIFACT_STATE_MARKER, "Artifacts in this conversation right now:"];
+  for (const a of artifacts) {
+    const who = a.author === "human" ? "saved by the person" : `written by you (${a.author})`;
+    lines.push(`- ${a.artifactId} — current version ${a.version}, ${who}`);
+    if (a.basedOn !== undefined) {
+      lines.push(`  they were working from version ${a.basedOn}`);
+    }
+    if (a.values !== undefined && Object.keys(a.values).length > 0) {
+      lines.push(`  controls as they left them: ${JSON.stringify(a.values)}`);
+    }
+  }
+  lines.push("");
+  lines.push(
+    "When you revise one of these, set `replaces` to the current version above. The document bytes are not repeated here; ask if you need to see them.",
+  );
+  return `${lines.join("\n")}\n\n${prompt}`;
+};

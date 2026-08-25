@@ -310,14 +310,22 @@ body {
 /* Fixed height and outside the scrolling area: the actions used to sit at
    the bottom of a panel that grew with the notes in it, so they left the
    screen exactly when there was most to do. */
+/* One row. It held the note box as well, and keeping the column after the
+   box moved into the popover left a tall empty strip with a lone button at
+   the far end of it. */
 .doc-panel {
   flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 16px 14px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
   border-top: 1px solid var(--line);
   background: var(--bg);
+}
+
+.doc-panel .guidance {
+  flex: 1;
+  min-width: 0;
 }
 
 .guidance {
@@ -334,13 +342,71 @@ body {
   color: var(--error);
 }
 
+/* The frame and the note box share this box. The frame reports a rect in
+   its own viewport; because the frame fills this box, that rect is also a
+   position here. */
+.doc-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Nothing to see: it exists only so the note box has something to point at
+   and stay pointing at when the popover flips to avoid an edge. */
+.sel-anchor {
+  position: absolute;
+  pointer-events: none;
+}
+
+.note-pop {
+  z-index: 40;
+  /* What Radix measured is the only true answer here: the box is placed
+     against a viewport it cannot see from CSS. Without this it kept its
+     width and hung off the edge. */
+  width: 360px;
+  max-width: var(--radix-popper-available-width, 360px);
+  max-height: var(--radix-popper-available-height, none);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+}
+
+.note-pop-head {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.note-pop-arrow {
+  fill: var(--panel);
+}
+
+.note-pop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.note-pop-actions .ghost {
+  background: transparent;
+  color: var(--muted);
+}
+
 .note-compose {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.note-compose textarea {
+.note-compose textarea,
+.note-pop textarea {
   resize: none;
   padding: 8px 10px;
   border: 1px solid var(--line);
@@ -361,7 +427,8 @@ body {
   justify-content: flex-end;
 }
 
-.note-actions button {
+.note-actions button,
+.note-pop-actions button {
   padding: 6px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;

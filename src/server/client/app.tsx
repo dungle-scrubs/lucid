@@ -27,6 +27,7 @@ import {
   useExternalStoreRuntime,
   useMessage,
 } from "@assistant-ui/react";
+import * as Popover from "@radix-ui/react-popover";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -339,17 +340,41 @@ const CATALOG_POLL_MS = 2000;
  *
  * `key` is the version, so a new version replaces the frame rather than
  * mutating it. There is no in-place update path to get wrong. */
+/** Where a selection sits inside the frame, in the frame's own viewport. */
+interface SelectionRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** The frame is not trusted, so the rect is checked like anything else it
+ * sends. A bad one means no anchor, not a thrown render. */
+const readRect = (raw: unknown): SelectionRect | null => {
+  if (raw === null || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const nums = [r.x, r.y, r.width, r.height];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  return {
+    x: r.x as number,
+    y: r.y as number,
+    width: r.width as number,
+    height: r.height as number,
+  };
+};
+
 const DocumentFrame = ({
   doc,
   onSelection,
   capture,
   snapshot,
+  deselect,
   onDirty,
   marked,
   mode,
 }: {
   doc: Doc;
-  onSelection: (ids: readonly string[]) => void;
+  onSelection: (ids: readonly string[], rect: SelectionRect | null) => void;
   /** Handed the frame's answer to a capture request. */
   capture: React.MutableRefObject<((ids: readonly string[]) => Promise<AnnotationSpot[]>) | null>;
   /** Handed the frame's answer to a snapshot request: the document as it now
@@ -358,6 +383,8 @@ const DocumentFrame = ({
   snapshot: React.MutableRefObject<
     (() => Promise<{ html: string; values: Record<string, string> } | null>) | null
   >;
+  /** Handed a way to drop the frame's selection, for backing out of a note. */
+  deselect: React.MutableRefObject<(() => void) | null>;
   /** The frame says when a person has changed something in it. */
   onDirty: () => void;
   /** Spots that already carry a note, marked in the document while the
@@ -445,7 +472,7 @@ const DocumentFrame = ({
       if (!Array.isArray(m.ids)) return;
       if (!m.ids.every((id) => typeof id === "string" && ELEMENT_ID.test(id))) return;
 
-      onSelection(m.ids as string[]);
+      onSelection(m.ids as string[], readRect(m.rect));
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -484,11 +511,17 @@ const DocumentFrame = ({
           if (snaps.current.delete(token)) resolve(null);
         }, 4000);
       });
+    deselect.current = () =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "deselect" },
+        "*",
+      );
     return () => {
       capture.current = null;
       snapshot.current = null;
+      deselect.current = null;
     };
-  }, [capture, snapshot]);
+  }, [capture, snapshot, deselect]);
 
   React.useEffect(() => {
     ref.current?.contentWindow?.postMessage(
@@ -619,6 +652,38 @@ const App = (): React.ReactElement => {
    * choice rather than a guess. */
   const [mode, setMode] = React.useState<"use" | "markup">("use");
   const noteBox = React.useRef<HTMLTextAreaElement | null>(null);
+  /** Where in the frame the selection sits, so the note box opens beside it
+   * rather than in a panel at the bottom, away from what it is about. */
+  const [selRect, setSelRect] = React.useState<SelectionRect | null>(null);
+  const deselect = React.useRef<(() => void) | null>(null);
+  /** What is typed, readable from a callback the frame holds. That callback
+   * must keep its identity across keystrokes, so it cannot close over the
+   * draft itself. */
+  const draftRef = React.useRef("");
+  draftRef.current = draft;
+
+  // Backing out. A selection with no way out of it was a dead end: the note
+  // box stayed open over the document with nothing but Add note in it.
+  const cancelNote = React.useCallback((): void => {
+    setDraft("");
+    setSelection([]);
+    setSelRect(null);
+    setRefusal(null);
+    deselect.current?.();
+  }, []);
+
+  const onSelected = React.useCallback(
+    (ids: readonly string[], rect: SelectionRect | null): void => {
+      // Clicking a part of the document that is not addressable empties the
+      // selection. With something already typed that threw the words away
+      // and closed the box, with no undo. Backing out is Cancel or Escape;
+      // a stray click is not either of them.
+      if (ids.length === 0 && draftRef.current.trim() !== "") return;
+      setSelection(ids);
+      setSelRect(ids.length === 0 ? null : rect);
+    },
+    [],
+  );
 
   // Selecting something in the document is the start of writing about it,
   // so the caret goes where the writing happens. Keyed on emptiness rather
@@ -772,6 +837,7 @@ const App = (): React.ReactElement => {
           // so the selection and the draft do not carry across. Notes do:
           // they are held per version, and coming back finds them.
           setSelection([]);
+          setSelRect(null);
           setDraft("");
           setRefusal(null);
           setWaiting(null);
@@ -815,7 +881,9 @@ const App = (): React.ReactElement => {
     setNotes([...notes, { note: text, spots: withSelectors, at: messages.length }]);
     setDraft("");
     setSelection([]);
+    setSelRect(null);
     setRefusal(null);
+    deselect.current?.();
   }, [draft, selection, notes, setNotes, doc, messages.length]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
@@ -1101,11 +1169,14 @@ const App = (): React.ReactElement => {
     if (doc === null) return { text: "No document in this conversation yet.", tone: "idle" };
     if (refusal !== null) return { text: refusal, tone: "warn" };
     if (edited) return { text: "You changed the document. Save to keep it.", tone: "ready" };
+    // What the last save did. It was recorded and never shown, so a save the
+    // server turned down looked exactly like one that worked.
+    if (saved !== null)
+      return { text: saved, tone: saved.startsWith("not saved") ? "warn" : "ready" };
+    // The box is beside what it is about now, and it says what is selected.
+    // Repeating that down here told the reader to look in the wrong place.
     if (selection.length > 0)
-      return {
-        text: `${selection.length} selected. Write what you want to say about ${selection.length === 1 ? "it" : "them"}, then Add note.`,
-        tone: "ready",
-      };
+      return { text: "⌘-click to put more of the document in this note.", tone: "ready" };
     if (notes.length > 0)
       return {
         text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. Send when you are done, or select more.`,
@@ -1206,18 +1277,110 @@ const App = (): React.ReactElement => {
                   </div>
                 )}
 
-                <DocumentFrame
-                  doc={doc}
-                  onSelection={setSelection}
-                  capture={capture}
-                  snapshot={snapshot}
-                  onDirty={() => setEdited(true)}
-                  marked={[
-                    ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
-                    ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
-                  ]}
-                  mode={mode}
-                />
+                {/* The frame and the note box share one positioned box, so
+                  a rect in the frame's own viewport is also a position on
+                  this page and the anchor needs no arithmetic. */}
+                <div className="doc-stage">
+                  <DocumentFrame
+                    doc={doc}
+                    onSelection={onSelected}
+                    capture={capture}
+                    snapshot={snapshot}
+                    deselect={deselect}
+                    onDirty={() => setEdited(true)}
+                    marked={[
+                      ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
+                      ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
+                    ]}
+                    mode={mode}
+                  />
+
+                  {/* Written where you clicked. The box used to be a panel at
+                    the bottom of the pane, so the thing being written about
+                    and the writing were at opposite ends of the screen. */}
+                  <Popover.Root
+                    open={selection.length > 0 && selRect !== null}
+                    // Whether it is open is a fact about the selection, so
+                    // the selection is the only thing that decides it. The
+                    // library asked to close on any click outside and took
+                    // a half-written note with it; refusing here means the
+                    // ways out are Cancel, Escape, and Add note.
+                    onOpenChange={() => {}}
+                  >
+                    <Popover.Anchor asChild>
+                      <div
+                        className="sel-anchor"
+                        style={
+                          selRect === null
+                            ? { display: "none" }
+                            : {
+                                left: `${selRect.x}px`,
+                                top: `${selRect.y}px`,
+                                width: `${selRect.width}px`,
+                                height: `${selRect.height}px`,
+                              }
+                        }
+                      />
+                    </Popover.Anchor>
+                    <Popover.Portal>
+                      <Popover.Content
+                        className="note-pop"
+                        // Under the line, not beside it. A block in a
+                        // document is as wide as the column, so there is
+                        // never room to the side — Radix said so, reporting
+                        // 128px available, and the box hung off the screen.
+                        // Below, it flips above near the bottom and slides
+                        // sideways to stay in view.
+                        side="bottom"
+                        align="start"
+                        sideOffset={8}
+                        collisionPadding={12}
+                        // Only Escape and the buttons close it. A click into
+                        // the document is how a second spot is added, and it
+                        // must not throw away what is already typed.
+                        onInteractOutside={(e) => e.preventDefault()}
+                        onFocusOutside={(e) => e.preventDefault()}
+                        onEscapeKeyDown={cancelNote}
+                        onOpenAutoFocus={(e) => {
+                          e.preventDefault();
+                          noteBox.current?.focus();
+                        }}
+                      >
+                        <div className="note-pop-head">
+                          {selection.length} selected
+                          {selection.length > 1 ? " — ⌘-click adds more" : ""}
+                        </div>
+                        <textarea
+                          ref={noteBox}
+                          value={draft}
+                          onChange={(e) => setDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                              e.preventDefault();
+                              void addNote();
+                            }
+                          }}
+                          placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
+                          rows={3}
+                        />
+                        <div className="note-pop-actions">
+                          <button type="button" className="ghost" onClick={cancelNote}>
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="primary"
+                            onClick={() => void addNote()}
+                            disabled={draft.trim() === ""}
+                          >
+                            Add note
+                          </button>
+                        </div>
+                        <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
+                      </Popover.Content>
+                    </Popover.Portal>
+                  </Popover.Root>
+                </div>
 
                 {/* Everything below here has a fixed height and never scrolls
                   out of view. The actions were reachable only by scrolling a
@@ -1225,42 +1388,15 @@ const App = (): React.ReactElement => {
                 <div className="doc-panel">
                   <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
 
-                  <div className="note-compose">
-                    <textarea
-                      ref={noteBox}
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                          e.preventDefault();
-                          void addNote();
-                        }
-                      }}
-                      placeholder={
-                        selection.length === 0
-                          ? "Select something in the document first"
-                          : `What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`
-                      }
-                      disabled={selection.length === 0}
-                      rows={2}
-                    />
-                    <div className="note-actions">
-                      <button
-                        type="button"
-                        onClick={() => void addNote()}
-                        disabled={selection.length === 0 || draft.trim() === ""}
-                      >
-                        Add note
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void save()}
-                        disabled={!edited || saving}
-                        title="Double-click text in the document to edit it; controls work as they are"
-                      >
-                        {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
-                      </button>
-                    </div>
+                  <div className="note-actions">
+                    <button
+                      type="button"
+                      onClick={() => void save()}
+                      disabled={!edited || saving}
+                      title="Double-click text in the document to edit it; controls work as they are"
+                    >
+                      {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
+                    </button>
                   </div>
                 </div>
               </>

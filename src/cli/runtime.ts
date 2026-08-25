@@ -247,6 +247,7 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
       collectEffects: (from: number) => host.collectEffects(from),
       advanceCursor: (off: number) => host.advanceCursor(off),
       artifactIndex: () => host.artifactIndex(),
+      readArtifact: (artifactId: string, version: number) => host.readArtifact(artifactId, version),
       writeArtifact: (params: {
         readonly artifactId: string;
         readonly version: number;

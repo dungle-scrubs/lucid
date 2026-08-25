@@ -235,12 +235,46 @@ const script = (artifactId: string, version: number, author: string): string => 
   // selects the words you want to replace — all of it the browser's, none
   // of it lucid's to reimplement badly.
 
+  // Where the selection sits, in this frame's own viewport. The parent puts
+  // the note box beside it and cannot read the document to work it out.
+  var rectOf = function () {
+    var l = 1 / 0, t = 1 / 0, r = -1 / 0, b = -1 / 0, any = false;
+    for (var i = 0; i < selected.length; i++) {
+      var el = document.querySelector("[" + ATTR + '="' + selected[i] + '"]');
+      if (!el) continue;
+      var q = el.getBoundingClientRect();
+      if (q.width === 0 && q.height === 0) continue;
+      any = true;
+      if (q.left < l) l = q.left;
+      if (q.top < t) t = q.top;
+      if (q.right > r) r = q.right;
+      if (q.bottom > b) b = q.bottom;
+    }
+    if (!any) return null;
+    return { x: l, y: t, width: r - l, height: b - t };
+  };
+
   var post = function () {
     parent.postMessage(
-      { source: SOURCE, kind: "selection", artifactId: ARTIFACT, version: VERSION, ids: selected.slice() },
+      {
+        source: SOURCE,
+        kind: "selection",
+        artifactId: ARTIFACT,
+        version: VERSION,
+        ids: selected.slice(),
+        rect: rectOf()
+      },
       "*"
     );
   };
+
+  // Scrolling the document moves what the note box is pointing at, so the
+  // rect is sent again rather than left behind on screen.
+  var repost = function () {
+    if (selected.length > 0) post();
+  };
+  window.addEventListener("scroll", repost, true);
+  window.addEventListener("resize", repost);
 
   var addressable = function (node) {
     if (!node || node.nodeType !== 1) return null;
@@ -304,6 +338,18 @@ const script = (artifactId: string, version: number, author: string): string => 
         // for a note, and there is no note being written in use mode.
         if (mode === "use" && selected.length > 0) { selected = []; paint(); post(); }
         applyMode();
+      }
+      return;
+    }
+
+    // Backing out of a note. The selection is the frame's, so only the frame
+    // can drop it; the parent clearing its own copy would leave the document
+    // still painted as selected.
+    if (m.kind === "deselect") {
+      if (selected.length > 0) {
+        selected = [];
+        paint();
+        post();
       }
       return;
     }
