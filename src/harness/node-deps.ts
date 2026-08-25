@@ -15,13 +15,37 @@ import type { HarnessDeps, HcnProcess, SpawnHcn } from "./process.js";
 import { HarnessSpawnError, HarnessVersionError } from "./runner.js";
 import { belowFloor, HCN_MIN_VERSION } from "./version.js";
 
-/** LUCID_HCN, then the package-local bin, then PATH. */
-export const resolveHcnBin = (): { bin: string; source: string } => {
-  const fromEnv = process.env.LUCID_HCN;
-  if (fromEnv !== undefined && fromEnv !== "") return { bin: fromEnv, source: "env" };
-  const here = dirname(fileURLToPath(import.meta.url));
-  const local = resolve(here, "..", "..", "node_modules", ".bin", "hcn");
-  if (existsSync(local)) return { bin: local, source: "node_modules" };
+/** Where to look, injected so both package-local branches are reachable in
+ * a test. Production passes nothing. */
+export interface HcnBinLookup {
+  readonly env?: string;
+  /** Stands in for this module's own directory. */
+  readonly moduleDir?: string;
+  readonly cwd?: string;
+}
+
+/** LUCID_HCN, then the package-local bin, then PATH.
+ *
+ * The package-local bin is looked for twice, and the second look is the
+ * one that matters for a built binary. `import.meta.url` inside a
+ * `bun build --compile` executable points into the embedded filesystem, so
+ * a path resolved from it names something that cannot exist and the lookup
+ * falls straight through to PATH. `bun run build` is the documented
+ * install, so the documented path was the one that silently picked up
+ * whatever `hcn` happened to be on PATH — a stale global, in the case that
+ * found this.
+ *
+ * Looking beside the current directory as well fixes it for the case that
+ * matters: a built binary run from inside a checkout, which is what the
+ * README tells you to do. */
+export const resolveHcnBin = (opts: HcnBinLookup = {}): { bin: string; source: string } => {
+  const env = opts.env ?? process.env.LUCID_HCN;
+  if (env !== undefined && env !== "") return { bin: env, source: "env" };
+  const here = opts.moduleDir ?? dirname(fileURLToPath(import.meta.url));
+  const beside = resolve(here, "..", "..", "node_modules", ".bin", "hcn");
+  if (existsSync(beside)) return { bin: beside, source: "node_modules" };
+  const fromCwd = resolve(opts.cwd ?? process.cwd(), "node_modules", ".bin", "hcn");
+  if (existsSync(fromCwd)) return { bin: fromCwd, source: "node_modules(cwd)" };
   return { bin: "hcn", source: "path" };
 };
 
@@ -33,7 +57,7 @@ export const assertHcnVersion = (bin: string): string => {
   }
   const found = probe.stdout.trim();
   if (belowFloor(found)) {
-    throw new HarnessVersionError(found, HCN_MIN_VERSION);
+    throw new HarnessVersionError(found, HCN_MIN_VERSION, bin);
   }
   return found;
 };

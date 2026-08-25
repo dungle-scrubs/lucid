@@ -148,8 +148,18 @@ export class HarnessSpawnError extends Error {
 
 /** The hcn on PATH is older than the surface lucid depends on. */
 export class HarnessVersionError extends Error {
-  constructor(found: string, required: string) {
-    super(`hcn ${found} is older than the required ${required}; run bun install`);
+  /** Names the binary that was actually used.
+   *
+   * Without it the message said "run bun install" whatever the cause, and
+   * the cause was a stale `hcn` on PATH — `bun install` would have fixed
+   * nothing and the advice sent the reader to the wrong place. */
+  constructor(found: string, required: string, bin?: string) {
+    super(
+      bin === undefined
+        ? `hcn ${found} is older than the required ${required}; run bun install`
+        : `hcn ${found} at ${bin} is older than the required ${required}. ` +
+            `Install a newer hcn there, or point LUCID_HCN at one.`,
+    );
     this.name = "HarnessVersionError";
   }
 }
