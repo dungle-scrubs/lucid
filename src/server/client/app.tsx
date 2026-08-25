@@ -72,6 +72,10 @@ interface Msg {
    * agent message. Six tool calls shown as six messages bury the one
    * message the person was waiting for. */
   readonly tool?: boolean;
+  /** Set for something that happened rather than something someone said —
+   * a version being saved. It has to ride on a role, and with your messages
+   * on the right it read as though you had typed it. */
+  readonly note?: boolean;
 }
 
 /** `/c/<id>` — the conversation is named by the URL, never by the bundle. */
@@ -99,9 +103,8 @@ const Message = (): React.ReactElement => {
   // the one thing that was.
   const original = useMessage((m) => getExternalStoreMessage<Msg>(m));
   const one = Array.isArray(original) ? original[0] : original;
-  const isTool = one?.tool === true;
 
-  if (isTool) {
+  if (one?.tool === true) {
     return (
       <MessagePrimitive.Root>
         <div className="msg tool">
@@ -114,11 +117,22 @@ const Message = (): React.ReactElement => {
     );
   }
 
+  if (one?.note === true) {
+    return (
+      <MessagePrimitive.Root>
+        <div className="msg happened">
+          <div className="body">
+            <MessagePrimitive.Parts />
+          </div>
+        </div>
+      </MessagePrimitive.Root>
+    );
+  }
+
   return (
     <MessagePrimitive.Root>
       <MessagePrimitive.If user>
         <div className="msg user">
-          <span className="who">you</span>
           <div className="body">
             <MessagePrimitive.Parts />
           </div>
@@ -866,7 +880,8 @@ const App = (): React.ReactElement => {
       .map((v) => ({
         id: `save-${catalog?.artifactId}-${v}`,
         role: "user" as const,
-        text: `[saved ${catalog?.artifactId} v${v}]`,
+        text: `you saved ${catalog?.artifactId} v${v}`,
+        note: true,
       }));
     return saves.length === 0 ? messages : [...messages, ...saves];
   }, [messages, catalog]);
