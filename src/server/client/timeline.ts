@@ -22,6 +22,15 @@ export interface Msg {
   readonly note?: boolean;
   /** A note written but not sent. */
   readonly pendingNote?: PendingNote;
+  /** A batch that was sent, drawn where it was sent rather than as a line
+   * of stripped text. */
+  readonly sentBatch?: SentBatch;
+}
+
+export interface SentBatch {
+  readonly artifactId: string;
+  readonly version: number;
+  readonly notes: readonly { readonly note: string; readonly spots: readonly AnnotationSpot[] }[];
 }
 
 /** A note not yet sent. `at` is how many timeline items existed when it was

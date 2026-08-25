@@ -43,7 +43,7 @@ import {
   sha256Hex,
 } from "./anchor.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
-import { type Msg, type PendingNote, weaveNotes } from "./timeline.js";
+import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
 
 /** Kept in step with the server's own poll interval. */
 const POLL_MS = 500;
@@ -56,6 +56,15 @@ interface Line {
   readonly mark?: string;
   readonly aborted?: boolean;
   readonly event?: string;
+  readonly batch?: SentBatch;
+}
+
+interface Activity {
+  readonly turn: boolean;
+  /** Delivered inputs whose turn has produced no terminal event. */
+  readonly inFlight: number;
+  /** Written but not delivered to anyone. */
+  readonly waiting: number;
 }
 
 interface Driver {
@@ -79,12 +88,23 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
       role: l.kind === "agent" ? ("assistant" as const) : ("user" as const),
       text: l.text,
       ...(l.event === "tool" ? { tool: true } : {}),
+      ...(l.batch === undefined ? {} : { sentBatch: l.batch }),
     }));
 
 /** Who said it has to survive into the DOM: a transcript where the person
  * and the agent look identical is not a transcript. The role is not on the
  * message element, so it is read through `If` and written as a class. */
+/** How a sent note re-attached in the version on screen, keyed by what the
+ * note said and what it pointed at. Context rather than a prop because the
+ * component is handed to assistant-ui, which does the rendering. */
+const Resolutions = React.createContext<ReadonlyMap<string, { lost: boolean; how: string | null }>>(
+  new Map(),
+);
+
 const Message = (): React.ReactElement => {
+  const resolutions = React.useContext(Resolutions);
+  const resolutionFor = (note: string, snippet: string) =>
+    resolutions.get(`${note}\u0000${snippet}`);
   // A tool call is the agent working, not the agent talking. Rendered as a
   // message it looks like something to read, and six of them in a row bury
   // the one thing that was.
@@ -99,6 +119,38 @@ const Message = (): React.ReactElement => {
           <div className="body">
             <MessagePrimitive.Parts />
           </div>
+        </div>
+      </MessagePrimitive.Root>
+    );
+  }
+
+  if (one?.sentBatch !== undefined) {
+    const b = one.sentBatch;
+    return (
+      <MessagePrimitive.Root>
+        <div className="batch">
+          {b.notes.map((n) => {
+            const spot = n.spots[0];
+            const status = resolutionFor(n.note, spot?.snippet ?? "");
+            return (
+              <div
+                className={status?.lost === true ? "note-card orphan" : "note-card sent"}
+                key={`${n.note}:${spot?.id ?? ""}`}
+              >
+                <span className="note-card-head">
+                  {status?.lost === true
+                    ? `lost its target · from v${b.version}`
+                    : status === undefined || status.how === null
+                      ? `sent · v${b.version}`
+                      : `sent · ${status.how} · v${b.version}`}
+                </span>
+                <span className="note-card-note">{n.note}</span>
+                <span className="note-card-spot">
+                  on {n.spots.map((sp) => `“${sp.snippet.slice(0, 40)}”`).join(", ")}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </MessagePrimitive.Root>
     );
@@ -165,18 +217,19 @@ const Message = (): React.ReactElement => {
  * when you are already there. */
 const Thread = ({
   pending,
-  orphans,
   onSendNotes,
   onDiscardNotes,
   sending,
+  activity,
+  quietFor,
 }: {
   pending: readonly PendingNote[];
-  /** Sent notes whose spot is gone in the version on screen. They have no
-   * mark to stand for them, so they need somewhere to be. */
-  orphans: readonly { note: string; fromVersion: number; snippet: string }[];
   onSendNotes: () => void;
   onDiscardNotes: () => void;
   sending: boolean;
+  activity: Activity;
+  /** Seconds since the transcript last changed. */
+  quietFor: number;
 }): React.ReactElement => (
   <ThreadPrimitive.Root className="thread-root">
     <ThreadPrimitive.Viewport autoScroll className="thread">
@@ -185,13 +238,23 @@ const Thread = ({
       </ThreadPrimitive.Empty>
       <ThreadPrimitive.Messages components={{ Message }} />
 
-      {orphans.map((o) => (
-        <div className="note-card orphan" key={`orphan:${o.fromVersion}:${o.snippet}:${o.note}`}>
-          <span className="note-card-head">lost its target · from v{o.fromVersion}</span>
-          <span className="note-card-note">{o.note}</span>
-          <span className="note-card-spot">on “{o.snippet.slice(0, 60)}”</span>
+      {/* Whether anything is in flight. Silence and working look the same
+          without this, and that is how eight delivered inputs sat
+          unanswered for an hour and a half with nothing on screen saying
+          so. */}
+      {activity.turn || activity.inFlight > 0 || activity.waiting > 0 ? (
+        <div className={quietFor > 45 && !activity.turn ? "activity stalled" : "activity"}>
+          <span className="pulse" />
+          <span>
+            {activity.turn
+              ? "the agent is working"
+              : activity.inFlight > 0
+                ? `${activity.inFlight} sent, waiting for the agent`
+                : `${activity.waiting} written, not delivered yet`}
+            {quietFor > 45 && !activity.turn ? ` — nothing back for ${Math.round(quietFor)}s` : ""}
+          </span>
         </div>
-      ))}
+      ) : null}
 
       {pending.length === 0 ? null : (
         <div className="queue-bar">
@@ -448,6 +511,21 @@ const App = (): React.ReactElement => {
   const [status, setStatus] = React.useState<string>("");
   /** What is driving: harness, model when known, and profile. */
   const [driver, setDriver] = React.useState<Driver>({});
+  const [activity, setActivity] = React.useState<Activity>({
+    turn: false,
+    inFlight: 0,
+    waiting: 0,
+  });
+  /** When the transcript last changed. A conversation that is waiting and a
+   * conversation that has stopped look identical without it — which is how
+   * a wedged harness sat silent for ninety minutes with eight inputs
+   * delivered and nothing said. */
+  const [lastChange, setLastChange] = React.useState(() => Date.now());
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
   const [problem, setProblem] = React.useState<string | null>(null);
   /** Set once on 401. Every fetch stops: the token can only come back by
    * reloading, and retrying a dead token forever is the failure this flag
@@ -587,11 +665,20 @@ const App = (): React.ReactElement => {
           status: string;
           damaged?: boolean;
           driver?: Driver;
+          activity?: Activity;
         };
         if (!alive) return;
-        setMessages(linesToMessages(data.lines));
+        const next = linesToMessages(data.lines);
+        setMessages((prev) => {
+          const changed =
+            prev.length !== next.length ||
+            (prev.length > 0 && prev[prev.length - 1]?.text !== next[next.length - 1]?.text);
+          if (changed) setLastChange(Date.now());
+          return next;
+        });
         setStatus(data.status);
         setDriver(data.driver ?? {});
+        setActivity(data.activity ?? { turn: false, inFlight: 0, waiting: 0 });
         setProblem(
           data.damaged === true
             ? "This record is damaged past a point; what follows the damage is not shown."
@@ -953,6 +1040,28 @@ const App = (): React.ReactElement => {
    * names said what they did and nothing about when they applied, and a
    * selection whose only feedback was inside a frame. This says which state
    * the page is in and what the next act is. */
+  /** Keyed the way the batch line looks a note up: what it said, and what
+   * it pointed at. */
+  const resolutions = React.useMemo(() => {
+    const m = new Map<string, { lost: boolean; how: string | null }>();
+    for (const a of anchored) {
+      m.set(`${a.note}\u0000${a.snippet}`, {
+        lost: a.elementId === null,
+        how:
+          a.how === null
+            ? null
+            : a.how === "exact"
+              ? "found again, exactly"
+              : a.how === "approximate"
+                ? "found again, reworded"
+                : a.how === "position"
+                  ? "found by position"
+                  : "found by path",
+      });
+    }
+    return m;
+  }, [anchored]);
+
   const guidance = ((): { text: string; tone: "idle" | "ready" | "warn" } => {
     if (doc === null) return { text: "No document in this conversation yet.", tone: "idle" };
     if (refusal !== null) return { text: refusal, tone: "warn" };
@@ -980,162 +1089,161 @@ const App = (): React.ReactElement => {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <header className="head">
-        <span className="id">{conversationId === "" ? "no conversation" : conversationId}</span>
-        {driver.harness === undefined ? null : (
-          <span className="driver">
-            {driver.harness}
-            {driver.model === undefined ? "" : ` · ${driver.model}`}
-            {driver.harnessVersion === undefined ? "" : ` · ${driver.harnessVersion}`}
-          </span>
-        )}
-        <span className="status">{status}</span>
-      </header>
-      {problem === null ? null : <div className="notice">{problem}</div>}
+      <Resolutions.Provider value={resolutions}>
+        <header className="head">
+          <span className="id">{conversationId === "" ? "no conversation" : conversationId}</span>
+          {driver.harness === undefined ? null : (
+            <span className="driver">
+              {driver.harness}
+              {driver.model === undefined ? "" : ` · ${driver.model}`}
+              {driver.harnessVersion === undefined ? "" : ` · ${driver.harnessVersion}`}
+            </span>
+          )}
+          <span className="status">{status}</span>
+        </header>
+        {problem === null ? null : <div className="notice">{problem}</div>}
 
-      <div className="panes">
-        {/* The document is the thing being worked on, so it gets the room
+        <div className="panes">
+          {/* The document is the thing being worked on, so it gets the room
             and the left side. The conversation is the margin note. */}
-        <div className="pane document">
-          {doc === null ? (
-            <div className="empty doc-empty">
-              Nothing to mark up yet. Ask the agent for a document.
-            </div>
-          ) : (
-            <>
-              <div className="doc-head">
-                <span className="doc-id">{doc.artifactId}</span>
-                {catalog === null || catalog.versions.length < 2 ? (
-                  <span className="doc-version">v{doc.version}</span>
-                ) : (
-                  <span className="doc-versions">
-                    {catalog.versions.map((v) => (
-                      <button
-                        type="button"
-                        key={v}
-                        className={v === doc.version ? "v current" : "v"}
-                        title={
-                          catalog.authors?.[v] === "human"
-                            ? `v${v} — saved by you`
-                            : `v${v} — written by the agent`
-                        }
-                        onClick={() => setPinned(v)}
-                      >
-                        v{v}
-                        {catalog.authors?.[v] === "human" ? " ✎" : ""}
-                      </button>
-                    ))}
-                  </span>
-                )}
-                {pinned === null ? null : (
-                  <button type="button" className="v latest" onClick={() => setPinned(null)}>
-                    follow newest
-                  </button>
-                )}
-                <span className="modes">
-                  <button
-                    type="button"
-                    className={mode === "use" ? "m current" : "m"}
-                    onClick={() => setMode("use")}
-                    title="Tick boxes, fill fields, and edit text"
-                  >
-                    Use
-                  </button>
-                  <button
-                    type="button"
-                    className={mode === "markup" ? "m current" : "m"}
-                    onClick={() => setMode("markup")}
-                    title="Click parts of the document to write notes about them"
-                  >
-                    Mark up
-                  </button>
-                </span>
+          <div className="pane document">
+            {doc === null ? (
+              <div className="empty doc-empty">
+                Nothing to mark up yet. Ask the agent for a document.
               </div>
-
-              {waiting === null || waiting <= doc.version ? null : (
-                <div className="doc-waiting">
-                  Version {waiting} has arrived.{" "}
-                  <button type="button" onClick={() => setPinned(waiting)}>
-                    show it
-                  </button>
-                </div>
-              )}
-
-              <DocumentFrame
-                doc={doc}
-                onSelection={setSelection}
-                capture={capture}
-                snapshot={snapshot}
-                onDirty={() => setEdited(true)}
-                marked={[
-                  ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
-                  ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
-                ]}
-                mode={mode}
-              />
-
-              {/* Everything below here has a fixed height and never scrolls
-                  out of view. The actions were reachable only by scrolling a
-                  panel that grew with the notes in it. */}
-              <div className="doc-panel">
-                <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
-
-                <div className="note-compose">
-                  <textarea
-                    ref={noteBox}
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                        e.preventDefault();
-                        void addNote();
-                      }
-                    }}
-                    placeholder={
-                      selection.length === 0
-                        ? "Select something in the document first"
-                        : `What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`
-                    }
-                    disabled={selection.length === 0}
-                    rows={2}
-                  />
-                  <div className="note-actions">
+            ) : (
+              <>
+                <div className="doc-head">
+                  <span className="doc-id">{doc.artifactId}</span>
+                  {catalog === null || catalog.versions.length < 2 ? (
+                    <span className="doc-version">v{doc.version}</span>
+                  ) : (
+                    <span className="doc-versions">
+                      {catalog.versions.map((v) => (
+                        <button
+                          type="button"
+                          key={v}
+                          className={v === doc.version ? "v current" : "v"}
+                          title={
+                            catalog.authors?.[v] === "human"
+                              ? `v${v} — saved by you`
+                              : `v${v} — written by the agent`
+                          }
+                          onClick={() => setPinned(v)}
+                        >
+                          v{v}
+                          {catalog.authors?.[v] === "human" ? " ✎" : ""}
+                        </button>
+                      ))}
+                    </span>
+                  )}
+                  {pinned === null ? null : (
+                    <button type="button" className="v latest" onClick={() => setPinned(null)}>
+                      follow newest
+                    </button>
+                  )}
+                  <span className="modes">
                     <button
                       type="button"
-                      onClick={() => void addNote()}
-                      disabled={selection.length === 0 || draft.trim() === ""}
+                      className={mode === "use" ? "m current" : "m"}
+                      onClick={() => setMode("use")}
+                      title="Tick boxes, fill fields, and edit text"
                     >
-                      Add note
+                      Use
                     </button>
                     <button
                       type="button"
-                      onClick={() => void save()}
-                      disabled={!edited || saving}
-                      title="Double-click text in the document to edit it; controls work as they are"
+                      className={mode === "markup" ? "m current" : "m"}
+                      onClick={() => setMode("markup")}
+                      title="Click parts of the document to write notes about them"
                     >
-                      {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
+                      Mark up
+                    </button>
+                  </span>
+                </div>
+
+                {waiting === null || waiting <= doc.version ? null : (
+                  <div className="doc-waiting">
+                    Version {waiting} has arrived.{" "}
+                    <button type="button" onClick={() => setPinned(waiting)}>
+                      show it
                     </button>
                   </div>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+                )}
 
-        <div className="pane conversation">
-          <Thread
-            pending={notes}
-            orphans={anchored.flatMap((a) =>
-              a.elementId === null
-                ? [{ note: a.note, fromVersion: a.fromVersion, snippet: a.snippet }]
-                : [],
+                <DocumentFrame
+                  doc={doc}
+                  onSelection={setSelection}
+                  capture={capture}
+                  snapshot={snapshot}
+                  onDirty={() => setEdited(true)}
+                  marked={[
+                    ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
+                    ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
+                  ]}
+                  mode={mode}
+                />
+
+                {/* Everything below here has a fixed height and never scrolls
+                  out of view. The actions were reachable only by scrolling a
+                  panel that grew with the notes in it. */}
+                <div className="doc-panel">
+                  <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
+
+                  <div className="note-compose">
+                    <textarea
+                      ref={noteBox}
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                          e.preventDefault();
+                          void addNote();
+                        }
+                      }}
+                      placeholder={
+                        selection.length === 0
+                          ? "Select something in the document first"
+                          : `What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`
+                      }
+                      disabled={selection.length === 0}
+                      rows={2}
+                    />
+                    <div className="note-actions">
+                      <button
+                        type="button"
+                        onClick={() => void addNote()}
+                        disabled={selection.length === 0 || draft.trim() === ""}
+                      >
+                        Add note
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void save()}
+                        disabled={!edited || saving}
+                        title="Double-click text in the document to edit it; controls work as they are"
+                      >
+                        {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
             )}
-            onSendNotes={() => void sendNotes()}
-            onDiscardNotes={() => setNotes([])}
-            sending={saving}
-          />
+          </div>
+
+          <div className="pane conversation">
+            <Thread
+              pending={notes}
+              onSendNotes={() => void sendNotes()}
+              onDiscardNotes={() => setNotes([])}
+              sending={saving}
+              activity={activity}
+              quietFor={(now - lastChange) / 1000}
+            />
+          </div>
         </div>
-      </div>
+      </Resolutions.Provider>
     </AssistantRuntimeProvider>
   );
 };

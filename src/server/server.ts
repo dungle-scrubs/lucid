@@ -194,10 +194,33 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         const observed = ((
           identity?.event as { capabilities?: { escalation?: { observedOn?: unknown } } }
         )?.capabilities?.escalation?.observedOn ?? {}) as { model?: string; version?: string };
+        // An input that carried an annotation batch keeps its place in the
+        // timeline; the batch rides along on that line so the page can draw
+        // the notes there rather than in a list of its own. Joined on seq,
+        // which both the line and the input carry.
+        const batchBySeq = new Map<number, unknown>();
+        for (const i of snapshot.transcript.inputs) {
+          const parsed = detectAnnotationBatch(i.text);
+          if (parsed !== null && !("malformed" in parsed)) batchBySeq.set(i.seq, parsed);
+        }
+        const lines = view.lines.map((l) =>
+          l.seq !== undefined && batchBySeq.has(l.seq) ? { ...l, batch: batchBySeq.get(l.seq) } : l,
+        );
+
         return json({
           conversationId: id,
-          lines: view.lines,
+          lines,
           status: snapshot.status,
+          // Whether anything is in flight, so the page can say so. Silence
+          // and working look identical otherwise, and the question "is
+          // something happening?" had no answer on the surface.
+          activity: {
+            turn: snapshot.state.turn !== null,
+            inFlight: snapshot.state.inFlightInputs,
+            waiting: snapshot.transcript.inputs.filter(
+              (i) => i.status === "outstanding" || i.status === "queued",
+            ).length,
+          },
           driver: {
             ...(attached?.harness === undefined ? {} : { harness: attached.harness }),
             ...(attached?.profile === undefined ? {} : { profile: attached.profile }),
