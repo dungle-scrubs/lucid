@@ -177,9 +177,15 @@ export interface Conversations {
   ensure(conversationId: string): { secret: string; dir: string };
 }
 
+/** Records live under `~/.lucid2/records` by default, overridden by
+ * `LUCID_ROOT`.
+ *
+ * Not `~/.lucid`: that is v1's live state directory — its hub log, its
+ * registry, its roots — and v1 is still in use. Defaulting there put a
+ * `records/` subdirectory inside a running program's own directory. */
 export const conversations = (rootDir?: string): Conversations => {
   const root =
-    rootDir ?? process.env.LUCID_ROOT ?? join(process.env.HOME ?? "/tmp", ".lucid", "records");
+    rootDir ?? process.env.LUCID_ROOT ?? join(process.env.HOME ?? "/tmp", ".lucid2", "records");
   return {
     rootDir: root,
     dirFor: (conversationId: string) => join(root, conversationId),

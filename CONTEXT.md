@@ -126,8 +126,11 @@ the v1 project, which is still in use and is not being retired.
 
 ```sh
 bun run build          # produces dist/lucid2
-export LUCID_ROOT=~/.lucid/records
 ```
+
+Records live under `~/.lucid2/records`. Set `LUCID_ROOT` to put them
+somewhere else. Not `~/.lucid` - that is v1's live state directory, and v1
+is still in use.
 
 One window, which is the way in:
 
