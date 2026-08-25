@@ -97,9 +97,9 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
 /** How a sent note re-attached in the version on screen, keyed by what the
  * note said and what it pointed at. Context rather than a prop because the
  * component is handed to assistant-ui, which does the rendering. */
-const Resolutions = React.createContext<ReadonlyMap<string, { lost: boolean; how: string | null }>>(
-  new Map(),
-);
+const Resolutions = React.createContext<
+  ReadonlyMap<string, { lost: boolean; later: boolean; how: string | null }>
+>(new Map());
 
 const Message = (): React.ReactElement => {
   const resolutions = React.useContext(Resolutions);
@@ -134,15 +134,23 @@ const Message = (): React.ReactElement => {
             const status = resolutionFor(n.note, spot?.snippet ?? "");
             return (
               <div
-                className={status?.lost === true ? "note-card orphan" : "note-card sent"}
+                className={
+                  status?.lost === true
+                    ? "note-card orphan"
+                    : status?.later === true
+                      ? "note-card later"
+                      : "note-card sent"
+                }
                 key={`${n.note}:${spot?.id ?? ""}`}
               >
                 <span className="note-card-head">
-                  {status?.lost === true
-                    ? `lost its target · from v${b.version}`
-                    : status === undefined || status.how === null
-                      ? `sent · v${b.version}`
-                      : `sent · ${status.how} · v${b.version}`}
+                  {status?.later === true
+                    ? `written against v${b.version} · not on this one`
+                    : status?.lost === true
+                      ? `lost its target · from v${b.version}`
+                      : status === undefined || status.how === null
+                        ? `sent · v${b.version}`
+                        : `sent · ${status.how} · v${b.version}`}
                 </span>
                 <span className="note-card-note">{n.note}</span>
                 <span className="note-card-spot">
@@ -958,6 +966,22 @@ const App = (): React.ReactElement => {
               });
               continue;
             }
+            // A note written against a LATER version than the one on
+            // screen was never about this one. Resolving it backwards and
+            // reporting "lost its target" said the agent had removed
+            // something, when all that happened is that you looked at an
+            // older version.
+            if (from > doc.version) {
+              out.push({
+                note: n.note,
+                fromVersion: from,
+                elementId: null,
+                how: null,
+                why: "later-version",
+                snippet: sp.snippet,
+              });
+              continue;
+            }
             const r = resolveSpot(target, sel, ok === true);
             out.push(
               r.resolved
@@ -1053,10 +1077,11 @@ const App = (): React.ReactElement => {
   /** Keyed the way the batch line looks a note up: what it said, and what
    * it pointed at. */
   const resolutions = React.useMemo(() => {
-    const m = new Map<string, { lost: boolean; how: string | null }>();
+    const m = new Map<string, { lost: boolean; later: boolean; how: string | null }>();
     for (const a of anchored) {
       m.set(`${a.note}\u0000${a.snippet}`, {
-        lost: a.elementId === null,
+        lost: a.elementId === null && a.why !== "later-version",
+        later: a.why === "later-version",
         how:
           a.how === null
             ? null

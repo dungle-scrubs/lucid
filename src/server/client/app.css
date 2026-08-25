@@ -684,3 +684,11 @@ body {
 .dock > :first-child {
   border-top: 0;
 }
+
+/* A note written against a later version than the one on screen. Not an
+   orphan — nothing was lost, you are just looking further back. */
+.note-card.later {
+  border-left-color: var(--faint);
+  background: transparent;
+  opacity: 0.6;
+}
