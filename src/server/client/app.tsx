@@ -43,7 +43,7 @@ import {
   selectorsFor,
   sha256Hex,
 } from "./anchor.js";
-import { togglesMode } from "./hotkeys.js";
+import { isModeToggle } from "./hotkeys.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 import {
   CONVERSATION_MAX,
@@ -764,7 +764,7 @@ const App = (): React.ReactElement => {
   // out, so the key works with the caret in the document too.
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (!togglesMode(e, e.target)) return;
+      if (!isModeToggle(e)) return;
       e.preventDefault();
       toggleMode();
     };

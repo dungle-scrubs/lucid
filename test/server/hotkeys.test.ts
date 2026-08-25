@@ -8,7 +8,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import "../support/dom.js";
-import { isModeToggle, togglesMode, writesProse } from "../../src/server/client/hotkeys.js";
+import { isModeToggle } from "../../src/server/client/hotkeys.js";
+import { instrumentArtifact } from "../../src/server/client/instrument.js";
 
 const key = (over: Record<string, unknown> = {}) => ({
   key: "Backspace",
@@ -48,42 +49,23 @@ describe("recognising the mode toggle", () => {
   });
 });
 
-describe("where the key stands down", () => {
-  test("inside the note box it deletes a word, as it always did", () => {
-    const t = el('<div class="note-pop"><textarea></textarea></div>', "textarea");
-    expect(writesProse(t)).toBe(true);
-    expect(togglesMode(key(), t)).toBe(false);
+describe("the frame asks the same question", () => {
+  test("its guard matches this one, clause for clause", () => {
+    // The frame's copy is hand-written JavaScript inside an injected
+    // string: it cannot import this module, so the two can drift and only
+    // half the window would stop responding to the key.
+    const out = instrumentArtifact("<!doctype html><html><body><p>a</p></body></html>", "d", 1);
+    expect(out).toContain('if (!e.altKey || e.key !== "Backspace") return;');
+    expect(out).toContain("if (e.ctrlKey || e.metaKey || e.shiftKey) return;");
   });
 
-  test("inside the conversation composer, the same", () => {
-    const t = el('<form class="composer"><textarea></textarea></form>', "textarea");
-    expect(togglesMode(key(), t)).toBe(false);
-  });
-
-  test("in a field the agent wrote, it still toggles", () => {
-    // The point of the key: a caret in the document, and one press to get
-    // back to marking it up.
-    const t = el('<form><input name="who" /></form>', "input");
-    expect(writesProse(t)).toBe(false);
-    expect(togglesMode(key(), t)).toBe(true);
-  });
-
-  test("with nothing focused it toggles", () => {
-    expect(togglesMode(key(), null)).toBe(true);
-    expect(togglesMode(key(), undefined)).toBe(true);
-  });
-
-  test("a target that cannot be asked is not treated as prose", () => {
-    // The frame hands over whatever its event carried. Anything that is not
-    // an element answers the same way as no element at all.
-    expect(writesProse({})).toBe(false);
-    expect(writesProse("textarea")).toBe(false);
-    expect(togglesMode(key(), {})).toBe(true);
-  });
-
-  test("standing down is about the surface, not the key", () => {
-    const t = el('<div class="note-pop"><textarea></textarea></div>', "textarea");
-    // A press that was never the toggle is still not the toggle in there.
-    expect(togglesMode(key({ altKey: false }), t)).toBe(false);
+  test("neither side looks at what was focused", () => {
+    // It fires wherever it is pressed. An exception on one side only would
+    // be exactly the drift above, in the form hardest to notice.
+    const out = instrumentArtifact("<!doctype html><html><body><p>a</p></body></html>", "d", 1);
+    const guard = out.slice(out.indexOf("if (!e.altKey"), out.indexOf("preventDefault"));
+    expect(guard).not.toContain("target");
+    expect(guard).not.toContain("closest");
+    expect(isModeToggle.length).toBe(1);
   });
 });

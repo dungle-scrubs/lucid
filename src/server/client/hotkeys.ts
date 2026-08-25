@@ -17,31 +17,20 @@ export interface KeyLike {
   readonly shiftKey?: boolean;
 }
 
-/** Alt-Backspace: switch between using the document and marking it up. */
+/**
+ * Alt-Backspace: switch between using the document and marking it up.
+ *
+ * It fires wherever it is pressed, including in a text box, where the
+ * browser would otherwise delete the word behind the caret. That is the
+ * trade, and it is deliberate: the key is worth more than delete-word-back.
+ *
+ * One consequence, the same one Escape has: pressing it while writing a
+ * note ends that note. Use mode has no selection for a note to point at, so
+ * there is nothing to come back to.
+ */
 export const isModeToggle = (e: KeyLike): boolean =>
   e.altKey === true &&
   e.key === "Backspace" &&
   e.ctrlKey !== true &&
   e.metaKey !== true &&
   e.shiftKey !== true;
-
-/**
- * lucid's own writing surfaces. In these, alt-backspace already means delete
- * the word behind the caret, and taking that away from someone mid-sentence
- * is worse than making them reach for the mode buttons.
- *
- * The document's own fields are not on this list. Flipping to mark-up mode
- * with a caret sitting in a field the agent wrote is the whole reason the
- * key exists, and a field in a checklist is not where prose gets written.
- */
-export const WRITING_SURFACES = ".note-pop, .composer";
-
-export const writesProse = (target: unknown): boolean => {
-  const el = target as { closest?: (selectors: string) => unknown } | null | undefined;
-  if (el === null || el === undefined || typeof el.closest !== "function") return false;
-  return el.closest(WRITING_SURFACES) !== null;
-};
-
-/** True when this key press should flip the mode. */
-export const togglesMode = (e: KeyLike, target: unknown): boolean =>
-  isModeToggle(e) && !writesProse(target);
