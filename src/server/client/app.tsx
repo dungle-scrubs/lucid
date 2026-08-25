@@ -113,6 +113,7 @@ interface CatalogEntry {
   readonly artifactId: string;
   readonly versions: readonly number[];
   readonly latest: number;
+  readonly authors?: Readonly<Record<number, string>>;
 }
 
 interface Doc {
@@ -149,18 +150,31 @@ const DocumentFrame = ({
   doc,
   onSelection,
   capture,
+  snapshot,
+  onDirty,
   marked,
 }: {
   doc: Doc;
   onSelection: (ids: readonly string[]) => void;
   /** Handed the frame's answer to a capture request. */
   capture: React.MutableRefObject<((ids: readonly string[]) => Promise<AnnotationSpot[]>) | null>;
+  /** Handed the frame's answer to a snapshot request: the document as it now
+   * reads, with lucid's instrumentation taken back out, and the values of
+   * the controls the agent authored. */
+  snapshot: React.MutableRefObject<
+    (() => Promise<{ html: string; values: Record<string, string> } | null>) | null
+  >;
+  /** The frame says when a person has changed something in it. */
+  onDirty: () => void;
   /** Spots that already carry a note, marked in the document while the
    * batch is being composed. */
   marked: readonly string[];
 }): React.ReactElement => {
   const ref = React.useRef<HTMLIFrameElement | null>(null);
   const pending = React.useRef(new Map<string, (spots: AnnotationSpot[]) => void>());
+  const snaps = React.useRef(
+    new Map<string, (v: { html: string; values: Record<string, string> } | null) => void>(),
+  );
   const nextToken = React.useRef(0);
 
   // A `message` listener hears from every frame on the page and from any
@@ -178,8 +192,38 @@ const DocumentFrame = ({
       const m = e.data as Record<string, unknown> | null;
       if (m === null || typeof m !== "object") return;
       if (m.source !== FRAME_MESSAGE_SOURCE) return;
-      if (m.kind !== "selection" && m.kind !== "captured") return;
+      if (
+        m.kind !== "selection" &&
+        m.kind !== "captured" &&
+        m.kind !== "snapshot-taken" &&
+        m.kind !== "dirty"
+      )
+        return;
       if (m.artifactId !== doc.artifactId || m.version !== doc.version) return;
+      if (m.kind === "dirty") {
+        onDirty();
+        return;
+      }
+
+      if (m.kind === "snapshot-taken") {
+        const token = typeof m.token === "string" ? m.token : "";
+        const settle = snaps.current.get(token);
+        if (settle === undefined) return;
+        snaps.current.delete(token);
+        if (typeof m.html !== "string") {
+          settle(null);
+          return;
+        }
+        const values: Record<string, string> = {};
+        if (m.values !== null && typeof m.values === "object" && !Array.isArray(m.values)) {
+          for (const [k, v] of Object.entries(m.values as Record<string, unknown>)) {
+            if (typeof v === "string") values[k] = v;
+          }
+        }
+        settle({ html: m.html, values });
+        return;
+      }
+
       if (m.kind === "captured") {
         // The answer to a capture this page asked for, matched by the token
         // it was asked with — an answer nobody is waiting for is dropped.
@@ -210,7 +254,7 @@ const DocumentFrame = ({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [doc.artifactId, doc.version, onSelection]);
+  }, [doc.artifactId, doc.version, onSelection, onDirty]);
 
   // Asking the frame what is at a set of spots. The parent cannot read the
   // document, so it asks and the frame answers — the boundary stays one
@@ -231,10 +275,25 @@ const DocumentFrame = ({
           if (pending.current.delete(token)) resolve([]);
         }, 2000);
       });
+    snapshot.current = () =>
+      new Promise((resolve) => {
+        const frame = ref.current;
+        if (frame === null || frame.contentWindow === null) return resolve(null);
+        const token = `s${nextToken.current++}`;
+        snaps.current.set(token, resolve);
+        frame.contentWindow.postMessage(
+          { source: FRAME_MESSAGE_SOURCE, kind: "snapshot", token },
+          "*",
+        );
+        window.setTimeout(() => {
+          if (snaps.current.delete(token)) resolve(null);
+        }, 4000);
+      });
     return () => {
       capture.current = null;
+      snapshot.current = null;
     };
-  }, [capture]);
+  }, [capture, snapshot]);
 
   React.useEffect(() => {
     ref.current?.contentWindow?.postMessage(
@@ -306,6 +365,15 @@ const App = (): React.ReactElement => {
   const capture = React.useRef<((ids: readonly string[]) => Promise<AnnotationSpot[]>) | null>(
     null,
   );
+  const snapshot = React.useRef<
+    (() => Promise<{ html: string; values: Record<string, string> } | null>) | null
+  >(null);
+  /** The document has been changed by the person and not yet saved. Saving
+   * is an explicit act — nothing becomes permanent until they say so, which
+   * is what stops every keystroke being a version. */
+  const [edited, setEdited] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [saved, setSaved] = React.useState<string | null>(null);
 
   const docKey = doc === null ? "" : `${doc.artifactId}@${doc.version}`;
   const notes = React.useMemo(() => notesByVersion[docKey] ?? [], [notesByVersion, docKey]);
@@ -313,7 +381,7 @@ const App = (): React.ReactElement => {
    * lucid never changes version under a person who has work pending — that
    * is what makes replacing the whole frame safe, and why no attempt is made
    * to patch the document in place. */
-  const pending = selection.length > 0 || draft.trim() !== "" || notes.length > 0;
+  const pending = selection.length > 0 || draft.trim() !== "" || notes.length > 0 || edited;
   const pendingRef = React.useRef(false);
   React.useEffect(() => {
     pendingRef.current = pending;
@@ -442,6 +510,8 @@ const App = (): React.ReactElement => {
           setDraft("");
           setRefusal(null);
           setWaiting(null);
+          setEdited(false);
+          setSaved(null);
           setDoc(fetched);
         } finally {
           fetching.current = false;
@@ -497,6 +567,49 @@ const App = (): React.ReactElement => {
     setRefusal(null);
   }, [notes, doc, token, dead, conversationId, setNotes]);
 
+  const save = React.useCallback(async (): Promise<void> => {
+    if (doc === null || token === null || dead || snapshot.current === null) return;
+    setSaving(true);
+    try {
+      const taken = await snapshot.current();
+      if (taken === null) {
+        setRefusal("could not read the document back");
+        return;
+      }
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/save`,
+        {
+          method: "POST",
+          headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+          body: JSON.stringify({ html: taken.html, values: taken.values, basedOn: doc.version }),
+        },
+      );
+      if (!res.ok) {
+        const said = (await res.json().catch(() => ({}))) as { error?: string };
+        // Nothing is cleared: the edit is still in the frame, and what was
+        // typed is still here.
+        setRefusal(
+          said.error === "artifact-too-large"
+            ? "too large to store — nothing was saved"
+            : `not saved: ${said.error ?? res.status}`,
+        );
+        return;
+      }
+      const body = (await res.json()) as { version: number; supersededSince: boolean };
+      setEdited(false);
+      setRefusal(null);
+      setSaved(
+        body.supersededSince
+          ? `saved as v${body.version}, based on v${doc.version} — the agent has since written a newer one`
+          : `saved as v${body.version}`,
+      );
+      // Follow what was just written: it is the version being worked on now.
+      setPinned(body.version);
+    } finally {
+      setSaving(false);
+    }
+  }, [doc, token, dead, conversationId]);
+
   const onNew = React.useCallback(
     async (m: { content: readonly { type: string; text?: string }[] }): Promise<void> => {
       const text = m.content
@@ -522,8 +635,27 @@ const App = (): React.ReactElement => {
     [conversationId, token, dead],
   );
 
+  // A save is an artifact version entry, not an input, so it is not in the
+  // transcript. The conversation still has to show that one happened — and
+  // show that, never the document. Appended in version order: an artifact
+  // entry carries no seq to interleave by, and a save is the most recent
+  // thing its author did.
+  const withSaves = React.useMemo(() => {
+    const authors = catalog?.authors ?? {};
+    const saves = Object.entries(authors)
+      .filter(([, who]) => who === "human")
+      .map(([v]) => Number(v))
+      .sort((x, y) => x - y)
+      .map((v) => ({
+        id: `save-${catalog?.artifactId}-${v}`,
+        role: "user" as const,
+        text: `[saved ${catalog?.artifactId} v${v}]`,
+      }));
+    return saves.length === 0 ? messages : [...messages, ...saves];
+  }, [messages, catalog]);
+
   const runtime = useExternalStoreRuntime<Msg>({
-    messages,
+    messages: withSaves,
     setMessages: (next) => setMessages([...next]),
     onNew,
     convertMessage: (m: Msg) => ({
@@ -582,6 +714,8 @@ const App = (): React.ReactElement => {
               doc={doc}
               onSelection={setSelection}
               capture={capture}
+              snapshot={snapshot}
+              onDirty={() => setEdited(true)}
               marked={[
                 ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
                 // Notes already sent are marked too, on the version they
@@ -604,7 +738,8 @@ const App = (): React.ReactElement => {
                   ))}
                 </ul>
               )}
-              {refusal === null ? null : <div className="notice">Not sent: {refusal}</div>}
+              {refusal === null ? null : <div className="notice">{refusal}</div>}
+              {saved === null ? null : <div className="saved">{saved}</div>}
               <div className="note-compose">
                 <textarea
                   value={draft}
@@ -624,6 +759,14 @@ const App = (): React.ReactElement => {
                     disabled={selection.length === 0 || draft.trim() === ""}
                   >
                     Add note
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void save()}
+                    disabled={!edited || saving}
+                    title="Double-click text to edit it; controls work as they are"
+                  >
+                    {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
                   </button>
                   <button
                     type="button"

@@ -58,6 +58,15 @@ const STYLE = `
   outline-offset: 1px !important;
   background: rgba(251, 191, 36, 0.22) !important;
 }
+[${ELEMENT_ATTR}].lucid-edited {
+  outline: 2px solid #0d9488 !important;
+  outline-offset: 1px !important;
+}
+[${ELEMENT_ATTR}][contenteditable="true"] {
+  outline: 2px solid #0d9488 !important;
+  outline-offset: 1px !important;
+  background: rgba(13, 148, 136, 0.10) !important;
+}
 [${ELEMENT_ATTR}].lucid-noted {
   outline: 2px dashed #7c3aed !important;
   outline-offset: 1px !important;
@@ -90,6 +99,78 @@ const script = (artifactId: string, version: number, author: string): string => 
 
   var selected = [];
   var hovered = null;
+  var dirty = false;
+
+  var CONTROL = "input,textarea,select";
+
+  // A control the agent authored is addressed by lucid's element id, so a
+  // value survives a document whose own ids are absent or repeated.
+  var readValues = function () {
+    var out = {};
+    var els = document.querySelectorAll(CONTROL);
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      var key = el.getAttribute(ATTR);
+      if (!key) continue;
+      if (el.type === "checkbox" || el.type === "radio") out[key] = el.checked ? "on" : "";
+      else out[key] = String(el.value == null ? "" : el.value);
+    }
+    return out;
+  };
+
+  // What lucid added comes back out: the document is saved as the agent
+  // would read it, not as lucid rendered it.
+  var clean = function () {
+    var copy = document.documentElement.cloneNode(true);
+    var added = copy.querySelectorAll("[data-lucid]");
+    for (var a = 0; a < added.length; a++) added[a].parentNode.removeChild(added[a]);
+    var marked = copy.querySelectorAll("[" + ATTR + "]");
+    for (var b = 0; b < marked.length; b++) {
+      var m = marked[b];
+      // Read the key before removing it: it is the only link between this
+      // copy and the live element whose state has to be written out.
+      var key = m.getAttribute(ATTR);
+      var live = key ? document.querySelector("[" + ATTR + '="' + key + '"]') : null;
+      // A control's current state lives on the DOM property, not on the
+      // attribute, so serialising the clone without this writes out the
+      // values the document loaded with rather than the ones on screen.
+      if (live) {
+        if (live.type === "checkbox" || live.type === "radio") {
+          if (live.checked) m.setAttribute("checked", "");
+          else m.removeAttribute("checked");
+        } else if (live.tagName === "TEXTAREA") {
+          m.textContent = live.value;
+        } else if (live.tagName === "INPUT") {
+          m.setAttribute("value", live.value);
+        }
+      }
+      m.removeAttribute(ATTR);
+      m.removeAttribute(AUTHOR_ATTR);
+      m.removeAttribute("contenteditable");
+      m.classList.remove("lucid-hover", "lucid-selected", "lucid-noted", "lucid-edited");
+      if (m.getAttribute("class") === "") m.removeAttribute("class");
+    }
+    return "<!doctype html>" + copy.outerHTML;
+  };
+
+  // Editing prose: a document is not editable until asked. Double-click
+  // opens the element under the pointer; leaving it closes it. The element
+  // is then authored by the person, which is what per-spot provenance
+  // reads.
+  document.addEventListener("dblclick", function (e) {
+    if (!e.isTrusted) return;
+    var el = addressable(e.target);
+    if (!el || el.matches(CONTROL)) return;
+    el.setAttribute("contenteditable", "true");
+    el.focus();
+  }, true);
+
+  document.addEventListener("focusout", function (e) {
+    if (!e.isTrusted) return;
+    var el = e.target;
+    if (!el || el.nodeType !== 1 || el.getAttribute("contenteditable") !== "true") return;
+    el.removeAttribute("contenteditable");
+  }, true);
 
   var post = function () {
     parent.postMessage(
@@ -143,6 +224,16 @@ const script = (artifactId: string, version: number, author: string): string => 
       return;
     }
 
+    if (m.kind === "snapshot") {
+      parent.postMessage(
+        { source: SOURCE, kind: "snapshot-taken", artifactId: ARTIFACT, version: VERSION,
+          token: typeof m.token === "string" ? m.token : "",
+          html: clean(), values: readValues() },
+        "*"
+      );
+      return;
+    }
+
     if (m.kind === "mark" && Array.isArray(m.ids)) {
       var noted = document.querySelectorAll(".lucid-noted");
       for (var a = 0; a < noted.length; a++) noted[a].classList.remove("lucid-noted");
@@ -153,6 +244,31 @@ const script = (artifactId: string, version: number, author: string): string => 
       return;
     }
   });
+
+  var touched = function (el) {
+    if (!el || el.nodeType !== 1 || !el.hasAttribute(ATTR)) return;
+    el.setAttribute(AUTHOR_ATTR, "human");
+    el.classList.add("lucid-edited");
+    if (!dirty) {
+      dirty = true;
+      parent.postMessage(
+        { source: SOURCE, kind: "dirty", artifactId: ARTIFACT, version: VERSION },
+        "*"
+      );
+    }
+  };
+
+  // What the person does to a control, and what they type into prose. Only
+  // trusted events: a document setting its own field values is the agent's
+  // own work, not an edit by the person.
+  document.addEventListener("input", function (e) {
+    if (!e.isTrusted) return;
+    touched(e.target);
+  }, true);
+  document.addEventListener("change", function (e) {
+    if (!e.isTrusted) return;
+    touched(e.target);
+  }, true);
 
   document.addEventListener("mouseover", function (e) {
     if (!e.isTrusted) return;

@@ -77,6 +77,15 @@ export type LogEntry =
       readonly contentType: string;
       readonly hash: string;
       readonly bytes: string;
+      /** The version this one was working from. Present on a save; absent on
+       * an agent emission. A save based on a version since replaced is
+       * accepted and records what it was working from — the agent
+       * reconciles, lucid does not merge. */
+      readonly basedOn?: number;
+      /** Values of the controls the agent authored, at save time. Ticking a
+       * box and rewriting a sentence are different acts, and neither form
+       * expresses the other, so the document and this both travel. */
+      readonly values?: Readonly<Record<string, string>>;
     };
 
 const ENTRY_SOURCES = ["frame", "input", "credit", "artifact"] as const;
@@ -137,6 +146,8 @@ export interface ArtifactVersion {
   readonly hash: string;
   readonly bytes: string;
   readonly at: number;
+  readonly basedOn?: number;
+  readonly values?: Readonly<Record<string, string>>;
 }
 
 /** Hash of artifact bytes: sha256 hex, written for every version from the first. */
@@ -166,6 +177,12 @@ const coerceArtifactEntry = (raw: unknown, offset: number): LogEntry & { src: "a
   const hash = r.hash;
   const bytes = r.bytes;
   const at = (r as { at: unknown }).at;
+  // Additive fields. A save records the version it was working from and the
+  // values of the controls the agent authored; an agent emission has
+  // neither. Older readers never looked at them, and the fold ignores what
+  // it does not name, so nothing needed a version bump.
+  const basedOn = r.basedOn;
+  const values = r.values;
   if (!isArtifactField(artifactId))
     throw new StoreError("corrupt-log", `malformed artifact entry at byte ${offset}: artifactId`);
   if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1)
@@ -191,6 +208,10 @@ const coerceArtifactEntry = (raw: unknown, offset: number): LogEntry & { src: "a
     contentType: contentType as string,
     hash: hash as string,
     bytes: bytes as string,
+    ...(typeof basedOn === "number" && Number.isSafeInteger(basedOn) ? { basedOn } : {}),
+    ...(values !== null && typeof values === "object" && !Array.isArray(values)
+      ? { values: values as Record<string, string> }
+      : {}),
   };
 };
 
@@ -706,6 +727,8 @@ export const readArtifactAtOffset = (raw: Buffer, offset: number): ArtifactVersi
     hash: art.hash,
     bytes: art.bytes,
     at: art.at,
+    ...(art.basedOn === undefined ? {} : { basedOn: art.basedOn }),
+    ...(art.values === undefined ? {} : { values: art.values }),
   };
 };
 
@@ -892,6 +915,8 @@ export interface ConversationLog {
     readonly author: string;
     readonly contentType: string;
     readonly bytes: string;
+    readonly basedOn?: number;
+    readonly values?: Readonly<Record<string, string>>;
   }):
     | { verdict: "accepted"; version: ArtifactVersion }
     | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" };
@@ -1275,6 +1300,8 @@ export const createLog = (
       contentType: params.contentType,
       hash,
       bytes: params.bytes,
+      ...(params.basedOn === undefined ? {} : { basedOn: params.basedOn }),
+      ...(params.values === undefined ? {} : { values: params.values }),
     };
     const flock = new Flock(paths.lockPath, conversationId);
     const lock = flock.acquire({ onEvent: deps.onLockEvent });

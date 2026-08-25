@@ -198,6 +198,8 @@ export interface ConversationHost {
     readonly author: string;
     readonly contentType: string;
     readonly bytes: string;
+    readonly basedOn?: number;
+    readonly values?: Readonly<Record<string, string>>;
   }):
     | { verdict: "accepted"; version: import("./log.js").ArtifactVersion }
     | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" };
@@ -267,6 +269,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     readonly author: string;
     readonly contentType: string;
     readonly bytes: string;
+    readonly basedOn?: number;
+    readonly values?: Readonly<Record<string, string>>;
   }):
     | { verdict: "accepted"; version: import("./log.js").ArtifactVersion }
     | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" } =>
@@ -403,6 +407,10 @@ export interface ArtifactCatalogEntry {
   /** Ascending. Every version the record holds, not a range. */
   readonly versions: readonly number[];
   readonly latest: number;
+  /** Who authored each version, by version number. Read by seeking to each
+   * version's line for its header only — a catalog still carries no
+   * document bytes. */
+  readonly authors: Readonly<Record<number, string>>;
 }
 
 /** Lock-free catalog of a record's artifacts.
@@ -428,7 +436,17 @@ export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[
   return [...byId.entries()]
     .map(([artifactId, versions]) => {
       const sorted = [...versions].sort((a, b) => a - b);
-      return { artifactId, versions: sorted, latest: sorted[sorted.length - 1] as number };
+      const authors: Record<number, string> = {};
+      for (const v of sorted) {
+        const one = readArtifactVersion(raw, artifactId, v, artifactIndex);
+        if (one !== null) authors[v] = one.author;
+      }
+      return {
+        artifactId,
+        versions: sorted,
+        latest: sorted[sorted.length - 1] as number,
+        authors,
+      };
     })
     .sort((a, b) => a.artifactId.localeCompare(b.artifactId));
 };

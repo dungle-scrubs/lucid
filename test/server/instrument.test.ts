@@ -102,3 +102,40 @@ describe("the document's own behaviour is left alone", () => {
     expect(out).toContain("m.source !== SOURCE");
   });
 });
+
+describe("what lucid added is not part of what gets saved", () => {
+  test("the snapshot strips lucid's own script, style, and attributes", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // The cleaning happens inside the frame — the parent cannot read the
+    // DOM — so what is asserted here is that the code to do it is there and
+    // removes each thing lucid added.
+    expect(out).toContain('querySelectorAll("[data-lucid]")');
+    expect(out).toContain("removeAttribute(ATTR)");
+    expect(out).toContain("removeAttribute(AUTHOR_ATTR)");
+    expect(out).toContain('removeAttribute("contenteditable")');
+    expect(out).toContain('"lucid-hover", "lucid-selected", "lucid-noted", "lucid-edited"');
+  });
+
+  test("a control's state is written out from the property, not the attribute", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // A ticked box changes `checked` on the element, not the attribute, so
+    // serialising without this writes out what the document loaded with.
+    expect(out).toContain('setAttribute("checked", "")');
+    expect(out).toContain("m.textContent = live.value");
+    expect(out).toContain('setAttribute("value", live.value)');
+  });
+
+  test("an edit marks the element as the person's, which is what provenance reads", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    expect(out).toContain('setAttribute(AUTHOR_ATTR, "human")');
+  });
+
+  test("the document setting its own field values is not an edit by the person", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // Both value listeners guard on isTrusted, so the agent's own scripted
+    // changes are not mistaken for the human's.
+    const guarded =
+      out.match(/document\.addEventListener\("(input|change)"[\s\S]{0,80}?isTrusted/g) ?? [];
+    expect(guarded.length).toBe(2);
+  });
+});

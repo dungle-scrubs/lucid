@@ -260,7 +260,90 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           hash: found.hash,
           at: found.at,
           bytes: found.bytes,
+          // A save records what it was working from and the values of the
+          // controls at the time. An agent emission has neither.
+          ...(found.basedOn === undefined ? {} : { basedOn: found.basedOn }),
+          ...(found.values === undefined ? {} : { values: found.values }),
         });
+      }
+
+      // A save is an artifact version entry. It is NOT an input: it starts
+      // no turn, is not counted against the input bound, and carries no
+      // disposition. It records what is true and waits to be read — through
+      // live delivery, or the next time anything folds the record.
+      const save = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/save\/?$/);
+      if (save && req.method === "POST") {
+        const id = decodeURIComponent(save[1] ?? "");
+        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+        const artifactId = decodeURIComponent(save[2] ?? "");
+        let body: unknown;
+        try {
+          body = await req.json();
+        } catch {
+          return json({ error: "invalid-json" }, 400);
+        }
+        const b = body as { html?: unknown; values?: unknown; basedOn?: unknown };
+        if (typeof b.html !== "string" || b.html.trim() === "") {
+          return json({ error: "html-required" }, 400);
+        }
+        if (typeof b.basedOn !== "number" || !Number.isSafeInteger(b.basedOn) || b.basedOn < 1) {
+          return json({ error: "based-on-required" }, 400);
+        }
+        const values: Record<string, string> = {};
+        if (b.values !== null && typeof b.values === "object" && !Array.isArray(b.values)) {
+          for (const [k, v] of Object.entries(b.values as Record<string, unknown>)) {
+            if (typeof v === "string") values[k] = v;
+          }
+        }
+        const dir = conversations(rootDir).dirFor(id);
+        if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
+        const host = createConversationHost(dir, {
+          now: () => Date.now(),
+          presence: () => undefined,
+          executorLease: () => false,
+          onEffect: () => {},
+          onRecord: () => {},
+        });
+        try {
+          // The next version in the single ordered list. There is no
+          // branching: a save based on a version the agent has since
+          // replaced still appends at the end, recording what it was
+          // working from. The agent reconciles; lucid does not merge.
+          let current = 0;
+          for (const key of host.artifactIndex().keys()) {
+            const sep = key.indexOf("\0");
+            if (sep === -1 || key.slice(0, sep) !== artifactId) continue;
+            const v = Number(key.slice(sep + 1));
+            if (Number.isSafeInteger(v) && v > current) current = v;
+          }
+          if (current === 0) return json({ error: "no-such-artifact" }, 404);
+          const result = host.writeArtifact({
+            artifactId,
+            version: current + 1,
+            author: "human",
+            contentType: "text/html",
+            bytes: b.html,
+            basedOn: b.basedOn,
+            values,
+          });
+          if (result.verdict === "refused") {
+            // Refused, and what was typed is still in the page — nothing
+            // here clears it.
+            return json(
+              { error: result.issue, verdict: "refused" },
+              result.issue === "artifact-too-large" ? 413 : 409,
+            );
+          }
+          return json({
+            verdict: "accepted",
+            artifactId,
+            version: result.version.version,
+            basedOn: b.basedOn,
+            supersededSince: b.basedOn !== current,
+          });
+        } finally {
+          host.close();
+        }
       }
 
       const write = path.match(/^\/api\/conversations\/([^/]+)\/input\/?$/);
