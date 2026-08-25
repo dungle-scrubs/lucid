@@ -28,6 +28,18 @@
   box-sizing: border-box;
 }
 
+/* No focus rings, anywhere. The browser draws one on anything focusable,
+   and the scrolling half of the conversation is focusable — so reading a
+   long answer put a blue box around the whole column.
+
+   First rule in the file that touches focus, so anything later still wins
+   if a control ever needs its own. Nothing does today. */
+*:focus,
+*:focus-visible,
+*:focus-within {
+  outline: none;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -155,9 +167,10 @@ body {
   font: inherit;
 }
 
+/* The composer says it is ready to be typed in by lifting its border, not
+   by drawing a ring around itself. */
 .composer textarea:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
+  border-color: var(--muted);
 }
 
 .composer button {

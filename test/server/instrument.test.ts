@@ -280,3 +280,44 @@ describe("what a save reports as control values", () => {
     expect(out).toContain('var CONTROL = "input,textarea,select,button,a,[contenteditable=true]"');
   });
 });
+
+describe("no focus rings", () => {
+  test("the browser's default ring is turned off in the document", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    expect(out).toContain(":where(*):focus");
+    expect(out).toContain(":where(*):focus-visible");
+  });
+
+  test("it is a default, not an override", () => {
+    // :where() carries no specificity, so a document that styles its own
+    // focus still wins. An !important here would take that away, and lucid
+    // does not get to restyle a document it was asked to render.
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    const rule = out.slice(out.indexOf(":where(*):focus"), out.indexOf(":where(*):focus") + 120);
+    expect(rule).toContain("outline: none");
+    expect(rule).not.toContain("!important");
+  });
+
+  test("the block holding the caret is tinted, not ringed", () => {
+    // Which block you are typing in still has to be visible. The tint says
+    // it without drawing the thing this change is about.
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    const at = out.indexOf('[contenteditable]:not([contenteditable="false"]):focus');
+    const rule = out.slice(at, out.indexOf("}", at));
+    expect(rule).toContain("outline: none");
+    expect(rule).toContain("background: rgba(13, 148, 136, 0.08)");
+  });
+
+  test("lucid's own markers are not focus states and stay", () => {
+    // Hover, selected, noted, and edited say what lucid knows about an
+    // element. None of them is the browser saying where the caret is.
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    for (const cls of ["lucid-hover", "lucid-selected", "lucid-noted", "lucid-edited"]) {
+      const at = out.indexOf(`.${cls} {`);
+      expect(at).toBeGreaterThan(-1);
+      // Solid for hover, selected and edited; dashed for a spot that
+      // carries a note. What matters is that each still draws one.
+      expect(out.slice(at, out.indexOf("}", at))).toMatch(/outline: 2px (solid|dashed)/);
+    }
+  });
+});

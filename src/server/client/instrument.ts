@@ -70,6 +70,15 @@ html {
   color: CanvasText;
 }
 
+/* No focus ring on the document's own controls either. Zero specificity, so
+   this beats the browser default and loses to a document that styles its
+   own focus — the same trick as the ground colour above, and for the same
+   reason: a default, not an override. */
+:where(*):focus,
+:where(*):focus-visible {
+  outline: none;
+}
+
 /* Mark-up mode only. In use mode lucid draws nothing and the document's
    own cursors stand: an I-beam over text, a pointer over a control. */
 [${ELEMENT_ATTR}].lucid-hover {
@@ -91,9 +100,12 @@ html.lucid-markup, html.lucid-markup * {
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):hover {
   background: rgba(13, 148, 136, 0.06) !important;
 }
+/* The block holding the caret is tinted, not ringed. The ring was the same
+   thing the browser draws around anything focused, and a page full of them
+   is what "no focus states" is about. The tint still says which block you
+   are typing in. */
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):focus {
-  outline: 2px solid #0d9488 !important;
-  outline-offset: 2px !important;
+  outline: none !important;
   background: rgba(13, 148, 136, 0.08) !important;
 }
 [${ELEMENT_ATTR}].lucid-selected {
