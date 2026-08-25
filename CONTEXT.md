@@ -80,6 +80,8 @@ Take nouns from here. One name per thing.
 | **spot** | One place a note points: an element id, the snippet that was there, who wrote it, and how to find it again |
 | **selector** | One of three ways of finding a spot after a rewrite: quote, position, path. Tried in that order |
 | **orphan** | A spot whose target is gone. Shown with its note and snippet, never re-pointed |
+| **document mode** | What a click in the document means: `use` operates it, `markup` selects an element to write about. Not a `profile` - that word is taken, and these are unrelated |
+| **note box** | Where a note is written. Opens beside what was selected |
 | **browser surface** | `lucid2 serve`: one loopback server, every record, a record chosen by URL |
 
 **Not lucid's words.** `hcn` owns harness descriptors, capability claims, and
@@ -102,18 +104,30 @@ the shape of a harness invocation. lucid never mirrors them.
 
 - An agent emits a document; it renders beside the conversation, in a frame
   the page cannot reach into.
-- Point at anything in it and it highlights. Click to select, command-click
-  to select several as one selection.
-- Write notes against what you selected. They accumulate and go as one
-  request. Each carries what was on screen where it points and who wrote it.
+- **Two modes, because two things wanted the same click.** In *use* mode the
+  document behaves as the agent built it: tick a box, fill a field, edit a
+  sentence or a line of a code block. In *mark up* mode a click selects an
+  element to write about and does nothing else. `⌥⌫` switches, from anywhere
+  including a caret in the document.
+- Click to select, command-click to select several as one selection. The note
+  box opens beside what you clicked. `⌘⏎` adds the note; with no note box
+  open, `⌘⏎` sends the queue.
+- Notes accumulate and go as one request. They sit in the conversation in the
+  order you wrote them, so a note written between two messages stays between
+  them. Each carries what was on screen where it points and who wrote it.
 - The agent answers by producing a new version, deciding for itself where
   the change belongs.
 - Any version stays viewable, with the marks made on it and nowhere else.
-- Fill in what the agent gave you — tick a box, type in a field, rewrite a
-  sentence — and save. That is a new version authored by you, not a turn.
+- Fill in what the agent gave you and save. That is a new version authored by
+  you, not a turn - and the agent is told about it on the next thing you say,
+  along with the values you left in the controls.
 - A note follows the document across a rewrite where it can, saying how
   confidently it re-attached; where it cannot, it says it lost its target
   and is never re-pointed at whatever took that place.
+- The window says what is happening: whether a turn is running, what is
+  queued, and - if the harness has answered nothing for ninety seconds -
+  that it may be wedged, written into the record rather than only on screen.
+
 
 Proof lives in two places: `bun run check` for the deterministic gate, and
 `scripts/smoke-*.ts` for the live lanes, one per thing that can only be shown
@@ -189,10 +203,46 @@ Without a build, every command works as `bun src/cli/main.ts <command>`.
   interleaved by time. An artifact entry carries no `seq` to interleave by,
   because the fold does not reduce artifact entries into state.
 
+### The interface is a prototype, not a design
+
+Nothing on the browser surface has been designed. Every layout, colour,
+spacing and interaction in it was arrived at by building the behaviour and
+then correcting what looked wrong, one report at a time. It works, and it is
+not the design.
+
+**Read it that way.** A future session must not defend the current
+appearance as intentional, reason from it about what the product should look
+like, or treat "it already looks like this" as an argument. Fix what is
+broken; do not build on the styling as though it were decided.
+
+A design pass from scratch is expected. Two things are likely to survive it:
+
+- **assistant-ui** for the conversation. Its primitives are what the thread
+  is built on, and the styled layer is this project's own because 0.10 ships
+  primitives rather than a `Thread` component.
+- **shadcn** for what assistant-ui does not cover. The note box is already
+  Radix Popover, which is what shadcn's Popover is; the styling is this
+  repo's own CSS because there is no Tailwind here to hang shadcn's classes
+  on. A design pass would settle that.
+
+Neither is a decision about how the product should look. They are the
+component layer the look will be built on.
+
 ## What is next
 
-Nothing is specified. RFC-06 is delivered; the next thing needs an RFC
-before code, per the pipeline below.
+**A design pass on the browser surface**, from scratch. See "The interface is
+a prototype, not a design" above for what that means and what is expected to
+survive it. Nothing about it is specified yet.
+
+Everything RFC-06 named is delivered, and the tracker is empty. The work
+since then has been correction rather than specification: defects found by
+using the thing, and interaction the RFC did not cover. Two of those changed
+what the agent is told, which is protocol and not decoration - a running
+session now hears about a save, and every prompt carries the current version
+of each artifact.
+
+Anything larger than a correction needs an RFC before code, per the pipeline
+below.
 
 ## Where authority lives
 
