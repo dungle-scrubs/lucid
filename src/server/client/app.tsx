@@ -522,6 +522,16 @@ const App = (): React.ReactElement => {
    * a box and picking an element to write about — so which one it is, is a
    * choice rather than a guess. */
   const [mode, setMode] = React.useState<"use" | "markup">("use");
+  const noteBox = React.useRef<HTMLTextAreaElement | null>(null);
+
+  // Selecting something in the document is the start of writing about it,
+  // so the caret goes where the writing happens. Keyed on emptiness rather
+  // than on the ids: adding a spot with ⌘-click should not pull focus back
+  // out of a note being typed.
+  const hasSelection = selection.length > 0;
+  React.useEffect(() => {
+    if (hasSelection) noteBox.current?.focus();
+  }, [hasSelection]);
 
   const docKey = doc === null ? "" : `${doc.artifactId}@${doc.version}`;
   const notes = React.useMemo(() => notesByVersion[docKey] ?? [], [notesByVersion, docKey]);
@@ -1072,6 +1082,7 @@ const App = (): React.ReactElement => {
 
                 <div className="note-compose">
                   <textarea
+                    ref={noteBox}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
