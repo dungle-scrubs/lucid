@@ -114,11 +114,14 @@ describe("the document's own behaviour is left alone", () => {
       );
     }
 
-    // The mode toggle is the one cancel that is not under that guard, and it
-    // must not be: the key exists to get back to mark-up from a caret in a
-    // field, which is use mode by definition. Nothing else may join it.
+    // The hotkeys are the cancels that are not under that guard, and they
+    // must not be: they exist to work from a caret in a field, which is use
+    // mode by definition. Every one of them is a key press, and nothing but
+    // a key press may join them — a mouse cancel outside the guard would be
+    // lucid taking a click the document was meant to handle.
     const rest = cancels.filter((c) => c.on !== "mousedown" && c.on !== "click");
-    expect(rest.map((c) => c.on)).toEqual(["keydown"]);
+    expect(rest.length).toBeGreaterThan(0);
+    for (const c of rest) expect(c.on).toBe("keydown");
   });
 
   test("only a real person's events count", () => {

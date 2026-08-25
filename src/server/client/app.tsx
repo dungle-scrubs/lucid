@@ -43,7 +43,7 @@ import {
   selectorsFor,
   sha256Hex,
 } from "./anchor.js";
-import { isModeToggle } from "./hotkeys.js";
+import { isModeToggle, isQueueSend } from "./hotkeys.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 import {
   CONVERSATION_MAX,
@@ -292,8 +292,14 @@ const Thread = ({
             <span>
               {pending.length} note{pending.length === 1 ? "" : "s"} queued
             </span>
-            <button type="button" className="primary" onClick={onSendNotes} disabled={sending}>
-              {sending ? "Sending…" : "Send"}
+            <button
+              type="button"
+              className="primary"
+              onClick={onSendNotes}
+              disabled={sending}
+              title="Send the queued notes (⌘⏎)"
+            >
+              {sending ? "Sending…" : "Send ⌘⏎"}
             </button>
             <button type="button" className="discard" onClick={onDiscardNotes} title="Discard them">
               ×
@@ -395,7 +401,7 @@ const DocumentFrame = ({
   /** Handed a way to drop the frame's selection, for backing out of a note. */
   deselect: React.MutableRefObject<(() => void) | null>;
   /** A key the frame caught that means something to the whole page. */
-  onHotkey: (which: "toggle-mode") => void;
+  onHotkey: (which: "toggle-mode" | "send-queue") => void;
   /** The frame says when a person has changed something in it. */
   onDirty: () => void;
   /** Spots that already carry a note, marked in the document while the
@@ -430,7 +436,7 @@ const DocumentFrame = ({
       // it carries no artifact and is answered before anything is checked
       // against one.
       if (m.kind === "hotkey") {
-        if (m.hotkey === "toggle-mode") onHotkey("toggle-mode");
+        if (m.hotkey === "toggle-mode" || m.hotkey === "send-queue") onHotkey(m.hotkey);
         return;
       }
 
@@ -680,6 +686,10 @@ const App = (): React.ReactElement => {
    * must keep its identity across keystrokes, so it cannot close over the
    * draft itself. */
   const draftRef = React.useRef("");
+  /** A batch of notes is on its way to the record. */
+  const [sending, setSending] = React.useState(false);
+  const sendingNotes = React.useRef(false);
+  const queueSendRef = React.useRef<(() => Promise<void>) | null>(null);
   draftRef.current = draft;
 
   // Backing out. A selection with no way out of it was a dead end: the note
@@ -760,17 +770,38 @@ const App = (): React.ReactElement => {
     cancelNote();
   }, [cancelNote]);
 
-  // Pressed anywhere in the page. The frame catches its own and posts it
-  // out, so the key works with the caret in the document too.
+  // Pressed anywhere in the page. The frame catches its own and posts them
+  // out, so both work with the caret in the document too.
+  const onHotkey = React.useCallback(
+    (which: "toggle-mode" | "send-queue"): void => {
+      if (which === "toggle-mode") {
+        toggleMode();
+        return;
+      }
+      // The note box has its own meaning for this key: add the note being
+      // written to the queue. Once no note is being written, the same press
+      // sends what the queue holds.
+      if (queueSendRef.current === null) return;
+      void queueSendRef.current();
+    },
+    [toggleMode],
+  );
+
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (!isModeToggle(e)) return;
+      if (isModeToggle(e)) {
+        e.preventDefault();
+        onHotkey("toggle-mode");
+        return;
+      }
+      if (!isQueueSend(e)) return;
+      if (queueSendRef.current === null) return;
       e.preventDefault();
-      toggleMode();
+      onHotkey("send-queue");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleMode]);
+  }, [onHotkey]);
 
   const onSelected = React.useCallback(
     (ids: readonly string[], rect: SelectionRect | null): void => {
@@ -988,27 +1019,45 @@ const App = (): React.ReactElement => {
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
-    // One request. Every note goes together, as one input with one id, one
-    // disposition, and one turn.
-    const body = encodeAnnotationBatch({
-      artifactId: doc.artifactId,
-      version: doc.version,
-      notes: notes.map((n) => ({ note: n.note, spots: n.spots })),
-    });
-    const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
-      method: "POST",
-      headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
-      body: JSON.stringify({ text: body }),
-    });
-    if (!res.ok) {
-      const said = (await res.json().catch(() => ({}))) as { error?: string };
-      // Nothing is cleared: what was written is still there to send again.
-      setRefusal(said.error === undefined ? `refused (${res.status})` : String(said.error));
-      return;
+    // One send at a time. There was no guard here at all, and the button was
+    // greyed out by the document-save flag instead — two unrelated things
+    // sharing one piece of state, so saving a document disabled sending
+    // notes and sending notes showed nothing. A key that sends makes a
+    // double press easy, which is what turned this up.
+    if (sendingNotes.current) return;
+    sendingNotes.current = true;
+    setSending(true);
+    try {
+      // One request. Every note goes together, as one input with one id, one
+      // disposition, and one turn.
+      const body = encodeAnnotationBatch({
+        artifactId: doc.artifactId,
+        version: doc.version,
+        notes: notes.map((n) => ({ note: n.note, spots: n.spots })),
+      });
+      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
+        method: "POST",
+        headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+        body: JSON.stringify({ text: body }),
+      });
+      if (!res.ok) {
+        const said = (await res.json().catch(() => ({}))) as { error?: string };
+        // Nothing is cleared: what was written is still there to send again.
+        setRefusal(said.error === undefined ? `refused (${res.status})` : String(said.error));
+        return;
+      }
+      setNotes([]);
+      setRefusal(null);
+    } finally {
+      sendingNotes.current = false;
+      setSending(false);
     }
-    setNotes([]);
-    setRefusal(null);
   }, [notes, doc, token, dead, conversationId, setNotes]);
+
+  // What command-Enter means right now, or null when it means nothing. A
+  // ref, so the window listener and the frame's callback both read the
+  // current answer without either being rebuilt as the queue changes.
+  queueSendRef.current = selection.length === 0 && notes.length > 0 && !sending ? sendNotes : null;
 
   const save = React.useCallback(async (): Promise<void> => {
     if (doc === null || token === null || dead || snapshot.current === null) return;
@@ -1279,7 +1328,7 @@ const App = (): React.ReactElement => {
       return { text: "⌘-click to put more of the document in this note.", tone: "ready" };
     if (notes.length > 0)
       return {
-        text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. Send when you are done, or select more.`,
+        text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. ⌘⏎ sends them, or select more.`,
         tone: "ready",
       };
     if (mode === "markup")
@@ -1387,7 +1436,7 @@ const App = (): React.ReactElement => {
                     capture={capture}
                     snapshot={snapshot}
                     deselect={deselect}
-                    onHotkey={toggleMode}
+                    onHotkey={onHotkey}
                     onDirty={() => setEdited(true)}
                     marked={[
                       ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
@@ -1535,7 +1584,7 @@ const App = (): React.ReactElement => {
               pending={notes}
               onSendNotes={() => void sendNotes()}
               onDiscardNotes={() => setNotes([])}
-              sending={saving}
+              sending={sending}
               activity={activity}
               quietFor={(now - lastChange) / 1000}
             />

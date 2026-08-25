@@ -299,6 +299,14 @@ const script = (artifactId: string, version: number, author: string): string => 
     "keydown",
     function (e) {
       if (!e.isTrusted) return;
+      // Command-Enter: send the queued notes. Whether any are queued is the
+      // page's to know, so this only reports the press. A document has no
+      // meaning for this combination, so nothing is taken from it.
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        parent.postMessage({ source: SOURCE, kind: "hotkey", hotkey: "send-queue" }, "*");
+        return;
+      }
       if (!e.altKey || e.key !== "Backspace") return;
       if (e.ctrlKey || e.metaKey || e.shiftKey) return;
       // The browser would delete the word behind the caret. This is the one
