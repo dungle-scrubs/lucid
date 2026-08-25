@@ -226,3 +226,20 @@ describe("a document that gave itself no background", () => {
     expect(before).toContain(":where(html)");
   });
 });
+
+describe("what a save reports as control values", () => {
+  test("only things that carry a value, not everything interactive", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // A paragraph lucid made editable has no value, and a link has none
+    // either. Reading them put empty entries in the map handed to the
+    // agent — a save of a three-box checklist reported six keys, three of
+    // them meaningless.
+    expect(out).toContain('var VALUED = "input,textarea,select"');
+    expect(out).toContain("document.querySelectorAll(VALUED)");
+  });
+
+  test("the wider selector is still what keeps a control out of editable text", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    expect(out).toContain('var CONTROL = "input,textarea,select,button,a,[contenteditable=true]"');
+  });
+});

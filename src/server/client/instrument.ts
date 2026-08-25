@@ -143,7 +143,13 @@ const script = (artifactId: string, version: number, author: string): string => 
   // selected the row at the same time. Nothing said which was happening.
   var mode = "use";
 
+  // Things a person can operate. Used to decide what must NOT be made
+  // editable — a label wrapping one of these would swallow it.
   var CONTROL = "input,textarea,select,button,a,[contenteditable=true]";
+  // Things that carry a value the agent authored. Narrower on purpose: a
+  // paragraph lucid made editable, or a link, has no value, and reading
+  // them put empty entries in the map the agent is handed.
+  var VALUED = "input,textarea,select";
   // Text that can hold a caret: a leaf block with no control inside it.
   // Never a label wrapping a checkbox — making that editable swallows the
   // control and the next click toggles it from inside the caret.
@@ -178,7 +184,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // value survives a document whose own ids are absent or repeated.
   var readValues = function () {
     var out = {};
-    var els = document.querySelectorAll(CONTROL);
+    var els = document.querySelectorAll(VALUED);
     for (var i = 0; i < els.length; i++) {
       var el = els[i];
       var key = el.getAttribute(ATTR);
