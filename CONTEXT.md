@@ -68,20 +68,52 @@ Take nouns from here. One name per thing.
 | **rung** | How much lucid can do with a session it does not own: `hooks`, `cooperative`, `observe`, in that order of preference |
 | **channel status** | The derived state: `interactive-attached`, `interactive-unattached`, `agent-gone`, `headless-session`, `headless-turn` |
 
+**The document, and marking it up**
+
+| Term | What it is |
+|---|---|
+| **artifact** | A document an agent emitted, identified by an `artifactId` and kept as an ordered list of versions |
+| **version** | One artifact entry: its bytes, its author (`agent` or `human`), and its hash. Never rewritten |
+| **save** | A version authored by a person, recording the version it was working from. Not an input, and starts no turn |
+| **annotation batch** | One or more notes, sent as a single input. Rides in the input text behind a fence, like an artifact block |
+| **note** | What a person wrote, against one or more spots |
+| **spot** | One place a note points: an element id, the snippet that was there, who wrote it, and how to find it again |
+| **selector** | One of three ways of finding a spot after a rewrite: quote, position, path. Tried in that order |
+| **orphan** | A spot whose target is gone. Shown with its note and snippet, never re-pointed |
+| **browser surface** | `lucid2 serve`: one loopback server, every record, a record chosen by URL |
+
 **Not lucid's words.** `hcn` owns harness descriptors, capability claims, and
 the shape of a harness invocation. lucid never mirrors them.
 
 ## What works today
 
-The substrate is done and proven through every integration mode.
+**The substrate**, proven through every integration mode.
 
 - A conversation survives losing its process. Reopen the record and it folds
   back intact.
 - A harness recalls **its own** session across a restart. All four.
 - One record can be handed between two different harnesses mid-conversation.
-- A send into an already-running conversation is answered without a restart.
+- A send into an already-running conversation is answered without a restart,
+  however long it has been idle.
 - A terminal session lucid does not own can be attached to and interjected,
   through project-scope hooks.
+
+**The artifact layer** (RFC-06), on the browser surface.
+
+- An agent emits a document; it renders beside the conversation, in a frame
+  the page cannot reach into.
+- Point at anything in it and it highlights. Click to select, command-click
+  to select several as one selection.
+- Write notes against what you selected. They accumulate and go as one
+  request. Each carries what was on screen where it points and who wrote it.
+- The agent answers by producing a new version, deciding for itself where
+  the change belongs.
+- Any version stays viewable, with the marks made on it and nowhere else.
+- Fill in what the agent gave you — tick a box, type in a field, rewrite a
+  sentence — and save. That is a new version authored by you, not a turn.
+- A note follows the document across a rewrite where it can, saying how
+  confidently it re-attached; where it cannot, it says it lost its target
+  and is never re-pointed at whatever took that place.
 
 Proof lives in two places: `bun run check` for the deterministic gate, and
 `scripts/smoke-*.ts` for the live lanes, one per thing that can only be shown
@@ -108,6 +140,16 @@ Alt+Enter interrupts a running turn. Ctrl+C leaves the terminal as it found
 it. When the harness asks a question, answering it here sends an answer rather
 than a new turn.
 
+The document surface, which is the other way in:
+
+```sh
+./dist/lucid2 serve                        # one server, every record
+```
+
+Then open `http://127.0.0.1:17454/c/demo`. It shows the conversation, the
+document beside it, and lets you mark it up. Run it beside a `chat` or a
+`run` on the same record: the server never drives, it only appends.
+
 The pieces are still separate commands, for scripting and for a second pair of
 eyes:
 
@@ -127,21 +169,27 @@ Without a build, every command works as `bun src/cli/main.ts <command>`.
 
 ## What is not built
 
-- **Artifacts.** An agent's output is text in a transcript. Nothing renders
-  as a document.
-- **Annotation.** Nothing to mark up, and no way to mark it.
 - **A published package.** There is a `bin` and a build, but nothing is
   published; `bun run build` is the install.
-- **A browser.** By design, until the substrate was proven. It now is.
+- **A document in the terminal.** The transcript names an artifact and its
+  version; it does not render one. The browser is where a document is read.
+- **More than one document at a time.** The newest artifact in a record is
+  the one shown.
 
-## What is next, in order
+## What is known, and deliberate
 
-1. **An artifact in the conversation, and annotation beside it.** An agent
-   emits a self-contained document as a message kind; the conversation renders
-   it inline and makes it addressable; annotation attaches to an address.
+- A paragraph rewritten heavily enough is reported as having lost its
+  target rather than matched. The approximate search is
+  `dom-anchor-text-quote` and its threshold is not reachable through its
+  API. Guessing would be worse: a wrong anchor is worse than an absent one.
+- A saved version appears in the conversation in version order, not
+  interleaved by time. An artifact entry carries no `seq` to interleave by,
+  because the fold does not reduce artifact entries into state.
 
-That needs an RFC before code, per the pipeline below. The first item on this
-list - the conversation in one window - is done, and is RFC-05.
+## What is next
+
+Nothing is specified. RFC-06 is delivered; the next thing needs an RFC
+before code, per the pipeline below.
 
 ## Where authority lives
 
