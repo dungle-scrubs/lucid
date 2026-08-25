@@ -30,6 +30,7 @@
  * the store already folded (D-009: the view IS fold(log)).
  */
 
+import { stripAnnotationBatch } from "../protocol/annotations.js";
 import { stripArtifactBlocks } from "../protocol/artifacts.js";
 import { EventKind } from "../protocol/events.js";
 import type { ChannelStatus } from "../protocol/index.js";
@@ -162,7 +163,11 @@ export const buildView = (input: {
   const humanLines: ConversationLine[] = inputs.map((i) => ({
     kind: "human",
     seq: i.seq,
-    text: i.text,
+    // An annotation batch is a protocol fence carried in input text, the
+    // same way an artifact block is carried in message text. The log keeps
+    // the raw text; the view shows the notes and the spots they were made
+    // against, never a wall of JSON.
+    text: stripAnnotationBatch(i.text),
     mark: INPUT_MARK[i.status],
   }));
 

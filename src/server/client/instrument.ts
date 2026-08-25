@@ -41,6 +41,12 @@ export const ELEMENT_ATTR = "data-lucid-el";
  * before believing an id came from a render it made. */
 export const ELEMENT_ID = /^e[0-9]+$/;
 
+/** Who wrote the content in an element. Set on every element when the
+ * document is instrumented, from the version's own author, so a spot can
+ * say who wrote it. Editing (a later slice) changes it per element, which
+ * is why it lives on the element rather than on the version. */
+export const AUTHOR_ATTR = "data-lucid-author";
+
 const STYLE = `
 [${ELEMENT_ATTR}].lucid-hover {
   outline: 2px solid #2563eb !important;
@@ -52,23 +58,35 @@ const STYLE = `
   outline-offset: 1px !important;
   background: rgba(251, 191, 36, 0.22) !important;
 }
+[${ELEMENT_ATTR}].lucid-noted {
+  outline: 2px dashed #7c3aed !important;
+  outline-offset: 1px !important;
+  background: rgba(167, 139, 250, 0.16) !important;
+}
 `;
 
 /** The injected script, as source. It runs inside the frame, where lucid's
  * own code cannot otherwise go. */
-const script = (artifactId: string, version: number): string => `
+const script = (artifactId: string, version: number, author: string): string => `
 (function () {
   var SOURCE = ${JSON.stringify(FRAME_MESSAGE_SOURCE)};
   var ATTR = ${JSON.stringify(ELEMENT_ATTR)};
   var ARTIFACT = ${JSON.stringify(artifactId)};
   var VERSION = ${JSON.stringify(version)};
+  var AUTHOR_ATTR = ${JSON.stringify(AUTHOR_ATTR)};
+  var AUTHOR = ${JSON.stringify(author)};
 
   // An id per element, in document order. Assigned by lucid rather than
   // taken from the document: an agent-written id may be missing, repeated,
   // or different in the next version, and none of those can be an address.
   var n = 0;
   var all = document.body ? document.body.querySelectorAll("*") : [];
-  for (var i = 0; i < all.length; i++) all[i].setAttribute(ATTR, "e" + ++n);
+  for (var i = 0; i < all.length; i++) {
+    all[i].setAttribute(ATTR, "e" + ++n);
+    // Whoever wrote this version wrote every spot in it. A later slice lets
+    // a person edit, and sets this per element where they did.
+    if (!all[i].hasAttribute(AUTHOR_ATTR)) all[i].setAttribute(AUTHOR_ATTR, AUTHOR);
+  }
 
   var selected = [];
   var hovered = null;
@@ -96,6 +114,46 @@ const script = (artifactId: string, version: number): string => `
 
   // Capture phase, and nothing is cancelled: the document's own listeners
   // see every event exactly as they would with lucid absent.
+  // The parent asks for what is at a set of spots, and for which spots to
+  // mark while a note is being composed. Nothing else comes in, and the
+  // parent still cannot touch the DOM: it asks, the frame answers.
+  window.addEventListener("message", function (e) {
+    if (e.source !== parent) return;
+    var m = e.data;
+    if (!m || typeof m !== "object" || m.source !== SOURCE) return;
+
+    if (m.kind === "capture" && Array.isArray(m.ids)) {
+      var spots = [];
+      for (var k = 0; k < m.ids.length; k++) {
+        var el = document.querySelector("[" + ATTR + '="' + String(m.ids[k]) + '"]');
+        if (!el) continue;
+        spots.push({
+          id: String(m.ids[k]),
+          // What was on screen, not the markup: the person marked what they
+          // could read.
+          snippet: (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim(),
+          author: el.getAttribute(AUTHOR_ATTR) || AUTHOR
+        });
+      }
+      parent.postMessage(
+        { source: SOURCE, kind: "captured", artifactId: ARTIFACT, version: VERSION,
+          token: typeof m.token === "string" ? m.token : "", spots: spots },
+        "*"
+      );
+      return;
+    }
+
+    if (m.kind === "mark" && Array.isArray(m.ids)) {
+      var noted = document.querySelectorAll(".lucid-noted");
+      for (var a = 0; a < noted.length; a++) noted[a].classList.remove("lucid-noted");
+      for (var b = 0; b < m.ids.length; b++) {
+        var mel = document.querySelector("[" + ATTR + '="' + String(m.ids[b]) + '"]');
+        if (mel) mel.classList.add("lucid-noted");
+      }
+      return;
+    }
+  });
+
   document.addEventListener("mouseover", function (e) {
     if (!e.isTrusted) return;
     var el = addressable(e.target);
@@ -148,8 +206,13 @@ const script = (artifactId: string, version: number): string => `
  * The style and script go last, so the document's own styles and scripts
  * have already run and lucid's highlight wins on specificity through
  * `!important` rather than through ordering it does not control. */
-export const instrumentArtifact = (bytes: string, artifactId: string, version: number): string => {
-  const added = `<style data-lucid="1">${STYLE}</style><script data-lucid="1">${script(artifactId, version)}</script>`;
+export const instrumentArtifact = (
+  bytes: string,
+  artifactId: string,
+  version: number,
+  author = "agent",
+): string => {
+  const added = `<style data-lucid="1">${STYLE}</style><script data-lucid="1">${script(artifactId, version, author)}</script>`;
   const close = bytes.lastIndexOf("</body>");
   if (close === -1) return `${bytes}${added}`;
   return `${bytes.slice(0, close)}${added}${bytes.slice(close)}`;

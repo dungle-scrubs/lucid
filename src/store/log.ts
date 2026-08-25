@@ -326,6 +326,11 @@ export interface CollectedBatch {
   readonly state: ChannelState;
   readonly transcript: Transcript;
   readonly goodBytes: number;
+  /** Every artifact version in the log, by `artifactKey` -> offset. Complete
+   * regardless of `fromOffset`: the fold walks the whole log for state, and
+   * the offset only scopes effect collection. */
+  readonly artifactIndex: ReadonlyMap<string, number>;
+  readonly artifactRefusals: readonly ArtifactRefusal[];
   /** In log order. A caller that wants each effect on its own flattens
    * this; a caller that advances a cursor per entry does not. */
   readonly entries: readonly CollectedEntry[];
@@ -825,12 +830,8 @@ export const collectEffectsUnderAppendLock = (
     // Use the collecting fold directly so we do not pay for a second pass,
     // but keep the repair discipline identical: fold, then truncate a torn
     // tail under the same lock.
-    const { state, goodBytes, transcript, collected } = foldCollect(
-      conversationId,
-      secret,
-      raw,
-      fromOffset,
-    );
+    const { state, goodBytes, transcript, collected, artifactIndex, artifactRefusals } =
+      foldCollect(conversationId, secret, raw, fromOffset);
     if (goodBytes < raw.length) {
       try {
         truncateSync(paths.logPath, goodBytes);
@@ -848,6 +849,13 @@ export const collectEffectsUnderAppendLock = (
       },
       goodBytes,
       entries: collected as readonly CollectedEntry[],
+      // The collecting fold walks the whole log to build state, so the index
+      // it builds is complete — `fromOffset` scopes which effects are
+      // COLLECTED, never which artifacts are indexed. Forwarding it is what
+      // keeps the log's copy whole; dropping it emptied the index on every
+      // collect, and the tailer collects twice a second.
+      artifactIndex,
+      artifactRefusals,
     };
   });
 
@@ -1106,14 +1114,11 @@ export const createLog = (
     acc.inputs.push(...batch.transcript.inputs);
     acc.aborted.length = 0;
     acc.aborted.push(...batch.transcript.aborted);
-    // foldCollect now returns the artifact index; keep the log's copy fresh.
-    curArtifactIndex = new Map<string, number>(
-      (batch as unknown as { artifactIndex: Map<string, number> }).artifactIndex ?? new Map(),
-    );
-    curArtifactRefusals = [
-      ...((batch as unknown as { artifactRefusals: readonly ArtifactRefusal[] }).artifactRefusals ??
-        []),
-    ] as readonly ArtifactRefusal[];
+    // The batch carries the index; keep the log's copy fresh from it. This
+    // was reached through an `as unknown as` cast onto a field the batch did
+    // not have, so it silently read `undefined` and installed an empty map.
+    curArtifactIndex = new Map<string, number>(batch.artifactIndex);
+    curArtifactRefusals = [...batch.artifactRefusals];
     return batch;
   };
 

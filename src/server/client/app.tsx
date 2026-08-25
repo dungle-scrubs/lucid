@@ -27,6 +27,12 @@ import {
 } from "@assistant-ui/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import {
+  type Annotation,
+  type AnnotationSpot,
+  clampSnippet,
+  encodeAnnotationBatch,
+} from "../../protocol/annotations.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 
 /** Kept in step with the server's own poll interval. */
@@ -142,11 +148,20 @@ const CATALOG_POLL_MS = 2000;
 const DocumentFrame = ({
   doc,
   onSelection,
+  capture,
+  marked,
 }: {
   doc: Doc;
   onSelection: (ids: readonly string[]) => void;
+  /** Handed the frame's answer to a capture request. */
+  capture: React.MutableRefObject<((ids: readonly string[]) => Promise<AnnotationSpot[]>) | null>;
+  /** Spots that already carry a note, marked in the document while the
+   * batch is being composed. */
+  marked: readonly string[];
 }): React.ReactElement => {
   const ref = React.useRef<HTMLIFrameElement | null>(null);
+  const pending = React.useRef(new Map<string, (spots: AnnotationSpot[]) => void>());
+  const nextToken = React.useRef(0);
 
   // A `message` listener hears from every frame on the page and from any
   // origin. The boundary exists only because this checks.
@@ -162,8 +177,32 @@ const DocumentFrame = ({
       // is checked before any of it is believed.
       const m = e.data as Record<string, unknown> | null;
       if (m === null || typeof m !== "object") return;
-      if (m.source !== FRAME_MESSAGE_SOURCE || m.kind !== "selection") return;
+      if (m.source !== FRAME_MESSAGE_SOURCE) return;
+      if (m.kind !== "selection" && m.kind !== "captured") return;
       if (m.artifactId !== doc.artifactId || m.version !== doc.version) return;
+      if (m.kind === "captured") {
+        // The answer to a capture this page asked for, matched by the token
+        // it was asked with — an answer nobody is waiting for is dropped.
+        const token = typeof m.token === "string" ? m.token : "";
+        const settle = pending.current.get(token);
+        if (settle === undefined) return;
+        pending.current.delete(token);
+        if (!Array.isArray(m.spots)) {
+          settle([]);
+          return;
+        }
+        const spots: AnnotationSpot[] = [];
+        for (const raw of m.spots) {
+          if (raw === null || typeof raw !== "object") continue;
+          const sp = raw as Record<string, unknown>;
+          if (typeof sp.id !== "string" || !ELEMENT_ID.test(sp.id)) continue;
+          if (typeof sp.snippet !== "string" || typeof sp.author !== "string") continue;
+          spots.push({ id: sp.id, snippet: clampSnippet(sp.snippet), author: sp.author });
+        }
+        settle(spots);
+        return;
+      }
+
       if (!Array.isArray(m.ids)) return;
       if (!m.ids.every((id) => typeof id === "string" && ELEMENT_ID.test(id))) return;
 
@@ -172,6 +211,37 @@ const DocumentFrame = ({
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [doc.artifactId, doc.version, onSelection]);
+
+  // Asking the frame what is at a set of spots. The parent cannot read the
+  // document, so it asks and the frame answers — the boundary stays one
+  // narrow message in each direction.
+  React.useEffect(() => {
+    capture.current = (ids) =>
+      new Promise<AnnotationSpot[]>((resolve) => {
+        const frame = ref.current;
+        if (frame === null || frame.contentWindow === null) return resolve([]);
+        const token = `c${nextToken.current++}`;
+        pending.current.set(token, resolve);
+        frame.contentWindow.postMessage(
+          { source: FRAME_MESSAGE_SOURCE, kind: "capture", token, ids: [...ids] },
+          "*",
+        );
+        // A frame that never answers must not leave a note half-written.
+        window.setTimeout(() => {
+          if (pending.current.delete(token)) resolve([]);
+        }, 2000);
+      });
+    return () => {
+      capture.current = null;
+    };
+  }, [capture]);
+
+  React.useEffect(() => {
+    ref.current?.contentWindow?.postMessage(
+      { source: FRAME_MESSAGE_SOURCE, kind: "mark", ids: [...marked] },
+      "*",
+    );
+  }, [marked]);
 
   return (
     <iframe
@@ -207,6 +277,15 @@ const App = (): React.ReactElement => {
    * an id addresses an element in the render it came from, and the next
    * version is a different render. */
   const [selection, setSelection] = React.useState<readonly string[]>([]);
+  /** Notes written but not yet sent. They accumulate: a batch is composed
+   * over several selections and leaves as one act. */
+  const [notes, setNotes] = React.useState<readonly Annotation[]>([]);
+  const [draft, setDraft] = React.useState("");
+  /** A refused send keeps what was typed and says why, here in the window. */
+  const [refusal, setRefusal] = React.useState<string | null>(null);
+  const capture = React.useRef<((ids: readonly string[]) => Promise<AnnotationSpot[]>) | null>(
+    null,
+  );
 
   React.useEffect(() => {
     let alive = true;
@@ -298,7 +377,13 @@ const App = (): React.ReactElement => {
           const body = (await one.json()) as Doc;
           if (!alive) return;
           shown.current = want;
+          // A note addresses an element in the render it was made against,
+          // and a new version is a different render. Notes do not carry
+          // across, so an unsent batch is cleared with the selection.
           setSelection([]);
+          setNotes([]);
+          setDraft("");
+          setRefusal(null);
           setDoc(body);
         } finally {
           fetching.current = false;
@@ -315,6 +400,44 @@ const App = (): React.ReactElement => {
       window.clearInterval(id);
     };
   }, [token, dead, conversationId]);
+
+  const addNote = React.useCallback(async (): Promise<void> => {
+    const text = draft.trim();
+    if (text === "" || selection.length === 0 || capture.current === null) return;
+    // What was on screen where the note points, captured now. A reference
+    // would have to be resolved later, against a document that may have
+    // changed by then.
+    const spots = await capture.current(selection);
+    if (spots.length === 0) return;
+    setNotes((prev) => [...prev, { note: text, spots }]);
+    setDraft("");
+    setSelection([]);
+    setRefusal(null);
+  }, [draft, selection]);
+
+  const sendNotes = React.useCallback(async (): Promise<void> => {
+    if (notes.length === 0 || doc === null || token === null || dead) return;
+    // One request. Every note goes together, as one input with one id, one
+    // disposition, and one turn.
+    const body = encodeAnnotationBatch({
+      artifactId: doc.artifactId,
+      version: doc.version,
+      notes,
+    });
+    const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
+      method: "POST",
+      headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+      body: JSON.stringify({ text: body }),
+    });
+    if (!res.ok) {
+      const said = (await res.json().catch(() => ({}))) as { error?: string };
+      // Nothing is cleared: what was written is still there to send again.
+      setRefusal(said.error === undefined ? `refused (${res.status})` : String(said.error));
+      return;
+    }
+    setNotes([]);
+    setRefusal(null);
+  }, [notes, doc, token, dead, conversationId]);
 
   const onNew = React.useCallback(
     async (m: { content: readonly { type: string; text?: string }[] }): Promise<void> => {
@@ -369,11 +492,60 @@ const App = (): React.ReactElement => {
               <span className="doc-id">{doc.artifactId}</span>
               <span className="doc-version">v{doc.version}</span>
             </div>
-            <DocumentFrame doc={doc} onSelection={setSelection} />
+            <DocumentFrame
+              doc={doc}
+              onSelection={setSelection}
+              capture={capture}
+              marked={notes.flatMap((n) => n.spots.map((sp) => sp.id))}
+            />
             <div className="doc-foot">
-              {selection.length === 0
-                ? "Click something in the document to select it. Hold command to select more."
-                : `${selection.length} selected`}
+              {notes.length === 0 ? null : (
+                <ul className="notes">
+                  {notes.map((n) => (
+                    <li key={`${n.spots.map((sp) => sp.id).join(",")}:${n.note}`}>
+                      <span className="note-text">{n.note}</span>
+                      <span className="note-spots">
+                        {n.spots
+                          .map((sp) => `"${sp.snippet.slice(0, 40)}" (${sp.author})`)
+                          .join(", ")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {refusal === null ? null : <div className="notice">Not sent: {refusal}</div>}
+              <div className="note-compose">
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder={
+                    selection.length === 0
+                      ? "Select something in the document to write about it"
+                      : `Write a note about ${selection.length} selected`
+                  }
+                  disabled={selection.length === 0}
+                  rows={2}
+                />
+                <div className="note-actions">
+                  <button
+                    type="button"
+                    onClick={() => void addNote()}
+                    disabled={selection.length === 0 || draft.trim() === ""}
+                  >
+                    Add note
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => void sendNotes()}
+                    disabled={notes.length === 0}
+                  >
+                    {notes.length === 0
+                      ? "Send notes"
+                      : `Send ${notes.length} note${notes.length === 1 ? "" : "s"}`}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

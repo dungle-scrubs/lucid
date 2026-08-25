@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Effect } from "../../src/protocol/index.js";
@@ -184,5 +184,52 @@ describe("the range fold that hands back effects (RFC-04 step 5)", () => {
     const enq = host.enqueueInput({ id: "in-1", text: "hi", mode: "queue" });
     expect(enq.verdict).toBe("accepted");
     expect(enq.effects.length).toBe(1);
+  });
+});
+
+describe("collecting effects does not cost the artifact index", () => {
+  test("the index survives a collect, so a revision can find the version it replaces", () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-collect-art-"));
+    createConversationRecord(root, "c");
+    const dir = join(root, "c");
+    const deps = {
+      now: () => 1_000,
+      presence: () => undefined,
+      executorLease: () => true,
+      onEffect: () => {},
+      onRecord: () => {},
+    };
+
+    const writer = openConversation(dir, deps);
+    writer.writeArtifact({
+      artifactId: "doc-1",
+      version: 1,
+      author: "agent",
+      contentType: "text/html",
+      bytes: "<p>v1</p>",
+    });
+    writer.close();
+
+    const host = openConversation(dir, deps);
+    try {
+      expect(host.artifactIndex().size).toBe(1);
+
+      // The tailer collects twice a second for the life of a driver. Every
+      // one of those refreshes the log's artifact index from the batch, so a
+      // collect that did not carry the index emptied it — and emission then
+      // computed the current version as 0 and tried to write v1 again over a
+      // v1 that already existed. The document could never be revised.
+      const batch = host.collectEffects(0);
+      expect(batch.artifactIndex.size).toBe(1);
+      expect(host.artifactIndex().size).toBe(1);
+
+      // And from a cursor past the artifact, which is where a driver sits.
+      host.collectEffects(batch.goodBytes);
+      expect(host.artifactIndex().size).toBe(1);
+      expect(host.readArtifact("doc-1", 1)?.bytes).toBe("<p>v1</p>");
+    } finally {
+      host.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -267,3 +267,91 @@ body {
   color: var(--muted);
   background: var(--bg);
 }
+
+/* --- notes --------------------------------------------------------------- */
+
+.doc-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+.notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.notes li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-left: 2px solid #7c3aed;
+  background: var(--panel);
+  border-radius: 0 6px 6px 0;
+}
+
+.note-text {
+  color: var(--fg);
+}
+
+.note-spots {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.note-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.note-compose textarea {
+  resize: none;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.note-compose textarea:disabled {
+  opacity: 0.55;
+}
+
+.note-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.note-actions button {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.note-actions button.primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.note-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

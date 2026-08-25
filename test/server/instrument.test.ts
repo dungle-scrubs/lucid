@@ -82,12 +82,23 @@ describe("the document's own behaviour is left alone", () => {
 
   test("only a real person's events count", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
-    // Every listener the script installs guards on isTrusted, so a document
-    // dispatching its own click is doing its own work and lucid does not
-    // read it as a selection.
-    const listeners = out.match(/addEventListener\(/g) ?? [];
+    // Every listener reading a user interaction guards on isTrusted, so a
+    // document dispatching its own click is doing its own work and lucid
+    // does not read it as a selection.
+    const interaction = out.match(/document\.addEventListener\(/g) ?? [];
     const guards = out.match(/if \(!e\.isTrusted\) return;/g) ?? [];
-    expect(listeners.length).toBeGreaterThan(0);
-    expect(guards.length).toBe(listeners.length);
+    expect(interaction.length).toBeGreaterThan(0);
+    expect(guards.length).toBe(interaction.length);
+  });
+
+  test("the one listener that is not a user interaction guards on the sender", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // The parent asks the frame for snippets and for which spots to mark.
+    // `isTrusted` says nothing there — every postMessage is trusted — so the
+    // check that matters is which window sent it.
+    expect(out).toContain("window.addEventListener");
+    expect(out).toContain("if (e.source !== parent) return;");
+    // And it still refuses anything that is not lucid's own message.
+    expect(out).toContain("m.source !== SOURCE");
   });
 });

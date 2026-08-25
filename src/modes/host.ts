@@ -30,6 +30,7 @@
 
 import type { HarnessEvent } from "../harness/events.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
+import { composeAnnotationPrompt } from "../protocol/annotations.js";
 import { composeArtifactPrompt, detectArtifactBlocks } from "../protocol/artifacts.js";
 import { EventKind } from "../protocol/events.js";
 import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
@@ -263,7 +264,7 @@ const sessionStrategy = (
     // (an answer is raw text through the harness answer path, not a prompt).
     let composed = text;
     if (mode !== "answer" && !artifactPreambleSent) {
-      const maybe = composeArtifactPrompt(text, "headless-session");
+      const maybe = composeArtifactPrompt(composeAnnotationPrompt(text), "headless-session");
       if (maybe !== text) {
         composed = maybe;
         artifactPreambleSent = true;
@@ -487,7 +488,10 @@ const turnStrategy = (
             // rather than losing the turn to a stale id.
             const attemptResume = resumeId !== undefined && !resumeTried;
             if (attemptResume) resumeTried = true;
-            const composedPrompt = composeArtifactPrompt(next.text, "headless-turn");
+            const composedPrompt = composeArtifactPrompt(
+              composeAnnotationPrompt(next.text),
+              "headless-turn",
+            );
             let raw = deps.runner.streamTurn({
               harness: deps.harness,
               prompt: composedPrompt,
@@ -512,7 +516,10 @@ const turnStrategy = (
                   kind: "error",
                   message: `could not resume harness session ${staleId}; continuing fresh`,
                 });
-                const retryPrompt = composeArtifactPrompt(next.text, "headless-turn");
+                const retryPrompt = composeArtifactPrompt(
+                  composeAnnotationPrompt(next.text),
+                  "headless-turn",
+                );
                 raw = deps.runner.streamTurn({
                   harness: deps.harness,
                   prompt: retryPrompt,
