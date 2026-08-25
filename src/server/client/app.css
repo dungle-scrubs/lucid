@@ -412,3 +412,16 @@ body {
   color: var(--fg);
   font-size: 12px;
 }
+
+.notes.sent li {
+  border-left-color: #b45309;
+}
+
+.notes.sent li.orphan {
+  border-left-color: var(--error);
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.notes.sent li.orphan .note-spots strong {
+  color: var(--error);
+}

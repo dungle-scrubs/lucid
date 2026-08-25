@@ -33,6 +33,13 @@ import {
   clampSnippet,
   encodeAnnotationBatch,
 } from "../../protocol/annotations.js";
+import {
+  type Confidence,
+  resolveSpot,
+  type SpotSelectors,
+  selectorsFor,
+  sha256Hex,
+} from "./anchor.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 
 /** Kept in step with the server's own poll interval. */
@@ -339,7 +346,22 @@ const App = (): React.ReactElement => {
   /** Every version the record holds, and which spots already carry a sent
    * note on each. */
   const [catalog, setCatalog] = React.useState<CatalogEntry | null>(null);
-  const [marks, setMarks] = React.useState<Record<string, string[]>>({});
+  /** Sent notes, by `artifactId@version` — the version each was made
+   * against. */
+  const [sentNotes, setSentNotes] = React.useState<Record<string, Annotation[]>>({});
+  /** Where each sent note points in the version on screen, and how
+   * confidently it got there. A note made against this version needs no
+   * resolving; one from an earlier version does. */
+  const [anchored, setAnchored] = React.useState<
+    readonly {
+      readonly note: string;
+      readonly fromVersion: number;
+      readonly elementId: string | null;
+      readonly how: Confidence | null;
+      readonly why: string | null;
+      readonly snippet: string;
+    }[]
+  >([]);
   /** The version asked for. Null means "follow the newest" — the ordinary
    * state, where a new version simply appears.
    *
@@ -466,7 +488,7 @@ const App = (): React.ReactElement => {
         if (!alive || !res.ok) return;
         const body = (await res.json()) as {
           artifacts: CatalogEntry[];
-          marks?: Record<string, string[]>;
+          notes?: Record<string, Annotation[]>;
         };
         const artifacts = body.artifacts;
         // One document beside the conversation in this slice. The newest
@@ -474,7 +496,7 @@ const App = (): React.ReactElement => {
         const entry = artifacts[artifacts.length - 1];
         if (entry === undefined) return;
         setCatalog(entry);
-        setMarks(body.marks ?? {});
+        setSentNotes(body.notes ?? {});
 
         // The version asked for, else the newest. A pin is what makes an
         // older version reachable, and marks live on the version they were
@@ -537,11 +559,19 @@ const App = (): React.ReactElement => {
     // changed by then.
     const spots = await capture.current(selection);
     if (spots.length === 0) return;
-    setNotes([...notes, { note: text, spots }]);
+    // Three ways of finding each spot again, written now, against the
+    // version being annotated — the same bytes the snapshot guard will
+    // verify before any of them is trusted later.
+    const parsed = new DOMParser().parseFromString(doc?.bytes ?? "", "text/html");
+    const withSelectors = spots.map((sp) => {
+      const sel = selectorsFor(parsed, sp.id);
+      return sel === null ? sp : { ...sp, selectors: sel };
+    });
+    setNotes([...notes, { note: text, spots: withSelectors }]);
     setDraft("");
     setSelection([]);
     setRefusal(null);
-  }, [draft, selection, notes, setNotes]);
+  }, [draft, selection, notes, setNotes, doc]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
@@ -609,6 +639,117 @@ const App = (): React.ReactElement => {
       setSaving(false);
     }
   }, [doc, token, dead, conversationId]);
+
+  // Re-anchoring. A note made against the version on screen already points
+  // at an element there. One made against an earlier version has to be
+  // found again — and only after that version's bytes verify against the
+  // hash the record stored for them.
+  const verified = React.useRef(new Map<string, boolean>());
+  React.useEffect(() => {
+    if (doc === null || token === null) return;
+    let alive = true;
+    void (async () => {
+      const out: {
+        note: string;
+        fromVersion: number;
+        elementId: string | null;
+        how: Confidence | null;
+        why: string | null;
+        snippet: string;
+      }[] = [];
+      const target = new DOMParser().parseFromString(doc.bytes, "text/html");
+      for (const [key, list] of Object.entries(sentNotes)) {
+        const sep = key.lastIndexOf("@");
+        if (sep === -1 || key.slice(0, sep) !== doc.artifactId) continue;
+        const from = Number(key.slice(sep + 1));
+        if (!Number.isSafeInteger(from)) continue;
+
+        // Made against what is on screen: the ids still name the elements
+        // they were written for, so nothing is resolved and nothing is
+        // qualified.
+        if (from === doc.version) {
+          for (const n of list) {
+            for (const sp of n.spots) {
+              out.push({
+                note: n.note,
+                fromVersion: from,
+                elementId: sp.id,
+                how: null,
+                why: null,
+                snippet: sp.snippet,
+              });
+            }
+          }
+          continue;
+        }
+
+        // The snapshot guard. The selectors describe the bytes of the
+        // version the note was made against, so those bytes are checked
+        // before any selector is believed. Asked once per version.
+        let ok = verified.current.get(key);
+        if (ok === undefined) {
+          try {
+            const res = await fetch(
+              `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/${from}`,
+              { headers: { [TOKEN_HEADER]: token } },
+            );
+            if (res.ok) {
+              const src = (await res.json()) as { bytes: string; hash: string };
+              ok = (await sha256Hex(src.bytes)) === src.hash;
+            } else {
+              ok = false;
+            }
+          } catch {
+            ok = false;
+          }
+          verified.current.set(key, ok);
+        }
+        if (!alive) return;
+
+        for (const n of list) {
+          // Each spot resolves on its own, and whichever survive are kept.
+          for (const sp of n.spots) {
+            const sel = sp.selectors as SpotSelectors | undefined;
+            if (sel === undefined) {
+              out.push({
+                note: n.note,
+                fromVersion: from,
+                elementId: null,
+                how: null,
+                why: "no-selectors",
+                snippet: sp.snippet,
+              });
+              continue;
+            }
+            const r = resolveSpot(target, sel, ok === true);
+            out.push(
+              r.resolved
+                ? {
+                    note: n.note,
+                    fromVersion: from,
+                    elementId: r.elementId,
+                    how: r.how,
+                    why: null,
+                    snippet: sp.snippet,
+                  }
+                : {
+                    note: n.note,
+                    fromVersion: from,
+                    elementId: null,
+                    how: null,
+                    why: r.why,
+                    snippet: sp.snippet,
+                  },
+            );
+          }
+        }
+      }
+      if (alive) setAnchored(out);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [doc, sentNotes, token, conversationId]);
 
   const onNew = React.useCallback(
     async (m: { content: readonly { type: string; text?: string }[] }): Promise<void> => {
@@ -720,10 +861,52 @@ const App = (): React.ReactElement => {
                 ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
                 // Notes already sent are marked too, on the version they
                 // were made against and nowhere else.
-                ...(marks[docKey] ?? []),
+                ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
               ]}
             />
             <div className="doc-foot">
+              {anchored.length === 0 ? null : (
+                <ul className="notes sent">
+                  {anchored.map((a) => (
+                    <li
+                      key={`${a.fromVersion}:${a.snippet}:${a.note}`}
+                      className={a.elementId === null ? "orphan" : "attached"}
+                    >
+                      <span className="note-text">{a.note}</span>
+                      <span className="note-spots">
+                        {a.elementId === null ? (
+                          <>
+                            {/* Never re-attached to whatever now occupies
+                                that space, and never dropped. A note about a
+                                paragraph the agent then removed may be the
+                                most interesting thing here. */}
+                            <strong>lost its target</strong> in v{doc.version} — written against v
+                            {a.fromVersion} on "{a.snippet.slice(0, 40)}"
+                            {a.why === "unverified-source"
+                              ? " (that version could not be verified)"
+                              : ""}
+                          </>
+                        ) : (
+                          <>
+                            {a.how === null
+                              ? `on this version`
+                              : a.how === "exact"
+                                ? `found again, exactly`
+                                : a.how === "approximate"
+                                  ? `found again, reworded`
+                                  : a.how === "position"
+                                    ? `found by position — may be the wrong element`
+                                    : `found by path — may be the wrong element`}
+                            {a.fromVersion === doc.version
+                              ? ""
+                              : ` (written against v${a.fromVersion})`}
+                          </>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {notes.length === 0 ? null : (
                 <ul className="notes">
                   {notes.map((n) => (

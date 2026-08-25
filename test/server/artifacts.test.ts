@@ -187,45 +187,91 @@ describe("marks live on the version they were made against", () => {
     });
   };
 
-  test("a mark is reported against its own version and no other", async () => {
+  /** Which ids a version's notes touch. The endpoint returns the notes
+   * themselves — re-anchoring needs the selectors written with them — so the
+   * ids are read back out of those. */
+  const idsAt = (notes: Record<string, { spots: { id: string }[] }[]>, key: string): string[] =>
+    (notes[key] ?? []).flatMap((n) => n.spots.map((sp) => sp.id));
+
+  test("a note is reported against its own version and no other", async () => {
     writeVersion(1, DOC);
     writeVersion(2, "<h1>revised</h1>");
     annotate(1, ["e1", "e3"]);
     annotate(2, ["e7"]);
-    const { marks } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
-      marks: Record<string, string[]>;
+    const { notes } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      notes: Record<string, { spots: { id: string }[] }[]>;
     };
-    expect(marks["doc-1@1"]).toEqual(["e1", "e3"]);
-    expect(marks["doc-1@2"]).toEqual(["e7"]);
+    expect(idsAt(notes, "doc-1@1")).toEqual(["e1", "e3"]);
+    expect(idsAt(notes, "doc-1@2")).toEqual(["e7"]);
   });
 
-  test("nothing is re-anchored: a version with no notes has no marks", async () => {
+  test("nothing is re-anchored by the server: a version with no notes has none", async () => {
     writeVersion(1, DOC);
     writeVersion(2, "<h1>revised</h1>");
     annotate(1, ["e1"]);
-    const { marks } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
-      marks: Record<string, string[]>;
+    const { notes } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      notes: Record<string, unknown[]>;
     };
-    expect(marks["doc-1@1"]).toEqual(["e1"]);
-    expect(marks["doc-1@2"]).toBeUndefined();
+    expect(notes["doc-1@1"]?.length).toBe(1);
+    expect(notes["doc-1@2"]).toBeUndefined();
   });
 
-  test("every spot of a multi-spot note is marked", async () => {
+  test("every spot of a multi-spot note is carried", async () => {
     writeVersion(1, DOC);
     annotate(1, ["e2", "e4", "e6"]);
-    const { marks } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
-      marks: Record<string, string[]>;
+    const { notes } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      notes: Record<string, { spots: { id: string }[] }[]>;
     };
-    expect(marks["doc-1@1"]).toEqual(["e2", "e4", "e6"]);
+    expect(idsAt(notes, "doc-1@1")).toEqual(["e2", "e4", "e6"]);
   });
 
   test("an ordinary message is not mistaken for a batch", async () => {
     writeVersion(1, DOC);
     sendInput(CONV, { rootDir: root, text: "just something I typed" });
-    const { marks } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
-      marks: Record<string, string[]>;
+    const { notes } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      notes: Record<string, unknown[]>;
     };
-    expect(Object.keys(marks)).toEqual([]);
+    expect(Object.keys(notes)).toEqual([]);
+  });
+
+  test("what a note said and pointed at survives the round trip", async () => {
+    writeVersion(1, DOC);
+    sendInput(CONV, {
+      rootDir: root,
+      text: encodeAnnotationBatch({
+        artifactId: "doc-1",
+        version: 1,
+        notes: [
+          {
+            note: "explain this",
+            spots: [
+              {
+                id: "e3",
+                snippet: "the paragraph as it read",
+                author: "agent",
+                selectors: {
+                  quote: { exact: "the paragraph as it read", prefix: "before ", suffix: " after" },
+                  position: { start: 7, end: 31 },
+                  css: "body > p:nth-of-type(2)",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const { notes } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      notes: Record<
+        string,
+        { note: string; spots: { snippet: string; selectors?: { css: string } }[] }[]
+      >;
+    };
+    const one = notes["doc-1@1"]?.[0];
+    expect(one?.note).toBe("explain this");
+    expect(one?.spots[0]?.snippet).toBe("the paragraph as it read");
+    // The selectors travel with the note: without them it cannot follow a
+    // rewrite.
+    expect(one?.spots[0]?.selectors?.css).toBe("body > p:nth-of-type(2)");
   });
 
   test("every version stays readable, which is what makes a mark honest", async () => {

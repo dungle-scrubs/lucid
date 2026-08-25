@@ -201,36 +201,37 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         const id = decodeURIComponent(catalog[1] ?? "");
         if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
         const dir = conversations(rootDir).dirFor(id);
-        if (!existsSync(join(dir, "log.ndjson"))) return json({ artifacts: [] });
+        if (!existsSync(join(dir, "log.ndjson"))) return json({ artifacts: [], notes: {} });
         try {
           // Which spots already carry a sent note, per version. Derived from
           // the record's own inputs: an annotation batch names the artifact
           // and the version it was made against, so a mark belongs to that
           // version and to no other. Nothing is re-anchored — an id means an
           // element in the render it came from.
-          const marks: Record<string, string[]> = {};
+          const notes: Record<string, unknown[]> = {};
           try {
             for (const i of viewSnapshot(dir).transcript.inputs) {
               const batch = detectAnnotationBatch(i.text);
               if (batch === null || "malformed" in batch) continue;
               const key = `${batch.artifactId}@${batch.version}`;
-              const at = marks[key] ?? [];
-              marks[key] = at;
-              for (const n of batch.notes) {
-                for (const sp of n.spots) at.push(sp.id);
-              }
+              const at = notes[key] ?? [];
+              notes[key] = at;
+              // The notes themselves, not just which ids they touched: a
+              // note made against an older version has to be re-anchored
+              // here, and that needs the selectors written with it.
+              for (const n of batch.notes) at.push(n);
             }
           } catch {
             // A record that will not fold has no marks to report; the
             // conversation endpoint is where that is said.
           }
-          return json({ artifacts: viewArtifactCatalog(dir), marks });
+          return json({ artifacts: viewArtifactCatalog(dir), notes });
         } catch {
           // A record too damaged to fold has no readable catalog. The
           // conversation endpoint is where that is reported; saying "no
           // documents" here would be a second, quieter version of the same
           // claim.
-          return json({ artifacts: [], damaged: true });
+          return json({ artifacts: [], notes: {}, damaged: true });
         }
       }
 

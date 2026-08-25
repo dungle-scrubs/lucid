@@ -59,6 +59,16 @@ export interface AnnotationSpot {
   readonly snippet: string;
   /** Who wrote the content in this spot. */
   readonly author: string;
+  /** Three ways of finding this spot again after the agent has rewritten
+   * the document, written when the note was made and tried in order. Absent
+   * on a note written before anchoring existed, which is why it is optional
+   * rather than required: such a note still shows, it just cannot follow a
+   * rewrite. */
+  readonly selectors?: {
+    readonly quote: { readonly exact: string; readonly prefix: string; readonly suffix: string };
+    readonly position: { readonly start: number; readonly end: number };
+    readonly css: string;
+  };
 }
 
 export interface Annotation {
@@ -86,10 +96,31 @@ export const encodeAnnotationBatch = (batch: AnnotationBatch, typed = ""): strin
   return typed.trim() === "" ? block : `${typed.trim()}\n\n${block}`;
 };
 
+const isSelectors = (v: unknown): boolean => {
+  if (v === null || typeof v !== "object") return false;
+  const s = v as Record<string, unknown>;
+  const q = s.quote as Record<string, unknown> | undefined;
+  const p = s.position as Record<string, unknown> | undefined;
+  return (
+    typeof s.css === "string" &&
+    q !== undefined &&
+    typeof q.exact === "string" &&
+    typeof q.prefix === "string" &&
+    typeof q.suffix === "string" &&
+    p !== undefined &&
+    typeof p.start === "number" &&
+    typeof p.end === "number"
+  );
+};
+
 const isSpot = (v: unknown): v is AnnotationSpot => {
   if (v === null || typeof v !== "object") return false;
   const s = v as Record<string, unknown>;
-  return typeof s.id === "string" && typeof s.snippet === "string" && typeof s.author === "string";
+  if (typeof s.id !== "string" || typeof s.snippet !== "string" || typeof s.author !== "string")
+    return false;
+  // Selectors are optional, but a malformed set is not the same as none:
+  // carrying it would let a broken anchor be tried and trusted.
+  return s.selectors === undefined || isSelectors(s.selectors);
 };
 
 const isNote = (v: unknown): v is Annotation => {
