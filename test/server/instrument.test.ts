@@ -90,20 +90,35 @@ describe("the document's own behaviour is left alone", () => {
     // Two: the mousedown, which stops a control taking focus and drawing a
     // caret, and the click, which stops it being operated. Focus moves on
     // mousedown, so cancelling only the click was too late.
-    const cancels = out.match(/preventDefault/g) ?? [];
-    expect(cancels.length).toBe(2);
-
-    // Every one of them sits inside a handler that has already returned
-    // unless the mode is mark-up.
-    let from = 0;
-    for (let n = 0; n < cancels.length; n += 1) {
-      const at = out.indexOf("preventDefault", from);
+    // Which listener each cancel belongs to, read from the nearest
+    // registration above it. Counting cancels on their own said nothing
+    // about mouse events, which is what this is a rule about.
+    const listener = (at: number): string => {
       const before = out.slice(0, at);
+      const opened = before.lastIndexOf("addEventListener(");
+      return /"([a-z]+)"/.exec(out.slice(opened, at))?.[1] ?? "";
+    };
+
+    const cancels: Array<{ at: number; on: string }> = [];
+    for (let at = out.indexOf("preventDefault"); at !== -1; ) {
+      cancels.push({ at, on: listener(at) });
+      at = out.indexOf("preventDefault", at + 1);
+    }
+
+    const mouse = cancels.filter((c) => c.on === "mousedown" || c.on === "click");
+    expect(mouse.length).toBe(2);
+    for (const c of mouse) {
+      const before = out.slice(0, c.at);
       expect(before.lastIndexOf('mode !== "markup"')).toBeGreaterThan(
         before.lastIndexOf("addEventListener"),
       );
-      from = at + 1;
     }
+
+    // The mode toggle is the one cancel that is not under that guard, and it
+    // must not be: the key exists to get back to mark-up from a caret in a
+    // field, which is use mode by definition. Nothing else may join it.
+    const rest = cancels.filter((c) => c.on !== "mousedown" && c.on !== "click");
+    expect(rest.map((c) => c.on)).toEqual(["keydown"]);
   });
 
   test("only a real person's events count", () => {
@@ -178,8 +193,21 @@ describe("two modes, so one click does one thing", () => {
     // Editable for as long as you are in use mode, rather than after a
     // double-click. That is what gives an I-beam, a caret, and a drag that
     // selects the words to replace — all native, none of it reimplemented.
-    expect(out).toContain('setAttribute("contenteditable", "true")');
+    expect(out).toContain('setAttribute("contenteditable", editKind(el))');
     expect(out).not.toContain('addEventListener("dblclick"');
+  });
+
+  test("a code block is editable, and as plain text", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // It was left out of the list and there was no way to fix a command in
+    // a checklist. In a pre a newline is the content, and rich editing puts
+    // in div and br to make one — which is then what gets saved.
+    expect(out).toContain(',pre"');
+    expect(out).toContain('"plaintext-only"');
+
+    // The affordance follows the attribute, not the word "true", or a pre
+    // would be editable with nothing on screen saying so.
+    expect(out).toContain('[contenteditable]:not([contenteditable="false"])');
   });
 
   test("a label wrapping a control is never made editable", () => {

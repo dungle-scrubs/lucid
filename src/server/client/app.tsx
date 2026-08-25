@@ -43,7 +43,15 @@ import {
   selectorsFor,
   sha256Hex,
 } from "./anchor.js";
+import { togglesMode } from "./hotkeys.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
+import {
+  CONVERSATION_MAX,
+  CONVERSATION_MIN,
+  clampConversationWidth,
+  readConversationWidth,
+  writeConversationWidth,
+} from "./layout.js";
 import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
 
 /** Kept in step with the server's own poll interval. */
@@ -369,6 +377,7 @@ const DocumentFrame = ({
   capture,
   snapshot,
   deselect,
+  onHotkey,
   onDirty,
   marked,
   mode,
@@ -385,6 +394,8 @@ const DocumentFrame = ({
   >;
   /** Handed a way to drop the frame's selection, for backing out of a note. */
   deselect: React.MutableRefObject<(() => void) | null>;
+  /** A key the frame caught that means something to the whole page. */
+  onHotkey: (which: "toggle-mode") => void;
   /** The frame says when a person has changed something in it. */
   onDirty: () => void;
   /** Spots that already carry a note, marked in the document while the
@@ -414,6 +425,15 @@ const DocumentFrame = ({
       const m = e.data as Record<string, unknown> | null;
       if (m === null || typeof m !== "object") return;
       if (m.source !== FRAME_MESSAGE_SOURCE) return;
+
+      // A key press is about the page, not about a version of a document, so
+      // it carries no artifact and is answered before anything is checked
+      // against one.
+      if (m.kind === "hotkey") {
+        if (m.hotkey === "toggle-mode") onHotkey("toggle-mode");
+        return;
+      }
+
       if (
         m.kind !== "selection" &&
         m.kind !== "captured" &&
@@ -476,7 +496,7 @@ const DocumentFrame = ({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [doc.artifactId, doc.version, onSelection, onDirty]);
+  }, [doc.artifactId, doc.version, onSelection, onHotkey, onDirty]);
 
   // Asking the frame what is at a set of spots. The parent cannot read the
   // document, so it asks and the frame answers — the boundary stays one
@@ -671,6 +691,86 @@ const App = (): React.ReactElement => {
     setRefusal(null);
     deselect.current?.();
   }, []);
+
+  /** How wide the conversation is. Null means it has never been dragged, and
+   * the stylesheet's own share of the window stands. */
+  const [convWidth, setConvWidth] = React.useState<number | null>(() =>
+    readConversationWidth(typeof localStorage === "undefined" ? null : localStorage),
+  );
+  const [dragging, setDragging] = React.useState(false);
+
+  // A pointer capture, not a window listener: the pointer crosses the frame
+  // on the way, and the frame is another document that would swallow every
+  // move after the first.
+  const startDrag = React.useCallback((e: React.PointerEvent<HTMLHRElement>): void => {
+    e.preventDefault();
+    const grip = e.currentTarget;
+    grip.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startWidth = grip.nextElementSibling?.getBoundingClientRect().width ?? 0;
+    setDragging(true);
+
+    const move = (ev: PointerEvent): void => {
+      // Dragging left widens the conversation: it is the right-hand pane.
+      setConvWidth(clampConversationWidth(startWidth - (ev.clientX - startX), window.innerWidth));
+    };
+    const done = (): void => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", done);
+      grip.removeEventListener("pointercancel", done);
+      grip.releasePointerCapture(e.pointerId);
+      setDragging(false);
+      setConvWidth((w) => {
+        if (w !== null) writeConversationWidth(localStorage, w);
+        return w;
+      });
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", done);
+    grip.addEventListener("pointercancel", done);
+  }, []);
+
+  // The same move without a pointer. A separator you can reach with Tab and
+  // cannot operate is a control in name only.
+  const nudgeDrag = React.useCallback((e: React.KeyboardEvent<HTMLHRElement>): void => {
+    const step = e.shiftKey ? 64 : 16;
+    const by = e.key === "ArrowLeft" ? step : e.key === "ArrowRight" ? -step : 0;
+    if (by === 0) return;
+    e.preventDefault();
+    const now = e.currentTarget.nextElementSibling?.getBoundingClientRect().width ?? 0;
+    const next = clampConversationWidth(now + by, window.innerWidth);
+    setConvWidth(next);
+    writeConversationWidth(localStorage, next);
+  }, []);
+
+  // A window that shrinks can leave the conversation wider than there is
+  // room for. What was dragged is kept; what is shown is what fits.
+  React.useEffect(() => {
+    const onResize = (): void => {
+      setConvWidth((w) => (w === null ? null : clampConversationWidth(w, window.innerWidth)));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const toggleMode = React.useCallback((): void => {
+    setMode((m) => (m === "use" ? "markup" : "use"));
+    // Leaving mark-up mode ends whatever note was being written: there is no
+    // selection in use mode for it to point at.
+    cancelNote();
+  }, [cancelNote]);
+
+  // Pressed anywhere in the page. The frame catches its own and posts it
+  // out, so the key works with the caret in the document too.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!togglesMode(e, e.target)) return;
+      e.preventDefault();
+      toggleMode();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleMode]);
 
   const onSelected = React.useCallback(
     (ids: readonly string[], rect: SelectionRect | null): void => {
@@ -1184,11 +1284,11 @@ const App = (): React.ReactElement => {
       };
     if (mode === "markup")
       return {
-        text: "Marking up: click a part of the document to select it, ⌘-click to add more. Controls do not respond while you are marking up.",
+        text: "Marking up: click a part of the document to select it, ⌘-click to add more. ⌥⌫ goes back to using it.",
         tone: "idle",
       };
     return {
-      text: "Using the document: tick boxes, fill fields, and click text to edit it. Switch to Mark up to write notes about it.",
+      text: "Using the document: tick boxes, fill fields, and click text to edit it. ⌥⌫ switches to Mark up to write notes about it.",
       tone: "idle",
     };
   })();
@@ -1253,7 +1353,7 @@ const App = (): React.ReactElement => {
                       type="button"
                       className={mode === "use" ? "m current" : "m"}
                       onClick={() => setMode("use")}
-                      title="Tick boxes, fill fields, and edit text"
+                      title="Tick boxes, fill fields, and edit text (⌥⌫)"
                     >
                       Use
                     </button>
@@ -1261,7 +1361,7 @@ const App = (): React.ReactElement => {
                       type="button"
                       className={mode === "markup" ? "m current" : "m"}
                       onClick={() => setMode("markup")}
-                      title="Click parts of the document to write notes about them"
+                      title="Click parts of the document to write notes about them (⌥⌫)"
                     >
                       Mark up
                     </button>
@@ -1287,6 +1387,7 @@ const App = (): React.ReactElement => {
                     capture={capture}
                     snapshot={snapshot}
                     deselect={deselect}
+                    onHotkey={toggleMode}
                     onDirty={() => setEdited(true)}
                     marked={[
                       ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
@@ -1333,6 +1434,10 @@ const App = (): React.ReactElement => {
                         // sideways to stay in view.
                         side="bottom"
                         align="start"
+                        // Stepped in from the left edge of what it points at.
+                        // Flush, its edge lined up with the paragraph's and
+                        // the two read as one block.
+                        alignOffset={28}
                         sideOffset={8}
                         collisionPadding={12}
                         // Only Escape and the buttons close it. A click into
@@ -1403,7 +1508,29 @@ const App = (): React.ReactElement => {
             )}
           </div>
 
-          <div className="pane conversation">
+          {/* An `hr`, because that is what a separator is. It carries its
+              width so a reader that cannot see the drag is still told what
+              the arrow keys just did. */}
+          <hr
+            className={dragging ? "pane-grip dragging" : "pane-grip"}
+            onPointerDown={startDrag}
+            onKeyDown={nudgeDrag}
+            tabIndex={0}
+            aria-orientation="vertical"
+            aria-label="Resize the conversation"
+            aria-valuemin={CONVERSATION_MIN}
+            aria-valuemax={CONVERSATION_MAX}
+            aria-valuenow={convWidth ?? undefined}
+          />
+
+          <div
+            className="pane conversation"
+            style={
+              convWidth === null
+                ? undefined
+                : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
+            }
+          >
             <Thread
               pending={notes}
               onSendNotes={() => void sendNotes()}

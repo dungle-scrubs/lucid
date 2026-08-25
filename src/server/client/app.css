@@ -204,21 +204,60 @@ body {
   background: var(--panel);
 }
 
-/* The conversation is the margin note beside it: a fixed reading column,
-   not a half of the screen. */
+/* The conversation is the margin note beside it: a reading column, not a
+   half of the screen. This is where it starts; the grip decides after that,
+   and an inline width overrides this rule. */
 .pane.conversation {
-  flex: 0 0 clamp(340px, 30%, 480px);
-  border-left: 1px solid var(--line);
+  flex: 0 0 var(--conversation-width, clamp(340px, 30%, 480px));
+}
+
+/* The border between the panes is the grip's, so there is one line and it
+   is the thing you grab. It is four pixels wide and reaches wider than it
+   looks, because a one-pixel target is not a target. */
+.pane-grip {
+  flex: 0 0 1px;
+  /* An `hr` brings its own border, margins, and height. */
+  margin: 0;
+  border: 0;
+  align-self: stretch;
+  position: relative;
+  background: var(--line);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.pane-grip::after {
+  content: "";
+  position: absolute;
+  inset: 0 -4px;
+}
+
+.pane-grip:hover,
+.pane-grip.dragging {
+  background: var(--accent, #6b7cff);
+}
+
+/* While dragging, the pointer is captured by the grip; this stops the rest
+   of the page from painting a text caret as it passes under. */
+.pane-grip.dragging::after {
+  position: fixed;
+  inset: 0;
+  cursor: col-resize;
 }
 
 @media (max-width: 900px) {
   .panes {
     flex-direction: column;
   }
+  /* Stacked, so a width means nothing and the grip has no axis to work on.
+     A dragged width arrives as a custom property rather than a flex value,
+     so this rule wins on order and nothing needs !important to beat it. */
   .pane.conversation {
     flex: 1 1 45%;
-    border-left: 0;
     border-top: 1px solid var(--line);
+  }
+  .pane-grip {
+    display: none;
   }
 }
 
@@ -323,11 +362,6 @@ body {
   background: var(--bg);
 }
 
-.doc-panel .guidance {
-  flex: 1;
-  min-width: 0;
-}
-
 .guidance {
   font-size: 12px;
   line-height: 1.45;
@@ -340,6 +374,12 @@ body {
 
 .guidance.warn {
   color: var(--error);
+}
+
+/* In the strip it is the row's stretchy half, with the button at the end. */
+.doc-panel .guidance {
+  flex: 1;
+  min-width: 0;
 }
 
 /* The frame and the note box share this box. The frame reports a rect in

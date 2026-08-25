@@ -24,6 +24,7 @@
  *   click is doing its own work, and lucid does not read that as a
  *   selection.
  */
+import { flattenNewlines } from "./snapshot-dom.js";
 
 /** Marks a message as lucid's own. Checked by the parent, which also
  * checks the sending window — an opaque origin gives nothing to compare,
@@ -80,15 +81,17 @@ html.lucid-markup, html.lucid-markup * {
   user-select: none !important;
 }
 /* Editable text, in use mode. The dotted rule is the affordance: it says
-   the text can be changed without shouting about it. */
-[${ELEMENT_ATTR}][contenteditable="true"] {
+   the text can be changed without shouting about it. Matched on the
+   attribute rather than on "true", because a pre carries plaintext-only
+   and is just as editable. */
+[${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]) {
   outline: none !important;
   border-bottom: 1px dotted rgba(13, 148, 136, 0.55) !important;
 }
-[${ELEMENT_ATTR}][contenteditable="true"]:hover {
+[${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):hover {
   background: rgba(13, 148, 136, 0.06) !important;
 }
-[${ELEMENT_ATTR}][contenteditable="true"]:focus {
+[${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):focus {
   outline: 2px solid #0d9488 !important;
   outline-offset: 2px !important;
   background: rgba(13, 148, 136, 0.08) !important;
@@ -153,12 +156,20 @@ const script = (artifactId: string, version: number, author: string): string => 
   // Text that can hold a caret: a leaf block with no control inside it.
   // Never a label wrapping a checkbox — making that editable swallows the
   // control and the next click toggles it from inside the caret.
-  var EDITABLE = "p,li,h1,h2,h3,h4,h5,h6,td,th,blockquote,dd,dt,figcaption";
+  var EDITABLE = "p,li,h1,h2,h3,h4,h5,h6,td,th,blockquote,dd,dt,figcaption,pre";
 
   var editable = function (el) {
     if (!el.matches(EDITABLE)) return false;
     if (el.querySelector("input,textarea,select,button,a")) return false;
     return (el.textContent || "").trim() !== "";
+  };
+
+  // How the caret behaves in a block. In a pre, a newline IS the content
+  // and the browser's rich editing inserts div and br to make one — which
+  // is then what gets saved as the next version of the document. Plain-text
+  // editing puts in a newline character, which is what a pre means.
+  var editKind = function (el) {
+    return el.matches("pre") ? "plaintext-only" : "true";
   };
 
   var applyMode = function () {
@@ -169,7 +180,7 @@ const script = (artifactId: string, version: number, author: string): string => 
     var all = document.body ? document.body.querySelectorAll("[" + ATTR + "]") : [];
     for (var i = 0; i < all.length; i++) {
       var el = all[i];
-      if (mode === "use" && editable(el)) el.setAttribute("contenteditable", "true");
+      if (mode === "use" && editable(el)) el.setAttribute("contenteditable", editKind(el));
       else el.removeAttribute("contenteditable");
     }
     if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
@@ -194,6 +205,11 @@ const script = (artifactId: string, version: number, author: string): string => 
     }
     return out;
   };
+
+  // The real function, injected by its own source. It lives in
+  // snapshot-dom.ts so that a test can run it against a document; the frame
+  // cannot import, so this is how one implementation serves both.
+  var flattenNewlines = ${flattenNewlines.toString()};
 
   // What lucid added comes back out: the document is saved as the agent
   // would read it, not as lucid rendered it.
@@ -227,6 +243,8 @@ const script = (artifactId: string, version: number, author: string): string => 
       m.classList.remove("lucid-hover", "lucid-selected", "lucid-noted", "lucid-edited");
       if (m.getAttribute("class") === "") m.removeAttribute("class");
     }
+    var pres = copy.querySelectorAll("pre");
+    for (var c = 0; c < pres.length; c++) flattenNewlines(pres[c]);
     return "<!doctype html>" + copy.outerHTML;
   };
 
@@ -273,6 +291,25 @@ const script = (artifactId: string, version: number, author: string): string => 
   var repost = function () {
     if (selected.length > 0) post();
   };
+
+  // The frame has its own keyboard, so a key pressed with the caret in the
+  // document never reaches the page. The mode toggle has to work from in
+  // here, which means asking the same question and handing the answer out.
+  document.addEventListener(
+    "keydown",
+    function (e) {
+      if (!e.isTrusted) return;
+      if (!e.altKey || e.key !== "Backspace") return;
+      if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+      // The browser would delete the word behind the caret. This is the one
+      // key lucid takes from the document, and it takes it in both modes:
+      // getting back to marking up from a caret in a field is the whole
+      // point of having it.
+      e.preventDefault();
+      parent.postMessage({ source: SOURCE, kind: "hotkey", hotkey: "toggle-mode" }, "*");
+    },
+    true
+  );
   window.addEventListener("scroll", repost, true);
   window.addEventListener("resize", repost);
 
