@@ -38,6 +38,17 @@ import type { CollectedBatch } from "../store/log.js";
 import { ARTIFACT_BYTES_MAX } from "../store/log.js";
 import { createSequencer } from "./sequencer.js";
 
+/** How long a harness may say nothing after being handed an input before
+ * lucid records that it has.
+ *
+ * A harness can legitimately think for a long time, so this is generous. It
+ * is not a timeout and nothing is cancelled: the input stays delivered and
+ * the turn stays open. All it does is turn silence into a fact in the
+ * record, because silence and working were indistinguishable — a wedged
+ * session held eight inputs for ninety minutes and the log said nothing at
+ * all between them. */
+export const STALL_MS = 90_000;
+
 /** What sendFrame returns. */
 type SendResult = ReduceResult | { readonly verdict: "refused"; readonly issue: string };
 
@@ -53,6 +64,13 @@ export interface HeadlessDeps {
   readonly provider?: string;
   /** Lucid mints headless turnIds (PLAN 4.3); injected for determinism. */
   readonly mintTurnId: () => string;
+  /** Injected so the stall watchdog is testable without waiting. */
+  readonly now?: () => number;
+  /** How long a handed-over input may produce nothing before the silence is
+   * recorded. Injected for tests; production uses STALL_MS. */
+  readonly stallMs?: number;
+  /** How often the watchdog looks. Injected for tests. */
+  readonly stallTickMs?: number;
   /** The in-process channel to the host. */
   readonly sendFrame: (frame: Frame) => SendResult;
   /** The record, for delivery-cursor bookkeeping (RFC-04 R3). When present
@@ -623,6 +641,42 @@ export const createHeadlessHost = (
     expected,
   };
 
+  // The stall watchdog.
+  //
+  // lucid hands an input to the harness and the harness answers with a
+  // disposition and a turn. When it answers with nothing, there was nothing
+  // in the record to say so: no event, no error, no entry at all between
+  // one input and the next. A person watching saw a conversation that had
+  // simply stopped, with no way to tell it from one that was thinking.
+  //
+  // This does not cancel anything and does not retry. The input stays
+  // delivered, the harness keeps whatever it has, and a late answer lands
+  // normally. It writes down that the silence happened, once per stall, so
+  // the terminal, the browser and the log all say the same thing.
+  const clock = deps.now ?? (() => Date.now());
+  const stallAfter = deps.stallMs ?? STALL_MS;
+  let handedOverAt: number | null = null;
+  let stallReported = false;
+
+  /** Anything the harness says clears the watch — it is answering. */
+  const harnessSpoke = (): void => {
+    handedOverAt = null;
+    stallReported = false;
+  };
+
+  const watchdog = setInterval(() => {
+    if (handedOverAt === null || stallReported) return;
+    if (clock() - handedOverAt < stallAfter) return;
+    stallReported = true;
+    ctx.sequencer.emit(ctx.getTurnId(), {
+      kind: EventKind.error,
+      message: `the harness has not answered for ${Math.round((clock() - handedOverAt) / 1000)}s since an input was handed to it; it may be wedged`,
+      terminal: false,
+    });
+  }, deps.stallTickMs ?? 5_000);
+  // Nothing here should hold the process open on its own.
+  (watchdog as unknown as { unref?: () => void }).unref?.();
+
   const strategy: StrategyHandle =
     profile === "headless-session"
       ? sessionStrategy(deps as HeadlessDeps & { sessionId: string }, ctx)
@@ -662,6 +716,10 @@ export const createHeadlessHost = (
         ) {
           handleArtifactMessage((event as { text: string }).text, currentTurnId, deps, ctx);
         }
+        // The harness said something, so it is answering. Every event goes
+        // through here, which is why the watch is cleared here rather than
+        // at each of the places one can be produced.
+        harnessSpoke();
         sequencer.emit(currentTurnId, event);
       }
       currentTurnId = deps.mintTurnId();
@@ -676,6 +734,8 @@ export const createHeadlessHost = (
   const receive = (frame: Frame): void => {
     switch (frame.kind) {
       case "input":
+        handedOverAt = clock();
+        stallReported = false;
         // The mode travels with the input all the way to the strategy. It
         // used to stop here, which made `steer` and `queue` mean the same
         // thing to a harness.
@@ -729,6 +789,7 @@ export const createHeadlessHost = (
   return {
     receive,
     close: (): void => {
+      clearInterval(watchdog);
       sequencer.detachOnce("shutdown");
       try {
         strategy.close();
