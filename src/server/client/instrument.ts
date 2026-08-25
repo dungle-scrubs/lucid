@@ -65,8 +65,8 @@ html {
  * background wins — including a deliberately dark one. A default, not an
  * override. */
 :where(html) {
-  background: #fff;
-  color-scheme: light;
+  background: Canvas;
+  color: CanvasText;
 }
 
 /* Mark-up mode only. In use mode lucid draws nothing and the document's
