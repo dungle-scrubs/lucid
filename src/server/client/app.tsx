@@ -102,6 +102,52 @@ const Thread = (): React.ReactElement => (
   </ThreadPrimitive.Root>
 );
 
+interface CatalogEntry {
+  readonly artifactId: string;
+  readonly versions: readonly number[];
+  readonly latest: number;
+}
+
+interface Doc {
+  readonly artifactId: string;
+  readonly version: number;
+  readonly contentType: string;
+  readonly bytes: string;
+}
+
+/** How often the document channel is asked for news.
+ *
+ * Slower than the conversation on purpose. A transcript changes constantly
+ * and costs a few lines; a document changes rarely and costs its whole
+ * size. Only the catalog is polled — it is versions and ids, no bytes — and
+ * a version is fetched once, when it turns out to be new. */
+const CATALOG_POLL_MS = 2000;
+
+/** The document, in a frame the page cannot reach into.
+ *
+ * `srcdoc` hands the frame its bytes; the frame fetches nothing, so a
+ * document that names an external image or script gets neither.
+ *
+ * The sandbox has no `allow-same-origin`, which is the whole point. With
+ * it the parent could read into the frame — and the frame could read back
+ * out, into a page holding a token with read and write on every record.
+ * The document is written by an agent, so that reach is not one to grant.
+ * Without it the frame is an opaque origin: nothing crosses in either
+ * direction. `allow-scripts` alone is safe precisely because the origin is
+ * opaque; the two together would not be.
+ *
+ * `key` is the version, so a new version replaces the frame rather than
+ * mutating it. There is no in-place update path to get wrong. */
+const DocumentFrame = ({ doc }: { doc: Doc }): React.ReactElement => (
+  <iframe
+    key={`${doc.artifactId}@${doc.version}`}
+    className="doc-frame"
+    title={`${doc.artifactId} v${doc.version}`}
+    sandbox="allow-scripts"
+    srcDoc={doc.bytes}
+  />
+);
+
 const App = (): React.ReactElement => {
   const conversationId = React.useMemo(conversationIdFromPath, []);
   const [token, setToken] = React.useState<string | null>(null);
@@ -112,6 +158,14 @@ const App = (): React.ReactElement => {
    * reloading, and retrying a dead token forever is the failure this flag
    * exists to prevent. */
   const [dead, setDead] = React.useState(false);
+  const [doc, setDoc] = React.useState<Doc | null>(null);
+  /** Which version is on screen. Compared against the catalog so a fetch
+   * happens on a new version and not on every tick. */
+  const shown = React.useRef<string>("");
+  /** True while a version is being fetched. A new version appears when
+   * nothing is in progress, so a slow fetch never has a second one racing
+   * it, and the frame is never swapped halfway. */
+  const fetching = React.useRef(false);
 
   React.useEffect(() => {
     let alive = true;
@@ -171,6 +225,55 @@ const App = (): React.ReactElement => {
     };
   }, [token, dead, conversationId]);
 
+  // The document channel. Separate effect, separate cadence, separate
+  // endpoint — a document never rides along with a transcript poll.
+  React.useEffect(() => {
+    if (token === null || dead || conversationId === "") return;
+    let alive = true;
+    const tick = async (): Promise<void> => {
+      if (fetching.current) return;
+      try {
+        const res = await fetch(
+          `/api/conversations/${encodeURIComponent(conversationId)}/artifacts`,
+          {
+            headers: { [TOKEN_HEADER]: token },
+          },
+        );
+        if (!alive || !res.ok) return;
+        const { artifacts } = (await res.json()) as { artifacts: CatalogEntry[] };
+        // One document beside the conversation in this slice. The newest
+        // artifact the record holds is the one shown.
+        const entry = artifacts[artifacts.length - 1];
+        if (entry === undefined) return;
+        const want = `${entry.artifactId}@${entry.latest}`;
+        if (want === shown.current) return;
+        fetching.current = true;
+        try {
+          const one = await fetch(
+            `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(entry.artifactId)}/${entry.latest}`,
+            { headers: { [TOKEN_HEADER]: token } },
+          );
+          if (!alive || !one.ok) return;
+          const body = (await one.json()) as Doc;
+          if (!alive) return;
+          shown.current = want;
+          setDoc(body);
+        } finally {
+          fetching.current = false;
+        }
+      } catch {
+        // A failed poll is not worth a notice: the next one is 2s away, and
+        // the conversation channel already reports a server that has gone.
+      }
+    };
+    void tick();
+    const id = window.setInterval(() => void tick(), CATALOG_POLL_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [token, dead, conversationId]);
+
   const onNew = React.useCallback(
     async (m: { content: readonly { type: string; text?: string }[] }): Promise<void> => {
       const text = m.content
@@ -214,7 +317,20 @@ const App = (): React.ReactElement => {
         <span className="status">{status}</span>
       </header>
       {problem === null ? null : <div className="notice">{problem}</div>}
-      <Thread />
+      <div className={doc === null ? "panes" : "panes with-doc"}>
+        <div className="pane conversation">
+          <Thread />
+        </div>
+        {doc === null ? null : (
+          <div className="pane document">
+            <div className="doc-head">
+              <span className="doc-id">{doc.artifactId}</span>
+              <span className="doc-version">v{doc.version}</span>
+            </div>
+            <DocumentFrame doc={doc} />
+          </div>
+        )}
+      </div>
     </AssistantRuntimeProvider>
   );
 };

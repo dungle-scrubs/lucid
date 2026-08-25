@@ -34,7 +34,12 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { conversations } from "../cli/record-addressing.js";
 import { TEXT_MAX } from "../protocol/frames.js";
-import { createConversationHost, viewSnapshot } from "../store/conversation-host.js";
+import {
+  createConversationHost,
+  viewArtifactCatalog,
+  viewArtifactVersion,
+  viewSnapshot,
+} from "../store/conversation-host.js";
 import { validConversationId } from "../store/errors.js";
 import { presenceHeld } from "../store/presence.js";
 // The projection is `buildView`'s, not a second one written for the
@@ -183,6 +188,56 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           // A torn trailing write folds cleanly but short. That is damage
           // too, and the page says so.
           damaged: snapshot.goodBytes < logSize(dir),
+        });
+      }
+
+      // Documents travel on their own channel, not with the conversation.
+      // Conversation updates are small and constant; documents are large and
+      // rare, so folding one into the other would make every poll pay a
+      // document's size for a transcript's worth of change.
+      const catalog = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/?$/);
+      if (catalog && req.method === "GET") {
+        const id = decodeURIComponent(catalog[1] ?? "");
+        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+        const dir = conversations(rootDir).dirFor(id);
+        if (!existsSync(join(dir, "log.ndjson"))) return json({ artifacts: [] });
+        try {
+          return json({ artifacts: viewArtifactCatalog(dir) });
+        } catch {
+          // A record too damaged to fold has no readable catalog. The
+          // conversation endpoint is where that is reported; saying "no
+          // documents" here would be a second, quieter version of the same
+          // claim.
+          return json({ artifacts: [], damaged: true });
+        }
+      }
+
+      // One version per request, read by seeking to the line it lives on.
+      // Nothing is held between requests.
+      const version = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/(\d+)\/?$/);
+      if (version && req.method === "GET") {
+        const id = decodeURIComponent(version[1] ?? "");
+        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+        const artifactId = decodeURIComponent(version[2] ?? "");
+        const n = Number(version[3]);
+        if (!Number.isSafeInteger(n) || n < 1) return json({ error: "invalid-version" }, 400);
+        const dir = conversations(rootDir).dirFor(id);
+        if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-version" }, 404);
+        let found: ReturnType<typeof viewArtifactVersion>;
+        try {
+          found = viewArtifactVersion(dir, artifactId, n);
+        } catch {
+          return json({ error: "damaged" }, 409);
+        }
+        if (found === null) return json({ error: "no-such-version" }, 404);
+        return json({
+          artifactId: found.artifactId,
+          version: found.version,
+          author: found.author,
+          contentType: found.contentType,
+          hash: found.hash,
+          at: found.at,
+          bytes: found.bytes,
         });
       }
 

@@ -186,3 +186,76 @@ body {
 .msg.agent .body {
   padding: 2px 0;
 }
+
+/* --- two panes ---------------------------------------------------------- */
+
+#root {
+  max-width: none;
+}
+
+.panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.pane {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Alone, the conversation keeps the reading width it had. Beside a
+   document it takes a fixed column, so the document gets the room. */
+.pane.conversation {
+  flex: 1;
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+.panes.with-doc .pane.conversation {
+  max-width: none;
+  margin: 0;
+  flex: 0 0 42%;
+  border-right: 1px solid var(--line);
+}
+
+.pane.document {
+  flex: 1;
+  background: var(--panel);
+}
+
+.doc-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.doc-head .doc-id {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* The frame is an opaque origin: it paints its own document, on its own
+   white, whatever the host theme is. Nothing here reaches inside it. */
+.doc-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+@media (max-width: 900px) {
+  .panes.with-doc {
+    flex-direction: column;
+  }
+  .panes.with-doc .pane.conversation {
+    flex: 1 1 50%;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}

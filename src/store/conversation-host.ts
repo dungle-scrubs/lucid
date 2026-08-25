@@ -54,12 +54,21 @@ import {
 } from "../protocol/index.js";
 import { pathsForDir, type RecordPaths, StoreError } from "./errors.js";
 import type { LockEvent } from "./lock.js";
-import { type AppendEvent, type CollectedBatch, createLog, foldLog, type LogEntry } from "./log.js";
+import {
+  type AppendEvent,
+  type ArtifactVersion,
+  type CollectedBatch,
+  createLog,
+  foldLog,
+  type LogEntry,
+  readArtifactVersion,
+} from "./log.js";
 
 const REDACTED = "redacted";
 
 export type {
   AppendEvent,
+  ArtifactVersion,
   CollectedBatch,
   CollectedEntry,
   LogEntry,
@@ -382,4 +391,58 @@ export const viewSnapshot = (
   const presenceFn = opts.presence ?? (() => undefined);
   const status = channelStatus(state, nowFn(), { processAlive: presenceFn() === true });
   return { state, transcript, status, goodBytes };
+};
+
+/** One artifact this record holds, and which versions of it exist.
+ *
+ * Built from the fold's index, which is keys and offsets — so a catalog
+ * costs no document bytes however large the documents are. Reading a
+ * version is a separate, explicit act (`viewArtifactVersion`). */
+export interface ArtifactCatalogEntry {
+  readonly artifactId: string;
+  /** Ascending. Every version the record holds, not a range. */
+  readonly versions: readonly number[];
+  readonly latest: number;
+}
+
+/** Lock-free catalog of a record's artifacts.
+ *
+ * The counterpart to `viewSnapshot` for documents. Same reader discipline:
+ * read the file, fold it, derive from that one fold, hold nothing. */
+export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[] => {
+  const { secret, conversationId, paths } = readRecordFiles(dir);
+  const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
+  const { artifactIndex } = foldLog(conversationId, secret, raw);
+  const byId = new Map<string, number[]>();
+  for (const key of artifactIndex.keys()) {
+    // `artifactKey` joins on NUL, which cannot occur in either half.
+    const sep = key.indexOf("\0");
+    if (sep === -1) continue;
+    const id = key.slice(0, sep);
+    const version = Number(key.slice(sep + 1));
+    if (!Number.isSafeInteger(version)) continue;
+    const seen = byId.get(id);
+    if (seen === undefined) byId.set(id, [version]);
+    else seen.push(version);
+  }
+  return [...byId.entries()]
+    .map(([artifactId, versions]) => {
+      const sorted = [...versions].sort((a, b) => a - b);
+      return { artifactId, versions: sorted, latest: sorted[sorted.length - 1] as number };
+    })
+    .sort((a, b) => a.artifactId.localeCompare(b.artifactId));
+};
+
+/** Lock-free seek to one artifact version. Folds to build the index, then
+ * reads exactly the one line that version lives on — never the whole
+ * document set. Null when this record holds no such version. */
+export const viewArtifactVersion = (
+  dir: string,
+  artifactId: string,
+  version: number,
+): ArtifactVersion | null => {
+  const { secret, conversationId, paths } = readRecordFiles(dir);
+  const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
+  const { artifactIndex } = foldLog(conversationId, secret, raw);
+  return readArtifactVersion(raw, artifactId, version, artifactIndex);
 };
