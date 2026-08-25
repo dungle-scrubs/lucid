@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { decideAction } from "../../src/modes/controller.js";
 import { ATTACH_GRACE_MS, channelStatus, HEARTBEAT_MS } from "../../src/protocol/liveness.js";
 import { LEASE_RENEW_EVERY_MS, LEASE_TTL_MS, reduce } from "../../src/protocol/reducer.js";
 import { attach, expectAccepted, fresh } from "./helpers.js";
@@ -210,5 +211,55 @@ describe("liveness + state machine (M4.4)", () => {
     // this layer - the reducer has no durable replay buffer to prove
     // ordered exactly-once delivery. M4.4 proves heartbeat/lease/epoch/
     // state only; the full oracle lands in M5.4 over the store.
+  });
+});
+
+describe("a lapsed lease does not change which profile is attached", () => {
+  test("an idle headless driver reads as headless, not as an interactive session", () => {
+    const session = expectAccepted(
+      reduce(fresh(), attach({ profile: "headless-session" }), 1_000),
+    ).state;
+    const turn = expectAccepted(reduce(fresh(), attach({ profile: "headless-turn" }), 1_000)).state;
+    const expired = 1_000 + ATTACH_GRACE_MS;
+
+    // The lease lapses after silence, and waiting for a person to type is
+    // exactly that. The driver is alive and holding the lock the whole time.
+    expect(channelStatus(session, expired, { processAlive: true })).toBe("headless-session");
+    expect(channelStatus(turn, expired, { processAlive: true })).toBe("headless-turn");
+  });
+
+  test("and the controller therefore delivers rather than waiting for a re-attach", () => {
+    const session = expectAccepted(
+      reduce(fresh(), attach({ profile: "headless-session" }), 1_000),
+    ).state;
+    const expired = 1_000 + ATTACH_GRACE_MS;
+    const status = channelStatus(session, expired, { processAlive: true });
+    // `interactive-unattached` means "a living human session, wait for it".
+    // A headless driver is not going to re-attach: it is already attached.
+    expect(decideAction(status)).toMatchObject({ action: "deliver", takeover: false });
+  });
+
+  test("an interactive attachment is unchanged — that is what the name is for", () => {
+    const interactive = expectAccepted(reduce(fresh(), attach(), 1_000)).state;
+    const expired = 1_000 + ATTACH_GRACE_MS;
+    expect(channelStatus(interactive, expired, { processAlive: true })).toBe(
+      "interactive-unattached",
+    );
+  });
+
+  test("a dead process is gone whatever was attached", () => {
+    const session = expectAccepted(
+      reduce(fresh(), attach({ profile: "headless-session" }), 1_000),
+    ).state;
+    const expired = 1_000 + ATTACH_GRACE_MS;
+    // The lock is kernel-released on death, so this is the honest answer and
+    // the one that lets a successor take over.
+    expect(channelStatus(session, expired, { processAlive: false })).toBe("agent-gone");
+  });
+
+  test("never attached at all is still interactive-unattached", () => {
+    // No profile to preserve, and a live process with no attachment is the
+    // case the name was written for.
+    expect(channelStatus(fresh(), 1_000, { processAlive: true })).toBe("interactive-unattached");
   });
 });

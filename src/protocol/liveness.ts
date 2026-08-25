@@ -49,5 +49,18 @@ export const channelStatus = (
         return "headless-turn";
     }
   }
-  return presence.processAlive ? "interactive-unattached" : "agent-gone";
+  if (!presence.processAlive) return "agent-gone";
+  // A lapsed lease with the process still alive. Which profile was attached
+  // still decides what this channel is.
+  //
+  // Collapsing every such case to `interactive-unattached` named the wrong
+  // profile for a headless driver — and that name is load-bearing: it means
+  // "a living human session, to be waited on, never taken over", and the
+  // controller turns it into `await-reattach`. A headless driver sitting
+  // idle is not going to re-attach; it is already attached and deliverable,
+  // which is what the lock says and what its own follower does.
+  const profile = state.attachment?.profile;
+  if (profile === "headless-session") return "headless-session";
+  if (profile === "headless-turn") return "headless-turn";
+  return "interactive-unattached";
 };
