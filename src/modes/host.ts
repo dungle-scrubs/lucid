@@ -32,6 +32,7 @@ import type { HarnessEvent } from "../harness/events.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
 import {
+  ARTIFACT_PREAMBLE_MARKER,
   type ArtifactState,
   composeArtifactPrompt,
   composeArtifactState,
@@ -328,20 +329,30 @@ const sessionStrategy = (
   let artifactPreambleSent = false;
   const sendNow = (id: string, text: string, mode: InputMode): void => {
     if (closed) return;
-    // RFC-06: headless-session preamble once per session, not for answers
-    // (an answer is raw text through the harness answer path, not a prompt).
+    // RFC-06: the artifact protocol preamble is said once per session. It is
+    // instructions, and they do not change.
+    //
+    // Nothing else here is like that, and all three used to sit behind the
+    // same flag. The artifact state describes a record that changes under
+    // the session — a person saving a version is exactly that — so from the
+    // second input onward the agent was told nothing about it, and would
+    // name a stale version in its next revision for a reason neither side
+    // could see. The annotation preamble belongs to the batch of notes in
+    // the input carrying it, so it goes with every batch or with none.
+    //
+    // Not for answers: an answer is raw text through the harness answer
+    // path, not a prompt.
     let composed = text;
-    if (mode !== "answer" && !artifactPreambleSent) {
-      const maybe = composeArtifactState(
-        composeArtifactPrompt(composeAnnotationPrompt(text), "headless-session"),
-        artifactState(deps),
-      );
-      if (maybe !== text) {
-        composed = maybe;
-        artifactPreambleSent = true;
-      } else if (text.startsWith("[lucid artifact protocol]")) {
-        artifactPreambleSent = true;
+    if (mode !== "answer") {
+      let framed = composeAnnotationPrompt(text);
+      if (!artifactPreambleSent) {
+        const withProtocol = composeArtifactPrompt(framed, "headless-session");
+        if (withProtocol !== framed || text.startsWith(ARTIFACT_PREAMBLE_MARKER)) {
+          artifactPreambleSent = true;
+        }
+        framed = withProtocol;
       }
+      composed = composeArtifactState(framed, artifactState(deps));
     }
     // hcn answers a send with exactly one disposition, and it answers
     // before it opens the turn. So the reply is awaited and recorded when
