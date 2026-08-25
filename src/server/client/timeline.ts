@@ -1,0 +1,60 @@
+/**
+ * The order things happened in.
+ *
+ * A note you have written but not sent is not in the record yet, so it
+ * cannot come back from the log with a seq like everything else. It still
+ * happened at a moment: write a note, say something to the agent, write
+ * another, and all three belong in the order you did them.
+ *
+ * That order is the whole reason a pending note goes in the timeline rather
+ * than in a list beside it, so it is worked out here, where it can be
+ * proven, instead of inside a component.
+ */
+import type { AnnotationSpot } from "../../protocol/annotations.js";
+
+export interface Msg {
+  readonly id: string;
+  readonly role: "assistant" | "user";
+  readonly text: string;
+  /** A tool call: the agent working, not the agent talking. */
+  readonly tool?: boolean;
+  /** Something that happened rather than something anyone said. */
+  readonly note?: boolean;
+  /** A note written but not sent. */
+  readonly pendingNote?: PendingNote;
+}
+
+/** A note not yet sent. `at` is how many timeline items existed when it was
+ * written, which is what puts it back in the right place. */
+export interface PendingNote {
+  readonly note: string;
+  readonly spots: readonly AnnotationSpot[];
+  readonly at: number;
+}
+
+/** Put pending notes back where they were written.
+ *
+ * A note lands before the item that was next when it was written. Notes
+ * handed over out of order are placed in order; nothing is dropped and
+ * nothing is repeated. */
+export const weaveNotes = (messages: readonly Msg[], notes: readonly PendingNote[]): Msg[] => {
+  if (notes.length === 0) return [...messages];
+  const ordered = [...notes].sort((a, b) => a.at - b.at);
+  const out: Msg[] = [];
+  let n = 0;
+  for (let i = 0; i <= messages.length; i += 1) {
+    while (n < ordered.length && (ordered[n] as PendingNote).at <= i) {
+      const pn = ordered[n] as PendingNote;
+      out.push({
+        id: `pending-${n}-${pn.spots.map((sp) => sp.id).join(",")}`,
+        role: "user",
+        text: pn.note,
+        pendingNote: pn,
+      });
+      n += 1;
+    }
+    const m = messages[i];
+    if (m !== undefined) out.push(m);
+  }
+  return out;
+};

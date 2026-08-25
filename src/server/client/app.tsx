@@ -43,6 +43,7 @@ import {
   sha256Hex,
 } from "./anchor.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
+import { type Msg, type PendingNote, weaveNotes } from "./timeline.js";
 
 /** Kept in step with the server's own poll interval. */
 const POLL_MS = 500;
@@ -62,20 +63,6 @@ interface Driver {
   readonly profile?: string;
   readonly model?: string;
   readonly harnessVersion?: string;
-}
-
-interface Msg {
-  readonly id: string;
-  readonly role: "assistant" | "user";
-  readonly text: string;
-  /** Set for a tool call, so it renders as one quiet line rather than as an
-   * agent message. Six tool calls shown as six messages bury the one
-   * message the person was waiting for. */
-  readonly tool?: boolean;
-  /** Set for something that happened rather than something someone said —
-   * a version being saved. It has to ride on a role, and with your messages
-   * on the right it read as though you had typed it. */
-  readonly note?: boolean;
 }
 
 /** `/c/<id>` — the conversation is named by the URL, never by the bundle. */
@@ -112,6 +99,21 @@ const Message = (): React.ReactElement => {
           <div className="body">
             <MessagePrimitive.Parts />
           </div>
+        </div>
+      </MessagePrimitive.Root>
+    );
+  }
+
+  if (one?.pendingNote !== undefined) {
+    const pn = one.pendingNote;
+    return (
+      <MessagePrimitive.Root>
+        <div className="note-card pending">
+          <span className="note-card-head">not sent</span>
+          <span className="note-card-note">{pn.note}</span>
+          <span className="note-card-spot">
+            on {pn.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
+          </span>
         </div>
       </MessagePrimitive.Root>
     );
@@ -161,13 +163,49 @@ const Message = (): React.ReactElement => {
  *
  * `ScrollToBottom` is its affordance for getting back, and it hides itself
  * when you are already there. */
-const Thread = (): React.ReactElement => (
+const Thread = ({
+  pending,
+  orphans,
+  onSendNotes,
+  onDiscardNotes,
+  sending,
+}: {
+  pending: readonly PendingNote[];
+  /** Sent notes whose spot is gone in the version on screen. They have no
+   * mark to stand for them, so they need somewhere to be. */
+  orphans: readonly { note: string; fromVersion: number; snippet: string }[];
+  onSendNotes: () => void;
+  onDiscardNotes: () => void;
+  sending: boolean;
+}): React.ReactElement => (
   <ThreadPrimitive.Root className="thread-root">
     <ThreadPrimitive.Viewport autoScroll className="thread">
       <ThreadPrimitive.Empty>
         <div className="empty">Nothing in this conversation yet.</div>
       </ThreadPrimitive.Empty>
       <ThreadPrimitive.Messages components={{ Message }} />
+
+      {orphans.map((o) => (
+        <div className="note-card orphan" key={`orphan:${o.fromVersion}:${o.snippet}:${o.note}`}>
+          <span className="note-card-head">lost its target · from v{o.fromVersion}</span>
+          <span className="note-card-note">{o.note}</span>
+          <span className="note-card-spot">on “{o.snippet.slice(0, 60)}”</span>
+        </div>
+      ))}
+
+      {pending.length === 0 ? null : (
+        <div className="queue-bar">
+          <span>
+            {pending.length} note{pending.length === 1 ? "" : "s"} queued
+          </span>
+          <button type="button" className="primary" onClick={onSendNotes} disabled={sending}>
+            {sending ? "Sending…" : "Send"}
+          </button>
+          <button type="button" className="discard" onClick={onDiscardNotes} title="Discard them">
+            ×
+          </button>
+        </div>
+      )}
     </ThreadPrimitive.Viewport>
     <ThreadPrimitive.ScrollToBottom asChild>
       <button type="button" className="to-bottom">
@@ -462,9 +500,9 @@ const App = (): React.ReactElement => {
   /** Unsent notes, kept per version. A note addresses an element in the
    * render it was made against, so it belongs to that version — and looking
    * at another version and coming back must not have lost it. */
-  const [notesByVersion, setNotesByVersion] = React.useState<Record<string, readonly Annotation[]>>(
-    {},
-  );
+  const [notesByVersion, setNotesByVersion] = React.useState<
+    Record<string, readonly PendingNote[]>
+  >({});
   const [draft, setDraft] = React.useState("");
   /** A refused send keeps what was typed and says why, here in the window. */
   const [refusal, setRefusal] = React.useState<string | null>(null);
@@ -497,7 +535,7 @@ const App = (): React.ReactElement => {
     pendingRef.current = pending;
   }, [pending]);
   const setNotes = React.useCallback(
-    (next: readonly Annotation[]) => setNotesByVersion((prev) => ({ ...prev, [docKey]: next })),
+    (next: readonly PendingNote[]) => setNotesByVersion((prev) => ({ ...prev, [docKey]: next })),
     [docKey],
   );
 
@@ -657,11 +695,13 @@ const App = (): React.ReactElement => {
       const sel = selectorsFor(parsed, sp.id);
       return sel === null ? sp : { ...sp, selectors: sel };
     });
-    setNotes([...notes, { note: text, spots: withSelectors }]);
+    // Where in the timeline this happened, so it stays there when the
+    // conversation carries on above and below it.
+    setNotes([...notes, { note: text, spots: withSelectors, at: messages.length }]);
     setDraft("");
     setSelection([]);
     setRefusal(null);
-  }, [draft, selection, notes, setNotes, doc]);
+  }, [draft, selection, notes, setNotes, doc, messages.length]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
@@ -670,7 +710,7 @@ const App = (): React.ReactElement => {
     const body = encodeAnnotationBatch({
       artifactId: doc.artifactId,
       version: doc.version,
-      notes,
+      notes: notes.map((n) => ({ note: n.note, spots: n.spots })),
     });
     const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
       method: "POST",
@@ -883,8 +923,8 @@ const App = (): React.ReactElement => {
         text: `you saved ${catalog?.artifactId} v${v}`,
         note: true,
       }));
-    return saves.length === 0 ? messages : [...messages, ...saves];
-  }, [messages, catalog]);
+    return weaveNotes(saves.length === 0 ? messages : [...messages, ...saves], notes);
+  }, [messages, catalog, notes]);
 
   const runtime = useExternalStoreRuntime<Msg>({
     messages: withSaves,
@@ -1030,53 +1070,6 @@ const App = (): React.ReactElement => {
               <div className="doc-panel">
                 <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
 
-                {anchored.length === 0 && notes.length === 0 ? null : (
-                  <ul className="notes">
-                    {anchored.map((a) => (
-                      <li
-                        key={`sent:${a.fromVersion}:${a.snippet}:${a.note}`}
-                        className={a.elementId === null ? "sent orphan" : "sent"}
-                      >
-                        <span className="note-text">{a.note}</span>
-                        <span className="note-spots">
-                          {a.elementId === null ? (
-                            <>
-                              <strong>lost its target</strong>
-                              {" — written against v"}
-                              {a.fromVersion} on “{a.snippet.slice(0, 44)}”
-                              {a.why === "unverified-source"
-                                ? " (that version could not be verified)"
-                                : ""}
-                            </>
-                          ) : (
-                            <>
-                              {a.how === null
-                                ? "sent · on this version"
-                                : a.how === "exact"
-                                  ? "sent · found again, exactly"
-                                  : a.how === "approximate"
-                                    ? "sent · found again, reworded"
-                                    : a.how === "position"
-                                      ? "sent · found by position, may be the wrong element"
-                                      : "sent · found by path, may be the wrong element"}
-                              {a.fromVersion === doc.version ? "" : ` (from v${a.fromVersion})`}
-                            </>
-                          )}
-                        </span>
-                      </li>
-                    ))}
-                    {notes.map((n) => (
-                      <li key={`draft:${n.spots.map((sp) => sp.id).join(",")}:${n.note}`}>
-                        <span className="note-text">{n.note}</span>
-                        <span className="note-spots">
-                          not sent ·{" "}
-                          {n.spots.map((sp) => `“${sp.snippet.slice(0, 34)}”`).join(", ")}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
                 <div className="note-compose">
                   <textarea
                     value={draft}
@@ -1111,16 +1104,6 @@ const App = (): React.ReactElement => {
                     >
                       {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
                     </button>
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={() => void sendNotes()}
-                      disabled={notes.length === 0}
-                    >
-                      {notes.length === 0
-                        ? "Send notes"
-                        : `Send ${notes.length} note${notes.length === 1 ? "" : "s"}`}
-                    </button>
                   </div>
                 </div>
               </div>
@@ -1129,7 +1112,17 @@ const App = (): React.ReactElement => {
         </div>
 
         <div className="pane conversation">
-          <Thread />
+          <Thread
+            pending={notes}
+            orphans={anchored.flatMap((a) =>
+              a.elementId === null
+                ? [{ note: a.note, fromVersion: a.fromVersion, snippet: a.snippet }]
+                : [],
+            )}
+            onSendNotes={() => void sendNotes()}
+            onDiscardNotes={() => setNotes([])}
+            sending={saving}
+          />
         </div>
       </div>
     </AssistantRuntimeProvider>
