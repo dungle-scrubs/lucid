@@ -12,7 +12,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sendInput } from "../../src/cli/send.js";
 import { startServe } from "../../src/cli/serve.js";
+import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
 import { createConversationRecord } from "../../src/store/store.js";
 
@@ -164,5 +166,84 @@ describe("the page cannot reach into the document", () => {
     // srcDoc hands the frame its bytes. A frame given a URL would fetch,
     // and a document is not something to let fetch.
     expect(bundle).toContain("srcDoc");
+  });
+});
+
+describe("marks live on the version they were made against", () => {
+  /** Send a batch the way the browser does: an input carrying the encoding. */
+  const annotate = (version: number, ids: readonly string[]): void => {
+    sendInput(CONV, {
+      rootDir: root,
+      text: encodeAnnotationBatch({
+        artifactId: "doc-1",
+        version,
+        notes: [
+          {
+            note: "a note",
+            spots: ids.map((id) => ({ id, snippet: "what was there", author: "agent" })),
+          },
+        ],
+      }),
+    });
+  };
+
+  test("a mark is reported against its own version and no other", async () => {
+    writeVersion(1, DOC);
+    writeVersion(2, "<h1>revised</h1>");
+    annotate(1, ["e1", "e3"]);
+    annotate(2, ["e7"]);
+    const { marks } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      marks: Record<string, string[]>;
+    };
+    expect(marks["doc-1@1"]).toEqual(["e1", "e3"]);
+    expect(marks["doc-1@2"]).toEqual(["e7"]);
+  });
+
+  test("nothing is re-anchored: a version with no notes has no marks", async () => {
+    writeVersion(1, DOC);
+    writeVersion(2, "<h1>revised</h1>");
+    annotate(1, ["e1"]);
+    const { marks } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      marks: Record<string, string[]>;
+    };
+    expect(marks["doc-1@1"]).toEqual(["e1"]);
+    expect(marks["doc-1@2"]).toBeUndefined();
+  });
+
+  test("every spot of a multi-spot note is marked", async () => {
+    writeVersion(1, DOC);
+    annotate(1, ["e2", "e4", "e6"]);
+    const { marks } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      marks: Record<string, string[]>;
+    };
+    expect(marks["doc-1@1"]).toEqual(["e2", "e4", "e6"]);
+  });
+
+  test("an ordinary message is not mistaken for a batch", async () => {
+    writeVersion(1, DOC);
+    sendInput(CONV, { rootDir: root, text: "just something I typed" });
+    const { marks } = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      marks: Record<string, string[]>;
+    };
+    expect(Object.keys(marks)).toEqual([]);
+  });
+
+  test("every version stays readable, which is what makes a mark honest", async () => {
+    writeVersion(1, DOC);
+    writeVersion(2, "<h1>revised</h1>");
+    writeVersion(3, "<h1>revised again</h1>");
+    annotate(1, ["e1"]);
+    for (const [v, want] of [
+      [1, DOC],
+      [2, "<h1>revised</h1>"],
+      [3, "<h1>revised again</h1>"],
+    ] as const) {
+      const body = (await (
+        await api(`/api/conversations/${CONV}/artifacts/doc-1/${v}`)
+      ).json()) as {
+        bytes: string;
+      };
+      expect(body.bytes).toBe(want);
+    }
   });
 });

@@ -33,6 +33,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { conversations } from "../cli/record-addressing.js";
+import { detectAnnotationBatch } from "../protocol/annotations.js";
 import { TEXT_MAX } from "../protocol/frames.js";
 import {
   createConversationHost,
@@ -202,7 +203,28 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         const dir = conversations(rootDir).dirFor(id);
         if (!existsSync(join(dir, "log.ndjson"))) return json({ artifacts: [] });
         try {
-          return json({ artifacts: viewArtifactCatalog(dir) });
+          // Which spots already carry a sent note, per version. Derived from
+          // the record's own inputs: an annotation batch names the artifact
+          // and the version it was made against, so a mark belongs to that
+          // version and to no other. Nothing is re-anchored — an id means an
+          // element in the render it came from.
+          const marks: Record<string, string[]> = {};
+          try {
+            for (const i of viewSnapshot(dir).transcript.inputs) {
+              const batch = detectAnnotationBatch(i.text);
+              if (batch === null || "malformed" in batch) continue;
+              const key = `${batch.artifactId}@${batch.version}`;
+              const at = marks[key] ?? [];
+              marks[key] = at;
+              for (const n of batch.notes) {
+                for (const sp of n.spots) at.push(sp.id);
+              }
+            }
+          } catch {
+            // A record that will not fold has no marks to report; the
+            // conversation endpoint is where that is said.
+          }
+          return json({ artifacts: viewArtifactCatalog(dir), marks });
         } catch {
           // A record too damaged to fold has no readable catalog. The
           // conversation endpoint is where that is reported; saying "no

@@ -277,14 +277,50 @@ const App = (): React.ReactElement => {
    * an id addresses an element in the render it came from, and the next
    * version is a different render. */
   const [selection, setSelection] = React.useState<readonly string[]>([]);
+  /** Every version the record holds, and which spots already carry a sent
+   * note on each. */
+  const [catalog, setCatalog] = React.useState<CatalogEntry | null>(null);
+  const [marks, setMarks] = React.useState<Record<string, string[]>>({});
+  /** The version asked for. Null means "follow the newest" — the ordinary
+   * state, where a new version simply appears.
+   *
+   * Choosing a version always pins it, the newest included. The rule that
+   * lucid never changes version under pending work is about lucid moving
+   * someone, not about someone moving themselves, and a pin is how the two
+   * are told apart. */
+  const [pinned, setPinned] = React.useState<number | null>(null);
+  /** A version that arrived while there was work pending. It waits here and
+   * is announced rather than swapped in underneath. */
+  const [waiting, setWaiting] = React.useState<number | null>(null);
   /** Notes written but not yet sent. They accumulate: a batch is composed
    * over several selections and leaves as one act. */
-  const [notes, setNotes] = React.useState<readonly Annotation[]>([]);
+  /** Unsent notes, kept per version. A note addresses an element in the
+   * render it was made against, so it belongs to that version — and looking
+   * at another version and coming back must not have lost it. */
+  const [notesByVersion, setNotesByVersion] = React.useState<Record<string, readonly Annotation[]>>(
+    {},
+  );
   const [draft, setDraft] = React.useState("");
   /** A refused send keeps what was typed and says why, here in the window. */
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const capture = React.useRef<((ids: readonly string[]) => Promise<AnnotationSpot[]>) | null>(
     null,
+  );
+
+  const docKey = doc === null ? "" : `${doc.artifactId}@${doc.version}`;
+  const notes = React.useMemo(() => notesByVersion[docKey] ?? [], [notesByVersion, docKey]);
+  /** Work pending: something selected, something typed, or notes not sent.
+   * lucid never changes version under a person who has work pending — that
+   * is what makes replacing the whole frame safe, and why no attempt is made
+   * to patch the document in place. */
+  const pending = selection.length > 0 || draft.trim() !== "" || notes.length > 0;
+  const pendingRef = React.useRef(false);
+  React.useEffect(() => {
+    pendingRef.current = pending;
+  }, [pending]);
+  const setNotes = React.useCallback(
+    (next: readonly Annotation[]) => setNotesByVersion((prev) => ({ ...prev, [docKey]: next })),
+    [docKey],
   );
 
   React.useEffect(() => {
@@ -360,31 +396,53 @@ const App = (): React.ReactElement => {
           },
         );
         if (!alive || !res.ok) return;
-        const { artifacts } = (await res.json()) as { artifacts: CatalogEntry[] };
+        const body = (await res.json()) as {
+          artifacts: CatalogEntry[];
+          marks?: Record<string, string[]>;
+        };
+        const artifacts = body.artifacts;
         // One document beside the conversation in this slice. The newest
         // artifact the record holds is the one shown.
         const entry = artifacts[artifacts.length - 1];
         if (entry === undefined) return;
-        const want = `${entry.artifactId}@${entry.latest}`;
-        if (want === shown.current) return;
+        setCatalog(entry);
+        setMarks(body.marks ?? {});
+
+        // The version asked for, else the newest. A pin is what makes an
+        // older version reachable, and marks live on the version they were
+        // made against, so that version has to be reachable.
+        const target = pinned ?? entry.latest;
+        const want = `${entry.artifactId}@${target}`;
+        if (want === shown.current) {
+          // Already on the asked-for version. A newer one having arrived is
+          // news, not a reason to move.
+          if (entry.latest > target) setWaiting(entry.latest);
+          return;
+        }
+        if (pinned === null && pendingRef.current && shown.current !== "") {
+          // Nothing pinned, but there is work in progress: say a newer
+          // version exists and wait to be asked.
+          setWaiting(entry.latest);
+          return;
+        }
         fetching.current = true;
         try {
           const one = await fetch(
-            `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(entry.artifactId)}/${entry.latest}`,
+            `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(entry.artifactId)}/${target}`,
             { headers: { [TOKEN_HEADER]: token } },
           );
           if (!alive || !one.ok) return;
-          const body = (await one.json()) as Doc;
+          const fetched = (await one.json()) as Doc;
           if (!alive) return;
           shown.current = want;
           // A note addresses an element in the render it was made against,
-          // and a new version is a different render. Notes do not carry
-          // across, so an unsent batch is cleared with the selection.
+          // so the selection and the draft do not carry across. Notes do:
+          // they are held per version, and coming back finds them.
           setSelection([]);
-          setNotes([]);
           setDraft("");
           setRefusal(null);
-          setDoc(body);
+          setWaiting(null);
+          setDoc(fetched);
         } finally {
           fetching.current = false;
         }
@@ -399,7 +457,7 @@ const App = (): React.ReactElement => {
       alive = false;
       window.clearInterval(id);
     };
-  }, [token, dead, conversationId]);
+  }, [token, dead, conversationId, pinned]);
 
   const addNote = React.useCallback(async (): Promise<void> => {
     const text = draft.trim();
@@ -409,11 +467,11 @@ const App = (): React.ReactElement => {
     // changed by then.
     const spots = await capture.current(selection);
     if (spots.length === 0) return;
-    setNotes((prev) => [...prev, { note: text, spots }]);
+    setNotes([...notes, { note: text, spots }]);
     setDraft("");
     setSelection([]);
     setRefusal(null);
-  }, [draft, selection]);
+  }, [draft, selection, notes, setNotes]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
@@ -437,7 +495,7 @@ const App = (): React.ReactElement => {
     }
     setNotes([]);
     setRefusal(null);
-  }, [notes, doc, token, dead, conversationId]);
+  }, [notes, doc, token, dead, conversationId, setNotes]);
 
   const onNew = React.useCallback(
     async (m: { content: readonly { type: string; text?: string }[] }): Promise<void> => {
@@ -490,13 +548,46 @@ const App = (): React.ReactElement => {
           <div className="pane document">
             <div className="doc-head">
               <span className="doc-id">{doc.artifactId}</span>
-              <span className="doc-version">v{doc.version}</span>
+              {catalog === null || catalog.versions.length < 2 ? (
+                <span className="doc-version">v{doc.version}</span>
+              ) : (
+                <span className="doc-versions">
+                  {catalog.versions.map((v) => (
+                    <button
+                      type="button"
+                      key={v}
+                      className={v === doc.version ? "v current" : "v"}
+                      onClick={() => setPinned(v)}
+                    >
+                      v{v}
+                    </button>
+                  ))}
+                </span>
+              )}
+              {pinned === null ? null : (
+                <button type="button" className="v latest" onClick={() => setPinned(null)}>
+                  follow newest
+                </button>
+              )}
             </div>
+            {waiting === null || waiting <= doc.version ? null : (
+              <div className="doc-waiting">
+                Version {waiting} has arrived.{" "}
+                <button type="button" onClick={() => setPinned(waiting)}>
+                  show it
+                </button>
+              </div>
+            )}
             <DocumentFrame
               doc={doc}
               onSelection={setSelection}
               capture={capture}
-              marked={notes.flatMap((n) => n.spots.map((sp) => sp.id))}
+              marked={[
+                ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
+                // Notes already sent are marked too, on the version they
+                // were made against and nowhere else.
+                ...(marks[docKey] ?? []),
+              ]}
             />
             <div className="doc-foot">
               {notes.length === 0 ? null : (
