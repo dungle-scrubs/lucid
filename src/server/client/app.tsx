@@ -27,6 +27,7 @@ import {
 } from "@assistant-ui/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 
 /** Kept in step with the server's own poll interval. */
 const POLL_MS = 500;
@@ -138,15 +139,51 @@ const CATALOG_POLL_MS = 2000;
  *
  * `key` is the version, so a new version replaces the frame rather than
  * mutating it. There is no in-place update path to get wrong. */
-const DocumentFrame = ({ doc }: { doc: Doc }): React.ReactElement => (
-  <iframe
-    key={`${doc.artifactId}@${doc.version}`}
-    className="doc-frame"
-    title={`${doc.artifactId} v${doc.version}`}
-    sandbox="allow-scripts"
-    srcDoc={doc.bytes}
-  />
-);
+const DocumentFrame = ({
+  doc,
+  onSelection,
+}: {
+  doc: Doc;
+  onSelection: (ids: readonly string[]) => void;
+}): React.ReactElement => {
+  const ref = React.useRef<HTMLIFrameElement | null>(null);
+
+  // A `message` listener hears from every frame on the page and from any
+  // origin. The boundary exists only because this checks.
+  React.useEffect(() => {
+    const onMessage = (e: MessageEvent): void => {
+      // The frame is sandboxed without `allow-same-origin`, so its origin
+      // is opaque and there is nothing to compare. Identity of the sending
+      // window is the check.
+      const frame = ref.current;
+      if (frame === null || e.source !== frame.contentWindow) return;
+
+      // Arriving on that channel is not the same as being true. The shape
+      // is checked before any of it is believed.
+      const m = e.data as Record<string, unknown> | null;
+      if (m === null || typeof m !== "object") return;
+      if (m.source !== FRAME_MESSAGE_SOURCE || m.kind !== "selection") return;
+      if (m.artifactId !== doc.artifactId || m.version !== doc.version) return;
+      if (!Array.isArray(m.ids)) return;
+      if (!m.ids.every((id) => typeof id === "string" && ELEMENT_ID.test(id))) return;
+
+      onSelection(m.ids as string[]);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [doc.artifactId, doc.version, onSelection]);
+
+  return (
+    <iframe
+      ref={ref}
+      key={`${doc.artifactId}@${doc.version}`}
+      className="doc-frame"
+      title={`${doc.artifactId} v${doc.version}`}
+      sandbox="allow-scripts"
+      srcDoc={instrumentArtifact(doc.bytes, doc.artifactId, doc.version)}
+    />
+  );
+};
 
 const App = (): React.ReactElement => {
   const conversationId = React.useMemo(conversationIdFromPath, []);
@@ -166,6 +203,10 @@ const App = (): React.ReactElement => {
    * nothing is in progress, so a slow fetch never has a second one racing
    * it, and the frame is never swapped halfway. */
   const fetching = React.useRef(false);
+  /** One selection, however many spots are in it. A new version clears it:
+   * an id addresses an element in the render it came from, and the next
+   * version is a different render. */
+  const [selection, setSelection] = React.useState<readonly string[]>([]);
 
   React.useEffect(() => {
     let alive = true;
@@ -257,6 +298,7 @@ const App = (): React.ReactElement => {
           const body = (await one.json()) as Doc;
           if (!alive) return;
           shown.current = want;
+          setSelection([]);
           setDoc(body);
         } finally {
           fetching.current = false;
@@ -327,7 +369,12 @@ const App = (): React.ReactElement => {
               <span className="doc-id">{doc.artifactId}</span>
               <span className="doc-version">v{doc.version}</span>
             </div>
-            <DocumentFrame doc={doc} />
+            <DocumentFrame doc={doc} onSelection={setSelection} />
+            <div className="doc-foot">
+              {selection.length === 0
+                ? "Click something in the document to select it. Hold command to select more."
+                : `${selection.length} selected`}
+            </div>
           </div>
         )}
       </div>
