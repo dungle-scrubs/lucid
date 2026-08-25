@@ -34,6 +34,7 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { conversations } from "../cli/record-addressing.js";
 import { detectAnnotationBatch } from "../protocol/annotations.js";
+import { EventKind } from "../protocol/events.js";
 import { TEXT_MAX } from "../protocol/frames.js";
 import {
   createConversationHost,
@@ -73,6 +74,25 @@ const logSize = (dir: string): number => {
   } catch {
     return 0;
   }
+};
+
+/** Is the newest turn still going?
+ *
+ * A turn is running when the last events belong to a turn that has not
+ * produced a terminal event yet. Older turns are irrelevant: one that never
+ * finished because its driver was killed is history, not activity. */
+const turnRunning = (transcript: {
+  events: readonly { turnId: string; event: unknown }[];
+}): boolean => {
+  const events = transcript.events;
+  const last = events[events.length - 1];
+  if (last === undefined) return false;
+  const turnId = last.turnId;
+  for (const e of events) {
+    if (e.turnId !== turnId) continue;
+    if ((e.event as { kind?: string }).kind === EventKind.done) return false;
+  }
+  return true;
 };
 
 const json = (body: unknown, status = 200): Response =>
@@ -215,7 +235,14 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           // and working look identical otherwise, and the question "is
           // something happening?" had no answer on the surface.
           activity: {
-            turn: snapshot.state.turn !== null,
+            // Whether the NEWEST turn has produced a terminal event.
+            //
+            // Not `state.turn`: that names the most recent turn so an abort
+            // can target it, and its own comment says it may name a turn
+            // that has already finished. Reading it as "a turn is running"
+            // made the page say the agent was working for as long as the
+            // record existed.
+            turn: turnRunning(snapshot.transcript),
             inFlight: snapshot.state.inFlightInputs,
             waiting: snapshot.transcript.inputs.filter(
               (i) => i.status === "outstanding" || i.status === "queued",

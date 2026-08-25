@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sendInput } from "../../src/cli/send.js";
 import { startServe } from "../../src/cli/serve.js";
+import { createConversationHost } from "../../src/store/conversation-host.js";
 import { acquirePresence } from "../../src/store/presence.js";
 import { createConversationRecord } from "../../src/store/store.js";
 
@@ -261,5 +262,72 @@ describe("the page says whether anything is driving", () => {
     } finally {
       handle.release();
     }
+  });
+});
+
+describe("whether the agent is working", () => {
+  /** Append an event the way a driver does, so the transcript is real. */
+  const emit = (turnId: string, event: Record<string, unknown>, n: number): void => {
+    const host = createConversationHost(join(root, CONV), {
+      now: () => Date.now(),
+      presence: () => undefined,
+      executorLease: () => true,
+      onEffect: () => {},
+      onRecord: () => {},
+    });
+    try {
+      const secret = readFileSync(join(root, CONV, "secret"), "utf8").trim();
+      host.handleFrame(
+        JSON.stringify({
+          kind: "attach",
+          conversationId: CONV,
+          profile: "headless-session",
+          secret,
+          version: 1,
+          harness: "claude",
+        }),
+      );
+      host.handleFrame(JSON.stringify({ kind: "event", epoch: 1, n, turnId, event }));
+    } finally {
+      host.close();
+    }
+  };
+
+  test("a turn with no terminal event is running", async () => {
+    emit("turn-1", { kind: "message", role: "assistant", text: "thinking out loud" }, 1);
+    const body = (await (await api(`/api/conversations/${CONV}`)).json()) as {
+      activity: { turn: boolean };
+    };
+    expect(body.activity.turn).toBe(true);
+  });
+
+  test("a turn that produced done is not running", async () => {
+    emit("turn-1", { kind: "message", role: "assistant", text: "here you go" }, 1);
+    emit("turn-1", { kind: "done", exitCode: 0, cause: "clean" }, 2);
+    const body = (await (await api(`/api/conversations/${CONV}`)).json()) as {
+      activity: { turn: boolean };
+    };
+    // `state.turn` still names turn-1 after this — it is what an abort would
+    // target — so reading that instead said the agent was working forever.
+    expect(body.activity.turn).toBe(false);
+  });
+
+  test("an older unfinished turn is history, not activity", async () => {
+    // A driver killed mid-turn leaves a turn with no done. That is not the
+    // agent working now.
+    emit("turn-1", { kind: "message", role: "assistant", text: "interrupted" }, 1);
+    emit("turn-2", { kind: "message", role: "assistant", text: "finished" }, 2);
+    emit("turn-2", { kind: "done", exitCode: 0, cause: "clean" }, 3);
+    const body = (await (await api(`/api/conversations/${CONV}`)).json()) as {
+      activity: { turn: boolean };
+    };
+    expect(body.activity.turn).toBe(false);
+  });
+
+  test("a record with no events at all is not working", async () => {
+    const body = (await (await api(`/api/conversations/${CONV}`)).json()) as {
+      activity: { turn: boolean };
+    };
+    expect(body.activity.turn).toBe(false);
   });
 });
