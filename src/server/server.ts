@@ -182,10 +182,32 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           rung: "",
           draft: "",
         });
+        // What is driving, so the page can say it. The harness is on the
+        // attachment; the model is not always known — hcn reports it on the
+        // identity event and some harnesses leave it empty — so it is sent
+        // when there is one and omitted when there is not, rather than
+        // shown as a blank.
+        const attached = snapshot.state.attachment;
+        const identity = [...snapshot.transcript.events]
+          .reverse()
+          .find((e) => (e.event as { kind?: string }).kind === "identity");
+        const observed = ((
+          identity?.event as { capabilities?: { escalation?: { observedOn?: unknown } } }
+        )?.capabilities?.escalation?.observedOn ?? {}) as { model?: string; version?: string };
         return json({
           conversationId: id,
           lines: view.lines,
           status: snapshot.status,
+          driver: {
+            ...(attached?.harness === undefined ? {} : { harness: attached.harness }),
+            ...(attached?.profile === undefined ? {} : { profile: attached.profile }),
+            ...(typeof observed.model === "string" && observed.model !== ""
+              ? { model: observed.model }
+              : {}),
+            ...(typeof observed.version === "string" && observed.version !== ""
+              ? { harnessVersion: observed.version }
+              : {}),
+          },
           // A torn trailing write folds cleanly but short. That is damage
           // too, and the page says so.
           damaged: snapshot.goodBytes < logSize(dir),

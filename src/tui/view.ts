@@ -51,6 +51,11 @@ export interface ConversationLine {
   readonly kind: "agent" | "human";
   readonly seq?: number;
   readonly text: string;
+  /** Which event produced this line, for a renderer that shows some kinds
+   * differently. A terminal prints them all the same; a browser does not —
+   * six tool calls rendered as six agent messages bury the one message the
+   * person was waiting for. Absent on a human line. */
+  readonly event?: string;
   /** For a human line: its disposition mark; agent lines have none. */
   readonly mark?: string;
   /** True when this line's turn was retired by an abort-turn (the renderer
@@ -106,7 +111,22 @@ const eventText = (event: Record<string, unknown>): string => {
       ...(recommended === undefined ? [] : [`    → recommended: ${recommended}`]),
     ].join("\n");
   }
-  if (kind === EventKind.tool && typeof event.name === "string") return `⚙ ${event.name}`;
+  if (kind === EventKind.tool && typeof event.name === "string") {
+    // The name alone says a tool ran and nothing about what it did. Six
+    // lines reading "Bash" tell a reader less than one reading the command.
+    const input = event.input as Record<string, unknown> | undefined;
+    const detail =
+      input === undefined
+        ? undefined
+        : typeof input.description === "string" && input.description !== ""
+          ? input.description
+          : typeof input.command === "string"
+            ? input.command
+            : typeof input.file_path === "string"
+              ? input.file_path
+              : undefined;
+    return detail === undefined ? event.name : `${event.name}: ${detail}`;
+  }
   // An error you cannot read is worse than no error: it says something went
   // wrong and refuses to say what. This fell to the `[kind]` fallback, so a
   // live session that failed to open showed a bare `[error]` while the log
@@ -154,6 +174,10 @@ export const buildView = (input: {
       kind: "agent",
       seq: e.seq,
       text: eventText(e.event),
+      event:
+        typeof (e.event as { kind?: unknown }).kind === "string"
+          ? (e.event as { kind: string }).kind
+          : undefined,
       aborted: abortedTurns.has(e.turnId) && !completed.has(e.turnId),
     }));
 

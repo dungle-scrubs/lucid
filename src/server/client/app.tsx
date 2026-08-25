@@ -21,9 +21,11 @@
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
+  getExternalStoreMessage,
   MessagePrimitive,
   ThreadPrimitive,
   useExternalStoreRuntime,
+  useMessage,
 } from "@assistant-ui/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
@@ -52,12 +54,24 @@ interface Line {
   readonly text: string;
   readonly mark?: string;
   readonly aborted?: boolean;
+  readonly event?: string;
+}
+
+interface Driver {
+  readonly harness?: string;
+  readonly profile?: string;
+  readonly model?: string;
+  readonly harnessVersion?: string;
 }
 
 interface Msg {
   readonly id: string;
   readonly role: "assistant" | "user";
   readonly text: string;
+  /** Set for a tool call, so it renders as one quiet line rather than as an
+   * agent message. Six tool calls shown as six messages bury the one
+   * message the person was waiting for. */
+  readonly tool?: boolean;
 }
 
 /** `/c/<id>` — the conversation is named by the URL, never by the bundle. */
@@ -73,40 +87,79 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
       id: l.seq === undefined ? `l-${i}` : `s-${l.seq}-${i}`,
       role: l.kind === "agent" ? ("assistant" as const) : ("user" as const),
       text: l.text,
+      ...(l.event === "tool" ? { tool: true } : {}),
     }));
 
 /** Who said it has to survive into the DOM: a transcript where the person
  * and the agent look identical is not a transcript. The role is not on the
  * message element, so it is read through `If` and written as a class. */
-const Message = (): React.ReactElement => (
-  <MessagePrimitive.Root>
-    <MessagePrimitive.If user>
-      <div className="msg user">
-        <span className="who">you</span>
-        <div className="body">
-          <MessagePrimitive.Parts />
-        </div>
-      </div>
-    </MessagePrimitive.If>
-    <MessagePrimitive.If assistant>
-      <div className="msg agent">
-        <span className="who">agent</span>
-        <div className="body">
-          <MessagePrimitive.Parts />
-        </div>
-      </div>
-    </MessagePrimitive.If>
-  </MessagePrimitive.Root>
-);
+const Message = (): React.ReactElement => {
+  // A tool call is the agent working, not the agent talking. Rendered as a
+  // message it looks like something to read, and six of them in a row bury
+  // the one thing that was.
+  const original = useMessage((m) => getExternalStoreMessage<Msg>(m));
+  const one = Array.isArray(original) ? original[0] : original;
+  const isTool = one?.tool === true;
 
+  if (isTool) {
+    return (
+      <MessagePrimitive.Root>
+        <div className="msg tool">
+          <span className="tool-mark">⚙</span>
+          <div className="body">
+            <MessagePrimitive.Parts />
+          </div>
+        </div>
+      </MessagePrimitive.Root>
+    );
+  }
+
+  return (
+    <MessagePrimitive.Root>
+      <MessagePrimitive.If user>
+        <div className="msg user">
+          <span className="who">you</span>
+          <div className="body">
+            <MessagePrimitive.Parts />
+          </div>
+        </div>
+      </MessagePrimitive.If>
+      <MessagePrimitive.If assistant>
+        <div className="msg agent">
+          <span className="who">agent</span>
+          <div className="body">
+            <MessagePrimitive.Parts />
+          </div>
+        </div>
+      </MessagePrimitive.If>
+    </MessagePrimitive.Root>
+  );
+};
+
+/** The scroll behaviour is assistant-ui's, not lucid's.
+ *
+ * `Viewport autoScroll` watches the content with a ResizeObserver and
+ * tracks whether you are at the bottom: new content follows you down when
+ * you are there, and leaves you alone when you have scrolled up. The
+ * ResizeObserver is the part a hand-rolled version gets wrong — text
+ * reflows after the effect runs, which leaves the viewport short of the
+ * end.
+ *
+ * `ScrollToBottom` is its affordance for getting back, and it hides itself
+ * when you are already there. */
 const Thread = (): React.ReactElement => (
   <ThreadPrimitive.Root className="thread-root">
-    <ThreadPrimitive.Viewport className="thread">
+    <ThreadPrimitive.Viewport autoScroll className="thread">
       <ThreadPrimitive.Empty>
         <div className="empty">Nothing in this conversation yet.</div>
       </ThreadPrimitive.Empty>
       <ThreadPrimitive.Messages components={{ Message }} />
     </ThreadPrimitive.Viewport>
+    <ThreadPrimitive.ScrollToBottom asChild>
+      <button type="button" className="to-bottom">
+        ↓ latest
+      </button>
+    </ThreadPrimitive.ScrollToBottom>
     <ComposerPrimitive.Root className="composer">
       <ComposerPrimitive.Input autoFocus placeholder="Send to the conversation…" rows={1} />
       <ComposerPrimitive.Send asChild>
@@ -160,6 +213,7 @@ const DocumentFrame = ({
   snapshot,
   onDirty,
   marked,
+  mode,
 }: {
   doc: Doc;
   onSelection: (ids: readonly string[]) => void;
@@ -176,6 +230,7 @@ const DocumentFrame = ({
   /** Spots that already carry a note, marked in the document while the
    * batch is being composed. */
   marked: readonly string[];
+  mode: "use" | "markup";
 }): React.ReactElement => {
   const ref = React.useRef<HTMLIFrameElement | null>(null);
   const pending = React.useRef(new Map<string, (spots: AnnotationSpot[]) => void>());
@@ -309,6 +364,19 @@ const DocumentFrame = ({
     );
   }, [marked]);
 
+  React.useEffect(() => {
+    // Sent on a timer as well as on change: the frame is replaced whenever
+    // the version changes, and a fresh frame starts in use mode.
+    const send = (): void =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode },
+        "*",
+      );
+    send();
+    const id = window.setInterval(send, 1000);
+    return () => window.clearInterval(id);
+  }, [mode]);
+
   return (
     <iframe
       ref={ref}
@@ -326,6 +394,8 @@ const App = (): React.ReactElement => {
   const [token, setToken] = React.useState<string | null>(null);
   const [messages, setMessages] = React.useState<Msg[]>([]);
   const [status, setStatus] = React.useState<string>("");
+  /** What is driving: harness, model when known, and profile. */
+  const [driver, setDriver] = React.useState<Driver>({});
   const [problem, setProblem] = React.useState<string | null>(null);
   /** Set once on 401. Every fetch stops: the token can only come back by
    * reloading, and retrying a dead token forever is the failure this flag
@@ -396,6 +466,10 @@ const App = (): React.ReactElement => {
   const [edited, setEdited] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState<string | null>(null);
+  /** What a click means right now. Two things wanted the same click — ticking
+   * a box and picking an element to write about — so which one it is, is a
+   * choice rather than a guess. */
+  const [mode, setMode] = React.useState<"use" | "markup">("use");
 
   const docKey = doc === null ? "" : `${doc.artifactId}@${doc.version}`;
   const notes = React.useMemo(() => notesByVersion[docKey] ?? [], [notesByVersion, docKey]);
@@ -450,10 +524,12 @@ const App = (): React.ReactElement => {
           lines: Line[];
           status: string;
           damaged?: boolean;
+          driver?: Driver;
         };
         if (!alive) return;
         setMessages(linesToMessages(data.lines));
         setStatus(data.status);
+        setDriver(data.driver ?? {});
         setProblem(
           data.damaged === true
             ? "This record is damaged past a point; what follows the damage is not shown."
@@ -806,166 +882,240 @@ const App = (): React.ReactElement => {
     }),
   });
 
+  /** What to do next, in one line.
+   *
+   * The actions were discoverable only by trying them: three buttons whose
+   * names said what they did and nothing about when they applied, and a
+   * selection whose only feedback was inside a frame. This says which state
+   * the page is in and what the next act is. */
+  const guidance = ((): { text: string; tone: "idle" | "ready" | "warn" } => {
+    if (doc === null) return { text: "No document in this conversation yet.", tone: "idle" };
+    if (refusal !== null) return { text: refusal, tone: "warn" };
+    if (edited) return { text: "You changed the document. Save to keep it.", tone: "ready" };
+    if (selection.length > 0)
+      return {
+        text: `${selection.length} selected. Write what you want to say about ${selection.length === 1 ? "it" : "them"}, then Add note.`,
+        tone: "ready",
+      };
+    if (notes.length > 0)
+      return {
+        text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. Send when you are done, or select more.`,
+        tone: "ready",
+      };
+    if (mode === "markup")
+      return {
+        text: "Marking up: click a part of the document to select it, ⌘-click to add more. Controls do not respond while you are marking up.",
+        tone: "idle",
+      };
+    return {
+      text: "Using the document: tick boxes, fill fields, and click text to edit it. Switch to Mark up to write notes about it.",
+      tone: "idle",
+    };
+  })();
+
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <header className="head">
         <span className="id">{conversationId === "" ? "no conversation" : conversationId}</span>
+        {driver.harness === undefined ? null : (
+          <span className="driver">
+            {driver.harness}
+            {driver.model === undefined ? "" : ` · ${driver.model}`}
+            {driver.harnessVersion === undefined ? "" : ` · ${driver.harnessVersion}`}
+          </span>
+        )}
         <span className="status">{status}</span>
       </header>
       {problem === null ? null : <div className="notice">{problem}</div>}
-      <div className={doc === null ? "panes" : "panes with-doc"}>
+
+      <div className="panes">
+        {/* The document is the thing being worked on, so it gets the room
+            and the left side. The conversation is the margin note. */}
+        <div className="pane document">
+          {doc === null ? (
+            <div className="empty doc-empty">
+              Nothing to mark up yet. Ask the agent for a document.
+            </div>
+          ) : (
+            <>
+              <div className="doc-head">
+                <span className="doc-id">{doc.artifactId}</span>
+                {catalog === null || catalog.versions.length < 2 ? (
+                  <span className="doc-version">v{doc.version}</span>
+                ) : (
+                  <span className="doc-versions">
+                    {catalog.versions.map((v) => (
+                      <button
+                        type="button"
+                        key={v}
+                        className={v === doc.version ? "v current" : "v"}
+                        title={
+                          catalog.authors?.[v] === "human"
+                            ? `v${v} — saved by you`
+                            : `v${v} — written by the agent`
+                        }
+                        onClick={() => setPinned(v)}
+                      >
+                        v{v}
+                        {catalog.authors?.[v] === "human" ? " ✎" : ""}
+                      </button>
+                    ))}
+                  </span>
+                )}
+                {pinned === null ? null : (
+                  <button type="button" className="v latest" onClick={() => setPinned(null)}>
+                    follow newest
+                  </button>
+                )}
+                <span className="modes">
+                  <button
+                    type="button"
+                    className={mode === "use" ? "m current" : "m"}
+                    onClick={() => setMode("use")}
+                    title="Tick boxes, fill fields, and edit text"
+                  >
+                    Use
+                  </button>
+                  <button
+                    type="button"
+                    className={mode === "markup" ? "m current" : "m"}
+                    onClick={() => setMode("markup")}
+                    title="Click parts of the document to write notes about them"
+                  >
+                    Mark up
+                  </button>
+                </span>
+              </div>
+
+              {waiting === null || waiting <= doc.version ? null : (
+                <div className="doc-waiting">
+                  Version {waiting} has arrived.{" "}
+                  <button type="button" onClick={() => setPinned(waiting)}>
+                    show it
+                  </button>
+                </div>
+              )}
+
+              <DocumentFrame
+                doc={doc}
+                onSelection={setSelection}
+                capture={capture}
+                snapshot={snapshot}
+                onDirty={() => setEdited(true)}
+                marked={[
+                  ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
+                  ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
+                ]}
+                mode={mode}
+              />
+
+              {/* Everything below here has a fixed height and never scrolls
+                  out of view. The actions were reachable only by scrolling a
+                  panel that grew with the notes in it. */}
+              <div className="doc-panel">
+                <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
+
+                {anchored.length === 0 && notes.length === 0 ? null : (
+                  <ul className="notes">
+                    {anchored.map((a) => (
+                      <li
+                        key={`sent:${a.fromVersion}:${a.snippet}:${a.note}`}
+                        className={a.elementId === null ? "sent orphan" : "sent"}
+                      >
+                        <span className="note-text">{a.note}</span>
+                        <span className="note-spots">
+                          {a.elementId === null ? (
+                            <>
+                              <strong>lost its target</strong>
+                              {" — written against v"}
+                              {a.fromVersion} on “{a.snippet.slice(0, 44)}”
+                              {a.why === "unverified-source"
+                                ? " (that version could not be verified)"
+                                : ""}
+                            </>
+                          ) : (
+                            <>
+                              {a.how === null
+                                ? "sent · on this version"
+                                : a.how === "exact"
+                                  ? "sent · found again, exactly"
+                                  : a.how === "approximate"
+                                    ? "sent · found again, reworded"
+                                    : a.how === "position"
+                                      ? "sent · found by position, may be the wrong element"
+                                      : "sent · found by path, may be the wrong element"}
+                              {a.fromVersion === doc.version ? "" : ` (from v${a.fromVersion})`}
+                            </>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                    {notes.map((n) => (
+                      <li key={`draft:${n.spots.map((sp) => sp.id).join(",")}:${n.note}`}>
+                        <span className="note-text">{n.note}</span>
+                        <span className="note-spots">
+                          not sent ·{" "}
+                          {n.spots.map((sp) => `“${sp.snippet.slice(0, 34)}”`).join(", ")}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="note-compose">
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        void addNote();
+                      }
+                    }}
+                    placeholder={
+                      selection.length === 0
+                        ? "Select something in the document first"
+                        : `What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`
+                    }
+                    disabled={selection.length === 0}
+                    rows={2}
+                  />
+                  <div className="note-actions">
+                    <button
+                      type="button"
+                      onClick={() => void addNote()}
+                      disabled={selection.length === 0 || draft.trim() === ""}
+                    >
+                      Add note
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void save()}
+                      disabled={!edited || saving}
+                      title="Double-click text in the document to edit it; controls work as they are"
+                    >
+                      {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
+                    </button>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => void sendNotes()}
+                      disabled={notes.length === 0}
+                    >
+                      {notes.length === 0
+                        ? "Send notes"
+                        : `Send ${notes.length} note${notes.length === 1 ? "" : "s"}`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
         <div className="pane conversation">
           <Thread />
         </div>
-        {doc === null ? null : (
-          <div className="pane document">
-            <div className="doc-head">
-              <span className="doc-id">{doc.artifactId}</span>
-              {catalog === null || catalog.versions.length < 2 ? (
-                <span className="doc-version">v{doc.version}</span>
-              ) : (
-                <span className="doc-versions">
-                  {catalog.versions.map((v) => (
-                    <button
-                      type="button"
-                      key={v}
-                      className={v === doc.version ? "v current" : "v"}
-                      onClick={() => setPinned(v)}
-                    >
-                      v{v}
-                    </button>
-                  ))}
-                </span>
-              )}
-              {pinned === null ? null : (
-                <button type="button" className="v latest" onClick={() => setPinned(null)}>
-                  follow newest
-                </button>
-              )}
-            </div>
-            {waiting === null || waiting <= doc.version ? null : (
-              <div className="doc-waiting">
-                Version {waiting} has arrived.{" "}
-                <button type="button" onClick={() => setPinned(waiting)}>
-                  show it
-                </button>
-              </div>
-            )}
-            <DocumentFrame
-              doc={doc}
-              onSelection={setSelection}
-              capture={capture}
-              snapshot={snapshot}
-              onDirty={() => setEdited(true)}
-              marked={[
-                ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
-                // Notes already sent are marked too, on the version they
-                // were made against and nowhere else.
-                ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
-              ]}
-            />
-            <div className="doc-foot">
-              {anchored.length === 0 ? null : (
-                <ul className="notes sent">
-                  {anchored.map((a) => (
-                    <li
-                      key={`${a.fromVersion}:${a.snippet}:${a.note}`}
-                      className={a.elementId === null ? "orphan" : "attached"}
-                    >
-                      <span className="note-text">{a.note}</span>
-                      <span className="note-spots">
-                        {a.elementId === null ? (
-                          <>
-                            {/* Never re-attached to whatever now occupies
-                                that space, and never dropped. A note about a
-                                paragraph the agent then removed may be the
-                                most interesting thing here. */}
-                            <strong>lost its target</strong> in v{doc.version} — written against v
-                            {a.fromVersion} on "{a.snippet.slice(0, 40)}"
-                            {a.why === "unverified-source"
-                              ? " (that version could not be verified)"
-                              : ""}
-                          </>
-                        ) : (
-                          <>
-                            {a.how === null
-                              ? `on this version`
-                              : a.how === "exact"
-                                ? `found again, exactly`
-                                : a.how === "approximate"
-                                  ? `found again, reworded`
-                                  : a.how === "position"
-                                    ? `found by position — may be the wrong element`
-                                    : `found by path — may be the wrong element`}
-                            {a.fromVersion === doc.version
-                              ? ""
-                              : ` (written against v${a.fromVersion})`}
-                          </>
-                        )}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {notes.length === 0 ? null : (
-                <ul className="notes">
-                  {notes.map((n) => (
-                    <li key={`${n.spots.map((sp) => sp.id).join(",")}:${n.note}`}>
-                      <span className="note-text">{n.note}</span>
-                      <span className="note-spots">
-                        {n.spots
-                          .map((sp) => `"${sp.snippet.slice(0, 40)}" (${sp.author})`)
-                          .join(", ")}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {refusal === null ? null : <div className="notice">{refusal}</div>}
-              {saved === null ? null : <div className="saved">{saved}</div>}
-              <div className="note-compose">
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  placeholder={
-                    selection.length === 0
-                      ? "Select something in the document to write about it"
-                      : `Write a note about ${selection.length} selected`
-                  }
-                  disabled={selection.length === 0}
-                  rows={2}
-                />
-                <div className="note-actions">
-                  <button
-                    type="button"
-                    onClick={() => void addNote()}
-                    disabled={selection.length === 0 || draft.trim() === ""}
-                  >
-                    Add note
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void save()}
-                    disabled={!edited || saving}
-                    title="Double-click text to edit it; controls work as they are"
-                  >
-                    {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
-                  </button>
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={() => void sendNotes()}
-                    disabled={notes.length === 0}
-                  >
-                    {notes.length === 0
-                      ? "Send notes"
-                      : `Send ${notes.length} note${notes.length === 1 ? "" : "s"}`}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </AssistantRuntimeProvider>
   );

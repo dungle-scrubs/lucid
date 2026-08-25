@@ -48,10 +48,29 @@ export const ELEMENT_ID = /^e[0-9]+$/;
 export const AUTHOR_ATTR = "data-lucid-author";
 
 const STYLE = `
+/* Mark-up mode only. In use mode lucid draws nothing and the document's
+   own cursors stand: an I-beam over text, a pointer over a control. */
 [${ELEMENT_ATTR}].lucid-hover {
   outline: 2px solid #2563eb !important;
   outline-offset: 1px !important;
-  cursor: pointer !important;
+}
+html.lucid-markup, html.lucid-markup * {
+  cursor: crosshair !important;
+  user-select: none !important;
+}
+/* Editable text, in use mode. The dotted rule is the affordance: it says
+   the text can be changed without shouting about it. */
+[${ELEMENT_ATTR}][contenteditable="true"] {
+  outline: none !important;
+  border-bottom: 1px dotted rgba(13, 148, 136, 0.55) !important;
+}
+[${ELEMENT_ATTR}][contenteditable="true"]:hover {
+  background: rgba(13, 148, 136, 0.06) !important;
+}
+[${ELEMENT_ATTR}][contenteditable="true"]:focus {
+  outline: 2px solid #0d9488 !important;
+  outline-offset: 2px !important;
+  background: rgba(13, 148, 136, 0.08) !important;
 }
 [${ELEMENT_ATTR}].lucid-selected {
   outline: 2px solid #b45309 !important;
@@ -61,11 +80,6 @@ const STYLE = `
 [${ELEMENT_ATTR}].lucid-edited {
   outline: 2px solid #0d9488 !important;
   outline-offset: 1px !important;
-}
-[${ELEMENT_ATTR}][contenteditable="true"] {
-  outline: 2px solid #0d9488 !important;
-  outline-offset: 1px !important;
-  background: rgba(13, 148, 136, 0.10) !important;
 }
 [${ELEMENT_ATTR}].lucid-noted {
   outline: 2px dashed #7c3aed !important;
@@ -100,8 +114,39 @@ const script = (artifactId: string, version: number, author: string): string => 
   var selected = [];
   var hovered = null;
   var dirty = false;
+  // "use" — the document behaves as the agent built it: controls work, text
+  // has a caret, drag selects text. "markup" — clicking picks elements to
+  // write notes about, and a click does NOT also operate a control.
+  //
+  // The two were one mode, and a single click did both: it ticked a box and
+  // selected the row at the same time. Nothing said which was happening.
+  var mode = "use";
 
-  var CONTROL = "input,textarea,select";
+  var CONTROL = "input,textarea,select,button,a,[contenteditable=true]";
+  // Text that can hold a caret: a leaf block with no control inside it.
+  // Never a label wrapping a checkbox — making that editable swallows the
+  // control and the next click toggles it from inside the caret.
+  var EDITABLE = "p,li,h1,h2,h3,h4,h5,h6,td,th,blockquote,dd,dt,figcaption";
+
+  var editable = function (el) {
+    if (!el.matches(EDITABLE)) return false;
+    if (el.querySelector("input,textarea,select,button,a")) return false;
+    return (el.textContent || "").trim() !== "";
+  };
+
+  var applyMode = function () {
+    var html = document.documentElement;
+    if (mode === "markup") html.classList.add("lucid-markup");
+    else html.classList.remove("lucid-markup");
+
+    var all = document.body ? document.body.querySelectorAll("[" + ATTR + "]") : [];
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (mode === "use" && editable(el)) el.setAttribute("contenteditable", "true");
+      else el.removeAttribute("contenteditable");
+    }
+    if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
+  };
 
   // A control the agent authored is addressed by lucid's element id, so a
   // value survives a document whose own ids are absent or repeated.
@@ -153,24 +198,10 @@ const script = (artifactId: string, version: number, author: string): string => 
     return "<!doctype html>" + copy.outerHTML;
   };
 
-  // Editing prose: a document is not editable until asked. Double-click
-  // opens the element under the pointer; leaving it closes it. The element
-  // is then authored by the person, which is what per-spot provenance
-  // reads.
-  document.addEventListener("dblclick", function (e) {
-    if (!e.isTrusted) return;
-    var el = addressable(e.target);
-    if (!el || el.matches(CONTROL)) return;
-    el.setAttribute("contenteditable", "true");
-    el.focus();
-  }, true);
-
-  document.addEventListener("focusout", function (e) {
-    if (!e.isTrusted) return;
-    var el = e.target;
-    if (!el || el.nodeType !== 1 || el.getAttribute("contenteditable") !== "true") return;
-    el.removeAttribute("contenteditable");
-  }, true);
+  // Text is editable for as long as you are in use mode, rather than after
+  // a double-click. That is what gives a caret, an I-beam, and a drag that
+  // selects the words you want to replace — all of it the browser's, none
+  // of it lucid's to reimplement badly.
 
   var post = function () {
     parent.postMessage(
@@ -234,6 +265,17 @@ const script = (artifactId: string, version: number, author: string): string => 
       return;
     }
 
+    if (m.kind === "mode" && (m.mode === "use" || m.mode === "markup")) {
+      if (m.mode !== mode) {
+        mode = m.mode;
+        // Leaving mark-up mode drops the selection: it addressed elements
+        // for a note, and there is no note being written in use mode.
+        if (mode === "use" && selected.length > 0) { selected = []; paint(); post(); }
+        applyMode();
+      }
+      return;
+    }
+
     if (m.kind === "mark" && Array.isArray(m.ids)) {
       var noted = document.querySelectorAll(".lucid-noted");
       for (var a = 0; a < noted.length; a++) noted[a].classList.remove("lucid-noted");
@@ -270,8 +312,11 @@ const script = (artifactId: string, version: number, author: string): string => 
     touched(e.target);
   }, true);
 
+  // Text is editable from the start, because use mode is the start.
+  applyMode();
+
   document.addEventListener("mouseover", function (e) {
-    if (!e.isTrusted) return;
+    if (!e.isTrusted || mode !== "markup") return;
     var el = addressable(e.target);
     if (el === hovered) return;
     if (hovered) hovered.classList.remove("lucid-hover");
@@ -280,13 +325,17 @@ const script = (artifactId: string, version: number, author: string): string => 
   }, true);
 
   document.addEventListener("mouseout", function (e) {
-    if (!e.isTrusted) return;
+    if (!e.isTrusted || mode !== "markup") return;
     if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
   }, true);
 
   document.addEventListener("click", function (e) {
     // A document that dispatches its own click is doing its own work.
-    if (!e.isTrusted) return;
+    if (!e.isTrusted || mode !== "markup") return;
+    // In mark-up mode a click picks an element and does nothing else. Left
+    // to run, it would also tick the box or follow the link under it, so
+    // one click would do two things and neither would be undoable.
+    e.preventDefault();
     var el = addressable(e.target);
     if (!el) return;
     var id = el.getAttribute(ATTR);
@@ -307,7 +356,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // Clicking away clears. Only elements inside body carry the attribute,
   // so a click on the page's own margin lands here and nowhere else.
   document.addEventListener("click", function (e) {
-    if (!e.isTrusted) return;
+    if (!e.isTrusted || mode !== "markup") return;
     if (addressable(e.target)) return;
     if (selected.length === 0) return;
     selected = [];

@@ -73,20 +73,41 @@ describe("the identity is lucid's, not the document's", () => {
 });
 
 describe("the document's own behaviour is left alone", () => {
-  test("nothing is cancelled and nothing is stopped", () => {
+  test("nothing is stopped, ever", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
-    expect(out).not.toContain("preventDefault");
+    // Stopping propagation would hide the event from the document's own
+    // listeners. Nothing lucid does needs that.
     expect(out).not.toContain("stopPropagation");
     expect(out).not.toContain("stopImmediatePropagation");
+  });
+
+  test("a click is cancelled only while marking up", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // In use mode the document behaves as the agent built it: a click ticks
+    // the box under it and lucid does nothing. In mark-up mode a click
+    // picks an element, and letting it also tick the box would make one
+    // click do two things.
+    const cancels = out.match(/preventDefault/g) ?? [];
+    expect(cancels.length).toBe(1);
+
+    // The one cancel sits inside a handler that has already returned unless
+    // the mode is mark-up.
+    const handler = out.slice(out.indexOf("preventDefault"));
+    const guard = out.slice(0, out.indexOf("preventDefault"));
+    expect(guard.lastIndexOf('mode !== "markup"')).toBeGreaterThan(
+      guard.lastIndexOf("addEventListener"),
+    );
+    expect(handler.length).toBeGreaterThan(0);
   });
 
   test("only a real person's events count", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
     // Every listener reading a user interaction guards on isTrusted, so a
     // document dispatching its own click is doing its own work and lucid
-    // does not read it as a selection.
+    // does not read it as a selection. Some guards also test the mode, so
+    // the check is for the isTrusted clause rather than a whole line.
     const interaction = out.match(/document\.addEventListener\(/g) ?? [];
-    const guards = out.match(/if \(!e\.isTrusted\) return;/g) ?? [];
+    const guards = out.match(/if \(!e\.isTrusted/g) ?? [];
     expect(interaction.length).toBeGreaterThan(0);
     expect(guards.length).toBe(interaction.length);
   });
@@ -137,5 +158,45 @@ describe("what lucid added is not part of what gets saved", () => {
     const guarded =
       out.match(/document\.addEventListener\("(input|change)"[\s\S]{0,80}?isTrusted/g) ?? [];
     expect(guarded.length).toBe(2);
+  });
+});
+
+describe("two modes, so one click does one thing", () => {
+  test("use mode is where the document starts", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    expect(out).toContain('var mode = "use"');
+  });
+
+  test("text is editable in use mode, and a caret is the browser's job", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // Editable for as long as you are in use mode, rather than after a
+    // double-click. That is what gives an I-beam, a caret, and a drag that
+    // selects the words to replace — all native, none of it reimplemented.
+    expect(out).toContain('setAttribute("contenteditable", "true")');
+    expect(out).not.toContain('addEventListener("dblclick"');
+  });
+
+  test("a label wrapping a control is never made editable", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // Making it editable swallows the control: the checkbox ends up inside
+    // a caret, and the next click toggles it from in there.
+    expect(out).toContain('el.querySelector("input,textarea,select,button,a")');
+  });
+
+  test("hover and selection are mark-up mode only", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    for (const listener of ["mouseover", "mouseout", "click"]) {
+      const at = out.indexOf(`addEventListener("${listener}"`);
+      expect(at).toBeGreaterThan(-1);
+      // The guard is the first thing in the handler.
+      expect(out.slice(at, at + 220)).toContain('mode !== "markup"');
+    }
+  });
+
+  test("leaving mark-up mode drops the selection", () => {
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    // It addressed elements for a note, and there is no note being written
+    // in use mode.
+    expect(out).toContain('if (mode === "use" && selected.length > 0)');
   });
 });

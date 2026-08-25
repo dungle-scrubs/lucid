@@ -173,24 +173,12 @@ body {
   cursor: default;
 }
 
-/* assistant-ui's Root wraps the thread and the composer; it has to be the
-   column that fills the page, or the composer floats under the last
-   message instead of sitting at the bottom. */
-.thread-root {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.msg.agent .body {
-  padding: 2px 0;
-}
-
-/* --- two panes ---------------------------------------------------------- */
+/* --- the two panes ------------------------------------------------------ */
 
 #root {
   max-width: none;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .panes {
@@ -201,38 +189,46 @@ body {
 
 .pane {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-/* Alone, the conversation keeps the reading width it had. Beside a
-   document it takes a fixed column, so the document gets the room. */
-.pane.conversation {
-  flex: 1;
-  max-width: 880px;
-  margin: 0 auto;
-}
-
-.panes.with-doc .pane.conversation {
-  max-width: none;
-  margin: 0;
-  flex: 0 0 42%;
-  border-right: 1px solid var(--line);
-}
-
+/* The document is the thing being worked on, so it gets the room. */
 .pane.document {
   flex: 1;
   background: var(--panel);
 }
 
+/* The conversation is the margin note beside it: a fixed reading column,
+   not a half of the screen. */
+.pane.conversation {
+  flex: 0 0 clamp(340px, 30%, 480px);
+  border-left: 1px solid var(--line);
+}
+
+@media (max-width: 900px) {
+  .panes {
+    flex-direction: column;
+  }
+  .pane.conversation {
+    flex: 1 1 45%;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+
+/* --- the document ------------------------------------------------------- */
+
 .doc-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
   font-size: 12px;
   color: var(--muted);
+  background: var(--bg);
 }
 
 .doc-head .doc-id {
@@ -240,42 +236,94 @@ body {
   font-weight: 600;
 }
 
-/* The frame is an opaque origin: it paints its own document, on its own
-   white, whatever the host theme is. Nothing here reaches inside it. */
+.doc-versions {
+  display: flex;
+  gap: 4px;
+}
+
+.doc-head button.v {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.doc-head button.v.current {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.doc-head button.v.latest {
+  margin-left: 4px;
+}
+
+.doc-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(251, 191, 36, 0.16);
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.doc-waiting button {
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
 .doc-frame {
   flex: 1;
+  min-height: 0;
   width: 100%;
   border: 0;
   background: #fff;
 }
 
-@media (max-width: 900px) {
-  .panes.with-doc {
-    flex-direction: column;
-  }
-  .panes.with-doc .pane.conversation {
-    flex: 1 1 50%;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
+.doc-empty {
+  padding: 32px 20px;
 }
 
-.doc-foot {
-  padding: 8px 16px;
-  border-top: 1px solid var(--line);
-  font-size: 12px;
-  color: var(--muted);
-  background: var(--bg);
-}
+/* --- the panel under the document --------------------------------------- */
 
-/* --- notes --------------------------------------------------------------- */
-
-.doc-foot {
+/* Fixed height and outside the scrolling area: the actions used to sit at
+   the bottom of a panel that grew with the notes in it, so they left the
+   screen exactly when there was most to do. */
+.doc-panel {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 42vh;
-  overflow-y: auto;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.guidance {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.guidance.ready {
+  color: var(--fg);
+}
+
+.guidance.warn {
+  color: var(--error);
 }
 
 .notes {
@@ -285,20 +333,37 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* The list scrolls; the composer and the buttons below it do not. */
+  max-height: 22vh;
+  overflow-y: auto;
 }
 
 .notes li {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 6px 8px;
+  padding: 6px 9px;
   border-left: 2px solid #7c3aed;
   background: var(--panel);
   border-radius: 0 6px 6px 0;
 }
 
+.notes li.sent {
+  border-left-color: #b45309;
+}
+
+.notes li.sent.orphan {
+  border-left-color: var(--error);
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.notes li.sent.orphan .note-spots strong {
+  color: var(--error);
+}
+
 .note-text {
   color: var(--fg);
+  font-size: 13px;
 }
 
 .note-spots {
@@ -324,7 +389,7 @@ body {
 }
 
 .note-compose textarea:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
 }
 
 .note-actions {
@@ -356,46 +421,66 @@ body {
   cursor: default;
 }
 
-.doc-versions {
-  display: flex;
-  gap: 4px;
-}
+/* --- the conversation --------------------------------------------------- */
 
-.doc-head button.v {
+.head .driver {
+  font-size: 11px;
+  color: var(--faint);
   padding: 2px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
 }
 
-.doc-head button.v.current {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-  font-weight: 600;
-}
-
-.doc-head button.v.latest {
-  margin-left: 8px;
-}
-
-.doc-waiting {
+.thread-root {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(251, 191, 36, 0.14);
-  font-size: 12px;
-  color: var(--fg);
+  flex-direction: column;
 }
 
-.doc-waiting button {
-  padding: 2px 10px;
+/* The one element that scrolls in this pane. It needs a bounded height, or
+   the page scrolls instead and sticking to the bottom means nothing. */
+.thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* A tool call is the agent working, not the agent talking. */
+.msg.tool {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.msg.tool .body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.msg.tool .tool-mark {
+  flex: 0 0 auto;
+}
+
+/* assistant-ui marks this disabled when you are already at the bottom
+   rather than unmounting it, so hiding it is the stylesheet's job. */
+.to-bottom[disabled] {
+  display: none;
+}
+
+.to-bottom {
+  position: absolute;
+  right: 16px;
+  bottom: 76px;
+  padding: 4px 12px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel);
@@ -403,25 +488,34 @@ body {
   font: inherit;
   font-size: 11px;
   cursor: pointer;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
 }
 
-.saved {
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: rgba(13, 148, 136, 0.16);
-  color: var(--fg);
-  font-size: 12px;
+.thread-root {
+  position: relative;
 }
 
-.notes.sent li {
-  border-left-color: #b45309;
+.modes {
+  display: flex;
+  gap: 0;
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
 }
 
-.notes.sent li.orphan {
-  border-left-color: var(--error);
-  background: rgba(220, 38, 38, 0.08);
+.doc-head button.m {
+  padding: 3px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
 }
 
-.notes.sent li.orphan .note-spots strong {
-  color: var(--error);
+.doc-head button.m.current {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
 }
