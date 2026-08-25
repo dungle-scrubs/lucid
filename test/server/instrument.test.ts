@@ -87,17 +87,23 @@ describe("the document's own behaviour is left alone", () => {
     // the box under it and lucid does nothing. In mark-up mode a click
     // picks an element, and letting it also tick the box would make one
     // click do two things.
+    // Two: the mousedown, which stops a control taking focus and drawing a
+    // caret, and the click, which stops it being operated. Focus moves on
+    // mousedown, so cancelling only the click was too late.
     const cancels = out.match(/preventDefault/g) ?? [];
-    expect(cancels.length).toBe(1);
+    expect(cancels.length).toBe(2);
 
-    // The one cancel sits inside a handler that has already returned unless
-    // the mode is mark-up.
-    const handler = out.slice(out.indexOf("preventDefault"));
-    const guard = out.slice(0, out.indexOf("preventDefault"));
-    expect(guard.lastIndexOf('mode !== "markup"')).toBeGreaterThan(
-      guard.lastIndexOf("addEventListener"),
-    );
-    expect(handler.length).toBeGreaterThan(0);
+    // Every one of them sits inside a handler that has already returned
+    // unless the mode is mark-up.
+    let from = 0;
+    for (let n = 0; n < cancels.length; n += 1) {
+      const at = out.indexOf("preventDefault", from);
+      const before = out.slice(0, at);
+      expect(before.lastIndexOf('mode !== "markup"')).toBeGreaterThan(
+        before.lastIndexOf("addEventListener"),
+      );
+      from = at + 1;
+    }
   });
 
   test("only a real person's events count", () => {

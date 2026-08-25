@@ -230,60 +230,70 @@ const Thread = ({
   activity: Activity;
   /** Seconds since the transcript last changed. */
   quietFor: number;
-}): React.ReactElement => (
-  <ThreadPrimitive.Root className="thread-root">
-    <ThreadPrimitive.Viewport autoScroll className="thread">
-      <ThreadPrimitive.Empty>
-        <div className="empty">Nothing in this conversation yet.</div>
-      </ThreadPrimitive.Empty>
-      <ThreadPrimitive.Messages components={{ Message }} />
-
-      {/* Whether anything is in flight. Silence and working look the same
-          without this, and that is how eight delivered inputs sat
-          unanswered for an hour and a half with nothing on screen saying
-          so. */}
-      {activity.turn || activity.inFlight > 0 || activity.waiting > 0 ? (
-        <div className={quietFor > 45 && !activity.turn ? "activity stalled" : "activity"}>
-          <span className="pulse" />
-          <span>
-            {activity.turn
-              ? "the agent is working"
-              : activity.inFlight > 0
-                ? `${activity.inFlight} sent, waiting for the agent`
-                : `${activity.waiting} written, not delivered yet`}
-            {quietFor > 45 && !activity.turn ? ` — nothing back for ${Math.round(quietFor)}s` : ""}
-          </span>
-        </div>
-      ) : null}
-
-      {pending.length === 0 ? null : (
-        <div className="queue-bar">
-          <span>
-            {pending.length} note{pending.length === 1 ? "" : "s"} queued
-          </span>
-          <button type="button" className="primary" onClick={onSendNotes} disabled={sending}>
-            {sending ? "Sending…" : "Send"}
+}): React.ReactElement => {
+  const stalled = quietFor > 45 && !activity.turn;
+  const busy = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
+  return (
+    <ThreadPrimitive.Root className="thread-root">
+      {/* The half that scrolls. Only messages and note cards are in here, so
+          nothing that has to stay put competes with the scrolling. */}
+      <div className="thread-wrap">
+        <ThreadPrimitive.Viewport autoScroll className="thread">
+          <ThreadPrimitive.Empty>
+            <div className="empty">Nothing in this conversation yet.</div>
+          </ThreadPrimitive.Empty>
+          <ThreadPrimitive.Messages components={{ Message }} />
+        </ThreadPrimitive.Viewport>
+        <ThreadPrimitive.ScrollToBottom asChild>
+          <button type="button" className="to-bottom">
+            ↓ latest
           </button>
-          <button type="button" className="discard" onClick={onDiscardNotes} title="Discard them">
-            ×
-          </button>
-        </div>
-      )}
-    </ThreadPrimitive.Viewport>
-    <ThreadPrimitive.ScrollToBottom asChild>
-      <button type="button" className="to-bottom">
-        ↓ latest
-      </button>
-    </ThreadPrimitive.ScrollToBottom>
-    <ComposerPrimitive.Root className="composer">
-      <ComposerPrimitive.Input autoFocus placeholder="Send to the conversation…" rows={1} />
-      <ComposerPrimitive.Send asChild>
-        <button type="submit">Send</button>
-      </ComposerPrimitive.Send>
-    </ComposerPrimitive.Root>
-  </ThreadPrimitive.Root>
-);
+        </ThreadPrimitive.ScrollToBottom>
+      </div>
 
+      {/* The half that does not. One solid block at the bottom: what is
+          happening, what is queued, and the box you type in. The queue bar
+          was sticky inside the scroller and lay over the conversation
+          instead of sitting under it. */}
+      <div className="dock">
+        {busy ? (
+          <div className={stalled ? "activity stalled" : "activity"}>
+            <span className="pulse" />
+            <span>
+              {activity.turn
+                ? "the agent is working"
+                : activity.inFlight > 0
+                  ? `${activity.inFlight} sent, waiting for the agent`
+                  : `${activity.waiting} written, not delivered yet`}
+              {stalled ? ` — nothing back for ${Math.round(quietFor)}s` : ""}
+            </span>
+          </div>
+        ) : null}
+
+        {pending.length === 0 ? null : (
+          <div className="queue-bar">
+            <span>
+              {pending.length} note{pending.length === 1 ? "" : "s"} queued
+            </span>
+            <button type="button" className="primary" onClick={onSendNotes} disabled={sending}>
+              {sending ? "Sending…" : "Send"}
+            </button>
+            <button type="button" className="discard" onClick={onDiscardNotes} title="Discard them">
+              ×
+            </button>
+          </div>
+        )}
+
+        <ComposerPrimitive.Root className="composer">
+          <ComposerPrimitive.Input autoFocus placeholder="Send to the conversation…" rows={1} />
+          <ComposerPrimitive.Send asChild>
+            <button type="submit">Send</button>
+          </ComposerPrimitive.Send>
+        </ComposerPrimitive.Root>
+      </div>
+    </ThreadPrimitive.Root>
+  );
+};
 interface CatalogEntry {
   readonly artifactId: string;
   readonly versions: readonly number[];

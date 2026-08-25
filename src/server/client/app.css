@@ -138,11 +138,8 @@ body {
   display: flex;
   gap: 8px;
   align-items: flex-end;
-  padding: 12px 20px 20px;
-  border-top: 1px solid var(--line);
+  padding: 10px 14px 14px;
   background: var(--bg);
-  position: sticky;
-  bottom: 0;
 }
 
 .composer textarea {
@@ -445,7 +442,7 @@ body {
 .to-bottom {
   position: absolute;
   right: 16px;
-  bottom: 76px;
+  bottom: 10px;
   padding: 4px 12px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -562,18 +559,17 @@ body {
 /* The queue's own action, where the queue is. The chat composer below it
    sends chat and never touches these — you can write notes, keep talking,
    and send the batch when you are ready. */
+/* Part of the dock, not a card floating over the conversation. Opaque, so
+   nothing shows through it, and square against the composer below it. */
 .queue-bar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  border: 1px solid #7c3aed;
-  border-radius: 10px;
-  background: rgba(124, 58, 237, 0.14);
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
   font-size: 12px;
   color: var(--fg);
-  position: sticky;
-  bottom: 0;
 }
 
 .queue-bar > span {
@@ -609,7 +605,9 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 10px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
   font-size: 12px;
   color: var(--muted);
 }
@@ -657,4 +655,32 @@ body {
 .note-card.sent {
   border-left-color: #b45309;
   background: rgba(180, 83, 9, 0.12);
+}
+
+/* --- the two halves of the conversation pane ----------------------------- */
+
+/* Everything that scrolls. */
+.thread-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Everything that does not: what is happening, what is queued, and the box
+   you type in — one solid block, opaque, below the conversation rather than
+   over it. */
+.dock {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+}
+
+/* The dock owns the divider above itself; its first child must not draw a
+   second one. */
+.dock > :first-child {
+  border-top: 0;
 }

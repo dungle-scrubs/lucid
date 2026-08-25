@@ -153,6 +153,11 @@ const script = (artifactId: string, version: number, author: string): string => 
       else el.removeAttribute("contenteditable");
     }
     if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
+    // A control focused while using the document keeps its caret otherwise,
+    // which reads as still being editable after the mode has changed.
+    if (mode === "markup" && document.activeElement && document.activeElement.blur) {
+      document.activeElement.blur();
+    }
   };
 
   // A control the agent authored is addressed by lucid's element id, so a
@@ -321,6 +326,15 @@ const script = (artifactId: string, version: number, author: string): string => 
 
   // Text is editable from the start, because use mode is the start.
   applyMode();
+
+  // Focus moves on mousedown, not on click. Cancelling only the click let
+  // the browser focus a textarea and draw a caret first, and the element
+  // was then highlighted for annotation a moment later — two things
+  // happening from one press, in the wrong order.
+  document.addEventListener("mousedown", function (e) {
+    if (!e.isTrusted || mode !== "markup") return;
+    e.preventDefault();
+  }, true);
 
   document.addEventListener("mouseover", function (e) {
     if (!e.isTrusted || mode !== "markup") return;
