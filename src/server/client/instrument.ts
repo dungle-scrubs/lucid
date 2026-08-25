@@ -48,6 +48,13 @@ export const ELEMENT_ID = /^e[0-9]+$/;
 export const AUTHOR_ATTR = "data-lucid-author";
 
 const STYLE = `
+/* The frame is its own scrolling context. Without this, scrolling past
+   either end rubber-bands, which reads as the document coming loose from
+   the panel it sits in. */
+html {
+  overscroll-behavior: none;
+}
+
 /* Mark-up mode only. In use mode lucid draws nothing and the document's
    own cursors stand: an I-beam over text, a pointer over a control. */
 [${ELEMENT_ATTR}].lucid-hover {
