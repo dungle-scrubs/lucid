@@ -292,6 +292,68 @@ body {
   font-weight: 600;
 }
 
+/* The other artifacts in this conversation. Siblings in a record, so they
+   read as a row of names rather than as a hierarchy. */
+.also {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.also-label {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.also-one {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.also-one.here {
+  border-color: var(--muted);
+}
+
+.also-open,
+.also-tab {
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.4;
+}
+
+/* The one on screen is a label, not an offer. */
+.also-open:disabled {
+  cursor: default;
+  color: var(--muted);
+}
+
+.also-v {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.also-tab {
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.also-open:hover:not(:disabled),
+.also-tab:hover {
+  background: var(--panel);
+}
+
 .doc-versions {
   display: flex;
   gap: 4px;

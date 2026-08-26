@@ -585,6 +585,63 @@ const DocumentFrame = ({
   );
 };
 
+/**
+ * The other artifacts in this conversation.
+ *
+ * Labelled in terms of the conversation, never as a relationship: artifacts
+ * are siblings in a record, nothing in the record links one to another, and
+ * calling them "related" would name something that does not exist.
+ *
+ * Only rendered when there is more than one. A list of one is a label.
+ */
+const AlsoHere = ({
+  artifacts,
+  showing,
+  conversationId,
+  onOpen,
+}: {
+  artifacts: readonly CatalogEntry[];
+  showing: string | null;
+  conversationId: string;
+  onOpen: (artifactId: string) => void;
+}): React.ReactElement | null => {
+  if (artifacts.length < 2) return null;
+  return (
+    <div className="also">
+      <span className="also-label">Also in this conversation</span>
+      {artifacts.map((a) => {
+        const here = a.artifactId === showing;
+        return (
+          <span key={a.artifactId} className={here ? "also-one here" : "also-one"}>
+            <button
+              type="button"
+              className="also-open"
+              onClick={() => onOpen(a.artifactId)}
+              disabled={here}
+              title={here ? "Showing this one" : `Show ${a.artifactId}`}
+            >
+              {a.artifactId}
+              <span className="also-v">v{a.latest}</span>
+            </button>
+            {/* A real link, so the browser's own open-in-new-tab works: the
+                middle click, the modifier click, and the context menu. A
+                button with a click handler gives none of those. */}
+            <a
+              className="also-tab"
+              href={formatRoute({ conversationId, artifactId: a.artifactId })}
+              target="_blank"
+              rel="noreferrer"
+              title="Open in a new tab"
+            >
+              ↗
+            </a>
+          </span>
+        );
+      })}
+    </div>
+  );
+};
+
 const App = (): React.ReactElement => {
   // Read once. Where in the record the page starts is an opening question;
   // after that the page moves the address bar, not the other way round.
@@ -592,6 +649,15 @@ const App = (): React.ReactElement => {
   const conversationId = opened?.conversationId ?? "";
   /** The artifact the URL asked for, until a person picks another. */
   const [wantArtifact, setWantArtifact] = React.useState<string | null>(opened?.artifactId ?? null);
+  /** Show another artifact. The pin goes with it: a version number belongs
+   * to the artifact it came from, and carrying v7 across would ask for a
+   * version of a different document. */
+  const openArtifact = React.useCallback((artifactId: string): void => {
+    setWantArtifact(artifactId);
+    setPinned(null);
+    setUnknownArtifact(null);
+  }, []);
+
   /** An artifact the URL named that the record does not hold. */
   const [unknownArtifact, setUnknownArtifact] = React.useState<string | null>(null);
   const [token, setToken] = React.useState<string | null>(null);
@@ -634,6 +700,10 @@ const App = (): React.ReactElement => {
   /** Every version the record holds, and which spots already carry a sent
    * note on each. */
   const [catalog, setCatalog] = React.useState<CatalogEntry | null>(null);
+  /** Every artifact the record holds. The catalog endpoint has always
+   * returned all of them; the page kept only the one it was showing, which
+   * is what made the rest unreachable. */
+  const [allArtifacts, setAllArtifacts] = React.useState<readonly CatalogEntry[]>([]);
   /** Sent notes, by `artifactId@version` — the version each was made
    * against. */
   const [sentNotes, setSentNotes] = React.useState<Record<string, Annotation[]>>({});
@@ -959,6 +1029,10 @@ const App = (): React.ReactElement => {
           notes?: Record<string, Annotation[]>;
         };
         const artifacts = body.artifacts;
+        // Held before the pick, not after it. An artifact the record does not
+        // hold returns early below, and that is exactly the page that has to
+        // offer the list of what it does hold.
+        setAllArtifacts(artifacts);
         // The artifact the URL named, else the one with the most recent
         // version entry - which is what the page did when nothing could name
         // one. An id that names nothing is not silently replaced: the page
@@ -1422,6 +1496,12 @@ const App = (): React.ReactElement => {
               // different document or rendering a blank frame.
               <div className="empty doc-empty">
                 <p>This conversation has no artifact called “{unknownArtifact}”.</p>
+                <AlsoHere
+                  artifacts={allArtifacts}
+                  showing={null}
+                  conversationId={conversationId}
+                  onOpen={openArtifact}
+                />
                 <button
                   type="button"
                   onClick={() => {
@@ -1440,6 +1520,12 @@ const App = (): React.ReactElement => {
               <>
                 <div className="doc-head">
                   <span className="doc-id">{doc.artifactId}</span>
+                  <AlsoHere
+                    artifacts={allArtifacts}
+                    showing={doc.artifactId}
+                    conversationId={conversationId}
+                    onOpen={openArtifact}
+                  />
                   {catalog === null || catalog.versions.length < 2 ? (
                     <span className="doc-version">v{doc.version}</span>
                   ) : (
