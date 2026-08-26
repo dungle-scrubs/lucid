@@ -250,7 +250,16 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             // that has already finished. Reading it as "a turn is running"
             // made the page say the agent was working for as long as the
             // record existed.
-            turn: turnRunning(snapshot.transcript),
+            //
+            // The transcript alone is not enough. A turn appends nothing
+            // between its input and its terminal event - `live1`'s log has
+            // the disposition at +0.1s and then the message and `done`
+            // together at +19s, with no line in between. So mid-turn the
+            // newest event is the PREVIOUS turn's `done` and this reads
+            // false while the agent is working. A delivered input whose
+            // turn has not terminated is that turn, which is what
+            // inFlightInputs counts, so it is the other half of the answer.
+            turn: turnRunning(snapshot.transcript) || snapshot.state.inFlightInputs > 0,
             inFlight: snapshot.state.inFlightInputs,
             waiting: snapshot.transcript.inputs.filter(
               (i) => i.status === "outstanding" || i.status === "queued",

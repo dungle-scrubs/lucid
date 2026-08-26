@@ -38,6 +38,7 @@ import {
   NOTE_QUEUE_MAX,
   queueAdmits,
 } from "../../protocol/annotations.js";
+import { type Activity as ActivitySnapshot, describeActivity } from "./activity.js";
 import {
   type Confidence,
   resolveSpot,
@@ -71,13 +72,8 @@ interface Line {
   readonly batch?: SentBatch;
 }
 
-interface Activity {
-  readonly turn: boolean;
-  /** Delivered inputs whose turn has produced no terminal event. */
-  readonly inFlight: number;
-  /** Written but not delivered to anyone. */
-  readonly waiting: number;
-}
+/** `activity.ts` owns the shape and the rule that reads it. */
+type Activity = ActivitySnapshot;
 
 interface Driver {
   readonly harness?: string;
@@ -240,18 +236,36 @@ const Thread = ({
   onDiscardNotes,
   sending,
   activity,
-  quietFor,
+  now,
+  lastChange,
 }: {
   pending: readonly PendingNote[];
   onSendNotes: () => void;
   onDiscardNotes: () => void;
   sending: boolean;
   activity: Activity;
-  /** Seconds since the transcript last changed. */
-  quietFor: number;
+  /** Ticks once a second, so the count moves without a render loop. */
+  now: number;
+  /** When the transcript last changed. */
+  lastChange: number;
 }): React.ReactElement => {
-  const stalled = quietFor > 45 && !activity.turn;
-  const busy = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
+  const busyNow = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
+  // When this stretch of work began. Held across renders because nothing in
+  // the record says it: a turn writes no line between its input and its
+  // terminal event, so the only witness to the start is the page that saw
+  // idle become busy. Adjusted during render, which is React's own form for
+  // state derived from a change in props.
+  const [wasBusy, setWasBusy] = React.useState(busyNow);
+  const [startedAt, setStartedAt] = React.useState<number | null>(busyNow ? now : null);
+  if (busyNow !== wasBusy) {
+    setWasBusy(busyNow);
+    setStartedAt(busyNow ? now : null);
+  }
+  // A turn that streams resets the clock as it goes; one that says nothing
+  // until it finishes is timed from when it started.
+  const since = Math.max(startedAt ?? now, lastChange);
+  const report = describeActivity(activity, (now - since) / 1000);
+  const { busy, stalled } = report;
   return (
     <ThreadPrimitive.Root className="thread-root">
       {/* The half that scrolls. Only messages and note cards are in here, so
@@ -279,12 +293,12 @@ const Thread = ({
           <div className={stalled ? "activity stalled" : "activity"}>
             <span className="pulse" />
             <span>
-              {activity.turn
-                ? "the agent is working"
-                : activity.inFlight > 0
-                  ? `${activity.inFlight} sent, waiting for the agent`
-                  : `${activity.waiting} written, not delivered yet`}
-              {stalled ? ` — nothing back for ${Math.round(quietFor)}s` : ""}
+              {report.label}
+              {report.elapsed === null
+                ? ""
+                : stalled
+                  ? ` — nothing back for ${report.elapsed}`
+                  : ` — ${report.elapsed}`}
             </span>
           </div>
         ) : null}
@@ -618,7 +632,9 @@ const AlsoHere = ({
   if (artifacts.length < 2) return null;
   return (
     <div className="also">
-      <span className="also-label">Also in this conversation</span>
+      {/* Not "also": the row lists every artifact, including the one on
+          screen, so the set of chips does not reshuffle when you switch. */}
+      <span className="also-label">In this conversation</span>
       {artifacts.map((a) => {
         const here = a.artifactId === showing;
         return (
@@ -1900,7 +1916,8 @@ const App = (): React.ReactElement => {
               onDiscardNotes={() => setNotes([])}
               sending={sending}
               activity={activity}
-              quietFor={(now - lastChange) / 1000}
+              now={now}
+              lastChange={lastChange}
             />
           </div>
         </div>
