@@ -216,7 +216,10 @@ be found exactly is reported as lost rather than guessed at.
 ### R3 - What lucid does with it
 
 1. Read the version named by `replaces`.
-2. Apply every edit in order, in memory.
+2. Resolve every anchor against that version, check exactly-once for each and
+   refuse any overlap, then apply the edits by position, in memory. Never in
+   the order they were listed: R2 is what makes the result independent of
+   that order.
 3. Check the result against `ARTIFACT_BYTES_MAX`.
 4. Append the **result** as the next version, complete, exactly as a whole
    form is appended today: same entry, same author, same hash over the same
@@ -280,7 +283,8 @@ The artifact preamble gains the patch form. It MUST say:
 
 - that the patch form exists and what it costs to get wrong;
 - that `find` is literal and must match exactly once;
-- that edits apply in order;
+- that the order edits are listed in does not affect the result, because
+  every anchor is resolved against the version named by `replaces`;
 - that a failed patch is refused whole, with a reason, and can be retried;
 - that the whole form is always available and is the right choice when the
   agent is unsure what the current document holds, or when a change needs one
