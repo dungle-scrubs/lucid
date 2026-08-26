@@ -35,6 +35,8 @@ import {
   type AnnotationSpot,
   clampSnippet,
   encodeAnnotationBatch,
+  NOTE_QUEUE_MAX,
+  queueAdmits,
 } from "../../protocol/annotations.js";
 import {
   type Confidence,
@@ -291,6 +293,9 @@ const Thread = ({
           <div className="queue-bar">
             <span>
               {pending.length} note{pending.length === 1 ? "" : "s"} queued
+              {/* Only near the bound. A count out of a maximum on an empty
+                  queue is a limit nobody was going to reach. */}
+              {pending.length >= NOTE_QUEUE_MAX - 4 ? ` of ${NOTE_QUEUE_MAX}` : ""}
             </span>
             <button
               type="button"
@@ -994,6 +999,13 @@ const App = (): React.ReactElement => {
   const addNote = React.useCallback(async (): Promise<void> => {
     const text = draft.trim();
     if (text === "" || selection.length === 0 || capture.current === null) return;
+    // RFC-07 R10. Refused before anything is captured: what is queued stays
+    // queued, and what was typed stays in the box to send after this one goes.
+    const room = queueAdmits(notes.length);
+    if (!room.ok) {
+      setRefusal(room.why);
+      return;
+    }
     // What was on screen where the note points, captured now. A reference
     // would have to be resolved later, against a document that may have
     // changed by then.
@@ -1057,7 +1069,14 @@ const App = (): React.ReactElement => {
   // What command-Enter means right now, or null when it means nothing. A
   // ref, so the window listener and the frame's callback both read the
   // current answer without either being rebuilt as the queue changes.
-  queueSendRef.current = selection.length === 0 && notes.length > 0 && !sending ? sendNotes : null;
+  // Normally the note box owns this key: it adds the note being written. Once
+  // the queue is full nothing can be added, so the key sends rather than doing
+  // nothing at all - which is what it did, leaving a full queue, an open note
+  // box, and no way out of either without reaching for the mouse.
+  queueSendRef.current =
+    notes.length > 0 && !sending && (selection.length === 0 || notes.length >= NOTE_QUEUE_MAX)
+      ? sendNotes
+      : null;
 
   const save = React.useCallback(async (): Promise<void> => {
     if (doc === null || token === null || dead || snapshot.current === null) return;
@@ -1501,8 +1520,9 @@ const App = (): React.ReactElement => {
                         }}
                       >
                         <div className="note-pop-head">
-                          {selection.length} selected
-                          {selection.length > 1 ? " — ⌘-click adds more" : ""}
+                          {notes.length >= NOTE_QUEUE_MAX
+                            ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
+                            : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
                         </div>
                         <textarea
                           ref={noteBox}
@@ -1525,7 +1545,7 @@ const App = (): React.ReactElement => {
                             type="button"
                             className="primary"
                             onClick={() => void addNote()}
-                            disabled={draft.trim() === ""}
+                            disabled={draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX}
                           >
                             Add note
                           </button>

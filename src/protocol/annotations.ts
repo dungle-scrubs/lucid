@@ -53,6 +53,36 @@ export const ANNOTATION_FENCE = "lucid-annotations";
  * reads is what lucid sent. */
 export const SNIPPET_MAX = 2000;
 
+/**
+ * How many notes one queue may hold (RFC-07 R10).
+ *
+ * A queue had no bound at all, and it goes as a single input, so one queue
+ * growing without end is one input growing without end.
+ *
+ * A queue belongs to an artifact and a version, never to a pane or to what
+ * is on screen. This bounds one of them. It deliberately does not bound how
+ * many queues a person accumulates: moving between versions leaves a bounded
+ * queue per version and every one survives, because keeping them is the
+ * point.
+ *
+ * Unrelated to `INPUT_QUEUE_MAX`, which counts inputs in flight. An unsent
+ * queue counts zero there however full it is, and a sent batch counts one
+ * however many notes it carries.
+ */
+export const NOTE_QUEUE_MAX = 20;
+
+/** Whether one more note fits. The refusal is a message, so the caller needs
+ * to know why and not only that. */
+export const queueAdmits = (
+  queued: number,
+): { readonly ok: true } | { readonly ok: false; readonly why: string } =>
+  queued < NOTE_QUEUE_MAX
+    ? { ok: true }
+    : {
+        ok: false,
+        why: `${NOTE_QUEUE_MAX} notes is the most one batch can carry. Send these, or discard one, before writing another.`,
+      };
+
 export interface AnnotationSpot {
   /** lucid's element id, from the render the note was made against. */
   readonly id: string;
