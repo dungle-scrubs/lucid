@@ -54,6 +54,7 @@ import {
   readConversationWidth,
   writeConversationWidth,
 } from "./layout.js";
+import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
 import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
 
 /** Kept in step with the server's own poll interval. */
@@ -85,11 +86,9 @@ interface Driver {
   readonly harnessVersion?: string;
 }
 
-/** `/c/<id>` — the conversation is named by the URL, never by the bundle. */
-const conversationIdFromPath = (): string => {
-  const m = window.location.pathname.match(/^\/c\/([^/]+)\/?$/);
-  return m?.[1] === undefined ? "" : decodeURIComponent(m[1]);
-};
+/** The conversation, and now the artifact and the version, are named by the
+ * URL and never by the bundle. `route.ts` owns the shape. */
+const routeFromPath = (): Route | null => parseRoute(window.location.pathname);
 
 const linesToMessages = (lines: readonly Line[]): Msg[] =>
   lines
@@ -587,7 +586,14 @@ const DocumentFrame = ({
 };
 
 const App = (): React.ReactElement => {
-  const conversationId = React.useMemo(conversationIdFromPath, []);
+  // Read once. Where in the record the page starts is an opening question;
+  // after that the page moves the address bar, not the other way round.
+  const opened = React.useMemo(routeFromPath, []);
+  const conversationId = opened?.conversationId ?? "";
+  /** The artifact the URL asked for, until a person picks another. */
+  const [wantArtifact, setWantArtifact] = React.useState<string | null>(opened?.artifactId ?? null);
+  /** An artifact the URL named that the record does not hold. */
+  const [unknownArtifact, setUnknownArtifact] = React.useState<string | null>(null);
   const [token, setToken] = React.useState<string | null>(null);
   const [messages, setMessages] = React.useState<Msg[]>([]);
   const [status, setStatus] = React.useState<string>("");
@@ -651,7 +657,9 @@ const App = (): React.ReactElement => {
    * lucid never changes version under pending work is about lucid moving
    * someone, not about someone moving themselves, and a pin is how the two
    * are told apart. */
-  const [pinned, setPinned] = React.useState<number | null>(null);
+  // A version named in the URL opens pinned to it: a link to a version has
+  // to land on that version, not on the newest one.
+  const [pinned, setPinned] = React.useState<number | null>(opened?.version ?? null);
   /** A version that arrived while there was work pending. It waits here and
    * is announced rather than swapped in underneath. */
   const [waiting, setWaiting] = React.useState<number | null>(null);
@@ -744,6 +752,22 @@ const App = (): React.ReactElement => {
     grip.addEventListener("pointerup", done);
     grip.addEventListener("pointercancel", done);
   }, []);
+
+  // The address bar says what is on screen. Replaced rather than pushed:
+  // moving between versions of a document is not a sequence of pages a person
+  // wants to walk back through one at a time, and a pin that follows the
+  // newest version would otherwise fill the history by itself.
+  React.useEffect(() => {
+    if (conversationId === "" || doc === null) return;
+    const next: Route = {
+      conversationId,
+      artifactId: doc.artifactId,
+      ...(pinned === null ? {} : { version: pinned }),
+    };
+    const now = parseRoute(window.location.pathname);
+    if (sameRoute(now, next)) return;
+    window.history.replaceState(null, "", formatRoute(next));
+  }, [conversationId, doc, pinned]);
 
   // The same move without a pointer. A separator you can reach with Tab and
   // cannot operate is a control in name only.
@@ -935,10 +959,21 @@ const App = (): React.ReactElement => {
           notes?: Record<string, Annotation[]>;
         };
         const artifacts = body.artifacts;
-        // One document beside the conversation in this slice. The newest
-        // artifact the record holds is the one shown.
-        const entry = artifacts[artifacts.length - 1];
-        if (entry === undefined) return;
+        // The artifact the URL named, else the one with the most recent
+        // version entry - which is what the page did when nothing could name
+        // one. An id that names nothing is not silently replaced: the page
+        // says so, because a link that quietly shows a different document is
+        // worse than a link that fails.
+        const asked = wantArtifact;
+        const entry =
+          asked === null
+            ? artifacts[artifacts.length - 1]
+            : artifacts.find((a) => a.artifactId === asked);
+        if (entry === undefined) {
+          if (asked !== null) setUnknownArtifact(asked);
+          return;
+        }
+        setUnknownArtifact(null);
         setCatalog(entry);
         setSentNotes(body.notes ?? {});
 
@@ -994,7 +1029,7 @@ const App = (): React.ReactElement => {
       alive = false;
       window.clearInterval(id);
     };
-  }, [token, dead, conversationId, pinned]);
+  }, [token, dead, conversationId, pinned, wantArtifact]);
 
   const addNote = React.useCallback(async (): Promise<void> => {
     const text = draft.trim();
@@ -1381,7 +1416,23 @@ const App = (): React.ReactElement => {
           {/* The document is the thing being worked on, so it gets the room
             and the left side. The conversation is the margin note. */}
           <div className="pane document">
-            {doc === null ? (
+            {unknownArtifact !== null ? (
+              // A link naming an artifact this record does not hold. Said
+              // plainly, with the way on, rather than quietly showing a
+              // different document or rendering a blank frame.
+              <div className="empty doc-empty">
+                <p>This conversation has no artifact called “{unknownArtifact}”.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWantArtifact(null);
+                    setPinned(null);
+                  }}
+                >
+                  Show what it does have
+                </button>
+              </div>
+            ) : doc === null ? (
               <div className="empty doc-empty">
                 Nothing to mark up yet. Ask the agent for a document.
               </div>

@@ -7,7 +7,6 @@
  * half the window.
  */
 import { describe, expect, test } from "bun:test";
-import "../support/dom.js";
 import { isModeToggle, isQueueSend } from "../../src/server/client/hotkeys.js";
 import { instrumentArtifact } from "../../src/server/client/instrument.js";
 
@@ -16,13 +15,6 @@ const key = (over: Record<string, unknown> = {}) => ({
   altKey: true,
   ...over,
 });
-
-const el = (html: string, sel: string): Element => {
-  const d = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
-  const found = d.querySelector(sel);
-  if (found === null) throw new Error(`no ${sel}`);
-  return found;
-};
 
 describe("recognising the mode toggle", () => {
   test("alt-backspace is the toggle", () => {

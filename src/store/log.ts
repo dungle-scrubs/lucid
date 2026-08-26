@@ -159,6 +159,19 @@ export const hashArtifactBytes = (bytes: string): string =>
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
 const isArtifactField = (v: unknown): boolean =>
   typeof v === "string" && v.length > 0 && v.length <= 128 && !CONTROL_CHARS.test(v);
+
+/**
+ * The rule the fold applies to an `artifactId`, exported so that anything
+ * accepting one from outside applies the same rule and not a different one.
+ *
+ * Deliberately NOT `validConversationId`. That is a path-safe alphabet,
+ * because a conversation id names a directory. An artifact id names nothing
+ * on disk - it is an index key - and it is far wider: `plan/日本語` is a
+ * valid artifact id that the fold indexes today and that
+ * `validConversationId` rejects. Checking one with the other would hide
+ * artifacts the record already holds.
+ */
+export const validArtifactId = (v: unknown): boolean => isArtifactField(v);
 const isHashHex = (v: unknown): boolean => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
 
 /** Key for the (artifactId, version) -> offset index. \0 is safe because ids have no control chars. */

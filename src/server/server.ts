@@ -128,9 +128,16 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
     // half-built import and throws before the page mounts. This is a
     // product surface, so it always serves the production bundle.
     development: false,
-    // Static bundle. The conversation id is read from the URL by the client,
-    // so every record shares one page.
-    routes: { "/c/:id": index },
+    // Static bundle. The conversation, the artifact and the version are read
+    // from the URL by the client, so every record and every artifact in it
+    // share one page. The artifact segments exist so that an artifact and a
+    // version are linkable at all; before them the page picked the artifact
+    // with the most recent version entry and nothing else was reachable.
+    routes: {
+      "/c/:id": index,
+      "/c/:id/:artifactId": index,
+      "/c/:id/:artifactId/:version": index,
+    },
     fetch: async (req: Request): Promise<Response> => {
       const url = new URL(req.url);
       const path = url.pathname;
