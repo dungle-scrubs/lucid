@@ -356,6 +356,39 @@ body {
 
 /* The version picker. A dropdown because a hundred versions is a hundred
    buttons otherwise, and a long conversation produces a hundred versions. */
+/* Asking before a restore. It sits between the document and the panel so it
+   is in the way, which is the point of a confirmation. */
+.confirm {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.confirm span {
+  flex: 1;
+  min-width: 0;
+}
+
+.confirm button {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.v.restore {
+  color: var(--fg);
+}
+
 .doc-version-pick {
   font: inherit;
   font-size: 12px;

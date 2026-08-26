@@ -43,6 +43,7 @@ import {
   viewSnapshot,
 } from "../store/conversation-host.js";
 import { validConversationId } from "../store/errors.js";
+import { validArtifactId } from "../store/log.js";
 import { presenceHeld } from "../store/presence.js";
 // The projection is `buildView`'s, not a second one written for the
 // browser. Terminal and browser disagreeing about what a conversation says
@@ -420,6 +421,79 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             version: result.version.version,
             basedOn: b.basedOn,
             supersededSince: b.basedOn !== current,
+          });
+        } finally {
+          host.close();
+        }
+      }
+
+      // Restore is a person's act on the record, and it is an append like any
+      // other. lucid copies the bytes of the version being restored into a new
+      // version at the end of the list. Nothing is removed, rewritten or
+      // hidden - the version it replaced is still there and still reachable,
+      // which is what makes undoing a restore the same act again.
+      const restore = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/restore\/?$/);
+      if (restore && req.method === "POST") {
+        const id = decodeURIComponent(restore[1] ?? "");
+        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+        const artifactId = decodeURIComponent(restore[2] ?? "");
+        if (!validArtifactId(artifactId)) return json({ error: "unknown-artifact" }, 404);
+        let body: unknown;
+        try {
+          body = await req.json();
+        } catch {
+          return json({ error: "invalid-json" }, 400);
+        }
+        const b = body as { version?: unknown };
+        if (typeof b.version !== "number" || !Number.isSafeInteger(b.version) || b.version < 1) {
+          return json({ error: "version-required" }, 400);
+        }
+        const dir = conversations(rootDir).dirFor(id);
+        if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
+        const host = createConversationHost(dir, {
+          now: () => Date.now(),
+          presence: () => undefined,
+          executorLease: () => false,
+          onEffect: () => {},
+          onRecord: () => {},
+        });
+        try {
+          let current = 0;
+          for (const key of host.artifactIndex().keys()) {
+            const sep = key.indexOf("\0");
+            if (sep === -1 || key.slice(0, sep) !== artifactId) continue;
+            const v = Number(key.slice(sep + 1));
+            if (Number.isSafeInteger(v) && v > current) current = v;
+          }
+          if (current === 0) return json({ error: "unknown-artifact" }, 404);
+          // Restoring what is already current would append a copy that
+          // records nothing.
+          if (b.version === current) return json({ error: "restore-of-current" }, 409);
+          const from = host.readArtifact(artifactId, b.version);
+          if (from === null) return json({ error: "version-unreadable" }, 404);
+          const result = host.writeArtifact({
+            artifactId,
+            version: current + 1,
+            author: "human",
+            contentType: from.contentType,
+            bytes: from.bytes,
+            basedOn: b.version,
+            // The values the restored version carried, if it carried any.
+            // Restoring a state means restoring the controls too.
+            ...(from.values === undefined ? {} : { values: from.values }),
+          });
+          if (result.verdict === "refused") {
+            return json(
+              { error: result.issue, verdict: "refused" },
+              result.issue === "artifact-too-large" ? 413 : 409,
+            );
+          }
+          return json({
+            verdict: "accepted",
+            artifactId,
+            version: result.version.version,
+            restoredFrom: b.version,
+            replaced: current,
           });
         } finally {
           host.close();

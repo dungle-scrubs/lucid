@@ -1114,6 +1114,11 @@ const App = (): React.ReactElement => {
     };
   }, [token, dead, conversationId, pinned, wantArtifact]);
 
+  /** A restore waiting to be confirmed. Holding the version rather than a
+   * boolean means the confirmation can name what it is about to do. */
+  const [confirmRestore, setConfirmRestore] = React.useState<number | null>(null);
+  const [restoring, setRestoring] = React.useState(false);
+
   /** Showing a version that is not the current one. Read-only: no editing,
    * no saving, no selecting, no annotating (RFC-07 R6, R7). */
   const viewingOld = doc !== null && catalog !== null && doc.version !== catalog.latest;
@@ -1203,6 +1208,37 @@ const App = (): React.ReactElement => {
     notes.length > 0 && !sending && (selection.length === 0 || notes.length >= NOTE_QUEUE_MAX)
       ? sendNotes
       : null;
+
+  const restore = React.useCallback(async (): Promise<void> => {
+    const from = confirmRestore;
+    if (from === null || doc === null || token === null || dead || restoring) return;
+    setRestoring(true);
+    try {
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/restore`,
+        {
+          method: "POST",
+          headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+          body: JSON.stringify({ version: from }),
+        },
+      );
+      if (!res.ok) {
+        const said = (await res.json().catch(() => ({}))) as { error?: string };
+        setRefusal(`not restored: ${said.error ?? res.status}`);
+        return;
+      }
+      const body = (await res.json()) as { version: number };
+      setConfirmRestore(null);
+      setRefusal(null);
+      // Follow what was just written. It is the current version now, and
+      // staying on the old one would leave the page read-only for no reason
+      // a person could see.
+      setPinned(null);
+      setSaved(`v${from} restored as v${body.version}`);
+    } finally {
+      setRestoring(false);
+    }
+  }, [confirmRestore, doc, token, dead, restoring, conversationId]);
 
   const save = React.useCallback(async (): Promise<void> => {
     if (doc === null || token === null || dead || snapshot.current === null) return;
@@ -1588,6 +1624,16 @@ const App = (): React.ReactElement => {
                       {viewingOld ? "Back to current" : "Follow newest"}
                     </button>
                   )}
+                  {viewingOld ? (
+                    <button
+                      type="button"
+                      className="v restore"
+                      onClick={() => setConfirmRestore(doc.version)}
+                      title={`Make v${doc.version} the current version`}
+                    >
+                      Restore this version
+                    </button>
+                  ) : null}
                   <span className="modes">
                     <button
                       type="button"
@@ -1734,6 +1780,32 @@ const App = (): React.ReactElement => {
                 {/* Everything below here has a fixed height and never scrolls
                   out of view. The actions were reachable only by scrolling a
                   panel that grew with the notes in it. */}
+                {/* A confirmation, because a restore puts a new version in
+                  front of the agent. It says the undo out loud: someone
+                  deciding whether to restore is deciding whether it is
+                  reversible, and here it is - permanently, because nothing
+                  is overwritten. */}
+                {confirmRestore === null ? null : (
+                  <div className="confirm">
+                    <span>
+                      Make v{confirmRestore} the current version? It is copied to the end of the
+                      list as v{(catalog?.latest ?? doc.version) + 1}. Nothing is deleted, and going
+                      back is restoring v{catalog?.latest ?? doc.version} the same way.
+                    </span>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => void restore()}
+                      disabled={restoring}
+                    >
+                      {restoring ? "Restoring…" : "Restore"}
+                    </button>
+                    <button type="button" onClick={() => setConfirmRestore(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
                 <div className="doc-panel">
                   <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
 
