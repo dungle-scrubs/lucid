@@ -40,6 +40,7 @@ import {
 } from "../protocol/artifacts.js";
 import { EventKind } from "../protocol/events.js";
 import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
+import { applyPatch, parsePatchBody } from "../protocol/patch.js";
 import type { CollectedBatch } from "../store/log.js";
 import { ARTIFACT_BYTES_MAX } from "../store/log.js";
 import { createSequencer } from "./sequencer.js";
@@ -179,21 +180,11 @@ const handleArtifactMessage = (
       continue;
     }
     const { header, bytes } = d.block;
-    // The form parses (RFC-08 R1) but nothing applies it yet. Refused here,
-    // ahead of every check below, because those all read `bytes` as a
-    // document and a patch body is not one: the size check would measure the
-    // wrong thing and the store would keep a description of edits as though
-    // it were the document. Says which form and what to do instead, so the
-    // agent can recover in the same turn.
-    if (header.form === "patch") {
-      ctx.sequencer.emit(turnId, {
-        kind: EventKind.error,
-        message: `artifact ${header.id} refused: form "patch" is understood but not applied yet — emit the whole document instead`,
-        terminal: false,
-      });
-      continue;
-    }
-    if (bytes.length > ARTIFACT_BYTES_MAX) {
+    const isPatch = header.form === "patch";
+    // A patch body is a description of edits, not a document, so the size
+    // check below would measure the wrong thing and name a problem that is
+    // not size. The document a patch produces is checked once it exists.
+    if (!isPatch && bytes.length > ARTIFACT_BYTES_MAX) {
       ctx.sequencer.emit(turnId, {
         kind: EventKind.error,
         message: `artifact ${header.id} too large: ${bytes.length} > ${ARTIFACT_BYTES_MAX}`,
@@ -232,6 +223,21 @@ const handleArtifactMessage = (
     const local = localVersions.get(header.id);
     if (local !== undefined && local > current) current = local;
 
+    // RFC-08 R1: a patch is a revision, never a creation. There is nothing
+    // to anchor against without a version to anchor in, so both of these
+    // refuse rather than starting the artifact from the patch body.
+    if (isPatch && (header.replaces === null || current === 0)) {
+      ctx.sequencer.emit(turnId, {
+        kind: EventKind.error,
+        message:
+          current === 0
+            ? `artifact ${header.id} refused: E-PATCH-01 patch-without-base: no such artifact to patch — emit the whole document to create it`
+            : `artifact ${header.id} refused: E-PATCH-01 patch-without-base: a patch must name the version it replaces`,
+        terminal: false,
+      });
+      continue;
+    }
+
     if (current === 0) {
       // Unknown id — starts new artifact at v1, regardless of replaces.
       const res = deps.host.writeArtifact?.({
@@ -261,13 +267,72 @@ const handleArtifactMessage = (
       });
       continue;
     }
+    // What actually gets stored. For a whole form it is what the agent sent.
+    // For a patch it is what the edits produce, and it is appended exactly as
+    // a whole form is: same entry, same author, same hash over the same kind
+    // of bytes. The patch is never stored, and nothing in the record says a
+    // version arrived as one.
+    let document = bytes;
+    if (isPatch) {
+      const parsed = parsePatchBody(bytes);
+      if ("refused" in parsed) {
+        ctx.sequencer.emit(turnId, {
+          kind: EventKind.error,
+          message: `artifact ${header.id} refused: ${parsed.refused}`,
+          terminal: false,
+        });
+        continue;
+      }
+      // Lifted by #141, which owns resolving several anchors up front and
+      // refusing edits that overlap. Until then one edit is the whole of what
+      // can be applied safely, and saying so beats applying two in sequence.
+      if (parsed.edits.length > 1) {
+        ctx.sequencer.emit(turnId, {
+          kind: EventKind.error,
+          message: `artifact ${header.id} refused: only one edit per patch is applied so far, got ${parsed.edits.length} — emit the whole document instead`,
+          terminal: false,
+        });
+        continue;
+      }
+      const base = deps.host.readArtifact?.(header.id, current);
+      if (base?.bytes === undefined) {
+        ctx.sequencer.emit(turnId, {
+          kind: EventKind.error,
+          message: `artifact ${header.id} refused: v${current} could not be read, so there is nothing to patch`,
+          terminal: false,
+        });
+        continue;
+      }
+      const applied = applyPatch(base.bytes, parsed.edits);
+      if ("refused" in applied) {
+        ctx.sequencer.emit(turnId, {
+          kind: EventKind.error,
+          message: `artifact ${header.id} refused: ${applied.refused}`,
+          terminal: false,
+        });
+        continue;
+      }
+      document = applied.document;
+      // The result is the only thing left bounding a patch. Under the whole
+      // form the document also has to fit inside a message, which caps it
+      // well below this; a patch carries only the edits, so this check is
+      // what holds.
+      if (document.length > ARTIFACT_BYTES_MAX) {
+        ctx.sequencer.emit(turnId, {
+          kind: EventKind.error,
+          message: `artifact ${header.id} refused: E-PATCH-06 patch-result-too-large: ${document.length} > ${ARTIFACT_BYTES_MAX}`,
+          terminal: false,
+        });
+        continue;
+      }
+    }
     const next = current + 1;
     const res = deps.host.writeArtifact({
       artifactId: header.id,
       version: next,
       author: "agent",
       contentType: header.contentType,
-      bytes,
+      bytes: document,
     });
     if (res?.verdict === "accepted") {
       localVersions.set(header.id, next);

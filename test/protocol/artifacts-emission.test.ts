@@ -57,6 +57,10 @@ const rig = (
       collectEffects: (from: number) => host.collectEffects(from),
       advanceCursor: (off: number) => host.advanceCursor(off),
       artifactIndex: () => host.artifactIndex(),
+      // Production wires this (cli/runtime.ts). A patch reads the version it
+      // revises through it, so a rig without it refuses every patch for a
+      // reason that has nothing to do with the patch.
+      readArtifact: (artifactId: string, version: number) => host.readArtifact(artifactId, version),
       writeArtifact: (params: {
         artifactId: string;
         version: number;
@@ -373,87 +377,200 @@ describe("artifact view projection", () => {
   });
 });
 
-/** RFC-08 R1 as it reaches the store. The parser accepting `form: "patch"`
- * is one thing; what emission does with a form nothing applies yet is
- * another, and getting it wrong stores a description of edits as though it
- * were the document. */
-describe("a patch form, before anything applies it", () => {
+/** RFC-08 as it reaches the store. The pure functions are the oracle for
+ * what a patch means; this is about what emission does with the result, and
+ * the ways getting it wrong would store the wrong bytes or store none. */
+describe("a patch that revises a document", () => {
   const patchFence = (id: string, replaces: number | null, body: string) =>
     `\`\`\`lucid-artifact\n${JSON.stringify({ id, replaces, contentType: "text/html", form: "patch" })}\n${body}\n\`\`\``;
+  const oneEdit = (find: string, replace: string) => JSON.stringify({ edits: [{ find, replace }] });
 
-  test("is refused, and stores nothing", async () => {
+  /** A rig with `doc-1` at v1, which is what a patch needs to exist. */
+  const withV1 = async (bytes = "<ul><li>Read the brief</li></ul>") => {
     const r = rig({ mode: "session" });
     r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
     await flush();
     r.accept("in-1", "turn-1");
     await flush();
-    r.proc.emit(assistant(patchFence("doc-1", null, '{"edits":[{"find":"a","replace":"b"}]}')));
+    r.proc.emit(assistant(artifactFence("doc-1", null, "text/html", bytes)));
     r.proc.emit(doneClean);
     await flush();
     await flush();
-    // Nothing at all: not the patch body stored as a document, and not a
-    // half-made artifact at v1.
+    return r;
+  };
+
+  /** Start a second turn on an existing rig and emit `text` in it. */
+  const secondTurn = async (r: ReturnType<typeof rig>, text: string) => {
+    r.host.enqueueInput({ id: "in-2", text: "revise", mode: "queue" });
+    await flush();
+    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "started" });
+    r.proc.emit({ kind: "turn", turnId: "turn-2", id: "in-2" });
+    await flush();
+    r.proc.emit(assistant(text));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+  };
+
+  const messages = (r: ReturnType<typeof rig>) =>
+    r.host.transcript().events.flatMap((e) => {
+      const ev = e.event as Record<string, unknown>;
+      return typeof ev.message === "string" ? [ev.message] : [];
+    });
+
+  test("produces the next version, complete, from an edit that names only the change", async () => {
+    const r = await withV1();
+    await secondTurn(
+      r,
+      patchFence(
+        "doc-1",
+        1,
+        oneEdit("<li>Read the brief</li>", "<li>Read the brief carefully</li>"),
+      ),
+    );
+    const v2 = r.host.readArtifact("doc-1", 2);
+    // The whole document, not the patch, and not a fragment.
+    expect(v2?.bytes).toBe("<ul><li>Read the brief carefully</li></ul>");
+    expect(v2?.author).toBe("agent");
+    r.host.close();
+  });
+
+  test("the version it produces is indistinguishable from one emitted whole", async () => {
+    // Nothing in the record says a version arrived as a patch. A reader wants
+    // the document, and the document is what is there.
+    const patched = await withV1();
+    await secondTurn(patched, patchFence("doc-1", 1, oneEdit("brief", "spec")));
+    const whole = await withV1();
+    await secondTurn(
+      whole,
+      artifactFence("doc-1", 1, "text/html", "<ul><li>Read the spec</li></ul>"),
+    );
+    const a = patched.host.readArtifact("doc-1", 2);
+    const b = whole.host.readArtifact("doc-1", 2);
+    expect(a?.bytes).toBe(b?.bytes as string);
+    expect(a?.hash).toBe(b?.hash as string);
+    expect(a?.author).toBe(b?.author as string);
+    expect(a?.contentType).toBe(b?.contentType as string);
+    patched.host.close();
+    whole.host.close();
+  });
+
+  test("a patch with no base is refused as E-PATCH-01", async () => {
+    const r = rig({ mode: "session" });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(patchFence("doc-1", null, oneEdit("a", "b"))));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    // Not the patch body stored as a document, and not a half-made v1.
     expect(r.host.readArtifact("doc-1", 1)).toBeNull();
+    expect(messages(r).some((m) => m.includes("E-PATCH-01"))).toBe(true);
     r.host.close();
   });
 
-  test("says which form and what to do instead, rather than failing obscurely", async () => {
+  test("a patch against an artifact that does not exist is refused, not created", async () => {
     const r = rig({ mode: "session" });
     r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
     await flush();
     r.accept("in-1", "turn-1");
     await flush();
-    r.proc.emit(assistant(patchFence("doc-1", 1, '{"edits":[]}')));
+    r.proc.emit(assistant(patchFence("nope", 3, oneEdit("a", "b"))));
     r.proc.emit(doneClean);
     await flush();
     await flush();
-    const said = r.host.transcript().events.flatMap((e) => {
-      const ev = e.event as Record<string, unknown>;
-      return typeof ev.message === "string" ? [ev.message] : [];
+    expect(r.host.readArtifact("nope", 1)).toBeNull();
+    expect(messages(r).some((m) => m.includes("E-PATCH-01"))).toBe(true);
+    r.host.close();
+  });
+
+  test("an anchor that does not match refuses, and leaves the version alone", async () => {
+    const r = await withV1();
+    await secondTurn(r, patchFence("doc-1", 1, oneEdit("<li>Not in there</li>", "x")));
+    expect(r.host.readArtifact("doc-1", 2)).toBeNull();
+    expect(r.host.readArtifact("doc-1", 1)?.bytes).toBe("<ul><li>Read the brief</li></ul>");
+    expect(messages(r).some((m) => m.includes("E-PATCH-02"))).toBe(true);
+    r.host.close();
+  });
+
+  test("an anchor that matches twice refuses rather than guessing", async () => {
+    const r = await withV1("<p>one</p><p>one</p>");
+    await secondTurn(r, patchFence("doc-1", 1, oneEdit("one", "two")));
+    expect(r.host.readArtifact("doc-1", 2)).toBeNull();
+    expect(messages(r).some((m) => m.includes("E-PATCH-03"))).toBe(true);
+    r.host.close();
+  });
+
+  test("a malformed body refuses as E-PATCH-04", async () => {
+    const r = await withV1();
+    await secondTurn(r, patchFence("doc-1", 1, "{not json"));
+    expect(r.host.readArtifact("doc-1", 2)).toBeNull();
+    expect(messages(r).some((m) => m.includes("E-PATCH-04"))).toBe(true);
+    r.host.close();
+  });
+
+  test("a stale replaces keeps the refusal RFC-06 already defines", async () => {
+    const r = await withV1();
+    await secondTurn(r, patchFence("doc-1", 99, oneEdit("brief", "spec")));
+    expect(r.host.readArtifact("doc-1", 2)).toBeNull();
+    expect(messages(r).some((m) => m.includes("stale"))).toBe(true);
+    r.host.close();
+  });
+
+  test("a result over the byte bound refuses as E-PATCH-06", async () => {
+    // Under the whole form a document this size cannot arrive at all, because
+    // it has to fit in a message. A patch carries only the edits, so this is
+    // the only bound left.
+    const r = await withV1("<p>seed</p>");
+    await secondTurn(
+      r,
+      patchFence("doc-1", 1, oneEdit("seed", "z".repeat(ARTIFACT_BYTES_MAX + 10))),
+    );
+    expect(r.host.readArtifact("doc-1", 2)).toBeNull();
+    expect(messages(r).some((m) => m.includes("E-PATCH-06"))).toBe(true);
+    r.host.close();
+  });
+
+  test("an oversize patch body is not reported as an oversize document", async () => {
+    // The whole-form size check measures `bytes` as a document. A patch body
+    // is not one, so reporting "too large" would name the wrong problem.
+    const r = await withV1();
+    await secondTurn(r, patchFence("doc-1", 1, "z".repeat(ARTIFACT_BYTES_MAX + 10)));
+    expect(messages(r).some((m) => m.includes("E-PATCH-04"))).toBe(true);
+    expect(messages(r).some((m) => m.includes("too large:"))).toBe(false);
+    r.host.close();
+  });
+
+  test("a refusal does not end the turn, and a whole form after it still lands", async () => {
+    const r = await withV1();
+    r.host.enqueueInput({ id: "in-2", text: "revise", mode: "queue" });
+    await flush();
+    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "started" });
+    r.proc.emit({ kind: "turn", turnId: "turn-2", id: "in-2" });
+    await flush();
+    r.proc.emit(assistant(patchFence("doc-1", 1, oneEdit("<li>Nope</li>", "x"))));
+    await flush();
+    r.proc.emit(assistant(artifactFence("doc-1", 1, "text/html", "<p>recovered</p>")));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    expect(r.host.readArtifact("doc-1", 2)?.bytes).toBe("<p>recovered</p>");
+    r.host.close();
+  });
+
+  test("more than one edit is refused until #141, rather than applied in sequence", async () => {
+    const r = await withV1("<p>a</p><p>b</p>");
+    const two = JSON.stringify({
+      edits: [
+        { find: "a", replace: "x" },
+        { find: "b", replace: "y" },
+      ],
     });
-    const refusal = said.find((m) => m.includes("doc-1"));
-    expect(refusal).toBeDefined();
-    expect(refusal).toContain("patch");
-    expect(refusal).toContain("whole document");
-    r.host.close();
-  });
-
-  test("does not end the turn, and a whole form after it still lands", async () => {
-    // A refused artifact has never ended a turn and does not start now, so a
-    // model that recovers inside the same turn is not punished for trying.
-    const r = rig({ mode: "session" });
-    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
-    await flush();
-    r.accept("in-1", "turn-1");
-    await flush();
-    r.proc.emit(assistant(patchFence("doc-1", null, '{"edits":[]}')));
-    await flush();
-    r.proc.emit(assistant(artifactFence("doc-1", null, "text/html", "<p>recovered</p>")));
-    r.proc.emit(doneClean);
-    await flush();
-    await flush();
-    expect(r.host.readArtifact("doc-1", 1)?.bytes).toBe("<p>recovered</p>");
-    r.host.close();
-  });
-
-  test("an oversize patch body is refused as a patch, not as an oversize document", async () => {
-    // The size check below it measures `bytes` as a document. A patch body is
-    // not one, so reporting "too large" here would name the wrong problem.
-    const r = rig({ mode: "session" });
-    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
-    await flush();
-    r.accept("in-1", "turn-1");
-    await flush();
-    r.proc.emit(assistant(patchFence("doc-1", 1, "z".repeat(ARTIFACT_BYTES_MAX + 10))));
-    r.proc.emit(doneClean);
-    await flush();
-    await flush();
-    const said = r.host.transcript().events.flatMap((e) => {
-      const ev = e.event as Record<string, unknown>;
-      return typeof ev.message === "string" ? [ev.message] : [];
-    });
-    expect(said.some((m) => m.includes("patch"))).toBe(true);
-    expect(said.some((m) => m.includes("too large"))).toBe(false);
+    await secondTurn(r, patchFence("doc-1", 1, two));
+    expect(r.host.readArtifact("doc-1", 2)).toBeNull();
+    expect(messages(r).some((m) => m.includes("one edit per patch"))).toBe(true);
     r.host.close();
   });
 
@@ -469,11 +586,7 @@ describe("a patch form, before anything applies it", () => {
     await flush();
     await flush();
     expect(r.host.readArtifact("doc-1", 1)).toBeNull();
-    const said = r.host.transcript().events.flatMap((e) => {
-      const ev = e.event as Record<string, unknown>;
-      return typeof ev.message === "string" ? [ev.message] : [];
-    });
-    expect(said.some((m) => m.includes("E-PATCH-07"))).toBe(true);
+    expect(messages(r).some((m) => m.includes("E-PATCH-07"))).toBe(true);
     r.host.close();
   });
 });
