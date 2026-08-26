@@ -157,6 +157,11 @@ const script = (artifactId: string, version: number, author: string): string => 
   // The two were one mode, and a single click did both: it ticked a box and
   // selected the row at the same time. Nothing said which was happening.
   var mode = "use";
+  // A version that is not the current one is read only: it cannot be edited
+  // and it cannot be marked up. RFC-07 R6 and R7. This is not a third mode -
+  // the mode is still whatever it is, and it applies again the moment the
+  // current version is back on screen.
+  var readOnly = false;
 
   // Things a person can operate. Used to decide what must NOT be made
   // editable — a label wrapping one of these would swallow it.
@@ -186,13 +191,14 @@ const script = (artifactId: string, version: number, author: string): string => 
 
   var applyMode = function () {
     var html = document.documentElement;
-    if (mode === "markup") html.classList.add("lucid-markup");
+    if (mode === "markup" && !readOnly) html.classList.add("lucid-markup");
     else html.classList.remove("lucid-markup");
 
     var all = document.body ? document.body.querySelectorAll("[" + ATTR + "]") : [];
     for (var i = 0; i < all.length; i++) {
       var el = all[i];
-      if (mode === "use" && editable(el)) el.setAttribute("contenteditable", editKind(el));
+      if (!readOnly && mode === "use" && editable(el))
+        el.setAttribute("contenteditable", editKind(el));
       else el.removeAttribute("contenteditable");
     }
     if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
@@ -389,11 +395,19 @@ const script = (artifactId: string, version: number, author: string): string => 
     }
 
     if (m.kind === "mode" && (m.mode === "use" || m.mode === "markup")) {
-      if (m.mode !== mode) {
+      var nextReadOnly = m.readOnly === true;
+      if (m.mode !== mode || nextReadOnly !== readOnly) {
         mode = m.mode;
+        readOnly = nextReadOnly;
         // Leaving mark-up mode drops the selection: it addressed elements
-        // for a note, and there is no note being written in use mode.
-        if (mode === "use" && selected.length > 0) { selected = []; paint(); post(); }
+        // for a note, and there is no note being written in use mode. A
+        // version going read only drops it for the same reason - there is
+        // nothing to write about a version that cannot be annotated.
+        if ((mode === "use" || readOnly) && selected.length > 0) {
+          selected = [];
+          paint();
+          post();
+        }
         applyMode();
       }
       return;
@@ -455,12 +469,12 @@ const script = (artifactId: string, version: number, author: string): string => 
   // was then highlighted for annotation a moment later — two things
   // happening from one press, in the wrong order.
   document.addEventListener("mousedown", function (e) {
-    if (!e.isTrusted || mode !== "markup") return;
+    if (!e.isTrusted || mode !== "markup" || readOnly) return;
     e.preventDefault();
   }, true);
 
   document.addEventListener("mouseover", function (e) {
-    if (!e.isTrusted || mode !== "markup") return;
+    if (!e.isTrusted || mode !== "markup" || readOnly) return;
     var el = addressable(e.target);
     if (el === hovered) return;
     if (hovered) hovered.classList.remove("lucid-hover");
@@ -469,13 +483,13 @@ const script = (artifactId: string, version: number, author: string): string => 
   }, true);
 
   document.addEventListener("mouseout", function (e) {
-    if (!e.isTrusted || mode !== "markup") return;
+    if (!e.isTrusted || mode !== "markup" || readOnly) return;
     if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
   }, true);
 
   document.addEventListener("click", function (e) {
     // A document that dispatches its own click is doing its own work.
-    if (!e.isTrusted || mode !== "markup") return;
+    if (!e.isTrusted || mode !== "markup" || readOnly) return;
     // In mark-up mode a click picks an element and does nothing else. Left
     // to run, it would also tick the box or follow the link under it, so
     // one click would do two things and neither would be undoable.
@@ -500,7 +514,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // Clicking away clears. Only elements inside body carry the attribute,
   // so a click on the page's own margin lands here and nowhere else.
   document.addEventListener("click", function (e) {
-    if (!e.isTrusted || mode !== "markup") return;
+    if (!e.isTrusted || mode !== "markup" || readOnly) return;
     if (addressable(e.target)) return;
     if (selected.length === 0) return;
     selected = [];

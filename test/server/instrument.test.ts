@@ -234,7 +234,9 @@ describe("two modes, so one click does one thing", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
     // It addressed elements for a note, and there is no note being written
     // in use mode.
-    expect(out).toContain('if (mode === "use" && selected.length > 0)');
+    // Read-only drops it for the same reason: there is nothing to write
+    // about a version that cannot be annotated.
+    expect(out).toContain('if ((mode === "use" || readOnly) && selected.length > 0)');
   });
 });
 

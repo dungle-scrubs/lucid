@@ -391,6 +391,7 @@ const DocumentFrame = ({
   onDirty,
   marked,
   mode,
+  readOnly,
 }: {
   doc: Doc;
   onSelection: (ids: readonly string[], rect: SelectionRect | null) => void;
@@ -412,6 +413,10 @@ const DocumentFrame = ({
    * batch is being composed. */
   marked: readonly string[];
   mode: "use" | "markup";
+  /** A version that is not the current one. Neither editable nor markable
+   * (RFC-07 R6, R7). Not a third mode: the mode still stands, and applies
+   * again the moment the current version is back. */
+  readOnly: boolean;
 }): React.ReactElement => {
   const ref = React.useRef<HTMLIFrameElement | null>(null);
   const pending = React.useRef(new Map<string, (spots: AnnotationSpot[]) => void>());
@@ -565,13 +570,13 @@ const DocumentFrame = ({
     // the version changes, and a fresh frame starts in use mode.
     const send = (): void =>
       ref.current?.contentWindow?.postMessage(
-        { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode },
+        { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode, readOnly },
         "*",
       );
     send();
     const id = window.setInterval(send, 1000);
     return () => window.clearInterval(id);
-  }, [mode]);
+  }, [mode, readOnly]);
 
   return (
     <iframe
@@ -769,6 +774,8 @@ const App = (): React.ReactElement => {
    * must keep its identity across keystrokes, so it cannot close over the
    * draft itself. */
   const draftRef = React.useRef("");
+  /** Read from the hotkey callback, which must keep its identity. */
+  const viewingOldRef = React.useRef(false);
   /** A batch of notes is on its way to the record. */
   const [sending, setSending] = React.useState(false);
   const sendingNotes = React.useRef(false);
@@ -863,6 +870,8 @@ const App = (): React.ReactElement => {
   }, []);
 
   const toggleMode = React.useCallback((): void => {
+    // Nothing to switch between on a version that permits neither.
+    if (viewingOldRef.current) return;
     setMode((m) => (m === "use" ? "markup" : "use"));
     // Leaving mark-up mode ends whatever note was being written: there is no
     // selection in use mode for it to point at.
@@ -1105,11 +1114,19 @@ const App = (): React.ReactElement => {
     };
   }, [token, dead, conversationId, pinned, wantArtifact]);
 
+  /** Showing a version that is not the current one. Read-only: no editing,
+   * no saving, no selecting, no annotating (RFC-07 R6, R7). */
+  const viewingOld = doc !== null && catalog !== null && doc.version !== catalog.latest;
+
   const addNote = React.useCallback(async (): Promise<void> => {
     const text = draft.trim();
     if (text === "" || selection.length === 0 || capture.current === null) return;
     // RFC-07 R10. Refused before anything is captured: what is queued stays
     // queued, and what was typed stays in the box to send after this one goes.
+    // Belt as well as braces: the frame stops sending selections on a
+    // read-only version, so this should be unreachable. It is here because
+    // "should be unreachable" is where notes end up on the wrong version.
+    if (viewingOld) return;
     const room = queueAdmits(notes.length);
     if (!room.ok) {
       setRefusal(room.why);
@@ -1136,7 +1153,7 @@ const App = (): React.ReactElement => {
     setSelRect(null);
     setRefusal(null);
     deselect.current?.();
-  }, [draft, selection, notes, setNotes, doc, messages.length]);
+  }, [draft, selection, notes, setNotes, doc, messages.length, viewingOld]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
@@ -1442,9 +1459,18 @@ const App = (): React.ReactElement => {
     return m;
   }, [anchored]);
 
+  viewingOldRef.current = viewingOld;
+
   const guidance = ((): { text: string; tone: "idle" | "ready" | "warn" } => {
     if (doc === null) return { text: "No document in this conversation yet.", tone: "idle" };
     if (refusal !== null) return { text: refusal, tone: "warn" };
+    // Said before anything else about the document, because it explains why
+    // every other affordance is missing.
+    if (viewingOld)
+      return {
+        text: `Version ${doc?.version} — read only. Only the current version can be edited or written about.`,
+        tone: "warn",
+      };
     if (edited) return { text: "You changed the document. Save to keep it.", tone: "ready" };
     // What the last save did. It was recorded and never shown, so a save the
     // server turned down looked exactly like one that worked.
@@ -1526,31 +1552,40 @@ const App = (): React.ReactElement => {
                     conversationId={conversationId}
                     onOpen={openArtifact}
                   />
+                  {/* One version is a badge with nothing to open. More than
+                    one is a dropdown, newest first: a row of buttons does not
+                    survive a hundred versions, which is what a long
+                    conversation produces. A native select because it is the
+                    affordance, and the visual treatment belongs to the design
+                    pass rather than to this. */}
                   {catalog === null || catalog.versions.length < 2 ? (
                     <span className="doc-version">v{doc.version}</span>
                   ) : (
-                    <span className="doc-versions">
-                      {catalog.versions.map((v) => (
-                        <button
-                          type="button"
-                          key={v}
-                          className={v === doc.version ? "v current" : "v"}
-                          title={
-                            catalog.authors?.[v] === "human"
-                              ? `v${v} — saved by you`
-                              : `v${v} — written by the agent`
-                          }
-                          onClick={() => setPinned(v)}
-                        >
+                    <select
+                      className={viewingOld ? "doc-version-pick old" : "doc-version-pick"}
+                      value={String(doc.version)}
+                      aria-label="Version"
+                      onChange={(e) => {
+                        const picked = Number.parseInt(e.target.value, 10);
+                        // Choosing the current version is choosing to follow
+                        // it, not to pin it there. Otherwise the newest
+                        // version arriving would leave you on a stale one
+                        // that the picker calls current.
+                        setPinned(picked === catalog.latest ? null : picked);
+                      }}
+                    >
+                      {[...catalog.versions].reverse().map((v) => (
+                        <option key={v} value={String(v)}>
                           v{v}
-                          {catalog.authors?.[v] === "human" ? " ✎" : ""}
-                        </button>
+                          {catalog.authors?.[v] === "human" ? " · saved by you" : " · by the agent"}
+                          {v === catalog.latest ? " · current" : ""}
+                        </option>
                       ))}
-                    </span>
+                    </select>
                   )}
                   {pinned === null ? null : (
                     <button type="button" className="v latest" onClick={() => setPinned(null)}>
-                      follow newest
+                      {viewingOld ? "Back to current" : "Follow newest"}
                     </button>
                   )}
                   <span className="modes">
@@ -1558,6 +1593,7 @@ const App = (): React.ReactElement => {
                       type="button"
                       className={mode === "use" ? "m current" : "m"}
                       onClick={() => setMode("use")}
+                      disabled={viewingOld}
                       title="Tick boxes, fill fields, and edit text (⌥⌫)"
                     >
                       Use
@@ -1566,6 +1602,7 @@ const App = (): React.ReactElement => {
                       type="button"
                       className={mode === "markup" ? "m current" : "m"}
                       onClick={() => setMode("markup")}
+                      disabled={viewingOld}
                       title="Click parts of the document to write notes about them (⌥⌫)"
                     >
                       Mark up
@@ -1599,6 +1636,7 @@ const App = (): React.ReactElement => {
                       ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
                     ]}
                     mode={mode}
+                    readOnly={viewingOld}
                   />
 
                   {/* Written where you clicked. The box used to be a panel at
@@ -1703,7 +1741,7 @@ const App = (): React.ReactElement => {
                     <button
                       type="button"
                       onClick={() => void save()}
-                      disabled={!edited || saving}
+                      disabled={!edited || saving || viewingOld}
                       title="Double-click text in the document to edit it; controls work as they are"
                     >
                       {saving ? "Saving…" : edited ? "Save changes" : "Saved"}

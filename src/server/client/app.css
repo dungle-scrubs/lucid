@@ -354,6 +354,26 @@ body {
   background: var(--panel);
 }
 
+/* The version picker. A dropdown because a hundred versions is a hundred
+   buttons otherwise, and a long conversation produces a hundred versions. */
+.doc-version-pick {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  max-width: 220px;
+}
+
+/* Looking at something that cannot be changed. The picker says so as well
+   as the guidance line, because the picker is what put you here. */
+.doc-version-pick.old {
+  border-color: var(--error);
+  color: var(--error);
+}
+
 .doc-versions {
   display: flex;
   gap: 4px;
