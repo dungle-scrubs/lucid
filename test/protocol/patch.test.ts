@@ -127,20 +127,116 @@ describe("applying edits", () => {
     expect(r.length).toBeLessThan(500);
   });
 
-  test("a document is not searched for an anchor after an earlier edit changed it", () => {
-    // Every anchor resolves against the ORIGINAL. Here the second anchor
-    // exists only in the original, and the first edit would destroy it.
-    const out = applyPatch("hello world", [
+  test("the result of no edits at all is the document unchanged", () => {
+    expect(applied(applyPatch(doc, []))).toBe(doc);
+  });
+});
+
+describe("several edits in one patch", () => {
+  const doc = "<ul>\n<li>alpha</li>\n<li>beta</li>\n<li>gamma</li>\n</ul>";
+
+  test("all of them land, in one new document", () => {
+    expect(
+      applied(
+        applyPatch(doc, [
+          { find: "<li>alpha</li>", replace: "<li>ALPHA</li>" },
+          { find: "<li>gamma</li>", replace: "<li>GAMMA</li>" },
+        ]),
+      ),
+    ).toBe("<ul>\n<li>ALPHA</li>\n<li>beta</li>\n<li>GAMMA</li>\n</ul>");
+  });
+
+  test("the order they are listed in cannot change the result", () => {
+    // This is the guarantee resolving up front buys. If edits applied in
+    // sequence, the second would act on the first one's output and these two
+    // orderings could diverge.
+    const forward = applyPatch(doc, [
+      { find: "alpha", replace: "one" },
+      { find: "beta", replace: "two" },
+      { find: "gamma", replace: "three" },
+    ]);
+    const backward = applyPatch(doc, [
+      { find: "gamma", replace: "three" },
+      { find: "beta", replace: "two" },
+      { find: "alpha", replace: "one" },
+    ]);
+    expect(applied(forward)).toBe(applied(backward));
+    expect(applied(forward)).toBe("<ul>\n<li>one</li>\n<li>two</li>\n<li>three</li>\n</ul>");
+  });
+
+  test("an edit whose replacement changes length does not shift the ones after it", () => {
+    // Applying front-to-back without re-basing offsets is the classic way to
+    // corrupt this. Every anchor was located in the original, so the apply
+    // walks backwards and the offsets stay true.
+    expect(
+      applied(
+        applyPatch("AAA-BBB-CCC", [
+          { find: "AAA", replace: "" },
+          { find: "BBB", replace: "a much longer replacement" },
+          { find: "CCC", replace: "z" },
+        ]),
+      ),
+    ).toBe("-a much longer replacement-z");
+  });
+
+  test("an edit may not anchor on text an earlier edit introduces", () => {
+    // A real loss, and the price of the guarantee. `NEW` exists nowhere in
+    // the original, so it is not found - rather than being found in the
+    // output of the edit before it.
+    const r = applyPatch(doc, [
+      { find: "<li>beta</li>", replace: "<li>NEW</li>" },
+      { find: "NEW", replace: "NEWER" },
+    ]);
+    expect(refusedBy(r)).toContain("E-PATCH-02");
+  });
+
+  test("edits that matched overlapping text are refused", () => {
+    const r = applyPatch("hello world", [
       { find: "hello world", replace: "goodbye" },
       { find: "world", replace: "planet" },
     ]);
-    // Both anchors resolve, and they overlap - which #141 refuses. Until
-    // then the guard in emission keeps multi-edit patches out entirely, so
-    // what matters here is only that the anchor was sought in the original.
-    expect("refused" in out || "document" in out).toBe(true);
+    expect(refusedBy(r)).toContain("E-PATCH-08");
+    expect(refusedBy(r)).toContain("0");
+    expect(refusedBy(r)).toContain("1");
   });
 
-  test("the result of no edits at all is the document unchanged", () => {
-    expect(applied(applyPatch(doc, []))).toBe(doc);
+  test("two edits with the same anchor are an overlap, not a double apply", () => {
+    const r = applyPatch(doc, [
+      { find: "beta", replace: "x" },
+      { find: "beta", replace: "y" },
+    ]);
+    expect(refusedBy(r)).toContain("E-PATCH-08");
+  });
+
+  test("edits that merely touch, without overlapping, are fine", () => {
+    // "AB" then "CD" in "ABCD" are adjacent, not overlapping. Refusing these
+    // would make an off-by-one in the overlap check invisible.
+    expect(
+      applied(
+        applyPatch("ABCD", [
+          { find: "AB", replace: "1" },
+          { find: "CD", replace: "2" },
+        ]),
+      ),
+    ).toBe("12");
+  });
+
+  test("one bad anchor refuses the whole patch, and none of the others apply", () => {
+    const r = applyPatch(doc, [
+      { find: "alpha", replace: "one" },
+      { find: "not in the document", replace: "x" },
+      { find: "gamma", replace: "three" },
+    ]);
+    expect(refusedBy(r)).toContain("E-PATCH-02");
+    expect(refusedBy(r)).toContain("edit 1");
+  });
+
+  test("the refusal names an edit by its listed position, not its position in the text", () => {
+    // The agent wrote the list; it can only fix the edit it can find.
+    const r = applyPatch("xxx AAA yyy BBB", [
+      { find: "BBB", replace: "b" },
+      { find: "nope", replace: "n" },
+    ]);
+    expect(refusedBy(r)).toContain("edit 1");
   });
 });

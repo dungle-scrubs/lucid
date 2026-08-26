@@ -283,17 +283,9 @@ const handleArtifactMessage = (
         });
         continue;
       }
-      // Lifted by #141, which owns resolving several anchors up front and
-      // refusing edits that overlap. Until then one edit is the whole of what
-      // can be applied safely, and saying so beats applying two in sequence.
-      if (parsed.edits.length > 1) {
-        ctx.sequencer.emit(turnId, {
-          kind: EventKind.error,
-          message: `artifact ${header.id} refused: only one edit per patch is applied so far, got ${parsed.edits.length} — emit the whole document instead`,
-          terminal: false,
-        });
-        continue;
-      }
+      // `current` already folds in versions written by an earlier block of
+      // this same message, so a second block anchors against what the first
+      // one produced rather than silently against the version before it.
       const base = deps.host.readArtifact?.(header.id, current);
       if (base?.bytes === undefined) {
         ctx.sequencer.emit(turnId, {

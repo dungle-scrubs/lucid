@@ -151,9 +151,31 @@ export const applyPatch = (document: string, edits: readonly PatchEdit[]): Patch
   // Applied by position, so the result does not depend on the order the
   // edits were listed in. Later positions first, so an earlier replacement
   // cannot shift the offsets of the ones still to come.
-  spots.sort((a, b) => b.at - a.at);
+  const ordered = spots
+    .map((s, i) => ({ ...s, listed: i }))
+    .sort((a, b) => a.at - b.at || a.listed - b.listed);
+
+  // Two edits that matched overlapping regions are refused. Applying both
+  // would make one act on text the other replaced, which is the ordering
+  // hazard resolving up front removes - arriving by another route.
+  //
+  // Two edits with the same `find` land here too: one anchor, one region,
+  // claimed twice. There is no reading of that which is not ambiguous.
+  for (let i = 1; i < ordered.length; i++) {
+    const prev = ordered[i - 1] as (typeof ordered)[number];
+    const cur = ordered[i] as (typeof ordered)[number];
+    if (cur.at < prev.at + prev.edit.find.length) {
+      const a = Math.min(prev.listed, cur.listed);
+      const b = Math.max(prev.listed, cur.listed);
+      return {
+        refused: `E-PATCH-08 patch-edits-overlap: edits ${a} and ${b} matched overlapping text; one of them is already covered by the other`,
+      };
+    }
+  }
+
   let out = document;
-  for (const s of spots) {
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    const s = ordered[i] as (typeof ordered)[number];
     out = out.slice(0, s.at) + s.edit.replace + out.slice(s.at + s.edit.find.length);
   }
   return { document: out };

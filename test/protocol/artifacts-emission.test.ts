@@ -560,17 +560,66 @@ describe("a patch that revises a document", () => {
     r.host.close();
   });
 
-  test("more than one edit is refused until #141, rather than applied in sequence", async () => {
+  test("several edits in one patch all land in one new version", async () => {
     const r = await withV1("<p>a</p><p>b</p>");
     const two = JSON.stringify({
       edits: [
-        { find: "a", replace: "x" },
-        { find: "b", replace: "y" },
+        { find: "<p>a</p>", replace: "<p>x</p>" },
+        { find: "<p>b</p>", replace: "<p>y</p>" },
       ],
     });
     await secondTurn(r, patchFence("doc-1", 1, two));
+    expect(r.host.readArtifact("doc-1", 2)?.bytes).toBe("<p>x</p><p>y</p>");
+    // One version, not one per edit.
+    expect(r.host.readArtifact("doc-1", 3)).toBeNull();
+    r.host.close();
+  });
+
+  test("overlapping edits refuse the whole patch", async () => {
+    const r = await withV1("<p>hello world</p>");
+    const overlapping = JSON.stringify({
+      edits: [
+        { find: "hello world", replace: "goodbye" },
+        { find: "world", replace: "planet" },
+      ],
+    });
+    await secondTurn(r, patchFence("doc-1", 1, overlapping));
     expect(r.host.readArtifact("doc-1", 2)).toBeNull();
-    expect(messages(r).some((m) => m.includes("one edit per patch"))).toBe(true);
+    expect(r.host.readArtifact("doc-1", 1)?.bytes).toBe("<p>hello world</p>");
+    expect(messages(r).some((m) => m.includes("E-PATCH-08"))).toBe(true);
+    r.host.close();
+  });
+
+  test("a second block patches what the first block in the same message produced", async () => {
+    // The read has to see the version this message just created. Consulting
+    // only the durable index as it stood before the message would anchor the
+    // second block against the version before the first block's, silently.
+    const r = await withV1("<p>one</p>");
+    const whole = artifactFence("doc-1", 1, "text/html", "<p>two</p>");
+    const patch = patchFence(
+      "doc-1",
+      2,
+      JSON.stringify({ edits: [{ find: "two", replace: "three" }] }),
+    );
+    await secondTurn(r, `${whole}\n\n${patch}`);
+    expect(r.host.readArtifact("doc-1", 2)?.bytes).toBe("<p>two</p>");
+    expect(r.host.readArtifact("doc-1", 3)?.bytes).toBe("<p>three</p>");
+    r.host.close();
+  });
+
+  test("a refused second block leaves the first block's version standing", async () => {
+    // "Completely or not at all" is a rule about one patch, not a message.
+    const r = await withV1("<p>one</p>");
+    const whole = artifactFence("doc-1", 1, "text/html", "<p>two</p>");
+    const bad = patchFence(
+      "doc-1",
+      2,
+      JSON.stringify({ edits: [{ find: "absent", replace: "x" }] }),
+    );
+    await secondTurn(r, `${whole}\n\n${bad}`);
+    expect(r.host.readArtifact("doc-1", 2)?.bytes).toBe("<p>two</p>");
+    expect(r.host.readArtifact("doc-1", 3)).toBeNull();
+    expect(messages(r).some((m) => m.includes("E-PATCH-02"))).toBe(true);
     r.host.close();
   });
 
