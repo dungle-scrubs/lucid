@@ -269,8 +269,14 @@ export interface ArtifactState {
   /** Present when this version was saved by a person. */
   readonly basedOn?: number;
   readonly values?: Readonly<Record<string, string>>;
-  /** The bytes of the current version, when a person saved it. Absent for a
-   * version the agent wrote: it has those already. */
+  /** The bytes of the current version, when the agent needs to see them.
+   *
+   * Two reasons, and `author` tells them apart, so there is no third state
+   * where the two disagree. A person saved it, and the agent has never seen
+   * it. Or the agent wrote it and its own patch just failed to anchor
+   * against it, which is the one case where "it has those already" is false.
+   *
+   * Absent otherwise. */
   readonly bytes?: string;
 }
 
@@ -313,15 +319,26 @@ export const composeArtifactState = (
     //
     // Control values alone are not enough. They carry a ticked box and a
     // filled field; they carry nothing of a sentence rewritten in place.
-    if (a.author === "human" && a.bytes !== undefined) {
+    if (a.bytes !== undefined) {
+      // Its own version is only ever here because a patch missed.
+      const mine = a.author !== "human";
       if (a.bytes.length <= ARTIFACT_STATE_BYTES_MAX) {
-        lines.push("  what they saved, in full:");
+        lines.push(
+          mine
+            ? "  your patch did not match this version. Here it is in full, so the next anchor comes from the document and not from memory:"
+            : "  what they saved, in full:",
+        );
         lines.push("  ```");
         for (const line of a.bytes.split("\n")) lines.push(`  ${line}`);
         lines.push("  ```");
       } else {
+        // Never a truncated document. An anchor written against half a
+        // document is a miss the agent cannot see coming, and it would spend
+        // the retry this resend exists to make count.
         lines.push(
-          `  their version is ${a.bytes.length} bytes, too large to include here. Ask for it before revising: revising from your own last version would drop whatever they changed.`,
+          mine
+            ? `  your patch did not match this version, and at ${a.bytes.length} bytes it is too large to include here. Emit the whole document rather than another patch: a patch written from memory has already missed once.`
+            : `  their version is ${a.bytes.length} bytes, too large to include here. Ask for it before revising: revising from your own last version would drop whatever they changed.`,
         );
       }
     }

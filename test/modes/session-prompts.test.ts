@@ -59,6 +59,16 @@ const rig = () => {
         advanceCursor: (off: number) => host.advanceCursor(off),
         artifactIndex: () => host.artifactIndex(),
         readArtifact: (id: string, v: number) => host.readArtifact(id, v),
+        // Production wires this. Without it the driver refuses every artifact
+        // block as "no host" before the patch path is reached, so a rig
+        // missing it cannot see a patch refusal at all.
+        writeArtifact: (params: {
+          artifactId: string;
+          version: number;
+          author: string;
+          contentType: string;
+          bytes: string;
+        }) => host.writeArtifact(params),
       },
     } as unknown as Parameters<typeof createHeadlessHost>[0],
     "headless-session",
@@ -81,6 +91,14 @@ const rig = () => {
     say: (text: string) => {
       seq += 1;
       source.receive({ kind: "input", seq, id: `in-${seq}`, text, mode: "queue" });
+    },
+    /** What the harness says back, so a refusal can be provoked. The turn has
+     * to be opened first: an assistant message outside one is not routed. */
+    emitAssistant: (text: string) => {
+      proc.emit({ kind: "disposition", id: `in-${seq}`, disposition: "started" });
+      proc.emit({ kind: "turn", turnId: `turn-${seq}`, id: `in-${seq}` });
+      proc.emit({ kind: "message", role: "assistant", text });
+      proc.emit({ kind: "done", exitCode: null, cause: "clean" });
     },
     write: (version: number, author: string, values?: Record<string, string>) =>
       host.writeArtifact({
@@ -208,6 +226,100 @@ describe("a save reaches the agent on the next thing it is told", () => {
       const sent = r.sent();
       expect(sent[0]).not.toContain("[lucid artifact state]");
       expect(sent[1]).toBe("again");
+    } finally {
+      r.done();
+    }
+  });
+});
+
+/**
+ * RFC-08 E-PATCH-02 recovery.
+ *
+ * The state block carries bytes only for a version a person saved, because
+ * the agent has the ones it wrote. A failed anchor is where that reasoning
+ * breaks: the agent's picture of its own version has drifted, which is WHY
+ * the anchor missed, and its own current version is then the one thing it is
+ * never sent. Without this the retry is another guess from the same picture.
+ */
+describe("a patch that missed gets the document back", () => {
+  /** Emit an assistant message carrying a patch whose anchor is absent. */
+  const missingAnchor = (id: string, replaces: number) =>
+    `\`\`\`lucid-artifact\n${JSON.stringify({ id, replaces, contentType: "text/html", form: "patch" })}\n${JSON.stringify({ edits: [{ find: "text that is not in the document", replace: "x" }] })}\n\`\`\``;
+
+  test("its own current version rides on the next prompt, and not before", async () => {
+    const r = rig();
+    try {
+      r.write(1, "agent");
+      r.say("first");
+      await settle();
+      // Before any miss, the agent is not sent what it already wrote.
+      expect(r.sent()[0]).not.toContain("<p>v1</p>");
+
+      r.emitAssistant(missingAnchor("doc", 1));
+      await settle();
+
+      r.say("second");
+      await settle();
+      const second = r.sent()[1] as string;
+      expect(second).toContain("<p>v1</p>");
+      expect(second).toContain("your patch did not match");
+    } finally {
+      r.done();
+    }
+  });
+
+  test("it is sent once, not on every prompt after", async () => {
+    // The whole point of RFC-08 is keeping the document out of the context.
+    // A debt that never clears would put it back on every turn.
+    const r = rig();
+    try {
+      r.write(1, "agent");
+      r.say("first");
+      await settle();
+      r.emitAssistant(missingAnchor("doc", 1));
+      await settle();
+      r.say("second");
+      await settle();
+      r.say("third");
+      await settle();
+      expect(r.sent()[1]).toContain("<p>v1</p>");
+      expect(r.sent()[2]).not.toContain("<p>v1</p>");
+    } finally {
+      r.done();
+    }
+  });
+
+  test("a refusal that is not a missed anchor does not resend anything", async () => {
+    // The other refusals say what is wrong with the patch itself, and the
+    // agent can act on the reason alone. Resending for those would spend
+    // context on a problem the reason already solved.
+    const r = rig();
+    try {
+      r.write(1, "agent");
+      r.say("first");
+      await settle();
+      const malformed = `\`\`\`lucid-artifact\n${JSON.stringify({ id: "doc", replaces: 1, contentType: "text/html", form: "patch" })}\n{not json\n\`\`\``;
+      r.emitAssistant(malformed);
+      await settle();
+      r.say("second");
+      await settle();
+      expect(r.sent()[1]).not.toContain("<p>v1</p>");
+    } finally {
+      r.done();
+    }
+  });
+
+  test("a person's save is still sent whether or not anything missed", async () => {
+    const r = rig();
+    try {
+      r.write(1, "agent");
+      r.say("first");
+      await settle();
+      r.write(2, "human");
+      r.say("second");
+      await settle();
+      expect(r.sent()[1]).toContain("<p>v2</p>");
+      expect(r.sent()[1]).toContain("what they saved");
     } finally {
       r.done();
     }

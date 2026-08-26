@@ -59,7 +59,35 @@ export const STALL_MS = 90_000;
 /** What the record currently holds, read fresh so a save made a second ago
  * is in it. Headers only — the document bytes are read to get at the author
  * and the values and are not kept. */
-const artifactState = (deps: HeadlessDeps): readonly ArtifactState[] => {
+/**
+ * @param owed Artifacts whose current version the agent must be shown,
+ * because a patch of theirs was just refused for an anchor that did not
+ * match. Draining it is the caller's job, so the resend costs one prompt
+ * rather than every prompt after a single miss.
+ *
+ * The state block carries bytes only for a version a person saved, on the
+ * reasoning that the agent already has the ones it wrote. A failed anchor is
+ * exactly where that reasoning breaks: the agent's picture of its own version
+ * has drifted, which is why the anchor missed, and its own current version is
+ * then the one thing it is never sent. Without this the retry is another
+ * guess from the same stale picture.
+ */
+/** What is owed right now, and no longer owed after. Called once per prompt:
+ * the resend answers a miss, and repeating it every turn would put the
+ * document back in the context this whole RFC exists to keep it out of. */
+const drainOwed = (ctx: HostContext): ReadonlySet<string> => {
+  if (ctx.owedBytes.size === 0) return EMPTY_OWED;
+  const due = new Set(ctx.owedBytes);
+  ctx.owedBytes.clear();
+  return due;
+};
+
+const EMPTY_OWED: ReadonlySet<string> = new Set<string>();
+
+const artifactState = (
+  deps: HeadlessDeps,
+  owed: ReadonlySet<string> = EMPTY_OWED,
+): readonly ArtifactState[] => {
   const index = deps.host?.artifactIndex?.();
   if (index === undefined || deps.host?.readArtifact === undefined) return [];
   const current = new Map<string, number>();
@@ -83,10 +111,9 @@ const artifactState = (deps: HeadlessDeps): readonly ArtifactState[] => {
       author: one.author,
       ...(one.basedOn === undefined ? {} : { basedOn: one.basedOn }),
       ...(one.values === undefined ? {} : { values: one.values }),
-      // Only for a version a person saved. The agent wrote its own versions
-      // and does not need them read back; the person's is the one it has
-      // never seen, and the one it will otherwise revise away.
-      ...(one.author === "human" ? { bytes: one.bytes } : {}),
+      // A version a person saved, or one the agent wrote and has just proved
+      // it can no longer anchor against.
+      ...(one.author === "human" || owed.has(artifactId) ? { bytes: one.bytes } : {}),
     });
   }
   return out;
@@ -297,6 +324,11 @@ const handleArtifactMessage = (
       }
       const applied = applyPatch(base.bytes, parsed.edits);
       if ("refused" in applied) {
+        // Only for an anchor that did not match. The other refusals say what
+        // is wrong with the patch itself, and the agent can fix those from
+        // the reason alone; this one means its picture of the document has
+        // drifted, and no reason can repair that.
+        if (applied.refused.includes("E-PATCH-02")) ctx.owedBytes.add(header.id);
         ctx.sequencer.emit(turnId, {
           kind: EventKind.error,
           message: `artifact ${header.id} refused: ${applied.refused}`,
@@ -353,6 +385,11 @@ interface HostContext {
   /** Say that a reason this session is over is already in the record. The
    * pump reports the end too, and without this one failure reads as two. */
   reported(): void;
+  /** Artifact ids whose current version owes the agent a look, because its
+   * own patch just failed to anchor against it. Per host, not per module:
+   * one process runs several conversations and they must not read each
+   * other's debts. */
+  readonly owedBytes: Set<string>;
 }
 
 interface StrategyHandle {
@@ -430,7 +467,7 @@ const sessionStrategy = (
         }
         framed = withProtocol;
       }
-      composed = composeArtifactState(framed, artifactState(deps));
+      composed = composeArtifactState(framed, artifactState(deps, drainOwed(ctx)));
     }
     // hcn answers a send with exactly one disposition, and it answers
     // before it opens the turn. So the reply is awaited and recorded when
@@ -649,9 +686,13 @@ const turnStrategy = (
             // rather than losing the turn to a stale id.
             const attemptResume = resumeId !== undefined && !resumeTried;
             if (attemptResume) resumeTried = true;
+            // Read once, not per prompt. The resume retry below composes the
+            // same turn again, and draining the debt twice would send the
+            // second attempt without the document the first one owed.
+            const state = artifactState(deps, drainOwed(ctx));
             const composedPrompt = composeArtifactState(
               composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
-              artifactState(deps),
+              state,
             );
             let raw = deps.runner.streamTurn({
               harness: deps.harness,
@@ -679,7 +720,7 @@ const turnStrategy = (
                 });
                 const retryPrompt = composeArtifactState(
                   composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
-                  artifactState(deps),
+                  state,
                 );
                 raw = deps.runner.streamTurn({
                   harness: deps.harness,
@@ -793,6 +834,7 @@ export const createHeadlessHost = (
       return currentTurnId;
     },
     expected,
+    owedBytes: new Set<string>(),
   };
 
   // The stall watchdog.

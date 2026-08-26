@@ -105,3 +105,62 @@ describe("telling the agent what the record holds", () => {
     expect(out).not.toContain("controls as they left them");
   });
 });
+
+describe("sending the agent its own document back after a patch missed", () => {
+  const missed: ArtifactState = {
+    artifactId: "doc-1",
+    version: 4,
+    author: "agent",
+    bytes: "<ul><li>alpha</li></ul>",
+  };
+
+  test("a version the agent wrote is normally not included", () => {
+    // The default, and the reason this ticket exists: the agent has its own
+    // versions already, so sending them back is context spent for nothing.
+    const out = composeArtifactState("go", [agentWrote]);
+    // No document block at all. ("in full" also appears in the closing
+    // instruction, so the fence is what actually distinguishes them.)
+    expect(out).not.toContain("```");
+  });
+
+  test("after a missed anchor, its own current version is included whole", () => {
+    const out = composeArtifactState("go", [missed]);
+    expect(out).toContain("<ul><li>alpha</li></ul>");
+  });
+
+  test("it says the bytes are its own version, not somebody else's edit", () => {
+    // Without this the agent reads a resend as a change it has to reconcile,
+    // and spends the retry working out what moved.
+    const out = composeArtifactState("go", [missed]);
+    expect(out).toContain("your patch did not match");
+    expect(out).not.toContain("what they saved");
+  });
+
+  test("a person's save still reads as a person's save", () => {
+    const out = composeArtifactState("go", [{ ...personSaved, bytes: "<p>theirs</p>" }]);
+    expect(out).toContain("what they saved");
+    expect(out).not.toContain("your patch did not match");
+  });
+
+  test("a document too large is never truncated, and says to emit the whole form", () => {
+    // An anchor written against half a document is a miss the agent cannot
+    // see coming, and it would spend the very retry this resend is for.
+    const huge = "z".repeat(ARTIFACT_STATE_BYTES_MAX + 1);
+    const out = composeArtifactState("go", [{ ...missed, bytes: huge }]);
+    expect(out).not.toContain(huge);
+    expect(out).toContain("too large to include here");
+    expect(out).toContain("whole document");
+    expect(out.length).toBeLessThan(ARTIFACT_STATE_BYTES_MAX);
+  });
+
+  test("an artifact carrying no bytes is listed without a document", () => {
+    // Which artifacts carry bytes is decided upstream, in `artifactState`;
+    // this layer renders what it is handed. The pairing tested here is that
+    // no bytes means no document block, so an artifact nobody asked about
+    // costs one line.
+    const out = composeArtifactState("go", [missed, agentWrote]);
+    expect(out).toContain("<ul><li>alpha</li></ul>");
+    expect(out).toContain("- doc-1");
+    expect(out.match(/```/g)?.length).toBe(2);
+  });
+});
