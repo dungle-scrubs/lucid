@@ -219,6 +219,12 @@ export const artifactPlaceholder = (header: ArtifactHeader): string => {
  * — when a person saved it — the values of the controls they left, which
  * are small and structured and are the half of a save that a document
  * cannot express on its own. */
+/** How much of a person's saved document travels with the prompt. Large
+ * enough for the documents this surface is for, small enough that a prompt
+ * stays a prompt. Over it, the agent is told plainly that it cannot see the
+ * version rather than being left to guess. */
+export const ARTIFACT_STATE_BYTES_MAX = 60_000;
+
 export interface ArtifactState {
   readonly artifactId: string;
   readonly version: number;
@@ -226,6 +232,9 @@ export interface ArtifactState {
   /** Present when this version was saved by a person. */
   readonly basedOn?: number;
   readonly values?: Readonly<Record<string, string>>;
+  /** The bytes of the current version, when a person saved it. Absent for a
+   * version the agent wrote: it has those already. */
+  readonly bytes?: string;
 }
 
 export const ARTIFACT_STATE_MARKER = "[lucid artifact state]";
@@ -260,10 +269,29 @@ export const composeArtifactState = (
     if (a.values !== undefined && Object.keys(a.values).length > 0) {
       lines.push(`  controls as they left them: ${JSON.stringify(a.values)}`);
     }
+    // A version a person saved is the only one the agent has not written
+    // itself, so it is the only one it cannot otherwise know. Without it the
+    // agent revises from the last version IT wrote, and every word the person
+    // typed is dropped from the next version without either side noticing.
+    //
+    // Control values alone are not enough. They carry a ticked box and a
+    // filled field; they carry nothing of a sentence rewritten in place.
+    if (a.author === "human" && a.bytes !== undefined) {
+      if (a.bytes.length <= ARTIFACT_STATE_BYTES_MAX) {
+        lines.push("  what they saved, in full:");
+        lines.push("  ```");
+        for (const line of a.bytes.split("\n")) lines.push(`  ${line}`);
+        lines.push("  ```");
+      } else {
+        lines.push(
+          `  their version is ${a.bytes.length} bytes, too large to include here. Ask for it before revising: revising from your own last version would drop whatever they changed.`,
+        );
+      }
+    }
   }
   lines.push("");
   lines.push(
-    "When you revise one of these, set `replaces` to the current version above. The document bytes are not repeated here; ask if you need to see them.",
+    "When you revise one of these, set `replaces` to the current version above. Where a version a person saved is shown in full, revise from that and not from the last one you wrote, or their changes are lost.",
   );
   return `${lines.join("\n")}\n\n${prompt}`;
 };

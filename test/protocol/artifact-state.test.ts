@@ -11,6 +11,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  ARTIFACT_STATE_BYTES_MAX,
   ARTIFACT_STATE_MARKER,
   type ArtifactState,
   composeArtifactState,
@@ -52,16 +53,39 @@ describe("telling the agent what the record holds", () => {
     expect(out).not.toContain("controls as they left them");
   });
 
-  test("the document itself is never in it", () => {
+  test("a version the agent wrote is not read back to it", () => {
+    const out = composeArtifactState("go on", [agentWrote]);
+    // It wrote those bytes. Repeating them costs a prompt and tells it
+    // nothing.
+    expect(out).not.toContain("what they saved, in full");
+  });
+
+  test("a version a person saved travels in full", () => {
+    // The failure this answers, found by using it: a person edited a
+    // sentence, saved, and asked the agent for an unrelated change. The
+    // agent revised from the last version IT wrote, and the sentence was
+    // gone from the next version with nothing said by either side.
+    //
+    // Control values are not enough. They carry a ticked box; they carry
+    // nothing of a rewritten sentence.
     const out = composeArtifactState("go on", [
-      { ...personSaved, values: { e1: "on" } },
-      agentWrote,
+      { ...personSaved, bytes: "<p>a sentence they rewrote</p>" },
     ]);
-    // Bytes can be a megabyte and most turns do not need them. The
-    // annotation path already carries the person's own text in the snippet.
-    expect(out).not.toContain("<html");
-    expect(out).not.toContain("<body");
-    expect(out).toContain("not repeated here");
+    expect(out).toContain("what they saved, in full");
+    expect(out).toContain("a sentence they rewrote");
+    expect(out).toContain("revise from that and not from the last one you wrote");
+  });
+
+  test("a version too large to carry says so, and says what to do", () => {
+    const big = "x".repeat(ARTIFACT_STATE_BYTES_MAX + 1);
+    const out = composeArtifactState("go on", [{ ...personSaved, bytes: big }]);
+    expect(out).not.toContain(big);
+    expect(out).toContain("too large to include here");
+    // The old wording told the agent to "ask if you need to see them", which
+    // it cannot do: this is a one-way prompt with no way to ask. Saying what
+    // is missing and why it matters is the most that can be true here.
+    expect(out).toContain("Ask for it before revising");
+    expect(out).not.toContain("ask if you need to see them");
   });
 
   test("several artifacts are all named", () => {

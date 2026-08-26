@@ -1276,8 +1276,15 @@ const App = (): React.ReactElement => {
           ? `saved as v${body.version}, based on v${doc.version} — the agent has since written a newer one`
           : `saved as v${body.version}`,
       );
-      // Follow what was just written: it is the version being worked on now.
-      setPinned(body.version);
+      // Follow, do not pin. What was just saved IS the newest version, so
+      // following shows it - and keeps showing the newest one after that.
+      //
+      // Pinning here looked equivalent and was not. The version you saved
+      // stops being current the moment the agent answers, and a version that
+      // is not current is read only, so saving and then asking the agent for
+      // anything locked you out of your own document with no explanation
+      // beyond a small line offering the new version.
+      setPinned(null);
     } finally {
       setSaving(false);
     }
@@ -1659,7 +1666,10 @@ const App = (): React.ReactElement => {
                 {waiting === null || waiting <= doc.version ? null : (
                   <div className="doc-waiting">
                     Version {waiting} has arrived.{" "}
-                    <button type="button" onClick={() => setPinned(waiting)}>
+                    {/* Follow rather than pin, for the reason the save path
+                      gives: pinning to the newest version now means being
+                      read-only against the one after it. */}
+                    <button type="button" onClick={() => setPinned(null)}>
                       show it
                     </button>
                   </div>

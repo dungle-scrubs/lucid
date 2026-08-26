@@ -82,6 +82,10 @@ const artifactState = (deps: HeadlessDeps): readonly ArtifactState[] => {
       author: one.author,
       ...(one.basedOn === undefined ? {} : { basedOn: one.basedOn }),
       ...(one.values === undefined ? {} : { values: one.values }),
+      // Only for a version a person saved. The agent wrote its own versions
+      // and does not need them read back; the person's is the one it has
+      // never seen, and the one it will otherwise revise away.
+      ...(one.author === "human" ? { bytes: one.bytes } : {}),
     });
   }
   return out;
@@ -129,6 +133,9 @@ export interface HeadlessDeps {
       readonly author: string;
       readonly basedOn?: number;
       readonly values?: Readonly<Record<string, string>>;
+      /** Needed for a version a person saved: it is the one the agent has
+       * never seen, and would otherwise revise away. */
+      readonly bytes?: string;
     } | null;
     writeArtifact?: (params: {
       readonly artifactId: string;
