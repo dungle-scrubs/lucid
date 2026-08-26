@@ -186,9 +186,16 @@ describe("what lucid added is not part of what gets saved", () => {
 });
 
 describe("two modes, so one click does one thing", () => {
-  test("use mode is where the document starts", () => {
+  test("mark-up mode is where the document starts", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
-    expect(out).toContain('var mode = "use"');
+    // What a person does with a document an agent produced is read it and
+    // say what is wrong with it. Filling it in is the rarer act, and it is
+    // the one with a switch to reach it.
+    expect(out).toContain('var mode = "markup"');
+    // The page defaults to the same mode. If these ever disagree, the frame
+    // renders every block editable for the moment before the page's first
+    // mode message lands.
+    expect(out).not.toContain('var mode = "use"');
   });
 
   test("text is editable in use mode, and a caret is the browser's job", () => {

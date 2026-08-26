@@ -156,7 +156,12 @@ const script = (artifactId: string, version: number, author: string): string => 
   //
   // The two were one mode, and a single click did both: it ticked a box and
   // selected the row at the same time. Nothing said which was happening.
-  var mode = "use";
+  //
+  // Mark up is where a document opens. The page defaults to it too, and both
+  // have to agree from the first paint: a frame starting in use mode would
+  // render every block editable for the moment before the page's first mode
+  // message arrives.
+  var mode = "markup";
   // A version that is not the current one is read only: it cannot be edited
   // and it cannot be marked up. RFC-07 R6 and R7. This is not a third mode -
   // the mode is still whatever it is, and it applies again the moment the
@@ -461,7 +466,8 @@ const script = (artifactId: string, version: number, author: string): string => 
     touched(e.target);
   }, true);
 
-  // Text is editable from the start, because use mode is the start.
+  // Applied before any event is handled, so the document opens in the mode
+  // it will stay in rather than changing under the first click.
   applyMode();
 
   // Focus moves on mousedown, not on click. Cancelling only the click let

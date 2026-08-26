@@ -763,8 +763,12 @@ const App = (): React.ReactElement => {
   const [saved, setSaved] = React.useState<string | null>(null);
   /** What a click means right now. Two things wanted the same click — ticking
    * a box and picking an element to write about — so which one it is, is a
-   * choice rather than a guess. */
-  const [mode, setMode] = React.useState<"use" | "markup">("use");
+   * choice rather than a guess.
+   *
+   * Mark up is the default. What a person does with a document an agent
+   * produced is read it and say what is wrong with it; filling it in is the
+   * rarer act, and it is the one that has a mode switch to reach it. */
+  const [mode, setMode] = React.useState<"use" | "markup">("markup");
   const noteBox = React.useRef<HTMLTextAreaElement | null>(null);
   /** Where in the frame the selection sits, so the note box opens beside it
    * rather than in a panel at the bottom, away from what it is about. */
