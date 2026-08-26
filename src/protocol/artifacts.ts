@@ -42,7 +42,25 @@ You can emit a document as an artifact. To do so, emit a fenced code block tagge
 - \`replaces\` — the version this one supersedes, or null for a first emission. Must be the current version; stale is refused.
 - \`contentType\` — e.g. "text/html".
 
-Two blocks in one message both land, in order. You do not assign version, author, or hash — lucid does.`;
+Two blocks in one message both land, in order. You do not assign version, author, or hash — lucid does.
+
+To revise a document you have already emitted, you can name what changes instead of retyping the whole thing. Add \`"form": "patch"\` to the header and make the body a JSON object of edits:
+
+\`\`\`lucid-artifact
+{"id": "checklist", "replaces": 12, "contentType": "text/html", "form": "patch"}
+{"edits": [{"find": "<li>Read the brief</li>", "replace": "<li>Read the brief carefully</li>"}]}
+\`\`\`
+
+lucid applies the edits and stores the whole resulting document, exactly as if you had typed it out. What you save is the typing, not the result.
+
+- \`find\` is matched literally against the version named by \`replaces\`: not a regular expression, not a selector, not a line range. It must match exactly once. No match is refused, and so is more than one; lengthen the anchor until it is unique.
+- \`replace\` may be empty, which deletes the matched text.
+- The order you list edits in does not matter. Every anchor is found in the version named by \`replaces\` before any edit is applied, so an edit CANNOT anchor on text another edit in the same patch introduces. If a change needs that, emit the whole document instead.
+- Two edits that cover overlapping text are refused. So is an unknown field on an edit: only \`find\` and \`replace\` exist.
+- A patch is a revision, never a creation. \`replaces\` must name an existing version, so the first emission of any document is always the whole form.
+- If any edit fails the whole patch is refused and nothing is stored. The refusal says which edit and why, so fix that edit and send it again. Nothing is ever half-applied.
+
+Emitting the whole document is always allowed and is never wrong. Use it when the document is short, when you are unsure what the current version holds, or when one edit needs to build on another. A patch that has to guess costs more than the document it was avoiding.`;
 
 /** What the body after the header is.
  *

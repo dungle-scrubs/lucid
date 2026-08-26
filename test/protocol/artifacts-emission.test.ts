@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import { openHeadlessSession, openHeadlessTurns } from "../../src/modes/headless.js";
 import {
+  ARTIFACT_PREAMBLE,
   ARTIFACT_PREAMBLE_MARKER,
   composeArtifactPrompt,
   detectArtifactBlocks,
@@ -652,5 +653,62 @@ describe("a patch that revises a document", () => {
     expect(r.host.readArtifact("doc-1", 1)).toBeNull();
     expect(messages(r).some((m) => m.includes("E-PATCH-07"))).toBe(true);
     r.host.close();
+  });
+});
+
+/** RFC-08 R6. The preamble is the only thing that makes the patch form
+ * reachable, and it is sent once per session, so what it leaves out the
+ * agent has no way to learn. */
+describe("what the preamble says about the patch form", () => {
+  test("it describes the form and its header", () => {
+    expect(ARTIFACT_PREAMBLE).toContain('"form": "patch"');
+    expect(ARTIFACT_PREAMBLE).toContain('"edits"');
+    expect(ARTIFACT_PREAMBLE).toContain("find");
+    expect(ARTIFACT_PREAMBLE).toContain("replace");
+  });
+
+  test("it says find is literal and must match exactly once", () => {
+    expect(ARTIFACT_PREAMBLE).toContain("literally");
+    expect(ARTIFACT_PREAMBLE).toContain("exactly once");
+    expect(ARTIFACT_PREAMBLE).toContain("not a regular expression");
+  });
+
+  test("it says the listed order does not matter, and why", () => {
+    // The dangerous misreading is that edits apply in sequence, which would
+    // invite an agent to build one edit on another. That is refused, and the
+    // preamble is where the agent finds out before spending a turn on it.
+    expect(ARTIFACT_PREAMBLE).toContain("order you list edits in does not matter");
+    expect(ARTIFACT_PREAMBLE).toContain("CANNOT anchor on text another edit");
+  });
+
+  test("it says a failed patch is refused whole, with a reason, and can be retried", () => {
+    expect(ARTIFACT_PREAMBLE).toContain("nothing is stored");
+    expect(ARTIFACT_PREAMBLE).toContain("send it again");
+    expect(ARTIFACT_PREAMBLE).toContain("half-applied");
+  });
+
+  test("it says the whole form is always available and never wrong", () => {
+    expect(ARTIFACT_PREAMBLE).toContain("always allowed and is never wrong");
+    expect(ARTIFACT_PREAMBLE).toContain("unsure what the current version holds");
+  });
+
+  test("it says a patch cannot create an artifact", () => {
+    expect(ARTIFACT_PREAMBLE).toContain("a revision, never a creation");
+  });
+
+  test("it still goes once per session, and not every turn", () => {
+    // Instructions do not change, so repeating them is context spent to say
+    // the same thing. RFC-07 settled this; adding to the preamble must not
+    // quietly change how often it rides.
+    const first = composeArtifactPrompt("hello", "headless-session");
+    expect(composeArtifactPrompt(first, "headless-session")).toBe(first);
+  });
+
+  test("the whole form still works for an agent that ignores all of it", () => {
+    // The preamble offers the patch form; nothing requires it. An agent that
+    // reads none of this keeps working exactly as before.
+    const blocks = detectArtifactBlocks(artifactFence("doc", null, "text/html", "<p>hi</p>"));
+    const only = blocks[0];
+    expect(only !== undefined && "block" in only && only.block.header.form).toBe("whole");
   });
 });
