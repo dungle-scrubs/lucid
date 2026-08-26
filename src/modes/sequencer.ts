@@ -27,6 +27,7 @@
 
 import type { HarnessEvent } from "../harness/events.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
+import { EventKind } from "../protocol/events.js";
 import {
   classOfEventKind,
   coalesceDroppable,
@@ -119,6 +120,21 @@ export const createSequencer = (
   let pending: readonly PendingDroppable<HarnessEvent>[] = [];
   let detached = false;
 
+  /** Refusals that will never clear: the record and this driver disagree
+   * about which attachment, epoch or turn is live. Everything else is about
+   * one event and leaves the next one able to land. */
+  const FATAL_ISSUES = new Set([
+    "not-attached",
+    "stale-epoch",
+    "future-epoch",
+    "turn-id-reused",
+    "gap-n",
+    "dupe-n",
+  ]);
+
+  /** Stops a stand-in that is itself refused from recursing. */
+  let substituting = false;
+
   const sendEvent = (turnId: string, event: HarnessEvent): boolean => {
     const attempt = n + 1;
     const verdict = deps.sendFrame({
@@ -135,6 +151,46 @@ export const createSequencer = (
     if ("issue" in verdict && verdict.issue === "no-credit") {
       credits = 0;
       pending = coalesceDroppable(pending, turnId, event);
+      return false;
+    }
+    // Every other refusal used to end here, discarded, with nothing written
+    // and nothing said. `n` does not advance, so one refusal made every event
+    // after it fail the same way, and the driver went on dispositioning
+    // inputs and writing artifacts - alive to look at, recording nothing the
+    // agent said. A record in use ran that way for a day.
+    //
+    // Refusals split by whether they can clear.
+    const issue = "issue" in verdict ? String(verdict.issue) : "refused";
+    if (FATAL_ISSUES.has(issue)) {
+      // Structural. The record and this driver disagree about which
+      // attachment, epoch, or turn is live, and no later event fares better.
+      // Stopping loudly beats running deaf.
+      throw new HeadlessError(
+        `the record refused a ${event.kind} event on turn ${turnId}: ${issue}. ` +
+          "Nothing this driver says can be recorded, so it is stopping rather " +
+          "than running deaf.",
+      );
+    }
+    if (classOfEventKind(event.kind) === "droppable") {
+      pending = coalesceDroppable(pending, turnId, event);
+      return false;
+    }
+    // This one event cannot be recorded - too large for the frame, most
+    // often. The next one may be fine, so the turn carries on. What must not
+    // happen is silence: a stand-in says the event existed and why it is not
+    // here, which is the difference between a gap a reader can see and a gap
+    // that looks like the harness saying nothing.
+    if (!substituting) {
+      substituting = true;
+      try {
+        sendEvent(turnId, {
+          kind: EventKind.error,
+          message: `a ${event.kind} event could not be recorded (${issue}); it is missing from this transcript`,
+          terminal: false,
+        } as unknown as HarnessEvent);
+      } finally {
+        substituting = false;
+      }
     }
     return false;
   };

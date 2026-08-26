@@ -29,6 +29,7 @@ import { INPUT_QUEUE_MAX } from "../protocol/events.js";
 import type { Frame } from "../protocol/index.js";
 import { InputLedger } from "../protocol/ledgers/input.js";
 import { channelStatus } from "../protocol/liveness.js";
+import { createTurnIds } from "../protocol/turn-id.js";
 import { acquirePresence, type PresenceHandle } from "../store/presence.js";
 import { type HostRecord, openConversation, viewSnapshot } from "../store/store.js";
 import { createTailer, followRecord, type RecordTailer } from "../store/tailer.js";
@@ -190,7 +191,9 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
     } catch {}
   };
 
-  let turnCount = 0;
+  // Unique across restarts: a reused id is refused by the reducer, and the
+  // driver would record nothing the agent says. See src/protocol/turn-id.ts.
+  const mintTurnId = createTurnIds();
   const runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
   const profile = (await supportsSession(runner, harness)) ? "headless-session" : "headless-turn";
 
@@ -199,7 +202,7 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
     conversationId,
     secret,
     runner,
-    mintTurnId: () => `turn-${++turnCount}`,
+    mintTurnId,
     sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
     host: {
       cursor: () => host.cursor(),

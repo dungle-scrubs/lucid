@@ -45,6 +45,7 @@ import { createHeadlessHost } from "../modes/host.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { inputFrame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
+import { createTurnIds } from "../protocol/turn-id.js";
 import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
 import { type HostRecord, openConversation } from "../store/store.js";
 import { followRecord } from "../store/tailer.js";
@@ -224,7 +225,9 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     } catch {}
   };
 
-  let turnCount = 0;
+  // Unique across restarts: a reused id is refused by the reducer, and the
+  // driver would record nothing the agent says. See src/protocol/turn-id.ts.
+  const mintTurnId = createTurnIds();
   const sessionId = uuidFn();
 
   // Single headless entry — the Host's strategy table owns the mode
@@ -240,7 +243,7 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     conversationId,
     secret,
     runner,
-    mintTurnId: () => `turn-${++turnCount}`,
+    mintTurnId,
     sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
     host: {
       cursor: () => host.cursor(),
