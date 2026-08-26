@@ -95,6 +95,7 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
     .filter((l) => l.text.trim() !== "")
     .map((l, i) => ({
       id: l.seq === undefined ? `l-${i}` : `s-${l.seq}-${i}`,
+      ...(l.seq === undefined ? {} : { seq: l.seq }),
       role: l.kind === "agent" ? ("assistant" as const) : ("user" as const),
       text: l.text,
       ...(l.event === "tool" ? { tool: true } : {}),
@@ -326,6 +327,10 @@ interface CatalogEntry {
   readonly versions: readonly number[];
   readonly latest: number;
   readonly authors?: Readonly<Record<number, string>>;
+  /** Per version, the seq of the last line before it: where in the
+   * conversation it belongs. Absent from an older server, in which case a
+   * saved version has no place and is left out rather than guessed at. */
+  readonly afterSeq?: Readonly<Record<number, number>>;
 }
 
 interface Doc {
@@ -1452,18 +1457,46 @@ const App = (): React.ReactElement => {
   // entry carries no seq to interleave by, and a save is the most recent
   // thing its author did.
   const withSaves = React.useMemo(() => {
+    // A version this person saved is a moment in the conversation, so it is
+    // shown where it happened. It used to be appended after every message,
+    // which put a save from yesterday below an answer from a minute ago and
+    // made it read as something that had just occurred.
+    //
+    // An artifact entry carries no seq of its own - the fold does not reduce
+    // one into state - so the fold records the seq of the last line before
+    // it, and that is the place. A version with no place, from a server that
+    // does not send one, is left out rather than guessed at: a marker in the
+    // wrong place is worse than no marker.
     const authors = catalog?.authors ?? {};
-    const saves = Object.entries(authors)
+    const afterSeq = catalog?.afterSeq ?? {};
+    const placed = Object.entries(authors)
       .filter(([, who]) => who === "human")
       .map(([v]) => Number(v))
+      .filter((v) => typeof afterSeq[v] === "number")
       .sort((x, y) => x - y)
       .map((v) => ({
-        id: `save-${catalog?.artifactId}-${v}`,
-        role: "user" as const,
-        text: `you saved ${catalog?.artifactId} v${v}`,
-        note: true,
+        after: afterSeq[v] as number,
+        line: {
+          id: `save-${catalog?.artifactId}-${v}`,
+          role: "user" as const,
+          text: `you saved ${catalog?.artifactId} v${v}`,
+          note: true,
+        },
       }));
-    return weaveNotes(saves.length === 0 ? messages : [...messages, ...saves], notes);
+
+    if (placed.length === 0) return weaveNotes(messages, notes);
+
+    const woven: Msg[] = [];
+    let next = 0;
+    for (const m of messages) {
+      // Every save whose place is at or before this line goes in first.
+      while (next < placed.length && (placed[next]?.after ?? 0) < (m.seq ?? 0)) {
+        woven.push(placed[next++]?.line as Msg);
+      }
+      woven.push(m);
+    }
+    while (next < placed.length) woven.push(placed[next++]?.line as Msg);
+    return weaveNotes(woven, notes);
   }, [messages, catalog, notes]);
 
   const runtime = useExternalStoreRuntime<Msg>({

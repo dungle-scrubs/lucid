@@ -57,6 +57,7 @@ import type { LockEvent } from "./lock.js";
 import {
   type AppendEvent,
   type ArtifactVersion,
+  artifactKey,
   type CollectedBatch,
   createLog,
   foldLog,
@@ -411,6 +412,13 @@ export interface ArtifactCatalogEntry {
    * version's line for its header only — a catalog still carries no
    * document bytes. */
   readonly authors: Readonly<Record<number, string>>;
+  /** Per version, the seq of the last frame accepted before it: where it sits
+   * in the conversation. An artifact entry carries no seq of its own, because
+   * the fold does not reduce one into state - but the log is one ordered
+   * file, so the seq at the moment it is read is its place. A reader showing
+   * a saved version as a moment in the thread needs this; without it the only
+   * honest place is the end, and the end reads as "just now". */
+  readonly afterSeq: Readonly<Record<number, number>>;
 }
 
 /** Lock-free catalog of a record's artifacts.
@@ -420,7 +428,7 @@ export interface ArtifactCatalogEntry {
 export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[] => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
   const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
-  const { artifactIndex } = foldLog(conversationId, secret, raw);
+  const { artifactIndex, artifactAfterSeq } = foldLog(conversationId, secret, raw);
   const byId = new Map<string, number[]>();
   for (const key of artifactIndex.keys()) {
     // `artifactKey` joins on NUL, which cannot occur in either half.
@@ -437,15 +445,22 @@ export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[
     .map(([artifactId, versions]) => {
       const sorted = [...versions].sort((a, b) => a - b);
       const authors: Record<number, string> = {};
+      // Where each version sits in the conversation. A reader showing a
+      // saved version as a moment in the thread needs this: without it the
+      // only honest place is the end, and the end reads as "just now".
+      const afterSeq: Record<number, number> = {};
       for (const v of sorted) {
         const one = readArtifactVersion(raw, artifactId, v, artifactIndex);
         if (one !== null) authors[v] = one.author;
+        const at = artifactAfterSeq.get(artifactKey(artifactId, v));
+        if (at !== undefined) afterSeq[v] = at;
       }
       return {
         artifactId,
         versions: sorted,
         latest: sorted[sorted.length - 1] as number,
         authors,
+        afterSeq,
       };
     })
     .sort((a, b) => a.artifactId.localeCompare(b.artifactId));

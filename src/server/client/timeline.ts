@@ -20,6 +20,9 @@ export interface Msg {
   readonly tool?: boolean;
   /** Something that happened rather than something anyone said. */
   readonly note?: boolean;
+  /** Where this line sits in the record. Used to place a saved version at the
+   * moment it was saved rather than after everything. */
+  readonly seq?: number;
   /** A note written but not sent. */
   readonly pendingNote?: PendingNote;
   /** A batch that was sent, drawn where it was sent rather than as a line

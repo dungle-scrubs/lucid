@@ -509,6 +509,9 @@ export const foldLog = (
   transcript: TranscriptAcc;
   refusedInputs: readonly FoldRefusal[];
   artifactIndex: Map<string, number>;
+  /** Per artifact version, the seq of the last frame before it. Its place in
+   * the conversation, since an artifact entry carries no seq of its own. */
+  artifactAfterSeq: Map<string, number>;
   artifactRefusals: readonly ArtifactRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
@@ -517,6 +520,13 @@ export const foldLog = (
   const transcript: TranscriptAcc = { events: [], inputs: [], aborted: [] };
   const refusedInputs: FoldRefusal[] = [];
   const artifactIndex = new Map<string, number>();
+  /** Where each artifact version sits in the conversation: the seq of the
+   * last frame accepted before it. An artifact entry gets no seq of its own,
+   * because the fold does not reduce it into state - but the log is one
+   * ordered file, so the seq at the moment it is read IS its place. Without
+   * this a saved version can only be shown after everything, which reads as
+   * a thing that just happened however long ago it was. */
+  const artifactAfterSeq = new Map<string, number>();
   const artifactRefusals: ArtifactRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
@@ -558,7 +568,10 @@ export const foldLog = (
             // First writer wins for a given (id, version) — later duplicate
             // is ignored rather than overwriting, since versions are never
             // rewritten (RFC-06: every version is a new entry).
-            if (!artifactIndex.has(key)) artifactIndex.set(key, offset);
+            if (!artifactIndex.has(key)) {
+              artifactIndex.set(key, offset);
+              artifactAfterSeq.set(key, state.seq);
+            }
           }
         } else {
           const { result, frame } = applyEntry(state, parsed as LogEntry, secret);
@@ -596,6 +609,7 @@ export const foldLog = (
     transcript,
     refusedInputs,
     artifactIndex,
+    artifactAfterSeq,
     artifactRefusals,
   };
 };
@@ -627,6 +641,9 @@ export const foldCollect = (
   collected: CollectedEntry[];
   refusedInputs: readonly FoldRefusal[];
   artifactIndex: Map<string, number>;
+  /** Per artifact version, the seq of the last frame before it. Its place in
+   * the conversation, since an artifact entry carries no seq of its own. */
+  artifactAfterSeq: Map<string, number>;
   artifactRefusals: readonly ArtifactRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
@@ -636,6 +653,13 @@ export const foldCollect = (
   const collected: CollectedEntry[] = [];
   const refusedInputs: FoldRefusal[] = [];
   const artifactIndex = new Map<string, number>();
+  /** Where each artifact version sits in the conversation: the seq of the
+   * last frame accepted before it. An artifact entry gets no seq of its own,
+   * because the fold does not reduce it into state - but the log is one
+   * ordered file, so the seq at the moment it is read IS its place. Without
+   * this a saved version can only be shown after everything, which reads as
+   * a thing that just happened however long ago it was. */
+  const artifactAfterSeq = new Map<string, number>();
   const artifactRefusals: ArtifactRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
@@ -663,7 +687,10 @@ export const foldCollect = (
             });
           } else {
             const key = artifactKey(art.artifactId, art.version);
-            if (!artifactIndex.has(key)) artifactIndex.set(key, entryOffset);
+            if (!artifactIndex.has(key)) {
+              artifactIndex.set(key, entryOffset);
+              artifactAfterSeq.set(key, state.seq);
+            }
           }
         } else {
           const { result, frame } = applyEntry(state, parsed as LogEntry, secret);
@@ -700,6 +727,7 @@ export const foldCollect = (
     collected,
     refusedInputs,
     artifactIndex,
+    artifactAfterSeq,
     artifactRefusals,
   };
 };
