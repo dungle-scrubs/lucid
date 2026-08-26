@@ -5,7 +5,16 @@
  * document, some edits, and what comes out.
  */
 import { describe, expect, test } from "bun:test";
-import { applyPatch, parsePatchBody } from "../../src/protocol/patch.js";
+import { TEXT_MAX } from "../../src/protocol/frames.js";
+import {
+  applyPatch,
+  PATCH_EDITS_MAX,
+  PATCH_FIND_MAX,
+  PATCH_REPLACE_MAX,
+  PATCH_REPLACE_TOTAL_MAX,
+  parsePatchBody,
+} from "../../src/protocol/patch.js";
+import { ARTIFACT_BYTES_MAX } from "../../src/store/log.js";
 
 const body = (edits: unknown) => JSON.stringify({ edits });
 
@@ -238,5 +247,84 @@ describe("several edits in one patch", () => {
       { find: "nope", replace: "n" },
     ]);
     expect(refusedBy(r)).toContain("edit 1");
+  });
+});
+
+describe("the bounds a patch cannot grow past", () => {
+  const edit = (find: string, replace: string) => ({ find, replace });
+
+  test("more edits than the bound allows is refused, before any of them is read", () => {
+    const many = Array.from({ length: PATCH_EDITS_MAX + 1 }, (_, i) => edit(`f${i}`, `r${i}`));
+    const r = refusedBy(parsePatchBody(body(many)));
+    expect(r).toContain("E-PATCH-05");
+    expect(r).toContain(String(PATCH_EDITS_MAX));
+  });
+
+  test("exactly the bound is allowed", () => {
+    const many = Array.from({ length: PATCH_EDITS_MAX }, (_, i) => edit(`f${i}`, `r${i}`));
+    expect(edits(parsePatchBody(body(many))).length).toBe(PATCH_EDITS_MAX);
+  });
+
+  test("an anchor longer than the bound is refused, naming which edit", () => {
+    const r = refusedBy(parsePatchBody(body([edit("z".repeat(PATCH_FIND_MAX + 1), "x")])));
+    expect(r).toContain("E-PATCH-05");
+    expect(r).toContain("edit 0");
+    // The reason must not carry the oversize anchor itself.
+    expect(r.length).toBeLessThan(500);
+  });
+
+  test("a replacement longer than the bound is refused", () => {
+    const r = refusedBy(parsePatchBody(body([edit("a", "z".repeat(PATCH_REPLACE_MAX + 1))])));
+    expect(r).toContain("E-PATCH-05");
+    expect(r.length).toBeLessThan(500);
+  });
+
+  test("replacements that individually fit but together do not are refused", () => {
+    // The point of the total: each of these is legal on its own, and no
+    // per-edit check would catch what they add up to.
+    const each = "z".repeat(PATCH_REPLACE_MAX);
+    const n = Math.ceil(PATCH_REPLACE_TOTAL_MAX / PATCH_REPLACE_MAX) + 1;
+    const r = refusedBy(
+      parsePatchBody(body(Array.from({ length: n }, (_, i) => edit(`f${i}`, each)))),
+    );
+    expect(r).toContain("E-PATCH-05");
+    expect(r).toContain("add up to");
+  });
+
+  test("the total is refused before applying, not after building the document", () => {
+    // Building it first would mean allocating what is about to be thrown away,
+    // which is the whole reason this bound exists rather than relying on the
+    // check against the result.
+    const each = "z".repeat(PATCH_REPLACE_MAX);
+    const n = Math.ceil(PATCH_REPLACE_TOTAL_MAX / PATCH_REPLACE_MAX) + 1;
+    const parsed = parsePatchBody(body(Array.from({ length: n }, (_, i) => edit(`f${i}`, each))));
+    expect("edits" in parsed).toBe(false);
+  });
+
+  test("an ordinary patch is nowhere near any of them", () => {
+    const parsed = parsePatchBody(
+      body([edit("<li>Read the brief</li>", "<li>Read the brief carefully</li>")]),
+    );
+    expect(edits(parsed).length).toBe(1);
+  });
+});
+
+describe("what the patch form does and does not unbound", () => {
+  test("the artifact bound and the message bound are the same number", () => {
+    // RFC-08 R3 says one bound moves in the safe direction: a whole-form
+    // document has to fit inside a message, while a patch carries only the
+    // edits, so only ARTIFACT_BYTES_MAX applies to the result.
+    //
+    // True, and much smaller than it sounds. The two constants are equal, so
+    // what a patch buys is the fence header and any prose sharing the
+    // message - tens of characters, not a category change. Pinned here so
+    // nobody plans on the wider reading.
+    expect(ARTIFACT_BYTES_MAX).toBe(TEXT_MAX);
+  });
+
+  test("the sum bound cannot be reached by a patch the result check would catch anyway", () => {
+    // Both are ARTIFACT_BYTES_MAX, so the sum bound is a cheap early refusal
+    // for the obvious case rather than a second, tighter limit.
+    expect(PATCH_REPLACE_TOTAL_MAX).toBe(ARTIFACT_BYTES_MAX);
   });
 });

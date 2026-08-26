@@ -17,7 +17,30 @@
  * document is what is there.
  */
 
+import { ARTIFACT_BYTES_MAX } from "../store/log.js";
 import { quoteForRefusal } from "./artifacts.js";
+
+/* RFC-08 R7. Security requires each of these, and an unnamed bound is not a
+ * bound. Lengths are counted the way the rest of the store counts them, in
+ * string length rather than UTF-8 bytes, so one artifact is not measured two
+ * different ways depending on which path it arrived by. */
+
+/** More than this in one block is a rewrite, and the whole form is what a
+ * rewrite is for. Open Question 2 in RFC-08: the value is proposed, and is
+ * settled by the user or by the first revision that hits it. */
+export const PATCH_EDITS_MAX = 50;
+
+/** An anchor wide enough to be unique is far below this. Past it the agent is
+ * quoting the document back, and the whole form is cheaper than that. */
+export const PATCH_FIND_MAX = 4_096;
+
+/** Larger than any single edit needs, small enough that one edit cannot
+ * approach the artifact bound on its own. */
+export const PATCH_REPLACE_MAX = 65_536;
+
+/** What all the replacements together may add up to. Refused before applying,
+ * so a patch cannot ask lucid to build a document it will then refuse. */
+export const PATCH_REPLACE_TOTAL_MAX = ARTIFACT_BYTES_MAX;
 
 /** One replacement: the exact text to find, and what goes there instead. */
 export interface PatchEdit {
@@ -61,7 +84,15 @@ export const parsePatchBody = (body: string): PatchParse => {
   if (edits.length === 0) {
     return { refused: "E-PATCH-04 patch-malformed: `edits` must have at least one entry" };
   }
+  // Counted before anything is read, so an enormous list costs one length
+  // check rather than a walk over all of it.
+  if (edits.length > PATCH_EDITS_MAX) {
+    return {
+      refused: `E-PATCH-05 patch-too-many-edits: ${edits.length} edits, the most in one block is ${PATCH_EDITS_MAX}; split the work across blocks or emit the whole document`,
+    };
+  }
   const out: PatchEdit[] = [];
+  let replaceTotal = 0;
   for (let i = 0; i < edits.length; i++) {
     const e = edits[i];
     if (typeof e !== "object" || e === null || Array.isArray(e)) {
@@ -90,6 +121,22 @@ export const parsePatchBody = (body: string): PatchParse => {
           refused: `E-PATCH-04 patch-malformed: edit ${i} has unknown field ${quoteForRefusal(k)}; only \`find\` and \`replace\` exist`,
         };
       }
+    }
+    if (find.length > PATCH_FIND_MAX) {
+      return {
+        refused: `E-PATCH-05 patch-too-many-edits: edit ${i} has a ${find.length}-character \`find\`, the most is ${PATCH_FIND_MAX}; an anchor that long is quoting the document, and the whole form is cheaper`,
+      };
+    }
+    if (replace.length > PATCH_REPLACE_MAX) {
+      return {
+        refused: `E-PATCH-05 patch-too-many-edits: edit ${i} has a ${replace.length}-character \`replace\`, the most is ${PATCH_REPLACE_MAX}`,
+      };
+    }
+    replaceTotal += replace.length;
+    if (replaceTotal > PATCH_REPLACE_TOTAL_MAX) {
+      return {
+        refused: `E-PATCH-05 patch-too-many-edits: the replacements add up to more than ${PATCH_REPLACE_TOTAL_MAX} characters, which is past what an artifact may hold; refused before applying rather than after building it`,
+      };
     }
     out.push({ find, replace });
   }

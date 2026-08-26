@@ -520,16 +520,31 @@ describe("a patch that revises a document", () => {
   });
 
   test("a result over the byte bound refuses as E-PATCH-06", async () => {
-    // Under the whole form a document this size cannot arrive at all, because
-    // it has to fit in a message. A patch carries only the edits, so this is
-    // the only bound left.
+    // Reaching this needs a base already close to the cap: a replacement big
+    // enough to overflow a small document is refused earlier and more
+    // cheaply by the per-replacement bound (E-PATCH-05).
     const r = await withV1("<p>seed</p>");
-    await secondTurn(
-      r,
-      patchFence("doc-1", 1, oneEdit("seed", "z".repeat(ARTIFACT_BYTES_MAX + 10))),
-    );
-    expect(r.host.readArtifact("doc-1", 2)).toBeNull();
+    const huge = `<p>seed</p>${"z".repeat(ARTIFACT_BYTES_MAX - 100)}`;
+    const wrote = r.host.writeArtifact({
+      artifactId: "doc-1",
+      version: 2,
+      author: "agent",
+      contentType: "text/html",
+      bytes: huge,
+    });
+    expect(wrote.verdict).toBe("accepted");
+    // Now a modest replacement tips the result past the bound.
+    await secondTurn(r, patchFence("doc-1", 2, oneEdit("seed", "z".repeat(200))));
+    expect(r.host.readArtifact("doc-1", 3)).toBeNull();
     expect(messages(r).some((m) => m.includes("E-PATCH-06"))).toBe(true);
+    r.host.close();
+  });
+
+  test("a replacement too large on its own is refused before anything is applied", async () => {
+    const r = await withV1("<p>seed</p>");
+    await secondTurn(r, patchFence("doc-1", 1, oneEdit("seed", "z".repeat(ARTIFACT_BYTES_MAX))));
+    expect(r.host.readArtifact("doc-1", 2)).toBeNull();
+    expect(messages(r).some((m) => m.includes("E-PATCH-05"))).toBe(true);
     r.host.close();
   });
 
