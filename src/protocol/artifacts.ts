@@ -44,10 +44,24 @@ You can emit a document as an artifact. To do so, emit a fenced code block tagge
 
 Two blocks in one message both land, in order. You do not assign version, author, or hash — lucid does.`;
 
+/** What the body after the header is.
+ *
+ * `whole` is the document itself, which is every block RFC-06 defines and
+ * stays the default. `patch` is a description of edits to the version named
+ * by `replaces` (RFC-08), which lucid applies to produce the document.
+ *
+ * There is no third value, and an unrecognised one is refused rather than
+ * assumed: guessing `whole` for a form lucid does not know would store a body
+ * that is not a document as though it were one. */
+export type ArtifactForm = "whole" | "patch";
+
 export type ArtifactHeader = {
   readonly id: string;
   readonly replaces: number | null;
   readonly contentType: string;
+  /** Always set. An absent `form` is normalised to `whole` here so no reader
+   * downstream has to remember the default. */
+  readonly form: ArtifactForm;
 };
 
 export interface ArtifactBlock {
@@ -65,6 +79,20 @@ export type ArtifactDetection =
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
 const isField = (v: unknown): boolean =>
   typeof v === "string" && v.length > 0 && v.length <= 128 && !CONTROL_CHARS.test(v);
+
+/** How much agent-supplied text a refusal reason may quote back (RFC-08 R7).
+ *
+ * A refusal names what it refused, which means putting agent text into the
+ * log. Unbounded, that is a way to write arbitrary length into the record by
+ * sending something invalid. */
+export const REFUSAL_QUOTE_MAX = 200;
+
+/** Agent text, safe to put in a refusal reason: JSON-quoted so control
+ * characters cannot break the line, and cut to the bound. */
+export const quoteForRefusal = (v: unknown): string => {
+  const s = JSON.stringify(v) ?? String(v);
+  return s.length <= REFUSAL_QUOTE_MAX ? s : `${s.slice(0, REFUSAL_QUOTE_MAX)}…`;
+};
 
 const FENCE_OPEN = /(?:^|\n)[ \t]*```[ \t]*lucid-artifact[ \t]*(?=\n)/g;
 
@@ -118,7 +146,7 @@ const parseHeader = (body: string): ArtifactDetection => {
     return { malformed: "lucid-artifact header must be a JSON object", rawBody: body };
   }
   const obj = raw as Record<string, unknown>;
-  const { id, replaces, contentType } = obj;
+  const { id, replaces, contentType, form } = obj;
   if (!isField(id))
     return {
       malformed:
@@ -139,6 +167,14 @@ const parseHeader = (body: string): ArtifactDetection => {
       rawBody: body,
     };
   }
+  // E-PATCH-07. Absent means `whole`, so every block written before RFC-08
+  // keeps its meaning and no agent has to change what it emits.
+  if (form !== undefined && form !== "whole" && form !== "patch") {
+    return {
+      malformed: `E-PATCH-07 unknown-form: lucid-artifact header field "form" must be "whole" or "patch", not ${quoteForRefusal(form)}`,
+      rawBody: body,
+    };
+  }
   // bytes may be any string (including empty), but size is checked by caller
   return {
     block: {
@@ -146,6 +182,7 @@ const parseHeader = (body: string): ArtifactDetection => {
         id: id as string,
         replaces: replaces as number | null,
         contentType: contentType as string,
+        form: form === "patch" ? "patch" : "whole",
       },
       bytes,
       rawBody: body,

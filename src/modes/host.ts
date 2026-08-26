@@ -179,6 +179,20 @@ const handleArtifactMessage = (
       continue;
     }
     const { header, bytes } = d.block;
+    // The form parses (RFC-08 R1) but nothing applies it yet. Refused here,
+    // ahead of every check below, because those all read `bytes` as a
+    // document and a patch body is not one: the size check would measure the
+    // wrong thing and the store would keep a description of edits as though
+    // it were the document. Says which form and what to do instead, so the
+    // agent can recover in the same turn.
+    if (header.form === "patch") {
+      ctx.sequencer.emit(turnId, {
+        kind: EventKind.error,
+        message: `artifact ${header.id} refused: form "patch" is understood but not applied yet — emit the whole document instead`,
+        terminal: false,
+      });
+      continue;
+    }
     if (bytes.length > ARTIFACT_BYTES_MAX) {
       ctx.sequencer.emit(turnId, {
         kind: EventKind.error,

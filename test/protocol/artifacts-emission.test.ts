@@ -372,3 +372,108 @@ describe("artifact view projection", () => {
     expect(stripped).not.toContain("not json");
   });
 });
+
+/** RFC-08 R1 as it reaches the store. The parser accepting `form: "patch"`
+ * is one thing; what emission does with a form nothing applies yet is
+ * another, and getting it wrong stores a description of edits as though it
+ * were the document. */
+describe("a patch form, before anything applies it", () => {
+  const patchFence = (id: string, replaces: number | null, body: string) =>
+    `\`\`\`lucid-artifact\n${JSON.stringify({ id, replaces, contentType: "text/html", form: "patch" })}\n${body}\n\`\`\``;
+
+  test("is refused, and stores nothing", async () => {
+    const r = rig({ mode: "session" });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(patchFence("doc-1", null, '{"edits":[{"find":"a","replace":"b"}]}')));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    // Nothing at all: not the patch body stored as a document, and not a
+    // half-made artifact at v1.
+    expect(r.host.readArtifact("doc-1", 1)).toBeNull();
+    r.host.close();
+  });
+
+  test("says which form and what to do instead, rather than failing obscurely", async () => {
+    const r = rig({ mode: "session" });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(patchFence("doc-1", 1, '{"edits":[]}')));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    const said = r.host.transcript().events.flatMap((e) => {
+      const ev = e.event as Record<string, unknown>;
+      return typeof ev.message === "string" ? [ev.message] : [];
+    });
+    const refusal = said.find((m) => m.includes("doc-1"));
+    expect(refusal).toBeDefined();
+    expect(refusal).toContain("patch");
+    expect(refusal).toContain("whole document");
+    r.host.close();
+  });
+
+  test("does not end the turn, and a whole form after it still lands", async () => {
+    // A refused artifact has never ended a turn and does not start now, so a
+    // model that recovers inside the same turn is not punished for trying.
+    const r = rig({ mode: "session" });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(patchFence("doc-1", null, '{"edits":[]}')));
+    await flush();
+    r.proc.emit(assistant(artifactFence("doc-1", null, "text/html", "<p>recovered</p>")));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    expect(r.host.readArtifact("doc-1", 1)?.bytes).toBe("<p>recovered</p>");
+    r.host.close();
+  });
+
+  test("an oversize patch body is refused as a patch, not as an oversize document", async () => {
+    // The size check below it measures `bytes` as a document. A patch body is
+    // not one, so reporting "too large" here would name the wrong problem.
+    const r = rig({ mode: "session" });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(patchFence("doc-1", 1, "z".repeat(ARTIFACT_BYTES_MAX + 10))));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    const said = r.host.transcript().events.flatMap((e) => {
+      const ev = e.event as Record<string, unknown>;
+      return typeof ev.message === "string" ? [ev.message] : [];
+    });
+    expect(said.some((m) => m.includes("patch"))).toBe(true);
+    expect(said.some((m) => m.includes("too large"))).toBe(false);
+    r.host.close();
+  });
+
+  test("an unknown form is refused before it reaches the store at all", async () => {
+    const r = rig({ mode: "session" });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    const bogus = `\`\`\`lucid-artifact\n${JSON.stringify({ id: "doc-1", replaces: null, contentType: "text/html", form: "diff" })}\n<p>hi</p>\n\`\`\``;
+    r.proc.emit(assistant(bogus));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    expect(r.host.readArtifact("doc-1", 1)).toBeNull();
+    const said = r.host.transcript().events.flatMap((e) => {
+      const ev = e.event as Record<string, unknown>;
+      return typeof ev.message === "string" ? [ev.message] : [];
+    });
+    expect(said.some((m) => m.includes("E-PATCH-07"))).toBe(true);
+    r.host.close();
+  });
+});
