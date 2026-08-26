@@ -106,7 +106,11 @@ describe("the document's own behaviour is left alone", () => {
     }
 
     const mouse = cancels.filter((c) => c.on === "mousedown" || c.on === "click");
-    expect(mouse.length).toBe(2);
+    // mousedown, the click that picks an element, and the click that closes
+    // a drag. That last one has to be cancelled too: a drag ends with a
+    // mouseup and then a click, and letting it through would follow the
+    // link the words were selected inside.
+    expect(mouse.length).toBe(3);
     for (const c of mouse) {
       const before = out.slice(0, c.at);
       expect(before.lastIndexOf('mode !== "markup"')).toBeGreaterThan(
@@ -243,7 +247,11 @@ describe("two modes, so one click does one thing", () => {
     // in use mode.
     // Read-only drops it for the same reason: there is nothing to write
     // about a version that cannot be annotated.
-    expect(out).toContain('if ((mode === "use" || readOnly) && selected.length > 0)');
+    expect(out).toContain('if ((mode === "use" || readOnly) && (selected.length > 0 || picked))');
+    // Both kinds of pick, and the browser's own selection with them. A range
+    // left standing would be read again by the next mouseup.
+    expect(out).toContain("picked = null;");
+    expect(out).toContain("removeAllRanges()");
   });
 });
 
@@ -328,5 +336,94 @@ describe("no focus rings", () => {
       // carries a note. What matters is that each still draws one.
       expect(out.slice(at, out.indexOf("}", at))).toMatch(/outline: 2px (solid|dashed)/);
     }
+  });
+});
+
+/** A click takes the whole element; a drag takes the words dragged over.
+ * The frame script cannot be imported, so these read the source it injects,
+ * the same way the rest of this file does. */
+describe("selecting text to mark it up", () => {
+  const out = instrumentArtifact(DOC, "doc-1", 1);
+
+  test("mark-up mode allows a selection at all", () => {
+    // user-select:none was the whole reason a drag did nothing. If it comes
+    // back, selecting a word silently stops working and nothing else fails.
+    expect(out).toContain("user-select: text !important");
+    expect(out).not.toContain("user-select: none !important");
+  });
+
+  test("a drag is read on mouseup, and a collapsed selection is not a drag", () => {
+    expect(out).toContain('addEventListener("mouseup"');
+    expect(out).toContain("sel.isCollapsed");
+  });
+
+  test("the spot is the element the selection starts in", () => {
+    // Not the common ancestor: a range across two paragraphs has body as
+    // its ancestor, and body names no spot.
+    expect(out).toContain("range.startContainer");
+  });
+
+  test("a drag replaces an element pick rather than adding to it", () => {
+    const at = out.indexOf("picked = {");
+    expect(at).toBeGreaterThan(-1);
+    expect(out.slice(at, at + 260)).toContain("selected = []");
+  });
+
+  test("the click that ends a drag does not also pick the element under it", () => {
+    // A drag fires mouseup and then click. Without this the click would
+    // immediately replace the words with the paragraph containing them.
+    const at = out.indexOf('addEventListener("click"');
+    expect(out.slice(at, at + 400)).toContain("if (picked)");
+  });
+
+  test("the highlight is one box per visual line", () => {
+    // One rectangle over the whole paragraph would say the note covers the
+    // paragraph, which is the thing this change exists to stop saying.
+    expect(out).toContain("coalesceByLine");
+    expect(out).toContain("getClientRects()");
+  });
+
+  test("the boxes are lucid's, so a save does not contain them", () => {
+    // clean() strips [data-lucid]; the boxes carry it for that reason.
+    const at = out.indexOf('box.className = "lucid-range"');
+    expect(at).toBeGreaterThan(-1);
+    expect(out.slice(at, at + 160)).toContain('setAttribute("data-lucid", "1")');
+  });
+
+  test("the note box is placed beside the words, not beside the paragraph", () => {
+    const at = out.indexOf("var rectOf = function ()");
+    expect(out.slice(at, at + 200)).toContain("picked.range.getBoundingClientRect()");
+  });
+
+  test("what is captured is the selected text, and it rides as a quote", () => {
+    expect(out).toContain("var text = isPick ? picked.exact");
+    expect(out).toContain("quote: isPick ? picked.exact");
+  });
+
+  test("a press on prose is not cancelled, so the browser can start a drag", () => {
+    // This, not the CSS, is what made dragging impossible. Cancelling every
+    // mousedown cancels the browser's own text selection, and a drag is made
+    // of one. If the guard goes away, selecting a phrase silently stops
+    // working and every other test still passes.
+    const at = out.indexOf('addEventListener("mousedown"');
+    expect(at).toBeGreaterThan(-1);
+    const body = out.slice(at, at + 900);
+    expect(body).toContain("t.matches(CONTROL)");
+    expect(body).toContain("t.closest(CONTROL)");
+  });
+
+  test("a press on a control is still cancelled", () => {
+    // Focus moves on mousedown, so a press on a textarea drew a caret before
+    // the click could pick the element: one press, two things, wrong order.
+    const at = out.indexOf('addEventListener("mousedown"');
+    const body = out.slice(at, at + 900);
+    const guard = body.indexOf("t.matches(CONTROL)");
+    expect(body.indexOf("e.preventDefault()", guard)).toBeGreaterThan(guard);
+  });
+
+  test("a click still reports no quote", () => {
+    // The page branches on it: empty means anchor to the whole element.
+    const at = out.indexOf("quote: isPick");
+    expect(out.slice(at, at + 120)).toContain(': ""');
   });
 });

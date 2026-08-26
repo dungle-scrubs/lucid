@@ -44,6 +44,7 @@ import {
   resolveSpot,
   type SpotSelectors,
   selectorsFor,
+  selectorsForQuote,
   sha256Hex,
 } from "./anchor.js";
 import { isModeToggle, isQueueSend } from "./hotkeys.js";
@@ -71,6 +72,14 @@ interface Line {
   readonly event?: string;
   readonly batch?: SentBatch;
 }
+
+/** What the frame reports for one pick, before it is stored.
+ *
+ * `quote` is the text a person dragged over, and it is deliberately not part
+ * of `AnnotationSpot`: the record expresses it as `selectors.quote.exact`,
+ * measured against the document's own bytes rather than against the frame's
+ * instrumented copy. This carries it the short distance between the two. */
+type CapturedSpot = AnnotationSpot & { readonly quote?: string };
 
 /** `activity.ts` owns the shape and the rule that reads it. */
 type Activity = ActivitySnapshot;
@@ -415,7 +424,7 @@ const DocumentFrame = ({
   doc: Doc;
   onSelection: (ids: readonly string[], rect: SelectionRect | null) => void;
   /** Handed the frame's answer to a capture request. */
-  capture: React.MutableRefObject<((ids: readonly string[]) => Promise<AnnotationSpot[]>) | null>;
+  capture: React.MutableRefObject<((ids: readonly string[]) => Promise<CapturedSpot[]>) | null>;
   /** Handed the frame's answer to a snapshot request: the document as it now
    * reads, with lucid's instrumentation taken back out, and the values of
    * the controls the agent authored. */
@@ -511,13 +520,18 @@ const DocumentFrame = ({
           settle([]);
           return;
         }
-        const spots: AnnotationSpot[] = [];
+        const spots: CapturedSpot[] = [];
         for (const raw of m.spots) {
           if (raw === null || typeof raw !== "object") continue;
           const sp = raw as Record<string, unknown>;
           if (typeof sp.id !== "string" || !ELEMENT_ID.test(sp.id)) continue;
           if (typeof sp.snippet !== "string" || typeof sp.author !== "string") continue;
-          spots.push({ id: sp.id, snippet: clampSnippet(sp.snippet), author: sp.author });
+          spots.push({
+            id: sp.id,
+            snippet: clampSnippet(sp.snippet),
+            author: sp.author,
+            ...(typeof sp.quote === "string" && sp.quote !== "" ? { quote: sp.quote } : {}),
+          });
         }
         settle(spots);
         return;
@@ -770,9 +784,7 @@ const App = (): React.ReactElement => {
   const [draft, setDraft] = React.useState("");
   /** A refused send keeps what was typed and says why, here in the window. */
   const [refusal, setRefusal] = React.useState<string | null>(null);
-  const capture = React.useRef<((ids: readonly string[]) => Promise<AnnotationSpot[]>) | null>(
-    null,
-  );
+  const capture = React.useRef<((ids: readonly string[]) => Promise<CapturedSpot[]>) | null>(null);
   const snapshot = React.useRef<
     (() => Promise<{ html: string; values: Record<string, string> } | null>) | null
   >(null);
@@ -1171,8 +1183,14 @@ const App = (): React.ReactElement => {
     // version being annotated — the same bytes the snapshot guard will
     // verify before any of them is trusted later.
     const parsed = new DOMParser().parseFromString(doc?.bytes ?? "", "text/html");
-    const withSelectors = spots.map((sp) => {
-      const sel = selectorsFor(parsed, sp.id);
+    const withSelectors = spots.map(({ quote, ...sp }) => {
+      // A drag anchors to the words dragged over; a click anchors to the
+      // whole element. `quote` is dropped here either way: what is stored is
+      // the anchor it produced, not the raw report from the frame.
+      const sel =
+        quote === undefined || quote === ""
+          ? selectorsFor(parsed, sp.id)
+          : selectorsForQuote(parsed, sp.id, quote);
       return sel === null ? sp : { ...sp, selectors: sel };
     });
     // Where in the timeline this happened, so it stays there when the

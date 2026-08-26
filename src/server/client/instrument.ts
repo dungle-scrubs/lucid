@@ -87,7 +87,24 @@ html {
 }
 html.lucid-markup, html.lucid-markup * {
   cursor: crosshair !important;
-  user-select: none !important;
+  /* Selectable. user-select: none was here to stop a click that picks an
+     element from also leaving a stray selection behind. That also made it
+     impossible to drag over a word, which is the other half of marking
+     something up: a click takes the whole element, a drag takes what you
+     dragged over. A click leaves a collapsed selection, and collapsed
+     selections are ignored, so the original problem does not come back. */
+  user-select: text !important;
+}
+/* One box per visual line of a selected range, drawn behind the text.
+   getClientRects() gives a rect per line, so a selection that wraps is
+   three boxes rather than one rectangle covering the whole paragraph. */
+.lucid-range {
+  position: absolute !important;
+  pointer-events: none !important;
+  z-index: 2147483646 !important;
+  background: rgba(251, 191, 36, 0.28) !important;
+  outline: 1px solid #b45309 !important;
+  border-radius: 2px !important;
 }
 /* Editable text, in use mode. The dotted rule is the affordance: it says
    the text can be changed without shouting about it. Matched on the
@@ -149,6 +166,10 @@ const script = (artifactId: string, version: number, author: string): string => 
 
   var selected = [];
   var hovered = null;
+  // A pick is either a set of elements or one stretch of selected text,
+  // never both: they are two answers to the same question and showing both
+  // would leave the note pointing at two different things.
+  var picked = null;
   var dirty = false;
   // "use" — the document behaves as the agent built it: controls work, text
   // has a caret, drag selects text. "markup" — clicking picks elements to
@@ -279,6 +300,12 @@ const script = (artifactId: string, version: number, author: string): string => 
   // Where the selection sits, in this frame's own viewport. The parent puts
   // the note box beside it and cannot read the document to work it out.
   var rectOf = function () {
+    if (picked && picked.range) {
+      var q = picked.range.getBoundingClientRect();
+      if (q.width > 0 || q.height > 0) {
+        return { x: q.left, y: q.top, width: q.width, height: q.height };
+      }
+    }
     var l = 1 / 0, t = 1 / 0, r = -1 / 0, b = -1 / 0, any = false;
     for (var i = 0; i < selected.length; i++) {
       var el = document.querySelector("[" + ATTR + '="' + selected[i] + '"]');
@@ -302,7 +329,11 @@ const script = (artifactId: string, version: number, author: string): string => 
         kind: "selection",
         artifactId: ARTIFACT,
         version: VERSION,
-        ids: selected.slice(),
+        // A range pick reports the element it sits in, so everything the
+        // page already does with an id keeps working. What narrows it to
+        // the selected words is the quote, which is absent for a click.
+        ids: picked ? [picked.id] : selected.slice(),
+        quote: picked ? picked.exact : "",
         rect: rectOf()
       },
       "*"
@@ -349,6 +380,57 @@ const script = (artifactId: string, version: number, author: string): string => 
     return node.hasAttribute(ATTR) ? node : null;
   };
 
+  // Merge a range's client rects into one box per visual line. The browser
+  // returns a rect per line box, and adjacent rects on the same line are
+  // separate when the range crosses an inline element, so a bare mapping
+  // draws a seam through the middle of a word.
+  var coalesceByLine = function (rects) {
+    var lines = [];
+    for (var i = 0; i < rects.length; i++) {
+      var r = rects[i];
+      if (r.width === 0 || r.height === 0) continue;
+      var joined = false;
+      for (var j = 0; j < lines.length; j++) {
+        var l = lines[j];
+        // Same line when the vertical centres are within a rect's height of
+        // each other. Comparing tops alone splits a line whenever a
+        // superscript or a taller inline sits in it.
+        if (Math.abs((r.top + r.bottom) / 2 - (l.top + l.bottom) / 2) < Math.min(r.height, l.height) / 2) {
+          l.left = Math.min(l.left, r.left);
+          l.right = Math.max(l.right, r.right);
+          l.top = Math.min(l.top, r.top);
+          l.bottom = Math.max(l.bottom, r.bottom);
+          joined = true;
+          break;
+        }
+      }
+      if (!joined) lines.push({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+    }
+    return lines;
+  };
+
+  // Boxes are data-lucid, so clean() strips them from a saved document
+  // exactly as it strips lucid's style and script.
+  var paintRange = function () {
+    var old = document.querySelectorAll(".lucid-range");
+    for (var i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+    if (!picked || !picked.range) return;
+    var lines = coalesceByLine(picked.range.getClientRects());
+    for (var j = 0; j < lines.length; j++) {
+      var l = lines[j];
+      var box = document.createElement("div");
+      box.className = "lucid-range";
+      box.setAttribute("data-lucid", "1");
+      // Document coordinates, so the boxes scroll with the text and no
+      // scroll listener has to keep them in place.
+      box.style.left = l.left + window.scrollX + "px";
+      box.style.top = l.top + window.scrollY + "px";
+      box.style.width = l.right - l.left + "px";
+      box.style.height = l.bottom - l.top + "px";
+      document.body.appendChild(box);
+    }
+  };
+
   var paint = function () {
     var marked = document.querySelectorAll(".lucid-selected");
     for (var i = 0; i < marked.length; i++) marked[i].classList.remove("lucid-selected");
@@ -356,6 +438,7 @@ const script = (artifactId: string, version: number, author: string): string => 
       var el = document.querySelector("[" + ATTR + '="' + selected[j] + '"]');
       if (el) el.classList.add("lucid-selected");
     }
+    paintRange();
   };
 
   // Capture phase, and nothing is cancelled: the document's own listeners
@@ -373,11 +456,17 @@ const script = (artifactId: string, version: number, author: string): string => 
       for (var k = 0; k < m.ids.length; k++) {
         var el = document.querySelector("[" + ATTR + '="' + String(m.ids[k]) + '"]');
         if (!el) continue;
+        // A drag reports what was dragged over. A click reports the whole
+        // element. Either way it is what was on screen and not the markup:
+        // the person marked what they could read.
+        var isPick = picked && String(m.ids[k]) === picked.id;
+        var text = isPick ? picked.exact : (el.innerText || el.textContent || "");
         spots.push({
           id: String(m.ids[k]),
-          // What was on screen, not the markup: the person marked what they
-          // could read.
-          snippet: (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim(),
+          snippet: text.replace(/\\s+/g, " ").trim(),
+          // The selected text, so the page can anchor the note to those
+          // words rather than to everything around them. Empty for a click.
+          quote: isPick ? picked.exact.replace(/\\s+/g, " ").trim() : "",
           author: el.getAttribute(AUTHOR_ATTR) || AUTHOR
         });
       }
@@ -408,8 +497,10 @@ const script = (artifactId: string, version: number, author: string): string => 
         // for a note, and there is no note being written in use mode. A
         // version going read only drops it for the same reason - there is
         // nothing to write about a version that cannot be annotated.
-        if ((mode === "use" || readOnly) && selected.length > 0) {
+        if ((mode === "use" || readOnly) && (selected.length > 0 || picked)) {
           selected = [];
+          picked = null;
+          window.getSelection() && window.getSelection().removeAllRanges();
           paint();
           post();
         }
@@ -422,8 +513,12 @@ const script = (artifactId: string, version: number, author: string): string => 
     // can drop it; the parent clearing its own copy would leave the document
     // still painted as selected.
     if (m.kind === "deselect") {
-      if (selected.length > 0) {
+      if (selected.length > 0 || picked) {
         selected = [];
+        // The browser's own selection goes with it. Left standing, the next
+        // mouseup anywhere would read it and pick those words again.
+        picked = null;
+        window.getSelection() && window.getSelection().removeAllRanges();
         paint();
         post();
       }
@@ -476,7 +571,19 @@ const script = (artifactId: string, version: number, author: string): string => 
   // happening from one press, in the wrong order.
   document.addEventListener("mousedown", function (e) {
     if (!e.isTrusted || mode !== "markup" || readOnly) return;
-    e.preventDefault();
+    // Cancelling every mousedown also cancels the browser's own text
+    // selection, which is what a drag is made of - so marking up a phrase
+    // was impossible for as long as this was unconditional.
+    //
+    // What it is actually for is controls: focus moves on mousedown, so a
+    // press on a textarea drew a caret before the click could pick the
+    // element, and one press did two things in the wrong order. That is
+    // still cancelled. A press on prose is left alone, and the drag it
+    // starts is the browser's.
+    var t = e.target;
+    if (t && t.nodeType === 1 && (t.matches(CONTROL) || t.closest(CONTROL))) {
+      e.preventDefault();
+    }
   }, true);
 
   document.addEventListener("mouseover", function (e) {
@@ -493,9 +600,42 @@ const script = (artifactId: string, version: number, author: string): string => 
     if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
   }, true);
 
+  // A drag over text picks those words. A click picks the element under it.
+  // Both end in a mouseup, so this runs first and decides which happened:
+  // an uncollapsed selection is a drag, anything else falls through to the
+  // click handler below.
+  document.addEventListener("mouseup", function (e) {
+    if (!e.isTrusted || mode !== "markup" || readOnly) return;
+    var sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+    var exact = sel.toString();
+    if (exact.replace(/\\s+/g, " ").trim() === "") return;
+    var range = sel.getRangeAt(0);
+    // Which element the selection STARTS in. Not the common ancestor: a
+    // range crossing two paragraphs has body as its ancestor, and body
+    // names no spot.
+    var node = range.startContainer;
+    var host = node.nodeType === 3 ? node.parentElement : node;
+    var el = addressable(host);
+    if (!el) return;
+    picked = { id: el.getAttribute(ATTR), exact: exact, range: range.cloneRange() };
+    // A drag replaces an element pick rather than adding to it.
+    selected = [];
+    paint();
+    post();
+  }, true);
+
   document.addEventListener("click", function (e) {
     // A document that dispatches its own click is doing its own work.
     if (!e.isTrusted || mode !== "markup" || readOnly) return;
+    // A drag ends with a mouseup and then a click. The mouseup already made
+    // the pick, so this click must not immediately replace it with the
+    // element under the cursor.
+    if (picked) {
+      var live = window.getSelection();
+      if (live && !live.isCollapsed) { e.preventDefault(); return; }
+      picked = null;
+    }
     // In mark-up mode a click picks an element and does nothing else. Left
     // to run, it would also tick the box or follow the link under it, so
     // one click would do two things and neither would be undoable.
@@ -522,8 +662,9 @@ const script = (artifactId: string, version: number, author: string): string => 
   document.addEventListener("click", function (e) {
     if (!e.isTrusted || mode !== "markup" || readOnly) return;
     if (addressable(e.target)) return;
-    if (selected.length === 0) return;
+    if (selected.length === 0 && !picked) return;
     selected = [];
+    picked = null;
     paint();
     post();
   }, true);

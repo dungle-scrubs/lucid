@@ -12,6 +12,7 @@ import {
   resolveSpot,
   type SpotSelectors,
   selectorsFor,
+  selectorsForQuote,
   sha256Hex,
 } from "../../src/server/client/anchor.js";
 
@@ -261,5 +262,79 @@ describe("the prefix does not drag the search somewhere wrong", () => {
     expect(r.resolved).toBe(true);
     if (!r.resolved) return;
     expect(elementFor(parse(after), r.elementId)?.textContent).toContain("Run the gate");
+  });
+});
+
+describe("anchoring to selected text rather than a whole element", () => {
+  /** Ids are assigned the way the frame assigns them: document order over
+   * everything inside body. */
+  const ID = "e2";
+  const HTML = "<body><div><p>Read the brief before you start.</p><p>Ship it.</p></div></body>";
+
+  test("the quote is the selected words, not the whole element", () => {
+    const sel = selectorsForQuote(parse(HTML), ID, "the brief");
+    expect(sel?.quote.exact).toBe("the brief");
+  });
+
+  test("its offsets cover only those words", () => {
+    const d = parse(HTML);
+    const sel = selectorsForQuote(d, ID, "the brief");
+    const whole = d.body?.textContent ?? "";
+    expect(sel).not.toBeNull();
+    if (sel === null) return;
+    expect(whole.slice(sel.position.start, sel.position.end)).toBe("the brief");
+  });
+
+  test("context comes from either side of the words", () => {
+    const sel = selectorsForQuote(parse(HTML), ID, "the brief");
+    expect(sel?.quote.prefix).toContain("Read ");
+    expect(sel?.quote.suffix).toContain(" before");
+  });
+
+  test("the occurrence inside the named element wins", () => {
+    // "Ship it" appears twice. Anchoring to the first occurrence anywhere
+    // would point a note at a paragraph nobody selected.
+    const two = "<body><p>Ship it.</p><p>Then Ship it again.</p></body>";
+    const d = parse(two);
+    const second = selectorsForQuote(d, "e2", "Ship it");
+    const whole = d.body?.textContent ?? "";
+    expect(second).not.toBeNull();
+    if (second === null) return;
+    // Past the first paragraph, which is 8 characters long.
+    expect(second.position.start).toBeGreaterThan(8);
+    expect(whole.slice(second.position.start, second.position.end)).toBe("Ship it");
+  });
+
+  test("text that is not in the named element falls back to the element", () => {
+    // Covering more than the person meant beats anchoring into text they
+    // never selected.
+    const sel = selectorsForQuote(parse(HTML), ID, "Ship it");
+    expect(sel?.quote.exact).toBe("Read the brief before you start.");
+  });
+
+  test("an unknown element or empty selection anchors nothing", () => {
+    expect(selectorsForQuote(parse(HTML), "e99", "the brief")).toBeNull();
+    expect(selectorsForQuote(parse(HTML), ID, "")).toBeNull();
+  });
+
+  test("a selected-text anchor resolves back to its element", () => {
+    // The whole point: after the agent rewrites around it, the note still
+    // finds the spot. `resolveSpot` searches by quote first.
+    const d = parse(HTML);
+    const sel = selectorsForQuote(d, ID, "the brief");
+    expect(sel).not.toBeNull();
+    if (sel === null) return;
+    const moved = parse(
+      "<body><div><h2>New heading</h2><p>Read the brief before you start.</p></div></body>",
+    );
+    // `verified` is the snapshot guard's answer; nothing re-anchors without it.
+    const got = resolveSpot(moved, sel, true);
+    expect(got.resolved).toBe(true);
+  });
+
+  test("a whole-element anchor is unchanged by the shared context helper", () => {
+    const sel = selectorsFor(parse(HTML), ID);
+    expect(sel?.quote.exact).toBe("Read the brief before you start.");
+    expect(sel?.quote.suffix).toContain("Ship it");
   });
 });

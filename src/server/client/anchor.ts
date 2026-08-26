@@ -103,14 +103,62 @@ export const selectorsFor = (doc: Document, elementId: string): SpotSelectors | 
   const exact = textOf(el);
   const start = exact === "" ? -1 : whole.indexOf(exact);
   return {
-    quote: {
-      exact,
-      // Enough context to tell two identical paragraphs apart, and not so
-      // much that rewriting a neighbour breaks the anchor.
-      prefix: start <= 0 ? "" : whole.slice(Math.max(0, start - 32), start),
-      suffix: start < 0 ? "" : whole.slice(start + exact.length, start + exact.length + 32),
-    },
+    quote: around(whole, start, exact),
     position: { start: Math.max(0, start), end: Math.max(0, start) + exact.length },
+    css: cssPath(el),
+  };
+};
+
+/** Enough context to tell two identical passages apart, and not so much
+ * that rewriting a neighbour breaks the anchor. Shared by both builders so a
+ * whole-element spot and a selected-text spot are measured the same way. */
+const CONTEXT = 32;
+
+const around = (whole: string, start: number, exact: string): SpotSelectors["quote"] => ({
+  exact,
+  prefix: start <= 0 ? "" : whole.slice(Math.max(0, start - CONTEXT), start),
+  suffix: start < 0 ? "" : whole.slice(start + exact.length, start + exact.length + CONTEXT),
+});
+
+/**
+ * The three selectors for a spot that is SOME of an element's text rather
+ * than all of it: what a person selected with the cursor.
+ *
+ * Offsets are measured here, against the document's own bytes, and never
+ * taken from the browser frame. The frame's copy carries lucid's injected
+ * `<style>` and `<script>`, and both contribute to `textContent`, so an
+ * offset captured there is shifted by however long lucid's own source
+ * happens to be.
+ *
+ * `exact` can occur more than once in a document. The occurrence inside
+ * `elementId` is the one the person selected, so the search starts there and
+ * the offset is translated into the whole document. Falling back to the
+ * first occurrence anywhere would silently anchor a note to a different
+ * paragraph that happens to share a word.
+ */
+export const selectorsForQuote = (
+  doc: Document,
+  elementId: string,
+  exact: string,
+): SpotSelectors | null => {
+  const el = elementFor(doc, elementId);
+  if (el === null || exact === "") return null;
+  const whole = doc.body?.textContent ?? "";
+  const inner = textOf(el);
+  const within = inner.indexOf(exact);
+  // Selected text that is not in the element it was reported against. The
+  // element wins: an anchor into text nobody selected is worse than one that
+  // covers more than they meant.
+  if (within === -1) return selectorsFor(doc, elementId);
+  const elementAt = whole.indexOf(inner);
+  const start = elementAt === -1 ? whole.indexOf(exact) : elementAt + within;
+  if (start === -1) return selectorsFor(doc, elementId);
+  return {
+    quote: around(whole, start, exact),
+    position: { start, end: start + exact.length },
+    // The same element path as a whole-element spot. It is the last resort
+    // in resolution, and at that point the element is all that is left to
+    // point at anyway.
     css: cssPath(el),
   };
 };
