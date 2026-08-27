@@ -59,6 +59,7 @@ import {
 } from "./layout.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
 import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
+import { isReadOnly, versionState } from "./version-state.js";
 
 /** Kept in step with the server's own poll interval. */
 const POLL_MS = 500;
@@ -815,6 +816,26 @@ const App = (): React.ReactElement => {
   // A version named in the URL opens pinned to it: a link to a version has
   // to land on that version, not on the newest one.
   const [pinned, setPinned] = React.useState<number | null>(opened?.version ?? null);
+  /** Go to the newest version even though there is work in progress.
+   *
+   * The banner offering the newer version used to call `setPinned(null)`,
+   * and in the case it appears for, `pinned` is already `null` - nothing was
+   * ever pinned. So the click changed no state, the guard below re-ran on the
+   * same values, and the button did nothing at all.
+   *
+   * State rather than a ref, because the effect has to re-run when it is set
+   * and has to read it. It is cleared as soon as it is honoured, so it asks
+   * once rather than turning following back on for good. */
+  const [forceFollow, setForceFollow] = React.useState(false);
+  const goToNewest = React.useCallback(() => {
+    // Both, because "show me the newest" has two things standing in its way
+    // and either may be present. A pin holds the target at a chosen version;
+    // work in progress holds the document where it is. Clearing only the pin
+    // was the old behaviour and did nothing when nothing was pinned; setting
+    // only the override does nothing when something is.
+    setPinned(null);
+    setForceFollow(true);
+  }, []);
   /** A version that arrived while there was work pending. It waits here and
    * is announced rather than swapped in underneath. */
   const [waiting, setWaiting] = React.useState<number | null>(null);
@@ -857,6 +878,8 @@ const App = (): React.ReactElement => {
    * draft itself. */
   const draftRef = React.useRef("");
   /** Read from the hotkey callback, which must keep its identity. */
+  /** Read only, for the hotkey path. Fed from `pinnedOld`: being
+   * overtaken does not take the modes away. */
   const viewingOldRef = React.useRef(false);
   /** A batch of notes is on its way to the record. */
   const [sending, setSending] = React.useState(false);
@@ -950,6 +973,23 @@ const App = (): React.ReactElement => {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  /* Closing the tab, reloading, or following a link takes the frame with it,
+   * and the frame is where an unsaved edit lives - nothing has written it
+   * down yet. Every other way of losing it now asks first: a version
+   * arriving offers save-or-discard, and a mode switch keeps it. This was
+   * the one exit with no question on it.
+   *
+   * The browser shows its own wording and ignores ours, so there is no
+   * message here. `preventDefault` is what asks. */
+  React.useEffect(() => {
+    if (!edited) return;
+    const ask = (e: BeforeUnloadEvent): void => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [edited]);
 
   const toggleMode = React.useCallback((): void => {
     // Nothing to switch between on a version that permits neither.
@@ -1153,12 +1193,15 @@ const App = (): React.ReactElement => {
           if (entry.latest > target) setWaiting(entry.latest);
           return;
         }
-        if (pinned === null && pendingRef.current && shown.current !== "") {
+        if (pinned === null && pendingRef.current && shown.current !== "" && !forceFollow) {
           // Nothing pinned, but there is work in progress: say a newer
-          // version exists and wait to be asked.
+          // version exists and wait to be asked. `forceFollow` is that asking.
           setWaiting(entry.latest);
           return;
         }
+        // Asked for, so spent. Anything after this holds the document again
+        // the moment there is work in progress.
+        if (forceFollow) setForceFollow(false);
         fetching.current = true;
         try {
           const one = await fetch(
@@ -1194,16 +1237,41 @@ const App = (): React.ReactElement => {
       alive = false;
       window.clearInterval(id);
     };
-  }, [token, dead, conversationId, pinned, wantArtifact]);
+  }, [token, dead, conversationId, pinned, wantArtifact, forceFollow]);
 
   /** A restore waiting to be confirmed. Holding the version rather than a
    * boolean means the confirmation can name what it is about to do. */
   const [confirmRestore, setConfirmRestore] = React.useState<number | null>(null);
+  /** A newer version waiting to be shown, once it is confirmed that the
+   * unsaved edit can go. Holds the version so the confirmation can name it. */
+  const [confirmDiscard, setConfirmDiscard] = React.useState<number | null>(null);
   const [restoring, setRestoring] = React.useState(false);
 
   /** Showing a version that is not the current one. Read-only: no editing,
    * no saving, no selecting, no annotating (RFC-07 R6, R7). */
-  const viewingOld = doc !== null && catalog !== null && doc.version !== catalog.latest;
+  /** Not the newest version. Two situations wear this, and they are not the
+   * same situation.
+   *
+   * `pinnedOld` is going back deliberately: a version was chosen from the
+   * picker. It is read only, and everything that reads "you cannot change
+   * this" belongs to it.
+   *
+   * `overtaken` is standing still while the newest moved. Nothing was
+   * chosen - the agent wrote a version, and the document was held where it
+   * was because there was work in progress. Treating that as read only
+   * disabled the save on an edit that was still live, and the server's whole
+   * superseded-save path (`basedOn`, `supersededSince`) exists for exactly
+   * this and could not be reached from the page. */
+  const shownVersion = versionState({
+    shown: doc?.version ?? null,
+    latest: catalog?.latest ?? null,
+    pinned,
+  });
+  const pinnedOld = isReadOnly(shownVersion);
+  const overtaken = shownVersion === "overtaken";
+  /** Not the newest, either way. Cosmetic only - what the picker looks like,
+   * and what the follow button says. Never what is disabled. */
+  const viewingOld = shownVersion !== "current";
 
   const addNote = React.useCallback(async (): Promise<void> => {
     const text = draft.trim();
@@ -1213,7 +1281,7 @@ const App = (): React.ReactElement => {
     // Belt as well as braces: the frame stops sending selections on a
     // read-only version, so this should be unreachable. It is here because
     // "should be unreachable" is where notes end up on the wrong version.
-    if (viewingOld) return;
+    if (pinnedOld) return;
     const room = queueAdmits(notes.length);
     if (!room.ok) {
       setRefusal(room.why);
@@ -1246,7 +1314,7 @@ const App = (): React.ReactElement => {
     setSelRect(null);
     setRefusal(null);
     deselect.current?.();
-  }, [draft, selection, notes, setNotes, doc, messages.length, viewingOld]);
+  }, [draft, selection, notes, setNotes, doc, messages.length, pinnedOld]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
@@ -1648,19 +1716,28 @@ const App = (): React.ReactElement => {
     return m;
   }, [anchored]);
 
-  viewingOldRef.current = viewingOld;
+  viewingOldRef.current = pinnedOld;
 
   const guidance = ((): { text: string; tone: "idle" | "ready" | "warn" } => {
     if (doc === null) return { text: "No document in this conversation yet.", tone: "idle" };
     if (refusal !== null) return { text: refusal, tone: "warn" };
     // Said before anything else about the document, because it explains why
     // every other affordance is missing.
-    if (viewingOld)
+    if (pinnedOld)
       return {
         text: `Version ${doc?.version} — read only. Only the current version can be edited or written about.`,
         tone: "warn",
       };
-    if (edited) return { text: "You changed the document. Save to keep it.", tone: "ready" };
+    // Being overtaken is not read only, so it does not take this branch. An
+    // edit in progress keeps saying what it says, and the banner above the
+    // document is what reports the newer version.
+    if (edited)
+      return {
+        text: overtaken
+          ? "You changed the document. Save to keep it — it will land on top of the newer version."
+          : "You changed the document. Save to keep it.",
+        tone: "ready",
+      };
     // What the last save did. It was recorded and never shown, so a save the
     // server turned down looked exactly like one that worked.
     if (saved !== null)
@@ -1782,7 +1859,7 @@ const App = (): React.ReactElement => {
                       {viewingOld ? "Back to current" : "Follow newest"}
                     </button>
                   )}
-                  {viewingOld ? (
+                  {pinnedOld ? (
                     <button
                       type="button"
                       className="v restore"
@@ -1797,7 +1874,7 @@ const App = (): React.ReactElement => {
                       type="button"
                       className={mode === "use" ? "m current" : "m"}
                       onClick={() => setMode("use")}
-                      disabled={viewingOld}
+                      disabled={pinnedOld}
                       title="Tick boxes, fill fields, and edit text (⌥⌫)"
                     >
                       Use
@@ -1806,7 +1883,7 @@ const App = (): React.ReactElement => {
                       type="button"
                       className={mode === "markup" ? "m current" : "m"}
                       onClick={() => setMode("markup")}
-                      disabled={viewingOld}
+                      disabled={pinnedOld}
                       title="Click parts of the document to write notes about them (⌥⌫)"
                     >
                       Mark up
@@ -1817,12 +1894,27 @@ const App = (): React.ReactElement => {
                 {waiting === null || waiting <= doc.version ? null : (
                   <div className="doc-waiting">
                     Version {waiting} has arrived.{" "}
-                    {/* Follow rather than pin, for the reason the save path
-                      gives: pinning to the newest version now means being
-                      read-only against the one after it. */}
-                    <button type="button" onClick={() => setPinned(null)}>
-                      show it
-                    </button>
+                    {/* Going there replaces the whole frame, so an unsaved
+                      edit in it would go with no warning. Saving first is
+                      offered because it works: the save lands on top of the
+                      newer version and follows it afterwards. */}
+                    {edited ? (
+                      <>
+                        <button type="button" onClick={() => void save()} disabled={saving}>
+                          {saving ? "Saving…" : "save mine first"}
+                        </button>{" "}
+                        <button type="button" onClick={() => setConfirmDiscard(waiting)}>
+                          discard mine and show it
+                        </button>
+                      </>
+                    ) : (
+                      /* Follow rather than pin, for the reason the save path
+                        gives: pinning to the newest version now means being
+                        read-only against the one after it. */
+                      <button type="button" onClick={goToNewest}>
+                        show it
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -1843,7 +1935,7 @@ const App = (): React.ReactElement => {
                       ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
                     ]}
                     mode={mode}
-                    readOnly={viewingOld}
+                    readOnly={pinnedOld}
                   />
 
                   {/* Written where you clicked. The box used to be a panel at
@@ -1946,6 +2038,30 @@ const App = (): React.ReactElement => {
                   deciding whether to restore is deciding whether it is
                   reversible, and here it is - permanently, because nothing
                   is overwritten. */}
+                {confirmDiscard === null ? null : (
+                  <div className="confirm">
+                    <span>
+                      Show v{confirmDiscard} and lose the change you have not saved? Saving instead
+                      keeps it: it lands on top of v{confirmDiscard} as the next version, and the
+                      agent is told what it was based on.
+                    </span>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => {
+                        setEdited(false);
+                        setConfirmDiscard(null);
+                        goToNewest();
+                      }}
+                    >
+                      Discard and show it
+                    </button>
+                    <button type="button" onClick={() => setConfirmDiscard(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
                 {confirmRestore === null ? null : (
                   <div className="confirm">
                     <span>
@@ -1974,7 +2090,7 @@ const App = (): React.ReactElement => {
                     <button
                       type="button"
                       onClick={() => void save()}
-                      disabled={!edited || saving || viewingOld}
+                      disabled={!edited || saving || pinnedOld}
                       title="Double-click text in the document to edit it; controls work as they are"
                     >
                       {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
