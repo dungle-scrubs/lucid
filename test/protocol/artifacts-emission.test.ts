@@ -242,7 +242,10 @@ describe("artifact emission via headless host", () => {
     r.host.close();
   });
 
-  test("two documents in one message both land, in order", async () => {
+  test("the first of two documents in one message lands, the second is refused", async () => {
+    // This asserted that both landed, until RFC-09 narrowed a conversation
+    // to one artifact. Rewritten rather than deleted: the shape of the case
+    // is still what has to be exercised, and only the outcome moved.
     const r = rig({ mode: "session" });
     r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
     await flush();
@@ -257,7 +260,38 @@ describe("artifact emission via headless host", () => {
     await flush();
     await flush();
     expect(r.host.readArtifact("doc-1", 1)?.bytes).toBe("first");
-    expect(r.host.readArtifact("doc-2", 1)?.bytes).toBe("second");
+    expect(r.host.readArtifact("doc-2", 1)).toBeNull();
+    const said = r.host.transcript().events.flatMap((e) => {
+      const ev = e.event as Record<string, unknown>;
+      return typeof ev.message === "string" ? [ev.message] : [];
+    });
+    // The refusal names what the conversation does hold, so the agent can
+    // reuse it without asking.
+    const refusal = said.find((m) => m.includes("E-ART-09"));
+    expect(refusal).toBeDefined();
+    expect(refusal).toContain("doc-1");
+    r.host.close();
+  });
+
+  test("a second block revising what the first block created still lands", async () => {
+    // The other half of the same rule. An artifact created earlier in this
+    // message counts as held, or a message that creates a document and then
+    // revises it would refuse its own second block.
+    const r = rig({ mode: "session" });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    const both =
+      artifactFence("doc-1", null, "text/html", "first") +
+      "\n" +
+      artifactFence("doc-1", 1, "text/html", "second");
+    r.proc.emit(assistant(both));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    expect(r.host.readArtifact("doc-1", 1)?.bytes).toBe("first");
+    expect(r.host.readArtifact("doc-1", 2)?.bytes).toBe("second");
     r.host.close();
   });
 
@@ -710,5 +744,207 @@ describe("what the preamble says about the patch form", () => {
     const blocks = detectArtifactBlocks(artifactFence("doc", null, "text/html", "<p>hi</p>"));
     const only = blocks[0];
     expect(only !== undefined && "block" in only && only.block.header.form).toBe("whole");
+  });
+});
+
+/** RFC-09 R2 and R5. A conversation holds one artifact, and an emission
+ * naming another is refused rather than folded in. */
+describe("a conversation holds one artifact", () => {
+  const messages = (r: ReturnType<typeof rig>) =>
+    r.host.transcript().events.flatMap((e) => {
+      const ev = e.event as Record<string, unknown>;
+      return typeof ev.message === "string" ? [ev.message] : [];
+    });
+
+  /** A rig whose record already holds `doc-1` at v1. */
+  const withDoc = async () => {
+    const r = rig({ mode: "session" });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(artifactFence("doc-1", null, "text/html", "<p>one</p>")));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    return r;
+  };
+
+  const secondTurn = async (r: ReturnType<typeof rig>, text: string) => {
+    r.host.enqueueInput({ id: "in-2", text: "again", mode: "queue" });
+    await flush();
+    r.proc.emit({ kind: "disposition", id: "in-2", disposition: "started" });
+    r.proc.emit({ kind: "turn", turnId: "turn-2", id: "in-2" });
+    await flush();
+    r.proc.emit(assistant(text));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+  };
+
+  test("a different id is refused, and the refusal names what is held", async () => {
+    const r = await withDoc();
+    await secondTurn(r, artifactFence("doc-2", null, "text/html", "<p>two</p>"));
+    expect(r.host.readArtifact("doc-2", 1)).toBeNull();
+    const refusal = messages(r).find((m) => m.includes("E-ART-09"));
+    expect(refusal).toBeDefined();
+    expect(refusal).toContain("doc-1");
+    r.host.close();
+  });
+
+  test("the id it holds is still a revision", async () => {
+    const r = await withDoc();
+    await secondTurn(r, artifactFence("doc-1", 1, "text/html", "<p>two</p>"));
+    expect(r.host.readArtifact("doc-1", 2)?.bytes).toBe("<p>two</p>");
+    r.host.close();
+  });
+
+  test("nothing is folded in: the refused bytes are not stored under the held id", async () => {
+    // The failure this refusal exists to prevent. Folding would land a
+    // document under a name the agent did not choose.
+    const r = await withDoc();
+    await secondTurn(r, artifactFence("doc-2", null, "text/html", "<p>elsewhere</p>"));
+    expect(r.host.readArtifact("doc-1", 1)?.bytes).toBe("<p>one</p>");
+    expect(r.host.readArtifact("doc-1", 2)).toBeNull();
+    r.host.close();
+  });
+
+  test("identity is checked before size", async () => {
+    // An emission for a document this conversation does not hold does not
+    // need its body measured. Reporting "too large" would tell the agent to
+    // fix the wrong thing.
+    const r = await withDoc();
+    await secondTurn(
+      r,
+      artifactFence("doc-2", null, "text/html", "z".repeat(ARTIFACT_BYTES_MAX + 10)),
+    );
+    expect(messages(r).some((m) => m.includes("E-ART-09"))).toBe(true);
+    expect(messages(r).some((m) => m.includes("too large"))).toBe(false);
+    r.host.close();
+  });
+
+  test("identity is checked before the patch checks", async () => {
+    const r = await withDoc();
+    const patch = `\`\`\`lucid-artifact\n${JSON.stringify({ id: "doc-2", replaces: null, contentType: "text/html", form: "patch" })}\n{not json\n\`\`\``;
+    await secondTurn(r, patch);
+    expect(messages(r).some((m) => m.includes("E-ART-09"))).toBe(true);
+    expect(messages(r).some((m) => m.includes("E-PATCH-01"))).toBe(false);
+    expect(messages(r).some((m) => m.includes("E-PATCH-04"))).toBe(false);
+    r.host.close();
+  });
+
+  test("a malformed block still refuses before the identity check", async () => {
+    // There is no id to check until the header parses, so this one has to
+    // come first whatever the precedence rule says.
+    const r = await withDoc();
+    await secondTurn(r, "```lucid-artifact\nnot json\n```");
+    expect(messages(r).some((m) => m.includes("malformed"))).toBe(true);
+    expect(messages(r).some((m) => m.includes("E-ART-09"))).toBe(false);
+    r.host.close();
+  });
+
+  test("an unrecognised form still refuses before the identity check", async () => {
+    const r = await withDoc();
+    const bogus = `\`\`\`lucid-artifact\n${JSON.stringify({ id: "doc-2", replaces: null, contentType: "text/html", form: "diff" })}\n<p>x</p>\n\`\`\``;
+    await secondTurn(r, bogus);
+    expect(messages(r).some((m) => m.includes("E-PATCH-07"))).toBe(true);
+    expect(messages(r).some((m) => m.includes("E-ART-09"))).toBe(false);
+    r.host.close();
+  });
+
+  test("a first emission of the whole form may carry a non-null replaces", async () => {
+    // RFC-06's rule, unchanged. An empty conversation has nothing to compare
+    // against, so identity cannot refuse here.
+    const r = rig({ mode: "session" });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(artifactFence("brand-new", 5, "text/html", "fresh")));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    expect(r.host.readArtifact("brand-new", 1)?.bytes).toBe("fresh");
+    r.host.close();
+  });
+
+  test("a record already holding two artifacts still takes a revision of either", async () => {
+    // R5. No such record can be created now, but one written by an older
+    // build must stay a working conversation.
+    const r = rig({ mode: "session" });
+    r.host.writeArtifact({
+      artifactId: "alpha",
+      version: 1,
+      author: "agent",
+      contentType: "text/html",
+      bytes: "<p>a</p>",
+    });
+    r.host.writeArtifact({
+      artifactId: "beta",
+      version: 1,
+      author: "agent",
+      contentType: "text/html",
+      bytes: "<p>b</p>",
+    });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(artifactFence("beta", 1, "text/html", "<p>b2</p>")));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    // Revised the one it named, and left the other alone.
+    expect(r.host.readArtifact("beta", 2)?.bytes).toBe("<p>b2</p>");
+    expect(r.host.readArtifact("alpha", 2)).toBeNull();
+    r.host.close();
+  });
+
+  test("a record holding two artifacts refuses a third, naming both", async () => {
+    const r = rig({ mode: "session" });
+    for (const id of ["alpha", "beta"]) {
+      r.host.writeArtifact({
+        artifactId: id,
+        version: 1,
+        author: "agent",
+        contentType: "text/html",
+        bytes: `<p>${id}</p>`,
+      });
+    }
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(artifactFence("gamma", null, "text/html", "<p>c</p>")));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    expect(r.host.readArtifact("gamma", 1)).toBeNull();
+    const refusal = messages(r).find((m) => m.includes("E-ART-09"));
+    expect(refusal).toContain("alpha");
+    expect(refusal).toContain("beta");
+    r.host.close();
+  });
+
+  test("an enormous id is quoted back within the refusal bound", async () => {
+    const r = rig({ mode: "session" });
+    r.host.writeArtifact({
+      artifactId: "界".repeat(128),
+      version: 1,
+      author: "agent",
+      contentType: "text/html",
+      bytes: "<p>a</p>",
+    });
+    r.host.enqueueInput({ id: "in-1", text: "go", mode: "queue" });
+    await flush();
+    r.accept("in-1", "turn-1");
+    await flush();
+    r.proc.emit(assistant(artifactFence("other", null, "text/html", "<p>b</p>")));
+    r.proc.emit(doneClean);
+    await flush();
+    await flush();
+    const refusal = messages(r).find((m) => m.includes("E-ART-09")) ?? "";
+    expect(Buffer.byteLength(refusal, "utf8")).toBeLessThan(600);
+    r.host.close();
   });
 });

@@ -37,6 +37,7 @@ import {
   composeArtifactPrompt,
   composeArtifactState,
   detectArtifactBlocks,
+  quoteForRefusal,
 } from "../protocol/artifacts.js";
 import { EventKind } from "../protocol/events.js";
 import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
@@ -212,6 +213,70 @@ const handleArtifactMessage = (
     }
     const { header, bytes } = d.block;
     const isPatch = header.form === "patch";
+    if (
+      deps.host === undefined ||
+      deps.host.artifactIndex === undefined ||
+      deps.host.writeArtifact === undefined
+    ) {
+      // No durable host to write to — still report that we saw it, but
+      // cannot store. This path is exercised in in-process tests that
+      // build a source without a host; production always has one.
+      //
+      // Ahead of every refusal below because it is not one: nothing is wrong
+      // with the emission, there is just nowhere to put it. The identity
+      // check needs the index this guard proves exists.
+      ctx.sequencer.emit(turnId, {
+        kind: EventKind.error,
+        message: `artifact ${header.id} not stored: no host`,
+        terminal: false,
+      });
+      continue;
+    }
+
+    // Every artifact this conversation holds, and the current version of
+    // each. One pass, because the identity check needs the whole set and the
+    // version lookup needs one entry of it.
+    const held = new Map<string, number>();
+    const idx = deps.host.artifactIndex?.() ?? new Map<string, number>();
+    for (const [key] of idx) {
+      const sep = key.indexOf("\0");
+      if (sep === -1) continue;
+      const id = key.slice(0, sep);
+      const v = Number(key.slice(sep + 1));
+      if (!Number.isSafeInteger(v)) continue;
+      if ((held.get(id) ?? 0) < v) held.set(id, v);
+    }
+    // Artifacts created by an earlier block of this same message count as
+    // held. Otherwise a message that creates the artifact and then revises
+    // it would refuse its own second block.
+    for (const [id, v] of localVersions) {
+      if ((held.get(id) ?? 0) < v) held.set(id, v);
+    }
+
+    // RFC-09 R2. A conversation holds one artifact, so an emission naming a
+    // different one is refused rather than folded in: the agent chose that
+    // id, and quietly substituting another would make its own instruction
+    // mean something else and land the document under a name it did not
+    // choose.
+    //
+    // First among the refusals for a block whose header parsed. Malformed
+    // and an unrecognised `form` already refused above, inside the parser,
+    // because until the header parses there is no id to check. Identity goes
+    // ahead of size and of the patch checks because its answer makes them
+    // moot: an emission for a document this conversation does not hold does
+    // not need its body measured or its edits parsed, and reporting a size
+    // refusal for an artifact that was never going to be accepted tells the
+    // agent to fix the wrong thing.
+    if (held.size > 0 && !held.has(header.id)) {
+      const names = [...held.keys()].map((id) => quoteForRefusal(id)).join(", ");
+      ctx.sequencer.emit(turnId, {
+        kind: EventKind.error,
+        message: `artifact ${header.id} refused: E-ART-09 second-artifact: this conversation holds ${names}. Reuse it, or emit the whole document under it to replace what it holds.`,
+        terminal: false,
+      });
+      continue;
+    }
+
     // A patch body is a description of edits, not a document, so the size
     // check below would measure the wrong thing and name a problem that is
     // not size. The document a patch produces is checked once it exists.
@@ -223,36 +288,7 @@ const handleArtifactMessage = (
       });
       continue;
     }
-    if (
-      deps.host === undefined ||
-      deps.host.artifactIndex === undefined ||
-      deps.host.writeArtifact === undefined
-    ) {
-      // No durable host to write to — still report that we saw it, but
-      // cannot store. This path is exercised in in-process tests that
-      // build a source without a host; production always has one.
-      ctx.sequencer.emit(turnId, {
-        kind: EventKind.error,
-        message: `artifact ${header.id} not stored: no host`,
-        terminal: false,
-      });
-      continue;
-    }
-    // Determine current version for this id — max of durable index and
-    // local assignments within this message.
-    let current = 0;
-    const idx = deps.host.artifactIndex?.() ?? new Map<string, number>();
-    for (const [key] of idx) {
-      const sep = key.indexOf("\0");
-      if (sep === -1) continue;
-      const id = key.slice(0, sep);
-      if (id === header.id) {
-        const v = Number(key.slice(sep + 1));
-        if (Number.isSafeInteger(v) && v > current) current = v;
-      }
-    }
-    const local = localVersions.get(header.id);
-    if (local !== undefined && local > current) current = local;
+    const current = held.get(header.id) ?? 0;
 
     // RFC-08 R1: a patch is a revision, never a creation. There is nothing
     // to anchor against without a version to anchor in, so both of these
