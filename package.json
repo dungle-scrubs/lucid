@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/server/client",
     "test": "bun test",
     "prepare": "test -d .git/hooks && git config --local core.hooksPath .git/hooks && lefthook install --force || true",
-    "build": "bun scripts/build.ts"
+    "build": "bun scripts/build.ts",
+    "build:reference": "bun scripts/build-reference.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
