@@ -43,7 +43,7 @@ import {
   viewSnapshot,
 } from "../store/conversation-host.js";
 import { validConversationId } from "../store/errors.js";
-import { validArtifactId } from "../store/log.js";
+import { ARTIFACT_TITLE_MAX, isArtifactTitle, validArtifactId } from "../store/log.js";
 import { presenceHeld } from "../store/presence.js";
 // The projection is `buildView`'s, not a second one written for the
 // browser. Terminal and browser disagreeing about what a conversation says
@@ -441,6 +441,57 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
       // version at the end of the list. Nothing is removed, rewritten or
       // hidden - the version it replaced is still there and still reachable,
       // which is what makes undoing a restore the same act again.
+      const meta = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/meta\/?$/);
+      if (meta && req.method === "POST") {
+        const id = decodeURIComponent(meta[1] ?? "");
+        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+        const artifactId = decodeURIComponent(meta[2] ?? "");
+        if (!validArtifactId(artifactId)) return json({ error: "unknown-artifact" }, 404);
+        let body: unknown;
+        try {
+          body = await req.json();
+        } catch {
+          return json({ error: "invalid-json" }, 400);
+        }
+        const b = body as { title?: unknown };
+        // E-ART-07. The bound is checked here, where a caller can be told,
+        // rather than left to the fold, which would silently drop the field.
+        if (!isArtifactTitle(b.title)) {
+          return json({ error: "invalid-title", max: ARTIFACT_TITLE_MAX }, 400);
+        }
+        const dir = conversations(rootDir).dirFor(id);
+        if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
+        const host = createConversationHost(dir, {
+          now: () => Date.now(),
+          presence: () => undefined,
+          executorLease: () => false,
+          onEffect: () => {},
+          onRecord: () => {},
+        });
+        try {
+          // E-ART-01. Naming an artifact the record does not hold is refused
+          // here, because this is the only place that can answer a caller.
+          // The fold tolerates such an entry anyway, so a record written by
+          // a build whose endpoint had a defect still opens.
+          let held = false;
+          for (const key of host.artifactIndex().keys()) {
+            const sep = key.indexOf("\0");
+            if (sep !== -1 && key.slice(0, sep) === artifactId) {
+              held = true;
+              break;
+            }
+          }
+          if (!held) return json({ error: "unknown-artifact" }, 404);
+          const result = host.writeArtifactMeta({ artifactId, title: b.title });
+          if (result.verdict === "refused") {
+            return json({ error: result.issue, verdict: "refused" }, 400);
+          }
+          return json({ artifactId, title: b.title });
+        } finally {
+          host.close();
+        }
+      }
+
       const restore = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/restore\/?$/);
       if (restore && req.method === "POST") {
         const id = decodeURIComponent(restore[1] ?? "");

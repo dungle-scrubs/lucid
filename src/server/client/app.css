@@ -292,6 +292,54 @@ body {
   font-weight: 600;
 }
 
+/* The name is a button until you press it. It carries no button chrome:
+   an affordance here would be a second thing competing with the document
+   for attention, and the name is already the most prominent word in the
+   bar. The hover rule is what says it can be pressed. */
+.doc-rename {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border-radius: 6px;
+  cursor: text;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-rename:hover {
+  background: var(--line);
+}
+
+.doc-renaming {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Sized to the name, not to the bar: a field spanning the header would say
+   this is a form. */
+.doc-rename-input {
+  font: inherit;
+  font-weight: 600;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--muted);
+  border-radius: 6px;
+  padding: 2px 6px;
+  width: 32ch;
+  max-width: 50vw;
+}
+
+.doc-rename-problem {
+  font-size: 11px;
+  color: var(--warn, #b45309);
+}
+
 /* The other artifacts in this conversation. Siblings in a record, so they
    read as a row of names rather than as a hierarchy. */
 .also {

@@ -38,6 +38,7 @@ import {
   NOTE_QUEUE_MAX,
   queueAdmits,
 } from "../../protocol/annotations.js";
+import { ARTIFACT_TITLE_MAX } from "../../protocol/artifact-title.js";
 import { type Activity as ActivitySnapshot, describeActivity } from "./activity.js";
 import {
   type Confidence,
@@ -72,6 +73,106 @@ interface Line {
   readonly event?: string;
   readonly batch?: SentBatch;
 }
+
+/** The artifact's name, and renaming it in place.
+ *
+ * Renaming writes a title and never touches `artifactId`, so nothing that
+ * points at the artifact moves: existing notes still resolve, and the
+ * agent's next `replaces` still names the thing it means. It also writes no
+ * version, so naming a document does not appear in its history as a change
+ * to the document.
+ *
+ * The name is a button until you press it, and a field while you type. There
+ * is no separate edit affordance to find, and nothing to dismiss when you
+ * change your mind: Escape puts it back.
+ */
+const DocName = ({
+  artifactId,
+  title,
+  onRename,
+}: {
+  artifactId: string;
+  title?: string;
+  onRename: (title: string) => Promise<string | null>;
+}): React.ReactElement => {
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState("");
+  const [problem, setProblem] = React.useState<string | null>(null);
+  const shown = displayName({ artifactId, ...(title === undefined ? {} : { title }) });
+
+  const commit = async (): Promise<void> => {
+    const next = draft.trim();
+    // Renaming to what it already says, or to nothing, is not a rename.
+    if (next === "" || next === shown) {
+      setEditing(false);
+      setProblem(null);
+      return;
+    }
+    const why = await onRename(next);
+    if (why !== null) {
+      setProblem(why);
+      return;
+    }
+    setEditing(false);
+    setProblem(null);
+  };
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="doc-id doc-rename"
+        title={
+          title === undefined
+            ? `${artifactId} — click to name it`
+            : `${artifactId} — click to rename`
+        }
+        onClick={() => {
+          setDraft(shown);
+          setProblem(null);
+          setEditing(true);
+        }}
+      >
+        {shown}
+      </button>
+    );
+  }
+  return (
+    <span className="doc-id doc-renaming">
+      <input
+        className="doc-rename-input"
+        value={draft}
+        // The stored bound. The field refuses the 201st character rather
+        // than letting you type a name the endpoint will then reject.
+        maxLength={ARTIFACT_TITLE_MAX}
+        aria-label="Name this artifact"
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void commit();
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setEditing(false);
+            setProblem(null);
+          }
+        }}
+        onBlur={() => void commit()}
+      />
+      {problem === null ? null : <span className="doc-rename-problem">{problem}</span>}
+    </span>
+  );
+};
+
+/** What to call an artifact on screen.
+ *
+ * The id is the fallback, not a placeholder to be styled differently: an
+ * artifact nobody has renamed is displayed by its id, and that is a complete
+ * answer rather than a missing one. `artifactId` never moves, so this is the
+ * only thing a rename changes. */
+const displayName = (a: { readonly artifactId: string; readonly title?: string }): string =>
+  a.title !== undefined && a.title !== "" ? a.title : a.artifactId;
 
 /** What the frame reports for one pick, before it is stored.
  *
@@ -347,6 +448,9 @@ const Thread = ({
 };
 interface CatalogEntry {
   readonly artifactId: string;
+  /** What to display. Absent from an older server and from an artifact
+   * nobody has renamed, in which case the id is displayed (RFC-07 R11). */
+  readonly title?: string;
   readonly versions: readonly number[];
   readonly latest: number;
   readonly authors?: Readonly<Record<number, string>>;
@@ -658,9 +762,9 @@ const AlsoHere = ({
               className="also-open"
               onClick={() => onOpen(a.artifactId)}
               disabled={here}
-              title={here ? "Showing this one" : `Show ${a.artifactId}`}
+              title={here ? "Showing this one" : `Show ${displayName(a)}`}
             >
-              {a.artifactId}
+              {displayName(a)}
               <span className="also-v">v{a.latest}</span>
             </button>
             {/* A real link, so the browser's own open-in-new-tab works: the
@@ -1252,6 +1356,36 @@ const App = (): React.ReactElement => {
       ? sendNotes
       : null;
 
+  /** Write a title. Returns null on success, or why not, so the field can
+   * stay open with the reason beside it rather than closing and losing what
+   * was typed. */
+  const rename = React.useCallback(
+    async (title: string): Promise<string | null> => {
+      if (doc === null || token === null || dead) return "not connected";
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/meta`,
+        {
+          method: "POST",
+          headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+          body: JSON.stringify({ title }),
+        },
+      );
+      if (!res.ok) {
+        const said = (await res.json().catch(() => ({}))) as { error?: string };
+        return said.error === "invalid-title"
+          ? `a name is 1 to ${ARTIFACT_TITLE_MAX} characters, with no control characters`
+          : `not renamed: ${said.error ?? res.status}`;
+      }
+      // The catalog is what the header reads, and the poll refreshes it. Set
+      // it now so the name does not flicker back to the id for a tick.
+      setAllArtifacts((prev) =>
+        prev.map((a) => (a.artifactId === doc.artifactId ? { ...a, title } : a)),
+      );
+      return null;
+    },
+    [doc, token, dead, conversationId],
+  );
+
   const restore = React.useCallback(async (): Promise<void> => {
     const from = confirmRestore;
     if (from === null || doc === null || token === null || dead || restoring) return;
@@ -1659,7 +1793,17 @@ const App = (): React.ReactElement => {
             ) : (
               <>
                 <div className="doc-head">
-                  <span className="doc-id">{doc.artifactId}</span>
+                  <DocName
+                    artifactId={doc.artifactId}
+                    {...(allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title ===
+                    undefined
+                      ? {}
+                      : {
+                          title: allArtifacts.find((a) => a.artifactId === doc.artifactId)
+                            ?.title as string,
+                        })}
+                    onRename={rename}
+                  />
                   <AlsoHere
                     artifacts={allArtifacts}
                     showing={doc.artifactId}

@@ -86,9 +86,31 @@ export type LogEntry =
        * box and rewriting a sentence are different acts, and neither form
        * expresses the other, so the document and this both travel. */
       readonly values?: Readonly<Record<string, string>>;
+    }
+  /** A fact about an artifact rather than about one of its versions.
+   *
+   * Naming a document is not a change to the document, so it must not
+   * create a version of it: a rename that appended a version would put a
+   * second copy of the bytes in the log and move `replaces` under the agent
+   * mid-conversation.
+   *
+   * `artifactId` never moves. It is identity in two places - the agent names
+   * it to revise, and every annotation batch carries it - so changing it
+   * would orphan existing notes and break the next revision (RFC-07 R11). */
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "artifact-meta";
+      readonly artifactId: string;
+      /** What the page displays. Absent means the page displays the id. */
+      readonly title?: string;
+      /** RFC-07 R12. Carried in the type so a record written by a build that
+       * has retire folds here rather than being skipped as unknown; nothing
+       * in this build reads it yet. */
+      readonly retired?: boolean;
     };
 
-const ENTRY_SOURCES = ["frame", "input", "credit", "artifact"] as const;
+const ENTRY_SOURCES = ["frame", "input", "credit", "artifact", "artifact-meta"] as const;
 
 /** The envelope every entry carries, whatever its source. The fold checks
  * this much and no more before deciding whether it knows the source:
@@ -133,6 +155,10 @@ export interface FoldRefusal {
 // ---------------------------------------------------------------------------
 // Artifact versions (RFC-06 storage) — the bytes live in their own entry kind
 // ---------------------------------------------------------------------------
+
+import { isArtifactTitle } from "../protocol/artifact-title.js";
+
+export { ARTIFACT_TITLE_MAX, isArtifactTitle } from "../protocol/artifact-title.js";
 
 /** RFC-06: an artifact is capped at 1 MB, the same bound TEXT_MAX guards. */
 export const ARTIFACT_BYTES_MAX = 1_000_000;
@@ -364,6 +390,7 @@ export interface CollectedBatch {
    * regardless of `fromOffset`: the fold walks the whole log for state, and
    * the offset only scopes effect collection. */
   readonly artifactIndex: ReadonlyMap<string, number>;
+  readonly artifactTitles: ReadonlyMap<string, string>;
   readonly artifactRefusals: readonly ArtifactRefusal[];
   /** In log order. A caller that wants each effect on its own flattens
    * this; a caller that advances a cursor per entry does not. */
@@ -412,6 +439,32 @@ const deepFreeze = <T>(value: T): T => {
   return value;
 };
 
+/** Apply one `artifact-meta` entry to the title map, tolerantly.
+ *
+ * A malformed meta entry MUST NOT make a record fail to open (RFC-07). An
+ * artifact entry's malformed fields are `corrupt-log` because the bytes and
+ * their hash ARE the document; a meta entry carries an opinion about a
+ * document. Losing an opinion is recoverable by writing it again. Losing the
+ * record is not.
+ *
+ * So each field is judged on its own merits and what cannot be used is
+ * ignored, leaving any earlier value standing. With no usable `artifactId`
+ * the whole entry is ignored, because there is nothing to attach it to.
+ *
+ * Whether the artifact exists is not checked here. The endpoint refuses what
+ * it can see; the fold stays total over records it did not write, so a
+ * hand-edited log still opens. An entry naming an artifact with no versions
+ * simply never reaches a reader, because readers look up titles by an id
+ * they already hold. */
+const applyArtifactMeta = (raw: unknown, titles: Map<string, string>): void => {
+  const e = raw as Record<string, unknown>;
+  if (!isArtifactField(e.artifactId)) return;
+  const id = e.artifactId as string;
+  // Absent is not the same as invalid: absent says nothing about the title,
+  // and an earlier one stands either way.
+  if (e.title !== undefined && isArtifactTitle(e.title)) titles.set(id, e.title);
+};
+
 const applyEntry = (
   state: ChannelState,
   entry: LogEntry,
@@ -432,6 +485,7 @@ const applyEntry = (
       return { result: enqueueInput(state, entry.input, entry.at), frame: null };
     case "credit":
       return { result: grantCredit(state, entry.tokens, entry.at), frame: null };
+    case "artifact-meta":
     case "artifact":
       // Artifacts are not reduced into ChannelState or the transcript — they
       // reuse the same skip path as an unknown src, but are still validated
@@ -512,6 +566,7 @@ export const foldLog = (
   /** Per artifact version, the seq of the last frame before it. Its place in
    * the conversation, since an artifact entry carries no seq of its own. */
   artifactAfterSeq: Map<string, number>;
+  artifactTitles: Map<string, string>;
   artifactRefusals: readonly ArtifactRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
@@ -527,6 +582,8 @@ export const foldLog = (
    * this a saved version can only be shown after everything, which reads as
    * a thing that just happened however long ago it was. */
   const artifactAfterSeq = new Map<string, number>();
+  /** artifactId -> the title last written for it. */
+  const artifactTitles = new Map<string, string>();
   const artifactRefusals: ArtifactRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
@@ -547,7 +604,10 @@ export const foldLog = (
         // carry path an unknown src uses for state (bytes count, no
         // effect), but still building the seek index during the fold
         // that already happens at open (RFC-06 storage).
-        if ((parsed as LogEntry).src === "artifact") {
+        if ((parsed as LogEntry).src === "artifact-meta") {
+          // Log order, last write winning per field.
+          applyArtifactMeta(parsed, artifactTitles);
+        } else if ((parsed as LogEntry).src === "artifact") {
           const art = coerceArtifactEntry(parsed, offset);
           // Size limit: oversize is refused but the record still opens —
           // the entry is carried (bytes counted) yet not indexed, so a
@@ -610,6 +670,7 @@ export const foldLog = (
     refusedInputs,
     artifactIndex,
     artifactAfterSeq,
+    artifactTitles,
     artifactRefusals,
   };
 };
@@ -644,6 +705,7 @@ export const foldCollect = (
   /** Per artifact version, the seq of the last frame before it. Its place in
    * the conversation, since an artifact entry carries no seq of its own. */
   artifactAfterSeq: Map<string, number>;
+  artifactTitles: Map<string, string>;
   artifactRefusals: readonly ArtifactRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
@@ -660,6 +722,8 @@ export const foldCollect = (
    * this a saved version can only be shown after everything, which reads as
    * a thing that just happened however long ago it was. */
   const artifactAfterSeq = new Map<string, number>();
+  /** artifactId -> the title last written for it. */
+  const artifactTitles = new Map<string, string>();
   const artifactRefusals: ArtifactRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
@@ -676,7 +740,9 @@ export const foldCollect = (
       if (!validEntry(parsed))
         throw new StoreError("corrupt-log", `malformed log entry at byte ${offset}`);
       if (knownEntry(parsed)) {
-        if ((parsed as LogEntry).src === "artifact") {
+        if ((parsed as LogEntry).src === "artifact-meta") {
+          applyArtifactMeta(parsed, artifactTitles);
+        } else if ((parsed as LogEntry).src === "artifact") {
           const art = coerceArtifactEntry(parsed, entryOffset);
           if (art.bytes.length > ARTIFACT_BYTES_MAX) {
             artifactRefusals.push({
@@ -728,6 +794,7 @@ export const foldCollect = (
     refusedInputs,
     artifactIndex,
     artifactAfterSeq,
+    artifactTitles,
     artifactRefusals,
   };
 };
@@ -894,8 +961,15 @@ export const collectEffectsUnderAppendLock = (
     // Use the collecting fold directly so we do not pay for a second pass,
     // but keep the repair discipline identical: fold, then truncate a torn
     // tail under the same lock.
-    const { state, goodBytes, transcript, collected, artifactIndex, artifactRefusals } =
-      foldCollect(conversationId, secret, raw, fromOffset);
+    const {
+      state,
+      goodBytes,
+      transcript,
+      collected,
+      artifactIndex,
+      artifactTitles,
+      artifactRefusals,
+    } = foldCollect(conversationId, secret, raw, fromOffset);
     if (goodBytes < raw.length) {
       try {
         truncateSync(paths.logPath, goodBytes);
@@ -919,6 +993,7 @@ export const collectEffectsUnderAppendLock = (
       // keeps the log's copy whole; dropping it emptied the index on every
       // collect, and the tailer collects twice a second.
       artifactIndex,
+      artifactTitles,
       artifactRefusals,
     };
   });
@@ -942,6 +1017,9 @@ export interface ConversationLog {
    * that already happens when the record opens. Reading a version is a seek,
    * not a fold (RFC-06 storage). */
   artifactIndex(): ReadonlyMap<string, number>;
+  /** artifactId -> its title, for every artifact one has been written for.
+   * An id absent from this map has no title and displays as its id. */
+  artifactTitles(): ReadonlyMap<string, string>;
   /** Read an artifact version by seek using the fold-built index. Returns
    * null if that version was never written or was refused for size. */
   readArtifact(artifactId: string, version: number): ArtifactVersion | null;
@@ -961,6 +1039,20 @@ export interface ConversationLog {
   }):
     | { verdict: "accepted"; version: ArtifactVersion }
     | { verdict: "refused"; issue: "artifact-too-large" | "artifact-version-exists" };
+  /** Append a fact about an artifact: today a title (RFC-07 R11).
+   *
+   * Never a version. Naming a document is not a change to the document, so
+   * this appends no bytes and moves no version number - which is what lets
+   * a rename happen mid-conversation without shifting `replaces` under the
+   * agent.
+   *
+   * Whether the artifact exists is the caller's question, not this one's:
+   * the endpoint refuses what it can see, and this stays as total as the
+   * fold that reads it back. */
+  writeArtifactMeta(params: {
+    readonly artifactId: string;
+    readonly title?: string;
+  }): { verdict: "accepted" } | { verdict: "refused"; issue: "artifact-title-invalid" };
   /** The delivery cursor: the offset up to which effects have been
    * dispatched (RFC-04 R4). 0 if no cursor has been written. A cursor
    * whose offset is past `goodBytes` is corruption — the log claims
@@ -1044,6 +1136,7 @@ export const createLog = (
   let curCursor = initialCursor;
   // RFC-06: index built during the fold that already happens at open — reading is a seek.
   let curArtifactIndex = new Map<string, number>(initialFolded.artifactIndex);
+  let curArtifactTitles = new Map<string, string>(initialFolded.artifactTitles);
   // biome-ignore lint/correctness/noUnusedVariables: refusals tracked for future diagnostics; index is the primary artifact surface
   let curArtifactRefusals = [...initialFolded.artifactRefusals] as readonly ArtifactRefusal[];
   const recoveredEntries = initialFolded.entries;
@@ -1069,6 +1162,7 @@ export const createLog = (
       // Keep artifact index consistent with the catch-up fold — a concurrent
       // writer may have appended artifact versions while we were out.
       curArtifactIndex = new Map<string, number>(folded.artifactIndex);
+      curArtifactTitles = new Map<string, string>(folded.artifactTitles);
       curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
       if (
         folded.goodBytes !== curGoodBytes ||
@@ -1184,8 +1278,67 @@ export const createLog = (
     // was reached through an `as unknown as` cast onto a field the batch did
     // not have, so it silently read `undefined` and installed an empty map.
     curArtifactIndex = new Map<string, number>(batch.artifactIndex);
+    curArtifactTitles = new Map<string, string>(batch.artifactTitles);
     curArtifactRefusals = [...batch.artifactRefusals];
     return batch;
+  };
+
+  const writeArtifactMeta: ConversationLog["writeArtifactMeta"] = (params) => {
+    if (!isArtifactField(params.artifactId)) {
+      return { verdict: "refused", issue: "artifact-title-invalid" };
+    }
+    if (params.title !== undefined && !isArtifactTitle(params.title)) {
+      return { verdict: "refused", issue: "artifact-title-invalid" };
+    }
+    const entry: LogEntry = {
+      v: 1,
+      at: Date.now(),
+      src: "artifact-meta",
+      artifactId: params.artifactId,
+      ...(params.title === undefined ? {} : { title: params.title }),
+    };
+    // Same lock and same fsync as every other append: a title is an ordinary
+    // log entry, ordered against the versions it describes.
+    const flock = new Flock(paths.lockPath, conversationId);
+    const lock = flock.acquire({ onEvent: deps.onLockEvent });
+    try {
+      const { folded } = readFoldRepair(paths, conversationId, secret);
+      curGoodBytes = folded.goodBytes;
+      const line = Buffer.from(`${JSON.stringify(entry)}\n`);
+      const preWriteOffset = curGoodBytes;
+      const fd = openSync(paths.logPath, "a");
+      try {
+        writeAllSync(fd, line);
+        fsyncSync(fd);
+      } catch (cause) {
+        // Truncate back to what was durable, so a half-written line never
+        // becomes the thing that stops the record opening.
+        try {
+          ftruncateSync(fd, preWriteOffset);
+        } catch {
+          try {
+            truncateSync(paths.logPath, preWriteOffset);
+          } catch {}
+        }
+        throw new StoreError(
+          "append-failed",
+          `could not append artifact meta to ${paths.logPath}`,
+          {
+            cause,
+          },
+        );
+      } finally {
+        try {
+          closeSync(fd);
+        } catch {}
+      }
+      curGoodBytes = preWriteOffset + line.length;
+      curArtifactTitles = new Map(folded.artifactTitles);
+      if (params.title !== undefined) curArtifactTitles.set(params.artifactId, params.title);
+      return { verdict: "accepted" };
+    } finally {
+      lock.release();
+    }
   };
 
   const cursor: ConversationLog["cursor"] = () => curCursor;
@@ -1207,6 +1360,7 @@ export const createLog = (
       curState = folded.state;
       curGoodBytes = folded.goodBytes;
       curArtifactIndex = new Map<string, number>(folded.artifactIndex);
+      curArtifactTitles = new Map<string, string>(folded.artifactTitles);
       curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
       acc.events.length = 0;
       acc.events.push(...folded.transcript.events);
@@ -1270,6 +1424,7 @@ export const createLog = (
   };
 
   const artifactIndex: ConversationLog["artifactIndex"] = () => new Map(curArtifactIndex);
+  const artifactTitles: ConversationLog["artifactTitles"] = () => new Map(curArtifactTitles);
 
   const readArtifact: ConversationLog["readArtifact"] = (artifactId, version) => {
     const key = artifactKey(artifactId, version);
@@ -1293,6 +1448,7 @@ export const createLog = (
       try {
         const { raw: refreshed, folded } = readFoldRepair(paths, conversationId, secret);
         curArtifactIndex = new Map<string, number>(folded.artifactIndex);
+        curArtifactTitles = new Map<string, string>(folded.artifactTitles);
         curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
         curState = folded.state;
         curGoodBytes = folded.goodBytes;
@@ -1349,6 +1505,7 @@ export const createLog = (
     try {
       const { raw: refreshedRaw, folded } = readFoldRepair(paths, conversationId, secret);
       curArtifactIndex = new Map<string, number>(folded.artifactIndex);
+      curArtifactTitles = new Map<string, string>(folded.artifactTitles);
       curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
       curState = folded.state;
       curGoodBytes = folded.goodBytes;
@@ -1442,8 +1599,10 @@ export const createLog = (
     }),
     goodBytes: () => curGoodBytes,
     artifactIndex,
+    artifactTitles,
     readArtifact,
     writeArtifact,
+    writeArtifactMeta,
     cursor,
     advanceCursor,
     append,

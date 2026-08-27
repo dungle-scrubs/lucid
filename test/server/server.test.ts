@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sendInput } from "../../src/cli/send.js";
 import { startServe } from "../../src/cli/serve.js";
+import { ARTIFACT_TITLE_MAX } from "../../src/protocol/artifact-title.js";
 import { createConversationHost } from "../../src/store/conversation-host.js";
 import { acquirePresence } from "../../src/store/presence.js";
 import { createConversationRecord } from "../../src/store/store.js";
@@ -329,5 +330,112 @@ describe("whether the agent is working", () => {
       activity: { turn: boolean };
     };
     expect(body.activity.turn).toBe(false);
+  });
+});
+
+/** RFC-07 R11 at the endpoint. The endpoint is where a caller can be told
+ * why, which is why the bound and the unknown-artifact check live here even
+ * though the fold tolerates both. */
+describe("naming an artifact", () => {
+  /** A record holding one artifact, so a rename has something to name. */
+  const withArtifact = (): void => {
+    const host = createConversationHost(join(root, CONV), {
+      now: () => Date.now(),
+      presence: () => undefined,
+      executorLease: () => false,
+      onEffect: () => {},
+      onRecord: () => {},
+    });
+    try {
+      host.writeArtifact({
+        artifactId: "doc-1",
+        version: 1,
+        author: "agent",
+        contentType: "text/html",
+        bytes: "<p>one</p>",
+      });
+    } finally {
+      host.close();
+    }
+  };
+
+  const rename = (artifactId: string, title: unknown): Promise<Response> =>
+    api(`/api/conversations/${CONV}/artifacts/${artifactId}/meta`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+
+  test("a rename lands, and the catalog shows the new name", async () => {
+    withArtifact();
+    expect((await rename("doc-1", "First day checklist")).status).toBe(200);
+    const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      artifacts: { artifactId: string; title?: string }[];
+    };
+    expect(cat.artifacts[0]?.title).toBe("First day checklist");
+    expect(cat.artifacts[0]?.artifactId).toBe("doc-1");
+  });
+
+  test("an artifact nobody renamed carries no title at all", async () => {
+    // Absent, not empty. A reader that does not know about titles is
+    // unaffected, and one that does falls back to the id.
+    withArtifact();
+    const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      artifacts: Record<string, unknown>[];
+    };
+    expect(cat.artifacts[0]).not.toHaveProperty("title");
+  });
+
+  test("renaming creates no version", async () => {
+    withArtifact();
+    await rename("doc-1", "Named");
+    const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      artifacts: { versions: number[] }[];
+    };
+    expect(cat.artifacts[0]?.versions).toEqual([1]);
+  });
+
+  test("naming an artifact the record does not hold is refused", async () => {
+    withArtifact();
+    expect((await rename("no-such-doc", "Ghost")).status).toBe(404);
+  });
+
+  test("a title outside the bound is refused and nothing is appended", async () => {
+    withArtifact();
+    const long = await rename("doc-1", "x".repeat(ARTIFACT_TITLE_MAX + 1));
+    expect(long.status).toBe(400);
+    expect((await long.json()).error).toBe("invalid-title");
+    expect((await rename("doc-1", "")).status).toBe(400);
+    expect((await rename("doc-1", 42)).status).toBe(400);
+    expect((await rename("doc-1", "two\nlines")).status).toBe(400);
+    const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      artifacts: Record<string, unknown>[];
+    };
+    expect(cat.artifacts[0]).not.toHaveProperty("title");
+  });
+
+  test("a title at exactly the bound is accepted", async () => {
+    withArtifact();
+    expect((await rename("doc-1", "x".repeat(ARTIFACT_TITLE_MAX))).status).toBe(200);
+  });
+
+  test("renaming twice keeps the second name", async () => {
+    withArtifact();
+    await rename("doc-1", "First");
+    await rename("doc-1", "Second");
+    const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      artifacts: { title?: string }[];
+    };
+    expect(cat.artifacts[0]?.title).toBe("Second");
+  });
+
+  test("a rename needs the token like everything else", async () => {
+    withArtifact();
+    const res = await fetch(url(`/api/conversations/${CONV}/artifacts/doc-1/meta`), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "No token" }),
+    });
+    expect(res.status).toBe(401);
   });
 });

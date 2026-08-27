@@ -189,6 +189,15 @@ export interface ConversationHost {
   /** Seek index built during the fold that already happens at open — reading
    * a version is a seek, not a fold. */
   artifactIndex(): ReadonlyMap<string, number>;
+  /** artifactId -> its title. An id absent from this map has no title and
+   * displays as its id (RFC-07 R11). */
+  artifactTitles(): ReadonlyMap<string, string>;
+  /** Write a fact about an artifact. Never a version: naming a document is
+   * not a change to the document. */
+  writeArtifactMeta(params: {
+    readonly artifactId: string;
+    readonly title?: string;
+  }): { verdict: "accepted" } | { verdict: "refused"; issue: string };
   /** Read an artifact version by seek. */
   readArtifact(artifactId: string, version: number): import("./log.js").ArtifactVersion | null;
   /** Append an artifact version. Over-size is refused and the record still
@@ -264,6 +273,12 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     artifactId: string,
     version: number,
   ): import("./log.js").ArtifactVersion | null => log.readArtifact(artifactId, version);
+  const artifactTitles = (): ReadonlyMap<string, string> => log.artifactTitles();
+  const writeArtifactMeta = (params: {
+    readonly artifactId: string;
+    readonly title?: string;
+  }): { verdict: "accepted" } | { verdict: "refused"; issue: string } =>
+    log.writeArtifactMeta(params);
   const writeArtifact = (params: {
     readonly artifactId: string;
     readonly version: number;
@@ -281,6 +296,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     conversationId,
     dir,
     snapshot,
+    artifactTitles,
+    writeArtifactMeta,
     state: (): ChannelState => snapshot().state,
     close: (): void => log.close(),
     transcript: () => snapshot().transcript,
@@ -405,6 +422,10 @@ export const viewSnapshot = (
  * version is a separate, explicit act (`viewArtifactVersion`). */
 export interface ArtifactCatalogEntry {
   readonly artifactId: string;
+  /** What to display for this artifact. Additive and optional: a reader
+   * that does not know about it keeps working, and a reader that does
+   * tolerates its absence by displaying `artifactId` (RFC-07 R11). */
+  readonly title?: string;
   /** Ascending. Every version the record holds, not a range. */
   readonly versions: readonly number[];
   readonly latest: number;
@@ -428,7 +449,7 @@ export interface ArtifactCatalogEntry {
 export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[] => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
   const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
-  const { artifactIndex, artifactAfterSeq } = foldLog(conversationId, secret, raw);
+  const { artifactIndex, artifactAfterSeq, artifactTitles } = foldLog(conversationId, secret, raw);
   const byId = new Map<string, number[]>();
   for (const key of artifactIndex.keys()) {
     // `artifactKey` joins on NUL, which cannot occur in either half.
@@ -455,8 +476,12 @@ export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[
         const at = artifactAfterSeq.get(artifactKey(artifactId, v));
         if (at !== undefined) afterSeq[v] = at;
       }
+      const title = artifactTitles.get(artifactId);
       return {
         artifactId,
+        // Only when one was written. Absent and empty are the same thing to
+        // a reader, and absent is the one the wire should carry.
+        ...(title === undefined ? {} : { title }),
         versions: sorted,
         latest: sorted[sorted.length - 1] as number,
         authors,
