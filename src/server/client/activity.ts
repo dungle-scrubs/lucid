@@ -18,15 +18,30 @@
  */
 
 /** Below this the number is noise, and a dock that counts every wait
- * teaches you to stop reading it. */
-export const ELAPSED_VISIBLE_AFTER = 20;
+ * teaches you to stop reading it.
+ *
+ * Was 20, when a revision took about two minutes and a count at 20 seconds
+ * said almost nothing. A patch revision now runs 3 to 33 seconds across 47
+ * measured turns, so 20 hid the count for most of a normal wait and then
+ * flashed it just before the answer arrived. */
+export const ELAPSED_VISIBLE_AFTER = 8;
 
-/** When a running turn becomes an alarm. A document revision on this record
- * was measured at 127 seconds, so the threshold sits well past the slowest
- * work actually seen. An alarm that fires on normal work is not an alarm.
- * RFC-08 is the change that makes revisions short; this number comes down
- * with it, not before. */
-export const TURN_STALL_AFTER = 300;
+/** When a running turn becomes an alarm.
+ *
+ * Measured over 47 turns after RFC-08 landed: a patch revision takes 3 to 33
+ * seconds, and the slowest legitimate turn of any kind was 127 seconds - a
+ * whole document of 27.7 KB, emitted in full. The whole form stays legal and
+ * stays the right choice for a rewrite, so the alarm has to sit above that
+ * and not above the patch case.
+ *
+ * What lucid cannot do is tell slow-because-large from wedged. A turn
+ * appends nothing between its input and its terminal event, so there is no
+ * progress to read: a document several times larger than any measured here
+ * would take longer than this and trip the alarm while working correctly.
+ * That is a known limit of one number over two very different jobs, not a
+ * defect to tune away. The number errs towards saying something late rather
+ * than crying wolf on every revision, which is the failure this replaced. */
+export const TURN_STALL_AFTER = 180;
 
 /** When notes nobody has taken become an alarm. Nothing has to run for a
  * note to be delivered, so silence here means no driver picked it up, and

@@ -236,14 +236,22 @@ result, as they always are - so a patch-produced version is not
 byte-identical to a whole form emitted at a different moment, and anything
 ordering by `afterSeq` (RFC-07) sees where it landed, not how it arrived.
 
-One bound moves, and in the safe direction. Artifact bytes reach
+One bound moves, and by very little. Artifact bytes reach
 `handleArtifactMessage` inside a message event, which is capped at
-`TEXT_MAX`. Under the whole form that cap applies to the document, so a
-document near 1 MB cannot arrive at all. Under the patch form only the small
-patch body transits, so a patch MAY produce a document larger than any single
-message could have carried. `ARTIFACT_BYTES_MAX` on the result is therefore
-the only bound left, which is why R3 checks it there and R7 bounds the sum of
+`TEXT_MAX`. Under the whole form that cap applies to the document plus its
+fence header plus any prose sharing the message. Under the patch form only
+the small patch body transits, so `ARTIFACT_BYTES_MAX` on the result is the
+only bound left, which is why R3 checks it there and R7 bounds the sum of
 replacements before applying.
+
+An earlier draft of this paragraph said a patch MAY produce a document larger
+than any single message could have carried, and left it there. That reads as
+a category change and is not one: `TEXT_MAX` and `ARTIFACT_BYTES_MAX` are
+both 1,000,000, and `store/log.ts` already says they are the same bound. What
+a patch actually buys is the fence header and whatever prose shares the
+message - tens of characters. Nothing should be planned on the wider reading,
+and a test pins the two constants together so the claim cannot quietly grow
+back.
 
 ### R4 - A patch applies completely or not at all
 
