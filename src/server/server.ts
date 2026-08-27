@@ -453,18 +453,15 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         } catch {
           return json({ error: "invalid-json" }, 400);
         }
-        const b = body as { title?: unknown; retired?: unknown };
+        const b = body as { title?: unknown };
         // E-ART-07. The bound is checked here, where a caller can be told,
         // rather than left to the fold, which would silently drop the field.
         if (b.title !== undefined && !isArtifactTitle(b.title)) {
           return json({ error: "invalid-title", max: ARTIFACT_TITLE_MAX }, 400);
         }
-        if (b.retired !== undefined && typeof b.retired !== "boolean") {
-          return json({ error: "invalid-retired" }, 400);
-        }
         // A request that says nothing is a mistake worth reporting rather
         // than an append of an entry with no opinion in it.
-        if (b.title === undefined && b.retired === undefined) {
+        if (b.title === undefined) {
           return json({ error: "nothing-to-write" }, 400);
         }
         const dir = conversations(rootDir).dirFor(id);
@@ -493,7 +490,6 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           const result = host.writeArtifactMeta({
             artifactId,
             ...(b.title === undefined ? {} : { title: b.title }),
-            ...(b.retired === undefined ? {} : { retired: b.retired }),
           });
           if (result.verdict === "refused") {
             return json({ error: result.issue, verdict: "refused" }, 400);
@@ -501,7 +497,6 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           return json({
             artifactId,
             ...(b.title === undefined ? {} : { title: b.title }),
-            ...(b.retired === undefined ? {} : { retired: b.retired }),
           });
         } finally {
           host.close();

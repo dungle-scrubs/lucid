@@ -165,38 +165,12 @@ describe("sending the agent its own document back after a patch missed", () => {
   });
 });
 
-describe("a retired artifact is still named to the agent", () => {
-  const retired: ArtifactState = {
-    artifactId: "old-doc",
-    version: 3,
-    author: "agent",
-    retired: true,
-  };
-
-  test("it is in the block, and marked", () => {
-    // Withholding it would leave the agent to discover the state by being
-    // refused, for a reason it could not see.
-    const out = composeArtifactState("go", [retired]);
-    expect(out).toContain("old-doc");
-    expect(out).toContain("RETIRED");
-  });
-
-  test("the block says what retired means and what to do about it", () => {
-    const out = composeArtifactState("go", [retired]);
-    expect(out).toContain("Nothing was deleted");
-    expect(out).toContain("do not revise it unless they ask");
-  });
-
-  test("an artifact in use is not marked, and the note is absent", () => {
-    const out = composeArtifactState("go", [agentWrote]);
+describe("retire is gone from what the agent is told", () => {
+  test("no artifact is marked retired, whatever the record holds", () => {
+    // RFC-09 withdrew R12. The state block used to mark an artifact RETIRED
+    // and carry a paragraph saying not to revise it.
+    const out = composeArtifactState("go", [agentWrote, personSaved]);
     expect(out).not.toContain("RETIRED");
     expect(out).not.toContain("Nothing was deleted");
-  });
-
-  test("one retired artifact alongside others marks only that one", () => {
-    const out = composeArtifactState("go", [agentWrote, retired]);
-    const lines = out.split("\n").filter((l) => l.startsWith("- "));
-    expect(lines.filter((l) => l.includes("RETIRED")).length).toBe(1);
-    expect(lines.length).toBe(2);
   });
 });
