@@ -192,11 +192,17 @@ export interface ConversationHost {
   /** artifactId -> its title. An id absent from this map has no title and
    * displays as its id (RFC-07 R11). */
   artifactTitles(): ReadonlyMap<string, string>;
+  /** artifactId -> whether it is retired. Absent means never retired. */
+  artifactRetired(): ReadonlyMap<string, boolean>;
   /** Write a fact about an artifact. Never a version: naming a document is
    * not a change to the document. */
   writeArtifactMeta(params: {
     readonly artifactId: string;
     readonly title?: string;
+    /** True when this artifact has been retired (RFC-07 R12). Additive and
+     * optional: absent means never retired, and a reader that does not know
+     * about it sees every artifact, which is what it saw before. */
+    readonly retired?: boolean;
   }): { verdict: "accepted" } | { verdict: "refused"; issue: string };
   /** Read an artifact version by seek. */
   readArtifact(artifactId: string, version: number): import("./log.js").ArtifactVersion | null;
@@ -274,9 +280,11 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     version: number,
   ): import("./log.js").ArtifactVersion | null => log.readArtifact(artifactId, version);
   const artifactTitles = (): ReadonlyMap<string, string> => log.artifactTitles();
+  const artifactRetired = (): ReadonlyMap<string, boolean> => log.artifactRetired();
   const writeArtifactMeta = (params: {
     readonly artifactId: string;
     readonly title?: string;
+    readonly retired?: boolean;
   }): { verdict: "accepted" } | { verdict: "refused"; issue: string } =>
     log.writeArtifactMeta(params);
   const writeArtifact = (params: {
@@ -297,6 +305,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     dir,
     snapshot,
     artifactTitles,
+    artifactRetired,
     writeArtifactMeta,
     state: (): ChannelState => snapshot().state,
     close: (): void => log.close(),
@@ -449,7 +458,11 @@ export interface ArtifactCatalogEntry {
 export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[] => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
   const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
-  const { artifactIndex, artifactAfterSeq, artifactTitles } = foldLog(conversationId, secret, raw);
+  const { artifactIndex, artifactAfterSeq, artifactTitles, artifactRetired } = foldLog(
+    conversationId,
+    secret,
+    raw,
+  );
   const byId = new Map<string, number[]>();
   for (const key of artifactIndex.keys()) {
     // `artifactKey` joins on NUL, which cannot occur in either half.
@@ -477,8 +490,12 @@ export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[
         if (at !== undefined) afterSeq[v] = at;
       }
       const title = artifactTitles.get(artifactId);
+      // Only when true. False and absent both mean in use, and absent is the
+      // one the wire should carry.
+      const retired = artifactRetired.get(artifactId) === true;
       return {
         artifactId,
+        ...(retired ? { retired: true } : {}),
         // Only when one was written. Absent and empty are the same thing to
         // a reader, and absent is the one the wire should carry.
         ...(title === undefined ? {} : { title }),

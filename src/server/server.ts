@@ -453,11 +453,19 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         } catch {
           return json({ error: "invalid-json" }, 400);
         }
-        const b = body as { title?: unknown };
+        const b = body as { title?: unknown; retired?: unknown };
         // E-ART-07. The bound is checked here, where a caller can be told,
         // rather than left to the fold, which would silently drop the field.
-        if (!isArtifactTitle(b.title)) {
+        if (b.title !== undefined && !isArtifactTitle(b.title)) {
           return json({ error: "invalid-title", max: ARTIFACT_TITLE_MAX }, 400);
+        }
+        if (b.retired !== undefined && typeof b.retired !== "boolean") {
+          return json({ error: "invalid-retired" }, 400);
+        }
+        // A request that says nothing is a mistake worth reporting rather
+        // than an append of an entry with no opinion in it.
+        if (b.title === undefined && b.retired === undefined) {
+          return json({ error: "nothing-to-write" }, 400);
         }
         const dir = conversations(rootDir).dirFor(id);
         if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
@@ -482,11 +490,19 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             }
           }
           if (!held) return json({ error: "unknown-artifact" }, 404);
-          const result = host.writeArtifactMeta({ artifactId, title: b.title });
+          const result = host.writeArtifactMeta({
+            artifactId,
+            ...(b.title === undefined ? {} : { title: b.title }),
+            ...(b.retired === undefined ? {} : { retired: b.retired }),
+          });
           if (result.verdict === "refused") {
             return json({ error: result.issue, verdict: "refused" }, 400);
           }
-          return json({ artifactId, title: b.title });
+          return json({
+            artifactId,
+            ...(b.title === undefined ? {} : { title: b.title }),
+            ...(b.retired === undefined ? {} : { retired: b.retired }),
+          });
         } finally {
           host.close();
         }

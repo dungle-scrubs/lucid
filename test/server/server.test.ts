@@ -439,3 +439,106 @@ describe("naming an artifact", () => {
     expect(res.status).toBe(401);
   });
 });
+
+/** RFC-07 R12 at the endpoint and in the catalog. */
+describe("retiring an artifact", () => {
+  const withArtifact = (): void => {
+    const host = createConversationHost(join(root, CONV), {
+      now: () => Date.now(),
+      presence: () => undefined,
+      executorLease: () => false,
+      onEffect: () => {},
+      onRecord: () => {},
+    });
+    try {
+      host.writeArtifact({
+        artifactId: "doc-1",
+        version: 1,
+        author: "agent",
+        contentType: "text/html",
+        bytes: "<p>one</p>",
+      });
+    } finally {
+      host.close();
+    }
+  };
+
+  const meta = (artifactId: string, body: unknown): Promise<Response> =>
+    api(`/api/conversations/${CONV}/artifacts/${artifactId}/meta`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const catalog = async (): Promise<{ artifactId: string; retired?: boolean }[]> =>
+    (
+      (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+        artifacts: { artifactId: string; retired?: boolean }[];
+      }
+    ).artifacts;
+
+  test("a retire lands, and the catalog says so", async () => {
+    withArtifact();
+    expect((await meta("doc-1", { retired: true })).status).toBe(200);
+    expect((await catalog())[0]?.retired).toBe(true);
+  });
+
+  test("bringing it back clears the flag", async () => {
+    withArtifact();
+    await meta("doc-1", { retired: true });
+    expect((await meta("doc-1", { retired: false })).status).toBe(200);
+    // Absent, not false: the wire carries retired only when it is true.
+    expect((await catalog())[0]).not.toHaveProperty("retired");
+  });
+
+  test("an artifact nobody retired carries no flag", async () => {
+    withArtifact();
+    expect((await catalog())[0]).not.toHaveProperty("retired");
+  });
+
+  test("retiring creates no version, and every version stays", async () => {
+    withArtifact();
+    await meta("doc-1", { retired: true });
+    const one = await api(`/api/conversations/${CONV}/artifacts/doc-1/1`);
+    expect(one.status).toBe(200);
+    const cat = (await (await api(`/api/conversations/${CONV}/artifacts`)).json()) as {
+      artifacts: { versions: number[] }[];
+    };
+    expect(cat.artifacts[0]?.versions).toEqual([1]);
+  });
+
+  test("a retired artifact is still readable by its URL", async () => {
+    // It says it was retired rather than behaving as though it never
+    // existed, which is what makes its page the way back.
+    withArtifact();
+    await meta("doc-1", { retired: true });
+    const res = await api(`/api/conversations/${CONV}/artifacts/doc-1/1`);
+    expect(res.status).toBe(200);
+  });
+
+  test("a non-boolean retired is refused", async () => {
+    withArtifact();
+    expect((await meta("doc-1", { retired: "yes" })).status).toBe(400);
+    expect((await meta("doc-1", { retired: 1 })).status).toBe(400);
+  });
+
+  test("a request saying nothing is refused", async () => {
+    withArtifact();
+    const res = await meta("doc-1", {});
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("nothing-to-write");
+  });
+
+  test("retiring an artifact the record does not hold is refused", async () => {
+    withArtifact();
+    expect((await meta("no-such-doc", { retired: true })).status).toBe(404);
+  });
+
+  test("a title and a retire can travel together", async () => {
+    withArtifact();
+    expect((await meta("doc-1", { title: "Done with", retired: true })).status).toBe(200);
+    const c = (await catalog())[0] as { title?: string; retired?: boolean };
+    expect(c.title).toBe("Done with");
+    expect(c.retired).toBe(true);
+  });
+});

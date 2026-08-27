@@ -451,6 +451,9 @@ interface CatalogEntry {
   /** What to display. Absent from an older server and from an artifact
    * nobody has renamed, in which case the id is displayed (RFC-07 R11). */
   readonly title?: string;
+  /** True when the person has finished with it. Absent means in use, which
+   * is what an older server sends for everything (RFC-07 R12). */
+  readonly retired?: boolean;
   readonly versions: readonly number[];
   readonly latest: number;
   readonly authors?: Readonly<Record<number, string>>;
@@ -747,16 +750,30 @@ const AlsoHere = ({
   conversationId: string;
   onOpen: (artifactId: string) => void;
 }): React.ReactElement | null => {
-  if (artifacts.length < 2) return null;
+  // Retired ones are not in the list. They are reachable through the count
+  // beside it, which is the difference between "finished with" and "gone":
+  // without that, finding one again depends on browser history.
+  const [revealed, setRevealed] = React.useState(false);
+  const inUse = artifacts.filter((a) => a.retired !== true);
+  const retired = artifacts.filter((a) => a.retired === true);
+  // The one on screen is always shown, even when it is retired: its own page
+  // is where it is brought back from.
+  const listed = revealed
+    ? [...inUse, ...retired]
+    : [...inUse, ...retired.filter((a) => a.artifactId === showing)];
+  if (listed.length < 2 && retired.length === 0) return null;
   return (
     <div className="also">
-      {/* Not "also": the row lists every artifact, including the one on
-          screen, so the set of chips does not reshuffle when you switch. */}
+      {/* Not "also": the row lists every artifact in use, including the one
+          on screen, so the set of chips does not reshuffle when you switch. */}
       <span className="also-label">In this conversation</span>
-      {artifacts.map((a) => {
+      {listed.map((a) => {
         const here = a.artifactId === showing;
         return (
-          <span key={a.artifactId} className={here ? "also-one here" : "also-one"}>
+          <span
+            key={a.artifactId}
+            className={`also-one${here ? " here" : ""}${a.retired === true ? " retired" : ""}`}
+          >
             <button
               type="button"
               className="also-open"
@@ -782,6 +799,16 @@ const AlsoHere = ({
           </span>
         );
       })}
+      {retired.length === 0 ? null : (
+        <button
+          type="button"
+          className="also-retired-count"
+          onClick={() => setRevealed(!revealed)}
+          title={revealed ? "Hide retired artifacts" : "Show retired artifacts"}
+        >
+          {revealed ? "hide" : `${retired.length} retired`}
+        </button>
+      )}
     </div>
   );
 };
@@ -1258,6 +1285,10 @@ const App = (): React.ReactElement => {
   /** A restore waiting to be confirmed. Holding the version rather than a
    * boolean means the confirmation can name what it is about to do. */
   const [confirmRestore, setConfirmRestore] = React.useState<number | null>(null);
+  /** Whether the retire confirmation is open. Retiring takes an artifact out
+   * of the list, so it asks first. Un-retiring does not: it restores access
+   * to something already in the record and destroys nothing (RFC-07 R12). */
+  const [confirmRetire, setConfirmRetire] = React.useState(false);
   const [restoring, setRestoring] = React.useState(false);
 
   /** Showing a version that is not the current one. Read-only: no editing,
@@ -1384,6 +1415,32 @@ const App = (): React.ReactElement => {
       return null;
     },
     [doc, token, dead, conversationId],
+  );
+
+  /** Retire or bring back the artifact on screen. Returns null on success,
+   * or why not. Writes no version: retiring records an intention, and the
+   * log is append-only so nothing is removed either way. */
+  const setRetired = React.useCallback(
+    async (artifactId: string, retired: boolean): Promise<string | null> => {
+      if (token === null || dead) return "not connected";
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(artifactId)}/meta`,
+        {
+          method: "POST",
+          headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+          body: JSON.stringify({ retired }),
+        },
+      );
+      if (!res.ok) {
+        const said = (await res.json().catch(() => ({}))) as { error?: string };
+        return `not ${retired ? "retired" : "brought back"}: ${said.error ?? res.status}`;
+      }
+      setAllArtifacts((prev) =>
+        prev.map((a) => (a.artifactId === artifactId ? { ...a, retired } : a)),
+      );
+      return null;
+    },
+    [token, dead, conversationId],
   );
 
   const restore = React.useCallback(async (): Promise<void> => {
@@ -1856,6 +1913,25 @@ const App = (): React.ReactElement => {
                       Restore this version
                     </button>
                   ) : null}
+                  {allArtifacts.find((a) => a.artifactId === doc.artifactId)?.retired === true ? (
+                    <button
+                      type="button"
+                      className="v unretire"
+                      onClick={() => void setRetired(doc.artifactId, false)}
+                      title="Put this back in the list"
+                    >
+                      Bring back
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="v retire"
+                      onClick={() => setConfirmRetire(true)}
+                      title="Take this out of the list. Nothing is deleted."
+                    >
+                      Retire
+                    </button>
+                  )}
                   <span className="modes">
                     <button
                       type="button"
@@ -2010,6 +2086,52 @@ const App = (): React.ReactElement => {
                   deciding whether to restore is deciding whether it is
                   reversible, and here it is - permanently, because nothing
                   is overwritten. */}
+                {/* A retired artifact says so where it is, and carries the
+                  way back. That is what turns its page from a dead end into
+                  the recovery path: a person who can reach the URL can bring
+                  it back, whether they got there from the revealed list or
+                  from browser history. */}
+                {allArtifacts.find((a) => a.artifactId === doc.artifactId)?.retired === true ? (
+                  <div className="doc-retired">
+                    <span>
+                      This artifact is retired. Every version is still here, and it is not in the
+                      list of artifacts in use.
+                    </span>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => void setRetired(doc.artifactId, false)}
+                    >
+                      Bring it back
+                    </button>
+                  </div>
+                ) : null}
+
+                {/* A confirmation, because retiring takes the artifact out of
+                  the list. It says what is not happening: nothing is deleted,
+                  which is what makes the decision a small one. */}
+                {!confirmRetire ? null : (
+                  <div className="confirm">
+                    <span>
+                      Retire this artifact? It leaves the list of artifacts in use. Every version
+                      stays in the record, and you can bring it back from this page at any time.
+                    </span>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => {
+                        setConfirmRetire(false);
+                        void setRetired(doc.artifactId, true);
+                      }}
+                    >
+                      Retire
+                    </button>
+                    <button type="button" onClick={() => setConfirmRetire(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
                 {confirmRestore === null ? null : (
                   <div className="confirm">
                     <span>

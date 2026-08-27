@@ -391,6 +391,7 @@ export interface CollectedBatch {
    * the offset only scopes effect collection. */
   readonly artifactIndex: ReadonlyMap<string, number>;
   readonly artifactTitles: ReadonlyMap<string, string>;
+  readonly artifactRetired: ReadonlyMap<string, boolean>;
   readonly artifactRefusals: readonly ArtifactRefusal[];
   /** In log order. A caller that wants each effect on its own flattens
    * this; a caller that advances a cursor per entry does not. */
@@ -456,13 +457,19 @@ const deepFreeze = <T>(value: T): T => {
  * hand-edited log still opens. An entry naming an artifact with no versions
  * simply never reaches a reader, because readers look up titles by an id
  * they already hold. */
-const applyArtifactMeta = (raw: unknown, titles: Map<string, string>): void => {
+const applyArtifactMeta = (
+  raw: unknown,
+  titles: Map<string, string>,
+  retired: Map<string, boolean>,
+): void => {
   const e = raw as Record<string, unknown>;
   if (!isArtifactField(e.artifactId)) return;
   const id = e.artifactId as string;
-  // Absent is not the same as invalid: absent says nothing about the title,
-  // and an earlier one stands either way.
+  // Absent is not the same as invalid: absent says nothing about the field,
+  // and an earlier value stands either way. Each field on its own merits, so
+  // an entry with a good title and a bad `retired` still names the artifact.
   if (e.title !== undefined && isArtifactTitle(e.title)) titles.set(id, e.title);
+  if (typeof e.retired === "boolean") retired.set(id, e.retired);
 };
 
 const applyEntry = (
@@ -567,6 +574,7 @@ export const foldLog = (
    * the conversation, since an artifact entry carries no seq of its own. */
   artifactAfterSeq: Map<string, number>;
   artifactTitles: Map<string, string>;
+  artifactRetired: Map<string, boolean>;
   artifactRefusals: readonly ArtifactRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
@@ -584,6 +592,10 @@ export const foldLog = (
   const artifactAfterSeq = new Map<string, number>();
   /** artifactId -> the title last written for it. */
   const artifactTitles = new Map<string, string>();
+  /** artifactId -> whether it is retired. Absent means never retired.
+   * Un-retiring writes false rather than removing the fact, because the log
+   * is append-only and nothing is ever rewritten. */
+  const artifactRetired = new Map<string, boolean>();
   const artifactRefusals: ArtifactRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
@@ -606,7 +618,7 @@ export const foldLog = (
         // that already happens at open (RFC-06 storage).
         if ((parsed as LogEntry).src === "artifact-meta") {
           // Log order, last write winning per field.
-          applyArtifactMeta(parsed, artifactTitles);
+          applyArtifactMeta(parsed, artifactTitles, artifactRetired);
         } else if ((parsed as LogEntry).src === "artifact") {
           const art = coerceArtifactEntry(parsed, offset);
           // Size limit: oversize is refused but the record still opens —
@@ -671,6 +683,7 @@ export const foldLog = (
     artifactIndex,
     artifactAfterSeq,
     artifactTitles,
+    artifactRetired,
     artifactRefusals,
   };
 };
@@ -706,6 +719,7 @@ export const foldCollect = (
    * the conversation, since an artifact entry carries no seq of its own. */
   artifactAfterSeq: Map<string, number>;
   artifactTitles: Map<string, string>;
+  artifactRetired: Map<string, boolean>;
   artifactRefusals: readonly ArtifactRefusal[];
 } => {
   let state = initialChannelState({ conversationId, secret });
@@ -724,6 +738,10 @@ export const foldCollect = (
   const artifactAfterSeq = new Map<string, number>();
   /** artifactId -> the title last written for it. */
   const artifactTitles = new Map<string, string>();
+  /** artifactId -> whether it is retired. Absent means never retired.
+   * Un-retiring writes false rather than removing the fact, because the log
+   * is append-only and nothing is ever rewritten. */
+  const artifactRetired = new Map<string, boolean>();
   const artifactRefusals: ArtifactRefusal[] = [];
   while (offset < raw.length) {
     const nl = raw.indexOf(NL, offset);
@@ -741,7 +759,7 @@ export const foldCollect = (
         throw new StoreError("corrupt-log", `malformed log entry at byte ${offset}`);
       if (knownEntry(parsed)) {
         if ((parsed as LogEntry).src === "artifact-meta") {
-          applyArtifactMeta(parsed, artifactTitles);
+          applyArtifactMeta(parsed, artifactTitles, artifactRetired);
         } else if ((parsed as LogEntry).src === "artifact") {
           const art = coerceArtifactEntry(parsed, entryOffset);
           if (art.bytes.length > ARTIFACT_BYTES_MAX) {
@@ -795,6 +813,7 @@ export const foldCollect = (
     artifactIndex,
     artifactAfterSeq,
     artifactTitles,
+    artifactRetired,
     artifactRefusals,
   };
 };
@@ -968,6 +987,7 @@ export const collectEffectsUnderAppendLock = (
       collected,
       artifactIndex,
       artifactTitles,
+      artifactRetired,
       artifactRefusals,
     } = foldCollect(conversationId, secret, raw, fromOffset);
     if (goodBytes < raw.length) {
@@ -994,6 +1014,7 @@ export const collectEffectsUnderAppendLock = (
       // collect, and the tailer collects twice a second.
       artifactIndex,
       artifactTitles,
+      artifactRetired,
       artifactRefusals,
     };
   });
@@ -1020,6 +1041,8 @@ export interface ConversationLog {
   /** artifactId -> its title, for every artifact one has been written for.
    * An id absent from this map has no title and displays as its id. */
   artifactTitles(): ReadonlyMap<string, string>;
+  /** artifactId -> whether it is retired. Absent means never retired. */
+  artifactRetired(): ReadonlyMap<string, boolean>;
   /** Read an artifact version by seek using the fold-built index. Returns
    * null if that version was never written or was refused for size. */
   readArtifact(artifactId: string, version: number): ArtifactVersion | null;
@@ -1052,6 +1075,10 @@ export interface ConversationLog {
   writeArtifactMeta(params: {
     readonly artifactId: string;
     readonly title?: string;
+    /** True retires, false brings it back. Nothing is removed either way:
+     * the log is append-only, so retiring records an intention and
+     * un-retiring records another (RFC-07 R12). */
+    readonly retired?: boolean;
   }): { verdict: "accepted" } | { verdict: "refused"; issue: "artifact-title-invalid" };
   /** The delivery cursor: the offset up to which effects have been
    * dispatched (RFC-04 R4). 0 if no cursor has been written. A cursor
@@ -1137,6 +1164,7 @@ export const createLog = (
   // RFC-06: index built during the fold that already happens at open — reading is a seek.
   let curArtifactIndex = new Map<string, number>(initialFolded.artifactIndex);
   let curArtifactTitles = new Map<string, string>(initialFolded.artifactTitles);
+  let curArtifactRetired = new Map<string, boolean>(initialFolded.artifactRetired);
   // biome-ignore lint/correctness/noUnusedVariables: refusals tracked for future diagnostics; index is the primary artifact surface
   let curArtifactRefusals = [...initialFolded.artifactRefusals] as readonly ArtifactRefusal[];
   const recoveredEntries = initialFolded.entries;
@@ -1163,6 +1191,7 @@ export const createLog = (
       // writer may have appended artifact versions while we were out.
       curArtifactIndex = new Map<string, number>(folded.artifactIndex);
       curArtifactTitles = new Map<string, string>(folded.artifactTitles);
+      curArtifactRetired = new Map<string, boolean>(folded.artifactRetired);
       curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
       if (
         folded.goodBytes !== curGoodBytes ||
@@ -1279,6 +1308,7 @@ export const createLog = (
     // not have, so it silently read `undefined` and installed an empty map.
     curArtifactIndex = new Map<string, number>(batch.artifactIndex);
     curArtifactTitles = new Map<string, string>(batch.artifactTitles);
+    curArtifactRetired = new Map<string, boolean>(batch.artifactRetired);
     curArtifactRefusals = [...batch.artifactRefusals];
     return batch;
   };
@@ -1290,12 +1320,17 @@ export const createLog = (
     if (params.title !== undefined && !isArtifactTitle(params.title)) {
       return { verdict: "refused", issue: "artifact-title-invalid" };
     }
+    // An entry that says nothing is not worth appending.
+    if (params.title === undefined && params.retired === undefined) {
+      return { verdict: "refused", issue: "artifact-title-invalid" };
+    }
     const entry: LogEntry = {
       v: 1,
       at: Date.now(),
       src: "artifact-meta",
       artifactId: params.artifactId,
       ...(params.title === undefined ? {} : { title: params.title }),
+      ...(params.retired === undefined ? {} : { retired: params.retired }),
     };
     // Same lock and same fsync as every other append: a title is an ordinary
     // log entry, ordered against the versions it describes.
@@ -1334,7 +1369,9 @@ export const createLog = (
       }
       curGoodBytes = preWriteOffset + line.length;
       curArtifactTitles = new Map(folded.artifactTitles);
+      curArtifactRetired = new Map(folded.artifactRetired);
       if (params.title !== undefined) curArtifactTitles.set(params.artifactId, params.title);
+      if (params.retired !== undefined) curArtifactRetired.set(params.artifactId, params.retired);
       return { verdict: "accepted" };
     } finally {
       lock.release();
@@ -1361,6 +1398,7 @@ export const createLog = (
       curGoodBytes = folded.goodBytes;
       curArtifactIndex = new Map<string, number>(folded.artifactIndex);
       curArtifactTitles = new Map<string, string>(folded.artifactTitles);
+      curArtifactRetired = new Map<string, boolean>(folded.artifactRetired);
       curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
       acc.events.length = 0;
       acc.events.push(...folded.transcript.events);
@@ -1425,6 +1463,7 @@ export const createLog = (
 
   const artifactIndex: ConversationLog["artifactIndex"] = () => new Map(curArtifactIndex);
   const artifactTitles: ConversationLog["artifactTitles"] = () => new Map(curArtifactTitles);
+  const artifactRetired: ConversationLog["artifactRetired"] = () => new Map(curArtifactRetired);
 
   const readArtifact: ConversationLog["readArtifact"] = (artifactId, version) => {
     const key = artifactKey(artifactId, version);
@@ -1449,6 +1488,7 @@ export const createLog = (
         const { raw: refreshed, folded } = readFoldRepair(paths, conversationId, secret);
         curArtifactIndex = new Map<string, number>(folded.artifactIndex);
         curArtifactTitles = new Map<string, string>(folded.artifactTitles);
+        curArtifactRetired = new Map<string, boolean>(folded.artifactRetired);
         curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
         curState = folded.state;
         curGoodBytes = folded.goodBytes;
@@ -1506,6 +1546,7 @@ export const createLog = (
       const { raw: refreshedRaw, folded } = readFoldRepair(paths, conversationId, secret);
       curArtifactIndex = new Map<string, number>(folded.artifactIndex);
       curArtifactTitles = new Map<string, string>(folded.artifactTitles);
+      curArtifactRetired = new Map<string, boolean>(folded.artifactRetired);
       curArtifactRefusals = [...folded.artifactRefusals] as readonly ArtifactRefusal[];
       curState = folded.state;
       curGoodBytes = folded.goodBytes;
@@ -1600,6 +1641,7 @@ export const createLog = (
     goodBytes: () => curGoodBytes,
     artifactIndex,
     artifactTitles,
+    artifactRetired,
     readArtifact,
     writeArtifact,
     writeArtifactMeta,

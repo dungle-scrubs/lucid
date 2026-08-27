@@ -296,6 +296,13 @@ export interface ArtifactState {
    *
    * Absent otherwise. */
   readonly bytes?: string;
+  /** True when this artifact has been retired (RFC-07 R12).
+   *
+   * A retired artifact stays in this block. The agent is told it exists and
+   * that it is retired: an agent revising an artifact nobody told it was
+   * retired is a worse failure than a longer block, and it would be refused
+   * for a reason it could not see. */
+  readonly retired?: boolean;
 }
 
 export const ARTIFACT_STATE_MARKER = "[lucid artifact state]";
@@ -323,7 +330,10 @@ export const composeArtifactState = (
   const lines = [ARTIFACT_STATE_MARKER, "Artifacts in this conversation right now:"];
   for (const a of artifacts) {
     const who = a.author === "human" ? "saved by the person" : `written by you (${a.author})`;
-    lines.push(`- ${a.artifactId} — current version ${a.version}, ${who}`);
+    // Named, and marked. Withholding it would leave the agent to discover
+    // the state by being refused.
+    const mark = a.retired === true ? ", RETIRED" : "";
+    lines.push(`- ${a.artifactId} — current version ${a.version}, ${who}${mark}`);
     if (a.basedOn !== undefined) {
       lines.push(`  they were working from version ${a.basedOn}`);
     }
@@ -362,6 +372,12 @@ export const composeArtifactState = (
     }
   }
   lines.push("");
+  if (artifacts.some((a) => a.retired === true)) {
+    lines.push("");
+    lines.push(
+      "A RETIRED artifact is one the person has finished with. Nothing was deleted and every version is still here, but do not revise it unless they ask for it back.",
+    );
+  }
   lines.push(
     "When you revise one of these, set `replaces` to the current version above. Where a version a person saved is shown in full, revise from that and not from the last one you wrote, or their changes are lost.",
   );

@@ -99,6 +99,7 @@ const artifactState = (
     if (!Number.isSafeInteger(v)) continue;
     if ((current.get(id) ?? 0) < v) current.set(id, v);
   }
+  const retired = deps.host?.artifactRetired?.() ?? new Map<string, boolean>();
   const out: ArtifactState[] = [];
   for (const [artifactId, version] of [...current.entries()].sort(([a], [b]) =>
     a.localeCompare(b),
@@ -114,6 +115,7 @@ const artifactState = (
       // A version a person saved, or one the agent wrote and has just proved
       // it can no longer anchor against.
       ...(one.author === "human" || owed.has(artifactId) ? { bytes: one.bytes } : {}),
+      ...(retired.get(artifactId) === true ? { retired: true } : {}),
     });
   }
   return out;
@@ -152,6 +154,8 @@ export interface HeadlessDeps {
     collectEffects(fromOffset: number): CollectedBatch;
     advanceCursor(offset: number): void;
     artifactIndex?: () => ReadonlyMap<string, number>;
+    /** artifactId -> whether it is retired, so the prompt can say so. */
+    artifactRetired?: () => ReadonlyMap<string, boolean>;
     /** Read one version's header — author, basedOn, values — so the prompt
      * can say what the record currently holds. */
     readArtifact?: (
