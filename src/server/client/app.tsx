@@ -727,65 +727,6 @@ const DocumentFrame = ({
   );
 };
 
-/**
- * The other artifacts in this conversation.
- *
- * Labelled in terms of the conversation, never as a relationship: artifacts
- * are siblings in a record, nothing in the record links one to another, and
- * calling them "related" would name something that does not exist.
- *
- * Only rendered when there is more than one. A list of one is a label.
- */
-const AlsoHere = ({
-  artifacts,
-  showing,
-  conversationId,
-  onOpen,
-}: {
-  artifacts: readonly CatalogEntry[];
-  showing: string | null;
-  conversationId: string;
-  onOpen: (artifactId: string) => void;
-}): React.ReactElement | null => {
-  if (artifacts.length < 2) return null;
-  return (
-    <div className="also">
-      {/* Not "also": the row lists every artifact in use, including the one
-          on screen, so the set of chips does not reshuffle when you switch. */}
-      <span className="also-label">In this conversation</span>
-      {artifacts.map((a) => {
-        const here = a.artifactId === showing;
-        return (
-          <span key={a.artifactId} className={here ? "also-one here" : "also-one"}>
-            <button
-              type="button"
-              className="also-open"
-              onClick={() => onOpen(a.artifactId)}
-              disabled={here}
-              title={here ? "Showing this one" : `Show ${displayName(a)}`}
-            >
-              {displayName(a)}
-              <span className="also-v">v{a.latest}</span>
-            </button>
-            {/* A real link, so the browser's own open-in-new-tab works: the
-                middle click, the modifier click, and the context menu. A
-                button with a click handler gives none of those. */}
-            <a
-              className="also-tab"
-              href={formatRoute({ conversationId, artifactId: a.artifactId })}
-              target="_blank"
-              rel="noreferrer"
-              title="Open in a new tab"
-            >
-              ↗
-            </a>
-          </span>
-        );
-      })}
-    </div>
-  );
-};
-
 const App = (): React.ReactElement => {
   // Read once. Where in the record the page starts is an opening question;
   // after that the page moves the address bar, not the other way round.
@@ -1770,21 +1711,22 @@ const App = (): React.ReactElement => {
               // different document or rendering a blank frame.
               <div className="empty doc-empty">
                 <p>This conversation has no artifact called “{unknownArtifact}”.</p>
-                <AlsoHere
-                  artifacts={allArtifacts}
-                  showing={null}
-                  conversationId={conversationId}
-                  onOpen={openArtifact}
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setWantArtifact(null);
-                    setPinned(null);
-                  }}
-                >
-                  Show what it does have
-                </button>
+                {/* A conversation holds one artifact, so there is one thing
+                    to offer and it is named. This is what the list used to
+                    do for this page; without a replacement, saying the
+                    artifact does not exist and offering nothing makes the
+                    page a dead end. */}
+                {allArtifacts.length === 0 ? (
+                  <p>It has no artifact yet. Ask the agent for a document.</p>
+                ) : (
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => openArtifact((allArtifacts[0] as CatalogEntry).artifactId)}
+                  >
+                    Open “{displayName(allArtifacts[0] as CatalogEntry)}”
+                  </button>
+                )}
               </div>
             ) : doc === null ? (
               <div className="empty doc-empty">
@@ -1803,12 +1745,6 @@ const App = (): React.ReactElement => {
                             ?.title as string,
                         })}
                     onRename={rename}
-                  />
-                  <AlsoHere
-                    artifacts={allArtifacts}
-                    showing={doc.artifactId}
-                    conversationId={conversationId}
-                    onOpen={openArtifact}
                   />
                   {/* One version is a badge with nothing to open. More than
                     one is a dropdown, newest first: a row of buttons does not
