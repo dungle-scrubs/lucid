@@ -72,12 +72,14 @@ Take nouns from here. One name per thing.
 
 | Term | What it is |
 |---|---|
-| **artifact** | A document an agent emitted, identified by an `artifactId` and kept as an ordered list of versions |
+| **artifact** | The document an agent emitted, identified by an `artifactId` and kept as an ordered list of versions. One per conversation (RFC-09) |
+| **artifactId** | The name the agent gave the document. Chosen on the first emission and immutable after: annotations and revisions both point at it |
+| **title** | The name a person gave the document. Displayed instead of the `artifactId` when one has been written |
 | **version** | One artifact entry: its bytes, its author (`agent` or `human`), and its hash. Never rewritten |
 | **save** | A version authored by a person, recording the version it was working from. Not an input, and starts no turn |
 | **annotation batch** | One or more notes, sent as a single input. Rides in the input text behind a fence, like an artifact block |
 | **note** | What a person wrote, against one or more spots |
-| **spot** | One place a note points: an element id, the snippet that was there, who wrote it, and how to find it again |
+| **spot** | One place a note points: an element id, the snippet that was there, who wrote it, and how to find it again. A click takes a whole element, a drag takes the words dragged over |
 | **selector** | One of three ways of finding a spot after a rewrite: quote, position, path. Tried in that order |
 | **orphan** | A spot whose target is gone. Shown with its note and snippet, never re-pointed |
 | **document mode** | What a click in the document means: `use` operates it, `markup` selects an element to write about. Not a `profile` - that word is taken, and these are unrelated |
@@ -115,8 +117,16 @@ the shape of a harness invocation. lucid never mirrors them.
 - Notes accumulate and go as one request. They sit in the conversation in the
   order you wrote them, so a note written between two messages stays between
   them. Each carries what was on screen where it points and who wrote it.
+- Click to select an element, or **drag across text to take just those
+  words**. A note on a phrase carries the phrase, not the paragraph around it.
 - The agent answers by producing a new version, deciding for itself where
-  the change belongs.
+  the change belongs. It may send **only what changed** rather than the whole
+  document (RFC-08). On a 4.5 KB document that was 17 times less output; on a
+  27 KB one, a revision went from 108 seconds to 18.
+- **Rename the document.** The name in the header is a button until you press
+  it and a field while you type. Renaming writes a title and never moves the
+  `artifactId`, so existing notes still point at it and the agent can still
+  revise it. It creates no version.
 - Any version stays viewable, with the marks made on it and nowhere else.
 - Fill in what the agent gave you and save. That is a new version authored by
   you, not a turn - and the agent is told about it on the next thing you say,
@@ -125,8 +135,11 @@ the shape of a harness invocation. lucid never mirrors them.
   confidently it re-attached; where it cannot, it says it lost its target
   and is never re-pointed at whatever took that place.
 - The window says what is happening: whether a turn is running, what is
-  queued, and - if the harness has answered nothing for ninety seconds -
-  that it may be wedged, written into the record rather than only on screen.
+  queued, how long it has been going once that is past eight seconds, and -
+  if nothing has come back for three minutes - that it may be wedged, written
+  into the record rather than only on screen. Three minutes is measured
+  against the slowest legitimate turn seen, a 27 KB document emitted whole at
+  108 seconds; a patch revision takes 3 to 33.
 
 
 Proof lives in two places: `bun run check` for the deterministic gate, and
@@ -190,8 +203,11 @@ Without a build, every command works as `bun src/cli/main.ts <command>`.
   published; `bun run build` is the install.
 - **A document in the terminal.** The transcript names an artifact and its
   version; it does not render one. The browser is where a document is read.
-- **More than one document at a time.** The newest artifact in a record is
-  the one shown.
+- **More than one document in a conversation.** Not a gap. RFC-09 declined
+  it: a conversation holds one artifact, and an emission naming another is
+  refused rather than folded in. An artifact is a view of context, not an
+  application, and every two-artifact record that ever existed here was a
+  test. If you want a second document, start a second conversation.
 
 ## What is known, and deliberate
 
@@ -234,12 +250,25 @@ component layer the look will be built on.
 a prototype, not a design" above for what that means and what is expected to
 survive it. Nothing about it is specified yet.
 
-Everything RFC-06 named is delivered, and the tracker is empty. The work
-since then has been correction rather than specification: defects found by
-using the thing, and interaction the RFC did not cover. Two of those changed
-what the agent is told, which is protocol and not decoration - a running
-session now hears about a save, and every prompt carries the current version
-of each artifact.
+One ticket is open, and it is deliberately held for after the pass:
+comparing two versions of the document. It adds visible surface, so
+designing it before the pass would mean designing it twice.
+
+Three RFCs have landed since RFC-06, and the shape they left is what the
+design pass inherits.
+
+- **RFC-07** gave the document a version history you can move through, an
+  older version you can read but not edit, restore, and a title you can
+  write.
+- **RFC-08** let the agent revise by naming what changes instead of retyping
+  the document. Measured over 24 revisions against a live model: 17 patches,
+  zero refusals.
+- **RFC-09** narrowed a conversation to one artifact and withdrew three of
+  RFC-07's rules with it - the artifact list, the second pane, and retire.
+  Retire had shipped the day before and was removed in full.
+
+RFC-09 is the one to read before designing anything. It is a reversal, it
+says why, and it records what it cost.
 
 Anything larger than a correction needs an RFC before code, per the pipeline
 below.
