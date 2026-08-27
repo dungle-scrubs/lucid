@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 /* The browser surface. One column: the conversation, and the way in. */
 
 :root {
@@ -169,6 +171,15 @@ body {
 
 /* The composer says it is ready to be typed in by lifting its border, not
    by drawing a ring around itself. */
+/* Placeholder colour was never specified here, so it took the browser's
+   default. Tailwind's preflight replaces that default with 50% of the text
+   colour, so the value has to be stated. `--faint` is the token for text
+   that recedes, and it lands within a few units of what Chrome was
+   painting. */
+.composer textarea::placeholder {
+  color: var(--faint);
+}
+
 .composer textarea:focus {
   border-color: var(--muted);
 }
@@ -229,9 +240,12 @@ body {
    looks, because a one-pixel target is not a target. */
 .pane-grip {
   flex: 0 0 1px;
-  /* An `hr` brings its own border, margins, and height. */
+  /* An `hr` brings its own border, margins, and height, and Tailwind's
+     preflight then sets `height: 0` on top - which beats `align-self` and
+     collapses the grip. Height is restored explicitly so stretch applies. */
   margin: 0;
   border: 0;
+  height: auto;
   align-self: stretch;
   position: relative;
   background: var(--line);
