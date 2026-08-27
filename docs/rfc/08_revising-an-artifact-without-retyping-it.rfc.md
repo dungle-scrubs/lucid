@@ -279,7 +279,7 @@ are proposed; Open Question 2 covers changing them.
 | `find` length | **4,096 bytes** | An anchor wide enough to be unique is far below this. Beyond it the agent is quoting the document, and the whole form is cheaper |
 | `replace` length | **65,536 bytes** | Larger than any single edit needs, small enough that one edit cannot approach `ARTIFACT_BYTES_MAX` alone |
 | sum of all `replace` lengths | **`ARTIFACT_BYTES_MAX`** | Refuses before applying, so a patch cannot ask lucid to build a document it will then refuse |
-| quoted text in a refusal reason | **200 bytes** | See Security |
+| quoted text in a refusal reason | **200 UTF-8 bytes** | See Security. Bytes, because the log is a file and what it costs is bytes. Counting UTF-16 code units let 128 characters of a three-byte code point reach 386 bytes |
 
 Exceeding any of these is `E-PATCH-05`. The result is still size-checked
 after applying, per R3: these bounds refuse the obvious cases cheaply, and

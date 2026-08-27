@@ -115,8 +115,33 @@ describe("quoting agent text back in a refusal", () => {
   test("long text is cut, so a refusal cannot be used to write length into the log", () => {
     const huge = "x".repeat(10_000);
     const q = quoteForRefusal(huge);
-    expect(q.length).toBeLessThanOrEqual(REFUSAL_QUOTE_MAX + 1);
+    expect(Buffer.byteLength(q, "utf8")).toBeLessThanOrEqual(REFUSAL_QUOTE_MAX);
     expect(q.endsWith("…")).toBe(true);
+  });
+
+  test("the bound is bytes, not UTF-16 code units", () => {
+    // A review measured this: 128 characters of a three-byte code point used
+    // to quote to 386 bytes against a stated bound of 200, because
+    // String.prototype.length counts units and the log stores UTF-8.
+    for (const ch of ["界", "🙂", "é", "x"]) {
+      const q = quoteForRefusal(ch.repeat(500));
+      expect(Buffer.byteLength(q, "utf8")).toBeLessThanOrEqual(REFUSAL_QUOTE_MAX);
+    }
+  });
+
+  test("it cuts on a character boundary, never inside one", () => {
+    // Slicing UTF-8 at a fixed byte count can land inside a character and
+    // write a replacement character into the log.
+    const q = quoteForRefusal("界".repeat(500));
+    expect(q).not.toContain("\ufffd");
+    // Round-trips, so no half character survived.
+    expect([...q].every((c) => c.length <= 2)).toBe(true);
+  });
+
+  test("text already within the bound is quoted whole and unmarked", () => {
+    const q = quoteForRefusal("界界界");
+    expect(q).toBe('"界界界"');
+    expect(q.endsWith("…")).toBe(false);
   });
 
   test("a refusal for an enormous form is bounded", () => {

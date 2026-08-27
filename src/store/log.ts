@@ -104,9 +104,12 @@ export type LogEntry =
       readonly artifactId: string;
       /** What the page displays. Absent means the page displays the id. */
       readonly title?: string;
-      /** RFC-07 R12. Carried in the type so a record written by a build that
-       * has retire folds here rather than being skipped as unknown; nothing
-       * in this build reads it yet. */
+      /** RFC-07 R12. Read by the fold into `artifactRetired`, carried on the
+       * catalog, and marked in the agent's state block.
+       *
+       * The comment here once said nothing in this build read it. That was
+       * true for one commit, between the type landing and retire shipping,
+       * and false afterwards. A review caught it still saying so. */
       readonly retired?: boolean;
     };
 

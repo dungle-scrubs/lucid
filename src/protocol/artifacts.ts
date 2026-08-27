@@ -98,18 +98,42 @@ const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
 const isField = (v: unknown): boolean =>
   typeof v === "string" && v.length > 0 && v.length <= 128 && !CONTROL_CHARS.test(v);
 
-/** How much agent-supplied text a refusal reason may quote back (RFC-08 R7).
+/** How much agent-supplied text a refusal reason may quote back (RFC-08 R7),
+ * in UTF-8 bytes.
  *
  * A refusal names what it refused, which means putting agent text into the
  * log. Unbounded, that is a way to write arbitrary length into the record by
- * sending something invalid. */
+ * sending something invalid.
+ *
+ * Bytes, because the log is a file and what it costs is bytes. This was
+ * counted in UTF-16 code units until a review measured it: 128 characters of
+ * a three-byte code point quoted to 386 bytes against a stated bound of 200,
+ * because `String.prototype.length` counts units and the file stores UTF-8.
+ * The overrun was bounded either way, since `isArtifactField` caps an id at
+ * 128 units, but the number did not mean what it said. */
 export const REFUSAL_QUOTE_MAX = 200;
 
 /** Agent text, safe to put in a refusal reason: JSON-quoted so control
- * characters cannot break the line, and cut to the bound. */
+ * characters cannot break the line, and cut to the bound.
+ *
+ * Cut on a code-point boundary. Slicing UTF-8 at a fixed byte count can land
+ * inside a character and produce a replacement character in the log, so this
+ * removes whole code points until the encoding fits. */
 export const quoteForRefusal = (v: unknown): string => {
   const s = JSON.stringify(v) ?? String(v);
-  return s.length <= REFUSAL_QUOTE_MAX ? s : `${s.slice(0, REFUSAL_QUOTE_MAX)}…`;
+  if (Buffer.byteLength(s, "utf8") <= REFUSAL_QUOTE_MAX) return s;
+  // The ellipsis is part of what is written, so it is inside the budget.
+  const room = REFUSAL_QUOTE_MAX - Buffer.byteLength("…", "utf8");
+  const points = [...s];
+  let out = "";
+  let used = 0;
+  for (const c of points) {
+    const n = Buffer.byteLength(c, "utf8");
+    if (used + n > room) break;
+    out += c;
+    used += n;
+  }
+  return `${out}…`;
 };
 
 const FENCE_OPEN = /(?:^|\n)[ \t]*```[ \t]*lucid-artifact[ \t]*(?=\n)/g;
