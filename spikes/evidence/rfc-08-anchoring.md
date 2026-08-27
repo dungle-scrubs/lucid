@@ -35,8 +35,8 @@ holds them. Seventeen for seventeen.
 It does not settle the cases where drift is likely, and none of them appeared
 in this run:
 
-- **A session restart.** The agent loses its context and then patches from a
-  summary. Untested here, and the most likely source of a real miss.
+- **A session restart.** Measured separately, below. It turned out not to be
+  the case this made it sound like.
 - **A person's save.** Covered by a different mechanism: `composeArtifactState`
   already sends a human-saved version's bytes in full, so the agent anchors
   against text it has been given rather than text it remembers.
@@ -44,8 +44,51 @@ in this run:
   either way, but there is more document to misremember.
 
 So the honest reading is: within a session the agent anchors reliably, and the
-resend-on-refusal policy is cheap because it almost never fires. Whether that
-holds across a restart is the open half.
+resend-on-refusal policy is cheap because it almost never fires.
+
+## A driver restart does not lose the context, and that is by design
+
+Run with `--restart-after 6` over 12 revisions: the driver is killed with
+`-9` mid-conversation and a new one started.
+
+```
+before restart: 3 patch, 1 whole, 3 prose, 0 refusals
+after  restart: 4 patch, 0 whole, 2 prose, 0 refusals
+```
+
+**Zero misses after the restart**, and the reason is in the record rather
+than in the model: the `identity` events either side of the second attach
+carry the same `sessionId`. The new driver resumed the harness session,
+which is what RFC-03 exists to do - the record remembers which harness held
+it. The agent's context was never lost, so it was still anchoring against
+versions it wrote itself.
+
+So the earlier note overstated the risk. Losing the driver process is not
+the same as losing the agent's context, and lucid already closes that gap.
+
+What is still unmeasured is narrower, and it is worth stating precisely: a
+session that **cannot be resumed**. A different machine, an expired session,
+a harness that lost it. lucid has a path for it - `could not resume ...
+continuing fresh` - and on that path the agent is asked to revise a document
+the state block names but does not carry. Nothing here says what it does
+then. Forcing that case needs either a way to start fresh against an
+existing record, which lucid does not expose and which is product surface
+this measurement does not justify, or a genuinely lost session.
+
+Two failures in the harness before this run produced anything, both worth
+keeping because each would have produced a confident wrong number:
+
+1. `pkill` without `-9` did not end the driver. The first run's "restart"
+   left the original alive, so the second half rode the same session as the
+   first and the split reported nothing real.
+2. The replacement driver died at once when spawned detached with its stdio
+   ignored, and again under `nohup ... >/dev/null`. The run then had no
+   driver at all.
+
+The script now kills with `-9`, starts the replacement through a shell with
+somewhere to write, and **waits for a second attach frame in the record**
+before continuing. When none arrives it throws rather than reporting. That
+guard is what caught the second failure.
 
 ## The output saving, measured rather than modelled
 
@@ -96,7 +139,9 @@ that did not occur once in seventeen. "Resend whenever the agent has not seen
 the current version" is already what happens for a person's save, which is the
 only case in this run where the agent had not seen it.
 
-Revisit if a restart measurement shows a materially different miss rate.
+The restart measurement below did not move it: 0 misses there too, because a
+restart resumes the session. Revisit if a session that cannot be resumed ever
+shows a materially different miss rate.
 
 ## Harness note
 
