@@ -1,29 +1,129 @@
 @import "tailwindcss";
 
-/* The browser surface. One column: the conversation, and the way in. */
-
-:root {
-  --bg: #fafaf9;
-  --fg: #1c1917;
-  --muted: #78716c;
-  --faint: #a8a29e;
-  --line: #e7e5e4;
-  --panel: #ffffff;
-  --accent: #1c1917;
-  --error: #dc2626;
+/* Source Serif 4, the chrome's serif, self-hosted: the page is served from
+   this origin and never from a CDN, and a reading surface has to hold its
+   type offline. Variable fonts (weight 200-900), latin subset, from Google
+   Fonts' Source Serif 4 under the SIL OFL (see fonts/OFL.txt). The document
+   body inside the frame is deliberately sans-serif and does not inherit
+   this. */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url("./fonts/source-serif-4.woff2") format("woff2");
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1c1917;
-    --fg: #fafaf9;
-    --muted: #a8a29e;
-    --faint: #78716c;
-    --line: #292524;
-    --panel: #262322;
-    --accent: #fafaf9;
-    --error: #f87171;
-  }
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: italic;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url("./fonts/source-serif-4-italic.woff2") format("woff2");
+}
+
+/* The browser surface: the reading view.
+ *
+ * Design: the reading-view handoff (`docs/reports/design-coverage.md` is
+ * the coverage map). Two panes - a document sheet on the sepia ground, the
+ * conversation beside it - under exactly one 34px header per column.
+ *
+ * Laws carried in this file:
+ * - Cyan (--color-accent) is everything the user or agent does. Magenta
+ *   (--color-accent-2) is only the substrate refusing. Neutral ink is
+ *   anything waiting.
+ * - No shadows anywhere. Elevation is the paper-on-pattern relationship.
+ * - Light only. Dark mode is not designed.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Broadsheet roles and ramps. */
+  --color-bg: #f3f2f2;
+  --color-surface: #eae9e9;
+  --color-text: #201e1d;
+  --color-accent: #0088b0;
+  --color-accent-2: #d6006c;
+  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
+
+  --color-neutral-100: #f8f4f4;
+  --color-neutral-200: #eae7e7;
+  --color-neutral-300: #d7d3d3;
+  --color-neutral-400: #bab6b6;
+  --color-neutral-500: #9b9797;
+  --color-neutral-600: #7d7979;
+  --color-neutral-700: #605d5d;
+  --color-neutral-800: #444141;
+  --color-neutral-900: #2d2b2b;
+
+  --color-accent-100: #e9f8ff;
+  --color-accent-200: #cbeeff;
+  --color-accent-300: #99e0ff;
+  --color-accent-400: #62c5ee;
+  --color-accent-500: #38a6cf;
+  --color-accent-600: #1186ac;
+  --color-accent-700: #006786;
+  --color-accent-800: #004961;
+  --color-accent-900: #0a303e;
+
+  --color-accent-2-100: #fff1f4;
+  --color-accent-2-200: #ffdee6;
+  --color-accent-2-300: #ffc0d0;
+  --color-accent-2-400: #ff90b1;
+  --color-accent-2-500: #ff458e;
+  --color-accent-2-600: #d82071;
+  --color-accent-2-700: #aa0b56;
+  --color-accent-2-800: #790e3d;
+  --color-accent-2-900: #4b1528;
+
+  /* The third process ink. A print treatment colour, never chrome or body. */
+  --color-process-yellow: #edbb00;
+
+  --font-heading: "Source Serif 4", system-ui, sans-serif;
+  --font-heading-weight: 600;
+  --font-body: "Source Serif 4", system-ui, sans-serif;
+
+  /* Broadsheet spacing and radius at the reading view's 1.25x density. */
+  --space-1: 6.25px;
+  --space-2: 12.5px;
+  --space-3: 18.75px;
+  --space-4: 25px;
+  --space-6: 37.5px;
+  --space-8: 50px;
+
+  --radius-sm: 1.25px;
+  --radius-md: 2.5px;
+  --radius-lg: 5px;
+
+  /* Local to the reading view: warm paper, sepia grounds, hairline edges.
+
+     Each colour-mix token gets its own :root block below. The CSS pipeline
+     (Lightning CSS behind the Tailwind plugin, and Bun's own transpiler for
+     the served-from-source path) lowers a colour-mix custom property into a
+     plain-colour fallback plus an @supports override - and it emits at most
+     ONE such override per rule block, silently dropping the rest. One block
+     per token is what makes all five survive both pipelines. */
+}
+
+:root {
+  --paper: color-mix(in srgb, #fff 93%, var(--color-process-yellow) 7%);
+}
+
+:root {
+  --sepia: color-mix(in srgb, var(--color-bg) 88%, var(--color-process-yellow) 12%);
+}
+
+:root {
+  --sepia-2: color-mix(in srgb, var(--color-bg) 76%, var(--color-process-yellow) 24%);
+}
+
+:root {
+  --edge: color-mix(in srgb, var(--color-text) 13%, transparent);
+}
+
+:root {
+  --edge-2: color-mix(in srgb, var(--color-text) 22%, transparent);
 }
 
 * {
@@ -31,7 +131,7 @@
 }
 
 /* No focus rings, anywhere. The browser draws one on anything focusable,
-   and the scrolling half of the conversation is focusable — so reading a
+   and the scrolling half of the conversation is focusable - so reading a
    long answer put a blue box around the whole column.
 
    First rule in the file that touches focus, so anything later still wins
@@ -42,276 +142,34 @@
   outline: none;
 }
 
+/* The window is one sepia field. Both columns and the patterned ground
+   behind the sheet sit on it; nothing else paints a page background. */
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font:
-    15px / 1.55 ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
+  background: var(--sepia);
+  color: var(--color-text);
+  font: 15px / 1.55 var(--font-body);
   -webkit-font-smoothing: antialiased;
 }
 
 #root {
-  max-width: 880px;
-  margin: 0 auto;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-/* --- chrome ------------------------------------------------------------ */
-
-.head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--line);
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.head .id {
-  color: var(--fg);
-  font-weight: 600;
-}
-
-.head .status {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--faint);
-}
-
-.notice {
-  margin: 12px 20px 0;
-  padding: 10px 12px;
-  border: 1px solid var(--error);
-  border-radius: 8px;
-  color: var(--error);
-  font-size: 13px;
-}
-
-/* --- thread ------------------------------------------------------------ */
-
-.thread {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-  padding: 16px 20px 8px;
-  gap: 14px;
-}
-
-.empty {
-  color: var(--faint);
-  font-size: 14px;
-  padding: 24px 0;
-}
-
-.msg {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  max-width: 100%;
-}
-
-/* Yours on the right, the agent's on the left. The side says whose it is,
-   so neither needs a label. */
-.msg.user {
-  align-items: flex-end;
-}
-
-.msg .who {
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.msg .body {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.msg.user .body {
-  align-self: flex-end;
-  max-width: 85%;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 5px 11px;
-}
-
-/* --- composer ---------------------------------------------------------- */
-
-/* Files attached to the message being written. They are already stored, so
-   these are references the page draws, not bytes it holds. */
-.attached {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 14px 0;
-}
-
-.chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 6px 4px 4px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  font-size: 12px;
-  max-width: 220px;
-}
-
-.thumb {
-  width: 28px;
-  height: 28px;
-  border-radius: 5px;
-  object-fit: cover;
-  flex: 0 0 auto;
-}
-
-/* What a file with no picture shows instead. */
-.thumb.kind {
-  display: grid;
-  place-items: center;
-  background: var(--bg);
-  color: var(--faint);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.chip-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chip-drop {
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  cursor: pointer;
-  padding: 0 2px;
-}
-
-.chip-drop:hover {
-  color: var(--fg);
-}
-
-/* Inside the note box the chips sit above the buttons, not above a
-   composer, so they need their own spacing. */
-.attached.in-note {
-  padding: 6px 0 0;
-}
-
-/* The control that opens the file picker. The input itself is never shown -
-   a browser's own file input cannot be styled and says the wrong thing. */
-.attach {
-  flex: 0 0 auto;
-  width: 34px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-}
-
-.attach:hover {
-  color: var(--fg);
-}
-
-.attach input {
-  display: none;
-}
-
-/* In the note box, beside Cancel and Add note rather than beside a
-   textarea, so it matches their height instead of the composer's. */
-.attach.small {
-  width: 28px;
-  height: 28px;
-  font-size: 15px;
-  margin-right: auto;
-}
-
-.composer {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 10px 14px 14px;
-  background: var(--bg);
-}
-
-.composer textarea {
-  flex: 1;
-  resize: none;
-  min-height: 40px;
-  max-height: 180px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  color: var(--fg);
-  font: inherit;
-}
-
-/* The composer says it is ready to be typed in by lifting its border, not
-   by drawing a ring around itself. */
-/* Placeholder colour was never specified here, so it took the browser's
-   default. Tailwind's preflight replaces that default with 50% of the text
-   colour, so the value has to be stated. `--faint` is the token for text
-   that recedes, and it lands within a few units of what Chrome was
-   painting. */
-.composer textarea::placeholder {
-  color: var(--faint);
-}
-
-.composer textarea:focus {
-  border-color: var(--muted);
-}
-
-.composer button {
-  height: 40px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--accent);
-  color: var(--bg);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.composer button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* --- the two panes ------------------------------------------------------ */
-
-#root {
-  max-width: none;
   height: 100vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
+
+/* --- the window and its two panes ---------------------------------------
+ *
+ * One flex row, 14px padding, 14px gap. The document column takes the
+ * room; the conversation is a 352px default the grip can move. */
 
 .panes {
   flex: 1;
   min-height: 0;
   display: flex;
+  padding: 14px;
+  gap: 14px;
 }
 
 .pane {
@@ -319,41 +177,52 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  gap: 12px;
 }
 
 /* The document is the thing being worked on, so it gets the room. */
 .pane.document {
   flex: 1;
-  background: var(--panel);
-  /* So a comparison covers this pane and only this pane. Without it the
-     comparison positions against the page and lies over the conversation
-     as well, which is not a thing it is a view of. */
+  /* So a comparison or a confirm covers this pane and only this pane. */
   position: relative;
 }
 
 /* The conversation is the margin note beside it: a reading column, not a
-   half of the screen. This is where it starts; the grip decides after that,
-   and an inline width overrides this rule. */
+   half of the screen. This is where it starts; the grip decides after
+   that, and an inline width overrides this rule. */
 .pane.conversation {
-  flex: 0 0 var(--conversation-width, clamp(340px, 30%, 480px));
+  flex: 0 0 var(--conversation-width, 352px);
 }
 
 /* The border between the panes is the grip's, so there is one line and it
-   is the thing you grab. It is four pixels wide and reaches wider than it
-   looks, because a one-pixel target is not a target. */
+   is the thing you grab: 1px --edge-2 with a 3x38 handle centred on it.
+   The ::after reaches wider than the line looks, because a one-pixel
+   target is not a target. */
 .pane-grip {
   flex: 0 0 1px;
   /* An `hr` brings its own border, margins, and height, and Tailwind's
      preflight then sets `height: 0` on top - which beats `align-self` and
      collapses the grip. Height is restored explicitly so stretch applies. */
-  margin: 0;
+  margin: 2px 0;
   border: 0;
   height: auto;
   align-self: stretch;
   position: relative;
-  background: var(--line);
+  background: var(--edge-2);
   cursor: col-resize;
   touch-action: none;
+}
+
+.pane-grip::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -2px;
+  width: 3px;
+  height: 38px;
+  margin-top: -19px;
+  border-radius: 2px;
+  background: var(--edge-2);
 }
 
 .pane-grip::after {
@@ -362,9 +231,15 @@ body {
   inset: 0 -4px;
 }
 
+/* A quiet hover: the hairline and its handle darken, nothing more. */
 .pane-grip:hover,
 .pane-grip.dragging {
-  background: var(--accent, #6b7cff);
+  background: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+.pane-grip:hover::before,
+.pane-grip.dragging::before {
+  background: color-mix(in srgb, var(--color-text) 45%, transparent);
 }
 
 /* While dragging, the pointer is captured by the grip; this stops the rest
@@ -384,52 +259,108 @@ body {
      so this rule wins on order and nothing needs !important to beat it. */
   .pane.conversation {
     flex: 1 1 45%;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--edge-2);
   }
   .pane-grip {
     display: none;
   }
+  /* The ground bleeds to the window's side edges only; below this pane is
+     the conversation, and the pattern must not run under it. */
+  .doc-ground {
+    margin: 0 -14px 0;
+  }
 }
 
-/* --- the document ------------------------------------------------------- */
+/* --- the one header ------------------------------------------------------
+ *
+ * A single 34px row over the document column: the lucid mark, a hairline,
+ * the name, the version pill, and the mode toggle pushed right. No second
+ * header, no toolbar under it. Transparent on the sepia ground at rest;
+ * the ink state fills it. */
 
 .doc-head {
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--color-text);
+  /* The ink fill arrives over ~120ms; nothing else about the row moves. */
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+/* lucid: a 10px accent dot and the wordmark. */
+.doc-mark {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
-  font-size: 12px;
-  color: var(--muted);
-  background: var(--bg);
+  flex: none;
 }
 
-.doc-head .doc-id {
-  color: var(--fg);
-  font-weight: 600;
+.doc-mark .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
+.doc-mark .word {
+  font: 600 18px / 1 var(--font-heading);
+  letter-spacing: -0.01em;
+}
+
+.doc-head-sep {
+  width: 1px;
+  height: 16px;
+  flex: none;
+  background: var(--edge-2);
 }
 
 /* The name is a button until you press it. It carries no button chrome:
-   an affordance here would be a second thing competing with the document
-   for attention, and the name is already the most prominent word in the
-   bar. The hover rule is what says it can be pressed. */
+   the pencil on approach is the affordance, and the name is already the
+   most prominent word in the bar. */
+.doc-head .doc-id {
+  color: var(--color-text);
+}
+
 .doc-rename {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border: 0;
   background: transparent;
   color: inherit;
-  font: inherit;
-  font-weight: 600;
-  padding: 2px 4px;
-  margin-left: -4px;
-  border-radius: 6px;
+  font: 600 16px / 1 var(--font-heading);
+  padding: 3px 9px;
+  margin-left: -3px;
+  border-radius: 8px;
   cursor: text;
   max-width: 42ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .doc-rename:hover {
-  background: var(--line);
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+/* The pencil appears on approach - instant, like every approach mark. */
+.doc-rename .pencil {
+  display: flex;
+  flex: none;
+  color: color-mix(in srgb, var(--color-text) 40%, transparent);
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.doc-rename:hover .pencil,
+.doc-rename:focus-visible .pencil {
+  opacity: 1;
 }
 
 .doc-renaming {
@@ -441,35 +372,393 @@ body {
 /* Sized to the name, not to the bar: a field spanning the header would say
    this is a form. */
 .doc-rename-input {
-  font: inherit;
-  font-weight: 600;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--muted);
-  border-radius: 6px;
-  padding: 2px 6px;
+  font: 600 16px / 1.2 var(--font-heading);
+  color: var(--color-text);
+  background: var(--paper);
+  border: 1px solid var(--edge-2);
+  border-radius: 8px;
+  padding: 3px 9px;
   width: 32ch;
   max-width: 50vw;
 }
 
+/* The substrate refused the title. Said beside the field, at the
+   lost-seam size, and the field stays open with the reason. */
 .doc-rename-problem {
-  font-size: 11px;
-  color: var(--warn, #b45309);
+  font-size: 11.5px;
+  color: var(--color-accent-2);
 }
 
-/* The version picker. A dropdown because a hundred versions is a hundred
-   buttons otherwise, and a long conversation produces a hundred versions. */
-/* Asking before a restore. It sits between the document and the panel so it
-   is in the way, which is the point of a confirmation. */
-.confirm {
+/* The version pill. One version is a badge with nothing to open; more
+   than one is this pill, whose closed state is the design's and whose
+   open state is native OS chrome. */
+.doc-version {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--edge-2);
+  border-radius: 20px;
+  font: 600 12px / 1 var(--font-heading);
+  color: var(--color-text);
+}
+
+.doc-version-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--edge-2);
+  border-radius: 20px;
+}
+
+.doc-version-pill:hover {
+  border-color: var(--color-accent);
+}
+
+.doc-version-pill .v {
+  font: 600 12px / 1 var(--font-heading);
+  color: var(--color-text);
+}
+
+.doc-version-pill .of {
+  font: 400 12px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  white-space: nowrap;
+}
+
+.doc-version-pill .caret {
+  display: flex;
+  margin-right: 5px;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+/* The real select, invisible over the pill it styles. Clicks land on it,
+   the native dropdown opens, and the pill is what is seen. */
+.pill-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  appearance: none;
+}
+
+/* The compare entry point, quiet until stage three gives it the 6b
+   vocabulary. A pill in the same family as the version pill. */
+.compare-pick {
+  appearance: none;
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--edge);
+  border-radius: 20px;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  font: 400 12px / 1 var(--font-body);
+  cursor: pointer;
+}
+
+.compare-pick:hover {
+  border-color: var(--color-accent);
+}
+
+/* The quiet header buttons that remain from the version-travel controls.
+   Their wording and full treatment belong to the later stages; the tokens
+   are these. */
+.doc-head button.v {
+  flex: none;
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--edge-2);
+  border-radius: 20px;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  font: 400 12px / 1 var(--font-body);
+  cursor: pointer;
+}
+
+.doc-head button.v:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+/* The mode toggle, pushed right. The active mode is filled with the
+   accent: a mode is a thing the person chose. */
+.modes {
+  margin-left: auto;
+  display: flex;
+  flex: none;
+  padding: 2px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+}
+
+.doc-head button.m {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 20px;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  font: 400 12px / 1 var(--font-body);
+  cursor: pointer;
+}
+
+.doc-head button.m.current {
+  background: var(--color-accent);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+}
+
+.doc-head button.m:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The header while an edit is unsaved: it fills with ink and becomes the
+   question. Version pill and mode toggle are replaced by the status clause
+   and the two answers; the markup swaps, this is its paint. */
+.doc-head.saving-bar {
+  justify-content: flex-end;
+  gap: 8px;
+  background: var(--color-text);
+  color: var(--color-bg);
+}
+
+.saving-what {
+  margin-right: auto;
+  color: color-mix(in srgb, var(--color-bg) 70%, transparent);
+}
+
+.doc-head.saving-bar button.v {
+  height: 26px;
+  padding: 0 13px;
+  border: 1px solid color-mix(in srgb, var(--color-bg) 35%, transparent);
+  border-radius: 20px;
+  color: var(--color-bg);
+  font: 400 12px / 1 var(--font-body);
+}
+
+.doc-head.saving-bar button.v:hover {
+  background: color-mix(in srgb, var(--color-bg) 14%, transparent);
+}
+
+.doc-head.saving-bar button.v.primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+}
+
+/* --- the ground and the sheet --------------------------------------------
+ *
+ * The patterned ground bleeds to the window's left, right, and bottom
+ * edges - never above the header - and the sheet floats on it: --paper,
+ * 1px accent border in annotate, 1px ink border in edit, radius 12px. The
+ * pattern is the mode: Topography to annotate with, Graph Paper to edit
+ * on. */
+
+.doc-ground {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0 -14px -14px;
+  padding: 16px 16px 0;
+  background-color: var(--sepia);
+  background-image: url("data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22 viewBox=%220 0 88 88%22><g fill=%22none%22 stroke=%22%23201e1d%22 stroke-opacity=%22.13%22 stroke-width=%221%22><circle cx=%2222%22 cy=%2222%22 r=%227%22/><circle cx=%2222%22 cy=%2222%22 r=%2215%22/><circle cx=%2222%22 cy=%2222%22 r=%2223%22/><circle cx=%2222%22 cy=%2222%22 r=%2231%22/><circle cx=%2266%22 cy=%2266%22 r=%229%22/><circle cx=%2266%22 cy=%2266%22 r=%2218%22/><circle cx=%2266%22 cy=%2266%22 r=%2227%22/><circle cx=%2274%22 cy=%2214%22 r=%225%22/><circle cx=%2214%22 cy=%2274%22 r=%224%22/></g></svg>");
+  background-size: 88px 88px;
+}
+
+/* Edit reads on Graph Paper: 80px majors, 16px minors, in ink. */
+.doc-ground.edit {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--color-text) 11%, transparent) 1px, transparent 1px),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-text) 11%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(color-mix(in srgb, var(--color-text) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-text) 5%, transparent) 1px,
+      transparent 1px
+    );
+  background-size:
+    80px 80px,
+    80px 80px,
+    16px 16px,
+    16px 16px;
+}
+
+/* The sheet. The frame and the note box share this box, so a rect in the
+   frame's own viewport is also a position on this page. */
+.doc-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-accent);
+  border-radius: 12px;
+  background: var(--paper);
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.doc-ground.edit .doc-stage {
+  border-color: var(--color-text);
+  cursor: text;
+}
+
+/* The tab on the sheet's top edge carries the mode. An indicator, not a
+   control: the mode toggle in the header is the control. */
+.doc-tab {
+  position: absolute;
+  top: 0;
+  left: 22px;
+  z-index: 2;
+  padding: 3px 11px 4px;
+  border-radius: 0 0 8px 8px;
+  background: var(--color-accent);
+  color: #fff;
+  font: 600 10px / 1 var(--font-heading);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.doc-ground.edit .doc-tab {
+  background: var(--color-text);
+}
+
+.doc-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  /* Transparent, not paper. The document paints its own background, and a
+     colour set here shows through wherever the document does not reach,
+     which on macOS is every rubber-band overscroll. */
+  background: transparent;
+}
+
+/* The guidance line, under the sheet on the ground. */
+.doc-panel {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px 12px;
+}
+
+.guidance {
+  font-size: 12px;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+}
+
+.guidance.ready {
+  color: var(--color-text);
+}
+
+/* A refusal in the guidance: the substrate said no. */
+.guidance.warn {
+  color: var(--color-accent-2);
+}
+
+/* In the strip it is the row's stretchy half, with the outcome at the end. */
+.doc-panel .guidance {
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-empty {
+  padding: 32px 20px;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+}
+
+/* A version changed things the reader could not see, or a newer version
+   arrived. News about the document, above the document; the later stages
+   own their designed forms. */
+.doc-changed {
+  flex: 0 0 auto;
+  padding: 6px 16px;
+  border: 1px solid var(--edge-2);
+  border-radius: 12px;
+  background: var(--paper);
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  font-size: 12px;
+}
+
+.doc-changed button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--color-text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.doc-waiting {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: 1px solid var(--edge-2);
+  border-radius: 12px;
+  background: var(--paper);
+  font-size: 12px;
+  color: var(--color-text);
+}
+
+.doc-waiting button {
+  padding: 2px 10px;
+  border: 1px solid var(--edge-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* --- confirmations -------------------------------------------------------
+ *
+ * Interim: a strip pinned over the pane's bottom, until the discard
+ * confirms become the 6c dialog in a later stage. It stays in the way,
+ * which is the point of a confirmation. */
+
+.confirm {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
-  border-top: 1px solid var(--line);
-  background: var(--panel);
+  border-top: 1px solid var(--edge-2);
+  background: var(--paper);
   font-size: 13px;
+  color: var(--color-text);
 }
 
 .confirm span {
@@ -478,92 +767,27 @@ body {
 }
 
 .confirm button {
+  flex: none;
   padding: 5px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.v.restore {
-  color: var(--fg);
-}
-
-.doc-version-pick {
-  font: inherit;
-  font-size: 12px;
-  padding: 2px 6px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--fg);
-  max-width: 220px;
-}
-
-/* Looking at something that cannot be changed. The picker says so as well
-   as the guidance line, because the picker is what put you here. */
-.doc-version-pick.old {
-  border-color: var(--error);
-  color: var(--error);
-}
-
-.doc-versions {
-  display: flex;
-  gap: 4px;
-}
-
-.doc-head button.v {
-  padding: 2px 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  border: 1px solid var(--edge-2);
+  border-radius: 20px;
   background: transparent;
-  color: var(--muted);
+  color: var(--color-text);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
-.doc-head button.v.current {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-  font-weight: 600;
-}
-
-.doc-head button.v.latest {
-  margin-left: 4px;
-}
-
-/* A version changed things the reader could not see. Sits where the
-   newer-version banner sits and reads the same way: news about the document,
-   above the document. */
-/* The bar, while an edit is unsaved. It replaces what the head holds rather
-   than sitting beside it: the point of the pattern is that there are two
-   things to do and nothing else, so the name, the version and the modes are
-   gone, not greyed. */
-.doc-head.saving-bar {
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.saving-what {
-  margin-right: auto;
-  color: var(--fg);
-  font-weight: 500;
-}
-
-.doc-head .v.primary {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
+.confirm button.primary {
+  background: var(--color-text);
+  border-color: var(--color-text);
+  color: var(--color-bg);
 }
 
 /* --- comparing two versions ---------------------------------------------
    Covers the stage rather than replacing the pane, so closing it returns to
-   the version being read, exactly where it was. */
+   the version that was being read, exactly where it was. The 6b two-sheet
+   view is a later stage; this keeps the built line diff on the new tokens. */
 
 .compare {
   position: absolute;
@@ -571,7 +795,7 @@ body {
   z-index: 3;
   display: flex;
   flex-direction: column;
-  background: var(--panel);
+  background: var(--paper);
 }
 
 .compare-head {
@@ -579,30 +803,30 @@ body {
   align-items: center;
   gap: 10px;
   padding: 8px 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
+  border-bottom: 1px solid var(--edge-2);
+  background: var(--paper);
   font-size: 12px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
 .compare-count {
-  color: var(--faint);
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
 }
 
 .compare-head button {
   margin-left: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--fg);
+  border: 1px solid var(--edge-2);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-text);
   font: inherit;
-  padding: 3px 10px;
+  padding: 3px 12px;
   cursor: pointer;
 }
 
 .compare-unreadable {
   padding: 10px 14px;
-  color: var(--error);
+  color: var(--color-accent-2);
   font-size: 13px;
 }
 
@@ -628,7 +852,7 @@ body {
 }
 
 .compare-no {
-  color: var(--faint);
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
   text-align: right;
   user-select: none;
 }
@@ -653,125 +877,26 @@ body {
   display: none;
 }
 
+/* A diff is not a refusal, so it never takes magenta. Interim tints on the
+   accent and neutral ramps until the 6b block treatment lands. */
 .compare-row.added {
-  background: rgba(16, 185, 129, 0.12);
+  background: var(--color-accent-100);
 }
 
 .compare-row.removed {
-  background: rgba(220, 38, 38, 0.12);
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
 }
 
 .compare-row.changed {
-  background: rgba(251, 191, 36, 0.12);
+  background: color-mix(in srgb, var(--color-accent-100) 60%, transparent);
 }
 
-.doc-changed {
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--muted);
-  font-size: 12px;
-}
+/* --- the note box --------------------------------------------------------
+ *
+ * Written where you clicked; the frame reports a rect in its own viewport
+ * and the box is anchored to it. No shadow - the 1px edge and the paper
+ * carry it. */
 
-.doc-changed button {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--fg);
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.doc-waiting {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(251, 191, 36, 0.16);
-  font-size: 12px;
-  color: var(--fg);
-}
-
-.doc-waiting button {
-  padding: 2px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--fg);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.doc-frame {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-  border: 0;
-  /* Transparent, not white. The document paints its own background — this
-     one follows the browser's colour scheme — and a colour set here shows
-     through wherever the document does not reach, which on macOS is every
-     rubber-band overscroll. It read as the page flashing white. */
-  background: transparent;
-}
-
-.doc-empty {
-  padding: 32px 20px;
-}
-
-/* --- the panel under the document --------------------------------------- */
-
-/* Fixed height and outside the scrolling area: the actions used to sit at
-   the bottom of a panel that grew with the notes in it, so they left the
-   screen exactly when there was most to do. */
-/* One row. It held the note box as well, and keeping the column after the
-   box moved into the popover left a tall empty strip with a lone button at
-   the far end of it. */
-.doc-panel {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
-  border-top: 1px solid var(--line);
-  background: var(--bg);
-}
-
-.guidance {
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--muted);
-}
-
-.guidance.ready {
-  color: var(--fg);
-}
-
-.guidance.warn {
-  color: var(--error);
-}
-
-/* In the strip it is the row's stretchy half, with the button at the end. */
-.doc-panel .guidance {
-  flex: 1;
-  min-width: 0;
-}
-
-/* The frame and the note box share this box. The frame reports a rect in
-   its own viewport; because the frame fills this box, that rect is also a
-   position here. */
-.doc-stage {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Nothing to see: it exists only so the note box has something to point at
-   and stay pointing at when the popover flips to avoid an edge. */
 .sel-anchor {
   position: absolute;
   pointer-events: none;
@@ -789,20 +914,20 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+  padding: 12px;
+  border: 1px solid var(--edge-2);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--color-text);
 }
 
 .note-pop-head {
   font-size: 11px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
 .note-pop-arrow {
-  fill: var(--panel);
+  fill: var(--paper);
 }
 
 .note-pop-actions {
@@ -813,72 +938,130 @@ body {
 
 .note-pop-actions .ghost {
   background: transparent;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
-.note-compose {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.note-compose textarea,
 .note-pop textarea {
   resize: none;
   padding: 8px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--edge-2);
   border-radius: 8px;
-  background: var(--panel);
-  color: var(--fg);
+  background: var(--paper);
+  color: var(--color-text);
   font: inherit;
   font-size: 13px;
 }
 
-.note-compose textarea:disabled {
-  opacity: 0.5;
+.note-pop-actions button {
+  padding: 6px 12px;
+  border: 1px solid var(--edge-2);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.note-pop-actions button.primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+}
+
+.note-pop-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .note-actions {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
-.note-actions button,
-.note-pop-actions button {
-  padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--fg);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
+/* --- the conversation column ---------------------------------------------
+ *
+ * Its own 34px row - conversation name, driver identity, status pill -
+ * aligned with the document header so both top out together. The turn
+ * list scrolls; the composer is pinned to the bottom. */
+
+.conv-head {
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 2px;
+  min-width: 0;
 }
 
-.note-actions button.primary {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-  font-weight: 600;
+.conv-name {
+  flex: none;
+  max-width: 55%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 400 14px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
 }
 
-.note-actions button:disabled {
-  opacity: 0.4;
-  cursor: default;
+/* What is driving, when the record says. Identity, not status. */
+.conv-driver {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 400 12px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
 }
 
-/* --- the conversation --------------------------------------------------- */
+/* The status pill. Working is the accent family - it is the agent doing
+   something. Idle is neutral ink: waiting, not refusing. */
+.conv-pill {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  padding: 0 11px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  white-space: nowrap;
+}
 
-.head .driver {
-  font-size: 11px;
-  color: var(--faint);
-  padding: 2px 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+.conv-pill .dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-text) 35%, transparent);
+}
+
+.conv-pill .label {
+  font: 400 12px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+.conv-pill.busy {
+  background: var(--color-accent-100);
+}
+
+.conv-pill.busy .dot {
+  background: var(--color-accent);
+}
+
+.conv-pill.busy .label {
+  color: var(--color-accent-800);
 }
 
 .thread-root {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -891,19 +1074,63 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 14px 8px;
+  padding: 2px 2px 0;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 17px;
 }
 
-/* A tool call is the agent working, not the agent talking. */
+.empty {
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  font-size: 13.5px;
+  padding: 24px 0;
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 100%;
+}
+
+/* Yours on the right, the agent's on the left. The side says whose it is,
+   so neither needs a label. */
+.msg.user {
+  align-items: flex-end;
+}
+
+.msg .who {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+.msg .body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+/* The user's turn is the one bubble: warm ink on the sepia, the serif's
+   own weight doing the marking. */
+.msg.user .body {
+  align-self: flex-end;
+  max-width: 85%;
+  background: color-mix(in srgb, var(--color-text) 5%, transparent);
+  border-radius: 10px;
+  padding: 10px 13px;
+}
+
+/* A tool call is the agent working, not the agent talking. Fainter than
+   speech, a mono glyph, neutral ink. */
 .msg.tool {
   flex-direction: row;
   align-items: baseline;
   gap: 6px;
   font-size: 12px;
-  color: var(--faint);
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
 }
 
 .msg.tool .body {
@@ -917,74 +1144,22 @@ body {
   flex: 0 0 auto;
 }
 
-/* assistant-ui marks this disabled when you are already at the bottom
-   rather than unmounting it, so hiding it is the stylesheet's job. */
-.to-bottom[disabled] {
-  display: none;
-}
-
-.to-bottom {
-  position: absolute;
-  right: 16px;
-  bottom: 10px;
-  padding: 4px 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--fg);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
-}
-
-.thread-root {
-  position: relative;
-}
-
-.modes {
-  display: flex;
-  gap: 0;
-  margin-left: auto;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.doc-head button.m {
-  padding: 3px 12px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.doc-head button.m.current {
-  background: var(--accent);
-  color: var(--bg);
-  font-weight: 600;
-}
-
-/* Something that happened, not something anyone said. Centred and quiet so
-   it does not read as a message from either side. */
+/* Something that happened, not something anyone said. A quiet pill: a save
+   is history, not a user action pending anything. */
 .msg.happened {
   align-items: center;
 }
 
 .msg.happened .body {
   font-size: 11px;
-  color: var(--faint);
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
   padding: 2px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--edge);
   border-radius: 999px;
 }
 
 /* assistant-ui renders each text part in its own <p>, which carries the
-   browser's default `margin: 15px 0`. That is 30px of vertical space around
-   a 23px line, and it was doing all of the padding the bubbles looked like
-   they had — the rule on `.body` was 5px and never the cause. */
+   browser's default margins. Those gaps belong to no one here. */
 .msg .body p {
   margin: 0;
 }
@@ -1001,119 +1176,139 @@ body {
   margin-bottom: 0;
 }
 
-/* --- notes in the timeline ---------------------------------------------- */
+/* assistant-ui marks this disabled when you are already at the bottom
+   rather than unmounting it, so hiding it is the stylesheet's job. */
+.to-bottom[disabled] {
+  display: none;
+}
+
+/* An ink pill, no shadow. */
+.to-bottom {
+  position: absolute;
+  right: 16px;
+  bottom: 10px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-text);
+  color: var(--color-bg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* --- notes in the timeline ----------------------------------------------
+ *
+ * Interim on the new tokens: the cyan left rule and the quiet ground. The
+ * anchoring bands and the queue vocabulary are a later stage. */
 
 .note-card {
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 7px 10px;
-  border-radius: 10px;
-  border-left: 3px solid #7c3aed;
-  background: rgba(124, 58, 237, 0.1);
+  border-radius: 2px;
+  border-left: 2px solid var(--color-accent);
+  background: transparent;
   align-self: stretch;
 }
 
 /* A note that still points somewhere takes you there. Only these are
-   interactive: a lost note has no target, and a note written against another
-   version would land in the wrong place rather than in none. */
+   interactive: a lost note has no target, and a note written against
+   another version would land in the wrong place rather than in none. */
 .note-card.goes {
   cursor: pointer;
 }
 
 .note-card.goes:hover {
-  background: rgba(124, 58, 237, 0.18);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
 }
 
 .note-card.goes:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 
+/* Lost is a fact about history, not an error: 20% ink rule, 75% presence. */
 .note-card.orphan {
-  border-left-color: var(--error);
-  background: rgba(220, 38, 38, 0.09);
+  border-left-color: color-mix(in srgb, var(--color-text) 20%, transparent);
+  opacity: 0.75;
 }
 
 .note-card-head {
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--faint);
-}
-
-.note-card.orphan .note-card-head {
-  color: var(--error);
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
 }
 
 .note-card-note {
   font-size: 13px;
-  color: var(--fg);
+  color: var(--color-text);
 }
 
 .note-card-spot {
   font-size: 11px;
-  color: var(--faint);
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
 }
 
-/* The queue's own action, where the queue is. The chat composer below it
-   sends chat and never touches these — you can write notes, keep talking,
-   and send the batch when you are ready. */
-/* Part of the dock, not a card floating over the conversation. Opaque, so
-   nothing shows through it, and square against the composer below it. */
-.queue-bar {
+.batch {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--panel);
-  font-size: 12px;
-  color: var(--fg);
+  flex-direction: column;
+  gap: 5px;
+  align-self: stretch;
 }
 
-.queue-bar > span {
+/* A note written against a later version than the one on screen. Not an
+   orphan - nothing was lost, you are just looking further back. */
+.note-card.later {
+  border-left-color: color-mix(in srgb, var(--color-text) 30%, transparent);
+  background: transparent;
+  opacity: 0.6;
+}
+
+/* --- the two halves of the conversation pane ----------------------------- */
+
+/* Everything that scrolls. */
+.thread-wrap {
+  position: relative;
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-.queue-bar button {
-  padding: 4px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--fg);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+/* Everything that does not: what is happening, what is queued, and the box
+   you type in - one solid block of paper below the conversation. */
+.dock {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border-top: 1px solid var(--edge-2);
+  border-radius: 12px 12px 0 0;
 }
 
-.queue-bar button.primary {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-  font-weight: 600;
+/* The dock owns the divider above itself; its first child must not draw a
+   second one. */
+.dock > :first-child {
+  border-top: 0;
 }
 
-.queue-bar button.discard {
-  padding: 4px 9px;
-  color: var(--muted);
-}
-
-/* --- is anything happening ----------------------------------------------- */
-
+/* What is happening. Neutral ink while it is only a wait; a stall is the
+   one warning, and it says so in ink at full weight, never magenta. */
 .activity {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--bg);
+  border-top: 1px solid var(--edge);
   font-size: 12px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
 .activity.stalled {
-  color: var(--error);
+  color: var(--color-text);
 }
 
 .pulse {
@@ -1145,50 +1340,206 @@ body {
   }
 }
 
-.batch {
+/* The queue's own action, where the queue is. */
+.queue-bar {
   display: flex;
-  flex-direction: column;
-  gap: 5px;
-  align-self: stretch;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--edge);
+  font-size: 12px;
+  color: var(--color-text);
 }
 
-.note-card.sent {
-  border-left-color: #b45309;
-  background: rgba(180, 83, 9, 0.12);
-}
-
-/* --- the two halves of the conversation pane ----------------------------- */
-
-/* Everything that scrolls. */
-.thread-wrap {
-  position: relative;
+.queue-bar > span {
   flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
 }
 
-/* Everything that does not: what is happening, what is queued, and the box
-   you type in — one solid block, opaque, below the conversation rather than
-   over it. */
-.dock {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-  border-top: 1px solid var(--line);
-}
-
-/* The dock owns the divider above itself; its first child must not draw a
-   second one. */
-.dock > :first-child {
-  border-top: 0;
-}
-
-/* A note written against a later version than the one on screen. Not an
-   orphan — nothing was lost, you are just looking further back. */
-.note-card.later {
-  border-left-color: var(--faint);
+.queue-bar button {
+  padding: 4px 12px;
+  border: 1px solid var(--edge-2);
+  border-radius: 20px;
   background: transparent;
-  opacity: 0.6;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.queue-bar button.primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+}
+
+.queue-bar button.discard {
+  padding: 4px 9px;
+  border-color: transparent;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+}
+
+/* --- attachments and the composer ---------------------------------------- */
+
+/* Files attached to the message being written. They are already stored, so
+   these are references the page draws, not bytes it holds. */
+.attached {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px 0;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 4px;
+  border: 1px solid var(--edge-2);
+  border-radius: 8px;
+  background: var(--paper);
+  font-size: 12px;
+  max-width: 220px;
+}
+
+.thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+/* What a file with no picture shows instead. */
+.thumb.kind {
+  display: grid;
+  place-items: center;
+  background: var(--color-bg);
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-drop {
+  border: 0;
+  background: none;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.chip-drop:hover {
+  color: var(--color-text);
+}
+
+/* Inside the note box the chips sit above the buttons, not above a
+   composer, so they need their own spacing. */
+.attached.in-note {
+  padding: 6px 0 0;
+}
+
+/* The control that opens the file picker. The input itself is never shown -
+   a browser's own file input cannot be styled and says the wrong thing. */
+.attach {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--edge-2);
+  border-radius: 10px;
+  background: var(--paper);
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.attach:hover {
+  color: var(--color-text);
+}
+
+.attach input {
+  display: none;
+}
+
+/* In the note box, beside Cancel and Add note rather than beside a
+   textarea, so it matches their height instead of the composer's. */
+.attach.small {
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+  margin-right: auto;
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 10px 14px 14px;
+}
+
+.composer textarea {
+  flex: 1;
+  resize: none;
+  min-height: 40px;
+  max-height: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--edge-2);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.composer textarea::placeholder {
+  color: color-mix(in srgb, var(--color-text) 42%, transparent);
+}
+
+.composer textarea:focus {
+  border-color: var(--color-accent);
+}
+
+.composer button {
+  height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--color-accent);
+  color: #fff;
+  font: inherit;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  cursor: pointer;
+}
+
+.composer button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* --- the notice strip ----------------------------------------------------
+ *
+ * The substrate refusing: a dead token, a damaged record, a send that did
+ * not go. Magenta, close to its cause. The later stages move each cause to
+ * its designed place - the 3d header, the G1 family, the composer chip. */
+
+.notice {
+  flex: 0 0 auto;
+  margin: 14px 14px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--color-accent-2);
+  border-radius: 12px;
+  background: var(--color-accent-2-100);
+  color: var(--color-accent-2-800);
+  font-size: 12.5px;
 }

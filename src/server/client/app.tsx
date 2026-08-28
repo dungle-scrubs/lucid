@@ -49,6 +49,7 @@ import {
   sha256Hex,
 } from "./anchor.js";
 import { isModeToggle, isQueueSend } from "./hotkeys.js";
+import { CaretDownDuotone, PencilDuotone } from "./icons.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 import {
   CONVERSATION_MAX,
@@ -144,6 +145,11 @@ const DocName = ({
         }}
       >
         {shown}
+        {/* The affordance, on approach only: the name is the most
+            prominent word in the bar and needs no standing label beside it. */}
+        <span className="pencil">
+          <PencilDuotone size={14} />
+        </span>
       </button>
     );
   }
@@ -2361,22 +2367,20 @@ const App = (): React.ReactElement => {
     [pinnedOld],
   );
 
+  /** The conversation's status pill, in one word. The counted, clocked
+   * telling of this state is a later stage's; the pill says which of the two
+   * states holds. */
+  const busy = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
+
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <Resolutions.Provider value={resolutions}>
         <FocusSpot.Provider value={goToSpot}>
-          <header className="head">
-            <span className="id">{conversationId === "" ? "no conversation" : conversationId}</span>
-            {driver.harness === undefined ? null : (
-              <span className="driver">
-                {driver.harness}
-                {driver.model === undefined ? "" : ` · ${driver.model}`}
-                {driver.harnessVersion === undefined ? "" : ` · ${driver.harnessVersion}`}
-              </span>
-            )}
-            <span className="status">{status}</span>
-          </header>
-          {problem === null ? null : <div className="notice">{problem}</div>}
+          {problem === null ? null : (
+            <div className="notice" role="alert">
+              {problem}
+            </div>
+          )}
 
           <div className="panes">
             {/* The document is the thing being worked on, so it gets the room
@@ -2445,6 +2449,13 @@ const App = (): React.ReactElement => {
                     </div>
                   ) : (
                     <div className="doc-head">
+                      {/* lucid, over the document: the mark, a hairline, then
+                      the name. Nothing else above the sheet. */}
+                      <span className="doc-mark" aria-hidden="true">
+                        <span className="dot" />
+                        <span className="word">lucid</span>
+                      </span>
+                      <span className="doc-head-sep" aria-hidden="true" />
                       <DocName
                         artifactId={doc.artifactId}
                         {...(allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title ===
@@ -2457,43 +2468,51 @@ const App = (): React.ReactElement => {
                         onRename={rename}
                       />
                       {/* One version is a badge with nothing to open. More than
-                    one is a dropdown, newest first: a row of buttons does not
-                    survive a hundred versions, which is what a long
-                    conversation produces. A native select because it is the
-                    affordance, and the visual treatment belongs to the design
-                    pass rather than to this. */}
+                    one is the version pill: its closed state is the design's,
+                    and the invisible select over it opens the native dropdown.
+                    A hundred versions is a hundred buttons otherwise, and a
+                    long conversation produces a hundred versions. */}
                       {catalog === null || catalog.versions.length < 2 ? (
                         <span className="doc-version">v{doc.version}</span>
                       ) : (
-                        <select
-                          className={viewingOld ? "doc-version-pick old" : "doc-version-pick"}
-                          value={String(doc.version)}
-                          aria-label="Version"
-                          onChange={(e) => {
-                            const picked = Number.parseInt(e.target.value, 10);
-                            // Choosing the current version is choosing to follow
-                            // it, not to pin it there. Otherwise the newest
-                            // version arriving would leave you on a stale one
-                            // that the picker calls current.
-                            setPinned(picked === catalog.latest ? null : picked);
-                          }}
-                        >
-                          {[...catalog.versions].reverse().map((v) => (
-                            <option key={v} value={String(v)}>
-                              v{v}
-                              {catalog.authors?.[v] === "human"
-                                ? " · saved by you"
-                                : " · by the agent"}
-                              {v === catalog.latest ? " · current" : ""}
-                            </option>
-                          ))}
-                        </select>
+                        <span className="doc-version-pill">
+                          <span className="v">v{doc.version}</span>
+                          {viewingOld ? null : (
+                            <span className="of">latest of {catalog.versions.length}</span>
+                          )}
+                          <span className="caret" aria-hidden="true">
+                            <CaretDownDuotone />
+                          </span>
+                          <select
+                            className="pill-select"
+                            value={String(doc.version)}
+                            aria-label="Version"
+                            onChange={(e) => {
+                              const picked = Number.parseInt(e.target.value, 10);
+                              // Choosing the current version is choosing to follow
+                              // it, not to pin it there. Otherwise the newest
+                              // version arriving would leave you on a stale one
+                              // that the picker calls current.
+                              setPinned(picked === catalog.latest ? null : picked);
+                            }}
+                          >
+                            {[...catalog.versions].reverse().map((v) => (
+                              <option key={v} value={String(v)}>
+                                v{v}
+                                {catalog.authors?.[v] === "human"
+                                  ? " · saved by you"
+                                  : " · by the agent"}
+                                {v === catalog.latest ? " · current" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </span>
                       )}
                       {/* Offered only where there is something to compare
                       against: one version has nothing to be held against. */}
                       {catalog === null || catalog.versions.length < 2 ? null : (
                         <select
-                          className="v compare-pick"
+                          className="compare-pick"
                           value=""
                           aria-label="Compare with another version"
                           onChange={(e) => {
@@ -2530,21 +2549,21 @@ const App = (): React.ReactElement => {
                       <span className="modes">
                         <button
                           type="button"
-                          className={mode === "edit" ? "m current" : "m"}
-                          onClick={() => setMode("edit")}
-                          disabled={pinnedOld}
-                          title="Tick boxes, fill fields, and edit text (⌥⌫)"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
                           className={mode === "annotate" ? "m current" : "m"}
                           onClick={() => setMode("annotate")}
                           disabled={pinnedOld}
                           title="Click parts of the document to write notes about them (⌥⌫)"
                         >
                           Annotate
+                        </button>
+                        <button
+                          type="button"
+                          className={mode === "edit" ? "m current" : "m"}
+                          onClick={() => setMode("edit")}
+                          disabled={pinnedOld}
+                          title="Tick boxes, fill fields, and edit text (⌥⌫)"
+                        >
+                          Edit
                         </button>
                       </span>
                     </div>
@@ -2611,166 +2630,186 @@ const App = (): React.ReactElement => {
                     />
                   )}
 
-                  {/* The frame and the note box share one positioned box, so
+                  {/* The patterned ground behind the sheet: sepia and the
+                  Topography pattern to annotate on, Graph Paper to edit on.
+                  It bleeds to the window's left, right, and bottom edges and
+                  never above the header. */}
+                  <div className={mode === "edit" ? "doc-ground edit" : "doc-ground"}>
+                    {/* The frame and the note box share one positioned box, so
                   a rect in the frame's own viewport is also a position on
-                  this page and the anchor needs no arithmetic. */}
-                  <div className="doc-stage">
-                    <DocumentFrame
-                      doc={doc}
-                      onSelection={onSelected}
-                      capture={capture}
-                      snapshot={snapshot}
-                      deselect={deselect}
-                      focusSpot={focusSpot}
-                      place={place}
-                      restorePlace={restorePlace}
-                      pendingRestore={pendingRestore}
-                      pendingPulse={pendingPulse}
-                      pulseBlocks={pulseBlocks}
-                      goBlock={goBlock}
-                      onOffscreen={setOffscreenChanges}
-                      onHotkey={onHotkey}
-                      onDirty={() => setEdited(true)}
-                      marked={[
-                        ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
-                        ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
-                      ]}
-                      mode={mode}
-                      readOnly={pinnedOld}
-                    />
+                  this page and the anchor needs no arithmetic. The box is
+                  the sheet: --paper, the mode's 1px border, radius 12px. */}
+                    <div className="doc-stage">
+                      {/* The tab on the sheet's top edge carries the mode. An
+                    indicator only - the toggle in the header is the control. */}
+                      <div className="doc-tab" aria-hidden="true">
+                        {mode === "edit" ? "Edit" : "Annotate"}
+                      </div>
+                      <DocumentFrame
+                        doc={doc}
+                        onSelection={onSelected}
+                        capture={capture}
+                        snapshot={snapshot}
+                        deselect={deselect}
+                        focusSpot={focusSpot}
+                        place={place}
+                        restorePlace={restorePlace}
+                        pendingRestore={pendingRestore}
+                        pendingPulse={pendingPulse}
+                        pulseBlocks={pulseBlocks}
+                        goBlock={goBlock}
+                        onOffscreen={setOffscreenChanges}
+                        onHotkey={onHotkey}
+                        onDirty={() => setEdited(true)}
+                        marked={[
+                          ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
+                          ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
+                        ]}
+                        mode={mode}
+                        readOnly={pinnedOld}
+                      />
 
-                    {/* Written where you clicked. The box used to be a panel at
+                      {/* Written where you clicked. The box used to be a panel at
                     the bottom of the pane, so the thing being written about
                     and the writing were at opposite ends of the screen. */}
-                    <Popover.Root
-                      open={selection.length > 0 && selRect !== null}
-                      // Whether it is open is a fact about the selection, so
-                      // the selection is the only thing that decides it. The
-                      // library asked to close on any click outside and took
-                      // a half-written note with it; refusing here means the
-                      // ways out are Cancel, Escape, and Add note.
-                      onOpenChange={() => {}}
-                    >
-                      <Popover.Anchor asChild>
-                        <div
-                          className="sel-anchor"
-                          style={
-                            selRect === null
-                              ? { display: "none" }
-                              : {
-                                  left: `${selRect.x}px`,
-                                  top: `${selRect.y}px`,
-                                  width: `${selRect.width}px`,
-                                  height: `${selRect.height}px`,
-                                }
-                          }
-                        />
-                      </Popover.Anchor>
-                      <Popover.Portal>
-                        <Popover.Content
-                          className="note-pop"
-                          // Under the line, not beside it. A block in a
-                          // document is as wide as the column, so there is
-                          // never room to the side — Radix said so, reporting
-                          // 128px available, and the box hung off the screen.
-                          // Below, it flips above near the bottom and slides
-                          // sideways to stay in view.
-                          side="bottom"
-                          align="start"
-                          // Stepped in from the left edge of what it points at.
-                          // Flush, its edge lined up with the paragraph's and
-                          // the two read as one block.
-                          alignOffset={28}
-                          sideOffset={8}
-                          collisionPadding={12}
-                          // Only Escape and the buttons close it. A click into
-                          // the document is how a second spot is added, and it
-                          // must not throw away what is already typed.
-                          onInteractOutside={(e) => e.preventDefault()}
-                          onFocusOutside={(e) => e.preventDefault()}
-                          onEscapeKeyDown={cancelNote}
-                          onOpenAutoFocus={(e) => {
-                            e.preventDefault();
-                            noteBox.current?.focus();
-                          }}
-                        >
-                          <div className="note-pop-head">
-                            {notes.length >= NOTE_QUEUE_MAX
-                              ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
-                              : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
-                          </div>
-                          <textarea
-                            ref={noteBox}
-                            value={draft}
-                            onChange={(e) => setDraft(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                                e.preventDefault();
-                                void addNote();
-                              }
-                            }}
-                            placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
-                            rows={3}
+                      <Popover.Root
+                        open={selection.length > 0 && selRect !== null}
+                        // Whether it is open is a fact about the selection, so
+                        // the selection is the only thing that decides it. The
+                        // library asked to close on any click outside and took
+                        // a half-written note with it; refusing here means the
+                        // ways out are Cancel, Escape, and Add note.
+                        onOpenChange={() => {}}
+                      >
+                        <Popover.Anchor asChild>
+                          <div
+                            className="sel-anchor"
+                            style={
+                              selRect === null
+                                ? { display: "none" }
+                                : {
+                                    left: `${selRect.x}px`,
+                                    top: `${selRect.y}px`,
+                                    width: `${selRect.width}px`,
+                                    height: `${selRect.height}px`,
+                                  }
+                            }
                           />
-                          {noteFiles.length === 0 ? null : (
-                            <div className="attached in-note">
-                              {noteFiles.map((a) => (
-                                <span className={a.text ? "chip text" : "chip"} key={a.hash}>
-                                  {a.url !== null ? (
-                                    <img src={a.url} alt="" className="thumb" />
-                                  ) : (
-                                    <span className="thumb kind">{a.text ? "text" : "file"}</span>
-                                  )}
-                                  <span className="chip-name">{a.name}</span>
-                                  <button
-                                    type="button"
-                                    className="chip-drop"
-                                    title="Remove"
-                                    onClick={() => removeNoteFile(a.hash)}
-                                  >
-                                    ×
-                                  </button>
-                                </span>
-                              ))}
+                        </Popover.Anchor>
+                        <Popover.Portal>
+                          <Popover.Content
+                            className="note-pop"
+                            // Under the line, not beside it. A block in a
+                            // document is as wide as the column, so there is
+                            // never room to the side — Radix said so, reporting
+                            // 128px available, and the box hung off the screen.
+                            // Below, it flips above near the bottom and slides
+                            // sideways to stay in view.
+                            side="bottom"
+                            align="start"
+                            // Stepped in from the left edge of what it points at.
+                            // Flush, its edge lined up with the paragraph's and
+                            // the two read as one block.
+                            alignOffset={28}
+                            sideOffset={8}
+                            collisionPadding={12}
+                            // Only Escape and the buttons close it. A click into
+                            // the document is how a second spot is added, and it
+                            // must not throw away what is already typed.
+                            onInteractOutside={(e) => e.preventDefault()}
+                            onFocusOutside={(e) => e.preventDefault()}
+                            onEscapeKeyDown={cancelNote}
+                            onOpenAutoFocus={(e) => {
+                              e.preventDefault();
+                              noteBox.current?.focus();
+                            }}
+                          >
+                            <div className="note-pop-head">
+                              {notes.length >= NOTE_QUEUE_MAX
+                                ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
+                                : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
                             </div>
-                          )}
-                          <div className="note-pop-actions">
-                            {/* The half that carries this feature: a
+                            <textarea
+                              ref={noteBox}
+                              value={draft}
+                              onChange={(e) => setDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                  e.preventDefault();
+                                  void addNote();
+                                }
+                              }}
+                              placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
+                              rows={3}
+                            />
+                            {noteFiles.length === 0 ? null : (
+                              <div className="attached in-note">
+                                {noteFiles.map((a) => (
+                                  <span className={a.text ? "chip text" : "chip"} key={a.hash}>
+                                    {a.url !== null ? (
+                                      <img src={a.url} alt="" className="thumb" />
+                                    ) : (
+                                      <span className="thumb kind">{a.text ? "text" : "file"}</span>
+                                    )}
+                                    <span className="chip-name">{a.name}</span>
+                                    <button
+                                      type="button"
+                                      className="chip-drop"
+                                      title="Remove"
+                                      onClick={() => removeNoteFile(a.hash)}
+                                    >
+                                      ×
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            <div className="note-pop-actions">
+                              {/* The half that carries this feature: a
                               screenshot of what is wrong with a paragraph is
                               marking up, which is what lucid is for. */}
-                            <label className="attach small" title="Attach a file to this note">
-                              +
-                              <input
-                                type="file"
-                                multiple
-                                onChange={(e) => {
-                                  if (e.currentTarget.files !== null)
-                                    void attachToNote(e.currentTarget.files);
-                                  e.currentTarget.value = "";
-                                }}
-                              />
-                            </label>
-                            <button type="button" className="ghost" onClick={cancelNote}>
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              className="primary"
-                              onClick={() => void addNote()}
-                              disabled={draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX}
-                            >
-                              Add note
-                            </button>
-                          </div>
-                          <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
-                        </Popover.Content>
-                      </Popover.Portal>
-                    </Popover.Root>
+                              <label className="attach small" title="Attach a file to this note">
+                                +
+                                <input
+                                  type="file"
+                                  multiple
+                                  onChange={(e) => {
+                                    if (e.currentTarget.files !== null)
+                                      void attachToNote(e.currentTarget.files);
+                                    e.currentTarget.value = "";
+                                  }}
+                                />
+                              </label>
+                              <button type="button" className="ghost" onClick={cancelNote}>
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                className="primary"
+                                onClick={() => void addNote()}
+                                disabled={draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX}
+                              >
+                                Add note
+                              </button>
+                            </div>
+                            <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
+                          </Popover.Content>
+                        </Popover.Portal>
+                      </Popover.Root>
+                    </div>
+
+                    {/* The guidance line, under the sheet on the ground. */}
+                    <div className="doc-panel">
+                      <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
+
+                      {/* Saving moved to the top bar with #171, and this is
+                        what is left: the last save's outcome, which is news
+                        rather than an action. A second Save down here would be
+                        a second place to look for the same thing. */}
+                      {saved === null ? null : <div className="note-actions">{saved}</div>}
+                    </div>
                   </div>
 
-                  {/* Everything below here has a fixed height and never scrolls
-                  out of view. The actions were reachable only by scrolling a
-                  panel that grew with the notes in it. */}
                   {/* A confirmation, because a restore puts a new version in
                   front of the agent. It says the undo out loud: someone
                   deciding whether to restore is deciding whether it is
@@ -2846,16 +2885,6 @@ const App = (): React.ReactElement => {
                       </button>
                     </div>
                   )}
-
-                  <div className="doc-panel">
-                    <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
-
-                    {/* Saving moved to the top bar with #171, and this is
-                      what is left: the last save's outcome, which is news
-                      rather than an action. A second Save down here would be
-                      a second place to look for the same thing. */}
-                    {saved === null ? null : <div className="note-actions">{saved}</div>}
-                  </div>
                 </>
               )}
             </div>
@@ -2883,6 +2912,30 @@ const App = (): React.ReactElement => {
                   : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
               }
             >
+              {/* The conversation's own 34px row, aligned with the document
+              header so both columns top out together: its name, what is
+              driving it, and how it stands. */}
+              <div className="conv-head">
+                <span className="conv-name">
+                  {conversationId === "" ? "no conversation" : conversationId}
+                </span>
+                {driver.harness === undefined ? null : (
+                  <span
+                    className="conv-driver"
+                    title={driver.harnessVersion === undefined ? undefined : driver.harnessVersion}
+                  >
+                    {driver.harness}
+                    {driver.model === undefined ? "" : ` · ${driver.model}`}
+                  </span>
+                )}
+                <span
+                  className={busy ? "conv-pill busy" : "conv-pill"}
+                  title={status === "" ? undefined : status}
+                >
+                  <span className="dot" aria-hidden="true" />
+                  <span className="label">{busy ? "working" : "idle"}</span>
+                </span>
+              </div>
               <Thread
                 pending={notes}
                 onSendNotes={() => void sendNotes()}
