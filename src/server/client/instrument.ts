@@ -25,6 +25,7 @@
  *   selection.
  */
 import { flattenNewlines } from "./snapshot-dom.js";
+import { BLOCK_SELECTOR } from "./version-diff.js";
 
 /** Marks a message as lucid's own. Checked by the parent, which also
  * checks the sending window — an opaque origin gives nothing to compare,
@@ -608,6 +609,23 @@ const script = (artifactId: string, version: number, author: string): string => 
       return;
     }
 
+    // Put the reader back where they were, in a document that has been
+    // replaced under them (#180).
+    //
+    // Addressed by block index rather than by scroll offset. An offset is
+    // wrong the moment anything above the reader changes length, which is
+    // exactly what a new version does. The page maps the old index to the
+    // new one before sending it, using the same block walk that reports what
+    // changed, so nothing here has to match anything.
+    if (m.kind === "restore-place" && typeof m.index === "number") {
+      var backTo = blocks()[m.index];
+      if (!backTo) return;
+      var want = typeof m.top === "number" ? m.top : 0;
+      var have = backTo.getBoundingClientRect().top;
+      window.scrollBy(0, have - want);
+      return;
+    }
+
     if (m.kind === "mark" && Array.isArray(m.ids)) {
       var noted = document.querySelectorAll(".lucid-noted");
       for (var a = 0; a < noted.length; a++) noted[a].classList.remove("lucid-noted");
@@ -618,6 +636,63 @@ const script = (artifactId: string, version: number, author: string): string => 
       return;
     }
   });
+
+  // The frame's blocks, in the order collectBlocks produces them: the same
+  // selector, skipping a block that holds another block, skipping empty ones.
+  // Ordering has to agree exactly, because the page addresses them by index.
+  var BLOCKS = "${BLOCK_SELECTOR}";
+  var blocks = function () {
+    var all = document.querySelectorAll(BLOCKS);
+    var out = [];
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].querySelector(BLOCKS)) continue;
+      if ((all[i].textContent || "").replace(/s+/g, " ").trim() === "") continue;
+      out.push(all[i]);
+    }
+    return out;
+  };
+
+  // Where the reader is, pushed rather than asked for.
+  //
+  // Pushed because by the time it is needed the frame is gone: a new version
+  // replaces this document, so the page has to already hold the answer. It
+  // cannot ask for it after the fact.
+  var placeTimer = null;
+  var reportPlace = function () {
+    var list = blocks();
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i].getBoundingClientRect();
+      // The first block whose bottom is still below the top edge: what the
+      // reader is looking at, rather than what has scrolled past.
+      if (r.bottom > 0) {
+        parent.postMessage(
+          { source: SOURCE, kind: "place", artifactId: ARTIFACT, version: VERSION,
+            // Not rounded. The offset is put back by scrolling the
+            // difference, and a rounded one lands within a pixel but not on
+            // the same sub-pixel, which re-rasterises every glyph.
+            index: i, top: r.top },
+          "*"
+        );
+        return;
+      }
+    }
+  };
+  window.addEventListener("scroll", function () {
+    if (placeTimer !== null) return;
+    placeTimer = setTimeout(function () {
+      placeTimer = null;
+      reportPlace();
+    }, 150);
+  }, { passive: true });
+  // The page cannot restore a place until the document exists to hold one,
+  // and srcdoc loads on its own schedule. Saying so beats guessing at a
+  // delay or resending until something sticks.
+  parent.postMessage(
+    { source: SOURCE, kind: "ready", artifactId: ARTIFACT, version: VERSION },
+    "*"
+  );
+  // Once at the start, so a reader who never scrolls still has a place.
+  setTimeout(reportPlace, 0);
 
   var touched = function (el) {
     if (!el || el.nodeType !== 1 || !el.hasAttribute(ATTR)) return;

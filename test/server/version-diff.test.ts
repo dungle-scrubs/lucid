@@ -250,3 +250,40 @@ describe("controls, which change without changing any words", () => {
     expect(d.identical).toBe(false);
   });
 });
+
+describe("following a block across a version", () => {
+  test("an unchanged block says where it went", () => {
+    // The reader's place is a block. Keeping it across a new version means
+    // following that block, which is what this map is for.
+    const d = diffVersions(
+      doc("<p>one</p><p>two</p><p>three</p>"),
+      doc("<p>NEW</p><p>one</p><p>two</p><p>three</p>"),
+    );
+    expect(d.carried.get(0)).toBe(1);
+    expect(d.carried.get(2)).toBe(3);
+  });
+
+  test("a reworded block is still followed", () => {
+    const d = diffVersions(
+      doc("<p>keep</p><p>the quick brown fox jumps</p>"),
+      doc("<p>keep</p><p>the quick brown fox leaps</p>"),
+    );
+    expect(d.carried.get(1)).toBe(1);
+  });
+
+  test("a removed block is absent, rather than pointing somewhere wrong", () => {
+    const d = diffVersions(doc("<p>one</p><p>gone</p><p>three</p>"), doc("<p>one</p><p>three</p>"));
+    expect(d.carried.has(1)).toBe(false);
+    expect(d.carried.get(2)).toBe(1);
+  });
+
+  test("every surviving block is accounted for", () => {
+    const before = doc("<p>a</p><p>b</p><p>c</p>");
+    const after = doc("<p>a</p><p>c</p>");
+    const d = diffVersions(before, after);
+    expect([...d.carried.entries()].sort()).toEqual([
+      [0, 0],
+      [2, 1],
+    ]);
+  });
+});

@@ -59,6 +59,7 @@ import {
 } from "./layout.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
 import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
+import { diffVersions } from "./version-diff.js";
 import { isReadOnly, versionState } from "./version-state.js";
 
 /** Kept in step with the server's own poll interval. */
@@ -557,6 +558,9 @@ const DocumentFrame = ({
   snapshot,
   deselect,
   focusSpot,
+  place,
+  restorePlace,
+  pendingRestore,
   onHotkey,
   onDirty,
   marked,
@@ -576,6 +580,9 @@ const DocumentFrame = ({
   /** Handed a way to drop the frame's selection, for backing out of a note. */
   deselect: React.MutableRefObject<(() => void) | null>;
   focusSpot: React.MutableRefObject<((ids: readonly string[]) => void) | null>;
+  place: React.MutableRefObject<{ version: number; index: number; top: number } | null>;
+  restorePlace: React.MutableRefObject<((index: number, top: number) => void) | null>;
+  pendingRestore: React.MutableRefObject<{ index: number; top: number } | null>;
   /** A key the frame caught that means something to the whole page. */
   onHotkey: (which: "toggle-mode" | "send-queue") => void;
   /** The frame says when a person has changed something in it. */
@@ -624,10 +631,34 @@ const DocumentFrame = ({
         m.kind !== "selection" &&
         m.kind !== "captured" &&
         m.kind !== "snapshot-taken" &&
-        m.kind !== "dirty"
+        m.kind !== "dirty" &&
+        m.kind !== "place" &&
+        m.kind !== "ready"
       )
         return;
       if (m.artifactId !== doc.artifactId || m.version !== doc.version) return;
+
+      // Where the reader is, pushed by the frame as they scroll (#180).
+      //
+      // Pushed rather than asked for, because by the time it is needed the
+      // frame that knew it has been unmounted. The version is recorded with
+      // it: a place in v20 means nothing in v24 until it has been followed
+      // through the versions between.
+      // A fresh frame, holding the version that has just been taken up. If a
+      // place was followed into it, this is the moment it can be given.
+      if (m.kind === "ready") {
+        const want = pendingRestore.current;
+        if (want === null) return;
+        pendingRestore.current = null;
+        restorePlace.current?.(want.index, want.top);
+        return;
+      }
+
+      if (m.kind === "place") {
+        if (typeof m.index !== "number" || typeof m.top !== "number") return;
+        place.current = { version: doc.version, index: m.index, top: m.top };
+        return;
+      }
       if (m.kind === "dirty") {
         onDirty();
         return;
@@ -687,7 +718,16 @@ const DocumentFrame = ({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [doc.artifactId, doc.version, onSelection, onHotkey, onDirty]);
+  }, [
+    doc.artifactId,
+    doc.version,
+    onSelection,
+    onHotkey,
+    onDirty,
+    place,
+    pendingRestore,
+    restorePlace,
+  ]);
 
   // Asking the frame what is at a set of spots. The parent cannot read the
   // document, so it asks and the frame answers — the boundary stays one
@@ -732,13 +772,19 @@ const DocumentFrame = ({
         { source: FRAME_MESSAGE_SOURCE, kind: "focus", ids: [...ids] },
         "*",
       );
+    restorePlace.current = (index, top) =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "restore-place", index, top },
+        "*",
+      );
     return () => {
       capture.current = null;
       snapshot.current = null;
       deselect.current = null;
       focusSpot.current = null;
+      restorePlace.current = null;
     };
-  }, [capture, snapshot, deselect, focusSpot]);
+  }, [capture, snapshot, deselect, focusSpot, restorePlace]);
 
   React.useEffect(() => {
     ref.current?.contentWindow?.postMessage(
@@ -918,6 +964,13 @@ const App = (): React.ReactElement => {
   const [selRect, setSelRect] = React.useState<SelectionRect | null>(null);
   const deselect = React.useRef<(() => void) | null>(null);
   const focusSpot = React.useRef<((ids: readonly string[]) => void) | null>(null);
+  /** The reader's place, as the frame last reported it. */
+  const place = React.useRef<{ version: number; index: number; top: number } | null>(null);
+  const restorePlace = React.useRef<((index: number, top: number) => void) | null>(null);
+  /** A place followed into the version being taken up, waiting for its
+   * frame to exist. */
+  const pendingRestore = React.useRef<{ index: number; top: number } | null>(null);
+  const docRef = React.useRef<Doc | null>(null);
   /** What is typed, readable from a callback the frame holds. That callback
    * must keep its identity across keystrokes, so it cannot close over the
    * draft itself. */
@@ -1257,6 +1310,39 @@ const App = (): React.ReactElement => {
           const fetched = (await one.json()) as Doc;
           if (!alive) return;
           shown.current = want;
+
+          // Follow the reader's place into the version being taken up (#180).
+          //
+          // By block, not by scroll offset. An offset is wrong the moment
+          // anything above the reader changes length, which is exactly what
+          // a new version does. `carried` is the same walk that reports what
+          // changed, read for where things went rather than what they are.
+          //
+          // Only when the place belongs to the version being left. A place
+          // in v20 says nothing about v24, and following it through every
+          // version between is work nobody asked for - the reader who was
+          // not here does not need their seat kept.
+          pendingRestore.current = null;
+          const here = place.current;
+          const leaving = docRef.current;
+          if (here !== null && leaving !== null && here.version === leaving.version) {
+            try {
+              const parse = (html: string): Document =>
+                new DOMParser().parseFromString(html, "text/html");
+              const moved = diffVersions(parse(leaving.bytes), parse(fetched.bytes)).carried.get(
+                here.index,
+              );
+              // Absent means the block the reader was on is gone. Putting
+              // them somewhere else that happens to share its number is
+              // worse than the top, which is at least honest.
+              if (moved !== undefined) pendingRestore.current = { index: moved, top: here.top };
+            } catch {
+              // A place is a convenience. Failing to follow one must never
+              // stop the version arriving.
+            }
+          }
+          place.current = null;
+
           // A note addresses an element in the render it was made against,
           // so the selection and the draft do not carry across. Notes do:
           // they are held per version, and coming back finds them.
@@ -1769,6 +1855,10 @@ const App = (): React.ReactElement => {
   }, [anchored]);
 
   viewingOldRef.current = pinnedOld;
+  // The version on screen, for readers that must not re-run when it
+  // changes. The document channel is one: making it depend on `doc`
+  // would restart a fetching effect every time a fetch finished.
+  docRef.current = doc;
 
   const guidance = ((): { text: string; tone: "idle" | "ready" | "warn" } => {
     if (doc === null) return { text: "No document in this conversation yet.", tone: "idle" };
@@ -1996,6 +2086,9 @@ const App = (): React.ReactElement => {
                       snapshot={snapshot}
                       deselect={deselect}
                       focusSpot={focusSpot}
+                      place={place}
+                      restorePlace={restorePlace}
+                      pendingRestore={pendingRestore}
                       onHotkey={onHotkey}
                       onDirty={() => setEdited(true)}
                       marked={[

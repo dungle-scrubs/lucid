@@ -42,7 +42,8 @@
  * The same set the frame makes editable, deliberately: a difference the
  * person cannot act on is a difference not worth reporting, and two
  * different lists would drift apart. */
-const BLOCK_SELECTOR = "p,li,h1,h2,h3,h4,h5,h6,td,th,blockquote,dd,dt,figcaption,pre" as const;
+export const BLOCK_SELECTOR =
+  "p,li,h1,h2,h3,h4,h5,h6,td,th,blockquote,dd,dt,figcaption,pre" as const;
 
 /** Whitespace is layout, not content. An agent that reflows a paragraph to
  * 80 columns has not changed it. */
@@ -142,6 +143,13 @@ export interface ControlChange {
 
 export interface VersionDiff {
   readonly changes: readonly Change[];
+  /** Where each surviving block went: its index in the earlier version to its
+   * index in the later one. Blocks that were removed are absent.
+   *
+   * Here because "what changed" and "where did this go" are the same walk.
+   * A reader's place is a block, and keeping it across a new version means
+   * following that block - which is this map. */
+  readonly carried: ReadonlyMap<number, number>;
   /** Controls whose value differs. Empty when none do. */
   readonly controls: readonly ControlChange[];
   /** Blocks that survived untouched. Reported because "nine changes" means
@@ -294,6 +302,7 @@ export const diffVersions = (before: Document, after: Document): VersionDiff => 
 
   const unusedOld = new Set(oldBlocks);
   const changes: Change[] = [];
+  const carried = new Map<number, number>();
   let unchanged = 0;
 
   /** Earlier blocks by tag and exact text, first occurrence winning. A
@@ -322,6 +331,7 @@ export const diffVersions = (before: Document, after: Document): VersionDiff => 
     const twin = oldByText.get(same(nb));
     if (twin !== undefined && unusedOld.has(twin)) {
       unusedOld.delete(twin);
+      carried.set(twin.index, nb.index);
       unchanged += 1;
       continue;
     }
@@ -335,6 +345,7 @@ export const diffVersions = (before: Document, after: Document): VersionDiff => 
     const sameSlot = oldByPath.get(pathOf(nb.el));
     if (sameSlot !== undefined && unusedOld.has(sameSlot) && sameSlot.tag === nb.tag) {
       unusedOld.delete(sameSlot);
+      carried.set(sameSlot.index, nb.index);
       changes.push({
         kind: "changed",
         tag: nb.tag,
@@ -363,6 +374,7 @@ export const diffVersions = (before: Document, after: Document): VersionDiff => 
     }
     if (best !== undefined && bestScore >= PAIR_MIN_OVERLAP) {
       unusedOld.delete(best);
+      carried.set(best.index, nb.index);
       changes.push({
         kind: "changed",
         tag: nb.tag,
@@ -390,6 +402,7 @@ export const diffVersions = (before: Document, after: Document): VersionDiff => 
 
   return {
     changes: sorted,
+    carried,
     controls,
     unchanged,
     identical: sorted.length === 0 && controls.length === 0,
