@@ -34,6 +34,7 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { conversations } from "../cli/record-addressing.js";
 import { detectAnnotationBatch } from "../protocol/annotations.js";
+import { isTextBytes, withinAttachmentBound } from "../protocol/attachment.js";
 import { EventKind } from "../protocol/events.js";
 import { TEXT_MAX } from "../protocol/frames.js";
 import {
@@ -572,6 +573,65 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
       }
 
       const write = path.match(/^\/api\/conversations\/([^/]+)\/input\/?$/);
+      // Attach a file to a conversation (RFC-11).
+      //
+      // The bytes are stored and an entry records that they exist. Nothing is
+      // sent here - attaching and sending are separate acts, and a file that
+      // is never sent is still a fact about the conversation.
+      const attach = path.match(/^\/api\/conversations\/([^/]+)\/attachments\/?$/);
+      if (attach && req.method === "POST") {
+        const id = decodeURIComponent(attach[1] ?? "");
+        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+
+        // Read the body as bytes. It is a file, not JSON, and the name and
+        // media type ride in headers so the body is exactly the file.
+        const name = req.headers.get("x-lucid-filename") ?? "";
+        const contentType = req.headers.get("content-type") ?? "application/octet-stream";
+        if (name === "" || name.length > 128) return json({ error: "filename-required" }, 400);
+
+        const raw = new Uint8Array(await req.arrayBuffer());
+        // Checked here as well as in the store. The endpoint is the rule and
+        // the browser is a convenience; a body this large should not have
+        // been read, and a later bound is not an excuse for no bound.
+        if (!withinAttachmentBound(raw.byteLength)) {
+          return json({ error: "attachment-too-large" }, 413);
+        }
+
+        const { dir } = conversations(rootDir).ensure(id);
+        const host = createConversationHost(dir, {
+          now: () => Date.now(),
+          presence: () => undefined,
+          executorLease: () => false,
+          onEffect: () => {},
+          onRecord: () => {},
+        });
+        try {
+          const result = host.writeAttachment({
+            bytes: raw,
+            contentType,
+            name,
+            // Decided on the bytes, once, and recorded. The media type states
+            // what the browser claims and the extension states less.
+            text: isTextBytes(raw),
+          });
+          if (result.verdict === "refused") {
+            return json(
+              { error: result.issue },
+              result.issue === "attachment-too-large" ? 413 : 400,
+            );
+          }
+          return json({
+            hash: result.hash,
+            bytes: raw.byteLength,
+            contentType,
+            name,
+            text: isTextBytes(raw),
+          });
+        } finally {
+          host.close();
+        }
+      }
+
       if (write && req.method === "POST") {
         const id = decodeURIComponent(write[1] ?? "");
         if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
