@@ -113,16 +113,32 @@ html.lucid-annotate, html.lucid-annotate * {
   outline: 1px solid #b45309 !important;
   border-radius: 2px !important;
 }
-/* Editable text, in edit mode. The dotted rule is the affordance: it says
-   the text can be changed without shouting about it. Matched on the
-   attribute rather than on "true", because a pre carries plaintext-only
-   and is just as editable. */
+/* Editable text, in edit mode. Matched on the attribute rather than on
+   "true", because a pre carries plaintext-only and is just as editable.
+ *
+ * Shown on approach, not always. Every editable block used to carry the
+ * dotted rule at all times, which meant lucid drawing on almost every block
+ * of a document it did not write. The mode is said by the sheet now, so the
+ * cue in the document only has to answer "can I type here" - a question
+ * asked about one block, at the moment the pointer is over it. */
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]) {
   outline: none !important;
-  border-bottom: 1px dotted rgba(13, 148, 136, 0.55) !important;
 }
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):hover {
-  background: rgba(13, 148, 136, 0.06) !important;
+  border-bottom: 1px dotted rgba(13, 148, 136, 0.55) !important;
+  /* Laid over whatever the document already has, not in place of it. As a
+     a background this replaced the agent's own - a block with a coloured
+     ground lost it on hover, so approaching a paragraph appeared to erase
+     part of the document. */
+  box-shadow: inset 0 0 0 9999px rgba(13, 148, 136, 0.06) !important;
+}
+/* No pointer, so nothing to approach with. The persistent cue comes back:
+   revealing on approach and showing it always are the same decision said
+   for two input devices, not two different decisions. */
+@media (hover: none) {
+  [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]) {
+    border-bottom: 1px dotted rgba(13, 148, 136, 0.55) !important;
+  }
 }
 /* The block holding the caret is tinted, not ringed. The ring was the same
    thing the browser draws around anything focused, and a page full of them
@@ -130,7 +146,7 @@ html.lucid-annotate, html.lucid-annotate * {
    are typing in. */
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):focus {
   outline: none !important;
-  background: rgba(13, 148, 136, 0.08) !important;
+  box-shadow: inset 0 0 0 9999px rgba(13, 148, 136, 0.08) !important;
 }
 [${ELEMENT_ATTR}].lucid-selected {
   outline: 2px solid #b45309 !important;

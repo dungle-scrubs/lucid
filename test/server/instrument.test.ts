@@ -318,11 +318,19 @@ describe("no focus rings", () => {
   test("the block holding the caret is tinted, not ringed", () => {
     // Which block you are typing in still has to be visible. The tint says
     // it without drawing the thing this change is about.
+    //
+    // Laid over the block's own ground rather than replacing it. As a
+    // `background` this erased whatever colour the agent gave the block, so
+    // putting a caret in a highlighted paragraph appeared to delete the
+    // highlight. Same tint, same intent, composed instead of substituted.
     const out = instrumentArtifact(DOC, "doc-1", 1);
     const at = out.indexOf('[contenteditable]:not([contenteditable="false"]):focus');
     const rule = out.slice(at, out.indexOf("}", at));
     expect(rule).toContain("outline: none");
-    expect(rule).toContain("background: rgba(13, 148, 136, 0.08)");
+    expect(rule).toContain("rgba(13, 148, 136, 0.08)");
+    expect(rule).toContain("box-shadow: inset");
+    // The document's own background survives being typed in.
+    expect(rule).not.toContain("background:");
   });
 
   test("lucid's own markers are not focus states and stay", () => {
