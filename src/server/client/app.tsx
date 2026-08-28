@@ -1138,6 +1138,7 @@ const App = (): React.ReactElement => {
   /** Read only, for the hotkey path. Fed from `pinnedOld`: being
    * overtaken does not take the modes away. */
   const viewingOldRef = React.useRef(false);
+  const editedRef = React.useRef(false);
   /** A batch of notes is on its way to the record. */
   const [sending, setSending] = React.useState(false);
   const sendingNotes = React.useRef(false);
@@ -1249,8 +1250,9 @@ const App = (): React.ReactElement => {
   }, [edited]);
 
   const toggleMode = React.useCallback((): void => {
-    // Nothing to switch between on a version that permits neither.
-    if (viewingOldRef.current) return;
+    // Nothing to switch between on a version that permits neither, and
+    // nothing to switch to while the bar is asking to save or discard.
+    if (viewingOldRef.current || editedRef.current) return;
     setMode((m) => (m === "edit" ? "annotate" : "edit"));
     // Leaving annotate mode ends whatever note was being written: there is no
     // selection in edit mode for it to point at.
@@ -1550,6 +1552,10 @@ const App = (): React.ReactElement => {
   /** A newer version waiting to be shown, once it is confirmed that the
    * unsaved edit can go. Holds the version so the confirmation can name it. */
   const [confirmDiscard, setConfirmDiscard] = React.useState<number | null>(null);
+  /** An unsaved edit waiting to be thrown away on purpose. Separate from
+   * `confirmDiscard`, which is about going to a newer version: this one is
+   * just abandoning what was typed, with nowhere to go afterwards. */
+  const [confirmDiscardEdit, setConfirmDiscardEdit] = React.useState(false);
   const [restoring, setRestoring] = React.useState(false);
 
   /** Showing a version that is not the current one. Read-only: no editing,
@@ -2057,6 +2063,10 @@ const App = (): React.ReactElement => {
   }, [anchored]);
 
   viewingOldRef.current = pinnedOld;
+  // The save bar hides the mode control while an edit is pending, so the
+  // hotkey goes with it. A key that still worked would be an unlabelled
+  // way past a bar whose whole claim is that there are two things to do.
+  editedRef.current = edited;
   // The version on screen, for readers that must not re-run when it
   // changes. The document channel is one: making it depend on `doc`
   // would restart a fetching effect every time a fetch finished.
@@ -2168,110 +2178,144 @@ const App = (): React.ReactElement => {
                 </div>
               ) : (
                 <>
-                  <div className="doc-head">
-                    <DocName
-                      artifactId={doc.artifactId}
-                      {...(allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title ===
-                      undefined
-                        ? {}
-                        : {
-                            title: allArtifacts.find((a) => a.artifactId === doc.artifactId)
-                              ?.title as string,
-                          })}
-                      onRename={rename}
-                    />
-                    {/* One version is a badge with nothing to open. More than
+                  {/* App Bridge, as #171 settled it: with an unsaved edit the
+                    bar stops describing the document and becomes the question,
+                    and nothing else. The name, the version and the modes are
+                    not merely disabled but gone - the only two things there
+                    are to do are the two that are here.
+                    
+                    Discard confirms. It is the only control on this bar that
+                    destroys work, and lucid asks before losing what a person
+                    typed everywhere else too. */}
+                  {edited ? (
+                    <div className="doc-head saving-bar">
+                      <span className="saving-what">
+                        Unsaved changes
+                        {overtaken ? " — they will land on top of the newer version" : ""}
+                      </span>
+                      <button
+                        type="button"
+                        className="v"
+                        onClick={() => setConfirmDiscardEdit(true)}
+                        disabled={saving}
+                      >
+                        Discard
+                      </button>
+                      <button
+                        type="button"
+                        className="v primary"
+                        onClick={() => void save()}
+                        disabled={saving}
+                      >
+                        {saving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="doc-head">
+                      <DocName
+                        artifactId={doc.artifactId}
+                        {...(allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title ===
+                        undefined
+                          ? {}
+                          : {
+                              title: allArtifacts.find((a) => a.artifactId === doc.artifactId)
+                                ?.title as string,
+                            })}
+                        onRename={rename}
+                      />
+                      {/* One version is a badge with nothing to open. More than
                     one is a dropdown, newest first: a row of buttons does not
                     survive a hundred versions, which is what a long
                     conversation produces. A native select because it is the
                     affordance, and the visual treatment belongs to the design
                     pass rather than to this. */}
-                    {catalog === null || catalog.versions.length < 2 ? (
-                      <span className="doc-version">v{doc.version}</span>
-                    ) : (
-                      <select
-                        className={viewingOld ? "doc-version-pick old" : "doc-version-pick"}
-                        value={String(doc.version)}
-                        aria-label="Version"
-                        onChange={(e) => {
-                          const picked = Number.parseInt(e.target.value, 10);
-                          // Choosing the current version is choosing to follow
-                          // it, not to pin it there. Otherwise the newest
-                          // version arriving would leave you on a stale one
-                          // that the picker calls current.
-                          setPinned(picked === catalog.latest ? null : picked);
-                        }}
-                      >
-                        {[...catalog.versions].reverse().map((v) => (
-                          <option key={v} value={String(v)}>
-                            v{v}
-                            {catalog.authors?.[v] === "human"
-                              ? " · saved by you"
-                              : " · by the agent"}
-                            {v === catalog.latest ? " · current" : ""}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    {/* Offered only where there is something to compare
-                      against: one version has nothing to be held against. */}
-                    {catalog === null || catalog.versions.length < 2 ? null : (
-                      <select
-                        className="v compare-pick"
-                        value=""
-                        aria-label="Compare with another version"
-                        onChange={(e) => {
-                          const v = Number.parseInt(e.target.value, 10);
-                          if (Number.isSafeInteger(v)) void compareWith(v);
-                          e.currentTarget.value = "";
-                        }}
-                      >
-                        <option value="">Compare with…</option>
-                        {catalog.versions
-                          .filter((v) => v !== doc.version)
-                          .map((v) => (
+                      {catalog === null || catalog.versions.length < 2 ? (
+                        <span className="doc-version">v{doc.version}</span>
+                      ) : (
+                        <select
+                          className={viewingOld ? "doc-version-pick old" : "doc-version-pick"}
+                          value={String(doc.version)}
+                          aria-label="Version"
+                          onChange={(e) => {
+                            const picked = Number.parseInt(e.target.value, 10);
+                            // Choosing the current version is choosing to follow
+                            // it, not to pin it there. Otherwise the newest
+                            // version arriving would leave you on a stale one
+                            // that the picker calls current.
+                            setPinned(picked === catalog.latest ? null : picked);
+                          }}
+                        >
+                          {[...catalog.versions].reverse().map((v) => (
                             <option key={v} value={String(v)}>
                               v{v}
+                              {catalog.authors?.[v] === "human"
+                                ? " · saved by you"
+                                : " · by the agent"}
+                              {v === catalog.latest ? " · current" : ""}
                             </option>
                           ))}
-                      </select>
-                    )}
-                    {pinned === null ? null : (
-                      <button type="button" className="v latest" onClick={() => setPinned(null)}>
-                        {viewingOld ? "Back to current" : "Follow newest"}
-                      </button>
-                    )}
-                    {pinnedOld ? (
-                      <button
-                        type="button"
-                        className="v restore"
-                        onClick={() => setConfirmRestore(doc.version)}
-                        title={`Make v${doc.version} the current version`}
-                      >
-                        Restore this version
-                      </button>
-                    ) : null}
-                    <span className="modes">
-                      <button
-                        type="button"
-                        className={mode === "edit" ? "m current" : "m"}
-                        onClick={() => setMode("edit")}
-                        disabled={pinnedOld}
-                        title="Tick boxes, fill fields, and edit text (⌥⌫)"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className={mode === "annotate" ? "m current" : "m"}
-                        onClick={() => setMode("annotate")}
-                        disabled={pinnedOld}
-                        title="Click parts of the document to write notes about them (⌥⌫)"
-                      >
-                        Annotate
-                      </button>
-                    </span>
-                  </div>
+                        </select>
+                      )}
+                      {/* Offered only where there is something to compare
+                      against: one version has nothing to be held against. */}
+                      {catalog === null || catalog.versions.length < 2 ? null : (
+                        <select
+                          className="v compare-pick"
+                          value=""
+                          aria-label="Compare with another version"
+                          onChange={(e) => {
+                            const v = Number.parseInt(e.target.value, 10);
+                            if (Number.isSafeInteger(v)) void compareWith(v);
+                            e.currentTarget.value = "";
+                          }}
+                        >
+                          <option value="">Compare with…</option>
+                          {catalog.versions
+                            .filter((v) => v !== doc.version)
+                            .map((v) => (
+                              <option key={v} value={String(v)}>
+                                v{v}
+                              </option>
+                            ))}
+                        </select>
+                      )}
+                      {pinned === null ? null : (
+                        <button type="button" className="v latest" onClick={() => setPinned(null)}>
+                          {viewingOld ? "Back to current" : "Follow newest"}
+                        </button>
+                      )}
+                      {pinnedOld ? (
+                        <button
+                          type="button"
+                          className="v restore"
+                          onClick={() => setConfirmRestore(doc.version)}
+                          title={`Make v${doc.version} the current version`}
+                        >
+                          Restore this version
+                        </button>
+                      ) : null}
+                      <span className="modes">
+                        <button
+                          type="button"
+                          className={mode === "edit" ? "m current" : "m"}
+                          onClick={() => setMode("edit")}
+                          disabled={pinnedOld}
+                          title="Tick boxes, fill fields, and edit text (⌥⌫)"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className={mode === "annotate" ? "m current" : "m"}
+                          onClick={() => setMode("annotate")}
+                          disabled={pinnedOld}
+                          title="Click parts of the document to write notes about them (⌥⌫)"
+                        >
+                          Annotate
+                        </button>
+                      </span>
+                    </div>
+                  )}
 
                   {/* The other half of the update-location rule (#181). What
                   the reader could see pulsed and is not mentioned; what they
@@ -2462,6 +2506,32 @@ const App = (): React.ReactElement => {
                   deciding whether to restore is deciding whether it is
                   reversible, and here it is - permanently, because nothing
                   is overwritten. */}
+                  {!confirmDiscardEdit ? null : (
+                    <div className="confirm">
+                      <span>
+                        Throw away the change you have not saved? Saving keeps it as the next
+                        version, and every version stays in the record, so a save is the reversible
+                        one.
+                      </span>
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => {
+                          setConfirmDiscardEdit(false);
+                          setEdited(false);
+                          // The change lives in the frame, so the frame has to
+                          // be rebuilt from the stored bytes to be rid of it.
+                          setDoc((d) => (d === null ? d : { ...d }));
+                        }}
+                      >
+                        Discard
+                      </button>
+                      <button type="button" onClick={() => setConfirmDiscardEdit(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
                   {confirmDiscard === null ? null : (
                     <div className="confirm">
                       <span>
@@ -2510,16 +2580,11 @@ const App = (): React.ReactElement => {
                   <div className="doc-panel">
                     <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
 
-                    <div className="note-actions">
-                      <button
-                        type="button"
-                        onClick={() => void save()}
-                        disabled={!edited || saving || pinnedOld}
-                        title="Double-click text in the document to edit it; controls work as they are"
-                      >
-                        {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
-                      </button>
-                    </div>
+                    {/* Saving moved to the top bar with #171, and this is
+                      what is left: the last save's outcome, which is news
+                      rather than an action. A second Save down here would be
+                      a second place to look for the same thing. */}
+                    {saved === null ? null : <div className="note-actions">{saved}</div>}
                   </div>
                 </>
               )}

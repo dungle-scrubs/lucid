@@ -441,6 +441,27 @@ body {
 /* A version changed things the reader could not see. Sits where the
    newer-version banner sits and reads the same way: news about the document,
    above the document. */
+/* The bar, while an edit is unsaved. It replaces what the head holds rather
+   than sitting beside it: the point of the pattern is that there are two
+   things to do and nothing else, so the name, the version and the modes are
+   gone, not greyed. */
+.doc-head.saving-bar {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.saving-what {
+  margin-right: auto;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.doc-head .v.primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
 /* --- comparing two versions ---------------------------------------------
    Covers the stage rather than replacing the pane, so closing it returns to
    the version being read, exactly where it was. */
