@@ -96,6 +96,13 @@ the same driver, so selection and status can never disagree.
 
 ## 3. Scoping ruling for this pass
 
+> **Superseded by RFC-12** (`docs/rfc/12_choosing-the-driver.rfc.md`,
+> 2026-08-29): the open menus with real harness / model / effort lists
+> are now in scope - the preference file, the endpoint, and the honor
+> rule that re-spawns the driver are specified there. The ruling's mode
+> clause stands: mode never switches into `interactive` from this line,
+> and the interactive report-only treatment stands with it.
+
 The line renders from real state. What the browser can change today is
 nothing: the harness, its profile, and the model are chosen where the
 driver is spawned (`lucid2 chat/run` flags and hook attachment); an input
