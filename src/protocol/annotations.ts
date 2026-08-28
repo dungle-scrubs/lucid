@@ -38,6 +38,7 @@ The person marked up a document you produced and wrote notes against what they m
 - Each note names one or more spots. A note with several spots is about all of them together.
 - \`snippet\` is what was on screen where the note points, captured when the note was written.
 - \`author\` says who wrote the content in that spot. A spot authored \`human\` is their text, not yours — do not defend it as your own.
+- A note may carry \`files\`. Each names a file the person attached to it. A file whose contents could be text is already in this message; one that could not carries a \`path\`. Read what is at that path if you are able to, and say so if you are not — nothing here guarantees you can.
 
 Answer by emitting a new version of THIS artifact: reuse the \`artifactId\` the block names as your \`id\`, and set \`replaces\` to the \`version\` it names. A different id starts an unrelated document and loses the thread.
 
@@ -101,9 +102,27 @@ export interface AnnotationSpot {
   };
 }
 
+/** A file attached to a note (RFC-11).
+ *
+ * The reference, never the bytes. `path` is where the agent was told to look
+ * - a copy outside the record, because `secret` lives beside the blob store -
+ * and is absent when the file's contents were put into the input instead. */
+export interface AttachedFile {
+  readonly hash: string;
+  readonly bytes: number;
+  readonly contentType: string;
+  readonly name: string;
+  readonly path?: string;
+}
+
 export interface Annotation {
   readonly note: string;
   readonly spots: readonly AnnotationSpot[];
+  /** Files this note is about. On the note rather than on the batch: a note
+   * is about a spot in the document, and the file is about that note. A file
+   * belonging to a batch of four notes says nothing about which it
+   * illustrates. */
+  readonly files?: readonly AttachedFile[];
 }
 
 export interface AnnotationBatch {
@@ -153,10 +172,43 @@ const isSpot = (v: unknown): v is AnnotationSpot => {
   return s.selectors === undefined || isSelectors(s.selectors);
 };
 
+const isAttachedFile = (v: unknown): v is AttachedFile => {
+  if (v === null || typeof v !== "object") return false;
+  const f = v as Record<string, unknown>;
+  return (
+    typeof f.hash === "string" &&
+    /^[0-9a-f]{64}$/.test(f.hash) &&
+    typeof f.bytes === "number" &&
+    Number.isSafeInteger(f.bytes) &&
+    typeof f.contentType === "string" &&
+    typeof f.name === "string" &&
+    (f.path === undefined || typeof f.path === "string")
+  );
+};
+
+/** A note, read tolerantly.
+ *
+ * Fields this build does not know are ignored, and that is a requirement
+ * rather than an accident: a batch is stored, in the input text, in the log,
+ * forever, so a batch written by a newer build must still decode here. This
+ * is the opposite of RFC-08's patch parser, which refuses unknown fields
+ * because a patch body is never stored and its only reader is the lucid
+ * applying it now.
+ *
+ * A `files` that is present and malformed is dropped rather than failing the
+ * note. Losing a file reference leaves a note that still says what it said;
+ * failing the note loses what the person wrote. */
 const isNote = (v: unknown): v is Annotation => {
   if (v === null || typeof v !== "object") return false;
   const n = v as Record<string, unknown>;
   return typeof n.note === "string" && Array.isArray(n.spots) && n.spots.every(isSpot);
+};
+
+/** The files on a note that can be used, which may be none. */
+export const filesOf = (n: Annotation): readonly AttachedFile[] => {
+  const raw = (n as { files?: unknown }).files;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isAttachedFile);
 };
 
 const isBatch = (v: unknown): v is AnnotationBatch => {

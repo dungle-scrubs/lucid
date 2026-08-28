@@ -1184,6 +1184,9 @@ const App = (): React.ReactElement => {
   /** Files attached to the message being written. Stored the moment they are
    * chosen, so closing the page does not lose them. */
   const [attached, setAttached] = React.useState<readonly Attached[]>([]);
+  /** Files on the note being written. Separate from the composer's: a note is
+   * about a spot, and its files are about that note. */
+  const [noteFiles, setNoteFiles] = React.useState<readonly Attached[]>([]);
   /** A comparison being read: which version the one on screen is held against,
    * and that version's bytes once they arrive. `null` bytes mean it could not
    * be read, which is reported rather than shown as an empty side. */
@@ -1687,13 +1690,34 @@ const App = (): React.ReactElement => {
     });
     // Where in the timeline this happened, so it stays there when the
     // conversation carries on above and below it.
-    setNotes([...notes, { note: text, spots: withSelectors, at: messages.length }]);
+    setNotes([
+      ...notes,
+      {
+        note: text,
+        spots: withSelectors,
+        at: messages.length,
+        // The reference travels with the note, never the bytes. `path` is
+        // filled in when the turn is built, because where a file is offered
+        // from is a per-turn copy outside the record.
+        ...(noteFiles.length === 0
+          ? {}
+          : {
+              files: noteFiles.map((f) => ({
+                hash: f.hash,
+                bytes: f.bytes,
+                contentType: f.contentType,
+                name: f.name,
+              })),
+            }),
+      },
+    ]);
+    setNoteFiles([]);
     setDraft("");
     setSelection([]);
     setSelRect(null);
     setRefusal(null);
     deselect.current?.();
-  }, [draft, selection, notes, setNotes, doc, messages.length, pinnedOld]);
+  }, [draft, selection, notes, setNotes, doc, messages.length, pinnedOld, noteFiles]);
 
   const sendNotes = React.useCallback(async (): Promise<void> => {
     if (notes.length === 0 || doc === null || token === null || dead) return;
@@ -1711,7 +1735,11 @@ const App = (): React.ReactElement => {
       const body = encodeAnnotationBatch({
         artifactId: doc.artifactId,
         version: doc.version,
-        notes: notes.map((n) => ({ note: n.note, spots: n.spots })),
+        notes: notes.map((n) => ({
+          note: n.note,
+          spots: n.spots,
+          ...(n.files === undefined || n.files.length === 0 ? {} : { files: n.files }),
+        })),
       });
       const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/input`, {
         method: "POST",
@@ -1832,6 +1860,77 @@ const App = (): React.ReactElement => {
     },
     [doc, token, conversationId],
   );
+
+  /** Store a chosen file and describe it back. Shared by the composer and
+   * the note box, because storing is the same act either way - only what the
+   * reference is then attached to differs. */
+  const storeFiles = React.useCallback(
+    async (files: FileList): Promise<readonly Attached[]> => {
+      if (token === null || conversationId === "") return [];
+      const out: Attached[] = [];
+      for (const file of Array.from(files)) {
+        try {
+          const res = await fetch(
+            `/api/conversations/${encodeURIComponent(conversationId)}/attachments`,
+            {
+              method: "POST",
+              headers: {
+                [TOKEN_HEADER]: token,
+                "x-lucid-filename": file.name,
+                "content-type": file.type === "" ? "application/octet-stream" : file.type,
+              },
+              body: file,
+            },
+          );
+          if (!res.ok) {
+            const said = (await res.json().catch(() => ({}))) as { error?: string };
+            setRefusal(
+              said.error === "attachment-too-large"
+                ? `${file.name} is too large to attach`
+                : `could not attach ${file.name}: ${said.error ?? res.status}`,
+            );
+            continue;
+          }
+          const a = (await res.json()) as Omit<Attached, "url">;
+          let url: string | null = null;
+          if (a.contentType.startsWith("image/")) {
+            const got = await fetch(
+              `/api/conversations/${encodeURIComponent(conversationId)}/attachments/${a.hash}`,
+              { headers: { [TOKEN_HEADER]: token } },
+            );
+            if (got.ok) {
+              const blob = await got.blob();
+              if (blob.type.startsWith("image/")) url = URL.createObjectURL(blob);
+            }
+          }
+          out.push({ ...a, url });
+        } catch (e) {
+          setRefusal(`could not attach ${file.name}: ${String(e)}`);
+        }
+      }
+      return out;
+    },
+    [token, conversationId],
+  );
+
+  const attachToNote = React.useCallback(
+    async (files: FileList): Promise<void> => {
+      const stored = await storeFiles(files);
+      setNoteFiles((prev) => [
+        ...prev,
+        ...stored.filter((a) => !prev.some((p) => p.hash === a.hash)),
+      ]);
+    },
+    [storeFiles],
+  );
+
+  const removeNoteFile = React.useCallback((hash: string): void => {
+    setNoteFiles((prev) => {
+      const going = prev.find((a) => a.hash === hash);
+      if (going?.url !== null && going?.url !== undefined) URL.revokeObjectURL(going.url);
+      return prev.filter((a) => a.hash !== hash);
+    });
+  }, []);
 
   const attachFiles = React.useCallback(
     async (files: FileList): Promise<void> => {
@@ -2613,7 +2712,44 @@ const App = (): React.ReactElement => {
                             placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
                             rows={3}
                           />
+                          {noteFiles.length === 0 ? null : (
+                            <div className="attached in-note">
+                              {noteFiles.map((a) => (
+                                <span className={a.text ? "chip text" : "chip"} key={a.hash}>
+                                  {a.url !== null ? (
+                                    <img src={a.url} alt="" className="thumb" />
+                                  ) : (
+                                    <span className="thumb kind">{a.text ? "text" : "file"}</span>
+                                  )}
+                                  <span className="chip-name">{a.name}</span>
+                                  <button
+                                    type="button"
+                                    className="chip-drop"
+                                    title="Remove"
+                                    onClick={() => removeNoteFile(a.hash)}
+                                  >
+                                    ×
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           <div className="note-pop-actions">
+                            {/* The half that carries this feature: a
+                              screenshot of what is wrong with a paragraph is
+                              marking up, which is what lucid is for. */}
+                            <label className="attach small" title="Attach a file to this note">
+                              +
+                              <input
+                                type="file"
+                                multiple
+                                onChange={(e) => {
+                                  if (e.currentTarget.files !== null)
+                                    void attachToNote(e.currentTarget.files);
+                                  e.currentTarget.value = "";
+                                }}
+                              />
+                            </label>
                             <button type="button" className="ghost" onClick={cancelNote}>
                               Cancel
                             </button>

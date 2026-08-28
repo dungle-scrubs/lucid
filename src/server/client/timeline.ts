@@ -42,6 +42,9 @@ export interface PendingNote {
   readonly note: string;
   readonly spots: readonly AnnotationSpot[];
   readonly at: number;
+  /** Files attached to this note, by hash. The references are resolved when
+   * the batch is built; the queue holds only what identifies them. */
+  readonly files?: readonly import("../../protocol/annotations.js").AttachedFile[];
 }
 
 /** Put pending notes back where they were written.

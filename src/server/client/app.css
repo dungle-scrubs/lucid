@@ -207,6 +207,12 @@ body {
   color: var(--fg);
 }
 
+/* Inside the note box the chips sit above the buttons, not above a
+   composer, so they need their own spacing. */
+.attached.in-note {
+  padding: 6px 0 0;
+}
+
 /* The control that opens the file picker. The input itself is never shown -
    a browser's own file input cannot be styled and says the wrong thing. */
 .attach {
@@ -230,6 +236,15 @@ body {
 
 .attach input {
   display: none;
+}
+
+/* In the note box, beside Cancel and Add note rather than beside a
+   textarea, so it matches their height instead of the composer's. */
+.attach.small {
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+  margin-right: auto;
 }
 
 .composer {
