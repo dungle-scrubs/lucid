@@ -227,6 +227,17 @@ interface Driver {
   readonly harnessVersion?: string;
 }
 
+/** The driver as the conversation header names it: harness, then model.
+ * Derived from the same Driver the line under the composer renders (7a-7d),
+ * so the header above and the line below can never disagree about who is
+ * driving. Null when the record carries no identity at all; an interactive
+ * attachment names no harness (RFC-03), so a model alone still names what
+ * is known. */
+const driverHeadline = (driver: Driver): string | null => {
+  const known = [driver.harness, driver.model].filter((p): p is string => p !== undefined);
+  return known.length === 0 ? null : known.join(" · ");
+};
+
 /** The conversation, and now the artifact and the version, are named by the
  * URL and never by the bundle. `route.ts` owns the shape. */
 const routeFromPath = (): Route | null => parseRoute(window.location.pathname);
@@ -761,6 +772,92 @@ const RefusalChip = ({
   </span>
 );
 
+/** What the mode segment's hover gloss says, one string per mode. Verbatim
+ * from the product's mode table (CONTEXT.md) as the handoff requires, so
+ * the surface and the docs cannot drift. */
+const MODE_GLOSS: Readonly<Record<string, string>> = {
+  interactive:
+    "A terminal session you own. lucid attaches, records everything, and can interject — it does not drive.",
+  "headless-session":
+    "lucid spawns the harness and drives it. The harness recalls its own session across restarts.",
+  "headless-turn":
+    "No session recall. Each send starts the harness fresh; lucid's record is what carries continuity.",
+};
+
+/** The driver line (7a-7d): harness · mode · model · effort docked under
+ * the prompt, in the transcript datelines' voice. The order is the
+ * design's - harness, mode and model are one thought (the program, how
+ * lucid runs it, the weights); effort alters a turn rather than the
+ * connection, so it is last. A segment whose value the record does not
+ * carry is absent, not disabled: the projection names no effort yet, and
+ * some harnesses report no model, and neither is drawn as a blank or a
+ * ghost.
+ *
+ * The segments are quiet report ink, not controls: the open menus with
+ * selectable harness / model / effort lists are not built, because the
+ * substrate cannot act on a browser-side driver change today - spawn
+ * flags and hook attachment choose the driver (docs/reports/design-
+ * delta-v2.md, section 3). Only the mode's hover gloss is drawn, because
+ * a gloss is not an act. The conversation header names the same driver
+ * through `driverHeadline`, from the same Driver. */
+const DriverLine = ({ driver }: { driver: Driver }): React.ReactElement | null => {
+  const mode = driver.profile;
+  if (mode === undefined) return null;
+  const interactive = mode === "interactive";
+  const gloss = MODE_GLOSS[mode];
+  // headless-turn is the one mode whose consequence the line itself
+  // states: no session recall has no visual, so it gets words, permanent,
+  // and a 4px neutral dot marks the segment that owns them.
+  const noRecall = mode === "headless-turn";
+  const segments = [
+    ...(driver.harness === undefined ? [] : [{ key: "harness", label: driver.harness }]),
+    { key: "mode", label: mode },
+    ...(driver.model === undefined ? [] : [{ key: "model", label: driver.model }]),
+  ];
+  return (
+    <div className={interactive ? "driver-line interactive" : "driver-line"}>
+      {segments.map((seg, i) => {
+        const label =
+          seg.key === "mode" ? (
+            <span className="driver-seg mode" key={seg.key}>
+              {seg.label}
+              {noRecall ? <span aria-hidden="true" className="driver-mode-dot" /> : null}
+              {gloss === undefined ? null : (
+                <span className="driver-tip" role="tooltip">
+                  <span className="driver-tip-title">{seg.label}</span>
+                  <span className="driver-tip-body">{gloss}</span>
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className={interactive ? "driver-seg report" : "driver-seg"} key={seg.key}>
+              {seg.label}
+            </span>
+          );
+        // Each middot is bound into one flex item with the label that
+        // follows it, so a wrap can only break BEFORE a separator - a
+        // middot stranded at the end of a row reads as a dropped segment.
+        // Labels are never shortened to force one row.
+        return i === 0 ? (
+          label
+        ) : (
+          <span className="driver-pair" key={seg.key}>
+            <span aria-hidden="true" className="driver-sep">
+              ·
+            </span>
+            {label}
+          </span>
+        );
+      })}
+      {noRecall ? (
+        <span className="driver-note">
+          Each send starts the harness fresh. This record is what carries continuity.
+        </span>
+      ) : null}
+    </div>
+  );
+};
+
 const Thread = ({
   pending,
   onSendNotes,
@@ -779,6 +876,7 @@ const Thread = ({
   onAttach,
   onRemoveAttachment,
   onDismissRefusal,
+  driver,
 }: {
   pending: readonly PendingNote[];
   onSendNotes: () => void;
@@ -809,6 +907,10 @@ const Thread = ({
   onAttach: (files: FileList) => void;
   onRemoveAttachment: (hash: string) => void;
   onDismissRefusal: (id: string) => void;
+  /** What is driving, for the driver line docked under the composer
+   * (7a-7d) and for the composer's own variant: the mode decides whether
+   * the field sends or interjects, and whether the clip button is there. */
+  driver: Driver;
 }): React.ReactElement => {
   const composerBox = React.useRef<HTMLTextAreaElement | null>(null);
   // 4a: send is ghost at rest and solid the moment there is something to
@@ -823,6 +925,12 @@ const Thread = ({
   // conversation or it goes back where it came from - never a version.
   const [dragOver, setDragOver] = React.useState(false);
   const stalled = report.stalled;
+  // 7c: the mode governs the composer too. interactive means a human owns
+  // the session - lucid attaches, records, and can interject, it does not
+  // drive - so the field says Interject and the clip button is gone. A
+  // file dropped on the composer still attaches: storing one is a lucid
+  // act, not a driving act.
+  const interactive = driver.profile === "interactive";
   return (
     <ThreadPrimitive.Root className={dead ? "thread-root dead" : "thread-root"}>
       {/* The half that scrolls. Only messages and note cards are in here, so
@@ -993,18 +1101,22 @@ const Thread = ({
           {/* Attaching and sending are separate: the file is stored the
             moment it is chosen, so closing the page does not lose it and
             sending is the ordinary act it already was. 38px, matching send,
-            as the design's one new piece of composer chrome. */}
-          <label className="attach" title="Attach a file">
-            <PaperclipDuotone size={16} />
-            <input
-              type="file"
-              multiple
-              onChange={(e) => {
-                if (e.currentTarget.files !== null) onAttach(e.currentTarget.files);
-                e.currentTarget.value = "";
-              }}
-            />
-          </label>
+            as the design's one new piece of composer chrome. Interactive
+            has none of it (7c): interjecting carries words into a session
+            a human owns. */}
+          {interactive ? null : (
+            <label className="attach" title="Attach a file">
+              <PaperclipDuotone size={16} />
+              <input
+                type="file"
+                multiple
+                onChange={(e) => {
+                  if (e.currentTarget.files !== null) onAttach(e.currentTarget.files);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </label>
+          )}
           <ComposerPrimitive.Input
             autoFocus
             ref={composerBox}
@@ -1015,7 +1127,9 @@ const Thread = ({
                 ? "Reload to write…"
                 : dragOver
                   ? "Drop to attach — the original is kept"
-                  : "Send to the conversation…"
+                  : interactive
+                    ? "Interject…"
+                    : "Send to the conversation…"
             }
             rows={1}
           />
@@ -1031,6 +1145,12 @@ const Thread = ({
             </button>
           </ComposerPrimitive.Send>
         </ComposerPrimitive.Root>
+
+        {/* 7a-7d: the driver line, docked under the prompt and named from
+            the same projection the header names. Dead hides it: 3d's
+            composer says Reload and names no driver, and a stale one
+            would. */}
+        {dead ? null : <DriverLine driver={driver} />}
       </div>
     </ThreadPrimitive.Root>
   );
@@ -3981,15 +4101,17 @@ const App = (): React.ReactElement => {
                     <span className="conv-name">
                       {conversationId === "" ? "no conversation" : conversationId}
                     </span>
-                    {driver.harness === undefined ? null : (
+                    {/* What is driving, named from the same Driver the
+                driver line under the composer renders (7a-7d), so the two
+                surfaces cannot disagree. Identity, not status. */}
+                    {driverHeadline(driver) === null ? null : (
                       <span
                         className="conv-driver"
                         title={
                           driver.harnessVersion === undefined ? undefined : driver.harnessVersion
                         }
                       >
-                        {driver.harness}
-                        {driver.model === undefined ? "" : ` · ${driver.model}`}
+                        {driverHeadline(driver)}
                       </span>
                     )}
                     <span
@@ -4030,6 +4152,7 @@ const App = (): React.ReactElement => {
                     onDismissRefusal={(id) =>
                       setRefusals((prev) => prev.filter((r) => r.id !== id))
                     }
+                    driver={driver}
                   />
                 </div>
               </div>

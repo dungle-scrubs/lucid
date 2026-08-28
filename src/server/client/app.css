@@ -2261,6 +2261,150 @@ body {
   color: #fff;
 }
 
+/* --- the driver line (7a-7d) ---------------------------------------------
+ *
+ * One line of 11.5px report ink docked under the prompt, aligned to the
+ * field (46px, clearing the clip button). Segments harness, mode, model,
+ * effort, separated by a middot at 50%. The line wraps to a second row
+ * with a 5px row gap rather than truncating; each middot is bound into
+ * one flex item with the label after it, so a wrap can only break before
+ * a separator. Quieter than the composer placeholder above it: no
+ * borders, no carets, and the only accent ink this size would come from
+ * a hover or an open menu - neither is drawn until the substrate can act
+ * on a driver change (docs/reports/design-delta-v2.md, section 3). */
+
+.driver-line {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 2px;
+  row-gap: 5px;
+  /* The composer above carries 14px of bottom padding; -5px of it comes
+     back, so the air between field and line is the 9px the handoff draws. */
+  margin: -5px 14px 0;
+  padding: 0 0 14px 46px;
+  font: 400 11.5px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+}
+
+/* One label. Never shortened to force a single row. */
+.driver-seg {
+  padding: 4px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+/* The mode segment: the anchor for its hover gloss, and - in
+   headless-turn - the 4px neutral dot that marks the mode whose
+   consequence the second line states. */
+.driver-seg.mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.driver-mode-dot {
+  width: 4px;
+  height: 4px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-text) 40%, transparent);
+}
+
+/* A middot and the label after it: one unbreakable flex item, so a wrap
+   can only break before a separator, never strand one at a row's end. */
+.driver-pair {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.driver-sep {
+  opacity: 0.5;
+}
+
+/* headless-turn's permanent second line (7c): no session recall has no
+   visual, so it gets words, in neutral ink, present always - a property
+   of the harness, not a fault, and it cannot be dismissed. width: 100%
+   puts it on a row of its own under the segments. */
+.driver-note {
+  width: 100%;
+  padding: 5px 7px 0;
+  font: 400 11px / 1.4 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 48%, transparent);
+}
+
+/* The mode's hover gloss (7d): ink fill, the same ink the unsaved-changes
+   bar uses, so an overlay never reads as another surface. 232px, radius
+   8px, 9px/11px padding, no shadow, no tail, opening upward with 6px of
+   air above the row. ~400ms delay in and none out, so sweeping the row
+   on the way to the field does not flash a gloss; it is hover-only
+   because touch has no hover - there the gloss belongs to the menu, which
+   this pass does not draw. */
+.driver-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 46px;
+  width: 232px;
+  /* The segments never wrap; their gloss does, at its own width. */
+  white-space: normal;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--color-text);
+  color: var(--color-bg);
+  font: 400 11.5px / 1.45 var(--font-body);
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 2;
+  transition:
+    opacity 80ms linear 0ms,
+    visibility 0s linear 0ms;
+}
+
+.driver-tip-title {
+  font: 600 11.5px / 1 var(--font-heading);
+}
+
+.driver-tip-body {
+  color: color-mix(in srgb, var(--color-bg) 78%, transparent);
+}
+
+@media (hover: hover) {
+  .driver-seg.mode:hover .driver-tip {
+    visibility: visible;
+    opacity: 1;
+    transition:
+      opacity 80ms linear 400ms,
+      visibility 0s linear 400ms;
+  }
+}
+
+/* interactive (7c): the human's session chose the harness and the model,
+   so both are report at 55% and there is no clip button - the row aligns
+   to the field's own left edge, and the separators dim with the ink
+   around them. */
+.driver-line.interactive {
+  padding-left: 0;
+}
+
+.driver-line.interactive .driver-seg.report {
+  opacity: 0.55;
+}
+
+.driver-line.interactive .driver-sep {
+  opacity: 0.35;
+}
+
+.driver-line.interactive .driver-tip {
+  left: 0;
+}
+
 /* --- the notice strip ----------------------------------------------------
  *
  * The substrate refusing: a dead token, a damaged record, a send that did
