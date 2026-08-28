@@ -787,6 +787,92 @@ const Comparing = (): React.ReactElement => (
   </Section>
 );
 
+const Attaching = (): React.ReactElement => (
+  <Section
+    title="Attaching a file"
+    blurb="In the composer and on a note. A file is stored the moment it is chosen, not when the message is sent — so closing the page does not lose one, and removing it from a message does not remove it from the record. A file whose contents are text goes into the message; anything else is named, and lucid must never present the second as though it were the first."
+    wide
+  >
+    <Case
+      name="The control"
+      classes=".attach"
+      note="Opens a file picker. The browser's own file input is never shown — it cannot be styled and says the wrong thing."
+    >
+      <div className="ref-pane">
+        <div className="dock">
+          <form className="composer">
+            <span className="attach">+</span>
+            <textarea placeholder="Send to the conversation…" rows={1} />
+            <button type="button">Send</button>
+          </form>
+        </div>
+      </div>
+    </Case>
+    <Case
+      name="Attached"
+      classes=".attached .chip"
+      note="A picture shows a thumbnail. Anything else shows what kind it is, because a generic icon says less than the word does."
+    >
+      <div className="attached">
+        <span className="chip">
+          <span className="thumb kind">img</span>
+          <span className="chip-name">screenshot.png</span>
+          <button type="button" className="chip-drop">
+            ×
+          </button>
+        </span>
+        <span className="chip text">
+          <span className="thumb kind">text</span>
+          <span className="chip-name">run.log</span>
+          <button type="button" className="chip-drop">
+            ×
+          </button>
+        </span>
+        <span className="chip">
+          <span className="thumb kind">file</span>
+          <span className="chip-name">spec.pdf</span>
+          <button type="button" className="chip-drop">
+            ×
+          </button>
+        </span>
+      </div>
+    </Case>
+    <Case
+      name="On a note"
+      classes=".attached.in-note"
+      note="The half that carries the feature. A screenshot of what is wrong with a paragraph is marking up, and the file travels with that note rather than with the batch."
+    >
+      <div className="ref-pane" style={{ padding: "10px" }}>
+        <div className="attached in-note">
+          <span className="chip">
+            <span className="thumb kind">img</span>
+            <span className="chip-name">wrong.png</span>
+            <button type="button" className="chip-drop">
+              ×
+            </button>
+          </span>
+        </div>
+        <div className="note-pop-actions">
+          <span className="attach small">+</span>
+          <button type="button" className="ghost">
+            Cancel
+          </button>
+          <button type="button" className="primary">
+            Add note
+          </button>
+        </div>
+      </div>
+    </Case>
+    <Case
+      name="Too large"
+      classes=".notice"
+      note="25 MB is the limit. It admits any screenshot, photograph or PDF and keeps out video, which no agent can use anyway."
+    >
+      <div className="notice">screen-recording.mov is too large to attach</div>
+    </Case>
+  </Section>
+);
+
 const Failures = (): React.ReactElement => (
   <Section
     title="Empty, and broken"
@@ -863,6 +949,7 @@ const Page = (): React.ReactElement => (
     <Panel />
     <Dock />
     <Comparing />
+    <Attaching />
     <Failures />
     <footer className="ref-foot">
       <p>

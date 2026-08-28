@@ -238,6 +238,39 @@ plus not-on-this-version**, not seven treatments.
 
 **Lost is not an error.** It is a fact about history: the document moved on.
 
+### Attaching a file
+
+A person can attach a file to what they send: in the composer, and on a note.
+The note is the one that matters — a screenshot of what is wrong with a
+paragraph is marking up, which is what the product is for.
+
+States, all of which exist today:
+
+| | What it means |
+|---|---|
+| **attach** | The control that opens a file picker. Present in the composer and in the note box |
+| **attached, a picture** | A thumbnail of what you attached |
+| **attached, not a picture** | A marker saying whether it is text or some other file, with its name |
+| **removing one** | Takes it off the message. The bytes stay in the record |
+| **too large** | Refused, with the reason. 25 MB is the limit |
+| **could not attach** | Something else failed, and it says what |
+
+Two things a design has to know, because they are not obvious and they change
+what is honest to show:
+
+**A file is stored the moment it is chosen, not when the message is sent.**
+Attaching and sending are separate acts, so closing the page does not lose an
+attachment, and removing one from a message does not remove it from the
+record.
+
+**lucid cannot promise the agent saw it.** A file whose contents are text goes
+into the message and is delivered as certainly as the message. Anything else —
+an image, a PDF — is *named*, not sent: the agent is told where it is and may
+or may not be able to open it. The design must never present the second as
+though it were the first. That is not a wording preference; the failure it
+avoids is someone attaching a screenshot, getting a confident answer, and
+never learning it was answered without looking.
+
 ### A note takes you to what it points at
 
 Clicking a note in the conversation goes to the part of the document it is
@@ -437,6 +470,7 @@ built now, and the design has to account for them like anything else.
   Two columns where each would have 360 pixels, one column below that.
 - **Seeing what a version changed**, which is what lets the pulse know which
   parts are new.
+- **Attaching a file**, in the composer and on a note, described above.
 - **Keeping the reader's place** when a version arrives. Before this, every
   revision threw the reader back to the top of the document, which also made
   the pulse meaningless — nothing can be "already in view" if the view
