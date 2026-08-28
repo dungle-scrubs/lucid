@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/server/client",
     "test": "bun test",
     "prepare": "test -d .git/hooks && git config --local core.hooksPath .git/hooks && lefthook install --force || true",
-    "build": "bun build --compile --outfile dist/lucid2 src/cli/main.ts && rm -f .*.bun-build"
+    "build": "bun scripts/build.ts",
+    "build:reference": "bun scripts/build-reference.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
@@ -20,8 +21,10 @@
     "@types/jsdom": "^30.0.0",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "bun-plugin-tailwind": "0.1.2",
     "jsdom": "^30.0.1",
     "lefthook": "^2.1.10",
+    "tailwindcss": "4.1.14",
     "typescript": "^7.0.2"
   },
   "dependencies": {

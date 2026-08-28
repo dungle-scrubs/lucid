@@ -48,7 +48,13 @@ export const ELEMENT_ID = /^e[0-9]+$/;
  * is why it lives on the element rather than on the version. */
 export const AUTHOR_ATTR = "data-lucid-author";
 
-const STYLE = `
+/** The stylesheet lucid injects into the artifact frame.
+ *
+ * Exported so the behaviour reference can render the six in-document states
+ * from the same source the frame uses. A reference that copied these rules
+ * would drift from them, and a drifted reference is worse than none: it
+ * would show a designer states the product does not have. */
+export const STYLE = `
 /* The frame is its own scrolling context. Without this, scrolling past
    either end rubber-bands, which reads as the document coming loose from
    the panel it sits in. */

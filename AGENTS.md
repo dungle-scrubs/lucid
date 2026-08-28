@@ -19,6 +19,26 @@ bun test             # deterministic, clock-injected, fake hcn; ~1s
 bun scripts/smoke-handoff.ts   # handoff oracle, writes spikes/evidence/handoff-smoke.md
 ```
 
+### The binary is built by a script, not by `bun build`
+
+```sh
+bun run build      # -> scripts/build.ts -> dist/lucid2
+```
+
+Never change this back to `bun build --compile`. Bundler plugins do not run
+through the `bun build` CLI - only through `Bun.build`'s API, or through
+`bunfig.toml` for the dev server. The browser stylesheet starts with
+`@import "tailwindcss"`, so a CLI build warns `invalid @ rule encountered:
+'@theme'`, emits the raw import, and **succeeds**. The binary runs and serves
+a stylesheet with no Tailwind in it.
+
+`scripts/build.ts` reads the binary back and fails loudly when that happens.
+
+Tailwind arrives as two packages, both pinned exactly, for the same reason
+hcn is: `bun-plugin-tailwind` carries the compiler, `tailwindcss` carries the
+CSS that `@import` resolves to. Bump them together or the compiler and its
+source drift apart.
+
 A patch is green only when `bun run check` is green. Do not skip gates via `-k not` / `--deselect`.
 
 ## What "full e2e" means here
