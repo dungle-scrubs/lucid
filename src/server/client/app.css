@@ -386,10 +386,12 @@ body {
 }
 
 /* The substrate refused the title. Said beside the field, at the
-   lost-seam size, and the field stays open with the reason. */
+   lost-seam size, and the field stays open with the reason. Deep magenta,
+   the -800 the handoff sets all small magenta text in (the reading view
+   never draws 11.5px prose in the mid ramp). */
 .doc-rename-problem {
   font-size: 11.5px;
-  color: var(--color-accent-2);
+  color: var(--color-accent-2-800);
 }
 
 /* The version pill. One version is a badge with nothing to open; more
