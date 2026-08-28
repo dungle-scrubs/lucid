@@ -3276,7 +3276,7 @@ const App = (): React.ReactElement => {
       : "idle";
 
   /** The header over the document column, in its three states (README \u00a71):
-   * reading on the sepia ground, ink while changes are unsaved, and the one
+   * reading on the ground, ink while changes are unsaved, and the one
    * magenta state when there is no driver. Everything it shows is decided by
    * data the page already holds - it never invents a state. */
   const headerTitle = (doc: Doc): React.ReactNode => {

@@ -25,7 +25,7 @@
 /* The browser surface: the reading view.
  *
  * Design: the reading-view handoff (`docs/reports/design-coverage.md` is
- * the coverage map). Two panes - a document sheet on the sepia ground, the
+ * the coverage map). Two panes - a document sheet on the eggshell ground, the
  * conversation beside it - under exactly one 34px header per column.
  *
  * Laws carried in this file:
@@ -82,9 +82,6 @@
   --color-accent-2-800: #790e3d;
   --color-accent-2-900: #4b1528;
 
-  /* The third process ink. A print treatment colour, never chrome or body. */
-  --color-process-yellow: #edbb00;
-
   --font-heading: "Source Serif 4", system-ui, sans-serif;
   --font-heading-weight: 600;
   --font-body: "Source Serif 4", system-ui, sans-serif;
@@ -101,26 +98,27 @@
   --radius-md: 2.5px;
   --radius-lg: 5px;
 
-  /* Local to the reading view: warm paper, sepia grounds, hairline edges.
-
-     Each colour-mix token gets its own :root block below. The CSS pipeline
-     (Lightning CSS behind the Tailwind plugin, and Bun's own transpiler for
-     the served-from-source path) lowers a colour-mix custom property into a
-     plain-colour fallback plus an @supports override - and it emits at most
-     ONE such override per rule block, silently dropping the rest. One block
-     per token is what makes all five survive both pipelines. */
+  /* Local to the reading view: eggshell paper, grounds, hairline edges.
+     Eggshell, not cream - the v1 warm-ink treatment is rejected, and no
+     token here carries it (handoff v2). One colour-mix token per :root
+     block below. The CSS pipeline (Lightning CSS behind the Tailwind
+     plugin, and Bun's own transpiler for the served-from-source path)
+     lowers a colour-mix custom property into a plain-colour fallback plus
+     an @supports override - and it emits at most ONE such override per
+     rule block, silently dropping the rest. One block per token is what
+     makes all five survive both pipelines. */
 }
 
 :root {
-  --paper: color-mix(in srgb, #fff 93%, var(--color-process-yellow) 7%);
+  --paper: color-mix(in srgb, #fff 94%, var(--color-bg) 6%);
 }
 
 :root {
-  --sepia: color-mix(in srgb, var(--color-bg) 88%, var(--color-process-yellow) 12%);
+  --ground: var(--color-bg);
 }
 
 :root {
-  --sepia-2: color-mix(in srgb, var(--color-bg) 76%, var(--color-process-yellow) 24%);
+  --ground-2: color-mix(in srgb, var(--color-bg) 95%, var(--color-text) 5%);
 }
 
 :root {
@@ -147,11 +145,11 @@
   outline: none;
 }
 
-/* The window is one sepia field. Both columns and the patterned ground
+/* The window is one ground field. Both columns and the patterned ground
    behind the sheet sit on it; nothing else paints a page background. */
 body {
   margin: 0;
-  background: var(--sepia);
+  background: var(--ground);
   color: var(--color-text);
   font: 15px / 1.55 var(--font-body);
   -webkit-font-smoothing: antialiased;
@@ -280,7 +278,7 @@ body {
  *
  * A single 34px row over the document column: the lucid mark, a hairline,
  * the name, the version pill, and the mode toggle pushed right. No second
- * header, no toolbar under it. Transparent on the sepia ground at rest;
+ * header, no toolbar under it. Transparent on the ground at rest;
  * the ink state fills it. */
 
 .doc-head {
@@ -694,7 +692,7 @@ body {
   flex-direction: column;
   margin: 0 -14px -14px;
   padding: 16px 16px 0;
-  background-color: var(--sepia);
+  background-color: var(--ground);
   background-image: url("data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22 viewBox=%220 0 88 88%22><g fill=%22none%22 stroke=%22%23201e1d%22 stroke-opacity=%22.13%22 stroke-width=%221%22><circle cx=%2222%22 cy=%2222%22 r=%227%22/><circle cx=%2222%22 cy=%2222%22 r=%2215%22/><circle cx=%2222%22 cy=%2222%22 r=%2223%22/><circle cx=%2222%22 cy=%2222%22 r=%2231%22/><circle cx=%2266%22 cy=%2266%22 r=%229%22/><circle cx=%2266%22 cy=%2266%22 r=%2218%22/><circle cx=%2266%22 cy=%2266%22 r=%2227%22/><circle cx=%2274%22 cy=%2214%22 r=%225%22/><circle cx=%2214%22 cy=%2274%22 r=%224%22/></g></svg>");
   background-size: 88px 88px;
 }
@@ -984,14 +982,14 @@ body {
   max-width: 52ch;
 }
 
-/* The artifact the conversation does hold, as a sepia row. */
+/* The artifact the conversation does hold, as a ground-tinted row. */
 .artifact-row {
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 13px 15px;
   border-radius: 10px;
-  background: var(--sepia);
+  background: var(--ground);
   max-width: 440px;
 }
 
@@ -1127,7 +1125,7 @@ body {
 
 /* --- comparing two versions (6b) -----------------------------------------
  *
- * Two whole sheets side by side on the plain sepia ground - no pattern,
+ * Two whole sheets side by side on the plain ground - no pattern,
  * because there is no mode here. The newer side wears the accent border;
  * the older side the edge ink. Below 360px a side, one column. */
 
@@ -1514,9 +1512,9 @@ body {
   line-height: 1.55;
 }
 
-/* Yours: the one bubble - warm ink on the sepia, the serif's own weight
-   doing the marking. No width cap; a long message is still one thing you
-   said, not a column of paragraphs. */
+/* Yours: the one bubble - a whisper of ink on the ground, the serif's own
+   weight doing the marking. No width cap; a long message is still one thing
+   you said, not a column of paragraphs. */
 .msg.user .body {
   align-self: flex-end;
   max-width: 100%;
@@ -1560,7 +1558,7 @@ body {
 /* The refusal: lucid telling the agent no, which is why the document did
    not change. The fifth kind and the only magenta row - unmistakable by
    colour the way the note card is unmistakable by its rule. Left 2px
-   accent-2 rule, sepia ground, prohibit glyph; the reason at speaking
+   accent-2 rule, ground fill, prohibit glyph; the reason at speaking
    size, because it is the thing being said. Never cyan in the same
    component. */
 .msg.refusal {
@@ -1568,7 +1566,7 @@ body {
   padding: 9px 12px;
   border-left: 2px solid var(--color-accent-2);
   border-radius: 2px;
-  background: var(--sepia);
+  background: var(--ground);
 }
 
 .msg.refusal .refusal-head {
@@ -1806,7 +1804,7 @@ body {
  *
  * The small cards the conversation uses when it has something to state
  * rather than someone saying something: a stalled turn (3c), a version
- * collision (3f), a lost note's other version (6a). Sepia-2 ground inside
+ * collision (3f), a lost note's other version (6a). Ground-2 fill inside
  * the paper column, a hairline edge, a serif title, actions as pills. The
  * states themselves arrive with the later stages; the anatomy is one
  * style so they cannot drift apart. */
@@ -1818,7 +1816,7 @@ body {
   padding: 12px 14px;
   border: 1px solid var(--edge);
   border-radius: 10px;
-  background: var(--sepia-2);
+  background: var(--ground-2);
   align-self: stretch;
 }
 

@@ -473,7 +473,7 @@ describe("the mark language", () => {
     for (const token of [
       "--color-accent: #0088b0",
       "--color-accent-100: #e9f8ff",
-      "--paper: color-mix(in srgb, #fff 93%, var(--color-process-yellow) 7%)",
+      "--paper: color-mix(in srgb, #fff 94%, var(--color-bg) 6%)",
       "--font-heading:",
     ]) {
       expect(out).toContain(token);

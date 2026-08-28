@@ -107,21 +107,20 @@ const FRAME_TOKENS = `
 
   --color-accent-2-800: #790e3d;
 
-  --color-process-yellow: #edbb00;
-
   --font-heading: "Source Serif 4", ui-serif, Georgia, serif;
 }
 
-/* The five local tokens, verbatim from the handoff and identical to the
-   ones app.css defines (stage 1). color-mix runs in the browser as-is:
-   this sheet is injected as a string, so no pipeline lowers it, and the
+/* The five local tokens, verbatim from the handoff (v2: eggshell, not
+   cream - the v1 warm-ink treatment is gone) and identical to the ones
+   app.css defines (stage 1). color-mix runs in the browser as-is: this
+   sheet is injected as a string, so no pipeline lowers it, and the
    one-rule-per-token shape app.css needs does not apply here. All five
    ride along even though the marks today touch three, so a later stage
    adds marks without re-opening the token block. */
 :root {
-  --paper: color-mix(in srgb, #fff 93%, var(--color-process-yellow) 7%);
-  --sepia: color-mix(in srgb, var(--color-bg) 88%, var(--color-process-yellow) 12%);
-  --sepia-2: color-mix(in srgb, var(--color-bg) 76%, var(--color-process-yellow) 24%);
+  --paper: color-mix(in srgb, #fff 94%, var(--color-bg) 6%);
+  --ground: var(--color-bg);
+  --ground-2: color-mix(in srgb, var(--color-bg) 95%, var(--color-text) 5%);
   --edge: color-mix(in srgb, var(--color-text) 13%, transparent);
   --edge-2: color-mix(in srgb, var(--color-text) 22%, transparent);
 }
