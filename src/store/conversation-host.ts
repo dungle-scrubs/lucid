@@ -198,6 +198,16 @@ export interface ConversationHost {
     readonly artifactId: string;
     readonly title?: string;
   }): { verdict: "accepted" } | { verdict: "refused"; issue: string };
+  /** Store a file a person attached, and record that it exists (RFC-11).
+   * Returns the hash it is stored under. */
+  writeAttachment(params: {
+    readonly bytes: Uint8Array;
+    readonly contentType: string;
+    readonly name: string;
+    readonly text: boolean;
+  }):
+    | { verdict: "accepted"; hash: string }
+    | { verdict: "refused"; issue: "attachment-too-large" | "attachment-invalid" };
   /** Read an artifact version by seek. */
   readArtifact(artifactId: string, version: number): import("./log.js").ArtifactVersion | null;
   /** Append an artifact version. Over-size is refused and the record still
@@ -279,6 +289,15 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     readonly title?: string;
   }): { verdict: "accepted" } | { verdict: "refused"; issue: string } =>
     log.writeArtifactMeta(params);
+  const writeAttachment = (params: {
+    readonly bytes: Uint8Array;
+    readonly contentType: string;
+    readonly name: string;
+    readonly text: boolean;
+  }):
+    | { verdict: "accepted"; hash: string }
+    | { verdict: "refused"; issue: "attachment-too-large" | "attachment-invalid" } =>
+    log.writeAttachment(params);
   const writeArtifact = (params: {
     readonly artifactId: string;
     readonly version: number;
@@ -298,6 +317,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     snapshot,
     artifactTitles,
     writeArtifactMeta,
+    writeAttachment,
     state: (): ChannelState => snapshot().state,
     close: (): void => log.close(),
     transcript: () => snapshot().transcript,

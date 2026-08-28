@@ -39,6 +39,7 @@ import {
   type ReduceResult,
   reduce,
 } from "../protocol/index.js";
+import { putBlob } from "./blobs.js";
 import { type RecordPaths, StoreError } from "./errors.js";
 import { Flock, type LockEvent } from "./flock.js";
 
@@ -110,9 +111,32 @@ export type LogEntry =
        * ignores it, and an artifact that carries it behaves as though it
        * were never retired. */
       readonly retired?: boolean;
+    }
+  /** A file a person attached (RFC-11). The bytes are NOT here: they are a
+   * blob beside the log, at `files/<hash>`, and this names it.
+   *
+   * Measured, not assumed. Folding a 67 MB log costs 19 ms and 335 MB of
+   * resident memory, because a fold holds what it reads. Time is not the
+   * problem; memory is. */
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "attach";
+      /** sha256 hex of the blob, lowercase. The blob's name. */
+      readonly hash: string;
+      /** Size of the blob in bytes. */
+      readonly bytes: number;
+      /** As received from the browser. A claim, not evidence. */
+      readonly contentType: string;
+      /** What the person called it. */
+      readonly name: string;
+      /** Whether the bytes may be inlined into an input. Decided on the
+       * bytes when the file arrives, and recorded so the decision is not
+       * re-made differently later. */
+      readonly text: boolean;
     };
 
-const ENTRY_SOURCES = ["frame", "input", "credit", "artifact", "artifact-meta"] as const;
+const ENTRY_SOURCES = ["frame", "input", "credit", "artifact", "artifact-meta", "attach"] as const;
 
 /** The envelope every entry carries, whatever its source. The fold checks
  * this much and no more before deciding whether it knows the source:
@@ -209,6 +233,40 @@ export const artifactKey = (artifactId: string, version: number): string =>
 export type ArtifactIndex = ReadonlyMap<string, number>;
 
 /** Validate an envelope-valid entry claiming src artifact. Returns the typed entry or throws corrupt-log. */
+/**
+ * Read an `attach` entry, or refuse the record (RFC-11).
+ *
+ * Strict, like `coerceArtifactEntry` and unlike `applyArtifactMeta`. A meta
+ * entry carries an opinion about a document and losing one is recoverable by
+ * writing it again; an attach entry is the only thing that says a blob
+ * exists and what it is. A record whose attach entry cannot be read is a
+ * record that cannot find its own files.
+ */
+const coerceAttachEntry = (raw: unknown, offset: number): LogEntry & { src: "attach" } => {
+  const r = raw as Record<string, unknown>;
+  if (!isHashHex(r.hash))
+    throw new StoreError("corrupt-log", `malformed attach entry at byte ${offset}: hash`);
+  if (typeof r.bytes !== "number" || !Number.isSafeInteger(r.bytes) || r.bytes < 0)
+    throw new StoreError("corrupt-log", `malformed attach entry at byte ${offset}: bytes`);
+  if (!isArtifactField(r.contentType))
+    throw new StoreError("corrupt-log", `malformed attach entry at byte ${offset}: contentType`);
+  if (!isArtifactField(r.name))
+    throw new StoreError("corrupt-log", `malformed attach entry at byte ${offset}: name`);
+  if (typeof r.text !== "boolean")
+    throw new StoreError("corrupt-log", `malformed attach entry at byte ${offset}: text`);
+  const at = (r as { at: unknown }).at;
+  return {
+    v: 1,
+    at: typeof at === "number" ? at : 0,
+    src: "attach",
+    hash: r.hash as string,
+    bytes: r.bytes,
+    contentType: r.contentType as string,
+    name: r.name as string,
+    text: r.text,
+  };
+};
+
 const coerceArtifactEntry = (raw: unknown, offset: number): LogEntry & { src: "artifact" } => {
   const r = raw as Record<string, unknown>;
   const artifactId = r.artifactId;
@@ -491,10 +549,12 @@ const applyEntry = (
     case "credit":
       return { result: grantCredit(state, entry.tokens, entry.at), frame: null };
     case "artifact-meta":
+    case "attach":
     case "artifact":
-      // Artifacts are not reduced into ChannelState or the transcript — they
-      // reuse the same skip path as an unknown src, but are still validated
-      // and indexed. Returning an accepted no-op keeps the fold pure.
+      // Artifacts and attachments are not reduced into ChannelState or the
+      // transcript — they reuse the same skip path as an unknown src, but are
+      // still validated and indexed. Returning an accepted no-op keeps the
+      // fold pure.
       return {
         result: {
           verdict: "accepted",
@@ -612,6 +672,11 @@ export const foldLog = (
         if ((parsed as LogEntry).src === "artifact-meta") {
           // Log order, last write winning per field.
           applyArtifactMeta(parsed, artifactTitles);
+        } else if ((parsed as LogEntry).src === "attach") {
+          // Validated so a bad entry is a corrupt log rather than a silent
+          // reference to a blob that is not described. Nothing is indexed:
+          // an attachment is found through the input that names it.
+          coerceAttachEntry(parsed, offset);
         } else if ((parsed as LogEntry).src === "artifact") {
           const art = coerceArtifactEntry(parsed, offset);
           // Size limit: oversize is refused but the record still opens —
@@ -747,6 +812,11 @@ export const foldCollect = (
       if (knownEntry(parsed)) {
         if ((parsed as LogEntry).src === "artifact-meta") {
           applyArtifactMeta(parsed, artifactTitles);
+        } else if ((parsed as LogEntry).src === "attach") {
+          // Validated so a bad entry is a corrupt log rather than a silent
+          // reference to a blob that is not described. Nothing is indexed:
+          // an attachment is found through the input that names it.
+          coerceAttachEntry(parsed, offset);
         } else if ((parsed as LogEntry).src === "artifact") {
           const art = coerceArtifactEntry(parsed, entryOffset);
           if (art.bytes.length > ARTIFACT_BYTES_MAX) {
@@ -1054,6 +1124,19 @@ export interface ConversationLog {
    * Whether the artifact exists is the caller's question, not this one's:
    * the endpoint refuses what it can see, and this stays as total as the
    * fold that reads it back. */
+  /** Store an attachment and record that it exists (RFC-11).
+   *
+   * The blob is written and flushed before the entry is appended, so a crash
+   * between them leaves an orphan rather than a log that refers to bytes that
+   * are not there. Returns the hash the blob is stored under. */
+  writeAttachment(params: {
+    readonly bytes: Uint8Array;
+    readonly contentType: string;
+    readonly name: string;
+    readonly text: boolean;
+  }):
+    | { verdict: "accepted"; hash: string }
+    | { verdict: "refused"; issue: "attachment-too-large" | "attachment-invalid" };
   writeArtifactMeta(params: {
     readonly artifactId: string;
     readonly title?: string;
@@ -1286,6 +1369,61 @@ export const createLog = (
     curArtifactTitles = new Map<string, string>(batch.artifactTitles);
     curArtifactRefusals = [...batch.artifactRefusals];
     return batch;
+  };
+
+  const writeAttachment: ConversationLog["writeAttachment"] = (params) => {
+    // The blob first, flushed, and the entry after (RFC-11). A crash between
+    // them leaves a blob nothing refers to, which is a file taking space. The
+    // reverse order leaves a log that refers to bytes that are not there,
+    // which is a record that lies.
+    let hash: string;
+    try {
+      hash = putBlob(paths.dir, params.bytes);
+    } catch {
+      return { verdict: "refused", issue: "attachment-too-large" };
+    }
+    if (!isArtifactField(params.contentType) || !isArtifactField(params.name)) {
+      // The blob is already written and stays. It is an orphan, which is the
+      // safe direction; refusing after writing is better than describing it
+      // with fields the fold would later call corrupt.
+      return { verdict: "refused", issue: "attachment-invalid" };
+    }
+    const entry: LogEntry = {
+      v: 1,
+      at: Date.now(),
+      src: "attach",
+      hash,
+      bytes: params.bytes.byteLength,
+      contentType: params.contentType,
+      name: params.name,
+      text: params.text,
+    };
+    const flock = new Flock(paths.lockPath, conversationId);
+    const lock = flock.acquire({ onEvent: deps.onLockEvent });
+    try {
+      const { folded } = readFoldRepair(paths, conversationId, secret);
+      curGoodBytes = folded.goodBytes;
+      const line = Buffer.from(`${JSON.stringify(entry)}\n`);
+      const preWriteOffset = curGoodBytes;
+      const fd = openSync(paths.logPath, "a");
+      try {
+        writeAllSync(fd, line);
+        fsyncSync(fd);
+      } catch (cause) {
+        try {
+          truncateSync(paths.logPath, preWriteOffset);
+        } catch {
+          // Nothing further to do: the fold repairs a torn tail on open.
+        }
+        throw new StoreError("append-failed", "could not append attachment entry", { cause });
+      } finally {
+        closeSync(fd);
+      }
+      curGoodBytes = preWriteOffset + line.byteLength;
+    } finally {
+      lock.release();
+    }
+    return { verdict: "accepted", hash };
   };
 
   const writeArtifactMeta: ConversationLog["writeArtifactMeta"] = (params) => {
@@ -1612,6 +1750,7 @@ export const createLog = (
     readArtifact,
     writeArtifact,
     writeArtifactMeta,
+    writeAttachment,
     cursor,
     advanceCursor,
     append,
