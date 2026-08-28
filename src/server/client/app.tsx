@@ -26,6 +26,7 @@ import {
   ThreadPrimitive,
   useExternalStoreRuntime,
   useMessage,
+  useThreadComposer,
 } from "@assistant-ui/react";
 import * as Popover from "@radix-ui/react-popover";
 import * as React from "react";
@@ -33,13 +34,15 @@ import { createRoot } from "react-dom/client";
 import {
   type Annotation,
   type AnnotationSpot,
+  type AttachedFile,
   clampSnippet,
   encodeAnnotationBatch,
   NOTE_QUEUE_MAX,
   queueAdmits,
 } from "../../protocol/annotations.js";
 import { ARTIFACT_TITLE_MAX } from "../../protocol/artifact-title.js";
-import { type Activity as ActivitySnapshot, describeActivity } from "./activity.js";
+import { ATTACHMENT_BYTES_MAX } from "../../protocol/attachment.js";
+import { type Activity as ActivitySnapshot, describeActivity, type Report } from "./activity.js";
 import {
   type Confidence,
   resolveSpot,
@@ -49,7 +52,23 @@ import {
   sha256Hex,
 } from "./anchor.js";
 import { isModeToggle, isQueueSend } from "./hotkeys.js";
-import { CaretDownDuotone, PencilDuotone, ProhibitDuotone } from "./icons.js";
+import {
+  ArchiveDuotone,
+  ArrowDownDuotone,
+  ArrowRightDuotone,
+  ArrowUpDuotone,
+  CaretDownDuotone,
+  FileDuotone,
+  FileTextDuotone,
+  ImageDuotone,
+  LockDuotone,
+  PaperclipDuotone,
+  PaperPlaneTiltDuotone,
+  PencilDuotone,
+  ProhibitDuotone,
+  TableDuotone,
+  XDuotone,
+} from "./icons.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 import {
   CONVERSATION_MAX,
@@ -58,10 +77,10 @@ import {
   readConversationWidth,
   writeConversationWidth,
 } from "./layout.js";
-import { diffLines } from "./line-diff.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
+import { seamsForLost } from "./seams.js";
 import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
-import { diffVersions } from "./version-diff.js";
+import { diffVersions, type VersionDiff } from "./version-diff.js";
 import { isReadOnly, versionState } from "./version-state.js";
 
 /** Kept in step with the server's own poll interval. */
@@ -234,9 +253,26 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
 const Resolutions = React.createContext<
   ReadonlyMap<
     string,
-    { lost: boolean; later: boolean; how: string | null; elementId: string | null }
+    {
+      lost: boolean;
+      later: boolean;
+      how: string | null;
+      elementId: string | null;
+      /** The version the note was made against: where a lost note still
+       * reads, and what "Open vNN beside this" opens. */
+      fromVersion: number;
+    }
   >
 >(new Map());
+
+/** Hold one version against the one on screen (6b). Context for the same
+ * reason `Resolutions` is: the message component cannot take a prop. */
+const CompareWith = React.createContext<((version: number) => void) | null>(null);
+
+/** A thumbnail for a stored attachment, by hash. Returns the object URL if
+ * the bytes are an image, null when they are not or could not be read.
+ * Context, ditto: the chips inside note cards are rendered by assistant-ui. */
+const ThumbFor = React.createContext<((hash: string) => Promise<string | null>) | null>(null);
 
 /** Go to what a note points at.
  *
@@ -276,9 +312,57 @@ const Bands = ({
   );
 };
 
+/** A file a SENT note carried (4a state 6, mapped to the note card). Inside
+ * the turn the chips lose their x and keep their size; the image reads its
+ * bytes back through the same token-checked fetch the composer uses, once,
+ * and stands on the design's placeholder until then. */
+const SentFileChip = ({ file }: { file: AttachedFile }): React.ReactElement => {
+  const thumbFor = React.useContext(ThumbFor);
+  const [url, setUrl] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    if (file.contentType.startsWith("image/")) {
+      void thumbFor?.(file.hash).then((u) => {
+        if (alive) setUrl(u);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [file.hash, file.contentType, thumbFor]);
+  if (file.contentType.startsWith("image/")) return <ImageChip name={file.name} url={url} />;
+  return <PillChip name={file.name} contentType={file.contentType} bytes={file.bytes} />;
+};
+
+/** The lost-note light (6a, "Target lost"): clicking a note with nowhere to
+ * go lights the note itself, in the conversation, and nothing in the
+ * document pane moves. Not drawn as an error - the light is the same accent
+ * wash a found target takes, and it fades on the same 2.6s the pulse uses. */
+const useLostLight = (): {
+  lit: string | null;
+  light: (key: string) => void;
+} => {
+  const [lit, setLit] = React.useState<string | null>(null);
+  const timer = React.useRef<number | null>(null);
+  React.useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  const light = React.useCallback((key: string): void => {
+    setLit(key);
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setLit(null), 2600);
+  }, []);
+  return { lit, light };
+};
+
 const Message = (): React.ReactElement => {
   const resolutions = React.useContext(Resolutions);
   const focusSpot = React.useContext(FocusSpot);
+  const compareWith = React.useContext(CompareWith);
+  const { lit, light } = useLostLight();
   const resolutionFor = (note: string, snippet: string) =>
     resolutions.get(`${note}\u0000${snippet}`);
   // A tool call is the agent working, not the agent talking. Rendered as a
@@ -325,10 +409,11 @@ const Message = (): React.ReactElement => {
             // all means the resolutions have not landed yet: no band, no
             // claim, rather than a guess dressed as a fact.
             const how = status === undefined ? undefined : status.how;
+            const lost = status?.lost === true;
             const state =
               status === undefined
                 ? `sent · v${b.version}`
-                : status.lost === true
+                : lost
                   ? "lost · nothing left to point at"
                   : status.later === true
                     ? "not on this version"
@@ -337,43 +422,93 @@ const Message = (): React.ReactElement => {
                       : how === "position" || how === "css"
                         ? "a guess · worth checking"
                         : "still exact";
+            // 6a: a lost note is still clickable. There is nowhere to
+            // travel to, so the click lights the note here instead - the
+            // document never moves.
+            const lostKey = `${n.note}:${spot?.id ?? ""}`;
+            const goLost = (): void => light(lostKey);
+            const fromVersion = status?.fromVersion;
             return (
-              <div
-                className={[
-                  "note-card",
-                  status?.lost === true ? "orphan" : status?.later === true ? "later" : "sent",
-                  canGo ? "goes" : "",
-                ]
-                  .filter((c) => c !== "")
-                  .join(" ")}
-                key={`${n.note}:${spot?.id ?? ""}`}
-                {...(canGo
-                  ? {
-                      role: "button" as const,
-                      tabIndex: 0,
-                      title: "Go to what this note is about",
-                      onClick: () => focusSpot?.(targets),
-                      onKeyDown: (e: React.KeyboardEvent) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          focusSpot?.(targets);
+              <React.Fragment key={lostKey}>
+                <div
+                  className={[
+                    "note-card",
+                    lost ? "orphan" : status?.later === true ? "later" : "sent",
+                    canGo ? "goes" : "",
+                    lit === lostKey ? "lit" : "",
+                  ]
+                    .filter((c) => c !== "")
+                    .join(" ")}
+                  {...(canGo
+                    ? {
+                        role: "button" as const,
+                        tabIndex: 0,
+                        title: "Go to what this note is about",
+                        onClick: () => focusSpot?.(targets),
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            focusSpot?.(targets);
+                          }
+                        },
+                      }
+                    : lost
+                      ? {
+                          role: "button" as const,
+                          tabIndex: 0,
+                          title: "Nothing to go to - the passage is gone from this version",
+                          onClick: goLost,
+                          onKeyDown: (e: React.KeyboardEvent) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              goLost();
+                            }
+                          },
                         }
-                      },
-                    }
-                  : {})}
-              >
-                <span className="note-card-head">
-                  <span className="note-card-kind">Your note</span>
-                  {status === undefined ? null : (
-                    <Bands how={how ?? null} lost={status.lost} later={status.later} />
+                      : {})}
+                >
+                  <span className="note-card-head">
+                    <span className="note-card-kind">Your note</span>
+                    {status === undefined ? null : (
+                      <Bands how={how ?? null} lost={status.lost} later={status.later} />
+                    )}
+                    <span className="note-card-state">{state}</span>
+                  </span>
+                  <span className="note-card-quote">
+                    {n.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
+                  </span>
+                  <span className="note-card-note">{n.note}</span>
+                  {/* Sent attachments ride the note: read, never imported.
+                      The "read in full - N words, N rows" confirmation line
+                      is NOT drawn, because the client would have to compute
+                      it and the record never states it; the agent's own turn
+                      text carries whatever it measured. */}
+                  {n.files === undefined || n.files.length === 0 ? null : (
+                    <span className="note-card-files">
+                      {n.files.map((f) => (
+                        <SentFileChip file={f} key={f.hash} />
+                      ))}
+                    </span>
                   )}
-                  <span className="note-card-state">{state}</span>
-                </span>
-                <span className="note-card-quote">
-                  {n.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
-                </span>
-                <span className="note-card-note">{n.note}</span>
-              </div>
+                </div>
+                {/* 3e / 6a: a lost note still reads on the version it was
+                    written against, and the way to see that is the compare
+                    view - the passage beside its absence. */}
+                {lost && fromVersion !== undefined && compareWith !== null ? (
+                  <div className="card">
+                    <div className="card-title">A lost note is a fact, not an error.</div>
+                    <div className="card-body">
+                      The words it was attached to are not in this version. It stays in the
+                      conversation, and it still reads on v{fromVersion}, where the passage lives.
+                    </div>
+                    <div className="card-actions">
+                      <button type="button" onClick={() => compareWith(fromVersion)}>
+                        Open v{fromVersion} beside this
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </React.Fragment>
             );
           })}
         </div>
@@ -484,59 +619,288 @@ interface Attached {
   readonly url: string | null;
 }
 
+/** A file on its way to the store. The bytes are known the moment they are
+ * chosen - `file.size` - and that is all the chip claims: a count, never a
+ * percentage, because a fetch cannot report how much of the body has left. */
+interface Uploading {
+  readonly id: string;
+  readonly name: string;
+  readonly bytes: number;
+}
+
+/** The substrate refusing an attach or a send (4a state 5, G2). The reason
+ * rides on the chip and stays until it is dismissed: a toast that leaves on
+ * its own would take the only statement of what happened with it. */
+interface Refusal {
+  readonly id: string;
+  /** What was refused, when the refusal is about a file. */
+  readonly name: string | null;
+  readonly reason: string;
+}
+
+/** "18 KB", "3.4 MB" - one decimal under ten, whole above, as the design
+ * writes sizes on its chips. */
+const fmtBytes = (n: number): string => {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = n / 1024;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u += 1;
+  }
+  const shown = v >= 10 || Number.isInteger(v) ? Math.round(v) : Number(v.toFixed(1));
+  return `${shown} ${units[u] as string}`;
+};
+
+/** The glyph a chip carries when it has no picture. What the file IS, read
+ * off its name and claimed type, in the design's own small vocabulary. */
+const FileGlyph = ({
+  contentType,
+  name,
+}: {
+  contentType: string;
+  name: string;
+}): React.ReactElement => {
+  const lower = name.toLowerCase();
+  if (/\.(zip|gz|tar|7z|bz2|xz)$/.test(lower)) return <ArchiveDuotone size={14} />;
+  if (/\.(csv|tsv)$/.test(lower)) return <TableDuotone size={14} />;
+  if (contentType.startsWith("text/") || /\.(md|txt|json|ya?ml|html?)$/.test(lower))
+    return <FileTextDuotone size={14} />;
+  if (contentType.startsWith("image/")) return <ImageDuotone size={14} />;
+  return <FileDuotone size={14} />;
+};
+
+/** One attached image, as the design draws it: a 64px thumb, the filename on
+ * a translucent ink strip along the bottom, an x in the corner while it can
+ * still be taken off. `url` null means the bytes are an image the page has
+ * not read back - the dot-screen placeholder stands in until they arrive. */
+const ImageChip = ({
+  name,
+  url,
+  onRemove,
+}: {
+  name: string;
+  url: string | null;
+  onRemove?: () => void;
+}): React.ReactElement => (
+  <span className="chip imgchip" title={name}>
+    {url === null ? (
+      <span className="thumb-img none" aria-hidden="true">
+        <ImageDuotone size={18} />
+      </span>
+    ) : (
+      <img src={url} alt="" className="thumb-img" />
+    )}
+    <span className="thumb-name">{name}</span>
+    {onRemove === undefined ? null : (
+      <button type="button" className="chip-x corner" title="Remove" onClick={onRemove}>
+        <XDuotone size={9} />
+      </button>
+    )}
+  </span>
+);
+
+/** One attached file that is not a picture: a 32px pill - glyph, name (128px
+ * at most), size, and an x while it is still removable. */
+const PillChip = ({
+  name,
+  contentType,
+  bytes,
+  onRemove,
+}: {
+  name: string;
+  contentType: string;
+  bytes: number;
+  onRemove?: () => void;
+}): React.ReactElement => (
+  <span className="chip pill">
+    <span className="chip-glyph" aria-hidden="true">
+      <FileGlyph contentType={contentType} name={name} />
+    </span>
+    <span className="chip-name">{name}</span>
+    <span className="chip-size">{fmtBytes(bytes)}</span>
+    {onRemove === undefined ? null : (
+      <button type="button" className="chip-x" title="Remove" onClick={onRemove}>
+        <XDuotone size={10} />
+      </button>
+    )}
+  </span>
+);
+
+/** A file on its way in (4a state 3): the same pill with a 2px accent line
+ * along its bottom edge and the byte count where the size goes. No x - a
+ * fetch in flight cannot be taken back. */
+const UploadingChip = ({ name, bytes }: { name: string; bytes: number }): React.ReactElement => (
+  <span className="chip pill uploading" title={name}>
+    <span className="chip-glyph" aria-hidden="true">
+      <FileGlyph contentType="" name={name} />
+    </span>
+    <span className="chip-name">{name}</span>
+    <span className="chip-size">{fmtBytes(bytes)}</span>
+  </span>
+);
+
+/** A refusal (4a state 5): magenta, the reason on the chip, and it stays
+ * until it is dismissed. */
+const RefusalChip = ({
+  name,
+  reason,
+  onDismiss,
+}: {
+  name: string | null;
+  reason: string;
+  onDismiss: () => void;
+}): React.ReactElement => (
+  <span className="chip pill refused">
+    {name === null ? null : <span className="chip-name">{name}</span>}
+    <span className="chip-reason">{reason}</span>
+    <button type="button" className="chip-x" title="Dismiss" onClick={onDismiss}>
+      <XDuotone size={10} />
+    </button>
+  </span>
+);
+
 const Thread = ({
   pending,
   onSendNotes,
   onDiscardNotes,
   sending,
-  activity,
-  now,
-  lastChange,
+  report,
+  version,
+  dead,
+  invite,
+  collision,
+  onSave,
+  onShowWaiting,
   attachments,
+  uploading,
+  refusals,
   onAttach,
   onRemoveAttachment,
+  onDismissRefusal,
 }: {
   pending: readonly PendingNote[];
   onSendNotes: () => void;
   onDiscardNotes: () => void;
   sending: boolean;
-  activity: Activity;
-  /** Ticks once a second, so the count moves without a render loop. */
-  now: number;
-  /** When the transcript last changed. */
-  lastChange: number;
+  /** What the dock said about the agent, moved into the conversation's own
+   * status pill (3c, 6e Wait). Neutral ink while it is only a wait; the one
+   * warning is the stall. */
+  report: Report;
+  /** The document's version, for the stall card's facts. Null when no
+   * document is on screen. */
+  version: number | null;
+  /** The connection is dead (3d): the transcript fades, queued notes become
+   * one held card, and the composer says so. */
+  dead: boolean;
+  /** No document yet (3a): the conversation is the way in, so its field is
+   * dressed as the thing to do - accent border, ring, solid send. */
+  invite: boolean;
+  /** A version arrived underneath unsaved edits (3f): the collision card in
+   * the conversation offers both answers, and neither destroys anything. */
+  collision: { readonly arrived: number; readonly next: number } | null;
+  onSave: () => void;
+  onShowWaiting: (arrived: number) => void;
   /** Files attached to the message being written, not yet sent. */
   attachments: readonly Attached[];
+  uploading: readonly Uploading[];
+  refusals: readonly Refusal[];
   onAttach: (files: FileList) => void;
   onRemoveAttachment: (hash: string) => void;
+  onDismissRefusal: (id: string) => void;
 }): React.ReactElement => {
-  const busyNow = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
-  // When this stretch of work began. Held across renders because nothing in
-  // the record says it: a turn writes no line between its input and its
-  // terminal event, so the only witness to the start is the page that saw
-  // idle become busy. Adjusted during render, which is React's own form for
-  // state derived from a change in props.
-  const [wasBusy, setWasBusy] = React.useState(busyNow);
-  const [startedAt, setStartedAt] = React.useState<number | null>(busyNow ? now : null);
-  if (busyNow !== wasBusy) {
-    setWasBusy(busyNow);
-    setStartedAt(busyNow ? now : null);
-  }
-  // A turn that streams resets the clock as it goes; one that says nothing
-  // until it finishes is timed from when it started.
-  const since = Math.max(startedAt ?? now, lastChange);
-  const report = describeActivity(activity, (now - since) / 1000);
-  const { busy, stalled } = report;
+  const composerBox = React.useRef<HTMLTextAreaElement | null>(null);
+  // 4a: send is ghost at rest and solid the moment there is something to
+  // send. assistant-ui does not disable its own Send on an empty composer,
+  // so the emptiness is read here and the button is disabled by lucid -
+  // with attachments counted, because a file alone is something to say.
+  const composerText = useThreadComposer((c) => c.text);
+  const hasToSay = composerText.trim() !== "" || attachments.length > 0;
+  // 4a state 2: a file held over the composer is a drop target. The whole
+  // composer takes the dashed accent edge and the field says what will
+  // happen. Nothing lands on the document: a file is attached to the
+  // conversation or it goes back where it came from - never a version.
+  const [dragOver, setDragOver] = React.useState(false);
+  const stalled = report.stalled;
   return (
-    <ThreadPrimitive.Root className="thread-root">
+    <ThreadPrimitive.Root className={dead ? "thread-root dead" : "thread-root"}>
       {/* The half that scrolls. Only messages and note cards are in here, so
           nothing that has to stay put competes with the scrolling. */}
       <div className="thread-wrap">
-        <ThreadPrimitive.Viewport autoScroll className="thread">
+        <ThreadPrimitive.Viewport autoScroll className={dead ? "thread dead" : "thread"}>
           <ThreadPrimitive.Empty>
             <div className="empty">Nothing in this conversation yet.</div>
           </ThreadPrimitive.Empty>
           <ThreadPrimitive.Messages components={{ Message }} />
+
+          {/* 3c: the agent stopped mid-turn. A card under the truncated turn
+              says what that cost - nothing was written, the version is as it
+              was, the queue is intact. The document column does not react.
+              "Pick it up" is not offered: no record behaviour resumes a
+              stalled turn, and the nearest real act - saying something
+              again - is what "Ask again" does. */}
+          {stalled ? (
+            <div className="card">
+              <div className="card-title">The agent stopped here.</div>
+              <div className="card-body">
+                Nothing was written{version === null ? "" : ` — v${version} is exactly as it was`}
+                {pending.length === 0
+                  ? ""
+                  : `, and your ${pending.length} note${pending.length === 1 ? " is" : "s are"} still queued`}
+                .
+              </div>
+              <div className="card-actions">
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => composerBox.current?.focus()}
+                >
+                  Ask again
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {/* 3d: queued notes while the connection is dead. Nothing was sent,
+              nothing failed, nothing is guessed at - they are held here until
+              a driver returns, and the composer below says the same. */}
+          {dead && pending.length > 0 ? (
+            <div className="held">
+              <div className="held-head">
+                <span className="held-kind">Held</span>
+                <span className="held-state">
+                  {pending.length} note{pending.length === 1 ? "" : "s"}, nothing sent
+                </span>
+              </div>
+              <div className="held-body">
+                They stay yours until a driver is back. Nothing was lost and nothing was guessed at.
+              </div>
+            </div>
+          ) : null}
+
+          {/* 3f: the agent wrote a version underneath unsaved edits. Both
+              answers keep everything, so both are offered and neither is
+              styled as a danger. */}
+          {collision === null ? null : (
+            <div className="card">
+              <div className="card-title">
+                The agent wrote v{collision.arrived} while you were editing.
+              </div>
+              <div className="card-body">
+                Your copy is held where it is. Both ways forward keep everything — no version is
+                ever destroyed.
+              </div>
+              <div className="card-actions">
+                <button type="button" className="primary" onClick={onSave} disabled={sending}>
+                  {sending ? "Saving…" : `Save mine as v${collision.next}`}
+                </button>
+                <button type="button" onClick={() => onShowWaiting(collision.arrived)}>
+                  Show v{collision.arrived}
+                </button>
+              </div>
+            </div>
+          )}
         </ThreadPrimitive.Viewport>
         <ThreadPrimitive.ScrollToBottom asChild>
           <button type="button" className="to-bottom">
@@ -546,24 +910,9 @@ const Thread = ({
       </div>
 
       {/* The half that does not. One solid block at the bottom: what is
-          happening, what is queued, and the box you type in. The queue bar
-          was sticky inside the scroller and lay over the conversation
-          instead of sitting under it. */}
-      <div className="dock">
-        {busy ? (
-          <div className={stalled ? "activity stalled" : "activity"}>
-            <span className="pulse" />
-            <span>
-              {report.label}
-              {report.elapsed === null
-                ? ""
-                : stalled
-                  ? ` — nothing back for ${report.elapsed}`
-                  : ` — ${report.elapsed}`}
-            </span>
-          </div>
-        ) : null}
-
+          queued, what is attached, and the box you type in. What is
+          happening lives in the conversation's status pill now, not here. */}
+      <div className={dead ? "dock dead" : "dock"}>
         {pending.length === 0 ? null : (
           <div className="queue-bar">
             <span>
@@ -587,38 +936,66 @@ const Thread = ({
           </div>
         )}
 
-        {attachments.length === 0 ? null : (
+        {uploading.length + attachments.length + refusals.length === 0 ? null : (
           <div className="attached">
-            {attachments.map((a) => (
-              <span className={a.text ? "chip text" : "chip"} key={a.hash}>
-                {/* A thumbnail for what has one; a name for what does not. The
-                  bytes are already stored, so this reads them back rather
-                  than holding a second copy in the page. */}
-                {a.url !== null ? (
-                  <img src={a.url} alt="" className="thumb" />
-                ) : (
-                  <span className="thumb kind">{a.text ? "text" : "file"}</span>
-                )}
-                <span className="chip-name">{a.name}</span>
-                <button
-                  type="button"
-                  className="chip-drop"
-                  title="Remove"
-                  onClick={() => onRemoveAttachment(a.hash)}
-                >
-                  ×
-                </button>
-              </span>
+            {uploading.map((u) => (
+              <UploadingChip key={u.id} name={u.name} bytes={u.bytes} />
+            ))}
+            {attachments.map((a) =>
+              a.url !== null || a.contentType.startsWith("image/") ? (
+                <ImageChip
+                  key={a.hash}
+                  name={a.name}
+                  url={a.url}
+                  onRemove={() => onRemoveAttachment(a.hash)}
+                />
+              ) : (
+                <PillChip
+                  key={a.hash}
+                  name={a.name}
+                  contentType={a.contentType}
+                  bytes={a.bytes}
+                  onRemove={() => onRemoveAttachment(a.hash)}
+                />
+              ),
+            )}
+            {refusals.map((r) => (
+              <RefusalChip
+                key={r.id}
+                name={r.name}
+                reason={r.reason}
+                onDismiss={() => onDismissRefusal(r.id)}
+              />
             ))}
           </div>
         )}
 
-        <ComposerPrimitive.Root className="composer">
+        <ComposerPrimitive.Root
+          className={dragOver ? "composer dragover" : invite ? "composer inviting" : "composer"}
+          onDragOver={(e) => {
+            // Without the preventDefault the drop never fires and the
+            // browser navigates to the file instead.
+            if (e.dataTransfer?.types.includes("Files") !== true) return;
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+            setDragOver(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const files = e.dataTransfer?.files;
+            if (files !== undefined && files.length > 0) onAttach(files);
+          }}
+        >
           {/* Attaching and sending are separate: the file is stored the
             moment it is chosen, so closing the page does not lose it and
-            sending is the ordinary act it already was. */}
+            sending is the ordinary act it already was. 38px, matching send,
+            as the design's one new piece of composer chrome. */}
           <label className="attach" title="Attach a file">
-            +
+            <PaperclipDuotone size={16} />
             <input
               type="file"
               multiple
@@ -628,9 +1005,30 @@ const Thread = ({
               }}
             />
           </label>
-          <ComposerPrimitive.Input autoFocus placeholder="Send to the conversation…" rows={1} />
+          <ComposerPrimitive.Input
+            autoFocus
+            ref={composerBox}
+            className={dragOver ? "drop" : undefined}
+            disabled={dead}
+            placeholder={
+              dead
+                ? "Reload to write…"
+                : dragOver
+                  ? "Drop to attach — the original is kept"
+                  : "Send to the conversation…"
+            }
+            rows={1}
+          />
           <ComposerPrimitive.Send asChild>
-            <button type="submit">Send</button>
+            <button
+              type="submit"
+              className="send"
+              title="Send"
+              aria-label="Send"
+              disabled={dead || !hasToSay}
+            >
+              <PaperPlaneTiltDuotone size={16} />
+            </button>
           </ComposerPrimitive.Send>
         </ComposerPrimitive.Root>
       </div>
@@ -718,6 +1116,10 @@ const DocumentFrame = ({
   pulseBlocks,
   goBlock,
   onOffscreen,
+  onTravel,
+  onMarksBelow,
+  onSeamClick,
+  seams,
   onHotkey,
   onDirty,
   noteCounts,
@@ -743,11 +1145,26 @@ const DocumentFrame = ({
   pendingPulse: React.MutableRefObject<readonly number[] | null>;
   pulseBlocks: React.MutableRefObject<((indexes: readonly number[]) => void) | null>;
   goBlock: React.MutableRefObject<((index: number) => void) | null>;
-  onOffscreen: (indexes: readonly number[]) => void;
+  /** Which changed blocks the reader could not see, and which edge they sit
+   * at (6a): the ones below pulse and are not offered; the ones above and
+   * below are offered at the nearer edge instead. */
+  onOffscreen: (below: readonly number[], above: readonly number[]) => void;
+  /** A note's target sat off screen (6a): the frame did not scroll, and the
+   * page docks a travel offer at the edge nearest the target instead. */
+  onTravel: (index: number, below: boolean) => void;
+  /** Which noted blocks sit wholly below the fold (3g), pushed by the frame
+   * as the reader scrolls and as notes land. */
+  onMarksBelow: (indexes: readonly number[]) => void;
+  /** A seam was clicked: open the version where the passage still lives. */
+  onSeamClick: (version: number) => void;
+  /** Where a lost note pointed (3e). Sent again whenever it changes and once
+   * the frame says it is ready. */
+  seams: readonly { before: number; label: string; version: number }[];
   /** A key the frame caught that means something to the whole page. */
   onHotkey: (which: "toggle-mode" | "send-queue") => void;
-  /** The frame says when a person has changed something in it. */
-  onDirty: () => void;
+  /** The frame says the person changed something in it, and how many blocks
+   * carry an edit - the quantity the discard dialog names (6c). */
+  onDirty: (edits: number) => void;
   /** How many notes each block has carried, sent or queued. Drives the
    * count chip - the one persistent mark - so the frame is told counts,
    * not just presence: the chip is a tally, not a flag. */
@@ -755,7 +1172,8 @@ const DocumentFrame = ({
   mode: "edit" | "annotate";
   /** A version that is not the current one. Neither editable nor markable
    * (RFC-07 R6, R7). Not a third mode: the mode still stands, and applies
-   * again the moment the current version is back. */
+   * again the moment the current version is back. Also true while the
+   * connection is dead (3d): every word stays, and none of it moves. */
   readOnly: boolean;
 }): React.ReactElement => {
   const ref = React.useRef<HTMLIFrameElement | null>(null);
@@ -764,6 +1182,19 @@ const DocumentFrame = ({
     new Map<string, (v: { html: string; values: Record<string, string> } | null) => void>(),
   );
   const nextToken = React.useRef(0);
+
+  // Where a lost note pointed (3e), sent whenever it changes. `seamsRef` is
+  // the copy the ready handler sends, because a fresh frame will not hear
+  // this effect again until the anchors move - and they usually just moved,
+  // which is exactly when the frame was replaced.
+  const seamsRef = React.useRef(seams);
+  React.useEffect(() => {
+    seamsRef.current = seams;
+    ref.current?.contentWindow?.postMessage(
+      { source: FRAME_MESSAGE_SOURCE, kind: "seam", seams: [...seams] },
+      "*",
+    );
+  }, [seams]);
 
   // A `message` listener hears from every frame on the page and from any
   // origin. The boundary exists only because this checks.
@@ -796,10 +1227,18 @@ const DocumentFrame = ({
         m.kind !== "dirty" &&
         m.kind !== "place" &&
         m.kind !== "ready" &&
-        m.kind !== "pulsed"
+        m.kind !== "pulsed" &&
+        m.kind !== "focus-offscreen" &&
+        m.kind !== "marks-below" &&
+        m.kind !== "seam-clicked"
       )
         return;
-      if (m.artifactId !== doc.artifactId || m.version !== doc.version) return;
+      // A seam click carries no artifact or version: the frame that sent it
+      // is the frame that holds the seam, and the seam itself names the
+      // version to open. Everything else names the document it is about.
+      if (m.kind !== "seam-clicked") {
+        if (m.artifactId !== doc.artifactId || m.version !== doc.version) return;
+      }
 
       // Where the reader is, pushed by the frame as they scroll (#180).
       //
@@ -823,13 +1262,44 @@ const DocumentFrame = ({
           pendingPulse.current = null;
           if (changed.length > 0) pulseBlocks.current?.(changed);
         }
+        // Where a lost note pointed. The frame has to exist before a seam
+        // can sit in it.
+        ref.current?.contentWindow?.postMessage(
+          { source: FRAME_MESSAGE_SOURCE, kind: "seam", seams: seamsRef.current },
+          "*",
+        );
         return;
       }
 
-      // Which of them the reader could not see. The other half of the rule:
-      // they did not pulse, so they are offered instead.
+      // Which of them the reader could not see, and which edge they sat
+      // at. The other half of the rule: they did not pulse, so they are
+      // offered at the nearer edge instead.
       if (m.kind === "pulsed") {
-        onOffscreen(Array.isArray(m.offscreen) ? (m.offscreen as number[]) : []);
+        const below = Array.isArray(m.below) ? (m.below as number[]) : [];
+        const above = Array.isArray(m.above) ? (m.above as number[]) : [];
+        onOffscreen(below, above);
+        return;
+      }
+
+      // A note's target sat off screen (6a). The frame did not scroll and
+      // did not light anything; the offer is the page's to dock.
+      if (m.kind === "focus-offscreen") {
+        if (typeof m.index === "number" && typeof m.below === "boolean") onTravel(m.index, m.below);
+        return;
+      }
+
+      // The fold moved, or the marks did (3g).
+      if (m.kind === "marks-below") {
+        onMarksBelow(Array.isArray(m.indexes) ? (m.indexes as number[]) : []);
+        return;
+      }
+
+      // The way back to a lost passage (3e): the seam names the version
+      // where the note still reads, and opening that beside the current
+      // one is the compare view.
+      if (m.kind === "seam-clicked") {
+        if (typeof m.version === "number" && Number.isSafeInteger(m.version))
+          onSeamClick(m.version);
         return;
       }
 
@@ -839,7 +1309,7 @@ const DocumentFrame = ({
         return;
       }
       if (m.kind === "dirty") {
-        onDirty();
+        onDirty(typeof m.edits === "number" && m.edits >= 1 ? m.edits : 1);
         return;
       }
 
@@ -909,6 +1379,9 @@ const DocumentFrame = ({
     pendingPulse,
     pulseBlocks,
     onOffscreen,
+    onTravel,
+    onMarksBelow,
+    onSeamClick,
   ]);
 
   // Asking the frame what is at a set of spots. The parent cannot read the
@@ -1012,30 +1485,115 @@ const DocumentFrame = ({
   );
 };
 
+/** One side of a comparison: a whole document in its own sandboxed frame,
+ * with the diff marks for its side. The same frame machinery as the reading
+ * view - the document is agent-written and never rendered outside a
+ * sandbox, comparing included - sent its marks on a timer like the mode
+ * message, because a fresh frame has to hear them whenever it is ready. */
+const CompareSheet = ({
+  artifactId,
+  bytes,
+  version,
+  side,
+  marks,
+  seams,
+}: {
+  artifactId: string;
+  bytes: string;
+  version: number;
+  side: "old" | "new";
+  marks: readonly number[];
+  seams: readonly { before: number; label: string }[];
+}): React.ReactElement => {
+  const ref = React.useRef<HTMLIFrameElement | null>(null);
+  // Read-only from the first message: a comparison is for reading, and no
+  // write exists behind either side. The marks ride their own timer.
+  React.useEffect(() => {
+    const send = (): void => {
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode: "annotate", readOnly: true },
+        "*",
+      );
+      ref.current?.contentWindow?.postMessage(
+        {
+          source: FRAME_MESSAGE_SOURCE,
+          kind: "compare",
+          side,
+          marks: [...marks],
+          seams: seams.map((s) => ({ before: s.before, label: s.label, mid: true })),
+        },
+        "*",
+      );
+    };
+    send();
+    const id = window.setInterval(send, 1000);
+    return () => window.clearInterval(id);
+  }, [side, marks, seams]);
+  return (
+    <iframe
+      ref={ref}
+      key={`${artifactId}@${version}`}
+      className="doc-frame"
+      title={`${artifactId} v${version} (comparison)`}
+      sandbox="allow-scripts"
+      srcDoc={instrumentArtifact(bytes, artifactId, version)}
+    />
+  );
+};
+
+/** Where a removed block sits in the newer document: before the first
+ * surviving block that followed it, or at the end when nothing did. The
+ * same walk the place-keeping rule uses, read for where things went. */
+const seamBefore = (d: VersionDiff, wasAt: number): number => {
+  let best: number | undefined;
+  for (const oldIndex of d.carried.keys()) {
+    if (oldIndex > wasAt && (best === undefined || oldIndex < best)) best = oldIndex;
+  }
+  return best === undefined ? Number.MAX_SAFE_INTEGER : (d.carried.get(best) as number);
+};
+
+/** Where each removed run shows on the newer side: one seam per gap, however
+ * many blocks the run took with it. */
+const removedSeams = (d: VersionDiff): { before: number; label: string }[] => {
+  const byBefore = new Map<number, number>();
+  for (const c of d.changes) {
+    if (c.kind !== "removed" || c.wasAt === undefined) continue;
+    const before = seamBefore(d, c.wasAt);
+    byBefore.set(before, (byBefore.get(before) ?? 0) + 1);
+  }
+  return [...byBefore.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([before, count]) => ({
+      before,
+      label: count === 1 ? "one block removed" : `${count} blocks removed`,
+    }));
+};
+
 /**
- * Two versions, side by side (RFC-07 R9).
+ * Two versions, side by side (RFC-07 R9, designed 6b).
  *
  * A comparison is a view and nothing else. It never reaches the agent, never
  * appends to the record, and offers no editing of either side - restoring
  * means leaving it first, which is deliberate: this is for reading, and
  * there is no write behind it.
  *
- * Two columns where each would have room, one below that. The switch follows
- * the room actually available rather than a stored preference or a guess at
- * the device, because the pane can be dragged to any width on any machine.
+ * Two whole sheets rather than one split sheet, because each side is a whole
+ * document; below 360px a side it becomes one column. The newer side wears
+ * the accent border and the accent marks; the older side wears edge ink. A
+ * diff is not a refusal, so neither side ever takes magenta.
  */
 const Comparison = ({
+  artifactId,
   left,
   right,
   leftVersion,
   rightVersion,
-  onLeave,
 }: {
+  artifactId: string;
   left: string | null;
   right: string | null;
   leftVersion: number;
   rightVersion: number;
-  onLeave: () => void;
 }): React.ReactElement => {
   const box = React.useRef<HTMLDivElement | null>(null);
   const [wide, setWide] = React.useState(true);
@@ -1057,52 +1615,155 @@ const Comparison = ({
   // it as an empty column would say it was empty, which is a different and
   // untrue thing.
   const missing = left === null || right === null;
-  const diff = React.useMemo(
-    () => (missing ? null : diffLines(left as string, right as string)),
-    [left, right, missing],
+  const diff = React.useMemo(() => {
+    if (missing) return null;
+    const parse = (html: string): Document => new DOMParser().parseFromString(html, "text/html");
+    return diffVersions(parse(left as string), parse(right as string));
+  }, [left, right, missing]);
+
+  const oldMarks = React.useMemo(
+    () =>
+      diff === null
+        ? []
+        : diff.changes.map((c) => c.wasAt).filter((v): v is number => v !== undefined),
+    [diff],
   );
+  const newMarks = React.useMemo(
+    () =>
+      diff === null
+        ? []
+        : diff.changes.map((c) => c.at).filter((v): v is number => v !== undefined),
+    [diff],
+  );
+  const seams = React.useMemo(() => (diff === null ? [] : removedSeams(diff)), [diff]);
+  const changedCount = diff === null ? 0 : diff.changes.length;
 
   return (
-    <div className={wide ? "compare wide" : "compare"} ref={box}>
-      <div className="compare-head">
-        <span>
-          v{leftVersion} against v{rightVersion}
-        </span>
-        {diff === null ? null : (
-          <span className="compare-count">
-            {diff.identical
-              ? "identical"
-              : `${diff.added} added · ${diff.removed} removed · ${diff.changed} changed`}
-            {diff.coarse ? " · too large to line up exactly" : ""}
-          </span>
-        )}
-        <button type="button" onClick={onLeave}>
-          Close
-        </button>
-      </div>
-
-      {left === null ? (
-        <div className="compare-unreadable">v{leftVersion} could not be read.</div>
-      ) : null}
-      {right === null ? (
-        <div className="compare-unreadable">v{rightVersion} could not be read.</div>
-      ) : null}
-
-      {diff === null ? null : (
-        <div className="compare-body">
-          {diff.rows.map((r) => (
-            <div
-              className={`compare-row ${r.kind}`}
-              key={`${r.kind}:${r.beforeNo ?? "-"}:${r.afterNo ?? "-"}`}
-            >
-              <span className="compare-no">{r.beforeNo ?? ""}</span>
-              <pre className="compare-side left">{r.before ?? ""}</pre>
-              <span className="compare-no">{r.afterNo ?? ""}</span>
-              <pre className="compare-side right">{r.after ?? ""}</pre>
+    <div className={wide ? "doc-ground compare wide" : "doc-ground compare"} ref={box}>
+      <div className="compare-cols">
+        <div className="compare-col">
+          <div className="compare-col-head">
+            <span className="v">v{leftVersion}</span>
+            <span className="who">the earlier one</span>
+          </div>
+          {left === null ? (
+            <div className="compare-unreadable">v{leftVersion} could not be read.</div>
+          ) : (
+            <div className="compare-frame-wrap">
+              <CompareSheet
+                artifactId={artifactId}
+                bytes={left}
+                version={leftVersion}
+                side="old"
+                marks={oldMarks}
+                seams={[]}
+              />
             </div>
-          ))}
+          )}
         </div>
-      )}
+        <div className="compare-col">
+          <div className="compare-col-head">
+            <span className="v">v{rightVersion}</span>
+            <span className="who">the newer one</span>
+            {diff === null || changedCount === 0 ? null : (
+              <span className="count">
+                {changedCount} change{changedCount === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+          {right === null ? (
+            <div className="compare-unreadable">v{rightVersion} could not be read.</div>
+          ) : (
+            <div className="compare-frame-wrap new">
+              <CompareSheet
+                artifactId={artifactId}
+                bytes={right}
+                version={rightVersion}
+                side="new"
+                marks={newMarks}
+                seams={seams}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="compare-foot">
+        <div className="compare-note">
+          Comparing never reaches the agent and appends nothing.
+          {diff === null || diff.controls.length === 0
+            ? ""
+            : ` Also changed: ${diff.controls
+                .map(
+                  (c) =>
+                    `“${c.label}” ${c.before === "on" || c.before === "off" ? c.before : `“${c.before}”`} → ${
+                      c.after === "on" || c.after === "off" ? c.after : `“${c.after}”`
+                    }`,
+                )
+                .join(" · ")}.`}
+        </div>
+        <div className="compare-legend">
+          <span className="key new">
+            <span className="swatch" aria-hidden="true" />
+            changed in v{rightVersion}
+          </span>
+          <span className="key old">
+            <span className="swatch" aria-hidden="true" />
+            was in v{leftVersion}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/** The 6c shell: the one dialog, because discard is the one control that
+ * destroys work. 392px of paper on a blurred paper wash over the window;
+ * no shadow - the edge and the wash carry it. The destructive action is
+ * filled with ink, never magenta: a choice the person made is not the
+ * substrate refusing. */
+const Dialog = ({
+  title,
+  body,
+  keep,
+  go,
+  busy,
+  onKeep,
+  onGo,
+}: {
+  title: string;
+  body: React.ReactNode;
+  keep: string;
+  go: string;
+  busy: boolean;
+  onKeep: () => void;
+  onGo: () => void;
+}): React.ReactElement => {
+  // Escape is the keep answer, like everywhere else in lucid that asks a
+  // question of the person holding the keyboard.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onKeep();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onKeep]);
+  return (
+    <div className="dialog-backdrop">
+      <div className="dialog" role="alertdialog" aria-modal="true" aria-label={title}>
+        <div className="dialog-title">{title}</div>
+        <div className="dialog-body">{body}</div>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onKeep}>
+            {keep}
+          </button>
+          <button type="button" className="go" onClick={onGo} disabled={busy}>
+            {go}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -1146,6 +1807,10 @@ const App = (): React.ReactElement => {
     return () => window.clearInterval(id);
   }, []);
   const [problem, setProblem] = React.useState<string | null>(null);
+  /** The record is damaged past a point (G1, the 3d family): the header
+   * goes magenta with the cause and Reload is the one action, but the words
+   * already read stay on screen - they were on disk the whole time. */
+  const [damaged, setDamaged] = React.useState(false);
   /** Set once on 401. Every fetch stops: the token can only come back by
    * reloading, and retrying a dead token forever is the failure this flag
    * exists to prevent. */
@@ -1184,6 +1849,13 @@ const App = (): React.ReactElement => {
       readonly why: string | null;
       readonly snippet: string;
     }[]
+  >([]);
+  /** Where each lost note's passage WAS, as a seam the frame draws in the
+   * gap it left (3e). Derived in the same walk as the resolutions, because
+   * the question - where did the removed block sit relative to the ones
+   * that survived - is the same diff read another way. */
+  const [seams, setSeams] = React.useState<
+    readonly { before: number; label: string; version: number }[]
   >([]);
   /** The version asked for. Null means "follow the newest" — the ordinary
    * state, where a new version simply appears.
@@ -1237,6 +1909,9 @@ const App = (): React.ReactElement => {
    * is an explicit act — nothing becomes permanent until they say so, which
    * is what stops every keystroke being a version. */
   const [edited, setEdited] = React.useState(false);
+  /** How many blocks the change touches, as the frame reports it. Names the
+   * quantity in the discard dialog (6c: "Discard your three edits?"). */
+  const [editedCount, setEditedCount] = React.useState(0);
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState<string | null>(null);
   /** What a click means right now. Two things wanted the same click — ticking
@@ -1259,15 +1934,42 @@ const App = (): React.ReactElement => {
   /** A place followed into the version being taken up, waiting for its
    * frame to exist. */
   const pendingRestore = React.useRef<{ index: number; top: number } | null>(null);
-  /** Blocks this version changed that the reader could not see. They did
-   * not pulse, so they are offered instead. */
-  const [offscreenChanges, setOffscreenChanges] = React.useState<readonly number[]>([]);
+  /** The travel offer (6a): what a click on a note or an arriving version
+   * docks at the sheet edge nearest the target. Null while there is nothing
+   * to offer - the reader is looking at what changed, or declined to go. */
+  const [offer, setOffer] = React.useState<{
+    readonly side: "below" | "above";
+    readonly count: number;
+    readonly index: number;
+    readonly note: boolean;
+  } | null>(null);
+  /** Noted blocks wholly below the fold (3g), pushed by the frame. */
+  const [marksBelow, setMarksBelow] = React.useState<readonly number[]>([]);
   /** Files attached to the message being written. Stored the moment they are
    * chosen, so closing the page does not lose them. */
   const [attached, setAttached] = React.useState<readonly Attached[]>([]);
   /** Files on the note being written. Separate from the composer's: a note is
    * about a spot, and its files are about that note. */
   const [noteFiles, setNoteFiles] = React.useState<readonly Attached[]>([]);
+  /** Files on their way to the store (4a state 3), composer and note box
+   * separately - a chip belongs to the surface it was dropped on. */
+  const [uploading, setUploading] = React.useState<readonly Uploading[]>([]);
+  const [noteUploading, setNoteUploading] = React.useState<readonly Uploading[]>([]);
+  /** The substrate refused an attach or a send (4a state 5, G2). The chip
+   * stays until it is dismissed - never a toast. */
+  const [refusals, setRefusals] = React.useState<readonly Refusal[]>([]);
+  const [noteRefusals, setNoteRefusals] = React.useState<readonly Refusal[]>([]);
+  const refusalSeq = React.useRef(0);
+
+  /** A refusal as a fact the surface holds, not a message that times out. */
+  const addRefusal = React.useCallback((name: string | null, reason: string): void => {
+    const id = `r${refusalSeq.current++}`;
+    setRefusals((prev) => [...prev, { id, name, reason }]);
+  }, []);
+  const addNoteRefusal = React.useCallback((name: string | null, reason: string): void => {
+    const id = `n${refusalSeq.current++}`;
+    setNoteRefusals((prev) => [...prev, { id, name, reason }]);
+  }, []);
   /** A comparison being read: which version the one on screen is held against,
    * and that version's bytes once they arrive. `null` bytes mean it could not
    * be read, which is reported rather than shown as an empty side. */
@@ -1508,7 +2210,6 @@ const App = (): React.ReactElement => {
         if (!alive) return;
         if (res.status === 401) {
           setDead(true);
-          setProblem("This page's token is no longer valid — the server restarted. Reload.");
           return;
         }
         if (!res.ok) {
@@ -1534,11 +2235,8 @@ const App = (): React.ReactElement => {
         setStatus(data.status);
         setDriver(data.driver ?? {});
         setActivity(data.activity ?? { turn: false, inFlight: 0, waiting: 0 });
-        setProblem(
-          data.damaged === true
-            ? "This record is damaged past a point; what follows the damage is not shown."
-            : null,
-        );
+        setDamaged(data.damaged === true);
+        if (data.damaged !== true) setProblem(null);
       } catch (e: unknown) {
         if (alive) setProblem(String(e));
       }
@@ -1637,7 +2335,8 @@ const App = (): React.ReactElement => {
           // not here does not need their seat kept.
           pendingRestore.current = null;
           pendingPulse.current = null;
-          setOffscreenChanges([]);
+          setOffer(null);
+          setMarksBelow([]);
           const here = place.current;
           const leaving = docRef.current;
           // One walk answers both questions - where the reader's block went,
@@ -1680,6 +2379,7 @@ const App = (): React.ReactElement => {
           setRefusal(null);
           setWaiting(null);
           setEdited(false);
+          setEditedCount(0);
           setSaved(null);
           setDoc(fetched);
         } finally {
@@ -1944,12 +2644,21 @@ const App = (): React.ReactElement => {
 
   /** Store a chosen file and describe it back. Shared by the composer and
    * the note box, because storing is the same act either way - only what the
-   * reference is then attached to differs. */
+   * reference is then attached to differs. A refusal goes to whichever
+   * surface asked, and each file settles on its own - by its place in the
+   * chosen set, since names can repeat - so its chip leaves when its own
+   * bytes have landed. */
   const storeFiles = React.useCallback(
-    async (files: FileList): Promise<readonly Attached[]> => {
+    async (
+      files: FileList,
+      onRefusal: (name: string | null, reason: string) => void,
+      onSettled: (at: number) => void,
+    ): Promise<readonly Attached[]> => {
       if (token === null || conversationId === "") return [];
       const out: Attached[] = [];
-      for (const file of Array.from(files)) {
+      for (let at = 0; at < files.length; at += 1) {
+        const file = files.item(at);
+        if (file === null) continue;
         try {
           const res = await fetch(
             `/api/conversations/${encodeURIComponent(conversationId)}/attachments`,
@@ -1965,10 +2674,14 @@ const App = (): React.ReactElement => {
           );
           if (!res.ok) {
             const said = (await res.json().catch(() => ({}))) as { error?: string };
-            setRefusal(
+            // The real bound, not the prototype's: 25 MB is what this build
+            // refuses, and the chip says that in the bound's own decimal
+            // units - the coverage ruling names the exact wording.
+            onRefusal(
+              file.name,
               said.error === "attachment-too-large"
-                ? `${file.name} is too large to attach`
-                : `could not attach ${file.name}: ${said.error ?? res.status}`,
+                ? `over the ${ATTACHMENT_BYTES_MAX / 1_000_000} MB limit`
+                : `could not attach: ${said.error ?? res.status}`,
             );
             continue;
           }
@@ -1981,12 +2694,17 @@ const App = (): React.ReactElement => {
             );
             if (got.ok) {
               const blob = await got.blob();
+              // Served as an image only when the BYTES say so: a file that
+              // claimed to be a picture and is not comes back as bytes and
+              // gets the placeholder rather than a broken one.
               if (blob.type.startsWith("image/")) url = URL.createObjectURL(blob);
             }
           }
           out.push({ ...a, url });
-        } catch (e) {
-          setRefusal(`could not attach ${file.name}: ${String(e)}`);
+        } catch (e: unknown) {
+          onRefusal(file.name, `could not attach: ${String(e)}`);
+        } finally {
+          onSettled(at);
         }
       }
       return out;
@@ -1996,13 +2714,18 @@ const App = (): React.ReactElement => {
 
   const attachToNote = React.useCallback(
     async (files: FileList): Promise<void> => {
-      const stored = await storeFiles(files);
+      const chips = Array.from(files).map((f, i) => ({ id: `n${i}`, name: f.name, bytes: f.size }));
+      setNoteUploading((prev) => [...prev, ...chips]);
+      const stored = await storeFiles(files, addNoteRefusal, (at) => {
+        const id = `n${at}`;
+        setNoteUploading((prev) => prev.filter((u) => u.id !== id));
+      });
       setNoteFiles((prev) => [
         ...prev,
         ...stored.filter((a) => !prev.some((p) => p.hash === a.hash)),
       ]);
     },
-    [storeFiles],
+    [storeFiles, addNoteRefusal],
   );
 
   const removeNoteFile = React.useCallback((hash: string): void => {
@@ -2015,57 +2738,18 @@ const App = (): React.ReactElement => {
 
   const attachFiles = React.useCallback(
     async (files: FileList): Promise<void> => {
-      if (token === null || conversationId === "") return;
-      for (const file of Array.from(files)) {
-        try {
-          const res = await fetch(
-            `/api/conversations/${encodeURIComponent(conversationId)}/attachments`,
-            {
-              method: "POST",
-              headers: {
-                [TOKEN_HEADER]: token,
-                "x-lucid-filename": file.name,
-                "content-type": file.type === "" ? "application/octet-stream" : file.type,
-              },
-              body: file,
-            },
-          );
-          if (!res.ok) {
-            const said = (await res.json().catch(() => ({}))) as { error?: string };
-            setRefusal(
-              said.error === "attachment-too-large"
-                ? `${file.name} is too large to attach`
-                : `could not attach ${file.name}: ${said.error ?? res.status}`,
-            );
-            continue;
-          }
-          const a = (await res.json()) as Omit<Attached, "url">;
-          // Only a picture needs one, and only the page can make one: the
-          // bytes come back over a request that carries the token, and the
-          // object URL is what an `img` can actually use.
-          let url: string | null = null;
-          if (a.contentType.startsWith("image/")) {
-            const got = await fetch(
-              `/api/conversations/${encodeURIComponent(conversationId)}/attachments/${a.hash}`,
-              { headers: { [TOKEN_HEADER]: token } },
-            );
-            if (got.ok) {
-              const blob = await got.blob();
-              // Served as an image only when the BYTES say so, so a file that
-              // claimed to be a picture and is not comes back as bytes and
-              // gets no thumbnail rather than a broken one.
-              if (blob.type.startsWith("image/")) url = URL.createObjectURL(blob);
-            }
-          }
-          setAttached((prev) =>
-            prev.some((p) => p.hash === a.hash) ? prev : [...prev, { ...a, url }],
-          );
-        } catch (e) {
-          setRefusal(`could not attach ${file.name}: ${String(e)}`);
-        }
-      }
+      const chips = Array.from(files).map((f, i) => ({ id: `u${i}`, name: f.name, bytes: f.size }));
+      setUploading((prev) => [...prev, ...chips]);
+      const stored = await storeFiles(files, addRefusal, (at) => {
+        const id = `u${at}`;
+        setUploading((prev) => prev.filter((u) => u.id !== id));
+      });
+      setAttached((prev) => [
+        ...prev,
+        ...stored.filter((a) => !prev.some((p) => p.hash === a.hash)),
+      ]);
     },
-    [token, conversationId],
+    [storeFiles, addRefusal],
   );
 
   /** Take it off the message. The bytes stay in the record - nothing removes
@@ -2109,6 +2793,7 @@ const App = (): React.ReactElement => {
       }
       const body = (await res.json()) as { version: number; supersededSince: boolean };
       setEdited(false);
+      setEditedCount(0);
       setRefusal(null);
       setSaved(
         body.supersededSince
@@ -2145,8 +2830,14 @@ const App = (): React.ReactElement => {
         how: Confidence | null;
         why: string | null;
         snippet: string;
+        selectors: SpotSelectors | undefined;
       }[] = [];
       const target = new DOMParser().parseFromString(doc.bytes, "text/html");
+      if (alive) setSeams([]);
+      // The parsed bytes of each older version that verified, kept for the
+      // seam walk: where a lost note's passage WAS is a question about the
+      // old document, not the one on screen.
+      const olderDocs = new Map<number, Document>();
       for (const [key, list] of Object.entries(sentNotes)) {
         const sep = key.lastIndexOf("@");
         if (sep === -1 || key.slice(0, sep) !== doc.artifactId) continue;
@@ -2166,6 +2857,7 @@ const App = (): React.ReactElement => {
                 how: null,
                 why: null,
                 snippet: sp.snippet,
+                selectors: sp.selectors as SpotSelectors | undefined,
               });
             }
           }
@@ -2185,6 +2877,8 @@ const App = (): React.ReactElement => {
             if (res.ok) {
               const src = (await res.json()) as { bytes: string; hash: string };
               ok = (await sha256Hex(src.bytes)) === src.hash;
+              if (ok === true && !olderDocs.has(from))
+                olderDocs.set(from, new DOMParser().parseFromString(src.bytes, "text/html"));
             } else {
               ok = false;
             }
@@ -2207,6 +2901,7 @@ const App = (): React.ReactElement => {
                 how: null,
                 why: "no-selectors",
                 snippet: sp.snippet,
+                selectors: undefined,
               });
               continue;
             }
@@ -2223,6 +2918,7 @@ const App = (): React.ReactElement => {
                 how: null,
                 why: "later-version",
                 snippet: sp.snippet,
+                selectors: sel,
               });
               continue;
             }
@@ -2236,6 +2932,7 @@ const App = (): React.ReactElement => {
                     how: r.how,
                     why: null,
                     snippet: sp.snippet,
+                    selectors: sel,
                   }
                 : {
                     note: n.note,
@@ -2244,12 +2941,29 @@ const App = (): React.ReactElement => {
                     how: null,
                     why: r.why,
                     snippet: sp.snippet,
+                    selectors: sel,
                   },
             );
           }
         }
       }
       if (alive) setAnchored(out);
+
+      // Where a lost note pointed (3e): the seam's placement is proven in
+      // seams.ts against documents, not trusted from the one place it runs.
+      // The older bytes were fetched above for the hash check and kept
+      // parsed; the lost spots are everything the resolutions marked lost.
+      if (alive)
+        setSeams(
+          seamsForLost(
+            out
+              .filter((a) => a.elementId === null && a.why !== "later-version" && a.why !== null)
+              .map((a) => ({ fromVersion: a.fromVersion, selectors: a.selectors })),
+            olderDocs,
+            target,
+            doc.version,
+          ),
+        );
     })();
     return () => {
       alive = false;
@@ -2270,15 +2984,17 @@ const App = (): React.ReactElement => {
       });
       if (res.status === 401) {
         setDead(true);
-        setProblem("This page's token is no longer valid — the server restarted. Reload.");
         return;
       }
       if (!res.ok) {
+        // G2: the substrate refused the send, drawn where the refused act
+        // happened - a magenta chip at the composer, not a toast and not a
+        // page-level banner.
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setProblem(`Not sent: ${body.error ?? res.status}`);
+        addRefusal(null, `not sent — ${body.error ?? res.status}`);
       }
     },
-    [conversationId, token, dead],
+    [conversationId, token, dead, addRefusal],
   );
 
   // A save is an artifact version entry, not an input, so it is not in the
@@ -2314,7 +3030,7 @@ const App = (): React.ReactElement => {
         },
       }));
 
-    if (placed.length === 0) return weaveNotes(messages, notes);
+    if (placed.length === 0) return dead ? weaveNotes(messages, []) : weaveNotes(messages, notes);
 
     const woven: Msg[] = [];
     let next = 0;
@@ -2326,8 +3042,11 @@ const App = (): React.ReactElement => {
       woven.push(m);
     }
     while (next < placed.length) woven.push(placed[next++]?.line as Msg);
-    return weaveNotes(woven, notes);
-  }, [messages, catalog, notes]);
+    // Dead (3d): queued notes leave the timeline and become one held card
+    // under it - "N notes, nothing sent" - because nothing can be sent and
+    // a queue that looks live would say otherwise.
+    return dead ? weaveNotes(woven, []) : weaveNotes(woven, notes);
+  }, [messages, catalog, notes, dead]);
 
   const runtime = useExternalStoreRuntime<Msg>({
     messages: withSaves,
@@ -2372,7 +3091,13 @@ const App = (): React.ReactElement => {
   const resolutions = React.useMemo(() => {
     const m = new Map<
       string,
-      { lost: boolean; later: boolean; how: string | null; elementId: string | null }
+      {
+        lost: boolean;
+        later: boolean;
+        how: string | null;
+        elementId: string | null;
+        fromVersion: number;
+      }
     >();
     for (const a of anchored) {
       m.set(`${a.note}\u0000${a.snippet}`, {
@@ -2382,6 +3107,7 @@ const App = (): React.ReactElement => {
         // - it is what decides the "found again, exactly" line below - so
         // going there needs no second search.
         elementId: a.elementId,
+        fromVersion: a.fromVersion,
         how:
           a.how === null
             ? null
@@ -2463,586 +3189,936 @@ const App = (): React.ReactElement => {
     [pinnedOld],
   );
 
-  /** The conversation's status pill, in one word. The counted, clocked
-   * telling of this state is a later stage's; the pill says which of the two
-   * states holds. */
+  /** The frame says the person changed the document, and by how many blocks
+   * (6c names the quantity in the discard dialog). */
+  const onDirty = React.useCallback((edits: number): void => {
+    setEdited(true);
+    setEditedCount(edits);
+  }, []);
+
+  /** What a version changed out of sight (6a). Shown blocks pulsed; these
+   * are offered at the sheet edge nearest them instead, and taking the
+   * offer is the only thing that moves the page. */
+  const onOffscreen = React.useCallback(
+    (below: readonly number[], above: readonly number[]): void => {
+      if (below.length === 0 && above.length === 0) {
+        setOffer(null);
+        return;
+      }
+      const side = below.length > 0 ? "below" : "above";
+      const list = side === "below" ? below : above;
+      setOffer({ side, count: list.length, index: list[0] as number, note: false });
+    },
+    [],
+  );
+
+  /** A note's target sat off screen (6a). The frame refused to scroll; the
+   * offer docks here and says the note is the reason. */
+  const onTravel = React.useCallback((index: number, below: boolean): void => {
+    setOffer({ side: below ? "below" : "above", count: 1, index, note: true });
+  }, []);
+
+  /** A thumbnail for a stored attachment, read back once per hash through
+   * the token-checked endpoint. Null when the bytes are not a picture; a
+   * failed read leaves the design's placeholder rather than a broken img. */
+  const thumbCache = React.useRef(new Map<string, string | null>());
+  const thumbFor = React.useCallback(
+    (hash: string): Promise<string | null> => {
+      const had = thumbCache.current.get(hash);
+      if (had !== undefined) return Promise.resolve(had);
+      return (async (): Promise<string | null> => {
+        let url: string | null = null;
+        try {
+          if (token !== null) {
+            const got = await fetch(
+              `/api/conversations/${encodeURIComponent(conversationId)}/attachments/${hash}`,
+              { headers: { [TOKEN_HEADER]: token } },
+            );
+            if (got.ok) {
+              const blob = await got.blob();
+              if (blob.type.startsWith("image/")) url = URL.createObjectURL(blob);
+            }
+          }
+        } catch {
+          url = null;
+        }
+        thumbCache.current.set(hash, url);
+        return url;
+      })();
+    },
+    [token, conversationId],
+  );
+
+  /** The conversation's status pill, counted and clocked (3c, 6e Wait).
+   * Working is progress in the accent family; stalled is the one warning,
+   * in neutral ink, because a stall is not a refusal; idle says nothing
+   * more than that nobody is working. */
   const busy = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
+  // When this stretch of work began. Held across renders because nothing in
+  // the record says it: a turn writes no line between its input and its
+  // terminal event, so the only witness to the start is the page that saw
+  // idle become busy. Adjusted during render, which is React's own form for
+  // state derived from a change in props.
+  const [wasBusy, setWasBusy] = React.useState(busy);
+  const [startedAt, setStartedAt] = React.useState<number | null>(busy ? now : null);
+  if (busy !== wasBusy) {
+    setWasBusy(busy);
+    setStartedAt(busy ? now : null);
+  }
+  // A turn that streams resets the clock as it goes; one that says nothing
+  // until it finishes is timed from when it started.
+  const since = Math.max(startedAt ?? now, lastChange);
+  const report = describeActivity(activity, (now - since) / 1000);
+  const pillLabel = report.stalled
+    ? `stopped · ${report.elapsed ?? "a while"} ago`
+    : busy
+      ? `working${report.elapsed === null ? "" : ` · ${report.elapsed}`}`
+      : "idle";
+
+  /** The header over the document column, in its three states (README \u00a71):
+   * reading on the sepia ground, ink while changes are unsaved, and the one
+   * magenta state when there is no driver. Everything it shows is decided by
+   * data the page already holds - it never invents a state. */
+  const headerTitle = (doc: Doc): React.ReactNode => {
+    if (dead || damaged)
+      return (
+        <>
+          <span className="none-name">{dead ? "No driver" : "Damaged record"}</span>
+          <span className="head-cause">
+            {dead
+              ? "this page's token is no longer valid · your work is on disk"
+              : "the log is damaged past a point · what follows is not shown"}
+          </span>
+        </>
+      );
+    const title = allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title;
+    return (
+      <DocName
+        artifactId={doc.artifactId}
+        {...(title === undefined ? {} : { title })}
+        onRename={rename}
+      />
+    );
+  };
+
+  const nextVersion = (catalog?.latest ?? doc?.version ?? 0) + 1;
+  /** The number of saved versions, for the discard dialog's second fact. */
+  const savedCount = catalog?.versions.length ?? null;
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <Resolutions.Provider value={resolutions}>
         <FocusSpot.Provider value={goToSpot}>
-          {problem === null ? null : (
-            <div className="notice" role="alert">
-              {problem}
-            </div>
-          )}
+          <CompareWith.Provider value={(v: number) => void compareWith(v)}>
+            <ThumbFor.Provider value={thumbFor}>
+              {problem === null || dead || damaged ? null : (
+                <div className="notice" role="alert">
+                  {problem}
+                </div>
+              )}
 
-          <div className="panes">
-            {/* The document is the thing being worked on, so it gets the room
-            and the left side. The conversation is the margin note. */}
-            <div className="pane document">
-              {unknownArtifact !== null ? (
-                // A link naming an artifact this record does not hold. Said
-                // plainly, with the way on, rather than quietly showing a
-                // different document or rendering a blank frame.
-                <div className="empty doc-empty">
-                  <p>This conversation has no artifact called “{unknownArtifact}”.</p>
-                  {/* A conversation holds one artifact, so there is one thing
-                    to offer and it is named. This is what the list used to
-                    do for this page; without a replacement, saying the
-                    artifact does not exist and offering nothing makes the
-                    page a dead end. */}
-                  {allArtifacts.length === 0 ? (
-                    <p>It has no artifact yet. Ask the agent for a document.</p>
+              <div className="panes">
+                {/* The document is the thing being worked on, so it gets the room
+                and the left side. The conversation is the margin note. */}
+                <div className="pane document">
+                  {unknownArtifact !== null ? (
+                    <>
+                      {/* 6d: the address named an artifact this record does not
+                          hold. Not an error and not styled as one - the way
+                          on is the artifact it does hold, named plainly. */}
+                      <div className="doc-head">
+                        <span className="doc-mark" aria-hidden="true">
+                          <span className="dot" />
+                          <span className="word">lucid</span>
+                        </span>
+                        <span className="doc-head-sep" aria-hidden="true" />
+                        {allArtifacts.length === 0 ? (
+                          <span className="none-name">No document</span>
+                        ) : (
+                          <span className="dim-name">
+                            {displayName(allArtifacts[0] as CatalogEntry)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="doc-ground">
+                        <div className="empty-panel">
+                          <div className="miss-heading">
+                            This conversation has no artifact called{" "}
+                            <code className="miss-name">{unknownArtifact}</code>.
+                          </div>
+                          <div className="miss-line">
+                            It holds {allArtifacts.length} artifact
+                            {allArtifacts.length === 1 ? "" : "s"}. Nothing is missing and nothing
+                            failed — the address simply named something else.
+                          </div>
+                          {allArtifacts.length === 0 ? null : (
+                            <div className="artifact-row">
+                              <span className="artifact-glyph" aria-hidden="true">
+                                <FileTextDuotone size={20} />
+                              </span>
+                              <span className="artifact-meta">
+                                <span className="artifact-name">
+                                  {displayName(allArtifacts[0] as CatalogEntry)}
+                                </span>
+                                <span className="artifact-facts">
+                                  {(() => {
+                                    const one = allArtifacts[0] as CatalogEntry;
+                                    return `v${one.latest} · latest of ${one.versions.length} · saved by ${one.authors?.[one.latest] === "human" ? "you" : "the agent"}`;
+                                  })()}
+                                </span>
+                              </span>
+                              <button
+                                type="button"
+                                className="primary"
+                                onClick={() =>
+                                  openArtifact((allArtifacts[0] as CatalogEntry).artifactId)
+                                }
+                              >
+                                Open
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {/* The guidance line, under the panel on the ground. */}
+                        <div className="doc-panel">
+                          <div className="guidance idle">
+                            Ask the agent for “{unknownArtifact}” and it becomes a second artifact
+                            here.
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : doc === null ? (
+                    <>
+                      {/* 3a: no document, so no version pill and no mode toggle
+                          - the header says so rather than showing dead
+                          controls. The way in is the conversation. */}
+                      <div className="doc-head">
+                        <span className="doc-mark" aria-hidden="true">
+                          <span className="dot" />
+                          <span className="word">lucid</span>
+                        </span>
+                        <span className="doc-head-sep" aria-hidden="true" />
+                        <span className="none-name">No document</span>
+                      </div>
+                      <div className="doc-ground">
+                        <div className="empty-panel">
+                          <div className="empty-line">
+                            Nothing here yet. Ask on the right, or attach a file — either way lucid
+                            writes v1 and keeps it.
+                          </div>
+                          {/* Attaching here is the composer's own act: the file
+                              is stored and rides the next thing said, exactly
+                              as if the clip on the right had been pressed.
+                              Dropping a file ONTO the document is not a
+                              gesture - a file is never a version. */}
+                          <label className="v choose">
+                            Choose a file
+                            <input
+                              type="file"
+                              multiple
+                              onChange={(e) => {
+                                if (e.currentTarget.files !== null)
+                                  attachFiles(e.currentTarget.files);
+                                e.currentTarget.value = "";
+                              }}
+                            />
+                          </label>
+                        </div>
+                        <div className="doc-panel">
+                          <div className="guidance idle">No document in this conversation yet.</div>
+                        </div>
+                      </div>
+                    </>
                   ) : (
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={() => openArtifact((allArtifacts[0] as CatalogEntry).artifactId)}
-                    >
-                      Open “{displayName(allArtifacts[0] as CatalogEntry)}”
-                    </button>
-                  )}
-                </div>
-              ) : doc === null ? (
-                <div className="empty doc-empty">
-                  Nothing to annotate yet. Ask the agent for a document.
-                </div>
-              ) : (
-                <>
-                  {/* App Bridge, as #171 settled it: with an unsaved edit the
-                    bar stops describing the document and becomes the question,
-                    and nothing else. The name, the version and the modes are
-                    not merely disabled but gone - the only two things there
-                    are to do are the two that are here.
-                    
-                    Discard confirms. It is the only control on this bar that
-                    destroys work, and lucid asks before losing what a person
-                    typed everywhere else too. */}
-                  {edited ? (
-                    <div className="doc-head saving-bar">
-                      <span className="saving-what">
-                        Unsaved changes
-                        {overtaken ? " — they will land on top of the newer version" : ""}
-                      </span>
-                      <button
-                        type="button"
-                        className="v"
-                        onClick={() => setConfirmDiscardEdit(true)}
-                        disabled={saving}
-                      >
-                        Discard
-                      </button>
-                      <button
-                        type="button"
-                        className="v primary"
-                        onClick={() => void save()}
-                        disabled={saving}
-                      >
-                        {saving ? "Saving…" : "Save"}
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="doc-head">
-                      {/* lucid, over the document: the mark, a hairline, then
+                    <>
+                      {/* App Bridge, as #171 settled it: with an unsaved edit the
+                    header stops describing the document and becomes the
+                    question, and nothing else. The name stays; the version
+                    pill and the modes are not merely disabled but gone - the
+                    only two things there are to do are the two that are here.
+
+                    3f is the same bar: a version arriving underneath changes
+                    only the clause it states and the number it offers, and
+                    the conversation card below carries the same two answers. */}
+                      {dead || damaged ? (
+                        <div className="doc-head dead">
+                          <span className="doc-mark" aria-hidden="true">
+                            <span className="dot" />
+                            <span className="word">lucid</span>
+                          </span>
+                          <span className="doc-head-sep" aria-hidden="true" />
+                          {headerTitle(doc)}
+                          {/* 3d: Reload is the only action. The token cannot
+                              come back any other way, and the work is already
+                              on disk. */}
+                          <button
+                            type="button"
+                            className="v reload"
+                            onClick={() => window.location.reload()}
+                          >
+                            Reload
+                          </button>
+                        </div>
+                      ) : edited ? (
+                        <div className="doc-head saving-bar">
+                          <span className="doc-mark" aria-hidden="true">
+                            <span className="dot" />
+                            <span className="word">lucid</span>
+                          </span>
+                          <span className="doc-head-sep" aria-hidden="true" />
+                          {headerTitle(doc)}
+                          <span className="saving-clause">
+                            {waiting !== null && waiting > doc.version
+                              ? `unsaved · v${waiting} arrived while you typed`
+                              : "unsaved changes"}
+                          </span>
+                          <button
+                            type="button"
+                            className="v"
+                            onClick={() => setConfirmDiscardEdit(true)}
+                            disabled={saving}
+                          >
+                            Discard
+                          </button>
+                          <button
+                            type="button"
+                            className="v primary"
+                            onClick={() => void save()}
+                            disabled={saving}
+                          >
+                            {saving ? "Saving…" : `Save as v${nextVersion}`}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="doc-head">
+                          {/* lucid, over the document: the mark, a hairline, then
                       the name. Nothing else above the sheet. */}
-                      <span className="doc-mark" aria-hidden="true">
-                        <span className="dot" />
-                        <span className="word">lucid</span>
-                      </span>
-                      <span className="doc-head-sep" aria-hidden="true" />
-                      <DocName
-                        artifactId={doc.artifactId}
-                        {...(allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title ===
-                        undefined
-                          ? {}
-                          : {
-                              title: allArtifacts.find((a) => a.artifactId === doc.artifactId)
-                                ?.title as string,
-                            })}
-                        onRename={rename}
-                      />
-                      {/* One version is a badge with nothing to open. More than
+                          <span className="doc-mark" aria-hidden="true">
+                            <span className="dot" />
+                            <span className="word">lucid</span>
+                          </span>
+                          <span className="doc-head-sep" aria-hidden="true" />
+                          {headerTitle(doc)}
+                          {/* One version is a badge with nothing to open. More than
                     one is the version pill: its closed state is the design's,
                     and the invisible select over it opens the native dropdown.
                     A hundred versions is a hundred buttons otherwise, and a
                     long conversation produces a hundred versions. */}
-                      {catalog === null || catalog.versions.length < 2 ? (
-                        <span className="doc-version">v{doc.version}</span>
-                      ) : (
-                        <span className="doc-version-pill">
-                          <span className="v">v{doc.version}</span>
-                          {viewingOld ? null : (
-                            <span className="of">latest of {catalog.versions.length}</span>
-                          )}
-                          <span className="caret" aria-hidden="true">
-                            <CaretDownDuotone />
-                          </span>
-                          <select
-                            className="pill-select"
-                            value={String(doc.version)}
-                            aria-label="Version"
-                            onChange={(e) => {
-                              const picked = Number.parseInt(e.target.value, 10);
-                              // Choosing the current version is choosing to follow
-                              // it, not to pin it there. Otherwise the newest
-                              // version arriving would leave you on a stale one
-                              // that the picker calls current.
-                              setPinned(picked === catalog.latest ? null : picked);
-                            }}
-                          >
-                            {[...catalog.versions].reverse().map((v) => (
-                              <option key={v} value={String(v)}>
-                                v{v}
-                                {catalog.authors?.[v] === "human"
-                                  ? " · saved by you"
-                                  : " · by the agent"}
-                                {v === catalog.latest ? " · current" : ""}
-                              </option>
-                            ))}
-                          </select>
-                        </span>
-                      )}
-                      {/* Offered only where there is something to compare
-                      against: one version has nothing to be held against. */}
-                      {catalog === null || catalog.versions.length < 2 ? null : (
-                        <select
-                          className="compare-pick"
-                          value=""
-                          aria-label="Compare with another version"
-                          onChange={(e) => {
-                            const v = Number.parseInt(e.target.value, 10);
-                            if (Number.isSafeInteger(v)) void compareWith(v);
-                            e.currentTarget.value = "";
-                          }}
-                        >
-                          <option value="">Compare with…</option>
-                          {catalog.versions
-                            .filter((v) => v !== doc.version)
-                            .map((v) => (
-                              <option key={v} value={String(v)}>
-                                v{v}
-                              </option>
-                            ))}
-                        </select>
-                      )}
-                      {pinned === null ? null : (
-                        <button type="button" className="v latest" onClick={() => setPinned(null)}>
-                          {viewingOld ? "Back to current" : "Follow newest"}
-                        </button>
-                      )}
-                      {pinnedOld ? (
-                        <button
-                          type="button"
-                          className="v restore"
-                          onClick={() => setConfirmRestore(doc.version)}
-                          title={`Make v${doc.version} the current version`}
-                        >
-                          Restore this version
-                        </button>
-                      ) : null}
-                      <span className="modes">
-                        <button
-                          type="button"
-                          className={mode === "annotate" ? "m current" : "m"}
-                          onClick={() => setMode("annotate")}
-                          disabled={pinnedOld}
-                          title="Click parts of the document to write notes about them (⌥⌫)"
-                        >
-                          Annotate
-                        </button>
-                        <button
-                          type="button"
-                          className={mode === "edit" ? "m current" : "m"}
-                          onClick={() => setMode("edit")}
-                          disabled={pinnedOld}
-                          title="Tick boxes, fill fields, and edit text (⌥⌫)"
-                        >
-                          Edit
-                        </button>
-                      </span>
-                    </div>
-                  )}
-
-                  {/* The other half of the update-location rule (#181). What
-                  the reader could see pulsed and is not mentioned; what they
-                  could not see did not pulse and is offered here. Saying
-                  both would be saying it twice. */}
-                  {offscreenChanges.length === 0 ? null : (
-                    <div className="doc-changed">
-                      {offscreenChanges.length} change
-                      {offscreenChanges.length === 1 ? "" : "s"} you cannot see.{" "}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const first = offscreenChanges[0];
-                          if (first !== undefined) goBlock.current?.(first);
-                          setOffscreenChanges([]);
-                        }}
-                      >
-                        show the first
-                      </button>
-                    </div>
-                  )}
-
-                  {waiting === null || waiting <= doc.version ? null : (
-                    <div className="doc-waiting">
-                      Version {waiting} has arrived.{" "}
-                      {/* Going there replaces the whole frame, so an unsaved
-                      edit in it would go with no warning. Saving first is
-                      offered because it works: the save lands on top of the
-                      newer version and follows it afterwards. */}
-                      {edited ? (
-                        <>
-                          <button type="button" onClick={() => void save()} disabled={saving}>
-                            {saving ? "Saving…" : "save mine first"}
-                          </button>{" "}
-                          <button type="button" onClick={() => setConfirmDiscard(waiting)}>
-                            discard mine and show it
-                          </button>
-                        </>
-                      ) : (
-                        /* Follow rather than pin, for the reason the save path
-                        gives: pinning to the newest version now means being
-                        read-only against the one after it. */
-                        <button type="button" onClick={goToNewest}>
-                          show it
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {/* A comparison covers the stage rather than replacing the
-                    pane, so leaving it returns to the version that was being
-                    read, exactly where it was. */}
-                  {comparing === null ? null : (
-                    <Comparison
-                      left={comparing.bytes}
-                      right={doc.bytes}
-                      leftVersion={comparing.version}
-                      rightVersion={doc.version}
-                      onLeave={() => setComparing(null)}
-                    />
-                  )}
-
-                  {/* The patterned ground behind the sheet: sepia and the
-                  Topography pattern to annotate on, Graph Paper to edit on.
-                  It bleeds to the window's left, right, and bottom edges and
-                  never above the header. */}
-                  <div className={mode === "edit" ? "doc-ground edit" : "doc-ground"}>
-                    {/* The frame and the note box share one positioned box, so
-                  a rect in the frame's own viewport is also a position on
-                  this page and the anchor needs no arithmetic. The box is
-                  the sheet: --paper, the mode's 1px border, radius 12px. */}
-                    <div className="doc-stage">
-                      {/* The tab on the sheet's top edge carries the mode. An
-                    indicator only - the toggle in the header is the control. */}
-                      <div className="doc-tab" aria-hidden="true">
-                        {mode === "edit" ? "Edit" : "Annotate"}
-                      </div>
-                      <DocumentFrame
-                        doc={doc}
-                        onSelection={onSelected}
-                        capture={capture}
-                        snapshot={snapshot}
-                        deselect={deselect}
-                        focusSpot={focusSpot}
-                        place={place}
-                        restorePlace={restorePlace}
-                        pendingRestore={pendingRestore}
-                        pendingPulse={pendingPulse}
-                        pulseBlocks={pulseBlocks}
-                        goBlock={goBlock}
-                        onOffscreen={setOffscreenChanges}
-                        onHotkey={onHotkey}
-                        onDirty={() => setEdited(true)}
-                        noteCounts={noteCountByBlock}
-                        mode={mode}
-                        readOnly={pinnedOld}
-                      />
-
-                      {/* Written where you clicked. The box used to be a panel at
-                    the bottom of the pane, so the thing being written about
-                    and the writing were at opposite ends of the screen. */}
-                      <Popover.Root
-                        open={selection.length > 0 && selRect !== null}
-                        // Whether it is open is a fact about the selection, so
-                        // the selection is the only thing that decides it. The
-                        // library asked to close on any click outside and took
-                        // a half-written note with it; refusing here means the
-                        // ways out are Cancel, Escape, and Add note.
-                        onOpenChange={() => {}}
-                      >
-                        <Popover.Anchor asChild>
-                          <div
-                            className="sel-anchor"
-                            style={
-                              selRect === null
-                                ? { display: "none" }
-                                : {
-                                    left: `${selRect.x}px`,
-                                    top: `${selRect.y}px`,
-                                    width: `${selRect.width}px`,
-                                    height: `${selRect.height}px`,
-                                  }
-                            }
-                          />
-                        </Popover.Anchor>
-                        <Popover.Portal>
-                          <Popover.Content
-                            className="note-pop"
-                            // Under the line, not beside it. A block in a
-                            // document is as wide as the column, so there is
-                            // never room to the side — Radix said so, reporting
-                            // 128px available, and the box hung off the screen.
-                            // Below, it flips above near the bottom and slides
-                            // sideways to stay in view.
-                            side="bottom"
-                            align="start"
-                            // Stepped in from the left edge of what it points at.
-                            // Flush, its edge lined up with the paragraph's and
-                            // the two read as one block.
-                            alignOffset={28}
-                            sideOffset={8}
-                            collisionPadding={12}
-                            // Only Escape and the buttons close it. A click into
-                            // the document is how a second spot is added, and it
-                            // must not throw away what is already typed.
-                            onInteractOutside={(e) => e.preventDefault()}
-                            onFocusOutside={(e) => e.preventDefault()}
-                            onEscapeKeyDown={cancelNote}
-                            onOpenAutoFocus={(e) => {
-                              e.preventDefault();
-                              noteBox.current?.focus();
-                            }}
-                          >
-                            <div className="note-pop-head">
-                              {notes.length >= NOTE_QUEUE_MAX
-                                ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
-                                : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
-                            </div>
-                            <textarea
-                              ref={noteBox}
-                              value={draft}
-                              onChange={(e) => setDraft(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                                  e.preventDefault();
-                                  void addNote();
-                                }
-                              }}
-                              placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
-                              rows={3}
-                            />
-                            {noteFiles.length === 0 ? null : (
-                              <div className="attached in-note">
-                                {noteFiles.map((a) => (
-                                  <span className={a.text ? "chip text" : "chip"} key={a.hash}>
-                                    {a.url !== null ? (
-                                      <img src={a.url} alt="" className="thumb" />
-                                    ) : (
-                                      <span className="thumb kind">{a.text ? "text" : "file"}</span>
-                                    )}
-                                    <span className="chip-name">{a.name}</span>
-                                    <button
-                                      type="button"
-                                      className="chip-drop"
-                                      title="Remove"
-                                      onClick={() => removeNoteFile(a.hash)}
-                                    >
-                                      ×
-                                    </button>
-                                  </span>
+                          {comparing !== null ? (
+                            <span className="doc-version-pill compare-pill">
+                              <span className="v">v{comparing.version}</span>
+                              <span className="arrow" aria-hidden="true">
+                                <ArrowRightDuotone />
+                              </span>
+                              <span className="v">v{doc.version}</span>
+                            </span>
+                          ) : catalog === null || catalog.versions.length < 2 ? (
+                            <span className="doc-version">v{doc.version}</span>
+                          ) : (
+                            <span className="doc-version-pill">
+                              <span className="v">v{doc.version}</span>
+                              {viewingOld ? null : (
+                                <span className="of">latest of {catalog.versions.length}</span>
+                              )}
+                              <span className="caret" aria-hidden="true">
+                                <CaretDownDuotone />
+                              </span>
+                              <select
+                                className="pill-select"
+                                value={String(doc.version)}
+                                aria-label="Version"
+                                onChange={(e) => {
+                                  const picked = Number.parseInt(e.target.value, 10);
+                                  // Choosing the current version is choosing to follow
+                                  // it, not to pin it there. Otherwise the newest
+                                  // version arriving would leave you on a stale one
+                                  // that the picker calls current.
+                                  setPinned(picked === catalog.latest ? null : picked);
+                                }}
+                              >
+                                {[...catalog.versions].reverse().map((v) => (
+                                  <option key={v} value={String(v)}>
+                                    v{v}
+                                    {catalog.authors?.[v] === "human"
+                                      ? " · saved by you"
+                                      : " · by the agent"}
+                                    {v === catalog.latest ? " · current" : ""}
+                                  </option>
                                 ))}
-                              </div>
-                            )}
-                            <div className="note-pop-actions">
-                              {/* The half that carries this feature: a
-                              screenshot of what is wrong with a paragraph is
-                              marking up, which is what lucid is for. */}
-                              <label className="attach small" title="Attach a file to this note">
-                                +
-                                <input
-                                  type="file"
-                                  multiple
-                                  onChange={(e) => {
-                                    if (e.currentTarget.files !== null)
-                                      void attachToNote(e.currentTarget.files);
-                                    e.currentTarget.value = "";
-                                  }}
-                                />
-                              </label>
-                              <button type="button" className="ghost" onClick={cancelNote}>
-                                Cancel
+                              </select>
+                            </span>
+                          )}
+                          {/* G4: a pinned old version states its rule in the
+                          lock vocabulary - read-only, neutral ink, never
+                          magenta, because going back on purpose refused
+                          nothing. */}
+                          {pinnedOld && comparing === null ? (
+                            <span className="lock-chip">
+                              <LockDuotone size={11} />
+                              viewing v{doc.version} · read-only
+                            </span>
+                          ) : null}
+                          {/* Offered only where there is something to compare
+                      against: one version has nothing to be held against, and
+                      while a comparison is open the header already states
+                      which two it holds. */}
+                          {comparing !== null ||
+                          catalog === null ||
+                          catalog.versions.length < 2 ? null : (
+                            <select
+                              className="compare-pick"
+                              value=""
+                              aria-label="Compare with another version"
+                              onChange={(e) => {
+                                const v = Number.parseInt(e.target.value, 10);
+                                if (Number.isSafeInteger(v)) void compareWith(v);
+                                e.currentTarget.value = "";
+                              }}
+                            >
+                              <option value="">Compare with…</option>
+                              {catalog?.versions
+                                .filter((v) => v !== doc.version)
+                                .map((v) => (
+                                  <option key={v} value={String(v)}>
+                                    v{v}
+                                  </option>
+                                ))}
+                            </select>
+                          )}
+                          {comparing === null && pinned !== null ? (
+                            <button
+                              type="button"
+                              className="v latest"
+                              onClick={() => setPinned(null)}
+                            >
+                              {viewingOld ? "Back to current" : "Follow newest"}
+                            </button>
+                          ) : null}
+                          {comparing === null && pinnedOld ? (
+                            <button
+                              type="button"
+                              className="v restore"
+                              onClick={() => setConfirmRestore(doc.version)}
+                              title={`Make v${doc.version} the current version`}
+                            >
+                              Restore this version
+                            </button>
+                          ) : null}
+                          {comparing !== null ? (
+                            /* 6b: there is no mode here and neither side takes a
+                          caret, so the toggle is replaced by the lock chip
+                          and the way out. */
+                            <>
+                              <span className="lock-chip">
+                                <LockDuotone size={11} />
+                                read-only · comparing
+                              </span>
+                              <button
+                                type="button"
+                                className="v"
+                                onClick={() => setComparing(null)}
+                              >
+                                Close
+                              </button>
+                            </>
+                          ) : (
+                            <span className="modes">
+                              <button
+                                type="button"
+                                className={mode === "annotate" ? "m current" : "m"}
+                                onClick={() => setMode("annotate")}
+                                disabled={pinnedOld}
+                                title="Click parts of the document to write notes about them (⌥⌫)"
+                              >
+                                Annotate
                               </button>
                               <button
                                 type="button"
-                                className="primary"
-                                onClick={() => void addNote()}
-                                disabled={draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX}
+                                className={mode === "edit" ? "m current" : "m"}
+                                onClick={() => setMode("edit")}
+                                disabled={pinnedOld}
+                                title="Tick boxes, fill fields, and edit text (⌥⌫)"
                               >
-                                Add note
+                                Edit
                               </button>
-                            </div>
-                            <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
-                          </Popover.Content>
-                        </Popover.Portal>
-                      </Popover.Root>
-                    </div>
+                            </span>
+                          )}
+                        </div>
+                      )}
 
-                    {/* The guidance line, under the sheet on the ground. */}
-                    <div className="doc-panel">
-                      <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
+                      {/* The other half of the update-location rule (#181). What
+                  the reader could see pulsed and is not mentioned; what they
+                  could not see did not pulse and is offered here - at the
+                  sheet edge nearest the target, per 6a. Saying both would be
+                  saying it twice. */}
+                      {offer === null ? null : (
+                        <button
+                          type="button"
+                          className={`travel-offer ${offer.side}`}
+                          title="Put the target at the centre of the sheet"
+                          onClick={() => {
+                            goBlock.current?.(offer.index);
+                            setOffer(null);
+                          }}
+                        >
+                          <span className="t-arrow" aria-hidden="true">
+                            {offer.side === "below" ? <ArrowDownDuotone /> : <ArrowUpDuotone />}
+                          </span>
+                          <span className="t">
+                            {offer.note
+                              ? `1 change ${offer.side} · the note points there`
+                              : `${offer.count} change${offer.count === 1 ? "" : "s"} ${offer.side}`}
+                          </span>
+                          <span className="jump">Jump</span>
+                        </button>
+                      )}
 
-                      {/* Saving moved to the top bar with #171, and this is
+                      {waiting === null ||
+                      waiting <= doc.version ||
+                      edited ||
+                      dead ||
+                      damaged ? null : (
+                        <div className="doc-waiting">
+                          Version {waiting} has arrived.{" "}
+                          {/* Follow rather than pin, for the reason the save path
+                        gives: pinning to the newest version now means being
+                        read-only against the one after it. */}
+                          <button type="button" onClick={goToNewest}>
+                            show it
+                          </button>
+                        </div>
+                      )}
+
+                      {/* A comparison replaces the sheet on the ground (6b); the
+                    header above it states which two versions, and leaving it
+                    returns to the version that was being read, exactly where
+                    it was. */}
+                      {comparing === null ? (
+                        <div
+                          className={
+                            mode === "edit" && !(pinnedOld || dead || damaged)
+                              ? "doc-ground edit"
+                              : "doc-ground"
+                          }
+                        >
+                          {/* The frame and the note box share one positioned box, so
+                  a rect in the frame's own viewport is also a position on
+                  this page and the anchor needs no arithmetic. The box is
+                  the sheet: --paper, the mode's 1px border, radius 12px. */}
+                          <div
+                            className={[
+                              "doc-stage",
+                              pinnedOld ? "ro" : "",
+                              dead || damaged ? "dead" : "",
+                            ]
+                              .filter((c) => c !== "")
+                              .join(" ")}
+                          >
+                            {/* The tab on the sheet's top edge carries the mode. An
+                    indicator only - the toggle in the header is the control.
+                    A version that refuses everything says that instead: grey,
+                    edge ink, no mode named (G4, 3d). */}
+                            {dead || damaged ? (
+                              <div className="doc-tab grey" aria-hidden="true">
+                                {dead ? "Read only — no driver" : "Read only"}
+                              </div>
+                            ) : pinnedOld ? (
+                              <div className="doc-tab grey" aria-hidden="true">
+                                Read only
+                              </div>
+                            ) : (
+                              <div className="doc-tab" aria-hidden="true">
+                                {mode === "edit" ? "Edit" : "Annotate"}
+                              </div>
+                            )}
+                            <DocumentFrame
+                              doc={doc}
+                              onSelection={onSelected}
+                              capture={capture}
+                              snapshot={snapshot}
+                              deselect={deselect}
+                              focusSpot={focusSpot}
+                              place={place}
+                              restorePlace={restorePlace}
+                              pendingRestore={pendingRestore}
+                              pendingPulse={pendingPulse}
+                              pulseBlocks={pulseBlocks}
+                              goBlock={goBlock}
+                              onOffscreen={onOffscreen}
+                              onTravel={onTravel}
+                              onMarksBelow={setMarksBelow}
+                              onSeamClick={(v) => void compareWith(v)}
+                              seams={seams}
+                              onHotkey={onHotkey}
+                              onDirty={onDirty}
+                              noteCounts={noteCountByBlock}
+                              mode={mode}
+                              readOnly={pinnedOld || dead || damaged}
+                            />
+
+                            {/* 3g: most of the marks are below the fold on a long
+                        document. The bottom 56px of the sheet fades to
+                        paper and one ink pill says how many are down there;
+                        taking it goes to the next one. The scrollbar stays
+                        a scrollbar - no tick marks, no minimap. */}
+                            {marksBelow.length === 0 ? null : (
+                              <>
+                                <div className="sheet-fade" aria-hidden="true" />
+                                <button
+                                  type="button"
+                                  className="marks-pill"
+                                  title="Go to the next marked block"
+                                  onClick={() => {
+                                    const first = marksBelow[0];
+                                    if (first !== undefined) goBlock.current?.(first);
+                                  }}
+                                >
+                                  <span className="dot" aria-hidden="true" />
+                                  {marksBelow.length} mark{marksBelow.length === 1 ? "" : "s"} below
+                                </button>
+                              </>
+                            )}
+
+                            {/* Written where you clicked. The box used to be a panel at
+                    the bottom of the pane, so the thing being written about
+                    and the writing were at opposite ends of the screen. */}
+                            <Popover.Root
+                              open={selection.length > 0 && selRect !== null}
+                              // Whether it is open is a fact about the selection, so
+                              // the selection is the only thing that decides it. The
+                              // library asked to close on any click outside and took
+                              // a half-written note with it; refusing here means the
+                              // ways out are Cancel, Escape, and Add note.
+                              onOpenChange={() => {}}
+                            >
+                              <Popover.Anchor asChild>
+                                <div
+                                  className="sel-anchor"
+                                  style={
+                                    selRect === null
+                                      ? { display: "none" }
+                                      : {
+                                          left: `${selRect.x}px`,
+                                          top: `${selRect.y}px`,
+                                          width: `${selRect.width}px`,
+                                          height: `${selRect.height}px`,
+                                        }
+                                  }
+                                />
+                              </Popover.Anchor>
+                              <Popover.Portal>
+                                <Popover.Content
+                                  className="note-pop"
+                                  // Under the line, not beside it. A block in a
+                                  // document is as wide as the column, so there is
+                                  // never room to the side — Radix said so, reporting
+                                  // 128px available, and the box hung off the screen.
+                                  // Below, it flips above near the bottom and slides
+                                  // sideways to stay in view.
+                                  side="bottom"
+                                  align="start"
+                                  // Stepped in from the left edge of what it points at.
+                                  // Flush, its edge lined up with the paragraph's and
+                                  // the two read as one block.
+                                  alignOffset={28}
+                                  sideOffset={8}
+                                  collisionPadding={12}
+                                  // Only Escape and the buttons close it. A click into
+                                  // the document is how a second spot is added, and it
+                                  // must not throw away what is already typed.
+                                  onInteractOutside={(e) => e.preventDefault()}
+                                  onFocusOutside={(e) => e.preventDefault()}
+                                  onEscapeKeyDown={cancelNote}
+                                  onOpenAutoFocus={(e) => {
+                                    e.preventDefault();
+                                    noteBox.current?.focus();
+                                  }}
+                                >
+                                  <div className="note-pop-head">
+                                    {notes.length >= NOTE_QUEUE_MAX
+                                      ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
+                                      : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
+                                  </div>
+                                  <textarea
+                                    ref={noteBox}
+                                    value={draft}
+                                    onChange={(e) => setDraft(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                        e.preventDefault();
+                                        void addNote();
+                                      }
+                                    }}
+                                    placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
+                                    rows={3}
+                                  />
+                                  {noteFiles.length + noteUploading.length + noteRefusals.length ===
+                                  0 ? null : (
+                                    <div className="attached in-note">
+                                      {noteUploading.map((u) => (
+                                        <UploadingChip key={u.id} name={u.name} bytes={u.bytes} />
+                                      ))}
+                                      {noteFiles.map((a) =>
+                                        a.url !== null || a.contentType.startsWith("image/") ? (
+                                          <ImageChip
+                                            key={a.hash}
+                                            name={a.name}
+                                            url={a.url}
+                                            onRemove={() => removeNoteFile(a.hash)}
+                                          />
+                                        ) : (
+                                          <PillChip
+                                            key={a.hash}
+                                            name={a.name}
+                                            contentType={a.contentType}
+                                            bytes={a.bytes}
+                                            onRemove={() => removeNoteFile(a.hash)}
+                                          />
+                                        ),
+                                      )}
+                                      {noteRefusals.map((r) => (
+                                        <RefusalChip
+                                          key={r.id}
+                                          name={r.name}
+                                          reason={r.reason}
+                                          onDismiss={() =>
+                                            setNoteRefusals((prev) =>
+                                              prev.filter((x) => x.id !== r.id),
+                                            )
+                                          }
+                                        />
+                                      ))}
+                                    </div>
+                                  )}
+                                  <div className="note-pop-actions">
+                                    {/* The half that carries this feature: a
+                              screenshot of what is wrong with a paragraph is
+                              marking up, which is what lucid is for. */}
+                                    <label className="attach" title="Attach a file to this note">
+                                      <PaperclipDuotone size={16} />
+                                      <input
+                                        type="file"
+                                        multiple
+                                        onChange={(e) => {
+                                          if (e.currentTarget.files !== null)
+                                            void attachToNote(e.currentTarget.files);
+                                          e.currentTarget.value = "";
+                                        }}
+                                      />
+                                    </label>
+                                    <button type="button" className="ghost" onClick={cancelNote}>
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="primary"
+                                      onClick={() => void addNote()}
+                                      disabled={
+                                        draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX
+                                      }
+                                    >
+                                      Add note
+                                    </button>
+                                  </div>
+                                  <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
+                                </Popover.Content>
+                              </Popover.Portal>
+                            </Popover.Root>
+                          </div>
+
+                          {/* The guidance line, under the sheet on the ground. */}
+                          <div className="doc-panel">
+                            <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
+
+                            {/* Saving moved to the top bar with #171, and this is
                         what is left: the last save's outcome, which is news
                         rather than an action. A second Save down here would be
                         a second place to look for the same thing. */}
-                      {saved === null ? null : <div className="note-actions">{saved}</div>}
-                    </div>
-                  </div>
-
-                  {/* A confirmation, because a restore puts a new version in
-                  front of the agent. It says the undo out loud: someone
-                  deciding whether to restore is deciding whether it is
-                  reversible, and here it is - permanently, because nothing
-                  is overwritten. */}
-                  {!confirmDiscardEdit ? null : (
-                    <div className="confirm">
-                      <span>
-                        Throw away the change you have not saved? Saving keeps it as the next
-                        version, and every version stays in the record, so a save is the reversible
-                        one.
-                      </span>
-                      <button
-                        type="button"
-                        className="primary"
-                        onClick={() => {
-                          setConfirmDiscardEdit(false);
-                          setEdited(false);
-                          // The change lives in the frame, so the frame has to
-                          // be rebuilt from the stored bytes to be rid of it.
-                          setDoc((d) => (d === null ? d : { ...d }));
-                        }}
-                      >
-                        Discard
-                      </button>
-                      <button type="button" onClick={() => setConfirmDiscardEdit(false)}>
-                        Cancel
-                      </button>
-                    </div>
+                            {saved === null ? null : <div className="note-actions">{saved}</div>}
+                          </div>
+                        </div>
+                      ) : (
+                        <Comparison
+                          artifactId={doc.artifactId}
+                          left={comparing.bytes}
+                          right={doc.bytes}
+                          leftVersion={comparing.version}
+                          rightVersion={doc.version}
+                        />
+                      )}
+                    </>
                   )}
+                </div>
 
-                  {confirmDiscard === null ? null : (
-                    <div className="confirm">
-                      <span>
-                        Show v{confirmDiscard} and lose the change you have not saved? Saving
-                        instead keeps it: it lands on top of v{confirmDiscard} as the next version,
-                        and the agent is told what it was based on.
-                      </span>
-                      <button
-                        type="button"
-                        className="primary"
-                        onClick={() => {
-                          setEdited(false);
-                          setConfirmDiscard(null);
-                          goToNewest();
-                        }}
-                      >
-                        Discard and show it
-                      </button>
-                      <button type="button" onClick={() => setConfirmDiscard(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  )}
-
-                  {confirmRestore === null ? null : (
-                    <div className="confirm">
-                      <span>
-                        Make v{confirmRestore} the current version? It is copied to the end of the
-                        list as v{(catalog?.latest ?? doc.version) + 1}. Nothing is deleted, and
-                        going back is restoring v{catalog?.latest ?? doc.version} the same way.
-                      </span>
-                      <button
-                        type="button"
-                        className="primary"
-                        onClick={() => void restore()}
-                        disabled={restoring}
-                      >
-                        {restoring ? "Restoring…" : "Restore"}
-                      </button>
-                      <button type="button" onClick={() => setConfirmRestore(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            {/* An `hr`, because that is what a separator is. It carries its
+                {/* An `hr`, because that is what a separator is. It carries its
               width so a reader that cannot see the drag is still told what
               the arrow keys just did. */}
-            <hr
-              className={dragging ? "pane-grip dragging" : "pane-grip"}
-              onPointerDown={startDrag}
-              onKeyDown={nudgeDrag}
-              tabIndex={0}
-              aria-orientation="vertical"
-              aria-label="Resize the conversation"
-              aria-valuemin={CONVERSATION_MIN}
-              aria-valuemax={CONVERSATION_MAX}
-              aria-valuenow={convWidth ?? undefined}
-            />
+                <hr
+                  className={dragging ? "pane-grip dragging" : "pane-grip"}
+                  onPointerDown={startDrag}
+                  onKeyDown={nudgeDrag}
+                  tabIndex={0}
+                  aria-orientation="vertical"
+                  aria-label="Resize the conversation"
+                  aria-valuemin={CONVERSATION_MIN}
+                  aria-valuemax={CONVERSATION_MAX}
+                  aria-valuenow={convWidth ?? undefined}
+                />
 
-            <div
-              className="pane conversation"
-              style={
-                convWidth === null
-                  ? undefined
-                  : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
-              }
-            >
-              {/* The conversation's own 34px row, aligned with the document
-              header so both columns top out together: its name, what is
-              driving it, and how it stands. */}
-              <div className="conv-head">
-                <span className="conv-name">
-                  {conversationId === "" ? "no conversation" : conversationId}
-                </span>
-                {driver.harness === undefined ? null : (
-                  <span
-                    className="conv-driver"
-                    title={driver.harnessVersion === undefined ? undefined : driver.harnessVersion}
-                  >
-                    {driver.harness}
-                    {driver.model === undefined ? "" : ` · ${driver.model}`}
-                  </span>
-                )}
-                <span
-                  className={busy ? "conv-pill busy" : "conv-pill"}
-                  title={status === "" ? undefined : status}
+                <div
+                  className="pane conversation"
+                  style={
+                    convWidth === null
+                      ? undefined
+                      : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
+                  }
                 >
-                  <span className="dot" aria-hidden="true" />
-                  <span className="label">{busy ? "working" : "idle"}</span>
-                </span>
+                  {/* The conversation's own 34px row, aligned with the document
+              header so both columns top out together: its name, what is
+              driving it, and how it stands - counted and clocked. */}
+                  <div className="conv-head">
+                    <span className="conv-name">
+                      {conversationId === "" ? "no conversation" : conversationId}
+                    </span>
+                    {driver.harness === undefined ? null : (
+                      <span
+                        className="conv-driver"
+                        title={
+                          driver.harnessVersion === undefined ? undefined : driver.harnessVersion
+                        }
+                      >
+                        {driver.harness}
+                        {driver.model === undefined ? "" : ` · ${driver.model}`}
+                      </span>
+                    )}
+                    <span
+                      className={
+                        report.stalled
+                          ? "conv-pill stopped"
+                          : report.busy
+                            ? "conv-pill busy"
+                            : "conv-pill"
+                      }
+                      title={status === "" ? undefined : status}
+                    >
+                      <span className="dot" aria-hidden="true" />
+                      <span className="label">{pillLabel}</span>
+                    </span>
+                  </div>
+                  <Thread
+                    pending={notes}
+                    onSendNotes={() => void sendNotes()}
+                    onDiscardNotes={() => setNotes([])}
+                    sending={sending}
+                    report={report}
+                    version={doc?.version ?? null}
+                    dead={dead}
+                    invite={doc === null && !dead}
+                    collision={
+                      edited && waiting !== null && waiting > (doc?.version ?? 0)
+                        ? { arrived: waiting, next: nextVersion }
+                        : null
+                    }
+                    onSave={() => void save()}
+                    onShowWaiting={(arrived) => setConfirmDiscard(arrived)}
+                    attachments={attached}
+                    uploading={uploading}
+                    refusals={refusals}
+                    onAttach={(files) => void attachFiles(files)}
+                    onRemoveAttachment={removeAttachment}
+                    onDismissRefusal={(id) =>
+                      setRefusals((prev) => prev.filter((r) => r.id !== id))
+                    }
+                  />
+                </div>
               </div>
-              <Thread
-                pending={notes}
-                onSendNotes={() => void sendNotes()}
-                onDiscardNotes={() => setNotes([])}
-                sending={sending}
-                activity={activity}
-                now={now}
-                lastChange={lastChange}
-                attachments={attached}
-                onAttach={(files) => void attachFiles(files)}
-                onRemoveAttachment={removeAttachment}
-              />
-            </div>
-          </div>
+
+              {/* 6c: discard confirms, and the G5 restore confirm in the same
+              shell. The only dialogs, because discard is the only control
+              that destroys work - and the filled action is ink, never
+              magenta, because a choice the person made is not the substrate
+              refusing. */}
+              {confirmDiscardEdit ? (
+                <Dialog
+                  title={
+                    editedCount > 1
+                      ? `Discard your ${editedCount} edits?`
+                      : editedCount === 1
+                        ? "Discard your edit?"
+                        : "Discard your changes?"
+                  }
+                  body={
+                    <>
+                      They have not been saved to a version, so discarding is the one thing in lucid
+                      that destroys work.
+                      {savedCount === null ? (
+                        " Every version already saved is untouched."
+                      ) : (
+                        <> Every version already saved — all {savedCount} — is untouched.</>
+                      )}
+                    </>
+                  }
+                  keep="Keep editing"
+                  go="Discard them"
+                  busy={saving}
+                  onKeep={() => setConfirmDiscardEdit(false)}
+                  onGo={() => {
+                    setConfirmDiscardEdit(false);
+                    setEdited(false);
+                    setEditedCount(0);
+                    // The change lives in the frame, so the frame has to
+                    // be rebuilt from the stored bytes to be rid of it.
+                    setDoc((d) => (d === null ? d : { ...d }));
+                  }}
+                />
+              ) : null}
+              {confirmDiscard === null ? null : (
+                <Dialog
+                  title={`Discard your edits and show v${confirmDiscard}?`}
+                  body={
+                    <>
+                      Your changes have not been saved to a version, so this is the one thing in
+                      lucid that destroys work. Saving instead keeps them: they land on top of v
+                      {confirmDiscard} as v{nextVersion}, and the agent is told what they were based
+                      on.
+                      {savedCount === null
+                        ? ""
+                        : ` All ${savedCount} saved versions are untouched.`}
+                    </>
+                  }
+                  keep="Keep editing"
+                  go="Discard them"
+                  busy={saving}
+                  onKeep={() => setConfirmDiscard(null)}
+                  onGo={() => {
+                    setEdited(false);
+                    setEditedCount(0);
+                    setConfirmDiscard(null);
+                    goToNewest();
+                  }}
+                />
+              )}
+              {confirmRestore === null ? null : (
+                <Dialog
+                  title={`Restore v${confirmRestore}?`}
+                  body={
+                    <>
+                      The old bytes land as a new version at the end of the list — v
+                      {(catalog?.latest ?? doc?.version ?? 0) + 1}. Nothing is destroyed: every
+                      version stays in the record, and going back is restoring v
+                      {catalog?.latest ?? doc?.version ?? 0} the same way.
+                    </>
+                  }
+                  keep="Keep viewing"
+                  go={restoring ? "Restoring…" : "Restore"}
+                  busy={restoring}
+                  onKeep={() => setConfirmRestore(null)}
+                  onGo={() => void restore()}
+                />
+              )}
+            </ThumbFor.Provider>
+          </CompareWith.Provider>
         </FocusSpot.Provider>
       </Resolutions.Provider>
     </AssistantRuntimeProvider>

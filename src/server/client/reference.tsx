@@ -626,45 +626,48 @@ const Panel = (): React.ReactElement => (
 
 const Dock = (): React.ReactElement => (
   <Section
-    title="The dock"
-    blurb="Fixed at the foot of the conversation, never scrolls away. Five of its six states are progress; only one is a warning, and the thresholds behind it are measured from 47 turns rather than chosen."
+    title="The conversation's status pill"
+    blurb="The counted, clocked telling of what the agent is doing, in the conversation's own 34px row. Five of its six states are progress; only one is a warning, and the thresholds behind it are measured from 47 turns rather than chosen."
     wide
   >
-    <Case name="The agent is working" classes=".activity" note="A turn is in flight.">
+    <Case name="The agent is working" classes=".conv-pill.busy" note="A turn is in flight.">
       <div className="ref-pane">
-        <div className="dock">
-          <div className="activity">
-            <span className="pulse" />
-            <span>the agent is working</span>
-          </div>
+        <div className="conv-head">
+          <span className="conv-name">Warehouse cutover</span>
+          <span className="conv-pill busy">
+            <span className="dot" />
+            <span className="label">working</span>
+          </span>
         </div>
       </div>
     </Case>
     <Case
       name="Working, with a count"
-      classes=".activity"
-      note="The elapsed count appears past 8 seconds. Below that it is noise, and a dock that counts every wait teaches you to stop reading it."
+      classes=".conv-pill.busy"
+      note="The elapsed count appears past 8 seconds. Below that it is noise, and a pill that counts every wait teaches you to stop reading it."
     >
       <div className="ref-pane">
-        <div className="dock">
-          <div className="activity">
-            <span className="pulse" />
-            <span>the agent is working — 38s</span>
-          </div>
+        <div className="conv-head">
+          <span className="conv-name">Warehouse cutover</span>
+          <span className="conv-pill busy">
+            <span className="dot" />
+            <span className="label">working · 38s</span>
+          </span>
         </div>
       </div>
     </Case>
     <Case
       name="Stalled"
-      classes=".activity.stalled"
-      note="Past 180 seconds for a running turn, or 45 for notes that were never delivered. The only waiting state that is a warning."
+      classes=".conv-pill.stopped"
+      note="Past 180 seconds for a running turn, or 45 for notes that were never delivered. The only waiting state that is a warning - and a stall is not a refusal, so the ink stays neutral."
     >
       <div className="ref-pane">
-        <div className="dock">
-          <div className="activity stalled">
-            <span className="pulse" />
-            <span>the agent is working — nothing back for 4m 12s</span>
-          </div>
+        <div className="conv-head">
+          <span className="conv-name">Warehouse cutover</span>
+          <span className="conv-pill stopped">
+            <span className="dot" />
+            <span className="label">stopped · 4m 12s ago</span>
+          </span>
         </div>
       </div>
     </Case>
@@ -882,20 +885,29 @@ const Failures = (): React.ReactElement => (
   >
     <Case
       name="No artifact yet"
-      classes=".empty.doc-empty"
+      classes=".empty-panel"
       note="An invitation. It names the next action rather than reporting an absence."
     >
-      <div className="empty doc-empty">
-        <p>It has no artifact yet. Ask the agent for a document.</p>
+      <div className="empty-panel">
+        <p className="empty-line">
+          Nothing here yet. Ask on the right, or attach a file — either way lucid writes v1 and
+          keeps it.
+        </p>
+        <label className="v choose">
+          Choose a file
+          <input type="file" multiple />
+        </label>
       </div>
     </Case>
     <Case
       name="No artifact by that name"
-      classes=".empty.doc-empty"
+      classes=".empty-panel"
       note="The URL named something this conversation does not hold, so it offers the one it does."
     >
-      <div className="empty doc-empty">
-        <p>This conversation has no artifact called “roadmap”.</p>
+      <div className="empty-panel">
+        <p className="miss-heading">
+          This conversation has no artifact called <code className="miss-name">roadmap</code>.
+        </p>
         <button type="button" className="primary">
           Open onboarding-checklist
         </button>

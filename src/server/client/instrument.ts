@@ -330,7 +330,9 @@ html.lucid-annotate, html.lucid-annotate * {
 /* The lost seam: a 2px dashed rule in the gap between blocks, where a
    note pointed at prose that no longer exists. Not an error - a fact
    about history - so it is drawn in the edge ink, never magenta. The
-   label is the document's own sans: it is inside the page, not chrome. */
+   label is the document's own sans: it is inside the page, not chrome.
+   .mid is the compare vocabulary (6b): a line either side, label
+   centred. */
 .lucid-seam {
   display: flex;
   align-items: center;
@@ -349,10 +351,35 @@ html.lucid-annotate, html.lucid-annotate * {
     transparent 5px 9px
   );
 }
+.lucid-seam.mid::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--edge-2) 0 5px,
+    transparent 5px 9px
+  );
+}
 .lucid-seam .lucid-seam-label {
   font: 400 11.5px / 1 ui-sans-serif, system-ui, sans-serif;
   color: var(--color-neutral-500);
   white-space: nowrap;
+}
+
+/* The compare marks (6b). A diff is not a refusal, so neither side ever
+   takes magenta: the newer side wears the accent - the same 2px left rule
+   and wash an edit wears - and the older side wears neutral ink at a
+   third and four percent. Inset overlays, like every other edge mark, so
+   nothing shifts when the marks land. */
+[${ELEMENT_ATTR}].lucid-diff-new {
+  box-shadow: inset 2px 0 0 var(--color-accent),
+    inset 0 0 0 9999px var(--color-accent-100) !important;
+}
+[${ELEMENT_ATTR}].lucid-diff-old {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--color-text) 30%, transparent),
+    inset 0 0 0 9999px color-mix(in srgb, var(--color-text) 4%, transparent) !important;
 }
 
 /* --- arrivals -------------------------------------------------------- */
@@ -461,6 +488,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // would leave the note pointing at two different things.
   var picked = null;
   var dirty = false;
+  var editedCount = 0;
   // "edit" — the document behaves as the agent built it: controls work, text
   // has a caret, drag selects text. "annotate" — clicking picks elements to
   // write notes about, and a click does NOT also operate a control.
@@ -816,12 +844,14 @@ const script = (artifactId: string, version: number, author: string): string => 
       return;
     }
 
-    // Go to what a note points at (RFC/#178), following v1's rule.
+    // Go to what a note points at (RFC/#178), following the 6a rule.
     //
     // The rule that matters is the first branch: a target already on screen
-    // is NOT scrolled to. Moving the page under a reader who is already
-    // looking at the thing is the failure this exists to avoid, and it is
-    // the one every implementation gets wrong. Off screen, it centres.
+    // is lit in place and the page does not move - moving a reader who is
+    // already looking at the thing is the failure this exists to avoid.
+    // Off screen it does NOT scroll either: the frame says so, and the page
+    // docks a travel offer at the sheet edge nearest the target instead.
+    // Taking the offer is the only thing that centres the target.
     if (m.kind === "focus" && Array.isArray(m.ids)) {
       // A note can cover several elements. All of them light; the first one
       // that exists is what the page travels to, because only one thing can
@@ -843,7 +873,21 @@ const script = (artifactId: string, version: number, author: string): string => 
       // Fully in view, both edges. A block half off the bottom is not
       // "already where you are looking".
       var whole = fr.top >= 0 && fr.bottom <= vh;
-      if (!whole) target.scrollIntoView({ block: "center", inline: "nearest" });
+      if (!whole) {
+        // 6a, off screen: no scroll, no light. The page offers the jump;
+        // only taking it moves the document.
+        var at = indexOfBlock(target);
+        if (at === -1) {
+          parent.postMessage({ source: SOURCE, kind: "focus-missed" }, "*");
+          return;
+        }
+        parent.postMessage(
+          { source: SOURCE, kind: "focus-offscreen", artifactId: ARTIFACT,
+            version: VERSION, index: at, below: fr.top >= vh },
+          "*"
+        );
+        return;
+      }
       // Alternated, because re-adding a class an element already carries
       // does not restart its animation.
       var was = target.classList.contains("lucid-focus-a");
@@ -883,13 +927,16 @@ const script = (artifactId: string, version: number, author: string): string => 
     //
     // The whole rule is the split: a block in view pulses and is not
     // travelled to, a block out of view does not pulse and is offered
-    // instead. Pulsing something off screen wastes the one signal there is;
-    // scrolling to something already on screen destroys the reader's
-    // orientation to make a point they could already see.
+    // instead - with which edge it sits at, so the page can dock the offer
+    // at the edge nearest the target. Pulsing something off screen wastes
+    // the one signal there is; scrolling to something already on screen
+    // destroys the reader's orientation to make a point they could already
+    // see.
     if (m.kind === "pulse" && Array.isArray(m.indexes)) {
       var pl = blocks();
       var vph = window.innerHeight || document.documentElement.clientHeight;
-      var away = [];
+      var awayBelow = [];
+      var awayAbove = [];
       var seen = 0;
       for (var q = 0; q < m.indexes.length; q++) {
         var pe = pl[m.indexes[q]];
@@ -908,13 +955,15 @@ const script = (artifactId: string, version: number, author: string): string => 
             setTimeout(function () { el.classList.remove(cls); }, 2600);
           })(pe, pcls);
           seen += 1;
+        } else if (pr.top >= vph) {
+          awayBelow.push(m.indexes[q]);
         } else {
-          away.push(m.indexes[q]);
+          awayAbove.push(m.indexes[q]);
         }
       }
       parent.postMessage(
         { source: SOURCE, kind: "pulsed", artifactId: ARTIFACT, version: VERSION,
-          shown: seen, offscreen: away },
+          shown: seen, below: awayBelow, above: awayAbove },
         "*"
       );
       return;
@@ -956,6 +1005,53 @@ const script = (artifactId: string, version: number, author: string): string => 
           mel.setAttribute(COUNT_ATTR, String(count));
         }
       }
+      // The marks-below count follows the chips, not the scroll: a note
+      // landing under the fold changes the pill without a scroll event.
+      reportBelow();
+      return;
+    }
+
+    // Where a lost note pointed (3e): a seam drawn in the gap where the
+    // passage was. The page works out where; the frame owns the DOM.
+    // Clicking one opens the version where the note still reads, so a
+    // version rides along and comes back on the click.
+    if (m.kind === "seam" && Array.isArray(m.seams)) {
+      clearSeams();
+      var slist = blocks();
+      for (var s = 0; s < m.seams.length; s++) {
+        var one = m.seams[s];
+        if (one === null || typeof one !== "object") continue;
+        if (typeof one.before !== "number" || typeof one.label !== "string") continue;
+        addSeam(slist, one);
+      }
+      return;
+    }
+
+    // The compare marks (6b): which blocks changed on this side. Sent on a
+    // timer by the page, like the mode message, because a fresh frame has
+    // to hear it whenever it becomes ready.
+    if (m.kind === "compare" && (m.side === "new" || m.side === "old")) {
+      var cls = m.side === "new" ? "lucid-diff-new" : "lucid-diff-old";
+      var other = m.side === "new" ? "lucid-diff-old" : "lucid-diff-new";
+      var cleared = document.querySelectorAll("." + other);
+      for (var c = 0; c < cleared.length; c++) cleared[c].classList.remove(other);
+      var clist = blocks();
+      var marks = Array.isArray(m.marks) ? m.marks : [];
+      for (var d = 0; d < marks.length; d++) {
+        var cel = clist[marks[d]];
+        if (cel) cel.classList.add(cls);
+      }
+      // A block the newer side lost is a seam there, in the same vocabulary
+      // as a lost note's passage.
+      if (Array.isArray(m.seams)) {
+        clearSeams();
+        for (var e = 0; e < m.seams.length; e++) {
+          var spec = m.seams[e];
+          if (spec === null || typeof spec !== "object") continue;
+          if (typeof spec.before !== "number" || typeof spec.label !== "string") continue;
+          addSeam(clist, spec);
+        }
+      }
       return;
     }
   });
@@ -973,6 +1069,77 @@ const script = (artifactId: string, version: number, author: string): string => 
       out.push(all[i]);
     }
     return out;
+  };
+
+  // The block an element is, sits in, or wraps. A note's target is usually
+  // a block itself; a spot inside a control's label is not. -1 when the
+  // element names no block, which is the page's cue that there is nowhere
+  // to offer a jump to.
+  var indexOfBlock = function (el) {
+    var list = blocks();
+    for (var i = 0; i < list.length; i++) if (list[i] === el) return i;
+    for (var j = 0; j < list.length; j++) {
+      if (list[j].contains(el) || el.contains(list[j])) return j;
+    }
+    return -1;
+  };
+
+  // Seams are lucid's own DOM, marked data-lucid so a save strips them with
+  // everything else lucid added.
+  var clearSeams = function () {
+    var old = document.querySelectorAll(".lucid-seam");
+    for (var i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+  };
+
+  var addSeam = function (list, spec) {
+    var seam = document.createElement("div");
+    seam.className = "lucid-seam" + (spec.mid === true ? " mid" : "");
+    seam.setAttribute("data-lucid", "1");
+    var label = document.createElement("span");
+    label.className = "lucid-seam-label";
+    label.textContent = spec.label;
+    seam.appendChild(label);
+    if (typeof spec.version === "number") {
+      // Clicking a seam opens the version where the passage still lives.
+      seam.style.cursor = "pointer";
+      seam.addEventListener("click", function () {
+        parent.postMessage(
+          { source: SOURCE, kind: "seam-clicked", version: spec.version },
+          "*"
+        );
+      });
+    }
+    if (list.length === 0) {
+      document.body.appendChild(seam);
+      return;
+    }
+    var at = spec.before >= list.length ? null : list[spec.before];
+    if (at && at.parentNode) {
+      at.parentNode.insertBefore(seam, at);
+      return;
+    }
+    var last = list[list.length - 1];
+    if (last && last.parentNode) last.parentNode.insertBefore(seam, last.nextSibling);
+    else document.body.appendChild(seam);
+  };
+
+  // Which noted blocks sit wholly below the fold (3g). The page draws the
+  // count pill from this; it never works out positions for itself, because
+  // only this frame knows where the fold is.
+  var reportBelow = function () {
+    var list = blocks();
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].classList.contains("lucid-noted")) continue;
+      var r = list[i].getBoundingClientRect();
+      if (r.top >= vh) out.push(i);
+    }
+    parent.postMessage(
+      { source: SOURCE, kind: "marks-below", artifactId: ARTIFACT, version: VERSION,
+        indexes: out },
+      "*"
+    );
   };
 
   // Where the reader is, pushed rather than asked for.
@@ -1005,6 +1172,8 @@ const script = (artifactId: string, version: number, author: string): string => 
     placeTimer = setTimeout(function () {
       placeTimer = null;
       reportPlace();
+      // The fold moved, so the marks-below count moved with it (3g).
+      reportBelow();
     }, 150);
   }, { passive: true });
   // The page cannot restore a place until the document exists to hold one,
@@ -1016,15 +1185,25 @@ const script = (artifactId: string, version: number, author: string): string => 
   );
   // Once at the start, so a reader who never scrolls still has a place.
   setTimeout(reportPlace, 0);
+  // And so the 3g pill knows where the fold sat when the frame opened.
+  setTimeout(reportBelow, 0);
 
   var touched = function (el) {
     if (!el || el.nodeType !== 1 || !el.hasAttribute(ATTR)) return;
     el.setAttribute(AUTHOR_ATTR, "human");
     el.classList.add("lucid-edited");
-    if (!dirty) {
+    // How many blocks carry an edit, so the discard dialog can name the
+    // quantity (6c: "Discard your three edits?"). Posted when the count
+    // changes rather than on every keystroke: the first touch says the
+    // document is dirty, and each new block touched says there is one more
+    // thing at stake.
+    var edits = document.querySelectorAll(".lucid-edited").length;
+    if (!dirty || edits !== editedCount) {
       dirty = true;
+      editedCount = edits;
       parent.postMessage(
-        { source: SOURCE, kind: "dirty", artifactId: ARTIFACT, version: VERSION },
+        { source: SOURCE, kind: "dirty", artifactId: ARTIFACT, version: VERSION,
+          edits: edits },
         "*"
       );
     }

@@ -37,7 +37,13 @@ export interface Msg {
 export interface SentBatch {
   readonly artifactId: string;
   readonly version: number;
-  readonly notes: readonly { readonly note: string; readonly spots: readonly AnnotationSpot[] }[];
+  readonly notes: readonly {
+    readonly note: string;
+    readonly spots: readonly AnnotationSpot[];
+    /** Files the note carried, when it carried any (RFC-11). The record's
+     * own references - hash, size, type, name - never bytes. */
+    readonly files?: readonly import("../../protocol/annotations.js").AttachedFile[];
+  }[];
 }
 
 /** A note not yet sent. `at` is how many timeline items existed when it was

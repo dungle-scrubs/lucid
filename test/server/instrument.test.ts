@@ -95,7 +95,9 @@ describe("the document's own behaviour is left alone", () => {
     // about mouse events, which is what this is a rule about.
     const listener = (at: number): string => {
       const before = out.slice(0, at);
-      const opened = before.lastIndexOf("addEventListener(");
+      // The document's own handlers, never a listener lucid hung on an
+      // element it made (a seam is clickable, and that click is lucid's).
+      const opened = before.lastIndexOf("document.addEventListener(");
       return /"([a-z]+)"/.exec(out.slice(opened, at))?.[1] ?? "";
     };
 
@@ -243,7 +245,7 @@ describe("two modes, so one click does one thing", () => {
   test("hover and selection are mark-up mode only", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
     for (const listener of ["mouseover", "mouseout", "click"]) {
-      const at = out.indexOf(`addEventListener("${listener}"`);
+      const at = out.indexOf(`document.addEventListener("${listener}"`);
       expect(at).toBeGreaterThan(-1);
       // The guard is the first thing in the handler.
       expect(out.slice(at, at + 220)).toContain('mode !== "annotate"');
@@ -401,7 +403,7 @@ describe("selecting text to mark it up", () => {
   test("the click that ends a drag does not also pick the element under it", () => {
     // A drag fires mouseup and then click. Without this the click would
     // immediately replace the words with the paragraph containing them.
-    const at = out.indexOf('addEventListener("click"');
+    const at = out.indexOf('document.addEventListener("click"');
     expect(out.slice(at, at + 400)).toContain("if (picked)");
   });
 
@@ -481,12 +483,15 @@ describe("the mark language", () => {
   test("the count chip is drawn from the attribute, never the DOM", () => {
     // A real child element would enter innerText - which is what a capture
     // quotes and a note anchors to - and would need stripping from saves.
-    // A pseudo-element reading an attribute touches neither. The one
-    // element the script still creates is the range box, which clean()
-    // already takes out by its data-lucid mark.
+    // A pseudo-element reading an attribute touches neither. The elements
+    // the script does create are lucid's own decorations - the drag boxes
+    // and the seams - every one of them under a data-lucid mark so clean()
+    // takes them out of a save.
     expect(out).toContain("content: attr(data-lucid-count)");
-    expect(out.match(/createElement\(/g) ?? []).toHaveLength(1);
+    expect(out.match(/createElement\(/g) ?? []).toHaveLength(3);
     expect(out).toContain('box.className = "lucid-range"');
+    expect(out).toContain('seam.className = "lucid-seam"');
+    expect(out).toContain('seam.setAttribute("data-lucid", "1")');
   });
 
   test("the chip inverts on a selected block, and nothing else needs to", () => {
@@ -532,5 +537,76 @@ describe("the mark language", () => {
     expect(out.slice(both, out.indexOf("}", both))).toContain(
       "inset 2px 0 0 var(--color-accent-400)",
     );
+  });
+});
+
+/** Stage 3's frame protocol: the seam, the compare marks, the travel rule's
+ * off-screen half, the fold count, and the edited count the discard dialog
+ * names. Pinned from the bytes like everything here. */
+describe("the stage 3 frame protocol", () => {
+  const out = instrumentArtifact(DOC, "doc-1", 1);
+
+  test("a seam is inserted before a block index, carries the version it opens, and is lucid's own DOM", () => {
+    // The page works out WHERE; the frame owns the DOM. The seam is
+    // data-lucid so a save never contains it, and clicking it posts the
+    // version back - the way to the copy where the passage still lives.
+    expect(out).toContain('m.kind === "seam" && Array.isArray(m.seams)');
+    expect(out).toContain('seam.setAttribute("data-lucid", "1")');
+    expect(out).toContain('seam.className = "lucid-seam"');
+    expect(out).toContain("at.parentNode.insertBefore(seam, at)");
+    expect(out).toContain('kind: "seam-clicked", version: spec.version');
+  });
+
+  test("a compare message marks one side and clears the other", () => {
+    // 6b: the newer side wears accent, the older neutral ink. A repeated
+    // message (the timer) must not let the two sides accumulate each
+    // other's marks, so the other side's class is cleared first.
+    expect(out).toContain('m.kind === "compare" && (m.side === "new" || m.side === "old")');
+    expect(out).toContain('var other = m.side === "new" ? "lucid-diff-old" : "lucid-diff-new"');
+    expect(out).toContain("classList.remove(other)");
+    expect(out).toContain("cel.classList.add(cls)");
+  });
+
+  test("the diff marks never take magenta - a diff is not a refusal", () => {
+    const atNew = out.indexOf(".lucid-diff-new");
+    expect(atNew).toBeGreaterThan(-1);
+    expect(out.slice(atNew, out.indexOf("}", atNew))).not.toContain("accent-2");
+    const atOld = out.indexOf(".lucid-diff-old");
+    expect(out.slice(atOld, out.indexOf("}", atOld))).not.toContain("accent-2");
+  });
+
+  test("the focus rule's off-screen half does not scroll - it offers instead (6a)", () => {
+    // The old behaviour centred the target. The design forbids that: the
+    // page docks a travel offer at the nearer edge, and only taking it
+    // moves the document.
+    const at = out.indexOf('m.kind === "focus" && Array.isArray(m.ids)');
+    const body = out.slice(at, at + 2600);
+    expect(body).toContain('kind: "focus-offscreen"');
+    expect(body).not.toContain("scrollIntoView");
+  });
+
+  test("the pulsed report says which edge each unseen change sat at", () => {
+    // The offer docks at the edge nearest the target, so the frame reports
+    // above and below separately rather than one undifferentiated list.
+    expect(out).toContain("below: awayBelow");
+    expect(out).toContain("above: awayAbove");
+    expect(out).not.toContain("offscreen: away");
+  });
+
+  test("the fold count is pushed, not pulled (3g)", () => {
+    // Only the frame knows where the fold is, so it reports the noted
+    // blocks wholly below it - on scroll, on mark updates, and once at
+    // the start for a reader who never scrolls.
+    expect(out).toContain('kind: "marks-below"');
+    expect(out.indexOf("reportBelow()")).toBeGreaterThan(out.indexOf('kind: "mark"'));
+    expect(out).toContain("setTimeout(reportBelow, 0)");
+  });
+
+  test("the dirty message carries the edit count the discard dialog names (6c)", () => {
+    // "Discard your three edits?" needs the number. It is posted when the
+    // count of edited blocks changes, not on every keystroke.
+    const at = out.indexOf('kind: "dirty"');
+    expect(out.slice(at - 700, at)).toContain('document.querySelectorAll(".lucid-edited").length');
+    expect(out.slice(at, at + 200)).toContain("edits: edits");
   });
 });

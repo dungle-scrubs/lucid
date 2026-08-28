@@ -60,7 +60,14 @@ const verify = async (): Promise<void> => {
   }
   // The states themselves. If the injected stylesheet did not make it in,
   // the in-document cases render as plain text and the page is a lie.
-  for (const needed of ["lucid-noted", "lucid-range", "note-card", "doc-waiting", "activity"]) {
+  for (const needed of [
+    "lucid-noted",
+    "lucid-range",
+    "note-card",
+    "doc-waiting",
+    "conv-pill busy",
+    "empty-panel",
+  ]) {
     if (!html.includes(needed)) throw new Error(`${OUTFILE} is missing ${needed}.`);
   }
   const kb = Math.round((await Bun.file(OUTFILE).arrayBuffer()).byteLength / 1024);

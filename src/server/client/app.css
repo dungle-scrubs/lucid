@@ -479,9 +479,7 @@ body {
   border-color: var(--color-accent);
 }
 
-/* The quiet header buttons that remain from the version-travel controls.
-   Their wording and full treatment belong to the later stages; the tokens
-   are these. */
+/* The quiet header buttons that remain from the version-travel controls. */
 .doc-head button.v {
   flex: none;
   height: 26px;
@@ -497,6 +495,52 @@ body {
 .doc-head button.v:hover {
   border-color: var(--color-accent);
   color: var(--color-text);
+}
+
+/* The lock chips (G4, 6b): a version that refuses everything, and the
+   compare view. Neutral ink - going back on purpose refused nothing, and
+   comparing is a reading act. Same family as the conversation's status
+   pill, never magenta. */
+.lock-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  padding: 0 11px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  font: 400 12px / 1 var(--font-body);
+  white-space: nowrap;
+}
+
+.lock-chip svg {
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+/* The compare entry pill: vA -> vB, with the arrow in quiet ink. */
+.doc-version-pill.compare-pill {
+  cursor: default;
+}
+
+.doc-version-pill.compare-pill .arrow {
+  display: flex;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+/* A header that names absence rather than a document (3a, 6d). */
+.doc-head .none-name {
+  font: 400 16px / 1 var(--font-heading);
+  color: color-mix(in srgb, var(--color-text) 40%, transparent);
+}
+
+.doc-head .dim-name {
+  font: 400 14px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The mode toggle, pushed right. The active mode is filled with the
@@ -532,28 +576,46 @@ body {
   cursor: default;
 }
 
-/* The header while an edit is unsaved: it fills with ink and becomes the
-   question. Version pill and mode toggle are replaced by the status clause
-   and the two answers; the markup swaps, this is its paint. */
+/* The header while an edit is unsaved (2b, 3f): it fills with ink and
+   becomes the question. Version pill and mode toggle are replaced by the
+   status clause and the two answers; the markup swaps, this is its paint.
+   The fill arrives over ~120ms. */
 .doc-head.saving-bar {
-  justify-content: flex-end;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 11px;
+  padding: 0 4px 0 11px;
   background: var(--color-text);
   color: var(--color-bg);
 }
 
-.saving-what {
-  margin-right: auto;
-  color: color-mix(in srgb, var(--color-bg) 70%, transparent);
+/* The name keeps its own weight in the ink bar, and the clause follows it
+   in the quieter register the design gives the status. */
+.doc-head.saving-bar .doc-id {
+  color: var(--color-bg);
+}
+
+.saving-clause {
+  flex: none;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 13px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-bg) 60%, transparent);
 }
 
 .doc-head.saving-bar button.v {
   height: 26px;
   padding: 0 13px;
+  margin-left: auto;
   border: 1px solid color-mix(in srgb, var(--color-bg) 35%, transparent);
   border-radius: 20px;
   color: var(--color-bg);
   font: 400 12px / 1 var(--font-body);
+}
+
+.doc-head.saving-bar button.v + button.v {
+  margin-left: 0;
 }
 
 .doc-head.saving-bar button.v:hover {
@@ -566,6 +628,55 @@ body {
   color: #fff;
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
+}
+
+/* The header with no driver (3d) or a damaged record (G1): the one
+   magenta header, because the substrate is the thing that stopped. The
+   name gives way to the cause; Reload is the only action. */
+.doc-head.dead {
+  gap: 11px;
+  padding: 0 4px 0 11px;
+  background: var(--color-accent-2-100);
+  color: var(--color-accent-2-800);
+}
+
+.doc-head.dead .doc-mark .dot {
+  background: var(--color-accent-2);
+}
+
+.doc-head.dead .doc-head-sep {
+  background: color-mix(in srgb, var(--color-accent-2-800) 25%, transparent);
+}
+
+.doc-head.dead .none-name {
+  flex: none;
+  font: 600 16px / 1 var(--font-heading);
+}
+
+.doc-head .head-cause {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 13px / 1 var(--font-body);
+  opacity: 0.75;
+}
+
+.doc-head.dead button.reload {
+  flex: none;
+  height: 26px;
+  padding: 0 13px;
+  border: 1px solid color-mix(in srgb, var(--color-accent-2-800) 35%, transparent);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-accent-2-800);
+  font: 400 12px / 1 var(--font-body);
+  cursor: pointer;
+}
+
+.doc-head.dead button.reload:hover {
+  background: color-mix(in srgb, var(--color-accent-2-800) 8%, transparent);
 }
 
 /* --- the ground and the sheet --------------------------------------------
@@ -630,6 +741,22 @@ body {
   cursor: text;
 }
 
+/* A version that refuses everything (G4 pinned, 3d dead): the sheet drops
+   to the edge ink, the cursor is the platform's own, and the mode pattern
+   gives way - there is no mode to carry. */
+.doc-stage.ro,
+.doc-stage.dead {
+  border-color: var(--edge-2);
+  cursor: default;
+}
+
+/* The tab in the same states: grey, edge ink, no mode named - it says what
+   the sheet is (read only) and, on a dead connection, why. */
+.doc-tab.grey {
+  background: color-mix(in srgb, var(--color-text) 22%, transparent);
+  color: var(--color-text);
+}
+
 /* The tab on the sheet's top edge carries the mode. An indicator, not a
    control: the mode toggle in the header is the control. */
 .doc-tab {
@@ -662,6 +789,104 @@ body {
   background: transparent;
 }
 
+/* --- 6a: the travel offer ----------------------------------------------
+ *
+ * What the reader could not see did not pulse, so it is offered at the
+ * sheet edge nearest the target instead: accent fill, an arrow, and one
+ * white Jump pill. Taking it is the only thing that centres the target. */
+.travel-offer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  border: 0;
+  background: var(--color-accent);
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.travel-offer.below {
+  bottom: 0;
+}
+
+.travel-offer.above {
+  top: 0;
+}
+
+.travel-offer .t-arrow {
+  display: flex;
+  flex: none;
+}
+
+.travel-offer .t {
+  flex: 1;
+  min-width: 0;
+  font: 400 12px / 1.3 var(--font-body);
+}
+
+.travel-offer .jump {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 11px;
+  border-radius: 20px;
+  background: #fff;
+  color: var(--color-accent-800);
+  font: 600 11.5px / 1 var(--font-heading);
+}
+
+.travel-offer:hover .jump {
+  text-decoration: underline;
+}
+
+/* --- 3g: the marks-below fold -------------------------------------------
+ *
+ * The bottom 56px of the sheet fades to paper and one ink pill says how
+ * many marks are under it. The scrollbar stays a scrollbar. */
+.sheet-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 56px;
+  z-index: 4;
+  background: linear-gradient(transparent, var(--paper));
+  pointer-events: none;
+}
+
+.marks-pill {
+  position: absolute;
+  bottom: 13px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--color-text);
+  color: var(--color-bg);
+  font: 400 12px / 1 var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.marks-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent-400);
+}
+
 /* The guidance line, under the sheet on the ground. */
 .doc-panel {
   flex: 0 0 auto;
@@ -692,31 +917,117 @@ body {
   min-width: 0;
 }
 
-.doc-empty {
-  padding: 32px 20px;
-  color: color-mix(in srgb, var(--color-text) 62%, transparent);
-}
-
-/* A version changed things the reader could not see, or a newer version
-   arrived. News about the document, above the document; the later stages
-   own their designed forms. */
-.doc-changed {
-  flex: 0 0 auto;
-  padding: 6px 16px;
-  border: 1px solid var(--edge-2);
+/* --- the empty states (3a, 6d) ------------------------------------------
+ *
+ * No document yet, or none by the name the address asked for. Both sit on
+ * the same ground the sheet does, as a dashed-edge panel: one sentence and
+ * the way on. Never styled as an error - the way in is named, not the
+ * fault. */
+.empty-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 34px 32px;
+  border: 1px dashed color-mix(in srgb, var(--color-text) 28%, transparent);
   border-radius: 12px;
-  background: var(--paper);
-  color: color-mix(in srgb, var(--color-text) 62%, transparent);
-  font-size: 12px;
+  background: color-mix(in srgb, var(--paper) 55%, transparent);
 }
 
-.doc-changed button {
-  border: 0;
-  background: none;
-  padding: 0;
+.empty-line {
+  font: 400 15px / 1.5 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  text-align: center;
+  max-width: 34ch;
+}
+
+.empty-panel .v.choose {
+  height: 30px;
+  padding: 0 13px;
+  border: 1px solid var(--edge-2);
+  border-radius: 20px;
+  background: transparent;
   color: var(--color-text);
-  font: inherit;
-  text-decoration: underline;
+  font: 400 12.5px / 1 var(--font-body);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.empty-panel .v.choose:hover {
+  border-color: var(--color-accent);
+}
+
+/* 6d: the heading names what was asked for, in mono on a neutral tint. */
+.miss-heading {
+  font: 600 21px / 1.3 var(--font-heading);
+  max-width: 34ch;
+  text-wrap: pretty;
+}
+
+.miss-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82em;
+  font-weight: 400;
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+
+.miss-line {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+  max-width: 52ch;
+}
+
+/* The artifact the conversation does hold, as a sepia row. */
+.artifact-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 15px;
+  border-radius: 10px;
+  background: var(--sepia);
+  max-width: 440px;
+}
+
+.artifact-glyph {
+  display: flex;
+  flex: none;
+  color: var(--color-accent);
+}
+
+.artifact-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.artifact-name {
+  font: 600 14px / 1.2 var(--font-heading);
+}
+
+.artifact-facts {
+  font: 400 12px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+
+.artifact-row button.primary,
+.artifact-row .primary {
+  flex: none;
+  height: 30px;
+  padding: 0 15px;
+  border: 1px solid var(--color-accent);
+  border-radius: 20px;
+  background: var(--color-accent);
+  color: #fff;
+  font: 600 12.5px / 1 var(--font-heading);
   cursor: pointer;
 }
 
@@ -744,156 +1055,216 @@ body {
   cursor: pointer;
 }
 
-/* --- confirmations -------------------------------------------------------
+/* --- the 6c dialog --------------------------------------------------------
  *
- * Interim: a strip pinned over the pane's bottom, until the discard
- * confirms become the 6c dialog in a later stage. It stays in the way,
- * which is the point of a confirmation. */
-
-.confirm {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 5;
+ * The only dialog, because discard is the only control that destroys work.
+ * 392px of paper on a paper wash at 55% with a 1px blur over the window;
+ * 1px edge, radius 12, no shadow. The destructive action is filled with
+ * ink - a choice the person made is not the substrate refusing. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  border-top: 1px solid var(--edge-2);
+  justify-content: center;
+  background: color-mix(in srgb, var(--paper) 55%, transparent);
+  backdrop-filter: blur(1px);
+  -webkit-backdrop-filter: blur(1px);
+}
+
+.dialog {
+  width: 392px;
+  max-width: calc(100vw - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 20px;
+  border: 1px solid var(--edge-2);
+  border-radius: 12px;
   background: var(--paper);
-  font-size: 13px;
   color: var(--color-text);
 }
 
-.confirm span {
-  flex: 1;
-  min-width: 0;
+.dialog-title {
+  font: 600 17px / 1.25 var(--font-heading);
 }
 
-.confirm button {
-  flex: none;
-  padding: 5px 12px;
+.dialog-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--color-text) 72%, transparent);
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 9px;
+  justify-content: flex-end;
+  margin-top: 3px;
+}
+
+.dialog-actions button {
+  height: 32px;
+  padding: 0 14px;
   border: 1px solid var(--edge-2);
   border-radius: 20px;
   background: transparent;
   color: var(--color-text);
-  font: inherit;
-  font-size: 12px;
+  font: 400 13px / 1 var(--font-body);
   cursor: pointer;
 }
 
-.confirm button.primary {
+.dialog-actions button.go {
   background: var(--color-text);
   border-color: var(--color-text);
   color: var(--color-bg);
 }
 
-/* --- comparing two versions ---------------------------------------------
-   Covers the stage rather than replacing the pane, so closing it returns to
-   the version that was being read, exactly where it was. The 6b two-sheet
-   view is a later stage; this keeps the built line diff on the new tokens. */
+.dialog-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 
-.compare {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
+/* --- comparing two versions (6b) -----------------------------------------
+ *
+ * Two whole sheets side by side on the plain sepia ground - no pattern,
+ * because there is no mode here. The newer side wears the accent border;
+ * the older side the edge ink. Below 360px a side, one column. */
+
+.doc-ground.compare {
+  background-image: none;
+  padding: 16px;
+  gap: 12px;
+}
+
+.compare-cols {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+}
+
+.doc-ground.compare:not(.wide) .compare-cols {
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+}
+
+.compare-col {
+  width: 360px;
+  flex: none;
   display: flex;
   flex-direction: column;
-  background: var(--paper);
+  gap: 8px;
+  min-height: 0;
 }
 
-.compare-head {
+.doc-ground.compare:not(.wide) .compare-col {
+  width: 100%;
+  max-width: 640px;
+  flex: 1 1 460px;
+}
+
+.compare-col-head {
+  flex: none;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--edge-2);
-  background: var(--paper);
-  font-size: 12px;
-  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 2px;
 }
 
-.compare-count {
-  color: color-mix(in srgb, var(--color-text) 45%, transparent);
-}
-
-.compare-head button {
-  margin-left: auto;
-  border: 1px solid var(--edge-2);
-  border-radius: 20px;
-  background: transparent;
+.compare-col-head .v {
+  font: 600 12px / 1 var(--font-heading);
   color: var(--color-text);
-  font: inherit;
-  padding: 3px 12px;
-  cursor: pointer;
+}
+
+.compare-col-head .who {
+  font: 400 11.5px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+
+.compare-col-head .count {
+  margin-left: auto;
+  font: 400 11.5px / 1 var(--font-body);
+  color: var(--color-accent-800);
+}
+
+.compare-frame-wrap {
+  flex: 1;
+  min-height: 0;
+  /* A flex column, so the frame's own `flex: 1` fills it exactly as it
+     fills the reading sheet. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--edge-2);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.compare-frame-wrap.new {
+  border-color: var(--color-accent);
 }
 
 .compare-unreadable {
-  padding: 10px 14px;
-  color: var(--color-accent-2);
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  border: 1px solid var(--edge-2);
+  border-radius: 12px;
+  background: var(--paper);
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
   font-size: 13px;
 }
 
-.compare-body {
+/* The footer: the promise on the left, the legend on the right. */
+.compare-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 2px;
+}
+
+.compare-note {
   flex: 1;
-  overflow: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.5;
+  min-width: 0;
+  font: 400 12.5px / 1.4 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
 }
 
-/* One column until there is room for two. The rule is the same either way;
-   only the grid changes, so nothing about the rows has to know. */
-.compare-row {
-  display: grid;
-  grid-template-columns: 3.5em 1fr;
-  gap: 0 10px;
-  padding: 0 14px;
+.compare-legend {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font: 400 12px / 1 var(--font-body);
 }
 
-.compare.wide .compare-row {
-  grid-template-columns: 3.5em 1fr 3.5em 1fr;
+.compare-legend .key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
-.compare-no {
-  color: color-mix(in srgb, var(--color-text) 45%, transparent);
-  text-align: right;
-  user-select: none;
+.compare-legend .swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
 }
 
-.compare-side {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* In one column the left side is the earlier version, and showing both
-   stacked would double every unchanged line for no gain. */
-.compare:not(.wide) .compare-row.same .compare-side.left,
-.compare:not(.wide) .compare-row.same .compare-no:first-child,
-.compare:not(.wide) .compare-row.added .compare-side.left,
-.compare:not(.wide) .compare-row.added .compare-no:first-child {
-  display: none;
-}
-
-.compare:not(.wide) .compare-row.removed .compare-side.right,
-.compare:not(.wide) .compare-row.removed .compare-no:last-of-type {
-  display: none;
-}
-
-/* A diff is not a refusal, so it never takes magenta. Interim tints on the
-   accent and neutral ramps until the 6b block treatment lands. */
-.compare-row.added {
+.compare-legend .key.new .swatch {
   background: var(--color-accent-100);
+  border-left: 2px solid var(--color-accent);
 }
 
-.compare-row.removed {
+.compare-legend .key.old .swatch {
   background: color-mix(in srgb, var(--color-text) 6%, transparent);
-}
-
-.compare-row.changed {
-  background: color-mix(in srgb, var(--color-accent-100) 60%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--color-text) 30%, transparent);
 }
 
 /* --- the note box --------------------------------------------------------
@@ -938,7 +1309,7 @@ body {
 .note-pop-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 8px;
 }
 
 .note-pop-actions .ghost {
@@ -950,17 +1321,24 @@ body {
   resize: none;
   padding: 8px 10px;
   border: 1px solid var(--edge-2);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--paper);
   color: var(--color-text);
   font: inherit;
   font-size: 13px;
 }
 
+.note-pop-actions textarea:focus {
+  border-color: var(--color-accent);
+}
+
+/* G9: the note box is the composer in another position, so its controls are
+   the composer's - the 38px attach and 38px buttons. */
 .note-pop-actions button {
-  padding: 6px 12px;
+  height: 38px;
+  padding: 0 14px;
   border: 1px solid var(--edge-2);
-  border-radius: 20px;
+  border-radius: 10px;
   background: transparent;
   color: var(--color-text);
   font: inherit;
@@ -969,8 +1347,8 @@ body {
 }
 
 .note-pop-actions button.primary {
-  background: var(--color-accent);
   border-color: var(--color-accent);
+  background: var(--color-accent);
   color: #fff;
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
@@ -1048,6 +1426,7 @@ body {
   background: color-mix(in srgb, var(--color-text) 35%, transparent);
 }
 
+/* Idle is neutral ink: waiting, not refusing. */
 .conv-pill .label {
   font: 400 12px / 1 var(--font-body);
   color: color-mix(in srgb, var(--color-text) 55%, transparent);
@@ -1063,6 +1442,24 @@ body {
 
 .conv-pill.busy .label {
   color: var(--color-accent-800);
+}
+
+/* A stall is the one warning, and it is not a refusal: neutral ink, the
+   dot stops moving, and the label says stopped and how long ago. */
+.conv-pill.stopped .dot {
+  background: color-mix(in srgb, var(--color-text) 40%, transparent);
+}
+
+.conv-pill.stopped .label {
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+}
+
+/* 3d: with the connection dead the transcript is still all there - it was
+   on disk the whole time - but every sent turn steps back to 55%, and the
+   composer says Reload. */
+.thread.dead .msg,
+.thread.dead .batch {
+  opacity: 0.55;
 }
 
 .thread-root {
@@ -1361,11 +1758,36 @@ body {
   background: transparent;
 }
 
+/* Clicking a lost note lights the note itself (6a): the same accent wash
+   a found target takes, fading on the pulse's clock. The document does not
+   move. */
+.note-card.lit {
+  background: var(--color-accent-100);
+  border-radius: 6px;
+}
+
+/* Files a sent note carried (4a state 6, on the note card): the chips lose
+   their x and keep their size. */
+.note-card-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: flex-start;
+}
+
 .batch {
   display: flex;
   flex-direction: column;
   gap: 7px;
   align-self: stretch;
+}
+
+/* 3d: with the connection dead the transcript is still all there - it was
+   on disk the whole time - but every sent turn steps back to 55%, and the
+   composer says Reload. */
+.thread.dead .msg,
+.thread.dead .batch {
+  opacity: 0.55;
 }
 
 /* A note written against a later version than the one on screen. Not an
@@ -1451,8 +1873,10 @@ body {
   flex-direction: column;
 }
 
-/* Everything that does not: what is happening, what is queued, and the box
-   you type in - one solid block of paper below the conversation. */
+/* Everything that does not: what is queued, what is attached, and the box
+   you type in - one solid block of paper below the conversation. What is
+   happening lives in the conversation's status pill (3c); a stall is the
+   card inside the thread. */
 .dock {
   flex: 0 0 auto;
   display: flex;
@@ -1467,50 +1891,46 @@ body {
 .dock > :first-child {
   border-top: 0;
 }
+/* 3d: the composer at 50%, saying Reload - the one action is in the
+   header, and nothing here can be done. */
+.dock.dead {
+  opacity: 0.5;
+}
 
-/* What is happening. Neutral ink while it is only a wait; a stall is the
-   one warning, and it says so in ink at full weight, never magenta. */
-.activity {
+/* The held card (3d): queued notes while nothing can be sent. The rule is
+   accent-300 - paler than a sent note's, because less is asserted - and
+   the head says held, not failed. */
+.held {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  align-self: stretch;
+  padding: 9px 12px;
+  border-left: 2px solid var(--color-accent-300);
+  border-radius: 2px;
+}
+
+.held-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 14px;
-  border-top: 1px solid var(--edge);
-  font-size: 12px;
-  color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
-.activity.stalled {
-  color: var(--color-text);
+.held-kind {
+  font: 600 11px / 1 var(--font-heading);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
 }
 
-.pulse {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: pulse 1.4s ease-in-out infinite;
-  flex: 0 0 auto;
+.held-state {
+  font: 400 11px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
 }
 
-.activity.stalled .pulse {
-  animation: none;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 0.25;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pulse {
-    animation: none;
-  }
+.held-body {
+  font-size: 13.5px;
+  line-height: 1.55;
 }
 
 /* The queue's own action, where the queue is. */
@@ -1553,65 +1973,175 @@ body {
   color: color-mix(in srgb, var(--color-text) 62%, transparent);
 }
 
-/* --- attachments and the composer ---------------------------------------- */
-
-/* Files attached to the message being written. They are already stored, so
-   these are references the page draws, not bytes it holds. */
+/* --- attachments and the composer (4a, 5a) --------------------------------
+ *
+ * Images are 64px thumbs with the filename on a translucent ink strip and
+ * an x in the corner; every other file is a 32px pill - glyph, name (128px
+ * at most), size, x. One wrapping row above the field. Uploading adds a
+ * 2px accent line along the chip's bottom edge; a refusal is magenta with
+ * the reason on the chip, and it stays until dismissed. */
 .attached {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 7px;
   padding: 8px 14px 0;
+  align-items: flex-start;
 }
 
 .chip {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px 4px 4px;
   border: 1px solid var(--edge-2);
   border-radius: 8px;
   background: var(--paper);
-  font-size: 12px;
-  max-width: 220px;
 }
 
-.thumb {
-  width: 28px;
-  height: 28px;
-  border-radius: 5px;
-  object-fit: cover;
+/* The image chip: a square thumb, not a row. */
+.chip.imgchip {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  overflow: hidden;
   flex: 0 0 auto;
 }
 
-/* What a file with no picture shows instead. */
-.thumb.kind {
+.thumb-img {
+  display: block;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+}
+
+/* The design's dot-screen placeholder: what an image shows until its bytes
+   have been read back. */
+.thumb-img.none {
   display: grid;
   place-items: center;
-  background: var(--color-bg);
+  background-color: color-mix(in srgb, var(--color-text) 9%, transparent);
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--color-text) 26%, transparent) 1px,
+    transparent 1.4px
+  );
+  background-size: 5px 5px;
+  color: color-mix(in srgb, var(--color-text) 38%, transparent);
+}
+
+.thumb-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 2px 4px 3px;
+  background: color-mix(in srgb, var(--color-text) 62%, transparent);
+  color: var(--color-bg);
+  font: 400 9.5px / 1.1 var(--font-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The pill chip: 32px tall, glyph first, size last. */
+.chip.pill {
+  height: 32px;
+  gap: 8px;
+  padding: 0 4px 0 9px;
+  max-width: 100%;
+}
+
+.chip-glyph {
+  display: flex;
+  flex: none;
   color: color-mix(in srgb, var(--color-text) 45%, transparent);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12.5px;
+  max-width: 128px;
 }
 
-.chip-drop {
+.chip.imgchip .chip-name {
+  max-width: none;
+}
+
+.chip-size {
+  flex: none;
+  font: 400 11px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  white-space: nowrap;
+}
+
+/* Uploading (4a state 3): a 2px accent line along the bottom edge, and the
+   byte count rather than a percentage. */
+.chip.uploading {
+  position: relative;
+}
+
+.chip.uploading::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--color-accent);
+}
+
+/* Refused (4a state 5): the substrate saying no, so magenta - never
+   alongside cyan in the same chip. */
+.chip.refused {
+  border-color: var(--color-accent-2);
+  background: var(--color-accent-2-100);
+}
+
+.chip.refused .chip-name {
+  color: var(--color-accent-2-800);
+}
+
+.chip-reason {
+  flex: none;
+  font: 400 11px / 1 var(--font-body);
+  color: var(--color-accent-2-800);
+  white-space: nowrap;
+}
+
+.chip-x {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  margin-left: 2px;
   border: 0;
-  background: none;
-  color: color-mix(in srgb, var(--color-text) 62%, transparent);
-  font: inherit;
+  border-radius: 5px;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
   cursor: pointer;
-  padding: 0 2px;
+  padding: 0;
 }
 
-.chip-drop:hover {
+.chip-x:hover {
+  background: color-mix(in srgb, var(--color-text) 9%, transparent);
   color: var(--color-text);
+}
+
+/* The corner x on an image chip: ink on ink, like the strip it sits over. */
+.chip-x.corner {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  background: color-mix(in srgb, var(--color-text) 70%, transparent);
+  color: var(--color-bg);
+}
+
+.chip-x.corner:hover {
+  background: var(--color-text);
+  color: var(--color-bg);
 }
 
 /* Inside the note box the chips sit above the buttons, not above a
@@ -1621,11 +2151,12 @@ body {
 }
 
 /* The control that opens the file picker. The input itself is never shown -
-   a browser's own file input cannot be styled and says the wrong thing. */
+   a browser's own file input cannot be styled and says the wrong thing.
+   38px square, matching send. */
 .attach {
   flex: 0 0 auto;
-  width: 34px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   display: grid;
   place-items: center;
   border: 1px solid var(--edge-2);
@@ -1633,24 +2164,19 @@ body {
   background: var(--paper);
   color: color-mix(in srgb, var(--color-text) 62%, transparent);
   cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
 }
 
 .attach:hover {
   color: var(--color-text);
+  border-color: var(--color-accent);
 }
 
 .attach input {
   display: none;
 }
-
-/* In the note box, beside Cancel and Add note rather than beside a
-   textarea, so it matches their height instead of the composer's. */
-.attach.small {
-  width: 28px;
-  height: 28px;
-  font-size: 15px;
+/* The attach sits at the left of the row, Cancel and Add note at the
+   right. */
+.note-pop-actions .attach {
   margin-right: auto;
 }
 
@@ -1659,12 +2185,21 @@ body {
   gap: 8px;
   align-items: flex-end;
   padding: 10px 14px 14px;
+  border-radius: 12px;
+}
+
+/* 4a state 2: a file held over the composer. The whole composer takes the
+   dashed accent edge at 6px, and the field fills accent-100 and says what
+   will happen. */
+.composer.dragover {
+  outline: 1.5px dashed var(--color-accent);
+  outline-offset: 6px;
 }
 
 .composer textarea {
   flex: 1;
   resize: none;
-  min-height: 40px;
+  min-height: 38px;
   max-height: 180px;
   padding: 10px 12px;
   border: 1px solid var(--edge-2);
@@ -1682,22 +2217,50 @@ body {
   border-color: var(--color-accent);
 }
 
+.composer textarea.drop {
+  background: var(--color-accent-100);
+  border-color: var(--color-accent);
+}
+
+.composer textarea.drop::placeholder {
+  color: var(--color-accent-800);
+}
+
+/* 3a: no document, so the conversation is the way in - the field is
+   dressed as the thing to do, accent border with the 2px accent-200 ring. */
+.composer.inviting textarea {
+  border-color: var(--color-accent);
+  outline: 2px solid var(--color-accent-200);
+}
+
 .composer button {
-  height: 40px;
-  padding: 0 16px;
-  border: 0;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--color-accent);
   border-radius: 10px;
   background: var(--color-accent);
   color: #fff;
-  font: inherit;
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
   cursor: pointer;
 }
 
+/* Ghost at rest: nothing to send yet, so the button says so - edge, not
+   accent. It goes solid the moment there is something to send, and in the
+   empty state it stays solid, because the way in is the point. */
 .composer button:disabled {
-  opacity: 0.4;
+  border-color: var(--edge-2);
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
   cursor: default;
+}
+
+.composer.inviting button:disabled {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #fff;
 }
 
 /* --- the notice strip ----------------------------------------------------
