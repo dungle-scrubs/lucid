@@ -434,6 +434,27 @@ body {
   margin-left: 4px;
 }
 
+/* A version changed things the reader could not see. Sits where the
+   newer-version banner sits and reads the same way: news about the document,
+   above the document. */
+.doc-changed {
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.doc-changed button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--fg);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .doc-waiting {
   display: flex;
   align-items: center;

@@ -146,6 +146,37 @@ html.lucid-markup, html.lucid-markup * {
   outline-offset: 1px !important;
   background: rgba(167, 139, 250, 0.16) !important;
 }
+/* New material, when a version arrives and you can already see it (#181).
+ *
+ * The rise is quick and the fall is slow - the wash peaks a fifth of the way
+ * through and fades over the rest, which is v1's shape. A pulse that fades in
+ * as slowly as it fades out reads as the page loading rather than as
+ * something being pointed at.
+ *
+ * Alternated under two names for the reason focus is: CSS will not replay an
+ * animation whose name has not changed, and two versions in a row touching
+ * the same block is ordinary. */
+@keyframes lucid-new-a {
+  0% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0); }
+  20% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0.22); }
+  100% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0); }
+}
+@keyframes lucid-new-b {
+  0% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0); }
+  20% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0.22); }
+  100% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0); }
+}
+[${ELEMENT_ATTR}].lucid-new-a { animation: lucid-new-a 2.6s ease-in-out 1 !important; }
+[${ELEMENT_ATTR}].lucid-new-b { animation: lucid-new-b 2.6s ease-in-out 1 !important; }
+@media (prefers-reduced-motion: reduce) {
+  [${ELEMENT_ATTR}].lucid-new-a,
+  [${ELEMENT_ATTR}].lucid-new-b {
+    animation: none !important;
+    outline: 2px solid #10b981 !important;
+    outline-offset: 3px !important;
+  }
+}
+
 /* Focusing a note's target. Last, so it wins: what you are doing now beats
    what is already true about the element, and being annotated is exactly
    what the target of a note already is.
@@ -623,6 +654,65 @@ const script = (artifactId: string, version: number, author: string): string => 
       var want = typeof m.top === "number" ? m.top : 0;
       var have = backTo.getBoundingClientRect().top;
       window.scrollBy(0, have - want);
+      return;
+    }
+
+    // What this version changed, where the reader can already see it (#181).
+    //
+    // The whole rule is the split: a block in view pulses and is not
+    // travelled to, a block out of view does not pulse and is offered
+    // instead. Pulsing something off screen wastes the one signal there is;
+    // scrolling to something already on screen destroys the reader's
+    // orientation to make a point they could already see.
+    if (m.kind === "pulse" && Array.isArray(m.indexes)) {
+      var pl = blocks();
+      var vph = window.innerHeight || document.documentElement.clientHeight;
+      var away = [];
+      var seen = 0;
+      for (var q = 0; q < m.indexes.length; q++) {
+        var pe = pl[m.indexes[q]];
+        if (!pe) continue;
+        var pr = pe.getBoundingClientRect();
+        // Any part of it on screen counts as seen. A block whose first line
+        // is visible has been read up to, and jumping to it would move the
+        // page for something already in front of the reader.
+        if (pr.top < vph && pr.bottom > 0) {
+          var pwas = pe.classList.contains("lucid-new-a");
+          var pcls = pwas ? "lucid-new-b" : "lucid-new-a";
+          pe.classList.remove("lucid-new-a", "lucid-new-b");
+          void pe.offsetWidth;
+          pe.classList.add(pcls);
+          (function (el, cls) {
+            setTimeout(function () { el.classList.remove(cls); }, 2600);
+          })(pe, pcls);
+          seen += 1;
+        } else {
+          away.push(m.indexes[q]);
+        }
+      }
+      parent.postMessage(
+        { source: SOURCE, kind: "pulsed", artifactId: ARTIFACT, version: VERSION,
+          shown: seen, offscreen: away },
+        "*"
+      );
+      return;
+    }
+
+    // Travel to a block by its number, for the half of the rule that does
+    // not pulse. Same lighting as focusing a note: arriving somewhere is
+    // arriving somewhere, whichever asked.
+    if (m.kind === "go-block" && typeof m.index === "number") {
+      var gl = blocks()[m.index];
+      if (!gl) return;
+      gl.scrollIntoView({ block: "center", inline: "nearest" });
+      var gwas = gl.classList.contains("lucid-focus-a");
+      var gcls = gwas ? "lucid-focus-b" : "lucid-focus-a";
+      gl.classList.remove("lucid-focus-a", "lucid-focus-b");
+      void gl.offsetWidth;
+      gl.classList.add(gcls);
+      (function (el, cls) {
+        setTimeout(function () { el.classList.remove(cls); }, 2600);
+      })(gl, gcls);
       return;
     }
 

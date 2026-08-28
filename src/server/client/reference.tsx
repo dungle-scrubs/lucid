@@ -749,9 +749,16 @@ const Page = (): React.ReactElement => (
     <Failures />
     <footer className="ref-foot">
       <p>
-        Two states cannot be shown on a static page and are described instead: the one-time pulse
-        when new material arrives inside the reader's viewport, which runs 2.6s ease-in-out and
-        peaks at a 20% wash; and the crosshair cursor that annotate mode puts over everything.
+        Two things cannot be shown on a static page and are described instead. The{" "}
+        <strong>pulse</strong>: when a version arrives, whatever it changed that the reader can
+        already see washes once over 2.6s, rising quickly and fading slowly. It fires once per
+        version, never on scroll. Anything it changed off screen does not pulse and is offered
+        instead, which is the case above. And the <strong>crosshair cursor</strong> annotate mode
+        puts over everything.
+      </p>
+      <p>
+        Both halves of that rule share one principle: lucid never moves the page for something the
+        reader can already see, and never pulses something they cannot.
       </p>
     </footer>
   </>

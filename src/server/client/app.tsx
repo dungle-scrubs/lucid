@@ -561,6 +561,10 @@ const DocumentFrame = ({
   place,
   restorePlace,
   pendingRestore,
+  pendingPulse,
+  pulseBlocks,
+  goBlock,
+  onOffscreen,
   onHotkey,
   onDirty,
   marked,
@@ -583,6 +587,10 @@ const DocumentFrame = ({
   place: React.MutableRefObject<{ version: number; index: number; top: number } | null>;
   restorePlace: React.MutableRefObject<((index: number, top: number) => void) | null>;
   pendingRestore: React.MutableRefObject<{ index: number; top: number } | null>;
+  pendingPulse: React.MutableRefObject<readonly number[] | null>;
+  pulseBlocks: React.MutableRefObject<((indexes: readonly number[]) => void) | null>;
+  goBlock: React.MutableRefObject<((index: number) => void) | null>;
+  onOffscreen: (indexes: readonly number[]) => void;
   /** A key the frame caught that means something to the whole page. */
   onHotkey: (which: "toggle-mode" | "send-queue") => void;
   /** The frame says when a person has changed something in it. */
@@ -633,7 +641,8 @@ const DocumentFrame = ({
         m.kind !== "snapshot-taken" &&
         m.kind !== "dirty" &&
         m.kind !== "place" &&
-        m.kind !== "ready"
+        m.kind !== "ready" &&
+        m.kind !== "pulsed"
       )
         return;
       if (m.artifactId !== doc.artifactId || m.version !== doc.version) return;
@@ -648,9 +657,25 @@ const DocumentFrame = ({
       // place was followed into it, this is the moment it can be given.
       if (m.kind === "ready") {
         const want = pendingRestore.current;
-        if (want === null) return;
-        pendingRestore.current = null;
-        restorePlace.current?.(want.index, want.top);
+        if (want !== null) {
+          pendingRestore.current = null;
+          restorePlace.current?.(want.index, want.top);
+        }
+        // After the restore, never before it. What counts as already in view
+        // is what the reader will be looking at, and until the place is put
+        // back the frame is still at the top showing the wrong thing.
+        const changed = pendingPulse.current;
+        if (changed !== null) {
+          pendingPulse.current = null;
+          if (changed.length > 0) pulseBlocks.current?.(changed);
+        }
+        return;
+      }
+
+      // Which of them the reader could not see. The other half of the rule:
+      // they did not pulse, so they are offered instead.
+      if (m.kind === "pulsed") {
+        onOffscreen(Array.isArray(m.offscreen) ? (m.offscreen as number[]) : []);
         return;
       }
 
@@ -727,6 +752,9 @@ const DocumentFrame = ({
     place,
     pendingRestore,
     restorePlace,
+    pendingPulse,
+    pulseBlocks,
+    onOffscreen,
   ]);
 
   // Asking the frame what is at a set of spots. The parent cannot read the
@@ -777,14 +805,26 @@ const DocumentFrame = ({
         { source: FRAME_MESSAGE_SOURCE, kind: "restore-place", index, top },
         "*",
       );
+    pulseBlocks.current = (indexes) =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "pulse", indexes: [...indexes] },
+        "*",
+      );
+    goBlock.current = (index) =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "go-block", index },
+        "*",
+      );
     return () => {
       capture.current = null;
       snapshot.current = null;
       deselect.current = null;
       focusSpot.current = null;
       restorePlace.current = null;
+      pulseBlocks.current = null;
+      goBlock.current = null;
     };
-  }, [capture, snapshot, deselect, focusSpot, restorePlace]);
+  }, [capture, snapshot, deselect, focusSpot, restorePlace, pulseBlocks, goBlock]);
 
   React.useEffect(() => {
     ref.current?.contentWindow?.postMessage(
@@ -970,7 +1010,15 @@ const App = (): React.ReactElement => {
   /** A place followed into the version being taken up, waiting for its
    * frame to exist. */
   const pendingRestore = React.useRef<{ index: number; top: number } | null>(null);
+  /** Blocks this version changed that the reader could not see. They did
+   * not pulse, so they are offered instead. */
+  const [offscreenChanges, setOffscreenChanges] = React.useState<readonly number[]>([]);
   const docRef = React.useRef<Doc | null>(null);
+  /** Blocks this version added or changed, waiting for its frame. Sent once:
+   * the pulse marks a version arriving, not a block existing. */
+  const pendingPulse = React.useRef<readonly number[] | null>(null);
+  const pulseBlocks = React.useRef<((indexes: readonly number[]) => void) | null>(null);
+  const goBlock = React.useRef<((index: number) => void) | null>(null);
   /** What is typed, readable from a callback the frame holds. That callback
    * must keep its identity across keystrokes, so it cannot close over the
    * draft itself. */
@@ -1323,21 +1371,36 @@ const App = (): React.ReactElement => {
           // version between is work nobody asked for - the reader who was
           // not here does not need their seat kept.
           pendingRestore.current = null;
+          pendingPulse.current = null;
+          setOffscreenChanges([]);
           const here = place.current;
           const leaving = docRef.current;
-          if (here !== null && leaving !== null && here.version === leaving.version) {
+          // One walk answers both questions - where the reader's block went,
+          // and what this version changed. They are the same comparison read
+          // two ways.
+          if (leaving !== null) {
             try {
               const parse = (html: string): Document =>
                 new DOMParser().parseFromString(html, "text/html");
-              const moved = diffVersions(parse(leaving.bytes), parse(fetched.bytes)).carried.get(
-                here.index,
-              );
-              // Absent means the block the reader was on is gone. Putting
-              // them somewhere else that happens to share its number is
-              // worse than the top, which is at least honest.
-              if (moved !== undefined) pendingRestore.current = { index: moved, top: here.top };
+              const d = diffVersions(parse(leaving.bytes), parse(fetched.bytes));
+
+              if (here !== null && here.version === leaving.version) {
+                const moved = d.carried.get(here.index);
+                // Absent means the block the reader was on is gone. Putting
+                // them somewhere else that happens to share its number is
+                // worse than the top, which is at least honest.
+                if (moved !== undefined) pendingRestore.current = { index: moved, top: here.top };
+              }
+
+              // What arrived, by its place in the version that arrived. A
+              // removed block has nowhere to pulse, so it is not here.
+              const touched: number[] = [];
+              for (const c of d.changes) {
+                if (c.at !== undefined) touched.push(c.at);
+              }
+              pendingPulse.current = touched;
             } catch {
-              // A place is a convenience. Failing to follow one must never
+              // Both of these are conveniences. Failing at them must never
               // stop the version arriving.
             }
           }
@@ -2048,6 +2111,27 @@ const App = (): React.ReactElement => {
                     </span>
                   </div>
 
+                  {/* The other half of the update-location rule (#181). What
+                  the reader could see pulsed and is not mentioned; what they
+                  could not see did not pulse and is offered here. Saying
+                  both would be saying it twice. */}
+                  {offscreenChanges.length === 0 ? null : (
+                    <div className="doc-changed">
+                      {offscreenChanges.length} change
+                      {offscreenChanges.length === 1 ? "" : "s"} you cannot see.{" "}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const first = offscreenChanges[0];
+                          if (first !== undefined) goBlock.current?.(first);
+                          setOffscreenChanges([]);
+                        }}
+                      >
+                        show the first
+                      </button>
+                    </div>
+                  )}
+
                   {waiting === null || waiting <= doc.version ? null : (
                     <div className="doc-waiting">
                       Version {waiting} has arrived.{" "}
@@ -2089,6 +2173,10 @@ const App = (): React.ReactElement => {
                       place={place}
                       restorePlace={restorePlace}
                       pendingRestore={pendingRestore}
+                      pendingPulse={pendingPulse}
+                      pulseBlocks={pulseBlocks}
+                      goBlock={goBlock}
+                      onOffscreen={setOffscreenChanges}
                       onHotkey={onHotkey}
                       onDirty={() => setEdited(true)}
                       marked={[
