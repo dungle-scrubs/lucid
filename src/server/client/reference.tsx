@@ -671,6 +671,75 @@ const Dock = (): React.ReactElement => (
   </Section>
 );
 
+const Comparing = (): React.ReactElement => (
+  <Section
+    title="Two versions, side by side"
+    blurb="A comparison is over the stored bytes, not over a parse — so it shows what a rendering-based comparison cannot: a changed attribute, a comment, whitespace inside markup. It is read-only: never sent to the agent, never appended to the record, and neither side can be edited. Two columns where each would have 360px, one column below that, following the room actually available rather than a device class."
+    wide
+  >
+    <Case
+      name="Two columns"
+      classes=".compare.wide"
+      note="Line numbers for each side. A rewritten line is one row, not a deletion beside an unrelated insertion."
+    >
+      <div className="ref-pane">
+        <div className="compare wide" style={{ position: "static" }}>
+          <div className="compare-head">
+            <span>v20 against v31</span>
+            <span className="compare-count">0 added · 0 removed · 4 changed</span>
+            <button type="button">Close</button>
+          </div>
+          <div className="compare-body">
+            <div className="compare-row same">
+              <span className="compare-no">2</span>
+              <pre className="compare-side left">&lt;meta charset="utf-8"&gt;</pre>
+              <span className="compare-no">2</span>
+              <pre className="compare-side right">&lt;meta charset="utf-8"&gt;</pre>
+            </div>
+            <div className="compare-row changed">
+              <span className="compare-no">3</span>
+              <pre className="compare-side left">
+                &lt;title&gt;first day checklist&lt;/title&gt;
+              </pre>
+              <span className="compare-no">3</span>
+              <pre className="compare-side right">
+                &lt;title&gt;first day checklist [v31]&lt;/title&gt;
+              </pre>
+            </div>
+            <div className="compare-row added">
+              <span className="compare-no" />
+              <pre className="compare-side left" />
+              <span className="compare-no">4</span>
+              <pre className="compare-side right">&lt;meta name="generator"&gt;</pre>
+            </div>
+            <div className="compare-row removed">
+              <span className="compare-no">4</span>
+              <pre className="compare-side left">&lt;!-- an old note --&gt;</pre>
+              <span className="compare-no" />
+              <pre className="compare-side right" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </Case>
+    <Case
+      name="A version that could not be read"
+      classes=".compare-unreadable"
+      note="Reported for its own side. An empty column would say the version was empty, which is a different and untrue thing."
+    >
+      <div className="ref-pane">
+        <div className="compare" style={{ position: "static" }}>
+          <div className="compare-head">
+            <span>v9999 against v31</span>
+            <button type="button">Close</button>
+          </div>
+          <div className="compare-unreadable">v9999 could not be read.</div>
+        </div>
+      </div>
+    </Case>
+  </Section>
+);
+
 const Failures = (): React.ReactElement => (
   <Section
     title="Empty, and broken"
@@ -746,6 +815,7 @@ const Page = (): React.ReactElement => (
     <Head />
     <Panel />
     <Dock />
+    <Comparing />
     <Failures />
     <footer className="ref-foot">
       <p>

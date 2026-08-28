@@ -57,12 +57,20 @@ import {
   readConversationWidth,
   writeConversationWidth,
 } from "./layout.js";
+import { diffLines } from "./line-diff.js";
 import { formatRoute, parseRoute, type Route, sameRoute } from "./route.js";
 import { type Msg, type PendingNote, type SentBatch, weaveNotes } from "./timeline.js";
 import { diffVersions } from "./version-diff.js";
 import { isReadOnly, versionState } from "./version-state.js";
 
 /** Kept in step with the server's own poll interval. */
+/** How wide a column must be for two of them to beat one.
+ *
+ * Policy, not measured: RFC-07 R9 names the number and says so. A line of
+ * markup in a column narrower than this wraps so often that the comparison
+ * is harder to read than the two versions separately. */
+const COMPARE_COLUMN_MIN = 360;
+
 const POLL_MS = 500;
 const TOKEN_HEADER = "x-lucid-token";
 
@@ -858,6 +866,101 @@ const DocumentFrame = ({
   );
 };
 
+/**
+ * Two versions, side by side (RFC-07 R9).
+ *
+ * A comparison is a view and nothing else. It never reaches the agent, never
+ * appends to the record, and offers no editing of either side - restoring
+ * means leaving it first, which is deliberate: this is for reading, and
+ * there is no write behind it.
+ *
+ * Two columns where each would have room, one below that. The switch follows
+ * the room actually available rather than a stored preference or a guess at
+ * the device, because the pane can be dragged to any width on any machine.
+ */
+const Comparison = ({
+  left,
+  right,
+  leftVersion,
+  rightVersion,
+  onLeave,
+}: {
+  left: string | null;
+  right: string | null;
+  leftVersion: number;
+  rightVersion: number;
+  onLeave: () => void;
+}): React.ReactElement => {
+  const box = React.useRef<HTMLDivElement | null>(null);
+  const [wide, setWide] = React.useState(true);
+
+  // Measured, not assumed. `COMPARE_COLUMN_MIN` is policy: below it a column
+  // is too narrow to read a line of markup in, and two unreadable columns are
+  // worse than one readable one.
+  React.useEffect(() => {
+    const el = box.current;
+    if (el === null) return;
+    const measure = (): void => setWide(el.clientWidth >= COMPARE_COLUMN_MIN * 2);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // A version that could not be read is reported for its own side. Rendering
+  // it as an empty column would say it was empty, which is a different and
+  // untrue thing.
+  const missing = left === null || right === null;
+  const diff = React.useMemo(
+    () => (missing ? null : diffLines(left as string, right as string)),
+    [left, right, missing],
+  );
+
+  return (
+    <div className={wide ? "compare wide" : "compare"} ref={box}>
+      <div className="compare-head">
+        <span>
+          v{leftVersion} against v{rightVersion}
+        </span>
+        {diff === null ? null : (
+          <span className="compare-count">
+            {diff.identical
+              ? "identical"
+              : `${diff.added} added · ${diff.removed} removed · ${diff.changed} changed`}
+            {diff.coarse ? " · too large to line up exactly" : ""}
+          </span>
+        )}
+        <button type="button" onClick={onLeave}>
+          Close
+        </button>
+      </div>
+
+      {left === null ? (
+        <div className="compare-unreadable">v{leftVersion} could not be read.</div>
+      ) : null}
+      {right === null ? (
+        <div className="compare-unreadable">v{rightVersion} could not be read.</div>
+      ) : null}
+
+      {diff === null ? null : (
+        <div className="compare-body">
+          {diff.rows.map((r) => (
+            <div
+              className={`compare-row ${r.kind}`}
+              key={`${r.kind}:${r.beforeNo ?? "-"}:${r.afterNo ?? "-"}`}
+            >
+              <span className="compare-no">{r.beforeNo ?? ""}</span>
+              <pre className="compare-side left">{r.before ?? ""}</pre>
+              <span className="compare-no">{r.afterNo ?? ""}</span>
+              <pre className="compare-side right">{r.after ?? ""}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const App = (): React.ReactElement => {
   // Read once. Where in the record the page starts is an opening question;
   // after that the page moves the address bar, not the other way round.
@@ -1013,6 +1116,14 @@ const App = (): React.ReactElement => {
   /** Blocks this version changed that the reader could not see. They did
    * not pulse, so they are offered instead. */
   const [offscreenChanges, setOffscreenChanges] = React.useState<readonly number[]>([]);
+  /** A comparison being read: which version the one on screen is held against,
+   * and that version's bytes once they arrive. `null` bytes mean it could not
+   * be read, which is reported rather than shown as an empty side. */
+  const [comparing, setComparing] = React.useState<{
+    version: number;
+    bytes: string | null;
+    loading: boolean;
+  } | null>(null);
   const docRef = React.useRef<Doc | null>(null);
   /** Blocks this version added or changed, waiting for its frame. Sent once:
    * the pulse marks a version arriving, not a block existing. */
@@ -1620,6 +1731,34 @@ const App = (): React.ReactElement => {
     }
   }, [confirmRestore, doc, token, dead, restoring, conversationId]);
 
+  /** Read another version, to hold this one against it.
+   *
+   * Read-only in every sense: it fetches bytes and puts them on screen. No
+   * frame is made for it, so neither side can be edited, and nothing about a
+   * comparison reaches the record or the agent. */
+  const compareWith = React.useCallback(
+    async (version: number): Promise<void> => {
+      if (doc === null || token === null) return;
+      setComparing({ version, bytes: null, loading: true });
+      try {
+        const res = await fetch(
+          `/api/conversations/${encodeURIComponent(conversationId)}/artifacts/${encodeURIComponent(doc.artifactId)}/${version}`,
+          { headers: { [TOKEN_HEADER]: token } },
+        );
+        if (!res.ok) {
+          setComparing({ version, bytes: null, loading: false });
+          return;
+        }
+        const other = (await res.json()) as Doc;
+        setComparing({ version, bytes: other.bytes, loading: false });
+      } catch {
+        // Reported on its own side of the comparison, not as a page failure.
+        setComparing({ version, bytes: null, loading: false });
+      }
+    },
+    [doc, token, conversationId],
+  );
+
   const save = React.useCallback(async (): Promise<void> => {
     if (doc === null || token === null || dead || snapshot.current === null) return;
     setSaving(true);
@@ -2074,6 +2213,29 @@ const App = (): React.ReactElement => {
                         ))}
                       </select>
                     )}
+                    {/* Offered only where there is something to compare
+                      against: one version has nothing to be held against. */}
+                    {catalog === null || catalog.versions.length < 2 ? null : (
+                      <select
+                        className="v compare-pick"
+                        value=""
+                        aria-label="Compare with another version"
+                        onChange={(e) => {
+                          const v = Number.parseInt(e.target.value, 10);
+                          if (Number.isSafeInteger(v)) void compareWith(v);
+                          e.currentTarget.value = "";
+                        }}
+                      >
+                        <option value="">Compare with…</option>
+                        {catalog.versions
+                          .filter((v) => v !== doc.version)
+                          .map((v) => (
+                            <option key={v} value={String(v)}>
+                              v{v}
+                            </option>
+                          ))}
+                      </select>
+                    )}
                     {pinned === null ? null : (
                       <button type="button" className="v latest" onClick={() => setPinned(null)}>
                         {viewingOld ? "Back to current" : "Follow newest"}
@@ -2157,6 +2319,19 @@ const App = (): React.ReactElement => {
                         </button>
                       )}
                     </div>
+                  )}
+
+                  {/* A comparison covers the stage rather than replacing the
+                    pane, so leaving it returns to the version that was being
+                    read, exactly where it was. */}
+                  {comparing === null ? null : (
+                    <Comparison
+                      left={comparing.bytes}
+                      right={doc.bytes}
+                      leftVersion={comparing.version}
+                      rightVersion={doc.version}
+                      onLeave={() => setComparing(null)}
+                    />
                   )}
 
                   {/* The frame and the note box share one positioned box, so

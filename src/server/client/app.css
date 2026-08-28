@@ -226,6 +226,10 @@ body {
 .pane.document {
   flex: 1;
   background: var(--panel);
+  /* So a comparison covers this pane and only this pane. Without it the
+     comparison positions against the page and lies over the conversation
+     as well, which is not a thing it is a view of. */
+  position: relative;
 }
 
 /* The conversation is the margin note beside it: a reading column, not a
@@ -437,6 +441,110 @@ body {
 /* A version changed things the reader could not see. Sits where the
    newer-version banner sits and reads the same way: news about the document,
    above the document. */
+/* --- comparing two versions ---------------------------------------------
+   Covers the stage rather than replacing the pane, so closing it returns to
+   the version being read, exactly where it was. */
+
+.compare {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+.compare-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.compare-count {
+  color: var(--faint);
+}
+
+.compare-head button {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.compare-unreadable {
+  padding: 10px 14px;
+  color: var(--error);
+  font-size: 13px;
+}
+
+.compare-body {
+  flex: 1;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* One column until there is room for two. The rule is the same either way;
+   only the grid changes, so nothing about the rows has to know. */
+.compare-row {
+  display: grid;
+  grid-template-columns: 3.5em 1fr;
+  gap: 0 10px;
+  padding: 0 14px;
+}
+
+.compare.wide .compare-row {
+  grid-template-columns: 3.5em 1fr 3.5em 1fr;
+}
+
+.compare-no {
+  color: var(--faint);
+  text-align: right;
+  user-select: none;
+}
+
+.compare-side {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* In one column the left side is the earlier version, and showing both
+   stacked would double every unchanged line for no gain. */
+.compare:not(.wide) .compare-row.same .compare-side.left,
+.compare:not(.wide) .compare-row.same .compare-no:first-child,
+.compare:not(.wide) .compare-row.added .compare-side.left,
+.compare:not(.wide) .compare-row.added .compare-no:first-child {
+  display: none;
+}
+
+.compare:not(.wide) .compare-row.removed .compare-side.right,
+.compare:not(.wide) .compare-row.removed .compare-no:last-of-type {
+  display: none;
+}
+
+.compare-row.added {
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.compare-row.removed {
+  background: rgba(220, 38, 38, 0.12);
+}
+
+.compare-row.changed {
+  background: rgba(251, 191, 36, 0.12);
+}
+
 .doc-changed {
   padding: 6px 16px;
   border-bottom: 1px solid var(--line);
