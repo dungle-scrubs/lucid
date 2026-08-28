@@ -145,6 +145,37 @@ html.lucid-markup, html.lucid-markup * {
   outline-offset: 1px !important;
   background: rgba(167, 139, 250, 0.16) !important;
 }
+/* Focusing a note's target. Last, so it wins: what you are doing now beats
+   what is already true about the element, and being annotated is exactly
+   what the target of a note already is.
+ *
+ * An inset shadow rather than a background, because it has to layer over the
+ * annotated wash instead of replacing it. Two identical animations under two
+ * class names, alternated by the caller, because re-running an animation on
+ * an element that already carries it does nothing - and focusing the same
+ * note twice is the ordinary case.
+ *
+ * 2.6s, the duration v1 used. Appearance here is prototype, like everything
+ * else on this surface. */
+@keyframes lucid-focus-a {
+  0%, 100% { box-shadow: inset 0 0 0 9999px rgba(37, 99, 235, 0); }
+  50% { box-shadow: inset 0 0 0 9999px rgba(37, 99, 235, 0.2); }
+}
+@keyframes lucid-focus-b {
+  0%, 100% { box-shadow: inset 0 0 0 9999px rgba(37, 99, 235, 0); }
+  50% { box-shadow: inset 0 0 0 9999px rgba(37, 99, 235, 0.2); }
+}
+[${ELEMENT_ATTR}].lucid-focus-a { animation: lucid-focus-a 2.6s ease-in-out 1 !important; }
+[${ELEMENT_ATTR}].lucid-focus-b { animation: lucid-focus-b 2.6s ease-in-out 1 !important; }
+/* Still says where it went, without moving anything. */
+@media (prefers-reduced-motion: reduce) {
+  [${ELEMENT_ATTR}].lucid-focus-a,
+  [${ELEMENT_ATTR}].lucid-focus-b {
+    animation: none !important;
+    outline: 3px solid #2563eb !important;
+    outline-offset: 2px !important;
+  }
+}
 `;
 
 /** The injected script, as source. It runs inside the frame, where lucid's
@@ -527,6 +558,52 @@ const script = (artifactId: string, version: number, author: string): string => 
         window.getSelection() && window.getSelection().removeAllRanges();
         paint();
         post();
+      }
+      return;
+    }
+
+    // Go to what a note points at (RFC/#178), following v1's rule.
+    //
+    // The rule that matters is the first branch: a target already on screen
+    // is NOT scrolled to. Moving the page under a reader who is already
+    // looking at the thing is the failure this exists to avoid, and it is
+    // the one every implementation gets wrong. Off screen, it centres.
+    if (m.kind === "focus" && Array.isArray(m.ids)) {
+      // A note can cover several elements. All of them light; the first one
+      // that exists is what the page travels to, because only one thing can
+      // be centred.
+      var hits = [];
+      for (var f = 0; f < m.ids.length; f++) {
+        var hit = document.querySelector("[" + ATTR + '="' + String(m.ids[f]) + '"]');
+        if (hit) hits.push(hit);
+      }
+      var target = hits.length > 0 ? hits[0] : null;
+      // Nothing to go to. The page is told so it can say where the note
+      // went instead of leaving the click looking broken.
+      if (!target) {
+        parent.postMessage({ source: SOURCE, kind: "focus-missed" }, "*");
+        return;
+      }
+      var fr = target.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      // Fully in view, both edges. A block half off the bottom is not
+      // "already where you are looking".
+      var whole = fr.top >= 0 && fr.bottom <= vh;
+      if (!whole) target.scrollIntoView({ block: "center", inline: "nearest" });
+      // Alternated, because re-adding a class an element already carries
+      // does not restart its animation.
+      var was = target.classList.contains("lucid-focus-a");
+      var lit = was ? "lucid-focus-b" : "lucid-focus-a";
+      for (var g = 0; g < hits.length; g++) {
+        hits[g].classList.remove("lucid-focus-a", "lucid-focus-b");
+        // Forces the removal to land before the other class is added.
+        void hits[g].offsetWidth;
+        hits[g].classList.add(lit);
+        (function (el, cls) {
+          setTimeout(function () {
+            el.classList.remove(cls);
+          }, 2600);
+        })(hits[g], lit);
       }
       return;
     }

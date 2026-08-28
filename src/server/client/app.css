@@ -765,6 +765,22 @@ body {
   align-self: stretch;
 }
 
+/* A note that still points somewhere takes you there. Only these are
+   interactive: a lost note has no target, and a note written against another
+   version would land in the wrong place rather than in none. */
+.note-card.goes {
+  cursor: pointer;
+}
+
+.note-card.goes:hover {
+  background: rgba(124, 58, 237, 0.18);
+}
+
+.note-card.goes:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .note-card.orphan {
   border-left-color: var(--error);
   background: rgba(220, 38, 38, 0.09);

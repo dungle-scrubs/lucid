@@ -179,13 +179,17 @@ const Combinations = (): React.ReactElement => (
   </Section>
 );
 
-/** The eight heads a note card can carry. */
+/** The eight heads a note card can carry.
+ *
+ * `goes` marks the ones that take you to what they point at. A note with no
+ * target does not, because there is nowhere to go. */
 const NOTE_CARDS: readonly {
   cls: string;
   head: string;
   note: string;
   spot: string;
   meaning: string;
+  goes?: boolean;
 }[] = [
   {
     cls: "pending",
@@ -204,6 +208,7 @@ const NOTE_CARDS: readonly {
   {
     cls: "sent",
     head: "sent · found again, exactly · v9",
+    goes: true,
     note: "expand on this",
     spot: "on “bun run lint”",
     meaning: "Certain. The words it pointed at are still there, unchanged.",
@@ -211,6 +216,7 @@ const NOTE_CARDS: readonly {
   {
     cls: "sent",
     head: "sent · found again, reworded · v9",
+    goes: true,
     note: "this is still unclear",
     spot: "on “the deterministic suite”",
     meaning: "Changed but matched. The passage was reworded and found anyway.",
@@ -218,6 +224,7 @@ const NOTE_CARDS: readonly {
   {
     cls: "sent",
     head: "sent · found by position · v9",
+    goes: true,
     note: "shorten this",
     spot: "on “five files, each answering”",
     meaning: "Matched without the words agreeing. A guess — worth checking.",
@@ -225,6 +232,7 @@ const NOTE_CARDS: readonly {
   {
     cls: "sent",
     head: "sent · found by path · v9",
+    goes: true,
     note: "wrong order",
     spot: "on “CONTEXT.md → AGENTS.md”",
     meaning: "Also matched without the words. #172 collapses this and the one above into one band.",
@@ -248,11 +256,11 @@ const NOTE_CARDS: readonly {
 const NoteCards = (): React.ReactElement => (
   <Section
     title="Notes, in the conversation"
-    blurb="Eight states, not the three usually on screen at once. Six of them are one question — how confident lucid is that the note still points where it did."
+    blurb="Eight states, not the three usually on screen at once. Six of them are one question — how confident lucid is that the note still points where it did. A note that still points somewhere takes you there when clicked; one that does not is inert, because there is nowhere to go."
   >
     {NOTE_CARDS.map((c) => (
       <Case key={c.head} name={c.head} classes={`.note-card.${c.cls}`} note={c.meaning}>
-        <div className={`note-card ${c.cls}`}>
+        <div className={`note-card ${c.cls}${c.goes === true ? " goes" : ""}`}>
           <span className="note-card-head">{c.head}</span>
           <span className="note-card-note">{c.note}</span>
           <span className="note-card-spot">{c.spot}</span>

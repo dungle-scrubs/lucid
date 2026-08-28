@@ -216,11 +216,22 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
  * note said and what it pointed at. Context rather than a prop because the
  * component is handed to assistant-ui, which does the rendering. */
 const Resolutions = React.createContext<
-  ReadonlyMap<string, { lost: boolean; later: boolean; how: string | null }>
+  ReadonlyMap<
+    string,
+    { lost: boolean; later: boolean; how: string | null; elementId: string | null }
+  >
 >(new Map());
+
+/** Go to what a note points at.
+ *
+ * Context for the same reason `Resolutions` is: the message component is
+ * handed to assistant-ui, which does the rendering, so nothing can be passed
+ * down as a prop. `null` while no document is on screen. */
+const FocusSpot = React.createContext<((ids: readonly string[]) => void) | null>(null);
 
 const Message = (): React.ReactElement => {
   const resolutions = React.useContext(Resolutions);
+  const focusSpot = React.useContext(FocusSpot);
   const resolutionFor = (note: string, snippet: string) =>
     resolutions.get(`${note}\u0000${snippet}`);
   // A tool call is the agent working, not the agent talking. Rendered as a
@@ -250,16 +261,41 @@ const Message = (): React.ReactElement => {
           {b.notes.map((n) => {
             const spot = n.spots[0];
             const status = resolutionFor(n.note, spot?.snippet ?? "");
+            // Somewhere to go, and something to go there with. A lost note
+            // and a note written against another version both stay inert:
+            // there is no target, and scrolling somewhere arbitrary is worse
+            // than not moving.
+            // Every spot the note covers, in the order they were written.
+            // A note can point at several elements and all of them are part
+            // of what it is about.
+            const targets = n.spots
+              .map((sp) => resolutionFor(n.note, sp.snippet)?.elementId ?? null)
+              .filter((id): id is string => id !== null);
+            const canGo = focusSpot !== null && targets.length > 0;
             return (
               <div
-                className={
-                  status?.lost === true
-                    ? "note-card orphan"
-                    : status?.later === true
-                      ? "note-card later"
-                      : "note-card sent"
-                }
+                className={[
+                  "note-card",
+                  status?.lost === true ? "orphan" : status?.later === true ? "later" : "sent",
+                  canGo ? "goes" : "",
+                ]
+                  .filter((c) => c !== "")
+                  .join(" ")}
                 key={`${n.note}:${spot?.id ?? ""}`}
+                {...(canGo
+                  ? {
+                      role: "button" as const,
+                      tabIndex: 0,
+                      title: "Go to what this note is about",
+                      onClick: () => focusSpot?.(targets),
+                      onKeyDown: (e: React.KeyboardEvent) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          focusSpot?.(targets);
+                        }
+                      },
+                    }
+                  : {})}
               >
                 <span className="note-card-head">
                   {status?.later === true
@@ -520,6 +556,7 @@ const DocumentFrame = ({
   capture,
   snapshot,
   deselect,
+  focusSpot,
   onHotkey,
   onDirty,
   marked,
@@ -538,6 +575,7 @@ const DocumentFrame = ({
   >;
   /** Handed a way to drop the frame's selection, for backing out of a note. */
   deselect: React.MutableRefObject<(() => void) | null>;
+  focusSpot: React.MutableRefObject<((ids: readonly string[]) => void) | null>;
   /** A key the frame caught that means something to the whole page. */
   onHotkey: (which: "toggle-mode" | "send-queue") => void;
   /** The frame says when a person has changed something in it. */
@@ -689,12 +727,18 @@ const DocumentFrame = ({
         { source: FRAME_MESSAGE_SOURCE, kind: "deselect" },
         "*",
       );
+    focusSpot.current = (ids) =>
+      ref.current?.contentWindow?.postMessage(
+        { source: FRAME_MESSAGE_SOURCE, kind: "focus", ids: [...ids] },
+        "*",
+      );
     return () => {
       capture.current = null;
       snapshot.current = null;
       deselect.current = null;
+      focusSpot.current = null;
     };
-  }, [capture, snapshot, deselect]);
+  }, [capture, snapshot, deselect, focusSpot]);
 
   React.useEffect(() => {
     ref.current?.contentWindow?.postMessage(
@@ -873,6 +917,7 @@ const App = (): React.ReactElement => {
    * rather than in a panel at the bottom, away from what it is about. */
   const [selRect, setSelRect] = React.useState<SelectionRect | null>(null);
   const deselect = React.useRef<(() => void) | null>(null);
+  const focusSpot = React.useRef<((ids: readonly string[]) => void) | null>(null);
   /** What is typed, readable from a callback the frame holds. That callback
    * must keep its identity across keystrokes, so it cannot close over the
    * draft itself. */
@@ -1696,11 +1741,18 @@ const App = (): React.ReactElement => {
   /** Keyed the way the batch line looks a note up: what it said, and what
    * it pointed at. */
   const resolutions = React.useMemo(() => {
-    const m = new Map<string, { lost: boolean; later: boolean; how: string | null }>();
+    const m = new Map<
+      string,
+      { lost: boolean; later: boolean; how: string | null; elementId: string | null }
+    >();
     for (const a of anchored) {
       m.set(`${a.note}\u0000${a.snippet}`, {
         lost: a.elementId === null && a.why !== "later-version",
         later: a.why === "later-version",
+        // What the note points at in the version on screen. Already resolved
+        // - it is what decides the "found again, exactly" line below - so
+        // going there needs no second search.
+        elementId: a.elementId,
         how:
           a.how === null
             ? null
@@ -1762,379 +1814,396 @@ const App = (): React.ReactElement => {
     };
   })();
 
+  /** Handed to every note card. Refuses while an older version is pinned:
+   * the note's target was resolved against what is on screen, and jumping
+   * inside a version the note was not written against points at the wrong
+   * place rather than at nothing. */
+  const goToSpot = React.useCallback(
+    (ids: readonly string[]) => {
+      if (pinnedOld) return;
+      focusSpot.current?.(ids);
+    },
+    [pinnedOld],
+  );
+
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <Resolutions.Provider value={resolutions}>
-        <header className="head">
-          <span className="id">{conversationId === "" ? "no conversation" : conversationId}</span>
-          {driver.harness === undefined ? null : (
-            <span className="driver">
-              {driver.harness}
-              {driver.model === undefined ? "" : ` · ${driver.model}`}
-              {driver.harnessVersion === undefined ? "" : ` · ${driver.harnessVersion}`}
-            </span>
-          )}
-          <span className="status">{status}</span>
-        </header>
-        {problem === null ? null : <div className="notice">{problem}</div>}
+        <FocusSpot.Provider value={goToSpot}>
+          <header className="head">
+            <span className="id">{conversationId === "" ? "no conversation" : conversationId}</span>
+            {driver.harness === undefined ? null : (
+              <span className="driver">
+                {driver.harness}
+                {driver.model === undefined ? "" : ` · ${driver.model}`}
+                {driver.harnessVersion === undefined ? "" : ` · ${driver.harnessVersion}`}
+              </span>
+            )}
+            <span className="status">{status}</span>
+          </header>
+          {problem === null ? null : <div className="notice">{problem}</div>}
 
-        <div className="panes">
-          {/* The document is the thing being worked on, so it gets the room
+          <div className="panes">
+            {/* The document is the thing being worked on, so it gets the room
             and the left side. The conversation is the margin note. */}
-          <div className="pane document">
-            {unknownArtifact !== null ? (
-              // A link naming an artifact this record does not hold. Said
-              // plainly, with the way on, rather than quietly showing a
-              // different document or rendering a blank frame.
-              <div className="empty doc-empty">
-                <p>This conversation has no artifact called “{unknownArtifact}”.</p>
-                {/* A conversation holds one artifact, so there is one thing
+            <div className="pane document">
+              {unknownArtifact !== null ? (
+                // A link naming an artifact this record does not hold. Said
+                // plainly, with the way on, rather than quietly showing a
+                // different document or rendering a blank frame.
+                <div className="empty doc-empty">
+                  <p>This conversation has no artifact called “{unknownArtifact}”.</p>
+                  {/* A conversation holds one artifact, so there is one thing
                     to offer and it is named. This is what the list used to
                     do for this page; without a replacement, saying the
                     artifact does not exist and offering nothing makes the
                     page a dead end. */}
-                {allArtifacts.length === 0 ? (
-                  <p>It has no artifact yet. Ask the agent for a document.</p>
-                ) : (
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={() => openArtifact((allArtifacts[0] as CatalogEntry).artifactId)}
-                  >
-                    Open “{displayName(allArtifacts[0] as CatalogEntry)}”
-                  </button>
-                )}
-              </div>
-            ) : doc === null ? (
-              <div className="empty doc-empty">
-                Nothing to mark up yet. Ask the agent for a document.
-              </div>
-            ) : (
-              <>
-                <div className="doc-head">
-                  <DocName
-                    artifactId={doc.artifactId}
-                    {...(allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title ===
-                    undefined
-                      ? {}
-                      : {
-                          title: allArtifacts.find((a) => a.artifactId === doc.artifactId)
-                            ?.title as string,
-                        })}
-                    onRename={rename}
-                  />
-                  {/* One version is a badge with nothing to open. More than
+                  {allArtifacts.length === 0 ? (
+                    <p>It has no artifact yet. Ask the agent for a document.</p>
+                  ) : (
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => openArtifact((allArtifacts[0] as CatalogEntry).artifactId)}
+                    >
+                      Open “{displayName(allArtifacts[0] as CatalogEntry)}”
+                    </button>
+                  )}
+                </div>
+              ) : doc === null ? (
+                <div className="empty doc-empty">
+                  Nothing to mark up yet. Ask the agent for a document.
+                </div>
+              ) : (
+                <>
+                  <div className="doc-head">
+                    <DocName
+                      artifactId={doc.artifactId}
+                      {...(allArtifacts.find((a) => a.artifactId === doc.artifactId)?.title ===
+                      undefined
+                        ? {}
+                        : {
+                            title: allArtifacts.find((a) => a.artifactId === doc.artifactId)
+                              ?.title as string,
+                          })}
+                      onRename={rename}
+                    />
+                    {/* One version is a badge with nothing to open. More than
                     one is a dropdown, newest first: a row of buttons does not
                     survive a hundred versions, which is what a long
                     conversation produces. A native select because it is the
                     affordance, and the visual treatment belongs to the design
                     pass rather than to this. */}
-                  {catalog === null || catalog.versions.length < 2 ? (
-                    <span className="doc-version">v{doc.version}</span>
-                  ) : (
-                    <select
-                      className={viewingOld ? "doc-version-pick old" : "doc-version-pick"}
-                      value={String(doc.version)}
-                      aria-label="Version"
-                      onChange={(e) => {
-                        const picked = Number.parseInt(e.target.value, 10);
-                        // Choosing the current version is choosing to follow
-                        // it, not to pin it there. Otherwise the newest
-                        // version arriving would leave you on a stale one
-                        // that the picker calls current.
-                        setPinned(picked === catalog.latest ? null : picked);
-                      }}
-                    >
-                      {[...catalog.versions].reverse().map((v) => (
-                        <option key={v} value={String(v)}>
-                          v{v}
-                          {catalog.authors?.[v] === "human" ? " · saved by you" : " · by the agent"}
-                          {v === catalog.latest ? " · current" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {pinned === null ? null : (
-                    <button type="button" className="v latest" onClick={() => setPinned(null)}>
-                      {viewingOld ? "Back to current" : "Follow newest"}
-                    </button>
-                  )}
-                  {pinnedOld ? (
-                    <button
-                      type="button"
-                      className="v restore"
-                      onClick={() => setConfirmRestore(doc.version)}
-                      title={`Make v${doc.version} the current version`}
-                    >
-                      Restore this version
-                    </button>
-                  ) : null}
-                  <span className="modes">
-                    <button
-                      type="button"
-                      className={mode === "use" ? "m current" : "m"}
-                      onClick={() => setMode("use")}
-                      disabled={pinnedOld}
-                      title="Tick boxes, fill fields, and edit text (⌥⌫)"
-                    >
-                      Use
-                    </button>
-                    <button
-                      type="button"
-                      className={mode === "markup" ? "m current" : "m"}
-                      onClick={() => setMode("markup")}
-                      disabled={pinnedOld}
-                      title="Click parts of the document to write notes about them (⌥⌫)"
-                    >
-                      Mark up
-                    </button>
-                  </span>
-                </div>
+                    {catalog === null || catalog.versions.length < 2 ? (
+                      <span className="doc-version">v{doc.version}</span>
+                    ) : (
+                      <select
+                        className={viewingOld ? "doc-version-pick old" : "doc-version-pick"}
+                        value={String(doc.version)}
+                        aria-label="Version"
+                        onChange={(e) => {
+                          const picked = Number.parseInt(e.target.value, 10);
+                          // Choosing the current version is choosing to follow
+                          // it, not to pin it there. Otherwise the newest
+                          // version arriving would leave you on a stale one
+                          // that the picker calls current.
+                          setPinned(picked === catalog.latest ? null : picked);
+                        }}
+                      >
+                        {[...catalog.versions].reverse().map((v) => (
+                          <option key={v} value={String(v)}>
+                            v{v}
+                            {catalog.authors?.[v] === "human"
+                              ? " · saved by you"
+                              : " · by the agent"}
+                            {v === catalog.latest ? " · current" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {pinned === null ? null : (
+                      <button type="button" className="v latest" onClick={() => setPinned(null)}>
+                        {viewingOld ? "Back to current" : "Follow newest"}
+                      </button>
+                    )}
+                    {pinnedOld ? (
+                      <button
+                        type="button"
+                        className="v restore"
+                        onClick={() => setConfirmRestore(doc.version)}
+                        title={`Make v${doc.version} the current version`}
+                      >
+                        Restore this version
+                      </button>
+                    ) : null}
+                    <span className="modes">
+                      <button
+                        type="button"
+                        className={mode === "use" ? "m current" : "m"}
+                        onClick={() => setMode("use")}
+                        disabled={pinnedOld}
+                        title="Tick boxes, fill fields, and edit text (⌥⌫)"
+                      >
+                        Use
+                      </button>
+                      <button
+                        type="button"
+                        className={mode === "markup" ? "m current" : "m"}
+                        onClick={() => setMode("markup")}
+                        disabled={pinnedOld}
+                        title="Click parts of the document to write notes about them (⌥⌫)"
+                      >
+                        Mark up
+                      </button>
+                    </span>
+                  </div>
 
-                {waiting === null || waiting <= doc.version ? null : (
-                  <div className="doc-waiting">
-                    Version {waiting} has arrived.{" "}
-                    {/* Going there replaces the whole frame, so an unsaved
+                  {waiting === null || waiting <= doc.version ? null : (
+                    <div className="doc-waiting">
+                      Version {waiting} has arrived.{" "}
+                      {/* Going there replaces the whole frame, so an unsaved
                       edit in it would go with no warning. Saving first is
                       offered because it works: the save lands on top of the
                       newer version and follows it afterwards. */}
-                    {edited ? (
-                      <>
-                        <button type="button" onClick={() => void save()} disabled={saving}>
-                          {saving ? "Saving…" : "save mine first"}
-                        </button>{" "}
-                        <button type="button" onClick={() => setConfirmDiscard(waiting)}>
-                          discard mine and show it
-                        </button>
-                      </>
-                    ) : (
-                      /* Follow rather than pin, for the reason the save path
+                      {edited ? (
+                        <>
+                          <button type="button" onClick={() => void save()} disabled={saving}>
+                            {saving ? "Saving…" : "save mine first"}
+                          </button>{" "}
+                          <button type="button" onClick={() => setConfirmDiscard(waiting)}>
+                            discard mine and show it
+                          </button>
+                        </>
+                      ) : (
+                        /* Follow rather than pin, for the reason the save path
                         gives: pinning to the newest version now means being
                         read-only against the one after it. */
-                      <button type="button" onClick={goToNewest}>
-                        show it
-                      </button>
-                    )}
-                  </div>
-                )}
+                        <button type="button" onClick={goToNewest}>
+                          show it
+                        </button>
+                      )}
+                    </div>
+                  )}
 
-                {/* The frame and the note box share one positioned box, so
+                  {/* The frame and the note box share one positioned box, so
                   a rect in the frame's own viewport is also a position on
                   this page and the anchor needs no arithmetic. */}
-                <div className="doc-stage">
-                  <DocumentFrame
-                    doc={doc}
-                    onSelection={onSelected}
-                    capture={capture}
-                    snapshot={snapshot}
-                    deselect={deselect}
-                    onHotkey={onHotkey}
-                    onDirty={() => setEdited(true)}
-                    marked={[
-                      ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
-                      ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
-                    ]}
-                    mode={mode}
-                    readOnly={pinnedOld}
-                  />
+                  <div className="doc-stage">
+                    <DocumentFrame
+                      doc={doc}
+                      onSelection={onSelected}
+                      capture={capture}
+                      snapshot={snapshot}
+                      deselect={deselect}
+                      focusSpot={focusSpot}
+                      onHotkey={onHotkey}
+                      onDirty={() => setEdited(true)}
+                      marked={[
+                        ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
+                        ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
+                      ]}
+                      mode={mode}
+                      readOnly={pinnedOld}
+                    />
 
-                  {/* Written where you clicked. The box used to be a panel at
+                    {/* Written where you clicked. The box used to be a panel at
                     the bottom of the pane, so the thing being written about
                     and the writing were at opposite ends of the screen. */}
-                  <Popover.Root
-                    open={selection.length > 0 && selRect !== null}
-                    // Whether it is open is a fact about the selection, so
-                    // the selection is the only thing that decides it. The
-                    // library asked to close on any click outside and took
-                    // a half-written note with it; refusing here means the
-                    // ways out are Cancel, Escape, and Add note.
-                    onOpenChange={() => {}}
-                  >
-                    <Popover.Anchor asChild>
-                      <div
-                        className="sel-anchor"
-                        style={
-                          selRect === null
-                            ? { display: "none" }
-                            : {
-                                left: `${selRect.x}px`,
-                                top: `${selRect.y}px`,
-                                width: `${selRect.width}px`,
-                                height: `${selRect.height}px`,
-                              }
-                        }
-                      />
-                    </Popover.Anchor>
-                    <Popover.Portal>
-                      <Popover.Content
-                        className="note-pop"
-                        // Under the line, not beside it. A block in a
-                        // document is as wide as the column, so there is
-                        // never room to the side — Radix said so, reporting
-                        // 128px available, and the box hung off the screen.
-                        // Below, it flips above near the bottom and slides
-                        // sideways to stay in view.
-                        side="bottom"
-                        align="start"
-                        // Stepped in from the left edge of what it points at.
-                        // Flush, its edge lined up with the paragraph's and
-                        // the two read as one block.
-                        alignOffset={28}
-                        sideOffset={8}
-                        collisionPadding={12}
-                        // Only Escape and the buttons close it. A click into
-                        // the document is how a second spot is added, and it
-                        // must not throw away what is already typed.
-                        onInteractOutside={(e) => e.preventDefault()}
-                        onFocusOutside={(e) => e.preventDefault()}
-                        onEscapeKeyDown={cancelNote}
-                        onOpenAutoFocus={(e) => {
-                          e.preventDefault();
-                          noteBox.current?.focus();
-                        }}
-                      >
-                        <div className="note-pop-head">
-                          {notes.length >= NOTE_QUEUE_MAX
-                            ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
-                            : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
-                        </div>
-                        <textarea
-                          ref={noteBox}
-                          value={draft}
-                          onChange={(e) => setDraft(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                              e.preventDefault();
-                              void addNote();
-                            }
-                          }}
-                          placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
-                          rows={3}
+                    <Popover.Root
+                      open={selection.length > 0 && selRect !== null}
+                      // Whether it is open is a fact about the selection, so
+                      // the selection is the only thing that decides it. The
+                      // library asked to close on any click outside and took
+                      // a half-written note with it; refusing here means the
+                      // ways out are Cancel, Escape, and Add note.
+                      onOpenChange={() => {}}
+                    >
+                      <Popover.Anchor asChild>
+                        <div
+                          className="sel-anchor"
+                          style={
+                            selRect === null
+                              ? { display: "none" }
+                              : {
+                                  left: `${selRect.x}px`,
+                                  top: `${selRect.y}px`,
+                                  width: `${selRect.width}px`,
+                                  height: `${selRect.height}px`,
+                                }
+                          }
                         />
-                        <div className="note-pop-actions">
-                          <button type="button" className="ghost" onClick={cancelNote}>
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            className="primary"
-                            onClick={() => void addNote()}
-                            disabled={draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX}
-                          >
-                            Add note
-                          </button>
-                        </div>
-                        <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
-                      </Popover.Content>
-                    </Popover.Portal>
-                  </Popover.Root>
-                </div>
+                      </Popover.Anchor>
+                      <Popover.Portal>
+                        <Popover.Content
+                          className="note-pop"
+                          // Under the line, not beside it. A block in a
+                          // document is as wide as the column, so there is
+                          // never room to the side — Radix said so, reporting
+                          // 128px available, and the box hung off the screen.
+                          // Below, it flips above near the bottom and slides
+                          // sideways to stay in view.
+                          side="bottom"
+                          align="start"
+                          // Stepped in from the left edge of what it points at.
+                          // Flush, its edge lined up with the paragraph's and
+                          // the two read as one block.
+                          alignOffset={28}
+                          sideOffset={8}
+                          collisionPadding={12}
+                          // Only Escape and the buttons close it. A click into
+                          // the document is how a second spot is added, and it
+                          // must not throw away what is already typed.
+                          onInteractOutside={(e) => e.preventDefault()}
+                          onFocusOutside={(e) => e.preventDefault()}
+                          onEscapeKeyDown={cancelNote}
+                          onOpenAutoFocus={(e) => {
+                            e.preventDefault();
+                            noteBox.current?.focus();
+                          }}
+                        >
+                          <div className="note-pop-head">
+                            {notes.length >= NOTE_QUEUE_MAX
+                              ? `${NOTE_QUEUE_MAX} notes queued — send them before writing another`
+                              : `${selection.length} selected${selection.length > 1 ? " — ⌘-click adds more" : ""}`}
+                          </div>
+                          <textarea
+                            ref={noteBox}
+                            value={draft}
+                            onChange={(e) => setDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                e.preventDefault();
+                                void addNote();
+                              }
+                            }}
+                            placeholder={`What about ${selection.length === 1 ? "this" : `these ${selection.length}`}? (⌘⏎ to add)`}
+                            rows={3}
+                          />
+                          <div className="note-pop-actions">
+                            <button type="button" className="ghost" onClick={cancelNote}>
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className="primary"
+                              onClick={() => void addNote()}
+                              disabled={draft.trim() === "" || notes.length >= NOTE_QUEUE_MAX}
+                            >
+                              Add note
+                            </button>
+                          </div>
+                          <Popover.Arrow className="note-pop-arrow" width={12} height={6} />
+                        </Popover.Content>
+                      </Popover.Portal>
+                    </Popover.Root>
+                  </div>
 
-                {/* Everything below here has a fixed height and never scrolls
+                  {/* Everything below here has a fixed height and never scrolls
                   out of view. The actions were reachable only by scrolling a
                   panel that grew with the notes in it. */}
-                {/* A confirmation, because a restore puts a new version in
+                  {/* A confirmation, because a restore puts a new version in
                   front of the agent. It says the undo out loud: someone
                   deciding whether to restore is deciding whether it is
                   reversible, and here it is - permanently, because nothing
                   is overwritten. */}
-                {confirmDiscard === null ? null : (
-                  <div className="confirm">
-                    <span>
-                      Show v{confirmDiscard} and lose the change you have not saved? Saving instead
-                      keeps it: it lands on top of v{confirmDiscard} as the next version, and the
-                      agent is told what it was based on.
-                    </span>
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={() => {
-                        setEdited(false);
-                        setConfirmDiscard(null);
-                        goToNewest();
-                      }}
-                    >
-                      Discard and show it
-                    </button>
-                    <button type="button" onClick={() => setConfirmDiscard(null)}>
-                      Cancel
-                    </button>
+                  {confirmDiscard === null ? null : (
+                    <div className="confirm">
+                      <span>
+                        Show v{confirmDiscard} and lose the change you have not saved? Saving
+                        instead keeps it: it lands on top of v{confirmDiscard} as the next version,
+                        and the agent is told what it was based on.
+                      </span>
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => {
+                          setEdited(false);
+                          setConfirmDiscard(null);
+                          goToNewest();
+                        }}
+                      >
+                        Discard and show it
+                      </button>
+                      <button type="button" onClick={() => setConfirmDiscard(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  {confirmRestore === null ? null : (
+                    <div className="confirm">
+                      <span>
+                        Make v{confirmRestore} the current version? It is copied to the end of the
+                        list as v{(catalog?.latest ?? doc.version) + 1}. Nothing is deleted, and
+                        going back is restoring v{catalog?.latest ?? doc.version} the same way.
+                      </span>
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => void restore()}
+                        disabled={restoring}
+                      >
+                        {restoring ? "Restoring…" : "Restore"}
+                      </button>
+                      <button type="button" onClick={() => setConfirmRestore(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="doc-panel">
+                    <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
+
+                    <div className="note-actions">
+                      <button
+                        type="button"
+                        onClick={() => void save()}
+                        disabled={!edited || saving || pinnedOld}
+                        title="Double-click text in the document to edit it; controls work as they are"
+                      >
+                        {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
+                      </button>
+                    </div>
                   </div>
-                )}
+                </>
+              )}
+            </div>
 
-                {confirmRestore === null ? null : (
-                  <div className="confirm">
-                    <span>
-                      Make v{confirmRestore} the current version? It is copied to the end of the
-                      list as v{(catalog?.latest ?? doc.version) + 1}. Nothing is deleted, and going
-                      back is restoring v{catalog?.latest ?? doc.version} the same way.
-                    </span>
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={() => void restore()}
-                      disabled={restoring}
-                    >
-                      {restoring ? "Restoring…" : "Restore"}
-                    </button>
-                    <button type="button" onClick={() => setConfirmRestore(null)}>
-                      Cancel
-                    </button>
-                  </div>
-                )}
-
-                <div className="doc-panel">
-                  <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
-
-                  <div className="note-actions">
-                    <button
-                      type="button"
-                      onClick={() => void save()}
-                      disabled={!edited || saving || pinnedOld}
-                      title="Double-click text in the document to edit it; controls work as they are"
-                    >
-                      {saving ? "Saving…" : edited ? "Save changes" : "Saved"}
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* An `hr`, because that is what a separator is. It carries its
+            {/* An `hr`, because that is what a separator is. It carries its
               width so a reader that cannot see the drag is still told what
               the arrow keys just did. */}
-          <hr
-            className={dragging ? "pane-grip dragging" : "pane-grip"}
-            onPointerDown={startDrag}
-            onKeyDown={nudgeDrag}
-            tabIndex={0}
-            aria-orientation="vertical"
-            aria-label="Resize the conversation"
-            aria-valuemin={CONVERSATION_MIN}
-            aria-valuemax={CONVERSATION_MAX}
-            aria-valuenow={convWidth ?? undefined}
-          />
-
-          <div
-            className="pane conversation"
-            style={
-              convWidth === null
-                ? undefined
-                : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
-            }
-          >
-            <Thread
-              pending={notes}
-              onSendNotes={() => void sendNotes()}
-              onDiscardNotes={() => setNotes([])}
-              sending={sending}
-              activity={activity}
-              now={now}
-              lastChange={lastChange}
+            <hr
+              className={dragging ? "pane-grip dragging" : "pane-grip"}
+              onPointerDown={startDrag}
+              onKeyDown={nudgeDrag}
+              tabIndex={0}
+              aria-orientation="vertical"
+              aria-label="Resize the conversation"
+              aria-valuemin={CONVERSATION_MIN}
+              aria-valuemax={CONVERSATION_MAX}
+              aria-valuenow={convWidth ?? undefined}
             />
+
+            <div
+              className="pane conversation"
+              style={
+                convWidth === null
+                  ? undefined
+                  : ({ "--conversation-width": `${convWidth}px` } as React.CSSProperties)
+              }
+            >
+              <Thread
+                pending={notes}
+                onSendNotes={() => void sendNotes()}
+                onDiscardNotes={() => setNotes([])}
+                sending={sending}
+                activity={activity}
+                now={now}
+                lastChange={lastChange}
+              />
+            </div>
           </div>
-        </div>
+        </FocusSpot.Provider>
       </Resolutions.Provider>
     </AssistantRuntimeProvider>
   );
