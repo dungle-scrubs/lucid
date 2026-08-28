@@ -273,7 +273,7 @@ const NoteCards = (): React.ReactElement => (
 const Messages = (): React.ReactElement => (
   <Section
     title="The transcript"
-    blurb="Four variants. A refusal is not one of them — it arrives as EventKind.error and renders as an ordinary agent message, which is the defect #176 records."
+    blurb="Five kinds of row. A refusal is the fifth - magenta, because it is the substrate saying no rather than anybody talking."
   >
     <Case name="You" classes=".msg.user" note="What you sent.">
       <div className="msg user">
@@ -311,12 +311,13 @@ const Messages = (): React.ReactElement => (
     </Case>
     <Case
       name="A refusal"
-      classes=".msg.agent"
-      broken
-      note="lucid telling the agent no. Identical to the agent speaking, because the client reads Line.event once and compares it only to “tool”."
+      classes=".msg.refusal"
+      note="lucid telling the agent no. The fifth kind: magenta, never alongside cyan in the same row."
     >
-      <div className="msg agent">
-        <span className="who">agent</span>
+      <div className="msg refusal">
+        <div className="refusal-head">
+          <span className="refusal-kind">lucid refused</span>
+        </div>
         <div className="body">
           <p>
             artifact onboarding-checklist refused: E-PATCH-02 patch-anchor-not-found: edit 0 found
@@ -926,7 +927,7 @@ const Page = (): React.ReactElement => (
     <style dangerouslySetInnerHTML={{ __html: STYLE }} />
     <style>
       {
-        ".lucid-range-inline{background:rgba(251,191,36,.28);outline:1px solid #b45309;border-radius:2px}"
+        ".lucid-range-inline{background:var(--color-accent-200);outline:1.5px solid var(--color-accent);border-radius:3px}"
       }
     </style>
     <header className="ref-head">

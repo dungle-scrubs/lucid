@@ -18,6 +18,10 @@ export interface Msg {
   readonly text: string;
   /** A tool call: the agent working, not the agent talking. */
   readonly tool?: boolean;
+  /** lucid refusing the agent - an error or a limit event, the substrate
+   * saying no. The fifth transcript kind: magenta, never mistaken for the
+   * agent speaking. */
+  readonly refusal?: boolean;
   /** Something that happened rather than something anyone said. */
   readonly note?: boolean;
   /** Where this line sits in the record. Used to place a saved version at the

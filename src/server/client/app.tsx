@@ -49,7 +49,7 @@ import {
   sha256Hex,
 } from "./anchor.js";
 import { isModeToggle, isQueueSend } from "./hotkeys.js";
-import { CaretDownDuotone, PencilDuotone } from "./icons.js";
+import { CaretDownDuotone, PencilDuotone, ProhibitDuotone } from "./icons.js";
 import { ELEMENT_ID, FRAME_MESSAGE_SOURCE, instrumentArtifact } from "./instrument.js";
 import {
   CONVERSATION_MAX,
@@ -221,6 +221,7 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
       role: l.kind === "agent" ? ("assistant" as const) : ("user" as const),
       text: l.text,
       ...(l.event === "tool" ? { tool: true } : {}),
+      ...(l.event === "error" || l.event === "limit" ? { refusal: true } : {}),
       ...(l.batch === undefined ? {} : { sentBatch: l.batch }),
     }));
 
@@ -243,6 +244,37 @@ const Resolutions = React.createContext<
  * handed to assistant-ui, which does the rendering, so nothing can be passed
  * down as a prop. `null` while no document is on screen. */
 const FocusSpot = React.createContext<((ids: readonly string[]) => void) | null>(null);
+
+/** The anchoring bands: how confidently a sent note still points where it
+ * did (handoff, "Anchoring bands").
+ *
+ * Three 5x9px bars - accent filled, accent-300 outline empty - read at a
+ * glance what the head wording used to spell out. Lost and not-on-this-
+ * version are shapes instead: a grey bar and a dashed outline. A fact about
+ * history, never an error, so nothing here is magenta. */
+const Bands = ({
+  how,
+  lost,
+  later,
+}: {
+  how: string | null;
+  lost: boolean;
+  later: boolean;
+}): React.ReactElement | null => {
+  if (lost) return <span className="bands lost" aria-hidden="true" />;
+  if (later) return <span className="bands later" aria-hidden="true" />;
+  // Made against the version on screen, or found verbatim: still exact.
+  // Reworded but matched: two. Matched without the words agreeing - by
+  // position or by path - one bar and a label that says to check it.
+  const filled = how === null || how === "exact" ? 3 : how === "approximate" ? 2 : 1;
+  return (
+    <span className="bands" aria-hidden="true">
+      {[1, 2, 3].map((n) => (
+        <span key={n} className={n <= filled ? "b on" : "b"} />
+      ))}
+    </span>
+  );
+};
 
 const Message = (): React.ReactElement => {
   const resolutions = React.useContext(Resolutions);
@@ -287,6 +319,24 @@ const Message = (): React.ReactElement => {
               .map((sp) => resolutionFor(n.note, sp.snippet)?.elementId ?? null)
               .filter((id): id is string => id !== null);
             const canGo = focusSpot !== null && targets.length > 0;
+            // The band reads off the same resolution the travel rule does.
+            // A note made against the version on screen resolves to nothing
+            // special - which is the exact case, three bars. No entry at
+            // all means the resolutions have not landed yet: no band, no
+            // claim, rather than a guess dressed as a fact.
+            const how = status === undefined ? undefined : status.how;
+            const state =
+              status === undefined
+                ? `sent · v${b.version}`
+                : status.lost === true
+                  ? "lost · nothing left to point at"
+                  : status.later === true
+                    ? "not on this version"
+                    : how === "approximate"
+                      ? "reworded, found anyway"
+                      : how === "position" || how === "css"
+                        ? "a guess · worth checking"
+                        : "still exact";
             return (
               <div
                 className={[
@@ -313,18 +363,16 @@ const Message = (): React.ReactElement => {
                   : {})}
               >
                 <span className="note-card-head">
-                  {status?.later === true
-                    ? `written against v${b.version} · not on this one`
-                    : status?.lost === true
-                      ? `lost its target · from v${b.version}`
-                      : status === undefined || status.how === null
-                        ? `sent · v${b.version}`
-                        : `sent · ${status.how} · v${b.version}`}
+                  <span className="note-card-kind">Your note</span>
+                  {status === undefined ? null : (
+                    <Bands how={how ?? null} lost={status.lost} later={status.later} />
+                  )}
+                  <span className="note-card-state">{state}</span>
+                </span>
+                <span className="note-card-quote">
+                  {n.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
                 </span>
                 <span className="note-card-note">{n.note}</span>
-                <span className="note-card-spot">
-                  on {n.spots.map((sp) => `“${sp.snippet.slice(0, 40)}”`).join(", ")}
-                </span>
               </div>
             );
           })}
@@ -337,12 +385,37 @@ const Message = (): React.ReactElement => {
     const pn = one.pendingNote;
     return (
       <MessagePrimitive.Root>
+        {/* Yours until it is sent: the accent rule and the word queued say
+            whose it is and that nothing has left the page yet. */}
         <div className="note-card pending">
-          <span className="note-card-head">not sent</span>
-          <span className="note-card-note">{pn.note}</span>
-          <span className="note-card-spot">
-            on {pn.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
+          <span className="note-card-head">
+            <span className="note-card-kind">Your note</span>
+            <span className="note-card-state">queued · still yours to change</span>
           </span>
+          <span className="note-card-quote">
+            {pn.spots.map((sp) => `“${sp.snippet.slice(0, 44)}”`).join(", ")}
+          </span>
+          <span className="note-card-note">{pn.note}</span>
+        </div>
+      </MessagePrimitive.Root>
+    );
+  }
+
+  if (one?.refusal === true) {
+    // The substrate saying no, which is why the document did not change.
+    // Magenta and unmistakable, never alongside cyan in the same row: this
+    // is the one transcript kind that is not anybody talking. The terminal
+    // view prefixes the reason with a cross or a bang; the row already
+    // names who refused, so the prefix goes.
+    const said = one.text.replace(/^([✗!])\s+/, "");
+    return (
+      <MessagePrimitive.Root>
+        <div className="msg refusal">
+          <div className="refusal-head">
+            <ProhibitDuotone size={12} />
+            <span className="refusal-kind">lucid refused</span>
+          </div>
+          <div className="body">{said}</div>
         </div>
       </MessagePrimitive.Root>
     );
@@ -369,9 +442,10 @@ const Message = (): React.ReactElement => {
           </div>
         </div>
       </MessagePrimitive.If>
+      {/* No label: the side says whose it is. Yours is the bubble on the
+          right; the agent's is the open text on the left. */}
       <MessagePrimitive.If assistant>
         <div className="msg agent">
-          <span className="who">agent</span>
           <div className="body">
             <MessagePrimitive.Parts />
           </div>
@@ -646,7 +720,7 @@ const DocumentFrame = ({
   onOffscreen,
   onHotkey,
   onDirty,
-  marked,
+  noteCounts,
   mode,
   readOnly,
 }: {
@@ -674,9 +748,10 @@ const DocumentFrame = ({
   onHotkey: (which: "toggle-mode" | "send-queue") => void;
   /** The frame says when a person has changed something in it. */
   onDirty: () => void;
-  /** Spots that already carry a note, marked in the document while the
-   * batch is being composed. */
-  marked: readonly string[];
+  /** How many notes each block has carried, sent or queued. Drives the
+   * count chip - the one persistent mark - so the frame is told counts,
+   * not just presence: the chip is a tally, not a flag. */
+  noteCounts: ReadonlyMap<string, number>;
   mode: "edit" | "annotate";
   /** A version that is not the current one. Neither editable nor markable
    * (RFC-07 R6, R7). Not a third mode: the mode still stands, and applies
@@ -907,10 +982,10 @@ const DocumentFrame = ({
 
   React.useEffect(() => {
     ref.current?.contentWindow?.postMessage(
-      { source: FRAME_MESSAGE_SOURCE, kind: "mark", ids: [...marked] },
+      { source: FRAME_MESSAGE_SOURCE, kind: "mark", counts: Object.fromEntries(noteCounts) },
       "*",
     );
-  }, [marked]);
+  }, [noteCounts]);
 
   React.useEffect(() => {
     // Sent on a timer as well as on change: the frame is replaced whenever
@@ -2273,6 +2348,27 @@ const App = (): React.ReactElement => {
    * the page is in and what the next act is. */
   /** Keyed the way the batch line looks a note up: what it said, and what
    * it pointed at. */
+  /** The count chip's data: every note each block has carried, answered or
+   * not (handoff, "State needed": noteCountByBlock). The record hands the
+   * page notes, not counts - sent ones as anchors against the version on
+   * screen, queued ones as the batch being composed - so the tally is
+   * derived here, client-side, from what the page already holds. A note
+   * pointing at the same block twice counts once for that block; the chip
+   * answers "how many notes", not "how many spots". */
+  const noteCountByBlock = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    const seen = new Set<string>();
+    const add = (id: string, by: string): void => {
+      const key = `${by}\u0000${id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    };
+    for (const a of anchored) if (a.elementId !== null) add(a.elementId, a.note);
+    for (const n of notes) for (const sp of n.spots) add(sp.id, n.note);
+    return counts;
+  }, [anchored, notes]);
+
   const resolutions = React.useMemo(() => {
     const m = new Map<
       string,
@@ -2661,10 +2757,7 @@ const App = (): React.ReactElement => {
                         onOffscreen={setOffscreenChanges}
                         onHotkey={onHotkey}
                         onDirty={() => setEdited(true)}
-                        marked={[
-                          ...notes.flatMap((n) => n.spots.map((sp) => sp.id)),
-                          ...anchored.flatMap((a) => (a.elementId === null ? [] : [a.elementId])),
-                        ]}
+                        noteCounts={noteCountByBlock}
                         mode={mode}
                         readOnly={pinnedOld}
                       />

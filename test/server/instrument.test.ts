@@ -165,6 +165,15 @@ describe("what lucid added is not part of what gets saved", () => {
     expect(out).toContain('"lucid-hover", "lucid-selected", "lucid-noted", "lucid-edited"');
   });
 
+  test("the count chip's attribute goes back out with the rest of lucid's", () => {
+    // The chip is drawn from data-lucid-count, so a save that left the
+    // attribute behind would ship a count the next version rendered as a
+    // chip nobody asked for.
+    const out = instrumentArtifact(DOC, "doc-1", 1);
+    expect(out).toContain("removeAttribute(COUNT_ATTR)");
+    expect(out).toContain('var COUNT_ATTR = "data-lucid-count"');
+  });
+
   test("a control's state is written out from the property, not the attribute", () => {
     const out = instrumentArtifact(DOC, "doc-1", 1);
     // A ticked box changes `checked` on the element, not the attribute, so
@@ -315,35 +324,47 @@ describe("no focus rings", () => {
     expect(rule).not.toContain("!important");
   });
 
-  test("the block holding the caret is tinted, not ringed", () => {
-    // Which block you are typing in still has to be visible. The tint says
-    // it without drawing the thing this change is about.
-    //
-    // Laid over the block's own ground rather than replacing it. As a
-    // `background` this erased whatever colour the agent gave the block, so
-    // putting a caret in a highlighted paragraph appeared to delete the
-    // highlight. Same tint, same intent, composed instead of substituted.
+  test("the block holding the caret takes the ink outline on a paper fill", () => {
+    // Which block you are typing in has to be visible, and the design says
+    // how: a 1.5px ink outline over a paper fill, with a cyan caret. The
+    // fill is still an inset overlay rather than a `background` - laid over
+    // whatever the agent gave the block, composed rather than substituted,
+    // the same paint every other wash in the frame uses.
     const out = instrumentArtifact(DOC, "doc-1", 1);
     const at = out.indexOf('[contenteditable]:not([contenteditable="false"]):focus');
     const rule = out.slice(at, out.indexOf("}", at));
-    expect(rule).toContain("outline: none");
-    expect(rule).toContain("rgba(13, 148, 136, 0.08)");
+    expect(rule).toContain("outline: 1.5px solid var(--color-text)");
+    expect(rule).toContain("var(--paper)");
     expect(rule).toContain("box-shadow: inset");
-    // The document's own background survives being typed in.
+    // The document's own background property is never written to.
     expect(rule).not.toContain("background:");
   });
 
-  test("lucid's own markers are not focus states and stay", () => {
-    // Hover, selected, noted, and edited say what lucid knows about an
-    // element. None of them is the browser saying where the caret is.
+  test("lucid's own markers each still draw one mark, in their own channel", () => {
+    // The mark language (handoff): transient marks take the outline and
+    // fill; persistent marks sit outside or at the edge - the noted chip is
+    // a pseudo-element reading the count attribute, the edited rule is a
+    // 2px accent bar at the left edge. None of them is a focus state, so
+    // none may rely on the browser's ring, and each must draw without the
+    // others: that is what makes the combinations in 6f read.
     const out = instrumentArtifact(DOC, "doc-1", 1);
-    for (const cls of ["lucid-hover", "lucid-selected", "lucid-noted", "lucid-edited"]) {
+    const rule = (cls: string): string => {
       const at = out.indexOf(`.${cls} {`);
       expect(at).toBeGreaterThan(-1);
-      // Solid for hover, selected and edited; dashed for a spot that
-      // carries a note. What matters is that each still draws one.
-      expect(out.slice(at, out.indexOf("}", at))).toMatch(/outline: 2px (solid|dashed)/);
-    }
+      return out.slice(at, out.indexOf("}", at));
+    };
+    // Transient: on the block.
+    expect(rule("lucid-hover")).toContain("outline: 1px solid");
+    expect(rule("lucid-selected")).toContain("outline: 1.5px solid var(--color-accent)");
+    // Persistent: at the edge or past it, never over the words. The noted
+    // rule declares no outline of its own - a later `outline: none` would
+    // take the selection outline off an annotated block, and selection
+    // always wins (6f, defect 2).
+    expect(out).toContain("attr(data-lucid-count)");
+    expect(out.indexOf(".lucid-noted.lucid-selected")).toBeGreaterThan(
+      out.indexOf(".lucid-selected {"),
+    );
+    expect(rule("lucid-edited")).toContain("inset 2px 0 0 var(--color-accent-400)");
   });
 });
 
@@ -433,5 +454,83 @@ describe("selecting text to mark it up", () => {
     // The page branches on it: empty means anchor to the whole element.
     const at = out.indexOf("quote: isPick");
     expect(out.slice(at, at + 120)).toContain(': ""');
+  });
+});
+
+/** The mark language: two channels, one persistent mark (handoff "The mark
+ * language" + 6f). Decided from the bytes, like everything here: what the
+ * stylesheet draws and what the script does with a count. */
+describe("the mark language", () => {
+  const out = instrumentArtifact(DOC, "doc-1", 1);
+
+  test("the frame carries the chrome's own tokens, not literals", () => {
+    // A sandboxed frame inherits nothing from the page around it, so the
+    // sheet has to bring the custom properties itself - the same names and
+    // values app.css defines, which is what lets one mark style hold in the
+    // frame and on the reference page without a second vocabulary.
+    for (const token of [
+      "--color-accent: #0088b0",
+      "--color-accent-100: #e9f8ff",
+      "--paper: color-mix(in srgb, #fff 93%, var(--color-process-yellow) 7%)",
+      "--font-heading:",
+    ]) {
+      expect(out).toContain(token);
+    }
+  });
+
+  test("the count chip is drawn from the attribute, never the DOM", () => {
+    // A real child element would enter innerText - which is what a capture
+    // quotes and a note anchors to - and would need stripping from saves.
+    // A pseudo-element reading an attribute touches neither. The one
+    // element the script still creates is the range box, which clean()
+    // already takes out by its data-lucid mark.
+    expect(out).toContain("content: attr(data-lucid-count)");
+    expect(out.match(/createElement\(/g) ?? []).toHaveLength(1);
+    expect(out).toContain('box.className = "lucid-range"');
+  });
+
+  test("the chip inverts on a selected block, and nothing else needs to", () => {
+    // The one adjustment 6f makes: paper fill and an accent-300 border, so
+    // the tally stays readable against the accent wash.
+    const at = out.indexOf(".lucid-noted.lucid-selected");
+    expect(at).toBeGreaterThan(-1);
+    const rule = out.slice(at, out.indexOf("}", out.indexOf("}", at + 1) + 1));
+    expect(rule).toContain("background: var(--paper)");
+    expect(rule).toContain("border: 1px solid var(--color-accent-300)");
+  });
+
+  test("a mark message carries counts, not just presence", () => {
+    // The chip answers "how many notes", so the parent sends a tally per
+    // block and the frame writes it to the attribute the chip reads.
+    // Element ids are still validated by shape before use.
+    expect(out).toContain('m.kind === "mark" && m.counts');
+    expect(out).toContain("mel.setAttribute(COUNT_ATTR, String(count))");
+    expect(out).not.toContain('m.kind === "mark" && Array.isArray(m.ids)');
+  });
+
+  test("a lost seam is defined for the later stages, in edge ink", () => {
+    // 3e draws it where a note's passage was removed. It is a fact about
+    // history, not an error: dashed edge ink and a sans label, never
+    // magenta, never accent.
+    const at = out.indexOf(".lucid-seam::before");
+    expect(at).toBeGreaterThan(-1);
+    const rule = out.slice(at, out.indexOf("}", at));
+    expect(rule).toContain("repeating-linear-gradient");
+    expect(rule).toContain("var(--edge-2)");
+    expect(rule).not.toContain("accent");
+  });
+
+  test("edited is an edge rule and selection is a fill, so both compose", () => {
+    // The two channels never share paint: the persistent rule and the
+    // transient wash are declared together rather than left to the cascade,
+    // because a box-shadow in a later rule would replace the earlier one.
+    const both = out.indexOf(".lucid-edited.lucid-selected");
+    expect(both).toBeGreaterThan(-1);
+    expect(out.slice(both, out.indexOf("}", both))).toContain(
+      "inset 0 0 0 9999px var(--color-accent-100)",
+    );
+    expect(out.slice(both, out.indexOf("}", both))).toContain(
+      "inset 2px 0 0 var(--color-accent-400)",
+    );
   });
 });

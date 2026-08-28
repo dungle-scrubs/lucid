@@ -34,6 +34,11 @@
  *   anything waiting.
  * - No shadows anywhere. Elevation is the paper-on-pattern relationship.
  * - Light only. Dark mode is not designed.
+ *
+ * The artifact frame cannot inherit this :root - a sandbox is its own
+ * document - so `instrument.ts` redefines the same tokens inside the
+ * injected mark stylesheet (FRAME_TOKENS). The two blocks move together:
+ * same names, same values.
  */
 
 :root {
@@ -1077,7 +1082,7 @@ body {
   padding: 2px 2px 0;
   display: flex;
   flex-direction: column;
-  gap: 17px;
+  gap: 16px;
 }
 
 .empty {
@@ -1086,6 +1091,14 @@ body {
   padding: 24px 0;
 }
 
+/* --- the transcript -------------------------------------------------------
+ *
+ * Five kinds of row: what you said (the bubble, on the right), what the
+ * agent said (open text, on the left, no label - the side says whose it
+ * is), a tool the agent used, something lucid recorded, and a refusal.
+ * Speech and record are neutral ink. A refusal is magenta - the substrate
+ * saying no - and it is the only magenta row. */
+
 .msg {
   display: flex;
   flex-direction: column;
@@ -1093,17 +1106,8 @@ body {
   max-width: 100%;
 }
 
-/* Yours on the right, the agent's on the left. The side says whose it is,
-   so neither needs a label. */
 .msg.user {
   align-items: flex-end;
-}
-
-.msg .who {
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 45%, transparent);
 }
 
 .msg .body {
@@ -1113,14 +1117,16 @@ body {
   line-height: 1.55;
 }
 
-/* The user's turn is the one bubble: warm ink on the sepia, the serif's
-   own weight doing the marking. */
+/* Yours: the one bubble - warm ink on the sepia, the serif's own weight
+   doing the marking. No width cap; a long message is still one thing you
+   said, not a column of paragraphs. */
 .msg.user .body {
   align-self: flex-end;
-  max-width: 85%;
+  max-width: 100%;
   background: color-mix(in srgb, var(--color-text) 5%, transparent);
   border-radius: 10px;
   padding: 10px 13px;
+  line-height: 1.5;
 }
 
 /* A tool call is the agent working, not the agent talking. Fainter than
@@ -1144,18 +1150,48 @@ body {
   flex: 0 0 auto;
 }
 
-/* Something that happened, not something anyone said. A quiet pill: a save
-   is history, not a user action pending anything. */
-.msg.happened {
-  align-items: center;
+/* Something that happened, not something anyone said: a version saved, a
+   note sent. A quiet ink line - history, not a user action pending
+   anything, so no pill and no accent. */
+.msg.happened .body {
+  font: 400 12px / 1 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  padding-left: 2px;
+  white-space: pre-wrap;
 }
 
-.msg.happened .body {
-  font-size: 11px;
-  color: color-mix(in srgb, var(--color-text) 45%, transparent);
-  padding: 2px 10px;
-  border: 1px solid var(--edge);
-  border-radius: 999px;
+/* The refusal: lucid telling the agent no, which is why the document did
+   not change. The fifth kind and the only magenta row - unmistakable by
+   colour the way the note card is unmistakable by its rule. Left 2px
+   accent-2 rule, sepia ground, prohibit glyph; the reason at speaking
+   size, because it is the thing being said. Never cyan in the same
+   component. */
+.msg.refusal {
+  gap: 6px;
+  padding: 9px 12px;
+  border-left: 2px solid var(--color-accent-2);
+  border-radius: 2px;
+  background: var(--sepia);
+}
+
+.msg.refusal .refusal-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-accent-2);
+}
+
+.msg.refusal .refusal-kind {
+  font: 600 10.5px / 1 var(--font-heading);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-accent-2-800);
+}
+
+.msg.refusal .body {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text);
 }
 
 /* assistant-ui renders each text part in its own <p>, which carries the
@@ -1199,17 +1235,19 @@ body {
 
 /* --- notes in the timeline ----------------------------------------------
  *
- * Interim on the new tokens: the cyan left rule and the quiet ground. The
- * anchoring bands and the queue vocabulary are a later stage. */
+ * A sent note and its anchor: a 2px accent rule down the left, the quote it
+ * was made against in italics, and the note itself. The head carries the
+ * anchoring bands - three 5x9px bars, or the two shapes that are not a
+ * confidence at all (lost, elsewhere). A queued note is the same card with
+ * no bands: still yours, nothing claimed yet. */
 
 .note-card {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 7px 10px;
+  gap: 7px;
+  padding-left: 12px;
   border-radius: 2px;
   border-left: 2px solid var(--color-accent);
-  background: transparent;
   align-self: stretch;
 }
 
@@ -1229,33 +1267,104 @@ body {
   outline-offset: 2px;
 }
 
-/* Lost is a fact about history, not an error: 20% ink rule, 75% presence. */
+/* Lost is a fact about history, not an error: 20% ink rule, the head in
+   ink rather than accent, 75% presence. The note itself stays whole. */
 .note-card.orphan {
   border-left-color: color-mix(in srgb, var(--color-text) 20%, transparent);
   opacity: 0.75;
 }
 
 .note-card-head {
-  font-size: 10px;
-  letter-spacing: 0.06em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.note-card-kind {
+  flex: none;
+  font: 600 11px / 1 var(--font-heading);
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  color: var(--color-accent-800);
+}
+
+.note-card-state {
+  font: 400 11px / 1 var(--font-body);
   color: color-mix(in srgb, var(--color-text) 50%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.note-card.orphan .note-card-kind {
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+/* The words the note was made against - what the bands are a confidence
+   ABOUT. Shown the way the document showed them, in italics. */
+.note-card-quote {
+  font-size: 12.5px;
+  line-height: 1.45;
+  font-style: italic;
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
 }
 
 .note-card-note {
-  font-size: 13px;
+  font-size: 13.5px;
+  line-height: 1.55;
   color: var(--color-text);
 }
 
-.note-card-spot {
-  font-size: 11px;
-  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+/* The anchoring bands. Filled is accent; empty is an accent-300 outline;
+   lost is a 19px grey bar; not-on-this-version is a 19px dashed outline.
+   aria-hidden because the state label beside them says the same thing in
+   words. */
+.bands {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  flex: none;
+}
+
+.bands .b {
+  width: 5px;
+  height: 9px;
+  border-radius: 1px;
+  border: 1px solid var(--color-accent-300);
+  box-sizing: border-box;
+}
+
+.bands .b.on {
+  border: 0;
+  background: var(--color-accent);
+}
+
+.bands.lost,
+.bands.later {
+  gap: 0;
+}
+
+.bands.lost {
+  width: 19px;
+  height: 9px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--color-text) 26%, transparent);
+}
+
+.bands.later {
+  width: 19px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px dashed color-mix(in srgb, var(--color-text) 30%, transparent);
+  box-sizing: border-box;
+  background: transparent;
 }
 
 .batch {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 7px;
   align-self: stretch;
 }
 
@@ -1265,6 +1374,70 @@ body {
   border-left-color: color-mix(in srgb, var(--color-text) 30%, transparent);
   background: transparent;
   opacity: 0.6;
+}
+
+.note-card.later .note-card-kind {
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+/* --- statement cards ------------------------------------------------------
+ *
+ * The small cards the conversation uses when it has something to state
+ * rather than someone saying something: a stalled turn (3c), a version
+ * collision (3f), a lost note's other version (6a). Sepia-2 ground inside
+ * the paper column, a hairline edge, a serif title, actions as pills. The
+ * states themselves arrive with the later stages; the anatomy is one
+ * style so they cannot drift apart. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: var(--sepia-2);
+  align-self: stretch;
+}
+
+.card-title {
+  font: 600 14px / 1.35 var(--font-heading);
+  color: var(--color-text);
+}
+
+.card-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--color-text) 72%, transparent);
+}
+
+.card-actions {
+  display: flex;
+  gap: 9px;
+}
+
+.card-actions button {
+  height: 30px;
+  padding: 0 13px;
+  border: 1px solid var(--edge-2);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-text);
+  font: 400 12.5px / 1 var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.card-actions button:hover {
+  border-color: var(--color-accent);
+}
+
+.card-actions button.primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
 }
 
 /* --- the two halves of the conversation pane ----------------------------- */

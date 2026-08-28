@@ -24,6 +24,14 @@
  *   click is doing its own work, and lucid does not read that as a
  *   selection.
  */
+/** Source Serif 4, subset to the one string the frame itself draws - the
+ * count chip's digits - so the chip holds the chrome's serif inside a
+ * sandbox that cannot reach the page's fonts. Base64 of a woff2 cut from
+ * the same file `app.css` self-hosts (digits, space, middle dot; the weight
+ * axis survives). `unicode-range` keeps it from shadowing the full face on
+ * the behaviour reference, which loads both. */
+import frameSerif from "./fonts/source-serif-4-frame.txt";
+
 import { flattenNewlines } from "./snapshot-dom.js";
 import { BLOCK_SELECTOR } from "./version-diff.js";
 
@@ -39,6 +47,11 @@ export const FRAME_MESSAGE_SOURCE = "lucid-artifact";
  * changed between versions. */
 export const ELEMENT_ATTR = "data-lucid-el";
 
+/** The attribute carrying a block's note count, written by the injected
+ * script from the parent's mark message and read by the count chip's
+ * `content: attr(...)`. Lucid's own, so `clean()` strips it from a save. */
+export const COUNT_ATTR = "data-lucid-count";
+
 /** `e` + document-order index. The parent validates against this shape
  * before believing an id came from a render it made. */
 export const ELEMENT_ID = /^e[0-9]+$/;
@@ -51,11 +64,82 @@ export const AUTHOR_ATTR = "data-lucid-author";
 
 /** The stylesheet lucid injects into the artifact frame.
  *
- * Exported so the behaviour reference can render the six in-document states
+ * Exported so the behaviour reference can render the in-document states
  * from the same source the frame uses. A reference that copied these rules
  * would drift from them, and a drifted reference is worse than none: it
- * would show a designer states the product does not have. */
+ * would show a designer states the product does not have.
+ *
+ * THE MARK LANGUAGE (reading-view handoff, "The mark language" + 6f).
+ *
+ * Two channels, so nothing hides anything:
+ *
+ * - Persistent marks sit OUTSIDE or AT THE EDGE of the block - the count
+ *   chip at its end, the edited rule at its left edge. They survive
+ *   without the pointer and never fade.
+ * - Transient marks sit ON the block - hover, selection, the editable
+ *   cue, the caret block. What you are doing wins over what is already
+ *   true, so hover and selection always paint over the persistent marks,
+ *   and annotated and edited stay legible underneath them.
+ *
+ * The one adjustment the composition needs is the chip inverting on a
+ * selected block (paper fill, accent-300 border) so it reads against the
+ * accent wash. Every other pairing composes without special cases.
+ *
+ * The tokens are the chrome's own, redefined here because a sandboxed
+ * frame cannot inherit custom properties from the page around it. This
+ * block and app.css's :root move together: same names, same values. */
+const FRAME_TOKENS = `
+:root {
+  --color-bg: #f3f2f2;
+  --color-surface: #eae9e9;
+  --color-text: #201e1d;
+  --color-accent: #0088b0;
+  --color-accent-2: #d6006c;
+
+  --color-neutral-300: #d7d3d3;
+  --color-neutral-500: #9b9797;
+
+  --color-accent-100: #e9f8ff;
+  --color-accent-200: #cbeeff;
+  --color-accent-300: #99e0ff;
+  --color-accent-400: #62c5ee;
+  --color-accent-800: #004961;
+
+  --color-accent-2-800: #790e3d;
+
+  --color-process-yellow: #edbb00;
+
+  --font-heading: "Source Serif 4", ui-serif, Georgia, serif;
+}
+
+/* The five local tokens, verbatim from the handoff and identical to the
+   ones app.css defines (stage 1). color-mix runs in the browser as-is:
+   this sheet is injected as a string, so no pipeline lowers it, and the
+   one-rule-per-token shape app.css needs does not apply here. All five
+   ride along even though the marks today touch three, so a later stage
+   adds marks without re-opening the token block. */
+:root {
+  --paper: color-mix(in srgb, #fff 93%, var(--color-process-yellow) 7%);
+  --sepia: color-mix(in srgb, var(--color-bg) 88%, var(--color-process-yellow) 12%);
+  --sepia-2: color-mix(in srgb, var(--color-bg) 76%, var(--color-process-yellow) 24%);
+  --edge: color-mix(in srgb, var(--color-text) 13%, transparent);
+  --edge-2: color-mix(in srgb, var(--color-text) 22%, transparent);
+}
+
+/* The chip is the only text lucid draws inside the frame, and it is digits.
+   unicode-range keeps this face from shadowing the full one anywhere both
+   load (the behaviour reference). */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 200 900;
+  unicode-range: U+0020, U+0030-0039, U+00B7;
+  src: url(data:font/woff2;base64,${frameSerif}) format("woff2");
+}
+`;
+
 export const STYLE = `
+${FRAME_TOKENS}
 /* The frame is its own scrolling context. Without this, scrolling past
    either end rubber-bands, which reads as the document coming loose from
    the panel it sits in. */
@@ -88,10 +172,6 @@ html {
 
 /* Annotate mode only. In edit mode lucid draws nothing and the document's
    own cursors stand: an I-beam over text, a pointer over a control. */
-[${ELEMENT_ATTR}].lucid-hover {
-  outline: 2px solid #2563eb !important;
-  outline-offset: 1px !important;
-}
 html.lucid-annotate, html.lucid-annotate * {
   cursor: crosshair !important;
   /* Selectable. user-select: none was here to stop a click that picks an
@@ -102,85 +182,208 @@ html.lucid-annotate, html.lucid-annotate * {
      selections are ignored, so the original problem does not come back. */
   user-select: text !important;
 }
-/* One box per visual line of a selected range, drawn behind the text.
-   getClientRects() gives a rect per line, so a selection that wraps is
-   three boxes rather than one rectangle covering the whole paragraph. */
+
+/* --- transient marks, on the block --------------------------------
+ *
+ * Order carries the precedence: hover first, selection after it, so the
+ * thing you are doing now beats the thing you are merely near. */
+
+/* Hover: this block is markable. 1px neutral ink at 45%, radius 6px. */
+[${ELEMENT_ATTR}].lucid-hover {
+  outline: 1px solid color-mix(in srgb, var(--color-text) 45%, transparent) !important;
+  outline-offset: 0 !important;
+  border-radius: 6px !important;
+}
+
+/* Selected: this block is the subject of what you are about to write.
+ * 1.5px accent outline, accent-100 fill. The fill is an inset overlay
+ * rather than a background, so a block the agent gave its own ground
+ * keeps it under the wash instead of losing it. */
+[${ELEMENT_ATTR}].lucid-selected {
+  outline: 1.5px solid var(--color-accent) !important;
+  outline-offset: 0 !important;
+  border-radius: 6px !important;
+  box-shadow: inset 0 0 0 9999px var(--color-accent-100) !important;
+}
+
+/* A text-span selection: a run inside a paragraph, not the whole block.
+   One box per visual line - getClientRects() gives a rect per line, so a
+   selection that wraps is three boxes rather than one rectangle covering
+   the whole paragraph, and a drag that ends mid-word shows that it did.
+
+   The boxes sit over the words, so the fill multiplies against them: the
+   accent-200 wash tints the paper and leaves the glyphs readable, the same
+   relationship an inline highlight has when it is drawn under the text. */
 .lucid-range {
   position: absolute !important;
   pointer-events: none !important;
   z-index: 2147483646 !important;
-  background: rgba(251, 191, 36, 0.28) !important;
-  outline: 1px solid #b45309 !important;
-  border-radius: 2px !important;
+  mix-blend-mode: multiply !important;
+  background: var(--color-accent-200) !important;
+  outline: 1.5px solid var(--color-accent) !important;
+  border-radius: 3px !important;
 }
-/* Editable text, in edit mode. Matched on the attribute rather than on
-   "true", because a pre carries plaintext-only and is just as editable.
+
+/* --- edit mode ------------------------------------------------------ */
+
+/* Editable text. Matched on the attribute rather than on "true", because
+ * a pre carries plaintext-only and is just as editable.
  *
  * Shown on approach, not always. Every editable block used to carry the
- * dotted rule at all times, which meant lucid drawing on almost every block
- * of a document it did not write. The mode is said by the sheet now, so the
+ * cue at all times, which meant lucid drawing on almost every block of a
+ * document it did not write. The mode is said by the sheet now, so the
  * cue in the document only has to answer "can I type here" - a question
- * asked about one block, at the moment the pointer is over it. */
+ * asked about one block, at the moment the pointer is over it. The caret
+ * is cyan wherever it lands. */
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]) {
   outline: none !important;
+  caret-color: var(--color-accent) !important;
 }
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):hover {
-  border-bottom: 1px dotted rgba(13, 148, 136, 0.55) !important;
-  /* Laid over whatever the document already has, not in place of it. As a
-     a background this replaced the agent's own - a block with a coloured
-     ground lost it on hover, so approaching a paragraph appeared to erase
-     part of the document. */
-  box-shadow: inset 0 0 0 9999px rgba(13, 148, 136, 0.06) !important;
+  outline: 1px dashed color-mix(in srgb, var(--color-text) 35%, transparent) !important;
+  outline-offset: 2px !important;
 }
 /* No pointer, so nothing to approach with. The persistent cue comes back:
    revealing on approach and showing it always are the same decision said
    for two input devices, not two different decisions. */
 @media (hover: none) {
   [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]) {
-    border-bottom: 1px dotted rgba(13, 148, 136, 0.55) !important;
+    outline: 1px dashed color-mix(in srgb, var(--color-text) 35%, transparent) !important;
+    outline-offset: 2px !important;
   }
 }
-/* The block holding the caret is tinted, not ringed. The ring was the same
-   thing the browser draws around anything focused, and a page full of them
-   is what "no focus states" is about. The tint still says which block you
-   are typing in. */
+
+/* The block holding the caret: 1.5px ink outline on a paper fill, with the
+   2px cyan caret. The fill is an inset overlay, not a background - the
+   words stay on top of it, and whatever ground the agent gave the block
+   gives way to paper only for as long as the caret is in it. */
 [${ELEMENT_ATTR}][contenteditable]:not([contenteditable="false"]):focus {
-  outline: none !important;
-  box-shadow: inset 0 0 0 9999px rgba(13, 148, 136, 0.08) !important;
+  outline: 1.5px solid var(--color-text) !important;
+  outline-offset: 0 !important;
+  border-radius: 6px !important;
+  box-shadow: inset 0 0 0 9999px var(--paper) !important;
 }
-[${ELEMENT_ATTR}].lucid-selected {
-  outline: 2px solid #b45309 !important;
-  outline-offset: 1px !important;
-  background: rgba(251, 191, 36, 0.22) !important;
+
+/* --- persistent marks, outside or at the edge ----------------------- */
+
+/* Annotated: the count chip. The ONE persistent mark - every note this
+   block has carried, answered or not. It never fades and never clears, so
+   it is not an outline over the words but a pill at the block's end:
+   17px, accent-100 on accent-800, 10.5px serif. Drawn as a pseudo-element
+   reading an attribute, so it never enters the DOM the way a real child
+   would: innerText (what a capture quotes) does not see it, and a save
+   needs only to strip the attribute.
+
+   No outline declaration here, on purpose. The chip is the whole mark,
+   and a rule here - even outline: none - would sit later in the sheet
+   than the transient rules and take the selection outline off an
+   annotated block, which is exactly the pairing 6f says must compose. */
+[${ELEMENT_ATTR}].lucid-noted[${COUNT_ATTR}]::after {
+  content: attr(${COUNT_ATTR});
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 17px;
+  min-width: 17px;
+  padding: 0 6px;
+  margin-left: 9px;
+  border-radius: 9px;
+  box-sizing: border-box;
+  background: var(--color-accent-100);
+  color: var(--color-accent-800);
+  font: 600 10.5px / 1 var(--font-heading);
+  vertical-align: 2px;
+  white-space: nowrap;
 }
+
+/* The one composition that needs help: on a selected block the chip
+   inverts - paper fill, accent-300 border - so it stays readable against
+   the accent wash. Everything else about the two channels composes. */
+[${ELEMENT_ATTR}].lucid-noted.lucid-selected[${COUNT_ATTR}]::after {
+  background: var(--paper);
+  border: 1px solid var(--color-accent-300);
+}
+
+/* Edited, unsaved: a 2px accent-400 rule on the left edge. An inset
+   overlay rather than a border, so a block does not shift two pixels the
+   moment the first keystroke lands in it. Like the chip, it declares no
+   outline: its channel is the edge, and the transient marks above keep
+   theirs even while this one is showing (6f, defect 3). */
 [${ELEMENT_ATTR}].lucid-edited {
-  outline: 2px solid #0d9488 !important;
-  outline-offset: 1px !important;
+  box-shadow: inset 2px 0 0 var(--color-accent-400) !important;
 }
-[${ELEMENT_ATTR}].lucid-noted {
-  outline: 2px dashed #7c3aed !important;
-  outline-offset: 1px !important;
-  background: rgba(167, 139, 250, 0.16) !important;
+
+/* Edited and selected: the selection's fill and the edit's rule are
+   different edges of the same block, so both show. */
+[${ELEMENT_ATTR}].lucid-edited.lucid-selected {
+  box-shadow: inset 0 0 0 9999px var(--color-accent-100),
+    inset 2px 0 0 var(--color-accent-400) !important;
 }
+
+/* Edited with the caret in it: the paper fill the caret block takes, with
+   the rule still at the edge. */
+[${ELEMENT_ATTR}][contenteditable].lucid-edited:not([contenteditable="false"]):focus {
+  box-shadow: inset 0 0 0 9999px var(--paper),
+    inset 2px 0 0 var(--color-accent-400) !important;
+}
+
+/* The lost seam: a 2px dashed rule in the gap between blocks, where a
+   note pointed at prose that no longer exists. Not an error - a fact
+   about history - so it is drawn in the edge ink, never magenta. The
+   label is the document's own sans: it is inside the page, not chrome. */
+.lucid-seam {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 7px;
+  margin: 0 -7px;
+}
+.lucid-seam::before {
+  content: "";
+  flex: 1;
+  height: 2px;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--edge-2) 0 5px,
+    transparent 5px 9px
+  );
+}
+.lucid-seam .lucid-seam-label {
+  font: 400 11.5px / 1 ui-sans-serif, system-ui, sans-serif;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+
+/* --- arrivals -------------------------------------------------------- */
+
 /* New material, when a version arrives and you can already see it (#181).
  *
- * The rise is quick and the fall is slow - the wash peaks a fifth of the way
- * through and fades over the rest, which is v1's shape. A pulse that fades in
- * as slowly as it fades out reads as the page loading rather than as
- * something being pointed at.
+ * Accent light: a 1.5px accent outline and an accent-100 fill, washing in
+ * and out once. The rise is quick and the fall is slow - the wash peaks a
+ * fifth of the way through and fades over the rest, which is v1's shape. A
+ * pulse that fades in as slowly as it fades out reads as the page loading
+ * rather than as something being pointed at.
  *
  * Alternated under two names for the reason focus is: CSS will not replay an
  * animation whose name has not changed, and two versions in a row touching
- * the same block is ordinary. */
+ * the same block is ordinary. The transparent outline the keyframes animate
+ * is what keeps the resting block from carrying a visible outline for the
+ * 2.6s. */
 @keyframes lucid-new-a {
-  0% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0); }
-  20% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0.22); }
-  100% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0); }
+  0% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
+  20% { box-shadow: inset 0 0 0 9999px var(--color-accent-100); outline-color: var(--color-accent); }
+  100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
 }
 @keyframes lucid-new-b {
-  0% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0); }
-  20% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0.22); }
-  100% { box-shadow: inset 0 0 0 9999px rgba(16, 185, 129, 0); }
+  0% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
+  20% { box-shadow: inset 0 0 0 9999px var(--color-accent-100); outline-color: var(--color-accent); }
+  100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
+}
+[${ELEMENT_ATTR}].lucid-new-a,
+[${ELEMENT_ATTR}].lucid-new-b {
+  border-radius: 6px !important;
+  outline: 1.5px solid transparent !important;
 }
 [${ELEMENT_ATTR}].lucid-new-a { animation: lucid-new-a 2.6s ease-in-out 1 !important; }
 [${ELEMENT_ATTR}].lucid-new-b { animation: lucid-new-b 2.6s ease-in-out 1 !important; }
@@ -188,30 +391,31 @@ html.lucid-annotate, html.lucid-annotate * {
   [${ELEMENT_ATTR}].lucid-new-a,
   [${ELEMENT_ATTR}].lucid-new-b {
     animation: none !important;
-    outline: 2px solid #10b981 !important;
-    outline-offset: 3px !important;
+    outline: 1.5px solid var(--color-accent) !important;
+    outline-offset: 0 !important;
   }
 }
 
-/* Focusing a note's target. Last, so it wins: what you are doing now beats
-   what is already true about the element, and being annotated is exactly
-   what the target of a note already is.
- *
- * An inset shadow rather than a background, because it has to layer over the
- * annotated wash instead of replacing it. Two identical animations under two
- * class names, alternated by the caller, because re-running an animation on
- * an element that already carries it does nothing - and focusing the same
- * note twice is the ordinary case.
- *
- * 2.6s, the duration v1 used. Appearance here is prototype, like everything
- * else on this surface. */
+/* Focusing a note's target, or travelling to a block: light it in place.
+   Same wash as new material, peaking at the half rather than the fifth
+   because nothing has to be distinguished from a page loading - the reader
+   asked for this.
+
+   Alternated under two class names, because re-running an animation on an
+   element that already carries it does nothing - and focusing the same
+   note twice is the ordinary case. */
 @keyframes lucid-focus-a {
-  0%, 100% { box-shadow: inset 0 0 0 9999px rgba(37, 99, 235, 0); }
-  50% { box-shadow: inset 0 0 0 9999px rgba(37, 99, 235, 0.2); }
+  0%, 100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
+  50% { box-shadow: inset 0 0 0 9999px var(--color-accent-100); outline-color: var(--color-accent); }
 }
 @keyframes lucid-focus-b {
-  0%, 100% { box-shadow: inset 0 0 0 9999px rgba(37, 99, 235, 0); }
-  50% { box-shadow: inset 0 0 0 9999px rgba(37, 99, 235, 0.2); }
+  0%, 100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
+  50% { box-shadow: inset 0 0 0 9999px var(--color-accent-100); outline-color: var(--color-accent); }
+}
+[${ELEMENT_ATTR}].lucid-focus-a,
+[${ELEMENT_ATTR}].lucid-focus-b {
+  border-radius: 6px !important;
+  outline: 1.5px solid transparent !important;
 }
 [${ELEMENT_ATTR}].lucid-focus-a { animation: lucid-focus-a 2.6s ease-in-out 1 !important; }
 [${ELEMENT_ATTR}].lucid-focus-b { animation: lucid-focus-b 2.6s ease-in-out 1 !important; }
@@ -220,8 +424,8 @@ html.lucid-annotate, html.lucid-annotate * {
   [${ELEMENT_ATTR}].lucid-focus-a,
   [${ELEMENT_ATTR}].lucid-focus-b {
     animation: none !important;
-    outline: 3px solid #2563eb !important;
-    outline-offset: 2px !important;
+    outline: 1.5px solid var(--color-accent) !important;
+    outline-offset: 0 !important;
   }
 }
 `;
@@ -236,6 +440,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   var VERSION = ${JSON.stringify(version)};
   var AUTHOR_ATTR = ${JSON.stringify(AUTHOR_ATTR)};
   var AUTHOR = ${JSON.stringify(author)};
+  var COUNT_ATTR = ${JSON.stringify(COUNT_ATTR)};
 
   // An id per element, in document order. Assigned by lucid rather than
   // taken from the document: an agent-written id may be missing, repeated,
@@ -368,6 +573,7 @@ const script = (artifactId: string, version: number, author: string): string => 
       }
       m.removeAttribute(ATTR);
       m.removeAttribute(AUTHOR_ATTR);
+      m.removeAttribute(COUNT_ATTR);
       m.removeAttribute("contenteditable");
       m.classList.remove("lucid-hover", "lucid-selected", "lucid-noted", "lucid-edited");
       if (m.getAttribute("class") === "") m.removeAttribute("class");
@@ -732,12 +938,23 @@ const script = (artifactId: string, version: number, author: string): string => 
       return;
     }
 
-    if (m.kind === "mark" && Array.isArray(m.ids)) {
-      var noted = document.querySelectorAll(".lucid-noted");
-      for (var a = 0; a < noted.length; a++) noted[a].classList.remove("lucid-noted");
-      for (var b = 0; b < m.ids.length; b++) {
-        var mel = document.querySelector("[" + ATTR + '="' + String(m.ids[b]) + '"]');
-        if (mel) mel.classList.add("lucid-noted");
+    // Which blocks carry notes, and how many each has carried. The chip is
+    // the one persistent mark, so this is state rather than decoration:
+    // the count stays until it is replaced, and it never fades on its own.
+    if (m.kind === "mark" && m.counts && typeof m.counts === "object") {
+      var was = document.querySelectorAll(".lucid-noted");
+      for (var a = 0; a < was.length; a++) {
+        was[a].classList.remove("lucid-noted");
+        was[a].removeAttribute(COUNT_ATTR);
+      }
+      for (var key in m.counts) {
+        if (!Object.prototype.hasOwnProperty.call(m.counts, key)) continue;
+        var mel = document.querySelector("[" + ATTR + '="' + String(key) + '"]');
+        var count = m.counts[key];
+        if (mel && typeof count === "number" && count >= 1) {
+          mel.classList.add("lucid-noted");
+          mel.setAttribute(COUNT_ATTR, String(count));
+        }
       }
       return;
     }
