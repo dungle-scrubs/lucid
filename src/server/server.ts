@@ -174,6 +174,19 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         return json({ lucid: "browser", open: "/c/<conversationId>" });
       }
 
+      // A URL bar, a history entry, or a pasted link carries a trailing
+      // slash as often as not, and Bun's route table above matches exact
+      // paths only - "/c/demo/" would fall through to the 404 at the foot
+      // of this handler. Send the canonical path back and let the browser
+      // re-ask: the page route answers it, and the address bar ends up on
+      // the form that reloads cleanly.
+      if (path.length > 1 && path.endsWith("/")) {
+        return new Response(null, {
+          status: 308,
+          headers: { location: path.replace(/\/+$/, "") + url.search },
+        });
+      }
+
       const read = path.match(/^\/api\/conversations\/([^/]+)\/?$/);
       if (read && req.method === "GET") {
         const id = decodeURIComponent(read[1] ?? "");

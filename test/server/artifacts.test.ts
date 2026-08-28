@@ -151,6 +151,17 @@ describe("one version per request, read by seeking", () => {
 });
 
 describe("the page cannot reach into the document", () => {
+  test("a trailing slash on a page path redirects to the canonical route", async () => {
+    // A URL bar or a pasted link adds the slash; the route table matches
+    // exact paths only, so without this the reader gets the bare 404 text.
+    const slashed = await fetch(`${server.url}/c/${CONV}/`, { redirect: "manual" });
+    expect(slashed.status).toBe(308);
+    expect(slashed.headers.get("location")).toBe(`/c/${CONV}`);
+    const followed = await fetch(`${server.url}/c/${CONV}/`);
+    expect(followed.status).toBe(200);
+    expect(followed.headers.get("content-type")).toContain("text/html");
+  });
+
   test("the frame is sandboxed without allow-same-origin, and is handed its bytes", async () => {
     const html = await (await fetch(`${server.url}/c/${CONV}`)).text();
     const src = html.match(/<script[^>]+src="([^"]+)"/)?.[1];
