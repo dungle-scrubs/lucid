@@ -425,16 +425,22 @@ so light and dark hold inside the document as well as around it.
 
 ---
 
-## 11. Known but unbuilt
+## 11. Built since this brief was written
 
-Three things are decided and not yet built. They are not part of this brief,
-but a design should leave room for them.
+These existed only as decisions when the brief was first drafted. They are
+built now, and the design has to account for them like anything else.
 
-- **Seeing what a new version added**, so a revision does not have to be
-  re-read to find what moved.
-- **Comparing two versions** of the document side by side.
-- The **pulse** described in §9 depends on the first of these: it cannot
-  highlight new material without knowing which parts are new.
+- **The pulse**, described in §9, and its other half in §5 — clicking a note
+  to go to what it points at. Both halves of one rule.
+- **Comparing two versions** side by side, over the stored bytes. Read-only:
+  it never reaches the agent, never appends, and neither side can be edited.
+  Two columns where each would have 360 pixels, one column below that.
+- **Seeing what a version changed**, which is what lets the pulse know which
+  parts are new.
+- **Keeping the reader's place** when a version arrives. Before this, every
+  revision threw the reader back to the top of the document, which also made
+  the pulse meaningless — nothing can be "already in view" if the view
+  resets.
 
 ---
 
