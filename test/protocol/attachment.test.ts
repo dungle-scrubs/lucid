@@ -10,6 +10,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ATTACHMENT_BYTES_MAX,
   isTextBytes,
+  sniffImageType,
   withinAttachmentBound,
 } from "../../src/protocol/attachment.js";
 
@@ -110,5 +111,40 @@ describe("the size bound", () => {
     expect(withinAttachmentBound(1.5)).toBe(false);
     expect(withinAttachmentBound(Number.NaN)).toBe(false);
     expect(withinAttachmentBound(Number.POSITIVE_INFINITY)).toBe(false);
+  });
+});
+
+describe("what type an attachment is served as", () => {
+  test("a PNG is recognised by its bytes", () => {
+    expect(sniffImageType(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(
+      "image/png",
+    );
+  });
+
+  test("JPEG, GIF and WEBP", () => {
+    expect(sniffImageType(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe("image/jpeg");
+    expect(sniffImageType(bytes("GIF89a......"))).toBe("image/gif");
+    expect(sniffImageType(bytes("RIFF....WEBPVP8 "))).toBe("image/webp");
+  });
+
+  test("anything else is not an image", () => {
+    expect(sniffImageType(bytes("plain text"))).toBeNull();
+    expect(sniffImageType(bytes("%PDF-1.7"))).toBeNull();
+    expect(sniffImageType(new Uint8Array(0))).toBeNull();
+  });
+
+  test("SVG is not served as an image, whatever it claims", () => {
+    // It is an image and also a document that can carry script. Serving it as
+    // an image would undo the guard the sniff exists for.
+    expect(sniffImageType(bytes('<svg xmlns="http://www.w3.org/2000/svg"></svg>'))).toBeNull();
+  });
+
+  test("HTML pretending to be a PNG is not an image", () => {
+    // The name and the media type are the sender's claims. The bytes are not.
+    expect(sniffImageType(bytes("<script>alert(1)</script>"))).toBeNull();
+  });
+
+  test("a truncated header is not an image", () => {
+    expect(sniffImageType(new Uint8Array([0x89, 0x50]))).toBeNull();
   });
 });

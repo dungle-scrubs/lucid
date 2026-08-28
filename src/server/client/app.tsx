@@ -386,6 +386,24 @@ const Message = (): React.ReactElement => {
  *
  * `ScrollToBottom` is its affordance for getting back, and it hides itself
  * when you are already there. */
+/** A file attached to the message being written. Stored already - the hash
+ * is the record's, not the page's - so the page holds a reference and a URL
+ * to show it by, never a second copy of the bytes. */
+interface Attached {
+  readonly hash: string;
+  readonly name: string;
+  readonly contentType: string;
+  readonly bytes: number;
+  readonly text: boolean;
+  /** An object URL for the thumbnail, or null for a file with no picture.
+   *
+   * An object URL rather than the endpoint's own: an `img` tag cannot send
+   * the token header every `/api/` path requires, and putting a token in a
+   * URL puts it in logs and referrers. The page fetches the bytes with the
+   * header and shows what it already holds. */
+  readonly url: string | null;
+}
+
 const Thread = ({
   pending,
   onSendNotes,
@@ -394,6 +412,9 @@ const Thread = ({
   activity,
   now,
   lastChange,
+  attachments,
+  onAttach,
+  onRemoveAttachment,
 }: {
   pending: readonly PendingNote[];
   onSendNotes: () => void;
@@ -404,6 +425,10 @@ const Thread = ({
   now: number;
   /** When the transcript last changed. */
   lastChange: number;
+  /** Files attached to the message being written, not yet sent. */
+  attachments: readonly Attached[];
+  onAttach: (files: FileList) => void;
+  onRemoveAttachment: (hash: string) => void;
 }): React.ReactElement => {
   const busyNow = activity.turn || activity.inFlight > 0 || activity.waiting > 0;
   // When this stretch of work began. Held across renders because nothing in
@@ -482,7 +507,47 @@ const Thread = ({
           </div>
         )}
 
+        {attachments.length === 0 ? null : (
+          <div className="attached">
+            {attachments.map((a) => (
+              <span className={a.text ? "chip text" : "chip"} key={a.hash}>
+                {/* A thumbnail for what has one; a name for what does not. The
+                  bytes are already stored, so this reads them back rather
+                  than holding a second copy in the page. */}
+                {a.url !== null ? (
+                  <img src={a.url} alt="" className="thumb" />
+                ) : (
+                  <span className="thumb kind">{a.text ? "text" : "file"}</span>
+                )}
+                <span className="chip-name">{a.name}</span>
+                <button
+                  type="button"
+                  className="chip-drop"
+                  title="Remove"
+                  onClick={() => onRemoveAttachment(a.hash)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         <ComposerPrimitive.Root className="composer">
+          {/* Attaching and sending are separate: the file is stored the
+            moment it is chosen, so closing the page does not lose it and
+            sending is the ordinary act it already was. */}
+          <label className="attach" title="Attach a file">
+            +
+            <input
+              type="file"
+              multiple
+              onChange={(e) => {
+                if (e.currentTarget.files !== null) onAttach(e.currentTarget.files);
+                e.currentTarget.value = "";
+              }}
+            />
+          </label>
           <ComposerPrimitive.Input autoFocus placeholder="Send to the conversation…" rows={1} />
           <ComposerPrimitive.Send asChild>
             <button type="submit">Send</button>
@@ -1116,6 +1181,9 @@ const App = (): React.ReactElement => {
   /** Blocks this version changed that the reader could not see. They did
    * not pulse, so they are offered instead. */
   const [offscreenChanges, setOffscreenChanges] = React.useState<readonly number[]>([]);
+  /** Files attached to the message being written. Stored the moment they are
+   * chosen, so closing the page does not lose them. */
+  const [attached, setAttached] = React.useState<readonly Attached[]>([]);
   /** A comparison being read: which version the one on screen is held against,
    * and that version's bytes once they arrive. `null` bytes mean it could not
    * be read, which is reported rather than shown as an empty side. */
@@ -1764,6 +1832,72 @@ const App = (): React.ReactElement => {
     },
     [doc, token, conversationId],
   );
+
+  const attachFiles = React.useCallback(
+    async (files: FileList): Promise<void> => {
+      if (token === null || conversationId === "") return;
+      for (const file of Array.from(files)) {
+        try {
+          const res = await fetch(
+            `/api/conversations/${encodeURIComponent(conversationId)}/attachments`,
+            {
+              method: "POST",
+              headers: {
+                [TOKEN_HEADER]: token,
+                "x-lucid-filename": file.name,
+                "content-type": file.type === "" ? "application/octet-stream" : file.type,
+              },
+              body: file,
+            },
+          );
+          if (!res.ok) {
+            const said = (await res.json().catch(() => ({}))) as { error?: string };
+            setRefusal(
+              said.error === "attachment-too-large"
+                ? `${file.name} is too large to attach`
+                : `could not attach ${file.name}: ${said.error ?? res.status}`,
+            );
+            continue;
+          }
+          const a = (await res.json()) as Omit<Attached, "url">;
+          // Only a picture needs one, and only the page can make one: the
+          // bytes come back over a request that carries the token, and the
+          // object URL is what an `img` can actually use.
+          let url: string | null = null;
+          if (a.contentType.startsWith("image/")) {
+            const got = await fetch(
+              `/api/conversations/${encodeURIComponent(conversationId)}/attachments/${a.hash}`,
+              { headers: { [TOKEN_HEADER]: token } },
+            );
+            if (got.ok) {
+              const blob = await got.blob();
+              // Served as an image only when the BYTES say so, so a file that
+              // claimed to be a picture and is not comes back as bytes and
+              // gets no thumbnail rather than a broken one.
+              if (blob.type.startsWith("image/")) url = URL.createObjectURL(blob);
+            }
+          }
+          setAttached((prev) =>
+            prev.some((p) => p.hash === a.hash) ? prev : [...prev, { ...a, url }],
+          );
+        } catch (e) {
+          setRefusal(`could not attach ${file.name}: ${String(e)}`);
+        }
+      }
+    },
+    [token, conversationId],
+  );
+
+  /** Take it off the message. The bytes stay in the record - nothing removes
+   * anything from a record - and this is the message forgetting it. */
+  const removeAttachment = React.useCallback((hash: string): void => {
+    setAttached((prev) => {
+      // The object URL holds the bytes in the page until it is revoked.
+      const going = prev.find((a) => a.hash === hash);
+      if (going?.url !== null && going?.url !== undefined) URL.revokeObjectURL(going.url);
+      return prev.filter((a) => a.hash !== hash);
+    });
+  }, []);
 
   const save = React.useCallback(async (): Promise<void> => {
     if (doc === null || token === null || dead || snapshot.current === null) return;
@@ -2621,6 +2755,9 @@ const App = (): React.ReactElement => {
                 activity={activity}
                 now={now}
                 lastChange={lastChange}
+                attachments={attached}
+                onAttach={(files) => void attachFiles(files)}
+                onRemoveAttachment={removeAttachment}
               />
             </div>
           </div>

@@ -16,6 +16,7 @@ import { createConversationRecord } from "../../src/store/store.js";
 
 const rig = async (): Promise<{
   post: (body: BodyInit, name: string, type?: string) => Promise<Response>;
+  get: (hash: string) => Promise<Response>;
   dir: string;
   stop: () => Promise<void>;
 }> => {
@@ -35,6 +36,10 @@ const rig = async (): Promise<{
           "content-type": type,
         },
         body,
+      }),
+    get: (hash) =>
+      fetch(`${base}/api/conversations/c/attachments/${hash}`, {
+        headers: { "x-lucid-token": server.token },
       }),
   };
 };
@@ -131,6 +136,44 @@ describe("the same file twice", () => {
       .split("\n")
       .filter((l) => l.includes('"src":"attach"'));
     expect(entries.length).toBe(2);
+    await r.stop();
+  });
+});
+
+describe("reading an attachment back for a thumbnail", () => {
+  test("the bytes come back", async () => {
+    const r = await rig();
+    const { hash } = (await (await r.post("thumbnail me", "a.txt")).json()) as { hash: string };
+    const res = await r.get(hash);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("thumbnail me");
+    await r.stop();
+  });
+
+  test("never with the media type the sender claimed", async () => {
+    // Letting a claim decide how the browser renders bytes is how a file
+    // becomes a script.
+    const r = await rig();
+    const { hash } = (await (
+      await r.post("<script>alert(1)</script>", "x.html", "text/html")
+    ).json()) as { hash: string };
+    const res = await r.get(hash);
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    await r.stop();
+  });
+
+  test("a name that is not a hash is refused on its shape", async () => {
+    const r = await rig();
+    for (const bad of ["..%2Fsecret", "secret", "abc"]) {
+      expect((await r.get(bad)).status).toBe(400);
+    }
+    await r.stop();
+  });
+
+  test("an unknown hash is not found, not an error", async () => {
+    const r = await rig();
+    expect((await r.get("f".repeat(64))).status).toBe(404);
     await r.stop();
   });
 });

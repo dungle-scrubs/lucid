@@ -148,6 +148,90 @@ body {
 
 /* --- composer ---------------------------------------------------------- */
 
+/* Files attached to the message being written. They are already stored, so
+   these are references the page draws, not bytes it holds. */
+.attached {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px 0;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 12px;
+  max-width: 220px;
+}
+
+.thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+/* What a file with no picture shows instead. */
+.thumb.kind {
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--faint);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-drop {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.chip-drop:hover {
+  color: var(--fg);
+}
+
+/* The control that opens the file picker. The input itself is never shown -
+   a browser's own file input cannot be styled and says the wrong thing. */
+.attach {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.attach:hover {
+  color: var(--fg);
+}
+
+.attach input {
+  display: none;
+}
+
 .composer {
   display: flex;
   gap: 8px;

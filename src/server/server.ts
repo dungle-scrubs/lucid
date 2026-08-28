@@ -34,9 +34,10 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { conversations } from "../cli/record-addressing.js";
 import { detectAnnotationBatch } from "../protocol/annotations.js";
-import { isTextBytes, withinAttachmentBound } from "../protocol/attachment.js";
+import { isTextBytes, sniffImageType, withinAttachmentBound } from "../protocol/attachment.js";
 import { EventKind } from "../protocol/events.js";
 import { TEXT_MAX } from "../protocol/frames.js";
+import { getBlob } from "../store/blobs.js";
 import {
   createConversationHost,
   viewArtifactCatalog,
@@ -573,6 +574,41 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
       }
 
       const write = path.match(/^\/api\/conversations\/([^/]+)\/input\/?$/);
+      // Read an attachment back, for a thumbnail (RFC-11).
+      //
+      // This is the BROWSER surface, and it is where the hex guard belongs:
+      // the name is resolved as a sha256 hex string before anything touches
+      // the filesystem, so `../secret` fails on the shape of the name. The
+      // agent surface is a different problem with a different answer - see
+      // the offered path in `src/store/deliver.ts`.
+      const blob = path.match(/^\/api\/conversations\/([^/]+)\/attachments\/([^/]+)\/?$/);
+      if (blob && req.method === "GET") {
+        const id = decodeURIComponent(blob[1] ?? "");
+        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+        const hash = decodeURIComponent(blob[2] ?? "");
+        if (!/^[0-9a-f]{64}$/.test(hash)) return json({ error: "not-an-attachment" }, 400);
+        const dir = conversations(rootDir).dirFor(id);
+        let bytes: Uint8Array | null = null;
+        try {
+          bytes = getBlob(dir, hash);
+        } catch {
+          return json({ error: "not-an-attachment" }, 400);
+        }
+        if (bytes === null) return json({ error: "no-such-attachment" }, 404);
+        return new Response(bytes.buffer as ArrayBuffer, {
+          headers: {
+            // Never the type the sender claimed - that is a claim, and letting
+            // it decide how a browser renders bytes is how a file becomes a
+            // script. The type is read off the bytes instead, and only four
+            // image types are recognised. Everything else is octet-stream.
+            "content-type": sniffImageType(bytes) ?? "application/octet-stream",
+            "content-disposition": "inline",
+            "x-content-type-options": "nosniff",
+            "cache-control": "private, max-age=31536000, immutable",
+          },
+        });
+      }
+
       // Attach a file to a conversation (RFC-11).
       //
       // The bytes are stored and an entry records that they exist. Nothing is

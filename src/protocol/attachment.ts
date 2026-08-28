@@ -56,3 +56,56 @@ export const isTextBytes = (bytes: Uint8Array): boolean => {
 /** Whether a file of this size may be stored at all. */
 export const withinAttachmentBound = (size: number): boolean =>
   Number.isSafeInteger(size) && size >= 0 && size <= ATTACHMENT_BYTES_MAX;
+
+/** Image types lucid will serve back to its own page, decided by the bytes.
+ *
+ * The sender's `contentType` is never used for this. It is a claim, and
+ * letting a claim choose how a browser renders bytes is how an attachment
+ * becomes a script. These four are recognised by their magic bytes, are
+ * rendered as pictures by every browser, and cannot carry script.
+ *
+ * SVG is deliberately absent. It is an image and it is also a document that
+ * can carry script, so serving it as an image would undo the guard. */
+export const sniffImageType = (bytes: Uint8Array): string | null => {
+  const at = (i: number): number => bytes[i] ?? -1;
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    at(0) === 0x89 &&
+    at(1) === 0x50 &&
+    at(2) === 0x4e &&
+    at(3) === 0x47 &&
+    at(4) === 0x0d &&
+    at(5) === 0x0a &&
+    at(6) === 0x1a &&
+    at(7) === 0x0a
+  ) {
+    return "image/png";
+  }
+  // JPEG: FF D8 FF
+  if (at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) return "image/jpeg";
+  // GIF87a / GIF89a
+  if (
+    at(0) === 0x47 &&
+    at(1) === 0x49 &&
+    at(2) === 0x46 &&
+    at(3) === 0x38 &&
+    (at(4) === 0x37 || at(4) === 0x39) &&
+    at(5) === 0x61
+  ) {
+    return "image/gif";
+  }
+  // WEBP: "RIFF" .... "WEBP"
+  if (
+    at(0) === 0x52 &&
+    at(1) === 0x49 &&
+    at(2) === 0x46 &&
+    at(3) === 0x46 &&
+    at(8) === 0x57 &&
+    at(9) === 0x45 &&
+    at(10) === 0x42 &&
+    at(11) === 0x50
+  ) {
+    return "image/webp";
+  }
+  return null;
+};
