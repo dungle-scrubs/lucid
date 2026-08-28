@@ -86,13 +86,13 @@ html {
   outline: none;
 }
 
-/* Mark-up mode only. In use mode lucid draws nothing and the document's
+/* Annotate mode only. In edit mode lucid draws nothing and the document's
    own cursors stand: an I-beam over text, a pointer over a control. */
 [${ELEMENT_ATTR}].lucid-hover {
   outline: 2px solid #2563eb !important;
   outline-offset: 1px !important;
 }
-html.lucid-markup, html.lucid-markup * {
+html.lucid-annotate, html.lucid-annotate * {
   cursor: crosshair !important;
   /* Selectable. user-select: none was here to stop a click that picks an
      element from also leaving a stray selection behind. That also made it
@@ -113,7 +113,7 @@ html.lucid-markup, html.lucid-markup * {
   outline: 1px solid #b45309 !important;
   border-radius: 2px !important;
 }
-/* Editable text, in use mode. The dotted rule is the affordance: it says
+/* Editable text, in edit mode. The dotted rule is the affordance: it says
    the text can be changed without shouting about it. Matched on the
    attribute rather than on "true", because a pre carries plaintext-only
    and is just as editable. */
@@ -240,18 +240,18 @@ const script = (artifactId: string, version: number, author: string): string => 
   // would leave the note pointing at two different things.
   var picked = null;
   var dirty = false;
-  // "use" — the document behaves as the agent built it: controls work, text
-  // has a caret, drag selects text. "markup" — clicking picks elements to
+  // "edit" — the document behaves as the agent built it: controls work, text
+  // has a caret, drag selects text. "annotate" — clicking picks elements to
   // write notes about, and a click does NOT also operate a control.
   //
   // The two were one mode, and a single click did both: it ticked a box and
   // selected the row at the same time. Nothing said which was happening.
   //
-  // Mark up is where a document opens. The page defaults to it too, and both
-  // have to agree from the first paint: a frame starting in use mode would
+  // Annotate is where a document opens. The page defaults to it too, and both
+  // have to agree from the first paint: a frame starting in edit mode would
   // render every block editable for the moment before the page's first mode
   // message arrives.
-  var mode = "markup";
+  var mode = "annotate";
   // A version that is not the current one is read only: it cannot be edited
   // and it cannot be marked up. RFC-07 R6 and R7. This is not a third mode -
   // the mode is still whatever it is, and it applies again the moment the
@@ -286,20 +286,20 @@ const script = (artifactId: string, version: number, author: string): string => 
 
   var applyMode = function () {
     var html = document.documentElement;
-    if (mode === "markup" && !readOnly) html.classList.add("lucid-markup");
-    else html.classList.remove("lucid-markup");
+    if (mode === "annotate" && !readOnly) html.classList.add("lucid-annotate");
+    else html.classList.remove("lucid-annotate");
 
     var all = document.body ? document.body.querySelectorAll("[" + ATTR + "]") : [];
     for (var i = 0; i < all.length; i++) {
       var el = all[i];
-      if (!readOnly && mode === "use" && editable(el))
+      if (!readOnly && mode === "edit" && editable(el))
         el.setAttribute("contenteditable", editKind(el));
       else el.removeAttribute("contenteditable");
     }
     if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
     // A control focused while using the document keeps its caret otherwise,
     // which reads as still being editable after the mode has changed.
-    if (mode === "markup" && document.activeElement && document.activeElement.blur) {
+    if (mode === "annotate" && document.activeElement && document.activeElement.blur) {
       document.activeElement.blur();
     }
   };
@@ -361,7 +361,7 @@ const script = (artifactId: string, version: number, author: string): string => 
     return "<!doctype html>" + copy.outerHTML;
   };
 
-  // Text is editable for as long as you are in use mode, rather than after
+  // Text is editable for as long as you are in edit mode, rather than after
   // a double-click. That is what gives a caret, an I-beam, and a drag that
   // selects the words you want to replace — all of it the browser's, none
   // of it lucid's to reimplement badly.
@@ -434,7 +434,7 @@ const script = (artifactId: string, version: number, author: string): string => 
       if (e.ctrlKey || e.metaKey || e.shiftKey) return;
       // The browser would delete the word behind the caret. This is the one
       // key lucid takes from the document, and it takes it in both modes:
-      // getting back to marking up from a caret in a field is the whole
+      // getting back to annotating from a caret in a field is the whole
       // point of having it.
       e.preventDefault();
       parent.postMessage({ source: SOURCE, kind: "hotkey", hotkey: "toggle-mode" }, "*");
@@ -557,16 +557,16 @@ const script = (artifactId: string, version: number, author: string): string => 
       return;
     }
 
-    if (m.kind === "mode" && (m.mode === "use" || m.mode === "markup")) {
+    if (m.kind === "mode" && (m.mode === "edit" || m.mode === "annotate")) {
       var nextReadOnly = m.readOnly === true;
       if (m.mode !== mode || nextReadOnly !== readOnly) {
         mode = m.mode;
         readOnly = nextReadOnly;
-        // Leaving mark-up mode drops the selection: it addressed elements
-        // for a note, and there is no note being written in use mode. A
+        // Leaving annotate mode drops the selection: it addressed elements
+        // for a note, and there is no note being written in edit mode. A
         // version going read only drops it for the same reason - there is
         // nothing to write about a version that cannot be annotated.
-        if ((mode === "use" || readOnly) && (selected.length > 0 || picked)) {
+        if ((mode === "edit" || readOnly) && (selected.length > 0 || picked)) {
           selected = [];
           picked = null;
           window.getSelection() && window.getSelection().removeAllRanges();
@@ -818,9 +818,9 @@ const script = (artifactId: string, version: number, author: string): string => 
   // was then highlighted for annotation a moment later — two things
   // happening from one press, in the wrong order.
   document.addEventListener("mousedown", function (e) {
-    if (!e.isTrusted || mode !== "markup" || readOnly) return;
+    if (!e.isTrusted || mode !== "annotate" || readOnly) return;
     // Cancelling every mousedown also cancels the browser's own text
-    // selection, which is what a drag is made of - so marking up a phrase
+    // selection, which is what a drag is made of - so annotating a phrase
     // was impossible for as long as this was unconditional.
     //
     // What it is actually for is controls: focus moves on mousedown, so a
@@ -835,7 +835,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   }, true);
 
   document.addEventListener("mouseover", function (e) {
-    if (!e.isTrusted || mode !== "markup" || readOnly) return;
+    if (!e.isTrusted || mode !== "annotate" || readOnly) return;
     var el = addressable(e.target);
     if (el === hovered) return;
     if (hovered) hovered.classList.remove("lucid-hover");
@@ -844,7 +844,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   }, true);
 
   document.addEventListener("mouseout", function (e) {
-    if (!e.isTrusted || mode !== "markup" || readOnly) return;
+    if (!e.isTrusted || mode !== "annotate" || readOnly) return;
     if (hovered) { hovered.classList.remove("lucid-hover"); hovered = null; }
   }, true);
 
@@ -853,7 +853,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // an uncollapsed selection is a drag, anything else falls through to the
   // click handler below.
   document.addEventListener("mouseup", function (e) {
-    if (!e.isTrusted || mode !== "markup" || readOnly) return;
+    if (!e.isTrusted || mode !== "annotate" || readOnly) return;
     var sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
     var exact = sel.toString();
@@ -875,7 +875,7 @@ const script = (artifactId: string, version: number, author: string): string => 
 
   document.addEventListener("click", function (e) {
     // A document that dispatches its own click is doing its own work.
-    if (!e.isTrusted || mode !== "markup" || readOnly) return;
+    if (!e.isTrusted || mode !== "annotate" || readOnly) return;
     // A drag ends with a mouseup and then a click. The mouseup already made
     // the pick, so this click must not immediately replace it with the
     // element under the cursor.
@@ -884,7 +884,7 @@ const script = (artifactId: string, version: number, author: string): string => 
       if (live && !live.isCollapsed) { e.preventDefault(); return; }
       picked = null;
     }
-    // In mark-up mode a click picks an element and does nothing else. Left
+    // In annotate mode a click picks an element and does nothing else. Left
     // to run, it would also tick the box or follow the link under it, so
     // one click would do two things and neither would be undoable.
     e.preventDefault();
@@ -908,7 +908,7 @@ const script = (artifactId: string, version: number, author: string): string => 
   // Clicking away clears. Only elements inside body carry the attribute,
   // so a click on the page's own margin lands here and nowhere else.
   document.addEventListener("click", function (e) {
-    if (!e.isTrusted || mode !== "markup" || readOnly) return;
+    if (!e.isTrusted || mode !== "annotate" || readOnly) return;
     if (addressable(e.target)) return;
     if (selected.length === 0 && !picked) return;
     selected = [];

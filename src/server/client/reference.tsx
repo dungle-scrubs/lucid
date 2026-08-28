@@ -346,10 +346,10 @@ const Head = (): React.ReactElement => (
           </select>
           <span className="modes">
             <button type="button" className="m">
-              Use
+              Edit
             </button>
             <button type="button" className="m current">
-              Mark up
+              Annotate
             </button>
           </span>
         </div>
@@ -368,10 +368,10 @@ const Head = (): React.ReactElement => (
           <span className="doc-version">v1</span>
           <span className="modes">
             <button type="button" className="m current">
-              Use
+              Edit
             </button>
             <button type="button" className="m">
-              Mark up
+              Annotate
             </button>
           </span>
         </div>
@@ -429,10 +429,10 @@ const Head = (): React.ReactElement => (
           </button>
           <span className="modes">
             <button type="button" className="m" disabled>
-              Use
+              Edit
             </button>
             <button type="button" className="m current" disabled>
-              Mark up
+              Annotate
             </button>
           </span>
         </div>

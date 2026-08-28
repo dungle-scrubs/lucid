@@ -113,7 +113,7 @@ describe("the document's own behaviour is left alone", () => {
     expect(mouse.length).toBe(3);
     for (const c of mouse) {
       const before = out.slice(0, c.at);
-      expect(before.lastIndexOf('mode !== "markup"')).toBeGreaterThan(
+      expect(before.lastIndexOf('mode !== "annotate"')).toBeGreaterThan(
         before.lastIndexOf("addEventListener"),
       );
     }
@@ -195,11 +195,11 @@ describe("two modes, so one click does one thing", () => {
     // What a person does with a document an agent produced is read it and
     // say what is wrong with it. Filling it in is the rarer act, and it is
     // the one with a switch to reach it.
-    expect(out).toContain('var mode = "markup"');
+    expect(out).toContain('var mode = "annotate"');
     // The page defaults to the same mode. If these ever disagree, the frame
     // renders every block editable for the moment before the page's first
     // mode message lands.
-    expect(out).not.toContain('var mode = "use"');
+    expect(out).not.toContain('var mode = "edit"');
   });
 
   test("text is editable in use mode, and a caret is the browser's job", () => {
@@ -237,7 +237,7 @@ describe("two modes, so one click does one thing", () => {
       const at = out.indexOf(`addEventListener("${listener}"`);
       expect(at).toBeGreaterThan(-1);
       // The guard is the first thing in the handler.
-      expect(out.slice(at, at + 220)).toContain('mode !== "markup"');
+      expect(out.slice(at, at + 220)).toContain('mode !== "annotate"');
     }
   });
 
@@ -247,7 +247,7 @@ describe("two modes, so one click does one thing", () => {
     // in use mode.
     // Read-only drops it for the same reason: there is nothing to write
     // about a version that cannot be annotated.
-    expect(out).toContain('if ((mode === "use" || readOnly) && (selected.length > 0 || picked))');
+    expect(out).toContain('if ((mode === "edit" || readOnly) && (selected.length > 0 || picked))');
     // Both kinds of pick, and the browser's own selection with them. A range
     // left standing would be read again by the next mouseup.
     expect(out).toContain("picked = null;");

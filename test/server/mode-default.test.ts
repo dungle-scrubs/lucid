@@ -21,18 +21,18 @@ const appSource = readFileSync(join(import.meta.dir, "../../src/server/client/ap
 
 describe("a document opens in mark-up mode", () => {
   test("the frame starts there", () => {
-    expect(instrumentArtifact(DOC, "doc-1", 1)).toContain('var mode = "markup"');
+    expect(instrumentArtifact(DOC, "doc-1", 1)).toContain('var mode = "annotate"');
   });
 
   test("the page starts there too", () => {
-    expect(appSource).toContain('React.useState<"use" | "markup">("markup")');
+    expect(appSource).toContain('React.useState<"edit" | "annotate">("annotate")');
   });
 
   test("neither declares the other default", () => {
     // The failure this catches: one changed and the other did not, so the
     // frame renders editable until the page corrects it a moment later.
-    expect(instrumentArtifact(DOC, "doc-1", 1)).not.toContain('var mode = "use"');
-    expect(appSource).not.toContain('React.useState<"use" | "markup">("use")');
+    expect(instrumentArtifact(DOC, "doc-1", 1)).not.toContain('var mode = "edit"');
+    expect(appSource).not.toContain('React.useState<"edit" | "annotate">("edit")');
   });
 
   test("use mode is still reachable, and still means what it meant", () => {
@@ -40,7 +40,7 @@ describe("a document opens in mark-up mode", () => {
     // click operate a control rather than select an element is still keyed on
     // the same two names.
     const out = instrumentArtifact(DOC, "doc-1", 1);
-    expect(out).toContain('m.mode === "use"');
-    expect(out).toContain('mode === "use"');
+    expect(out).toContain('m.mode === "edit"');
+    expect(out).toContain('mode === "edit"');
   });
 });

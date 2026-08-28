@@ -606,7 +606,7 @@ const DocumentFrame = ({
   /** Spots that already carry a note, marked in the document while the
    * batch is being composed. */
   marked: readonly string[];
-  mode: "use" | "markup";
+  mode: "edit" | "annotate";
   /** A version that is not the current one. Neither editable nor markable
    * (RFC-07 R6, R7). Not a third mode: the mode still stands, and applies
    * again the moment the current version is back. */
@@ -843,7 +843,7 @@ const DocumentFrame = ({
 
   React.useEffect(() => {
     // Sent on a timer as well as on change: the frame is replaced whenever
-    // the version changes, and a fresh frame starts in use mode.
+    // the version changes, and a fresh frame starts in edit mode.
     const send = (): void =>
       ref.current?.contentWindow?.postMessage(
         { source: FRAME_MESSAGE_SOURCE, kind: "mode", mode, readOnly },
@@ -1097,10 +1097,10 @@ const App = (): React.ReactElement => {
    * a box and picking an element to write about — so which one it is, is a
    * choice rather than a guess.
    *
-   * Mark up is the default. What a person does with a document an agent
+   * Annotate is the default. What a person does with a document an agent
    * produced is read it and say what is wrong with it; filling it in is the
    * rarer act, and it is the one that has a mode switch to reach it. */
-  const [mode, setMode] = React.useState<"use" | "markup">("markup");
+  const [mode, setMode] = React.useState<"edit" | "annotate">("annotate");
   const noteBox = React.useRef<HTMLTextAreaElement | null>(null);
   /** Where in the frame the selection sits, so the note box opens beside it
    * rather than in a panel at the bottom, away from what it is about. */
@@ -1251,9 +1251,9 @@ const App = (): React.ReactElement => {
   const toggleMode = React.useCallback((): void => {
     // Nothing to switch between on a version that permits neither.
     if (viewingOldRef.current) return;
-    setMode((m) => (m === "use" ? "markup" : "use"));
-    // Leaving mark-up mode ends whatever note was being written: there is no
-    // selection in use mode for it to point at.
+    setMode((m) => (m === "edit" ? "annotate" : "edit"));
+    // Leaving annotate mode ends whatever note was being written: there is no
+    // selection in edit mode for it to point at.
     cancelNote();
   }, [cancelNote]);
 
@@ -2095,13 +2095,13 @@ const App = (): React.ReactElement => {
         text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. ⌘⏎ sends them, or select more.`,
         tone: "ready",
       };
-    if (mode === "markup")
+    if (mode === "annotate")
       return {
-        text: "Marking up: click a part of the document to select it, ⌘-click to add more. ⌥⌫ goes back to using it.",
+        text: "Annotating: click a part of the document to select it, ⌘-click to add more. ⌥⌫ goes back to editing it.",
         tone: "idle",
       };
     return {
-      text: "Using the document: tick boxes, fill fields, and click text to edit it. ⌥⌫ switches to Mark up to write notes about it.",
+      text: "Editing the document: tick boxes, fill fields, and click text to change it. ⌥⌫ switches to Annotate to write notes about it.",
       tone: "idle",
     };
   })();
@@ -2164,7 +2164,7 @@ const App = (): React.ReactElement => {
                 </div>
               ) : doc === null ? (
                 <div className="empty doc-empty">
-                  Nothing to mark up yet. Ask the agent for a document.
+                  Nothing to annotate yet. Ask the agent for a document.
                 </div>
               ) : (
                 <>
@@ -2254,21 +2254,21 @@ const App = (): React.ReactElement => {
                     <span className="modes">
                       <button
                         type="button"
-                        className={mode === "use" ? "m current" : "m"}
-                        onClick={() => setMode("use")}
+                        className={mode === "edit" ? "m current" : "m"}
+                        onClick={() => setMode("edit")}
                         disabled={pinnedOld}
                         title="Tick boxes, fill fields, and edit text (⌥⌫)"
                       >
-                        Use
+                        Edit
                       </button>
                       <button
                         type="button"
-                        className={mode === "markup" ? "m current" : "m"}
-                        onClick={() => setMode("markup")}
+                        className={mode === "annotate" ? "m current" : "m"}
+                        onClick={() => setMode("annotate")}
                         disabled={pinnedOld}
                         title="Click parts of the document to write notes about them (⌥⌫)"
                       >
-                        Mark up
+                        Annotate
                       </button>
                     </span>
                   </div>
