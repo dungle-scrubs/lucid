@@ -238,6 +238,26 @@ plus not-on-this-version**, not seven treatments.
 
 **Lost is not an error.** It is a fact about history: the document moved on.
 
+### A note takes you to what it points at
+
+Clicking a note in the conversation goes to the part of the document it is
+about. Without this you re-read the document hunting for where an annotation
+happened, which is the thing the product exists to stop.
+
+The rule has three cases and the first one is the one designs usually get
+wrong:
+
+- The target is **already on screen** — light it in place and do not scroll.
+  Never move the page under a reader who is already looking at the thing.
+- The target is **off screen** — scroll it to the vertical centre and light
+  it.
+- The target is **lost** — light the note itself and do not move the document
+  at all. There is nothing to go to.
+
+This is the same rule that governs new material arriving: *already visible*
+means show it in place, *off screen* means offer to travel. The design should
+treat them as one idea, not two.
+
 ### The transcript
 
 Four kinds of row: what you said, what the agent said, a tool the agent used,
@@ -407,9 +427,14 @@ so light and dark hold inside the document as well as around it.
 
 ## 11. Known but unbuilt
 
-One feature is specified and not yet built: **comparing two versions of the
-document side by side**. It is not part of this brief, but a design should
-not make it impossible to add.
+Three things are decided and not yet built. They are not part of this brief,
+but a design should leave room for them.
+
+- **Seeing what a new version added**, so a revision does not have to be
+  re-read to find what moved.
+- **Comparing two versions** of the document side by side.
+- The **pulse** described in §9 depends on the first of these: it cannot
+  highlight new material without knowing which parts are new.
 
 ---
 
