@@ -439,6 +439,53 @@ const Head = (): React.ReactElement => (
       </div>
     </Case>
     <Case
+      name="An unsaved edit"
+      classes=".doc-head.saving-bar"
+      note="The bar stops describing the document and becomes the question. The name, the version and the modes are gone rather than greyed — the two things on it are the only two there are to do. The mode hotkey goes with the buttons, so there is no unlabelled way past it."
+    >
+      <div className="ref-pane">
+        <div className="doc-head saving-bar">
+          <span className="saving-what">Unsaved changes</span>
+          <button type="button" className="v">
+            Discard
+          </button>
+          <button type="button" className="v primary">
+            Save
+          </button>
+        </div>
+      </div>
+    </Case>
+    <Case
+      name="An unsaved edit, overtaken"
+      classes=".doc-head.saving-bar"
+      note="The agent wrote a version while this edit was open. Saving still works and lands on top, recording what it was based on, so the wording says where it will go without reading as an error — because it is not one."
+    >
+      <div className="ref-pane">
+        <div className="doc-head saving-bar">
+          <span className="saving-what">
+            Unsaved changes — they will land on top of the newer version
+          </span>
+          <button type="button" className="v">
+            Discard
+          </button>
+          <button type="button" className="v primary">
+            Save
+          </button>
+        </div>
+      </div>
+    </Case>
+    <Case
+      name="Changes you cannot see"
+      classes=".doc-changed"
+      note="A version changed things outside the viewport. Those did not pulse — pulsing something off screen wastes the only signal there is — so they are offered instead. What the reader could see is not mentioned here, because it pulsed."
+    >
+      <div className="ref-pane">
+        <div className="doc-changed">
+          3 changes you cannot see. <button type="button">show the first</button>
+        </div>
+      </div>
+    </Case>
+    <Case
       name="A newer version arrived"
       classes=".doc-waiting"
       note="With an unsaved edit it offers both ways out. Saving works and lands on top, carrying what it was based on."
