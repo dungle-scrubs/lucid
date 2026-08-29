@@ -206,10 +206,10 @@ body {
   /* An `hr` brings its own border, margins, and height, and Tailwind's
      preflight then sets `height: 0` on top - which beats `align-self` and
      collapses the grip. Height is restored explicitly so stretch applies.
-     The negative bottom margin runs the line into .panes' bottom padding
-     and out at the window's edge: the dock went full-bleed, and a divider
-     that stops 14px short of the floor reads as broken. */
-  margin: 2px 0 -14px;
+     Both negative margins run the line through .panes' padding to the
+     window's edges: the dock went full-bleed, and a divider that stops
+     14px short of either end reads as broken (Kevin, 2026-08-29). */
+  margin: -14px 0 -14px;
   border: 0;
   height: auto;
   align-self: stretch;
@@ -1163,6 +1163,14 @@ body {
   min-height: 0;
 }
 
+/* Wide: each side takes half of what the container offers, not 360px
+   islands floating in dead ground (Kevin, 2026-08-29). */
+.doc-ground.compare.wide .compare-col {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
+
 .doc-ground.compare:not(.wide) .compare-col {
   width: 100%;
   max-width: 640px;
@@ -1906,6 +1914,41 @@ body {
   color: var(--color-accent-700);
 }
 
+/* The wait, said the way a terminal says it: the dots count up and start
+   over - ".", "..", "...", again - on a 1.2s cadence. Discrete content
+   steps, not a fade, because the request was a count, not a pulse. The
+   width is reserved so the elapsed count never shifts under it, and a
+   reduced-motion reader gets a still ellipsis. */
+.working-dots::after {
+  content: ".";
+  display: inline-block;
+  width: 1.6ch;
+  text-align: left;
+  animation: working-dots 1.2s infinite;
+}
+
+@keyframes working-dots {
+  0% {
+    content: ".";
+  }
+  25% {
+    content: "..";
+  }
+  50% {
+    content: "...";
+  }
+  75% {
+    content: "";
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .working-dots::after {
+    animation: none;
+    content: "...";
+  }
+}
+
 /* The dock owns the divider above itself; its first child must not draw a
    second one. */
 .dock > :first-child {
@@ -2307,7 +2350,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  column-gap: 2px;
+  column-gap: 0;
   row-gap: 5px;
   /* The composer above carries 14px of bottom padding; -5px of it comes
      back, so the air between field and line is the 9px the handoff draws. */
@@ -2317,9 +2360,11 @@ body {
   color: color-mix(in srgb, var(--color-text) 52%, transparent);
 }
 
-/* One label. Never shortened to force a single row. */
+/* One label. Never shortened to force a single row. The 5px side padding
+   keeps segments distinct at a glance; wider insets read as gaps between
+   words that belong to one sentence. */
 .driver-seg {
-  padding: 4px 7px;
+  padding: 4px 5px;
   border-radius: 6px;
   white-space: nowrap;
 }

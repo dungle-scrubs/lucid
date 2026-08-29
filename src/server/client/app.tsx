@@ -1325,8 +1325,13 @@ const Thread = ({
             wait teaches you to stop reading it. */}
         {report.busy && !stalled ? (
           <div className="working-bar">
-            {report.label}
-            {report.elapsed === null ? "" : ` · ${report.elapsed}`}
+            <span>
+              {report.label}
+              <span aria-hidden="true" className="working-dots" />
+            </span>
+            {report.elapsed === null ? null : (
+              <span className="working-elapsed"> · {report.elapsed}</span>
+            )}
           </div>
         ) : null}
         {pending.length === 0 ? null : (
