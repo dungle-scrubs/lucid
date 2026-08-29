@@ -101,7 +101,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.5.4",
+      hcn: "0.6.0",
       escalateQuestions: true,
     });
     const session = await opening;
@@ -147,7 +147,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.5.4",
+      hcn: "0.6.0",
       escalateQuestions: true,
     });
     const session = await opening;
@@ -166,7 +166,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.5.4",
+      hcn: "0.6.0",
       escalateQuestions: true,
     });
     const session = await opening;
@@ -192,7 +192,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.5.6",
+      hcn: "0.6.0",
       escalateQuestions: true,
     });
     const session = await opening;
@@ -213,7 +213,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.5.4",
+      hcn: "0.6.0",
       escalateQuestions: true,
     });
     const session = await opening;
@@ -236,7 +236,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.5.4",
+      hcn: "0.6.0",
       escalateQuestions: true,
     });
     const session = await opening;
@@ -253,7 +253,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.5.4",
+      hcn: "0.6.0",
       escalateQuestions: true,
     });
     const session = await opening;
@@ -286,7 +286,7 @@ describe("openSession over hcn session --json", () => {
       kind: "session",
       sessionId: sid,
       harness: "pi",
-      hcn: "0.5.4",
+      hcn: "0.6.0",
       escalateQuestions: true,
     });
     await opening;
@@ -433,7 +433,7 @@ describe("inspection, which never spawns a harness", () => {
 
 describe("review fixes: what the cross-family review found", () => {
   const sid2 = "479c05c6-0c2b-416a-9700-2b04cf8ecf24";
-  const open = async (r: ReturnType<typeof rig>, hcn = "0.5.4") => {
+  const open = async (r: ReturnType<typeof rig>, hcn = "0.6.0") => {
     const opening = r.runner.openSession({ harness: "claude", sessionId: sid2 });
     r.proc.emit({
       kind: "session",
@@ -561,7 +561,7 @@ describe("a turn that carries a failure still delivers its events", () => {
       kind: "session",
       sessionId: sid,
       harness: "claude",
-      hcn: "0.5.6",
+      hcn: "0.6.0",
       escalateQuestions: true,
     });
     const session = await opening;

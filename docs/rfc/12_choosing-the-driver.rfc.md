@@ -53,11 +53,12 @@ client is told.
   field on the endpoint is an unknown field and is refused.
 - **Re-spawning interactive sessions.** A session a human owns is never
   re-spawned by lucid, whatever the file says. See the honor rule.
-- **Changing `hcn`.** Where a dimension has no flag on the pinned hcn
-  (0.5.7), this RFC states the fact and specifies what happens. It does
-  not add flags to `@dungle-scrubs/harness-cli-normalizer`, and it needs
-  no bump: every rule below runs against the pinned binary. If a later
-  hcn widens a surface, the menus widen with it and nothing else changes.
+- **Changing `hcn`.** Where a dimension has no flag on the pinned hcn,
+  this RFC states the fact and specifies what happens. It does not add
+  flags to `@dungle-scrubs/harness-cli-normalizer`: every rule below runs
+  against the pinned binary. The one gap it recorded - session effort -
+  was closed by bumping to hcn 0.6.0, which grew `hcn session --effort`;
+  the menus widened with it and nothing else changed.
 
 ### Why now
 
@@ -266,19 +267,14 @@ file changes again. The preference file is left as written - it is the
 person's choice, not a claim about what runs, and the person may fix it
 with another choice, not with lucid quietly reverting it.
 
-**Effort where the invocation cannot express it.** As of hcn 0.5.7,
-verified by running the pinned binary: `hcn run` carries `--model`,
-`--effort` and `--provider`; `hcn session` carries `--model` and
-`--provider` and no `--effort`. So a headless-turn driver honors all
-three dimensions, and a headless-session driver (claude, pi) honors
-harness, model and provider while its effort stays the hcn profile
-default (medium). For a session-mode driver the effort menu is absent,
-not disabled - the same rule the design set for every dimension that
-cannot act. This is a fact about a pinned version, not a permanent
-property; a later hcn session that carries effort widens the menu with no
-other change. Recording the gap here is deliberate: the design assumed
-all four segments live in `headless-session`, and the assumption does not
-survive contact with the binary.
+**Effort on both profiles.** hcn 0.6.0 carries `--effort` on `hcn run`
+and `hcn session` alike (verified by running the pinned binary), so both
+headless profiles honor all four dimensions and the effort menu is
+offered on both. Before 0.6.0 the session surface carried no `--effort`:
+a session driver's effort stayed the hcn profile default (medium) and its
+menu was absent, not disabled - the same rule the design set for every
+dimension that cannot act. That rule stands for any future dimension a
+surface cannot express.
 
 ## The lists
 
@@ -382,10 +378,10 @@ Ordered so each step leaves `bun run check` green.
 
 1. **The seam.** Widen `HarnessRunner.inspect` to carry
    `models` (aliases resolved), `efforts`, `extensible`, and whether
-   provider is expressible; add `effort` to `StreamTurnOptions` and
-   `OpenSessionOptions`, rendered by the hcn runner as `--effort` where
-   the invocation carries it (run today; session when hcn does). No
-   fixture changes: the pinned hcn answers `inspect` at runtime.
+   provider is expressible; `effort` rides `StreamTurnOptions` and
+   `OpenSessionOptions` alike, rendered by the hcn runner as `--effort`
+   on both surfaces (hcn >= 0.6.0). No fixture changes beyond the
+   deliberate re-capture the hcn bump records.
 2. **The store.** `driver.json`: atomic replace, `0o600`, tolerant read
    (absent file, unknown fields). Testable without a browser.
 3. **The endpoint and the projection.** `POST .../driver`, the two
@@ -395,7 +391,7 @@ Ordered so each step leaves `bun run check` green.
    deterministic gate: a fake hcn fixture that refuses one invocation,
    asserting the driver in force answers the input and the event lands.
 5. **The client.** The menus, the lists from `driverChoices`, the
-   absent-not-disabled rules, effort absent on session drivers.
+   absent-not-disabled rules.
 
 Step 4 is the one that may not be shortcut: it is the whole point of the
 RFC, and every other step exists to feed it.
@@ -434,4 +430,4 @@ RFC, and every other step exists to feed it.
 - `CONTEXT.md` - the record and its parts; not lucid's words
 - The `hcn` skill and `hcn inspect <harness> --json` - the descriptor
   dump the lists are read from; `hcn run --help` / `hcn session --help`
-  on the pinned 0.5.7, run to verify which flags each surface carries
+  on the pinned 0.6.0, run to verify which flags each surface carries

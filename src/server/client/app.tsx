@@ -854,9 +854,7 @@ const DRIVER_MENU_W = 226;
  * design's - harness, mode and model are one thought (the program, how
  * lucid runs it, the weights); effort alters a turn rather than the
  * connection, so it is last. A segment whose value the record does not
- * carry is absent, not disabled - an effort that cannot act (a session-mode
- * driver, on the pinned hcn) is not drawn at all, and neither is a blank
- * or a ghost.
+ * carry is absent, not disabled - and so is a blank or a ghost.
  *
  * Harness, model and effort are controls now (RFC-12): hover takes the
  * accent pill, opening takes the segment solid, and a pick POSTs the whole

@@ -6,7 +6,7 @@
       "name": "lucid-v2",
       "dependencies": {
         "@assistant-ui/react": "^0.10",
-        "@dungle-scrubs/harness-cli-normalizer": "0.5.7",
+        "@dungle-scrubs/harness-cli-normalizer": "0.6.0",
         "@radix-ui/react-popover": "^1.1.23",
         "dom-anchor-text-quote": "^4",
         "react": "^18.3.1",
@@ -67,7 +67,7 @@
 
     "@csstools/css-tokenizer": ["@csstools/css-tokenizer@4.0.0", "", {}, "sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA=="],
 
-    "@dungle-scrubs/harness-cli-normalizer": ["@dungle-scrubs/harness-cli-normalizer@0.5.7", "", { "bin": { "hcn": "dist/cli.js" } }, "sha512-CEZ/aL/ePHelYmWtLp21n2CWcNHodWXl3Idi4qHaJ9nN3XRa3ZLCKRwU5+KusyKEe3BTKdnjCg2/IjFF3eCEdQ=="],
+    "@dungle-scrubs/harness-cli-normalizer": ["@dungle-scrubs/harness-cli-normalizer@0.6.0", "", { "bin": { "hcn": "dist/cli.js" } }, "sha512-pmy4tfRjTOQhpqmaC+q5M/9ydj07Q7ETzjYB8VHZl8+JTV7081gmqdaf1EXHyvoMRNEih072XTsPsTYD3ymCIQ=="],
 
     "@exodus/bytes": ["@exodus/bytes@1.15.1", "", { "peerDependencies": { "@noble/hashes": "^1.8.0 || ^2.0.0" }, "optionalPeers": ["@noble/hashes"] }, "sha512-S6mL0yNB/Abt9Ei4tq8gDhcczc4S3+vQ4ra7vxnAf+YHC02srtqxKKZghx2Dq6p0e66THKwR6r8N6P95wEty7Q=="],
 

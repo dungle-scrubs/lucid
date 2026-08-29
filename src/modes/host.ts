@@ -145,10 +145,8 @@ export interface HeadlessDeps {
   readonly model?: string;
   readonly provider?: string;
   /** RFC-12: the effort dimension, rendered by the hcn runner as
-   * `hcn run --effort`. `hcn session` (0.5.7) carries no effort flag, so a
-   * session-profile spawn cannot express it - the honor rule does not
-   * switch a session driver on it, and its effort stays the hcn profile
-   * default (medium). */
+   * `hcn run --effort` and (since hcn 0.6.0) `hcn session --effort`, so
+   * both headless profiles express it and the honor rule switches on it. */
   readonly effort?: string;
   /** RFC-12 honor: asked at a turn boundary, before the input in hand is
    * handed to the harness. True means "do not hand it over - end this
@@ -498,9 +496,7 @@ const sessionStrategy = (
   // Opening crosses a process boundary now, so it is a promise. The host's
   // surface stays synchronous: everything that needs the session awaits this
   // one handle rather than the caller learning about the wait.
-  // RFC-12: hcn session (0.5.7) carries --model and --provider but no
-  // --effort, so a session spawn's effort stays the hcn profile default.
-  // When hcn grows the flag, OpenSessionOptions widens and this passes it.
+  // hcn session carries --model, --provider and (since 0.6.0) --effort.
   const opening = deps.runner.openSession({
     harness: deps.harness,
     sessionId: deps.sessionId,
@@ -509,6 +505,7 @@ const sessionStrategy = (
     ...(ctx.resumeSessionId === undefined ? {} : { resume: ctx.resumeSessionId }),
     ...(deps.model === undefined ? {} : { model: deps.model }),
     ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+    ...(deps.effort === undefined ? {} : { effort: deps.effort }),
   });
   // A failure to open must not become an unhandled rejection. It must also
   // not be silent: a session hcn refuses (a harness with no session mode, an

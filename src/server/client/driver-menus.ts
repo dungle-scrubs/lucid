@@ -6,9 +6,8 @@
  * settable from the browser, and the design's mode gloss stays a tooltip.
  * The rules this module owns:
  *
- * - **Absent, not disabled.** A dimension that cannot act - effort on a
- *   session-mode driver (the pinned hcn's `session` carries no `--effort`),
- *   a model list the harness does not carry - is removed, never greyed.
+ * - **Absent, not disabled.** A dimension that cannot act - a model list
+ *   the harness does not carry - is removed, never greyed.
  * - **The preference is the choice; the driver in force is the fact.** The
  *   line renders what runs where the record names it and what the person
  *   chose where only a choice exists (effort has no other source), and the
@@ -145,15 +144,11 @@ export const driverLineState = (args: {
     ) {
       menus.add("model");
     }
-    // Effort cannot act on a session-mode driver: the pinned hcn's
-    // `session` carries no --effort, so the level would be written and
-    // never honored. Absent, not disabled (RFC-12, the honor rule's gap).
-    if (
-      harness !== null &&
-      profile !== "headless-session" &&
-      vocabulary !== null &&
-      vocabulary.efforts.length > 0
-    ) {
+    // Effort acts wherever the served vocabulary carries a ladder, which
+    // is every harness's on both headless profiles since hcn 0.6.0 grew
+    // `hcn session --effort`. A harness whose dump carries no ladder
+    // stays absent, not disabled.
+    if (harness !== null && vocabulary !== null && vocabulary.efforts.length > 0) {
       menus.add("effort");
     }
   }

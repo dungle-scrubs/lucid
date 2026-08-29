@@ -179,7 +179,7 @@ const sessionLine = (proc: FakeHcnProcess, sessionId: string): void => {
     kind: "session",
     sessionId,
     harness: "claude",
-    hcn: "0.5.7",
+    hcn: "0.6.0",
     escalateQuestions: true,
   });
 };
@@ -325,7 +325,7 @@ describe("RFC-12: the driver honors a changed preference (session profile)", () 
     expect(attachFrames.map((f) => (f as { harness?: string }).harness)).toEqual(["claude", "pi"]);
   });
 
-  test("a session driver does not switch on effort, which its invocation cannot express", async () => {
+  test("a changed effort re-spawns the session before the next turn, and the argv carries it", async () => {
     const r = await openRig();
     const proc1 = r.procs[0] as FakeHcnProcess;
     sessionLine(proc1, SID);
@@ -333,24 +333,46 @@ describe("RFC-12: the driver honors a changed preference (session profile)", () 
     await until(() => proc1.commands.some((c) => c.op === "send" && c.id === "A"), "send A");
     accept(proc1, "A", "hcn-t1");
     proc1.emit(identity(SID));
+    proc1.emit(assistant("first answer"));
     proc1.emit(doneClean);
     await settle();
+    expect(r.appliedCount("A")).toBe(1);
 
-    // `hcn session` carries no --effort (verified on the pinned binary):
-    // the dimension is absent for a session driver, not a switch trigger.
+    // `hcn session` has carried --effort since 0.6.0: a session driver
+    // switches on the dimension exactly like a turn driver.
     r.writePref({ harness: "claude", effort: "high" });
     r.send("B");
+    await r.closeSession(proc1);
+
+    const proc2 = r.procs[1] as FakeHcnProcess;
+    expect(r.argvOf(1)).toEqual([
+      BIN,
+      "session",
+      "claude",
+      "--json",
+      "--resume",
+      SID,
+      "--effort",
+      "high",
+    ]);
+    sessionLine(proc2, SID);
     await until(
-      () => proc1.commands.some((c) => c.op === "send" && c.id === "B"),
-      "B on the same session",
+      () => proc2.commands.some((c) => c.op === "send" && c.id === "B"),
+      "replayed send on the new spawn",
     );
-    accept(proc1, "B", "hcn-t2");
-    proc1.emit(assistant("still the first spawn"));
-    proc1.emit(doneClean);
+    accept(proc2, "B", "hcn-t2");
+    proc2.emit(assistant("second answer"));
+    proc2.emit(doneClean);
     await settle();
 
-    expect(r.spawner.calls.length).toBe(1);
+    expect(r.spawner.calls.length).toBe(2);
     expect(r.appliedCount("B")).toBe(1);
+    expect(r.logText()).toContain("second answer");
+    expect(r.driver.state()).toEqual({
+      spawn: { harness: "claude", effort: "high" },
+      profile: "headless-session",
+      ended: false,
+    });
   });
 });
 
@@ -581,8 +603,8 @@ describe("RFC-12: the pin and the startup fold", () => {
     proc.emit(doneClean);
     await settle();
 
-    // The model reached the spawn; the effort did not - a session driver's
-    // invocation cannot express it (hcn session carries no --effort).
+    // Every dimension reached the spawn: the model and the effort, on
+    // the session surface too since hcn 0.6.0.
     expect(spawner.calls[0]?.argv).toEqual([
       BIN,
       "session",
@@ -592,6 +614,8 @@ describe("RFC-12: the pin and the startup fold", () => {
       "sess-1",
       "--model",
       "claude-opus-5",
+      "--effort",
+      "high",
     ]);
     expect(driver.state().spawn).toEqual({
       harness: "claude",

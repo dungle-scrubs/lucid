@@ -74,8 +74,7 @@ describe("which menus exist", () => {
     expect(s.effort).toBe(EFFORT_DEFAULT);
   });
 
-  test("headless-session offers no effort: the pinned hcn's session carries no --effort", () => {
-    // Absent, not disabled - the dimension cannot act, so it is not drawn.
+  test("headless-session offers all three: hcn session carries --effort since 0.6.0", () => {
     const s = driverLineState({
       profile: "headless-session",
       driverHarness: "claude",
@@ -83,20 +82,8 @@ describe("which menus exist", () => {
       preference: null,
       choices: CHOICES,
     });
-    expect([...s.menus]).toEqual(["harness", "model"]);
-    expect(s.effort).toBeNull();
-  });
-
-  test("a session driver's preference effort does not bring the menu back", () => {
-    const s = driverLineState({
-      profile: "headless-session",
-      driverHarness: "claude",
-      driverModel: undefined,
-      preference: pref({ effort: "high" }),
-      choices: CHOICES,
-    });
-    expect(s.menus.has("effort")).toBe(false);
-    expect(s.effort).toBeNull();
+    expect([...s.menus]).toEqual(["harness", "model", "effort"]);
+    expect(s.effort).toBe(EFFORT_DEFAULT);
   });
 
   test("interactive offers none: the human's session chose the driver", () => {

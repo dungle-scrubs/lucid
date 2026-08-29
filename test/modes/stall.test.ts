@@ -58,7 +58,7 @@ const rig = (opts: { stallMs: number }) => {
     kind: "session",
     sessionId: SID,
     harness: "claude",
-    hcn: "0.5.4",
+    hcn: "0.6.0",
     escalateQuestions: true,
   });
   return {

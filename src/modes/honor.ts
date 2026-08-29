@@ -166,19 +166,9 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     if (pref === null) return false;
     if (refused !== null && samePreference(pref, refused)) return false;
     const desired = spawnOf(pref, current.harness, deps.harnessPinned);
-    // hcn session carries no --effort (0.5.7), so a session driver cannot
-    // express that dimension and does not switch on it: absent, not
-    // disabled, the same rule the design set for every dimension that
-    // cannot act.
-    const expressible = (s: DriverSpawn): DriverSpawn =>
-      profile === "headless-session"
-        ? {
-            harness: s.harness,
-            ...(s.model === undefined ? {} : { model: s.model }),
-            ...(s.provider === undefined ? {} : { provider: s.provider }),
-          }
-        : s;
-    return !sameSpawn(expressible(desired), expressible(current));
+    // Both headless profiles express effort since hcn 0.6.0 grew
+    // `hcn session --effort`, so every dimension compares on both.
+    return !sameSpawn(desired, current);
   };
 
   const openUnder = async (
@@ -193,9 +183,7 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       harness: spawn.harness,
       ...(spawn.model === undefined ? {} : { model: spawn.model }),
       ...(spawn.provider === undefined ? {} : { provider: spawn.provider }),
-      ...(nextProfile === "headless-turn" && spawn.effort !== undefined
-        ? { effort: spawn.effort }
-        : {}),
+      ...(spawn.effort === undefined ? {} : { effort: spawn.effort }),
       driverChangeAtBoundary: wantsChange,
       onEnded: (end: SourceEnd) => handleEnded(gen, end),
       ...(opts.notes === undefined ? {} : { notes: opts.notes }),

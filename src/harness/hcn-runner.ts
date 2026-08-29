@@ -202,8 +202,9 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       ...(opts.resume === undefined ? ["--session-id", opts.sessionId] : ["--resume", opts.resume]),
       ...flag("--model", opts.model),
       ...flag("--provider", opts.provider),
-      // No --effort here: `hcn session` (0.5.7) carries no effort flag, so
-      // a session spawn's effort stays the hcn profile default (RFC-12).
+      // hcn >= 0.6.0 carries --effort on session, validated per
+      // harness/model the same way the run path validates it (RFC-12).
+      ...flag("--effort", opts.effort),
       ...flag("--stall", opts.stallSeconds === undefined ? undefined : String(opts.stallSeconds)),
     ];
     log({ event: "hcn_session_open", sessionId: opts.sessionId, harness: opts.harness });
