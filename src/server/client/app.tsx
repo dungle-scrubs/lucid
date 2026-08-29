@@ -3628,15 +3628,11 @@ const App = (): React.ReactElement => {
         text: `${notes.length} note${notes.length === 1 ? "" : "s"} ready. ⌘⏎ sends them, or select more.`,
         tone: "ready",
       };
-    if (mode === "annotate")
-      return {
-        text: "Annotating: click a part of the document to select it, ⌘-click to add more. ⌥⌫ goes back to editing it.",
-        tone: "idle",
-      };
-    return {
-      text: "Editing the document: tick boxes, fill fields, and click text to change it. ⌥⌫ switches to Annotate to write notes about it.",
-      tone: "idle",
-    };
+    // The mode how-to is gone (Kevin, 2026-08-29): the sheet's tab carries
+    // the mode, and a hint that repeats it forever stops being read. What
+    // renders down here now is only what is news - a warning, an outcome,
+    // a count. Nothing to say, nothing drawn.
+    return { text: "", tone: "idle" };
   })();
 
   /** Handed to every note card. Refuses while an older version is pinned:
@@ -4389,9 +4385,12 @@ const App = (): React.ReactElement => {
                             </Popover.Root>
                           </div>
 
-                          {/* The guidance line, under the sheet on the ground. */}
+                          {/* The guidance line, under the sheet on the ground.
+                              Empty when there is nothing to say. */}
                           <div className="doc-panel">
-                            <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
+                            {guidance.text === "" ? null : (
+                              <div className={`guidance ${guidance.tone}`}>{guidance.text}</div>
+                            )}
 
                             {/* Saving moved to the top bar with #171, and this is
                         what is left: the last save's outcome, which is news
