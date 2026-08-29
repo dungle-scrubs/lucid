@@ -134,6 +134,14 @@ export interface StreamTurnOptions {
   readonly prompt: string;
   readonly resume?: string;
   readonly model?: string;
+  /** RFC-12: routing through `hcn run --provider` (pi only; hcn refuses
+   * the flag for a harness that cannot express the dimension). */
+  readonly provider?: string;
+  /** RFC-12: routing through `hcn run --effort`. `hcn session` (0.5.7)
+   * carries no effort flag, so OpenSessionOptions has no effort field - a
+   * session-profile spawn's effort stays the hcn profile default. When hcn
+   * grows the flag on session, this seam widens with it. */
+  readonly effort?: string;
   readonly cwd?: string;
   readonly turnId: string;
 }

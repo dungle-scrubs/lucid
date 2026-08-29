@@ -156,6 +156,8 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       opts.harness,
       "--json",
       ...flag("--model", opts.model),
+      ...flag("--provider", opts.provider),
+      ...flag("--effort", opts.effort),
       ...flag("--resume", opts.resume),
       opts.prompt,
     ];
@@ -200,6 +202,8 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       ...(opts.resume === undefined ? ["--session-id", opts.sessionId] : ["--resume", opts.resume]),
       ...flag("--model", opts.model),
       ...flag("--provider", opts.provider),
+      // No --effort here: `hcn session` (0.5.7) carries no effort flag, so
+      // a session spawn's effort stays the hcn profile default (RFC-12).
       ...flag("--stall", opts.stallSeconds === undefined ? undefined : String(opts.stallSeconds)),
     ];
     log({ event: "hcn_session_open", sessionId: opts.sessionId, harness: opts.harness });

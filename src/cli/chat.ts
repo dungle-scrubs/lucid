@@ -24,19 +24,21 @@ import { createHcnRunner } from "../harness/hcn-runner.js";
 import { nodeHarnessDeps } from "../harness/node-deps.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { decideAction } from "../modes/controller.js";
+import { openHonoringDriver } from "../modes/honor.js";
 import { createHeadlessHost } from "../modes/host.js";
 import { INPUT_QUEUE_MAX } from "../protocol/events.js";
 import type { Frame } from "../protocol/index.js";
 import { InputLedger } from "../protocol/ledgers/input.js";
 import { channelStatus } from "../protocol/liveness.js";
 import { createTurnIds } from "../protocol/turn-id.js";
+import { readDriverPreference } from "../store/driver-preference.js";
 import { acquirePresence, type PresenceHandle } from "../store/presence.js";
 import { type HostRecord, openConversation, viewSnapshot } from "../store/store.js";
 import { createTailer, followRecord, type RecordTailer } from "../store/tailer.js";
 import { NotTTYError, runInputLoop } from "../tui/input.js";
 import { renderLines } from "../tui/render.js";
 import { buildView } from "../tui/view.js";
-import { harnessForName, supportsSession } from "./harness.js";
+import { resolveStartupHarness, supportsSession } from "./harness.js";
 import { type Conversations, conversations } from "./record-addressing.js";
 
 export class ChatRefused extends Error {
@@ -96,7 +98,8 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
   const nowFn = opts.now ?? (() => Date.now());
   const uuidFn = opts.randomUUID ?? (() => crypto.randomUUID());
   const suffixFn = opts.randomConversationSuffix ?? (() => Math.random().toString(36).slice(2, 6));
-  const harness = opts.harness ?? harnessForName(opts.harnessName);
+  // Startup harness resolution happens below, with the record's driver
+  // preference in hand (RFC-12).
   const presenceProbe = opts.presence ?? (() => undefined);
   const stdout = (opts.stdout ?? process.stdout) as NodeJS.WriteStream;
   const write = opts.write ?? ((s: string) => stdout.write(s));
@@ -194,11 +197,17 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
   // Unique across restarts: a reused id is refused by the reducer, and the
   // driver would record nothing the agent says. See src/protocol/turn-id.ts.
   const mintTurnId = createTurnIds();
+
+  // RFC-12 startup honor: the preference's harness beats the default; an
+  // explicit harness at spawn pins the harness for this process's life;
+  // model, provider and effort come from the preference, which is their
+  // only source besides hcn's defaults.
+  const startup = resolveStartupHarness({ harnessName: opts.harnessName, harness: opts.harness });
+  const preference = readDriverPreference(dir);
+  const harness = startup.pinned ? startup.harness : (preference?.harness ?? startup.harness);
   const runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
-  const profile = (await supportsSession(runner, harness)) ? "headless-session" : "headless-turn";
 
   const baseDeps = {
-    harness,
     conversationId,
     secret,
     runner,
@@ -219,12 +228,20 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
     },
   } as const;
 
-  let source: ReturnType<typeof createHeadlessHost>;
+  // RFC-12: the source opens through the honoring driver, so a preference
+  // changed from the browser re-spawns the harness at the next turn
+  // boundary - here too, not only under `lucid run`.
+  let source: import("../modes/honor.js").HonoringSource;
   try {
-    source =
-      profile === "headless-session"
-        ? createHeadlessHostFn({ ...baseDeps, sessionId: uuidFn() }, "headless-session")
-        : createHeadlessHostFn(baseDeps, "headless-turn");
+    source = await openHonoringDriver({
+      base: baseDeps,
+      sessionCapable: (h) => supportsSession(runner, h),
+      initialHarness: harness,
+      harnessPinned: startup.pinned,
+      readPreference: () => readDriverPreference(dir),
+      mintSessionId: uuidFn,
+      createHostFn: createHeadlessHostFn,
+    });
   } catch (e) {
     try {
       host.close();
@@ -258,7 +275,10 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
       const tail = tailer.read();
       const st = tail.state;
       const chStatus = channelStatus(st, nowFn(), { processAlive: presenceProbe() === true });
-      const rung = following ? "following" : profile;
+      // The rung reads the driver's live state: a preference honored
+      // mid-conversation changes the profile, and the window must not
+      // keep painting the one this process started under (RFC-12).
+      const rung = following ? "following" : source.state().profile;
       // Build view with current draft. The draft field is what view.ts
       // already takes — this is the wiring that ticket says was missing.
       view = buildView({ transcript: tail.transcript, status: chStatus, rung, draft: chatDraft });
@@ -361,8 +381,9 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
     };
 
     if (q !== null) {
-      // A question is open — answer path.
-      if (profile === "headless-turn") {
+      // A question is open — answer path. Read the live profile: a
+      // mid-conversation driver change can move it (RFC-12).
+      if (source.state().profile === "headless-turn") {
         refuseInWindow(
           "answering needs a session profile — this harness has no session to answer into",
         );

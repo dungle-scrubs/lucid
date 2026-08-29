@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { conversations } from "../../src/cli/conversations.js";
@@ -119,6 +119,81 @@ describe("RFC-04 R2 at the runtime seam", () => {
     const log = readFileSync(join(root, "conv-1", "log.ndjson"), "utf8");
     expect(log).toContain('"n":2');
 
+    running.abort();
+  });
+});
+
+describe("RFC-12: the startup honor fold at the runtime seam", () => {
+  /** A factory that records the deps each spawn was built with, so the
+   * harness and model a preference chose are asserted on what the runtime
+   * actually spawned, not on what it reports. */
+  const recordingFactory = (): {
+    readonly factory: typeof createHeadlessHost;
+    readonly spawns: { harness: unknown; model?: unknown }[];
+  } => {
+    const spawns: { harness: unknown; model?: unknown }[] = [];
+    const factory = ((deps: { harness: unknown; model?: unknown }) => {
+      spawns.push({ harness: deps.harness, model: deps.model });
+      return {
+        receive: (_f: Frame): void => {},
+        close: (): void => {},
+      };
+    }) as unknown as typeof createHeadlessHost;
+    return { factory, spawns };
+  };
+
+  const writePreference = (root: string, body: Record<string, unknown>): void => {
+    const dir = join(root, "conv-1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "driver.json"), JSON.stringify(body));
+  };
+
+  test("a preference in the record names the harness and model of the first spawn", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-runtime-pref-"));
+    conversations(root).ensure("conv-1");
+    writePreference(root, { v: 1, harness: "codex", model: "gpt-6" });
+    const presence = fakePresence();
+    const source = recordingFactory();
+
+    const running = await startHeadless({
+      rootDir: root,
+      conversationId: "conv-1",
+      runner: fakeRunner,
+      acquirePresenceFn: presence.acquire,
+      createHeadlessHostFn: source.factory,
+      now: () => 1_000,
+    });
+    expect(running.kind).toBe("running");
+    if (running.kind !== "running") return;
+
+    // No flag named a harness, so the preference's choice is the spawn.
+    expect(source.spawns[0]?.harness).toBe("codex");
+    expect(source.spawns[0]?.model).toBe("gpt-6");
+    running.abort();
+  });
+
+  test("an explicit harness at spawn pins the harness for the process's life", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-runtime-pin-"));
+    conversations(root).ensure("conv-1");
+    writePreference(root, { v: 1, harness: "pi" });
+    const presence = fakePresence();
+    const source = recordingFactory();
+
+    const running = await startHeadless({
+      rootDir: root,
+      conversationId: "conv-1",
+      harnessName: "claude",
+      runner: fakeRunner,
+      acquirePresenceFn: presence.acquire,
+      createHeadlessHostFn: source.factory,
+      now: () => 1_000,
+    });
+    expect(running.kind).toBe("running");
+    if (running.kind !== "running") return;
+
+    // The flag wins on the harness dimension; the preference is not
+    // consulted for it (RFC-12's resolution order).
+    expect(source.spawns[0]?.harness).toBe("claude");
     running.abort();
   });
 });

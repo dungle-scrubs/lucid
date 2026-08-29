@@ -29,7 +29,7 @@
  */
 
 import type { HarnessEvent } from "../harness/events.js";
-import type { HarnessName, HarnessRunner } from "../harness/runner.js";
+import { type HarnessName, type HarnessRunner, HarnessSpawnError } from "../harness/runner.js";
 import { composeAnnotationPrompt } from "../protocol/annotations.js";
 import {
   ARTIFACT_PREAMBLE_MARKER,
@@ -125,6 +125,15 @@ const artifactState = (
 /** What sendFrame returns. */
 type SendResult = ReduceResult | { readonly verdict: "refused"; readonly issue: string };
 
+/** RFC-12: why a source stopped answering on its own. The owner (the
+ * honor wrapper, the runtime) needs the difference: a driver change asks
+ * for a re-spawn, a refused spawn asks for a fallback to the driver in
+ * force, and a plain end asks for nothing. */
+export type SourceEnd =
+  | { readonly kind: "driver-change" }
+  | { readonly kind: "open-refused"; readonly message: string }
+  | { readonly kind: "closed" };
+
 export interface HeadlessDeps {
   readonly harness: HarnessName;
   readonly conversationId: string;
@@ -135,6 +144,30 @@ export interface HeadlessDeps {
    * harness's own default. */
   readonly model?: string;
   readonly provider?: string;
+  /** RFC-12: the effort dimension, rendered by the hcn runner as
+   * `hcn run --effort`. `hcn session` (0.5.7) carries no effort flag, so a
+   * session-profile spawn cannot express it - the honor rule does not
+   * switch a session driver on it, and its effort stays the hcn profile
+   * default (medium). */
+  readonly effort?: string;
+  /** RFC-12 honor: asked at a turn boundary, before the input in hand is
+   * handed to the harness. True means "do not hand it over - end this
+   * source": the input is still outstanding in the record, and the source
+   * that replaces this one replays it through its attach. Absent means no
+   * honor rule and every hand-over proceeds. */
+  readonly driverChangeAtBoundary?: () => boolean;
+  /** RFC-12 honor: fired once when this source stops answering on its own,
+   * with the reason (see SourceEnd). */
+  readonly onEnded?: (end: SourceEnd) => void;
+  /** RFC-12 honor: non-terminal error notes to emit once this source is
+   * attached. The refused-driver-change wording rides the source that
+   * continues after a refused re-spawn, so the person reads why the line
+   * and the preference disagree. */
+  readonly notes?: readonly string[];
+  /** RFC-12 honor: this source was opened as a driver change, so its first
+   * turn probes for an invocation refusal before the input is consumed
+   * (see turnStrategy). */
+  readonly probeFirstTurn?: boolean;
   /** Lucid mints headless turnIds (PLAN 4.3); injected for determinism. */
   readonly mintTurnId: () => string;
   /** Injected so the stall watchdog is testable without waiting. */
@@ -425,6 +458,15 @@ interface HostContext {
   /** Say that a reason this session is over is already in the record. The
    * pump reports the end too, and without this one failure reads as two. */
   reported(): void;
+  /** RFC-12: the boundary question - has the driver preference changed so
+   * this source should not hand its input over? */
+  boundaryChange(): boolean;
+  /** RFC-12: this source is ending because the driver changed; its end is
+   * a hand-off, not a death. */
+  driverChange(): void;
+  /** RFC-12: this source's spawn was refused; carry the message to the
+   * owner through SourceEnd. */
+  openRefused(message: string): void;
   /** Artifact ids whose current version owes the agent a look, because its
    * own patch just failed to anchor against it. Per host, not per module:
    * one process runs several conversations and they must not read each
@@ -456,6 +498,9 @@ const sessionStrategy = (
   // Opening crosses a process boundary now, so it is a promise. The host's
   // surface stays synchronous: everything that needs the session awaits this
   // one handle rather than the caller learning about the wait.
+  // RFC-12: hcn session (0.5.7) carries --model and --provider but no
+  // --effort, so a session spawn's effort stays the hcn profile default.
+  // When hcn grows the flag, OpenSessionOptions widens and this passes it.
   const opening = deps.runner.openSession({
     harness: deps.harness,
     sessionId: deps.sessionId,
@@ -482,6 +527,20 @@ const sessionStrategy = (
   const waiting: Array<{ id: string; text: string; mode: InputMode }> = [];
 
   let artifactPreambleSent = false;
+
+  // RFC-12: end this source so its owner can re-open under the changed
+  // preference. Anything still waiting for a boundary is dropped here, not
+  // lost: no waiting input has an applied disposition, so each is still
+  // outstanding in the record and the replacement source's attach replays
+  // it - the same code path a restart uses.
+  const endAsDriverChange = (): void => {
+    if (closed) return;
+    closed = true;
+    waiting.length = 0;
+    ctx.driverChange();
+    void opening.then((session) => session.close()).catch(() => {});
+  };
+
   const sendNow = (id: string, text: string, mode: InputMode): void => {
     if (closed) return;
     // RFC-06: the artifact protocol preamble is said once per session. It is
@@ -589,6 +648,14 @@ const sessionStrategy = (
       // With no turn running there is no boundary coming, so holding the
       // input would be a hang rather than a policy.
       if (mode === "steer" || mode === "answer" || !turnRunning) {
+        // RFC-12: an input about to reach an idle session crosses a turn
+        // boundary, so the preference is honored before the hand-over. A
+        // steer or an answer is an interrupt for the driver in force and
+        // never switches (RFC-12: a running turn is not interrupted).
+        if (mode === "queue" && !closed && ctx.boundaryChange()) {
+          endAsDriverChange();
+          return;
+        }
         sendNow(id, text, mode);
         return;
       }
@@ -600,14 +667,19 @@ const sessionStrategy = (
         try {
           session = await opening;
         } catch (cause) {
+          const message = cause instanceof Error ? cause.message : String(cause);
           // Record why before the pump detaches. This is the only place that
           // knows, and the log is the only thing the operator will have.
           ctx.sequencer.emit(ctx.getTurnId(), {
             kind: "error",
-            message: `session did not open: ${cause instanceof Error ? cause.message : String(cause)}`,
+            message: `session did not open: ${message}`,
             terminal: true,
           });
           ctx.reported();
+          // RFC-12: the spawn was refused (hcn exit 2, or the binary never
+          // started). The owner decides whether a driver in force remains
+          // to fall back to; the message names hcn's own refusal wording.
+          ctx.openRefused(message);
           return;
         }
         for await (const turn of session.turns) {
@@ -619,6 +691,16 @@ const sessionStrategy = (
             if (!turnRunning) return;
             turnRunning = false;
             if (closed) return;
+            // RFC-12: the terminal event is the last moment to honor a
+            // changed preference before the waiting inputs are handed over.
+            // Ending here drops them back to the record - each is still
+            // outstanding - and the replacement source replays them onto
+            // the new spawn. A steer or an answer was never held, so none
+            // is lost to this either.
+            if (waiting.length > 0 && ctx.boundaryChange()) {
+              endAsDriverChange();
+              return;
+            }
             const due = waiting.splice(0, waiting.length);
             for (const w of due) sendNow(w.id, w.text, w.mode);
           };
@@ -684,12 +766,32 @@ const turnStrategy = (
   let resumeTried = false;
   let activeTurn: AsyncIterator<HarnessEvent> | null = null;
   let resolveWaiting: (() => void) | null = null;
+  // RFC-12: whether the next spawn is this source's first, so the refusal
+  // probe (see below) runs once, on the turn that proves the new spawn.
+  let spawns = 0;
 
   const wake = (): void => {
     const w = resolveWaiting;
     resolveWaiting = null;
     w?.();
   };
+
+  /** Replay what was read while deciding, then the rest of the stream. The
+   * probe and the resume-retry both read ahead of the pump; this hands the
+   * pump a single stream that preserves everything. */
+  const composite = (
+    head: readonly HarnessEvent[],
+    tail: AsyncIterator<HarnessEvent>,
+  ): AsyncIterable<HarnessEvent> => ({
+    async *[Symbol.asyncIterator]() {
+      for (const e of head) yield e;
+      let step = await tail.next();
+      while (!step.done) {
+        yield step.value;
+        step = await tail.next();
+      }
+    },
+  });
 
   // Turns generator — yields a turn iterable per queued input, in order.
   const turns: AsyncIterable<AsyncIterable<HarnessEvent>> = {
@@ -706,6 +808,17 @@ const turnStrategy = (
             }
             const next = queue.shift();
             if (next === undefined) continue;
+            // RFC-12: the moment before the spawn is a turn boundary. A
+            // changed preference ends this source instead of spawning: the
+            // input is still queued-outstanding in the record, and the
+            // replacement source's attach replays it onto the new spawn -
+            // no input is lost to the switch.
+            if (ctx.boundaryChange()) {
+              ctx.driverChange();
+              closed = true;
+              wake();
+              return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
+            }
             const turnId = ctx.getTurnId();
             // Disposition flips queued→applied at turn start — the host's
             // pump will have already shifted expected and dispatched;
@@ -739,8 +852,49 @@ const turnStrategy = (
               prompt: composedPrompt,
               turnId,
               ...(deps.model === undefined ? {} : { model: deps.model }),
+              ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+              ...(deps.effort === undefined ? {} : { effort: deps.effort }),
               ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
             });
+            // RFC-12: a source opened as a driver change probes its first
+            // turn for an invocation refusal before the input is consumed.
+            // hcn answers a refused invocation (exit 2: an unknown model, a
+            // provider the harness cannot express) with a failure as the
+            // run's FIRST stdout event, class `rejected`; a harness that
+            // rejects its own arguments answers class `native`, and a
+            // provider that cannot serve the requested model answers
+            // `unavailable` (verified against the pinned binary). All three
+            // reached no verdict on the work, so the input may safely run
+            // on the driver in force instead. Anything else first means the
+            // invocation started and the turn is real. One known overlap: a
+            // stale resume id on pi/muse also refuses pre-spawn with class
+            // `rejected`, so it reads here as a refused change rather than
+            // going through the fresh-retry below - the driver in force
+            // continues either way, and hcn's message names the real cause.
+            if (deps.probeFirstTurn === true && spawns === 0) {
+              spawns += 1;
+              const probe = raw[Symbol.asyncIterator]();
+              const step = await probe.next();
+              let refused: string | null = null;
+              if (!step.done) {
+                const e = step.value as { kind?: string; class?: string; message?: string };
+                if (
+                  e.kind === "failure" &&
+                  (e.class === "rejected" || e.class === "native" || e.class === "unavailable")
+                ) {
+                  refused = String(e.message ?? "the new driver's invocation was refused");
+                }
+              }
+              if (refused !== null) {
+                // End the probe's child: its iterator was abandoned unread.
+                void probe.return?.(undefined);
+                ctx.openRefused(refused);
+                closed = true;
+                wake();
+                return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
+              }
+              raw = composite(step.done ? [] : [step.value], probe);
+            }
             if (attemptResume) {
               const buffered: HarnessEvent[] = [];
               let refusedResume = false;
@@ -767,6 +921,8 @@ const turnStrategy = (
                   prompt: retryPrompt,
                   turnId,
                   ...(deps.model === undefined ? {} : { model: deps.model }),
+                  ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+                  ...(deps.effort === undefined ? {} : { effort: deps.effort }),
                 });
               } else {
                 // It worked: replay what was read while deciding.
@@ -859,6 +1015,16 @@ export const createHeadlessHost = (
   // detached, with nothing in the record to say why. Nothing else could take
   // over, and nothing said anything was wrong.
   let ended = false;
+  // RFC-12: how this source ended, for its owner. Set by the strategies
+  // through ctx (driver-change, open-refused) or left as a plain close;
+  // read once by the pump's end, after the strategies are done deciding.
+  let sourceEnd: SourceEnd = { kind: "closed" };
+  let sourceEndSet = false;
+  const setSourceEnd = (end: SourceEnd): void => {
+    if (sourceEndSet) return;
+    sourceEndSet = true;
+    sourceEnd = end;
+  };
 
   const ctx: HostContext = {
     sequencer,
@@ -875,7 +1041,24 @@ export const createHeadlessHost = (
     },
     expected,
     owedBytes: new Set<string>(),
+    boundaryChange: () => deps.driverChangeAtBoundary?.() ?? false,
+    driverChange: () => setSourceEnd({ kind: "driver-change" }),
+    openRefused: (message: string) => setSourceEnd({ kind: "open-refused", message }),
   };
+
+  // RFC-12: the notes ride a source opened to continue after a refused
+  // driver change - the wording the person reads in the transcript. One
+  // non-terminal error each, through the same sequencer path every error
+  // takes, under a turn id this source owns. Emitted after the attach (the
+  // sequencer exists) and before the attach replay is dispatched, so the
+  // note lands ahead of the turn that continues the conversation.
+  for (const note of deps.notes ?? []) {
+    ctx.sequencer.emit(ctx.getTurnId(), {
+      kind: EventKind.error,
+      message: note,
+      terminal: false,
+    });
+  }
 
   // The stall watchdog.
   //
@@ -976,12 +1159,33 @@ export const createHeadlessHost = (
     }
   };
   pump
-    .then(() => sessionEnded("the harness closed its turn stream"))
+    .then(() => {
+      // RFC-12: a driver change is a hand-off, not a death - the successor
+      // source continues the conversation, and the record already carries
+      // the story (the new attach). Reporting a session end here would
+      // make every honored switch read as a harness failure.
+      if (!ended && sourceEnd.kind !== "driver-change")
+        sessionEnded("the harness closed its turn stream");
+    })
     .catch((cause: unknown) => {
+      // RFC-12: a spawn that never started (the hcn binary itself) is an
+      // open refusal for the owner's purposes: hcn's own invocation
+      // refusals are already carried by the strategies; this is the case
+      // where `deps.spawn` threw and no stream ever existed.
+      if (cause instanceof HarnessSpawnError) ctx.openRefused(cause.message);
       sessionEnded(cause instanceof Error ? cause.message : String(cause));
     })
     .finally(() => {
-      sequencer.detachOnce("shutdown");
+      // The stall watchdog watches a live hand-over; with the pump gone
+      // there is no hand-over left to watch, and a late fire would emit
+      // through a detached sequencer - a fatal refusal thrown from a
+      // timer, which nothing catches. This is not theoretical: every
+      // honored driver change ends a source with an input in hand (the
+      // one that triggered it), and that input is exactly what the
+      // watchdog would later report as silence.
+      clearInterval(watchdog);
+      sequencer.detachOnce(sourceEnd.kind === "driver-change" ? "yield" : "shutdown");
+      deps.onEnded?.(sourceEnd);
     });
 
   const receive = (frame: Frame): void => {

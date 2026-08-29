@@ -41,16 +41,18 @@ import { createHcnRunner } from "../harness/hcn-runner.js";
 import { nodeHarnessDeps } from "../harness/node-deps.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { decideAction } from "../modes/controller.js";
+import { openHonoringDriver } from "../modes/honor.js";
 import { createHeadlessHost } from "../modes/host.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { inputFrame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
 import { createTurnIds } from "../protocol/turn-id.js";
+import { readDriverPreference } from "../store/driver-preference.js";
 import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
 import { type HostRecord, openConversation } from "../store/store.js";
 import { followRecord } from "../store/tailer.js";
 import { type Conversations, conversations } from "./conversations.js";
-import { harnessForName, supportsSession } from "./harness.js";
+import { resolveStartupHarness, supportsSession } from "./harness.js";
 
 /** Production deps for the runtime. All fields are injectable for tests. */
 export interface RuntimeDeps {
@@ -76,14 +78,6 @@ export interface RuntimeDeps {
   readonly acquirePresenceFn?: typeof acquirePresence;
   readonly openConversationFn?: typeof openConversation;
   readonly createHeadlessHostFn?: typeof createHeadlessHost;
-  /** @deprecated — prefer createHeadlessHostFn (single strategy table) */
-  readonly openHeadlessSessionFn?: (
-    deps: Parameters<typeof createHeadlessHost>[0] & { sessionId: string },
-  ) => ReturnType<typeof createHeadlessHost>;
-  /** @deprecated — prefer createHeadlessHostFn */
-  readonly openHeadlessTurnsFn?: (
-    deps: Parameters<typeof createHeadlessHost>[0],
-  ) => ReturnType<typeof createHeadlessHost>;
   readonly channelStatusFn?: typeof channelStatus;
   readonly decideActionFn?: typeof decideAction;
   readonly now?: () => number;
@@ -140,21 +134,14 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   const acquirePresenceFn = opts.acquirePresenceFn ?? acquirePresence;
   const openConversationFn = opts.openConversationFn ?? openConversation;
   const createHeadlessHostFn = opts.createHeadlessHostFn ?? createHeadlessHost;
-  // Backward compat: old tests inject openHeadlessSessionFn/TurnsFn — map them onto the single host
-  const openHeadlessSessionFn =
-    opts.openHeadlessSessionFn ??
-    ((deps: Parameters<typeof createHeadlessHostFn>[0]) =>
-      createHeadlessHostFn(deps, "headless-session"));
-  const openHeadlessTurnsFn =
-    opts.openHeadlessTurnsFn ??
-    ((deps: Parameters<typeof createHeadlessHostFn>[0]) =>
-      createHeadlessHostFn(deps, "headless-turn"));
   const channelStatusFn = opts.channelStatusFn ?? channelStatus;
   const decideActionFn = opts.decideActionFn ?? decideAction;
   const nowFn = opts.now ?? (() => Date.now());
   const uuidFn = opts.randomUUID ?? (() => crypto.randomUUID());
   const suffixFn = opts.randomConversationSuffix ?? (() => Math.random().toString(36).slice(2, 6));
-  const harness = opts.harness ?? harnessForName(opts.harnessName);
+  // Startup harness resolution happens below, with the record's driver
+  // preference in hand (RFC-12): the flag/env pin, else the preference's
+  // harness, else the default.
   const presenceProbe = opts.presence ?? (() => undefined);
 
   const convs = convsFactory(opts.rootDir);
@@ -228,18 +215,20 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   // Unique across restarts: a reused id is refused by the reducer, and the
   // driver would record nothing the agent says. See src/protocol/turn-id.ts.
   const mintTurnId = createTurnIds();
-  const sessionId = uuidFn();
 
-  // Single headless entry — the Host's strategy table owns the mode
-  // split (session vs turn). The runtime only selects the profile via
-  // supportsSession, then delegates the whole lifecycle to the Host.
+  // RFC-12 startup honor: read the preference and spawn under it. An
+  // explicit harness at spawn pins the harness for this process's life;
+  // the preference's harness beats the default; model, provider and effort
+  // have no spawn-flag surface, so the preference is their only source
+  // besides hcn's defaults.
+  const startup = resolveStartupHarness({ harness: opts.harness, harnessName: opts.harnessName });
+  const preference = readDriverPreference(dir);
+  const harness = startup.pinned ? startup.harness : (preference?.harness ?? startup.harness);
   // Runtime-verified, not guessed: hcn reads the descriptor and answers
-  // whether this harness holds a persistent session (PLAN D-008). One
-  // inspect per run, before the profile is chosen.
+  // whether a harness holds a persistent session (PLAN D-008), once per
+  // spawn through the honoring driver below.
   const runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
-  const profile = (await supportsSession(runner, harness)) ? "headless-session" : "headless-turn";
   const baseDeps = {
-    harness,
     conversationId,
     secret,
     runner,
@@ -260,15 +249,38 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
       }) => host.writeArtifact(params),
     },
   } as const;
+
   // A second driver must not strand a presence lock it cannot attach
   // behind: if acquiring succeeded but attaching then fails, release
   // presence and close the host before propagating the failure.
-  let source: ReturnType<typeof createHeadlessHost>;
+  //
+  // RFC-12: the source is opened through the honoring driver, which owns
+  // the per-spawn flags (the preference folded in above for the first
+  // spawn, the boundary rule for every one after) and re-opens through
+  // this same factory when the preference changes.
+  //
+  // The dispatch watermark below: each source's attach advanced the
+  // durable cursor past its own attach batch (the replay inside it
+  // reached the source directly), so the tailer starts looking after it -
+  // re-collecting that batch would hand the replayed inputs to the source
+  // a second time.
+  let lookedAt = 0;
+  let source: import("../modes/honor.js").HonoringSource;
+  let profile: "headless-session" | "headless-turn";
   try {
-    source =
-      profile === "headless-session"
-        ? openHeadlessSessionFn({ ...baseDeps, sessionId })
-        : openHeadlessTurnsFn(baseDeps);
+    source = await openHonoringDriver({
+      base: baseDeps,
+      sessionCapable: (h) => supportsSession(runner, h),
+      initialHarness: harness,
+      harnessPinned: startup.pinned,
+      readPreference: () => readDriverPreference(dir),
+      mintSessionId: uuidFn,
+      createHostFn: createHeadlessHostFn,
+      onSpawn: () => {
+        lookedAt = host.cursor();
+      },
+    });
+    profile = source.state().profile;
   } catch (e) {
     try {
       host.close();
@@ -341,8 +353,9 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   // no-effect range puts goodBytes past the cursor again and the next
   // tick writes another — an idle conversation then grows its log
   // forever. Track how far we have looked in a process-local variable
-  // and persist only after real dispatch.
-  let lookedAt = host.cursor();
+  // and persist only after real dispatch. `lookedAt` was declared before
+  // the source opened: each attach (the first and every swap) sets it
+  // past that attach's own effects through onSpawn.
 
   /** Inputs this process has already handed to the harness, by id.
    *
