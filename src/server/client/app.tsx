@@ -1007,11 +1007,21 @@ const DriverLine = ({
     ...(state.harness === null && !state.menus.has("harness")
       ? []
       : [{ key: "harness", el: seg("harness", state.harness ?? "no driver") }]),
-    ...(mode === undefined ? [] : [{ key: "mode", el: seg("mode", mode) }]),
-    ...(state.model === null ? [] : [{ key: "model", el: seg("model", state.model) }]),
+    // The model segment renders wherever a choice exists, even before one
+    // is made: until then the harness's own default runs, and "default
+    // model" names that honestly instead of hiding the dimension. Kevin's
+    // order (2026-08-29, over the handoff's): provider · model · effort ·
+    // mode - the things you can change first, the state that governs them
+    // last.
+    ...(state.menus.has("model")
+      ? [{ key: "model", el: seg("model", state.model ?? "default model") }]
+      : state.model === null
+        ? []
+        : [{ key: "model", el: seg("model", state.model) }]),
     ...(state.effort === null
       ? []
       : [{ key: "effort", el: seg("effort", `${state.effort} effort`) }]),
+    ...(mode === undefined ? [] : [{ key: "mode", el: seg("mode", mode) }]),
   ];
   const rowsFor = (key: MenuKey): React.ReactElement[] => {
     if (key === "harness") {

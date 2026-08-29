@@ -2292,8 +2292,9 @@ body {
 /* --- the driver line (7a-7d) ---------------------------------------------
  *
  * One line of 11.5px report ink docked under the prompt, aligned to the
- * field (46px, clearing the clip button). Segments harness, mode, model,
- * effort, separated by a middot at 50%. The line wraps to a second row
+ * field (46px, clearing the clip button). Segments harness, model,
+ * effort, mode - Kevin's order (2026-08-29): the settable dimensions
+ * first, the mode that governs them last. Separated by a middot at 50%. The line wraps to a second row
  * with a 5px row gap rather than truncating; each middot is bound into
  * one flex item with the label after it, so a wrap can only break before
  * a separator. Quieter than the composer placeholder above it: no
