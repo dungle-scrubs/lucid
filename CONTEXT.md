@@ -35,7 +35,7 @@ Take nouns from here. One name per thing.
 | Term | What it is |
 |---|---|
 | **conversation** | One exchange, identified by a `conversationId`, living in one directory |
-| **record** | That directory: `log.ndjson`, `meta.json`, `secret`, the two locks |
+| **record** | That directory: `log.ndjson`, `meta.json`, `driver.json`, `secret`, the two locks |
 | **log** | The append-only NDJSON file. The single source of truth |
 | **append lock** | A `flock(2)` on the log, held for one append transaction |
 | **presence lock** | A separate `flock(2)`, held for a source's whole participation. Also the executor lease |
@@ -85,6 +85,7 @@ Take nouns from here. One name per thing.
 | **document mode** | What a click in the document means: `use` operates it, `markup` selects an element to write about. Not a `profile` - that word is taken, and these are unrelated |
 | **note box** | Where a note is written. Opens beside what was selected |
 | **browser surface** | `lucid2 serve`: one loopback server, every record, a record chosen by URL |
+| **driver preference** | `driver.json`, beside `meta.json`. The harness, provider, model and effort a person chose in the browser. Written by the server; honored by a headless driver at the next turn boundary. Never in the log |
 
 **Not lucid's words.** `hcn` owns harness descriptors, capability claims, and
 the shape of a harness invocation. lucid never mirrors them.

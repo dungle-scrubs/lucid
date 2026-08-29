@@ -2271,9 +2271,9 @@ body {
  * with a 5px row gap rather than truncating; each middot is bound into
  * one flex item with the label after it, so a wrap can only break before
  * a separator. Quieter than the composer placeholder above it: no
- * borders, no carets, and the only accent ink this size would come from
- * a hover or an open menu - neither is drawn until the substrate can act
- * on a driver change (docs/reports/design-delta-v2.md, section 3). */
+ * borders, no carets, and accent ink this size only on hover or open
+ * (RFC-12 made the menus real - the substrate acts on a choice at the
+ * next turn boundary). */
 
 .driver-line {
   position: relative;
@@ -2401,6 +2401,211 @@ body {
 
 .driver-line.interactive .driver-sep {
   opacity: 0.35;
+}
+
+/* --- the driver menus (7a, RFC-12) ----------------------------------------
+ *
+ * A segment admits it is a control only on approach: the accent-100 pill,
+ * accent-800 text, and a 9px caret. Open takes the segment solid accent
+ * with white text and flips the caret; the menu opens upward from the
+ * line - the row is bottom-docked - on paper with an edge, radius 10px,
+ * 5px padding and no shadow, elevation being paper-on-pattern and never
+ * shade. The composer dims to 40% while a menu is open, and stays in
+ * place. Harness and model menus left-align to their segment; effort
+ * right-aligns, being the last segment in a 352px column. */
+
+.driver-seg.pick {
+  /* A button, reset to the span it replaced: same font, same padding, so
+     the rest is the same. */
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  appearance: none;
+}
+
+.driver-caret {
+  /* The space is reserved at rest - only the glyph is hidden - so the
+     caret's arrival on hover or open moves nothing: the separators stay
+     put and no neighbor reflows. */
+  display: inline-flex;
+  visibility: hidden;
+  flex: none;
+  color: currentColor;
+}
+
+.driver-seg.pick[aria-expanded="true"] {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.driver-seg.pick[aria-expanded="true"] .driver-caret {
+  visibility: visible;
+  transform: rotate(180deg);
+}
+
+@media (hover: hover) {
+  .driver-seg.pick:hover {
+    background: var(--color-accent-100);
+    color: var(--color-accent-800);
+  }
+  .driver-seg.pick:hover .driver-caret {
+    visibility: visible;
+  }
+}
+
+.driver-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  z-index: 3;
+  min-width: 214px;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px;
+  background: var(--paper);
+  border: 1px solid var(--edge-2);
+  border-radius: 10px;
+  font: 400 12.5px / 1 var(--font-body);
+  color: var(--color-text);
+}
+
+/* Effort right-aligns to the column's own right edge - the design's rule
+   for the last segment, where a left-aligned menu would run out of room. */
+.driver-menu.align-right {
+  right: 0;
+  min-width: 226px;
+}
+
+.driver-row,
+.driver-free {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: none;
+  border-radius: 7px;
+  font: 400 12.5px / 1 var(--font-body);
+  color: var(--color-text);
+  text-align: left;
+}
+
+.driver-row {
+  width: 100%;
+  background: none;
+  cursor: pointer;
+  appearance: none;
+}
+
+/* The 12px gutter: empty on every row but the selected one, so labels
+   align whichever row carries the check. */
+.driver-gutter {
+  width: 12px;
+  flex: none;
+}
+
+.driver-check {
+  width: 12px;
+  flex: none;
+  display: inline-flex;
+  color: var(--color-accent);
+}
+
+.driver-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* A glossed row is two lines, so its check tops-aligns with the label
+   rather than centering against the block. */
+.driver-row.glossed {
+  align-items: flex-start;
+}
+
+.driver-row.glossed .driver-check {
+  margin-top: 1px;
+}
+
+.driver-row:not(.selected):hover {
+  background: color-mix(in srgb, var(--color-text) 5%, transparent);
+}
+
+.driver-row.selected {
+  background: var(--color-accent-100);
+  color: var(--color-accent-800);
+}
+
+.driver-row.selected .driver-row-label {
+  font: 600 12.5px / 1 var(--font-heading);
+}
+
+.driver-gloss {
+  font: 400 10.5px / 1.3 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 48%, transparent);
+}
+
+.driver-row.selected .driver-gloss {
+  color: var(--color-accent-800);
+  opacity: 0.75;
+}
+
+/* The open entry of an extensible vocabulary (RFC-12): a row that is also
+   a field, so a model the descriptor never listed is still a choice. */
+.driver-free input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+}
+
+.driver-free input:focus {
+  outline: none;
+}
+
+.driver-free input::placeholder {
+  color: color-mix(in srgb, var(--color-text) 42%, transparent);
+}
+
+.driver-free.selected {
+  background: var(--color-accent-100);
+  color: var(--color-accent-800);
+}
+
+.driver-menu-rule {
+  height: 1px;
+  flex: none;
+  background: var(--edge);
+  margin: 4px 9px;
+}
+
+.driver-menu-note {
+  padding: 2px 9px 6px;
+  font: 400 11px / 1.4 var(--font-body);
+  color: color-mix(in srgb, var(--color-text) 48%, transparent);
+}
+
+/* A choice that did not save: magenta, because a refused POST is the
+   substrate saying no, and close to its cause - the line that made it. */
+.driver-choice-error {
+  width: 100%;
+  padding: 5px 7px 0;
+  font: 400 11px / 1.4 var(--font-body);
+  color: var(--color-accent-2);
+}
+
+/* While a menu is open the composer dims to 40% and stays in place (7a). */
+.composer.driver-open {
+  opacity: 0.4;
 }
 
 .driver-line.interactive .driver-tip {

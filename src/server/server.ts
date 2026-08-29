@@ -62,6 +62,7 @@ import { presenceHeld } from "../store/presence.js";
 import { buildView } from "../tui/view.js";
 import index from "./client/index.html";
 import { SERVER_PORT, TOKEN_HEADER } from "./constants.js";
+import { driverChoices } from "./driver-choices.js";
 import { mintToken } from "./token.js";
 
 export interface ServerOpts {
@@ -211,6 +212,10 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             status: "no record",
             damaged: false,
             driverPreference: null,
+            // The lists ride along on an empty record too: choosing a driver
+            // while nothing runs is the natural moment to choose one
+            // (RFC-12, open question 1), and the menus are how.
+            driverChoices: await driverChoices(),
           });
         }
         let snapshot: ReturnType<typeof viewSnapshot>;
@@ -232,6 +237,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             damaged: true,
             error: cause instanceof Error ? cause.message : String(cause),
             driverPreference: readDriverPreference(dir),
+            driverChoices: await driverChoices(),
           });
         }
         const view = buildView({
@@ -310,6 +316,10 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
           // the difference is the story the page has to tell. Null is the
           // state of every record no choice has been made in.
           driverPreference: readDriverPreference(dir),
+          // The lists the choice is made from (RFC-12): the four harnesses,
+          // each harness's models and efforts. Read once per process through
+          // the harness seam, so a poll costs no spawn.
+          driverChoices: await driverChoices(),
           // A torn trailing write folds cleanly but short. That is damage
           // too, and the page says so.
           damaged: snapshot.goodBytes < logSize(dir),

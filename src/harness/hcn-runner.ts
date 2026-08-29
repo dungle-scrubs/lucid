@@ -25,6 +25,7 @@ import {
   HarnessSpawnError,
   type HarnessTurn,
   HarnessVersionError,
+  type HarnessVocabulary,
   type OpenSessionOptions,
   type SendResult,
   type SessionClosed,
@@ -92,18 +93,40 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     return { out, err, code };
   };
 
+  /** The dump's `vocabulary` and `turnOptions` projected to what RFC-12's
+   * lists need. The dump is trusted for content and not for shape: a field
+   * of the wrong type is dropped rather than cast, so a future hcn that
+   * widens the vocabulary cannot make lucid serve a mangled list. */
+  const vocabularyOf = (parsed: Record<string, unknown>): HarnessVocabulary | undefined => {
+    const v = parsed.vocabulary;
+    if (v === null || typeof v !== "object") return undefined;
+    const strings = (x: unknown): readonly string[] =>
+      Array.isArray(x) ? x.filter((s): s is string => typeof s === "string") : [];
+    const turn = parsed.turnOptions;
+    const turnMap =
+      turn !== null && typeof turn === "object" ? (turn as Record<string, unknown>) : {};
+    return {
+      models: strings((v as Record<string, unknown>).models),
+      efforts: strings((v as Record<string, unknown>).efforts),
+      extensible: (v as Record<string, unknown>).extensible === true,
+      ...(turnMap.provider === undefined ? {} : { provider: true as const }),
+    };
+  };
+
   const inspect = async (harness: HarnessName): Promise<HarnessFacts> => {
     const { out, err, code } = await runToCompletion(["inspect", harness, "--json"]);
     if (code !== 0) {
       throw new HarnessRefusal("inspect-failed", err.join("\n") || `hcn inspect exited ${code}`);
     }
     const parsed = JSON.parse(out.join("\n")) as Record<string, unknown>;
+    const vocabulary = vocabularyOf(parsed);
     return {
       name: String(parsed.name ?? harness),
       // The descriptor's sessionMode is the runtime-verified answer to
       // "can this harness hold a persistent session" (PLAN D-008).
       session: parsed.sessionMode !== null && parsed.sessionMode !== undefined,
       verifiedAgainst: String(parsed.verifiedAgainst ?? "unknown"),
+      ...(vocabulary === undefined ? {} : { vocabulary }),
     };
   };
 

@@ -340,6 +340,95 @@ describe("inspection, which never spawns a harness", () => {
     r.proc.exit(0);
     expect((await pending).session).toBe(false);
   });
+
+  // The dumps below are composed inline rather than replayed from
+  // test/fixtures/hcn: no recording shows a vocabulary, and a descriptor
+  // dump is one JSON object, not an event stream a recording would prove.
+  test("inspect reads the choosing vocabulary off the descriptor (RFC-12)", async () => {
+    const r = rig();
+    const pending = r.runner.inspect("pi");
+    r.proc.emitRaw(
+      JSON.stringify({
+        name: "pi",
+        sessionMode: { flags: [] },
+        verifiedAgainst: "0.84.2",
+        vocabulary: {
+          models: ["zai/glm-5.2"],
+          aliases: { glm: "zai/glm-5.2" },
+          efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+          extensible: true,
+        },
+        turnOptions: { effort: {}, provider: {} },
+      }),
+    );
+    r.proc.exit(0);
+    expect(await pending).toEqual({
+      name: "pi",
+      session: true,
+      verifiedAgainst: "0.84.2",
+      vocabulary: {
+        // models as the dump lists them - the canonical ids the aliases
+        // resolve onto, served as they stand.
+        models: ["zai/glm-5.2"],
+        efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+        extensible: true,
+        provider: true,
+      },
+    });
+  });
+
+  test("a harness without the provider turn option carries no provider key", async () => {
+    const r = rig();
+    const pending = r.runner.inspect("claude");
+    r.proc.emitRaw(
+      JSON.stringify({
+        name: "claude",
+        sessionMode: { flags: [] },
+        verifiedAgainst: "2.1.233",
+        vocabulary: {
+          models: ["claude-opus-5"],
+          efforts: ["low", "medium", "high"],
+          extensible: false,
+        },
+        turnOptions: { effort: {} },
+      }),
+    );
+    r.proc.exit(0);
+    const facts = await pending;
+    // Absent, not false: "provider" missing from the entry is what tells
+    // the page the dimension does not exist for this harness.
+    expect("provider" in (facts.vocabulary ?? {})).toBe(false);
+    expect(facts.vocabulary?.extensible).toBe(false);
+  });
+
+  test("a dump with no vocabulary leaves the facts without one", async () => {
+    const r = rig();
+    const pending = r.runner.inspect("muse");
+    r.proc.emitRaw(JSON.stringify({ name: "muse", sessionMode: null, verifiedAgainst: "1.0" }));
+    r.proc.exit(0);
+    const facts = await pending;
+    expect("vocabulary" in facts).toBe(false);
+  });
+
+  test("a vocabulary of the wrong shape is narrowed, not cast", async () => {
+    const r = rig();
+    const pending = r.runner.inspect("codex");
+    r.proc.emitRaw(
+      JSON.stringify({
+        name: "codex",
+        sessionMode: null,
+        verifiedAgainst: "0.9.0",
+        vocabulary: { models: ["gpt-5.6-sol", 7, null], efforts: "many", extensible: "yes" },
+        turnOptions: null,
+      }),
+    );
+    r.proc.exit(0);
+    expect((await pending).vocabulary).toEqual({
+      models: ["gpt-5.6-sol"],
+      efforts: [],
+      extensible: false,
+    });
+  });
 });
 
 describe("review fixes: what the cross-family review found", () => {

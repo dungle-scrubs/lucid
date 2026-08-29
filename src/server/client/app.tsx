@@ -51,6 +51,17 @@ import {
   selectorsForQuote,
   sha256Hex,
 } from "./anchor.js";
+import {
+  chooseEffort,
+  chooseHarness,
+  chooseModel,
+  type DriverChoiceBody,
+  type DriverChoices,
+  type DriverPreference,
+  driverLineState,
+  effortGloss,
+  type MenuKey,
+} from "./driver-menus.js";
 import { isModeToggle, isQueueSend } from "./hotkeys.js";
 import {
   ArchiveDuotone,
@@ -58,6 +69,7 @@ import {
   ArrowRightDuotone,
   ArrowUpDuotone,
   CaretDownDuotone,
+  CheckDuotone,
   FileDuotone,
   FileTextDuotone,
   ImageDuotone,
@@ -784,76 +796,330 @@ const MODE_GLOSS: Readonly<Record<string, string>> = {
     "No session recall. Each send starts the harness fresh; lucid's record is what carries continuity.",
 };
 
+/** One row of a driver menu (7a): a 12px gutter carries the check when the
+ * row is the selected one, so every label aligns whether or not it is
+ * chosen. Effort rows carry a gloss under the label - the words alone do
+ * not say what is being traded, and only effort rows get one: harness and
+ * model name things that name themselves. */
+const DriverMenuRow = ({
+  label,
+  gloss,
+  selected,
+  onPick,
+}: {
+  label: string;
+  gloss?: string;
+  selected: boolean;
+  onPick: () => void;
+}): React.ReactElement => {
+  const hasGloss = gloss !== undefined && gloss !== "";
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={selected}
+      className={
+        selected
+          ? hasGloss
+            ? "driver-row selected glossed"
+            : "driver-row selected"
+          : hasGloss
+            ? "driver-row glossed"
+            : "driver-row"
+      }
+      onClick={onPick}
+    >
+      {selected ? (
+        <span aria-hidden="true" className="driver-check">
+          <CheckDuotone size={12} />
+        </span>
+      ) : (
+        <span aria-hidden="true" className="driver-gutter" />
+      )}
+      <span className="driver-row-text">
+        <span className="driver-row-label">{label}</span>
+        {hasGloss ? <span className="driver-gloss">{gloss}</span> : null}
+      </span>
+    </button>
+  );
+};
+
+/** The menus' width, from the handoff's drawn values: the model menu draws
+ * at 214px and the effort menu at 226px; the harness menu is the same shape
+ * as the model's. One constant serves the left clamp. */
+const DRIVER_MENU_W = 226;
+
 /** The driver line (7a-7d): harness · mode · model · effort docked under
  * the prompt, in the transcript datelines' voice. The order is the
  * design's - harness, mode and model are one thought (the program, how
  * lucid runs it, the weights); effort alters a turn rather than the
  * connection, so it is last. A segment whose value the record does not
- * carry is absent, not disabled: the projection names no effort yet, and
- * some harnesses report no model, and neither is drawn as a blank or a
- * ghost.
+ * carry is absent, not disabled - an effort that cannot act (a session-mode
+ * driver, on the pinned hcn) is not drawn at all, and neither is a blank
+ * or a ghost.
  *
- * The segments are quiet report ink, not controls: the open menus with
- * selectable harness / model / effort lists are not built, because the
- * substrate cannot act on a browser-side driver change today - spawn
- * flags and hook attachment choose the driver (docs/reports/design-
- * delta-v2.md, section 3). Only the mode's hover gloss is drawn, because
- * a gloss is not an act. The conversation header names the same driver
- * through `driverHeadline`, from the same Driver. */
-const DriverLine = ({ driver }: { driver: Driver }): React.ReactElement | null => {
+ * Harness, model and effort are controls now (RFC-12): hover takes the
+ * accent pill, opening takes the segment solid, and a pick POSTs the whole
+ * preference - the line and the header settle from the next poll, because
+ * nothing renders because the browser believes it happened. Mode stays a
+ * report with its hover gloss: it is not settable from the browser, and a
+ * control that cannot act is not drawn as one. Interactive offers no
+ * menus at all - the human's session chose the driver and lucid cannot
+ * change it mid-run - and its harness and model sit at 55% report ink.
+ * The conversation header names the same driver through `driverHeadline`,
+ * from the same Driver. */
+const DriverLine = ({
+  driver,
+  preference,
+  choices,
+  onChoose,
+  onMenuToggle,
+}: {
+  driver: Driver;
+  /** What the person chose (RFC-12), beside what is driving. The menus'
+   * selected rows are these values; the labels are these where only a
+   * choice can name the dimension. */
+  preference: DriverPreference | null;
+  /** The served lists: the four harnesses, each harness's models and
+   * efforts. Null when the server did not send them, and then no menu is
+   * offered - absent, not disabled. */
+  choices: DriverChoices | null;
+  /** POST a whole preference. Answers null on success, or why it refused,
+   * drawn beside the line that made the choice. */
+  onChoose: (body: DriverChoiceBody) => Promise<string | null>;
+  /** The line tells the dock when a menu is open, so the composer can dim
+   * to 40% and stay in place, per the design. */
+  onMenuToggle: (open: boolean) => void;
+}): React.ReactElement | null => {
   const mode = driver.profile;
-  if (mode === undefined) return null;
+  const wrapper = React.useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = React.useState<{ key: MenuKey; left: number } | null>(null);
+  const [choiceError, setChoiceError] = React.useState<string | null>(null);
+  const [freeModel, setFreeModel] = React.useState("");
+  React.useEffect(() => {
+    onMenuToggle(open !== null);
+    if (open === null) return;
+    // One menu at a time closes on Escape and on a click anywhere outside
+    // itself - including on another segment, which opens that one instead.
+    const close = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setOpen(null);
+    };
+    const away = (e: PointerEvent): void => {
+      if (wrapper.current?.contains(e.target as Node | null) !== true) setOpen(null);
+    };
+    document.addEventListener("keydown", close);
+    document.addEventListener("pointerdown", away);
+    return () => {
+      document.removeEventListener("keydown", close);
+      document.removeEventListener("pointerdown", away);
+    };
+  }, [open, onMenuToggle]);
+  // A line that unmounts with a menu open must not leave the composer
+  // dimmed behind it.
+  React.useEffect(() => {
+    return () => onMenuToggle(false);
+  }, [onMenuToggle]);
+  const pick = React.useCallback(
+    async (body: DriverChoiceBody | null): Promise<void> => {
+      setOpen(null);
+      if (body === null) return;
+      setChoiceError(null);
+      const why = await onChoose(body);
+      if (why !== null) setChoiceError(why);
+    },
+    [onChoose],
+  );
+  const state = driverLineState({
+    profile: mode,
+    driverHarness: driver.harness,
+    driverModel: driver.model,
+    preference,
+    choices,
+  });
   const interactive = mode === "interactive";
-  const gloss = MODE_GLOSS[mode];
+  const gloss = mode === undefined ? undefined : MODE_GLOSS[mode];
   // headless-turn is the one mode whose consequence the line itself
   // states: no session recall has no visual, so it gets words, permanent,
   // and a 4px neutral dot marks the segment that owns them.
   const noRecall = mode === "headless-turn";
-  const segments = [
-    ...(driver.harness === undefined ? [] : [{ key: "harness", label: driver.harness }]),
-    { key: "mode", label: mode },
-    ...(driver.model === undefined ? [] : [{ key: "model", label: driver.model }]),
+  /** Open a segment's menu, its left edge on the segment - clamped so a
+   * long label near the column's right edge cannot push the menu into the
+   * document pane. Effort never comes here: it opens right-aligned. */
+  const openAt = (key: MenuKey, el: HTMLElement): void => {
+    const line = wrapper.current;
+    let left = el.offsetLeft;
+    if (line !== null) left = Math.min(left, Math.max(0, line.clientWidth - DRIVER_MENU_W - 8));
+    setFreeModel("");
+    setOpen((was) => (was !== null && was.key === key ? null : { key, left }));
+  };
+  const seg = (key: MenuKey | "mode", label: string): React.ReactElement => {
+    if (key === "mode") {
+      return (
+        <span className="driver-seg mode" key={key}>
+          {label}
+          {noRecall ? <span aria-hidden="true" className="driver-mode-dot" /> : null}
+          {gloss === undefined ? null : (
+            <span className="driver-tip" role="tooltip">
+              <span className="driver-tip-title">{label}</span>
+              <span className="driver-tip-body">{gloss}</span>
+            </span>
+          )}
+        </span>
+      );
+    }
+    const live = state.menus.has(key);
+    if (!live) {
+      return (
+        <span className={interactive ? "driver-seg report" : "driver-seg"} key={key}>
+          {label}
+        </span>
+      );
+    }
+    const isOpen = open?.key === key;
+    return (
+      <button
+        type="button"
+        className="driver-seg pick"
+        key={key}
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
+        onClick={(e) => openAt(key, e.currentTarget)}
+      >
+        {label}
+        <span aria-hidden="true" className={isOpen ? "driver-caret flipped" : "driver-caret"}>
+          <CaretDownDuotone size={9} />
+        </span>
+      </button>
+    );
+  };
+  const segments: { key: string; el: React.ReactElement }[] = [
+    // Nothing driving and nothing chosen still names the state in the
+    // product's own words (3d: "No driver"), so the harness menu hangs
+    // somewhere and the first choice can be made from the browser - the
+    // natural moment, per RFC-12's open question 1. No menu offered, no
+    // segment: a line with nothing to say is not drawn.
+    ...(state.harness === null && !state.menus.has("harness")
+      ? []
+      : [{ key: "harness", el: seg("harness", state.harness ?? "no driver") }]),
+    ...(mode === undefined ? [] : [{ key: "mode", el: seg("mode", mode) }]),
+    ...(state.model === null ? [] : [{ key: "model", el: seg("model", state.model) }]),
+    ...(state.effort === null
+      ? []
+      : [{ key: "effort", el: seg("effort", `${state.effort} effort`) }]),
   ];
-  return (
-    <div className={interactive ? "driver-line interactive" : "driver-line"}>
-      {segments.map((seg, i) => {
-        const label =
-          seg.key === "mode" ? (
-            <span className="driver-seg mode" key={seg.key}>
-              {seg.label}
-              {noRecall ? <span aria-hidden="true" className="driver-mode-dot" /> : null}
-              {gloss === undefined ? null : (
-                <span className="driver-tip" role="tooltip">
-                  <span className="driver-tip-title">{seg.label}</span>
-                  <span className="driver-tip-body">{gloss}</span>
+  const rowsFor = (key: MenuKey): React.ReactElement[] => {
+    if (key === "harness") {
+      return (choices?.harnesses ?? []).map((h) => (
+        <DriverMenuRow
+          key={h}
+          label={h}
+          selected={h === state.harness}
+          onPick={() => void pick(chooseHarness(h, state))}
+        />
+      ));
+    }
+    const vocabulary = state.vocabulary;
+    if (vocabulary === null) return [];
+    if (key === "model") {
+      const listed = vocabulary.models.map((m) => (
+        <DriverMenuRow
+          key={m}
+          label={m}
+          selected={m === state.model}
+          onPick={() => void pick(chooseModel(m, state, preference))}
+        />
+      ));
+      // The open entry (extensible harnesses, RFC-12): pi registers models
+      // at runtime, so the listed ids are examples of a kind rather than
+      // the kind's whole population.
+      // The check sits on the committed choice only: while a new id is
+      // being typed, the row is a field, not the selected answer.
+      const freeSelected =
+        freeModel === "" && state.model !== null && !vocabulary.models.includes(state.model);
+      return vocabulary.extensible
+        ? [
+            ...listed,
+            <div className={freeSelected ? "driver-free selected" : "driver-free"} key="free">
+              {freeSelected ? (
+                <span aria-hidden="true" className="driver-check">
+                  <CheckDuotone size={12} />
                 </span>
+              ) : (
+                <span aria-hidden="true" className="driver-gutter" />
               )}
-            </span>
-          ) : (
-            <span className={interactive ? "driver-seg report" : "driver-seg"} key={seg.key}>
-              {seg.label}
-            </span>
-          );
+              <input
+                aria-label="Another model id"
+                onChange={(e) => setFreeModel(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  const id = freeModel.trim();
+                  if (id !== "") void pick(chooseModel(id, state, preference));
+                }}
+                placeholder="other model id…"
+                spellCheck={false}
+                value={freeSelected ? (state.model ?? "") : freeModel}
+              />
+            </div>,
+          ]
+        : listed;
+    }
+    return vocabulary.efforts.map((level) => (
+      <DriverMenuRow
+        gloss={effortGloss(level, vocabulary.efforts)}
+        key={level}
+        label={level}
+        selected={level === state.effort}
+        onPick={() => void pick(chooseEffort(level, state, preference))}
+      />
+    ));
+  };
+  // A line with no segments says nothing and is not drawn - the interactive
+  // record whose server sent no lists, the dead connection the dock already
+  // hides.
+  if (segments.length === 0) return null;
+  return (
+    <div className={interactive ? "driver-line interactive" : "driver-line"} ref={wrapper}>
+      {segments.map((s, i) =>
         // Each middot is bound into one flex item with the label that
         // follows it, so a wrap can only break BEFORE a separator - a
         // middot stranded at the end of a row reads as a dropped segment.
         // Labels are never shortened to force one row.
-        return i === 0 ? (
-          label
+        i === 0 ? (
+          <React.Fragment key={s.key}>{s.el}</React.Fragment>
         ) : (
-          <span className="driver-pair" key={seg.key}>
+          <span className="driver-pair" key={s.key}>
             <span aria-hidden="true" className="driver-sep">
               ·
             </span>
-            {label}
+            {s.el}
           </span>
-        );
-      })}
+        ),
+      )}
       {noRecall ? (
         <span className="driver-note">
           Each send starts the harness fresh. This record is what carries continuity.
         </span>
       ) : null}
+      {choiceError === null ? null : (
+        <span className="driver-choice-error">Choice not saved: {choiceError}</span>
+      )}
+      {open === null ? null : (
+        <div
+          className={open.key === "effort" ? "driver-menu align-right" : "driver-menu"}
+          role="menu"
+          style={open.key === "effort" ? undefined : { left: `${open.left}px` }}
+        >
+          {rowsFor(open.key)}
+          {open.key === "effort" ? null : (
+            <>
+              <div className="driver-menu-rule" />
+              <div className="driver-menu-note">
+                Changing the model does not restart the conversation.
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -877,6 +1143,9 @@ const Thread = ({
   onRemoveAttachment,
   onDismissRefusal,
   driver,
+  driverPreference,
+  driverChoices,
+  onDriverChoice,
 }: {
   pending: readonly PendingNote[];
   onSendNotes: () => void;
@@ -911,6 +1180,12 @@ const Thread = ({
    * (7a-7d) and for the composer's own variant: the mode decides whether
    * the field sends or interjects, and whether the clip button is there. */
   driver: Driver;
+  /** What the person chose (RFC-12) and the lists to choose from, both from
+   * the poll the client already makes. */
+  driverPreference: DriverPreference | null;
+  driverChoices: DriverChoices | null;
+  /** POST a whole driver preference; answers null or why it refused. */
+  onDriverChoice: (body: DriverChoiceBody) => Promise<string | null>;
 }): React.ReactElement => {
   const composerBox = React.useRef<HTMLTextAreaElement | null>(null);
   // 4a: send is ghost at rest and solid the moment there is something to
@@ -924,6 +1199,11 @@ const Thread = ({
   // happen. Nothing lands on the document: a file is attached to the
   // conversation or it goes back where it came from - never a version.
   const [dragOver, setDragOver] = React.useState(false);
+  /** Whether one of the driver line's menus is open: the composer dims to
+   * 40% and stays in place while it is, per 7a. Lifted here because the
+   * composer and the line are siblings. */
+  const [driverMenuOpen, setDriverMenuOpen] = React.useState(false);
+  const onDriverMenu = React.useCallback((open: boolean): void => setDriverMenuOpen(open), []);
   const stalled = report.stalled;
   // 7c: the mode governs the composer too. interactive means a human owns
   // the session - lucid attaches, records, and can interject, it does not
@@ -1079,7 +1359,15 @@ const Thread = ({
         )}
 
         <ComposerPrimitive.Root
-          className={dragOver ? "composer dragover" : invite ? "composer inviting" : "composer"}
+          className={
+            dragOver
+              ? "composer dragover"
+              : invite
+                ? "composer inviting"
+                : driverMenuOpen
+                  ? "composer driver-open"
+                  : "composer"
+          }
           onDragOver={(e) => {
             // Without the preventDefault the drop never fires and the
             // browser navigates to the file instead.
@@ -1150,7 +1438,15 @@ const Thread = ({
             the same projection the header names. Dead hides it: 3d's
             composer says Reload and names no driver, and a stale one
             would. */}
-        {dead ? null : <DriverLine driver={driver} />}
+        {dead ? null : (
+          <DriverLine
+            driver={driver}
+            preference={driverPreference}
+            choices={driverChoices}
+            onChoose={onDriverChoice}
+            onMenuToggle={onDriverMenu}
+          />
+        )}
       </div>
     </ThreadPrimitive.Root>
   );
@@ -1911,6 +2207,10 @@ const App = (): React.ReactElement => {
   const [status, setStatus] = React.useState<string>("");
   /** What is driving: harness, model when known, and profile. */
   const [driver, setDriver] = React.useState<Driver>({});
+  /** What the person chose (RFC-12), beside what is driving, and the lists
+   * to choose from. Both ride on the poll the page already makes. */
+  const [driverPreference, setDriverPreference] = React.useState<DriverPreference | null>(null);
+  const [driverChoices, setDriverChoices] = React.useState<DriverChoices | null>(null);
   const [activity, setActivity] = React.useState<Activity>({
     turn: false,
     inFlight: 0,
@@ -2341,6 +2641,8 @@ const App = (): React.ReactElement => {
           status: string;
           damaged?: boolean;
           driver?: Driver;
+          driverPreference?: DriverPreference | null;
+          driverChoices?: DriverChoices | null;
           activity?: Activity;
         };
         if (!alive) return;
@@ -2354,6 +2656,8 @@ const App = (): React.ReactElement => {
         });
         setStatus(data.status);
         setDriver(data.driver ?? {});
+        setDriverPreference(data.driverPreference ?? null);
+        setDriverChoices(data.driverChoices ?? null);
         setActivity(data.activity ?? { turn: false, inFlight: 0, waiting: 0 });
         setDamaged(data.damaged === true);
         if (data.damaged !== true) setProblem(null);
@@ -2672,6 +2976,26 @@ const App = (): React.ReactElement => {
     notes.length > 0 && !sending && (selection.length === 0 || notes.length >= NOTE_QUEUE_MAX)
       ? sendNotes
       : null;
+
+  /** Choose the driver (RFC-12): POST the whole preference the line
+   * composed. The file is written by the server and read back by the poll,
+   * so nothing here changes the line - it settles from the next poll, the
+   * same discipline as sending. Answers null on success, or why it was
+   * refused, so the line can say so beside itself. */
+  const chooseDriver = React.useCallback(
+    async (body: DriverChoiceBody): Promise<string | null> => {
+      if (token === null) return "not connected";
+      const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/driver`, {
+        method: "POST",
+        headers: { [TOKEN_HEADER]: token, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) return null;
+      const said = (await res.json().catch(() => ({}))) as { error?: string };
+      return said.error === undefined ? `refused (${res.status})` : said.error;
+    },
+    [token, conversationId],
+  );
 
   /** Write a title. Returns null on success, or why not, so the field can
    * stay open with the reason beside it rather than closing and losing what
@@ -4153,6 +4477,9 @@ const App = (): React.ReactElement => {
                       setRefusals((prev) => prev.filter((r) => r.id !== id))
                     }
                     driver={driver}
+                    driverPreference={driverPreference}
+                    driverChoices={driverChoices}
+                    onDriverChoice={chooseDriver}
                   />
                 </div>
               </div>

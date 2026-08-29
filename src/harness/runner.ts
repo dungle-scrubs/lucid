@@ -42,6 +42,32 @@ export interface HarnessFacts {
    * guess (PLAN D-008). */
   readonly session: boolean;
   readonly verifiedAgainst: string;
+  /** What a person may choose for model and effort (RFC-12), projected from
+   * the dump's `vocabulary` and `turnOptions`. Absent when the dump carries
+   * no vocabulary - the harness then has no lists to offer, and the page's
+   * rule for that is the design's own: absent, not disabled. */
+  readonly vocabulary?: HarnessVocabulary;
+}
+
+/** The choosing vocabulary hcn's descriptor dump reports for a harness
+ * (RFC-12). One source: `hcn inspect <harness> --json`, projected here, so
+ * lucid mirrors nothing about a harness's models. */
+export interface HarnessVocabulary {
+  /** `vocabulary.models`, aliases resolved: hcn's list is already the
+   * canonical ids, and `vocabulary.aliases` maps pet names onto it, so the
+   * list is served as it stands. */
+  readonly models: readonly string[];
+  /** `vocabulary.efforts`, the harness's ladder in the dump's own order. */
+  readonly efforts: readonly string[];
+  /** `vocabulary.extensible`: the model list is open (pi registers models
+   * at runtime), so an unlisted id is a valid choice, not a mistake. */
+  readonly extensible: boolean;
+  /** Whether the harness expresses a provider dimension at all - `turnOptions`
+   * carrying `provider` (pi only today). No list exists for it: the value is
+   * open and hcn validates it at spawn. Present only where expressible,
+   * absent elsewhere - never false, which would read as "checked and
+   * refused" where the truth is "no such dimension". */
+  readonly provider?: true;
 }
 
 /**
