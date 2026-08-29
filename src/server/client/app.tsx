@@ -4242,14 +4242,14 @@ const App = (): React.ReactElement => {
                                 <button
                                   type="button"
                                   className="marks-pill"
-                                  title="Go to the next marked block"
+                                  title="Go to the next noted block"
                                   onClick={() => {
                                     const first = marksBelow[0];
                                     if (first !== undefined) goBlock.current?.(first);
                                   }}
                                 >
                                   <span className="dot" aria-hidden="true" />
-                                  {marksBelow.length} mark{marksBelow.length === 1 ? "" : "s"} below
+                                  {marksBelow.length} note{marksBelow.length === 1 ? "" : "s"} below
                                 </button>
                               </>
                             )}
