@@ -2334,10 +2334,11 @@ body {
 
 /* --- the driver line (7a-7d) ---------------------------------------------
  *
- * One line of 11.5px report ink docked under the prompt, aligned to the
- * field (46px, clearing the clip button). Segments harness, model,
- * effort, mode - Kevin's order (2026-08-29): the settable dimensions
- * first, the mode that governs them last. Separated by a middot at 50%. The line wraps to a second row
+ * One line of 11.5px report ink docked under the prompt, flush with the
+ * composer's left edge (Kevin, 2026-08-29: padding-left 0 - the 46px
+ * field-aligned inset read as a random indent). Segments harness, model,
+ * effort, mode: the settable dimensions first, the mode that governs
+ * them last. Separated by a middot at 50%. The line wraps to a second row
  * with a 5px row gap rather than truncating; each middot is bound into
  * one flex item with the label after it, so a wrap can only break before
  * a separator. Quieter than the composer placeholder above it: no
@@ -2355,7 +2356,7 @@ body {
   /* The composer above carries 14px of bottom padding; -5px of it comes
      back, so the air between field and line is the 9px the handoff draws. */
   margin: -5px 14px 0;
-  padding: 0 0 14px 46px;
+  padding: 0 0 14px 0;
   font: 400 11.5px / 1 var(--font-body);
   color: color-mix(in srgb, var(--color-text) 52%, transparent);
 }
