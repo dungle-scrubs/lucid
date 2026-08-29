@@ -1908,17 +1908,17 @@ body {
 /* 6e Wait: the working state where the work is watched from. Accent is
    the family of things happening; the count arrives at the dock's own
    threshold (activity.ts), not here. */
-.working-bar {
-  padding: 9px 14px 0;
-  font: 400 12px / 1.4 var(--font-body);
+/* The wait, said as the transcript's own last row: the dots count up and
+   start over - ".", "..", "...", again - on a 1.2s cadence. Discrete
+   content steps, not a fade, because the request was a count, not a pulse.
+   The width is reserved so the elapsed count never shifts under it, and a
+   reduced-motion reader gets a still ellipsis. */
+.working-row {
+  padding: 2px 2px 0;
+  font: 400 12.5px / 1.4 var(--font-body);
   color: var(--color-accent-700);
 }
 
-/* The wait, said the way a terminal says it: the dots count up and start
-   over - ".", "..", "...", again - on a 1.2s cadence. Discrete content
-   steps, not a fade, because the request was a count, not a pulse. The
-   width is reserved so the elapsed count never shifts under it, and a
-   reduced-motion reader gets a still ellipsis. */
 .working-dots::after {
   content: ".";
   display: inline-block;

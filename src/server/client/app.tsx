@@ -1238,6 +1238,24 @@ const Thread = ({
           </ThreadPrimitive.Empty>
           <ThreadPrimitive.Messages components={{ Message }} />
 
+          {/* 6e Wait: progress in accent ink, as the transcript's own last
+              row - the scroll absorbs it, so the composer never moves when
+              work starts and stops (the dock version reflowed the input).
+              The header pill says it too; this row sits where the eyes
+              already are. The count joins at the dock's 8-second
+              threshold; before that the state alone is the message. */}
+          {report.busy && !stalled ? (
+            <div className="working-row">
+              <span>
+                {report.label}
+                <span aria-hidden="true" className="working-dots" />
+              </span>
+              {report.elapsed === null ? null : (
+                <span className="working-elapsed"> · {report.elapsed}</span>
+              )}
+            </div>
+          ) : null}
+
           {/* 3c: the agent stopped mid-turn. A card under the truncated turn
               says what that cost - nothing was written, the version is as it
               was, the queue is intact. The document column does not react.
@@ -1317,23 +1335,6 @@ const Thread = ({
           queued, what is attached, and the box you type in. What is
           happening lives in the conversation's status pill now, not here. */}
       <div className={dead ? "dock dead" : "dock"}>
-        {/* 6e Wait: progress in accent ink, next to the hand that waits. The
-            header pill says it too, but the pill sits at the top of a tall
-            column; a person who just hit send is looking here. The count
-            joins at the dock's own 8-second threshold - before that the
-            state alone is the message, and a counting dock for every short
-            wait teaches you to stop reading it. */}
-        {report.busy && !stalled ? (
-          <div className="working-bar">
-            <span>
-              {report.label}
-              <span aria-hidden="true" className="working-dots" />
-            </span>
-            {report.elapsed === null ? null : (
-              <span className="working-elapsed"> · {report.elapsed}</span>
-            )}
-          </div>
-        ) : null}
         {pending.length === 0 ? null : (
           <div className="queue-bar">
             <span>
