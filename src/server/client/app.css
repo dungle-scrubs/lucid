@@ -1885,6 +1885,10 @@ body {
   flex-direction: column;
   background: var(--paper);
   border-top: 1px solid var(--edge-2);
+  /* The bleed covers the gap the grip's line lives in, so the dock draws
+     that edge itself - one continuing rule from the divider down to the
+     window's bottom. */
+  border-left: 1px solid var(--edge-2);
   /* Full bleed, Kevin's call: the dock reaches the grip, the window's
      right edge, and the window's bottom - no ground strip below, no side
      inset. The negative margins escape .panes' 14px padding and gap, the
