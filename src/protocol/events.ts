@@ -49,6 +49,10 @@ export const EventKind = {
    * an unknown kind defaults to lossless. Naming it here stops the drift
    * probe reporting a kind hcn documents. */
   question: "question",
+  /** The harness naming what went wrong with a turn: class, reason, and
+   * when a limit lifts. Lossless - a failure nobody sees reads as the
+   * agent going quiet. */
+  failure: "failure",
   done: "done",
 } as const;
 

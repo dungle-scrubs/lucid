@@ -134,6 +134,21 @@ const eventText = (event: Record<string, unknown>): string => {
   if ((kind === EventKind.error || kind === EventKind.limit) && typeof event.message === "string")
     return `${kind === EventKind.error ? "✗" : "!"} ${event.message}`;
   if (kind === EventKind.progress && typeof event.label === "string") return `… ${event.label}`;
+  if (kind === EventKind.failure) {
+    // The harness naming what went wrong. The message carries the reason;
+    // when a limit lifts, that is the one fact a reader can act on - until
+    // then, nothing.
+    const f = event as { class?: unknown; message?: unknown; resetsAt?: unknown };
+    const reason =
+      typeof f.message === "string" && f.message !== ""
+        ? f.message
+        : `${typeof f.class === "string" ? f.class : "unknown"} failure`;
+    const resets =
+      typeof f.resetsAt === "number"
+        ? ` Resets at ${new Date(f.resetsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`
+        : "";
+    return `✗ ${reason}${resets}`;
+  }
   return `[${kind}]`;
 };
 

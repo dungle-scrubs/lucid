@@ -22,6 +22,10 @@ export interface Msg {
    * saying no. The fifth transcript kind: magenta, never mistaken for the
    * agent speaking. */
   readonly refusal?: boolean;
+  /** The harness failing a turn (rate limit, spawn failure) rather than
+   * lucid refusing. Same magenta treatment, different headline: who said
+   * no is the difference between "lucid refused" and "the turn failed". */
+  readonly harnessFailed?: boolean;
   /** Something that happened rather than something anyone said. */
   readonly note?: boolean;
   /** Where this line sits in the record. Used to place a saved version at the

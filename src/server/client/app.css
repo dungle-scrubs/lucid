@@ -1476,7 +1476,9 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 2px 2px 0;
+  /* Air under the last line: a response ending flush against the dock
+     reads as cut off. 18px keeps the rhythm of the 16px row gap. */
+  padding: 2px 2px 18px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1883,7 +1885,22 @@ body {
   flex-direction: column;
   background: var(--paper);
   border-top: 1px solid var(--edge-2);
-  border-radius: 12px 12px 0 0;
+  /* Full bleed, Kevin's call: the dock reaches the grip, the window's
+     right edge, and the window's bottom - no ground strip below, no side
+     inset. The negative margins escape .panes' 14px padding and gap, the
+     same way the sheet's ground bleeds; the window's own corner radius
+     clips the square corners. */
+  margin: 0 -14px -14px;
+  border-radius: 0;
+}
+
+/* 6e Wait: the working state where the work is watched from. Accent is
+   the family of things happening; the count arrives at the dock's own
+   threshold (activity.ts), not here. */
+.working-bar {
+  padding: 9px 14px 0;
+  font: 400 12px / 1.4 var(--font-body);
+  color: var(--color-accent-700);
 }
 
 /* The dock owns the divider above itself; its first child must not draw a
@@ -2185,7 +2202,9 @@ body {
   gap: 8px;
   align-items: flex-end;
   padding: 10px 14px 14px;
-  border-radius: 12px;
+  /* The dock is full-bleed and square; a rounded composer inside it
+     would draw its own box against the dock's paper. */
+  border-radius: 0;
 }
 
 /* 4a state 2: a file held over the composer. The whole composer takes the

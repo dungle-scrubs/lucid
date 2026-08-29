@@ -263,7 +263,11 @@ const linesToMessages = (lines: readonly Line[]): Msg[] =>
       role: l.kind === "agent" ? ("assistant" as const) : ("user" as const),
       text: l.text,
       ...(l.event === "tool" ? { tool: true } : {}),
-      ...(l.event === "error" || l.event === "limit" ? { refusal: true } : {}),
+      ...(l.event === "error" || l.event === "limit"
+        ? { refusal: true }
+        : l.event === "failure"
+          ? { refusal: true, harnessFailed: true }
+          : {}),
       ...(l.batch === undefined ? {} : { sentBatch: l.batch }),
     }));
 
@@ -564,14 +568,18 @@ const Message = (): React.ReactElement => {
     // Magenta and unmistakable, never alongside cyan in the same row: this
     // is the one transcript kind that is not anybody talking. The terminal
     // view prefixes the reason with a cross or a bang; the row already
-    // names who refused, so the prefix goes.
+    // names who refused, so the prefix goes. Who said no differs: lucid
+    // refusing an input, or the harness failing a turn - a rate limit is
+    // the upstream refusing service, and the reader needs to know it was
+    // not lucid and not the agent.
     const said = one.text.replace(/^([✗!])\s+/, "");
+    const who = one.harnessFailed === true ? "the turn failed" : "lucid refused";
     return (
       <MessagePrimitive.Root>
         <div className="msg refusal">
           <div className="refusal-head">
             <ProhibitDuotone size={12} />
-            <span className="refusal-kind">lucid refused</span>
+            <span className="refusal-kind">{who}</span>
           </div>
           <div className="body">{said}</div>
         </div>
@@ -1299,6 +1307,18 @@ const Thread = ({
           queued, what is attached, and the box you type in. What is
           happening lives in the conversation's status pill now, not here. */}
       <div className={dead ? "dock dead" : "dock"}>
+        {/* 6e Wait: progress in accent ink, next to the hand that waits. The
+            header pill says it too, but the pill sits at the top of a tall
+            column; a person who just hit send is looking here. The count
+            joins at the dock's own 8-second threshold - before that the
+            state alone is the message, and a counting dock for every short
+            wait teaches you to stop reading it. */}
+        {report.busy && !stalled ? (
+          <div className="working-bar">
+            {report.label}
+            {report.elapsed === null ? "" : ` · ${report.elapsed}`}
+          </div>
+        ) : null}
         {pending.length === 0 ? null : (
           <div className="queue-bar">
             <span>
