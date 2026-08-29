@@ -1336,9 +1336,9 @@ body {
 }
 
 /* G9: the note box is the composer in another position, so its controls are
-   the composer's - the 38px attach and 38px buttons. */
+   the composer's - the 30px attach and 30px buttons. */
 .note-pop-actions button {
-  height: 38px;
+  height: 30px;
   padding: 0 14px;
   border: 1px solid var(--edge-2);
   border-radius: 10px;
@@ -2172,15 +2172,15 @@ body {
 
 /* The control that opens the file picker. The input itself is never shown -
    a browser's own file input cannot be styled and says the wrong thing.
-   38px square, matching send. */
+   30px square, matching send. */
 .attach {
   flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
   border: 1px solid var(--edge-2);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--paper);
   color: color-mix(in srgb, var(--color-text) 62%, transparent);
   cursor: pointer;
@@ -2221,14 +2221,18 @@ body {
 .composer textarea {
   flex: 1;
   resize: none;
-  min-height: 38px;
+  min-height: 32px;
   max-height: 180px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--edge-2);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--paper);
   color: var(--color-text);
   font: inherit;
+  /* The transcript's own size (13.5px/1.55): a composer that sets larger
+     text than the conversation it feeds reads as a different document. */
+  font-size: 13.5px;
+  line-height: 1.55;
 }
 
 .composer textarea::placeholder {
@@ -2257,13 +2261,13 @@ body {
 
 .composer button {
   flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   display: grid;
   place-items: center;
   border: 1px solid var(--color-accent);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--color-accent);
   color: #fff;
   cursor: pointer;
