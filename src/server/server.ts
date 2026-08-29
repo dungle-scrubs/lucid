@@ -44,6 +44,14 @@ import {
   viewArtifactVersion,
   viewSnapshot,
 } from "../store/conversation-host.js";
+import {
+  DRIVER_BODY_FIELDS,
+  DRIVER_FIELD_MAX,
+  isDriverField,
+  isDriverHarness,
+  readDriverPreference,
+  writeDriverPreference,
+} from "../store/driver-preference.js";
 import { validConversationId } from "../store/errors.js";
 import { ARTIFACT_TITLE_MAX, isArtifactTitle, validArtifactId } from "../store/log.js";
 import { presenceHeld } from "../store/presence.js";
@@ -197,7 +205,13 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         // fold so that a missing record and a damaged one cannot arrive at
         // the same answer.
         if (!existsSync(join(dir, "log.ndjson"))) {
-          return json({ conversationId: id, lines: [], status: "no record", damaged: false });
+          return json({
+            conversationId: id,
+            lines: [],
+            status: "no record",
+            damaged: false,
+            driverPreference: null,
+          });
         }
         let snapshot: ReturnType<typeof viewSnapshot>;
         try {
@@ -217,6 +231,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             status: "damaged",
             damaged: true,
             error: cause instanceof Error ? cause.message : String(cause),
+            driverPreference: readDriverPreference(dir),
           });
         }
         const view = buildView({
@@ -290,6 +305,11 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               ? { harnessVersion: observed.version }
               : {}),
           },
+          // What the person chose, beside what is driving (RFC-12). The two
+          // are never one field: after a refused re-spawn they differ, and
+          // the difference is the story the page has to tell. Null is the
+          // state of every record no choice has been made in.
+          driverPreference: readDriverPreference(dir),
           // A torn trailing write folds cleanly but short. That is damage
           // too, and the page says so.
           damaged: snapshot.goodBytes < logSize(dir),
@@ -584,6 +604,63 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         } finally {
           host.close();
         }
+      }
+
+      // The driver preference (RFC-12). A person's choice of what drives
+      // the conversation, stored in the record and honored by whichever
+      // headless process holds the presence lock - never by this server,
+      // which spawns nothing and takes no lock. This endpoint writes one
+      // file and answers.
+      //
+      // Validation is shape only, in the RFC's pinned order: json, harness,
+      // fields, unknown keys. Membership is hcn's to judge at spawn - the
+      // lists describe a pinned hcn and drift from the one that will spawn,
+      // and a harness whose model vocabulary is extensible accepts ids no
+      // descriptor listed - so a value hcn refuses surfaces later, as an
+      // error event in the record, where the person reads it.
+      const driverPref = path.match(/^\/api\/conversations\/([^/]+)\/driver\/?$/);
+      if (driverPref && req.method === "POST") {
+        const id = decodeURIComponent(driverPref[1] ?? "");
+        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+        let body: unknown;
+        try {
+          body = await req.json();
+        } catch {
+          return json({ error: "invalid-json" }, 400);
+        }
+        const b = (body ?? {}) as Record<string, unknown>;
+        // A preference without its harness names nothing: model and effort
+        // are values in a harness's vocabulary, and a value without its
+        // domain cannot be honored. Aliases are refused with the rest - the
+        // file holds hcn's canonical names.
+        if (!isDriverHarness(b.harness)) return json({ error: "invalid-harness" }, 400);
+        for (const field of ["provider", "model", "effort"] as const) {
+          const value = b[field];
+          if (value === undefined) continue;
+          if (!isDriverField(value)) {
+            return json({ error: "invalid-field", field, max: DRIVER_FIELD_MAX }, 400);
+          }
+        }
+        // No field outside the five. `mode` and `profile` are unknown
+        // fields: mode is not settable from the browser, and the attach
+        // flow behind an interactive switch is not designed.
+        for (const key of Object.keys(b)) {
+          if (!DRIVER_BODY_FIELDS.has(key)) {
+            return json({ error: "unknown-field", field: key }, 400);
+          }
+        }
+        // The record is created when it does not exist, as an input does:
+        // choosing a driver while nothing runs is the natural moment to
+        // choose one, and the preference is honored by the next headless
+        // driver to start.
+        const { dir } = conversations(rootDir).ensure(id);
+        const stored = writeDriverPreference(dir, {
+          harness: b.harness,
+          ...(isDriverField(b.provider) ? { provider: b.provider } : {}),
+          ...(isDriverField(b.model) ? { model: b.model } : {}),
+          ...(isDriverField(b.effort) ? { effort: b.effort } : {}),
+        });
+        return json(stored);
       }
 
       const write = path.match(/^\/api\/conversations\/([^/]+)\/input\/?$/);

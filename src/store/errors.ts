@@ -30,6 +30,8 @@ export interface RecordPaths {
   readonly secretPath: string;
   readonly logPath: string;
   readonly metaPath: string;
+  /** The driver preference (RFC-12). Absent until a person makes a choice. */
+  readonly driverPath: string;
   readonly lockPath: string;
 }
 
@@ -40,6 +42,7 @@ export const pathsForDir = (dir: string): RecordPaths => {
     secretPath: join(dir, "secret"),
     logPath,
     metaPath: join(dir, "meta.json"),
+    driverPath: join(dir, "driver.json"),
     lockPath: `${logPath}.lock`,
   };
 };
