@@ -423,34 +423,36 @@ html.lucid-annotate, html.lucid-annotate * {
 }
 
 /* Focusing a note's target, or travelling to a block: light it in place.
-   Same wash as new material, peaking at the half rather than the fifth
-   because nothing has to be distinguished from a page loading - the reader
-   asked for this.
+   A HOLD, not a pulse: the reader asked for this and then looked away, so
+   the light has to survive the scroll and say move your eyes here - the
+   old 2.6s half-wave peaked at a tenth tint and was gone before anyone
+   found it (Kevin, 2026-08-29). Six seconds at accent-200 with a 2px
+   edge, then a fast drop.
 
    Alternated under two class names, because re-running an animation on an
    element that already carries it does nothing - and focusing the same
    note twice is the ordinary case. */
 @keyframes lucid-focus-a {
-  0%, 100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
-  50% { box-shadow: inset 0 0 0 9999px var(--color-accent-100); outline-color: var(--color-accent); }
+  0%, 92% { box-shadow: inset 0 0 0 9999px var(--color-accent-200); outline-color: var(--color-accent); }
+  100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
 }
 @keyframes lucid-focus-b {
-  0%, 100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
-  50% { box-shadow: inset 0 0 0 9999px var(--color-accent-100); outline-color: var(--color-accent); }
+  0%, 92% { box-shadow: inset 0 0 0 9999px var(--color-accent-200); outline-color: var(--color-accent); }
+  100% { box-shadow: inset 0 0 0 9999px transparent; outline-color: transparent; }
 }
 [${ELEMENT_ATTR}].lucid-focus-a,
 [${ELEMENT_ATTR}].lucid-focus-b {
   border-radius: 6px !important;
-  outline: 1.5px solid transparent !important;
+  outline: 2px solid transparent !important;
 }
-[${ELEMENT_ATTR}].lucid-focus-a { animation: lucid-focus-a 2.6s ease-in-out 1 !important; }
-[${ELEMENT_ATTR}].lucid-focus-b { animation: lucid-focus-b 2.6s ease-in-out 1 !important; }
+[${ELEMENT_ATTR}].lucid-focus-a { animation: lucid-focus-a 6s ease-in 1 !important; }
+[${ELEMENT_ATTR}].lucid-focus-b { animation: lucid-focus-b 6s ease-in 1 !important; }
 /* Still says where it went, without moving anything. */
 @media (prefers-reduced-motion: reduce) {
   [${ELEMENT_ATTR}].lucid-focus-a,
   [${ELEMENT_ATTR}].lucid-focus-b {
     animation: none !important;
-    outline: 1.5px solid var(--color-accent) !important;
+    outline: 2px solid var(--color-accent) !important;
     outline-offset: 0 !important;
   }
 }
@@ -899,7 +901,7 @@ const script = (artifactId: string, version: number, author: string): string => 
         (function (el, cls) {
           setTimeout(function () {
             el.classList.remove(cls);
-          }, 2600);
+          }, 6000);
         })(hits[g], lit);
       }
       return;
@@ -981,7 +983,7 @@ const script = (artifactId: string, version: number, author: string): string => 
       void gl.offsetWidth;
       gl.classList.add(gcls);
       (function (el, cls) {
-        setTimeout(function () { el.classList.remove(cls); }, 2600);
+        setTimeout(function () { el.classList.remove(cls); }, 6000);
       })(gl, gcls);
       return;
     }

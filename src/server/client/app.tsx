@@ -4051,7 +4051,8 @@ const App = (): React.ReactElement => {
                               }}
                             >
                               <option value="">Compare with…</option>
-                              {catalog?.versions
+                              {[...catalog.versions]
+                                .reverse()
                                 .filter((v) => v !== doc.version)
                                 .map((v) => (
                                   <option key={v} value={String(v)}>
