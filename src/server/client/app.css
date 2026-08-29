@@ -205,8 +205,11 @@ body {
   flex: 0 0 1px;
   /* An `hr` brings its own border, margins, and height, and Tailwind's
      preflight then sets `height: 0` on top - which beats `align-self` and
-     collapses the grip. Height is restored explicitly so stretch applies. */
-  margin: 2px 0;
+     collapses the grip. Height is restored explicitly so stretch applies.
+     The negative bottom margin runs the line into .panes' bottom padding
+     and out at the window's edge: the dock went full-bleed, and a divider
+     that stops 14px short of the floor reads as broken. */
+  margin: 2px 0 -14px;
   border: 0;
   height: auto;
   align-self: stretch;
@@ -1885,10 +1888,6 @@ body {
   flex-direction: column;
   background: var(--paper);
   border-top: 1px solid var(--edge-2);
-  /* The bleed covers the gap the grip's line lives in, so the dock draws
-     that edge itself - one continuing rule from the divider down to the
-     window's bottom. */
-  border-left: 1px solid var(--edge-2);
   /* Full bleed, Kevin's call: the dock reaches the grip, the window's
      right edge, and the window's bottom - no ground strip below, no side
      inset. The negative margins escape .panes' 14px padding and gap, the
