@@ -46,7 +46,7 @@ describe("what the dock says", () => {
     expect(describeActivity(undelivered, UNDELIVERED_STALL_AFTER).stalled).toBe(false);
     expect(describeActivity(undelivered, UNDELIVERED_STALL_AFTER + 1).stalled).toBe(true);
     expect(describeActivity(undelivered, UNDELIVERED_STALL_AFTER + 1).label).toBe(
-      "3 written, not delivered yet",
+      "Waiting for the agent",
     );
   });
 
@@ -77,9 +77,21 @@ describe("what the dock says", () => {
   });
 
   test("what is happening is named before it is timed", () => {
-    expect(describeActivity(running, 1).label).toBe("the agent is working");
-    expect(describeActivity(revising, 1).label).toBe("1 sent, waiting for the agent");
+    expect(describeActivity(running, 1).label).toBe("The agent is working");
+    expect(describeActivity(revising, 1).label).toBe("The agent is working");
   });
+});
+
+test("saved input without an agent explains what happens without a progress timer", () => {
+  const report = describeActivity(undelivered, 999, false);
+  expect(report.label).toBe("No agent is connected. Your message is saved.");
+  expect(report.disconnected).toBe(true);
+  expect(report.stalled).toBe(false);
+  expect(report.elapsed).toBeNull();
+});
+
+test("an idle disconnected record does not claim a message was saved", () => {
+  expect(describeActivity(idle, 999, false).busy).toBe(false);
 });
 
 describe("formatElapsed", () => {

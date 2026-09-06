@@ -2,13 +2,12 @@
 # symlink named node_modules slips straight past it into a commit.
 node_modules
 .lucid/*/run/
-lucid-v2-plan/
-lucid-v2-plan.html
 coverage/
 *.tsbuildinfo
 .DS_Store
 .lefthook-local/
 dist/
+artifacts/
 
 # bun build --compile drops a temp artifact beside the output. It is not
 # output and it is not source; it got committed once.

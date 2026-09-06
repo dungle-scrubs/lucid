@@ -24,8 +24,7 @@
 
 /* The browser surface: the reading view.
  *
- * Design: the reading-view handoff (`docs/reports/design-coverage.md` is
- * the coverage map). Two panes - a document sheet on the eggshell ground, the
+ * Design: current reading-view rules are in `docs/design.md`. Two panes - a document sheet on the eggshell ground, the
  * conversation beside it - under exactly one 34px header per column.
  *
  * Laws carried in this file:
@@ -115,6 +114,10 @@
 
 :root {
   --ground: var(--color-bg);
+}
+
+:root {
+  --document-ground: color-mix(in srgb, var(--ground) 50%, var(--paper) 50%);
 }
 
 :root {
@@ -697,8 +700,8 @@ body {
   flex-direction: column;
   margin: 0 -14px -14px;
   padding: 16px 16px 0;
-  background-color: var(--ground);
-  background-image: url("data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22 viewBox=%220 0 88 88%22><g fill=%22none%22 stroke=%22%23201e1d%22 stroke-opacity=%22.13%22 stroke-width=%221%22><circle cx=%2222%22 cy=%2222%22 r=%227%22/><circle cx=%2222%22 cy=%2222%22 r=%2215%22/><circle cx=%2222%22 cy=%2222%22 r=%2223%22/><circle cx=%2222%22 cy=%2222%22 r=%2231%22/><circle cx=%2266%22 cy=%2266%22 r=%229%22/><circle cx=%2266%22 cy=%2266%22 r=%2218%22/><circle cx=%2266%22 cy=%2266%22 r=%2227%22/><circle cx=%2274%22 cy=%2214%22 r=%225%22/><circle cx=%2214%22 cy=%2274%22 r=%224%22/></g></svg>");
+  background-color: var(--document-ground);
+  background-image: url("data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2288%22 height=%2288%22 viewBox=%220 0 88 88%22><g fill=%22none%22 stroke=%22%23201e1d%22 stroke-opacity=%22.065%22 stroke-width=%221%22><circle cx=%2222%22 cy=%2222%22 r=%227%22/><circle cx=%2222%22 cy=%2222%22 r=%2215%22/><circle cx=%2222%22 cy=%2222%22 r=%2223%22/><circle cx=%2222%22 cy=%2222%22 r=%2231%22/><circle cx=%2266%22 cy=%2266%22 r=%229%22/><circle cx=%2266%22 cy=%2266%22 r=%2218%22/><circle cx=%2266%22 cy=%2266%22 r=%2227%22/><circle cx=%2274%22 cy=%2214%22 r=%225%22/><circle cx=%2214%22 cy=%2274%22 r=%224%22/></g></svg>");
   background-size: 88px 88px;
 }
 
@@ -2363,21 +2366,11 @@ body {
   white-space: nowrap;
 }
 
-/* The mode segment: the anchor for its hover gloss, and - in
-   headless-turn - the 4px neutral dot that marks the mode whose
-   consequence the second line states. */
+/* The mode segment anchors its hover gloss. */
 .driver-seg.mode {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-}
-
-.driver-mode-dot {
-  width: 4px;
-  height: 4px;
-  flex: none;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--color-text) 40%, transparent);
 }
 
 /* A middot and the label after it: one unbreakable flex item, so a wrap

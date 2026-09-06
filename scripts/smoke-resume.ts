@@ -19,7 +19,7 @@
  * why muse degraded rather than broke for the months it was wrong.
  *
  * Run: bun scripts/smoke-resume.ts [--harness claude]
- * Evidence: spikes/evidence/resume.md
+ * Evidence: artifacts/evidence/resume.md
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -174,9 +174,9 @@ const main = async (): Promise<void> => {
   log(`both halves in one fold: ${bothHalves}`);
   if (!bothHalves) ok = false;
 
-  mkdirSync("spikes/evidence", { recursive: true });
+  mkdirSync("artifacts/evidence", { recursive: true });
   writeFileSync(
-    "spikes/evidence/resume.md",
+    "artifacts/evidence/resume.md",
     [
       `# Resume - ${HARNESS}`,
       "",

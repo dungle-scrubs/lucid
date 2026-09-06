@@ -19,13 +19,15 @@ does not replace the deterministic gate or gate CI.
 
 ## Live confirmation lanes
 
-| Lane | Script | Recorded evidence |
-|---|---|---|
-| Harness process through hcn | [smoke-live](../scripts/smoke-live.ts) | [pi](../spikes/evidence/df-smoke-pi.md) |
-| Harness recalls its session after process loss | [smoke-resume](../scripts/smoke-resume.ts) | [resume](../spikes/evidence/resume.md) |
-| One record, two different harnesses | [smoke-cross-harness](../scripts/smoke-cross-harness.ts) | [cross-harness](../spikes/evidence/cross-harness-handoff.md) |
-| Two processes pass ownership | [smoke-handoff](../scripts/smoke-handoff.ts) | [handoff](../spikes/evidence/handoff-smoke.md) |
-| Human-owned session attaches through hooks | [smoke-interactive](../scripts/smoke-interactive.ts) | [interactive](../spikes/evidence/interactive.md) |
+| Lane | Script |
+|---|---|
+| Harness process through hcn | [smoke-live](../scripts/smoke-live.ts) |
+| Harness recalls its session after process loss | [smoke-resume](../scripts/smoke-resume.ts) |
+| One record, two different harnesses | [smoke-cross-harness](../scripts/smoke-cross-harness.ts) |
+| Two processes pass ownership | [smoke-handoff](../scripts/smoke-handoff.ts) |
+| Human-owned session attaches through hooks | [smoke-interactive](../scripts/smoke-interactive.ts) |
+
+Scripts write dated output under ignored `artifacts/evidence/`.
 
 Read each script's arguments before running it. Use the workspace's standing
 live model and machine guidance in [AGENTS](../AGENTS.md). A direct model call

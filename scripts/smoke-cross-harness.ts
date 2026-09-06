@@ -15,7 +15,7 @@
  * honest demonstration that the durable log carries enough to do it.
  *
  * Run: bun scripts/smoke-cross-harness.ts [--from claude] [--to pi]
- * Evidence: spikes/evidence/cross-harness-handoff.md
+ * Evidence: artifacts/evidence/cross-harness-handoff.md
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -194,9 +194,9 @@ const main = async (): Promise<void> => {
     ok = false;
   }
 
-  mkdirSync("spikes/evidence", { recursive: true });
+  mkdirSync("artifacts/evidence", { recursive: true });
   writeFileSync(
-    "spikes/evidence/cross-harness-handoff.md",
+    "artifacts/evidence/cross-harness-handoff.md",
     [
       `# Cross-harness handoff - ${FROM} then ${TO}`,
       "",

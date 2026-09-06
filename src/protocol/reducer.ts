@@ -112,7 +112,7 @@ export interface ChannelState {
   /** Minted by the host at record creation (D-004); checked only at attach. */
   readonly secret: string;
   /** Last lucid-minted seq - the durable log position. Every accepted frame
-   * consumes one (PLAN.md: "every frame lucid accepts is assigned a seq"),
+   * consumes one,
    * so the space is sparse from a source's view: bookkeeping frames
    * (heartbeat/ack/detach) hold seqs that are never replayable, and the
    * host filters deliverable kinds when honoring replayFrom. */
@@ -230,8 +230,7 @@ export interface TransitionRecord {
 }
 
 /** The normalizer's ps-level fact (M3.1), CONTRACTUALLY about the
- * INTERACTIVE process only (PLAN.md: presence answers "is an interactive
- * process attached now?"). Never feed it the liveness of lucid's own
+ * INTERACTIVE process only: whether a human-owned process is present. Never feed it the liveness of lucid's own
  * headless child - that would fence a stalled runner against its own
  * recovery. */
 export interface Presence {

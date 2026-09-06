@@ -109,12 +109,12 @@ const main = async (): Promise<void> => {
   if (!matches) throw new Error("reopened fold does not match live transcript");
 
   // Evidence
-  mkdirSync("spikes/evidence", { recursive: true });
+  mkdirSync("artifacts/evidence", { recursive: true });
   writeFileSync(
-    "spikes/evidence/handoff-smoke.md",
+    "artifacts/evidence/handoff-smoke.md",
     `# Handoff smoke - baton-pass - ${conversationId}\n\n\`\`\`\n${lines.join("\n")}\n\`\`\`\n\nVerdict: PASS\n`,
   );
-  log(`evidence written to spikes/evidence/handoff-smoke.md`);
+  log(`evidence written to artifacts/evidence/handoff-smoke.md`);
 
   successorPresence.release();
   rmSync(root, { recursive: true, force: true });
@@ -126,9 +126,9 @@ main().catch((e) => {
   console.error(e instanceof Error ? e.stack : "");
   // Write failure evidence
   try {
-    mkdirSync("spikes/evidence", { recursive: true });
+    mkdirSync("artifacts/evidence", { recursive: true });
     writeFileSync(
-      "spikes/evidence/handoff-smoke.md",
+      "artifacts/evidence/handoff-smoke.md",
       `# Handoff smoke - FAIL\n\n\`\`\`\n${lines.join("\n")}\n\`\`\`\n\nError: ${e instanceof Error ? e.message : String(e)}\n`,
     );
   } catch {}

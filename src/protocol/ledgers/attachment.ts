@@ -26,7 +26,7 @@ export const AttachmentLedger = {
     return state.attachment !== null && now < state.attachment.lease.expires;
   },
 
-  /** PLAN.md: "a lease is renewed by any frame plus explicit lease grants."
+  /** A lease is renewed by any frame plus explicit lease grants.
    * Re-minting is gated at renewEvery granularity so per-token frames do not
    * churn lease identity: `expires` only ever moves forward, and a writer
    * streaming frames always holds >= TTL - renewEvery of headroom. */

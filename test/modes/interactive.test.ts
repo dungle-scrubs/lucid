@@ -19,7 +19,7 @@ import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
 import { attach } from "../protocol/helpers.js";
 
 const announcePath = fileURLToPath(
-  new URL("../../spikes/evidence/a002-announce.log", import.meta.url),
+  new URL("../fixtures/interactive/session-start.log", import.meta.url),
 );
 
 describe("interactive adapter ladder - rung 1 logic (M5.3)", () => {

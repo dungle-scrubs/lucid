@@ -963,7 +963,6 @@ const DriverLine = ({
       return (
         <span className="driver-seg mode" key={key}>
           {label}
-          {noRecall ? <span aria-hidden="true" className="driver-mode-dot" /> : null}
           {gloss === undefined ? null : (
             <span className="driver-tip" role="tooltip">
               <span className="driver-tip-title">{label}</span>
@@ -1248,7 +1247,7 @@ const Thread = ({
             <div className="working-row">
               <span>
                 {report.label}
-                <span aria-hidden="true" className="working-dots" />
+                {report.disconnected ? null : <span aria-hidden="true" className="working-dots" />}
               </span>
               {report.elapsed === null ? null : (
                 <span className="working-elapsed"> · {report.elapsed}</span>
@@ -3742,12 +3741,18 @@ const App = (): React.ReactElement => {
   // A turn that streams resets the clock as it goes; one that says nothing
   // until it finishes is timed from when it started.
   const since = Math.max(startedAt ?? now, lastChange);
-  const report = describeActivity(activity, (now - since) / 1000);
-  const pillLabel = report.stalled
-    ? `stopped · ${report.elapsed ?? "a while"} ago`
-    : busy
-      ? `working${report.elapsed === null ? "" : ` · ${report.elapsed}`}`
-      : "idle";
+  const report = describeActivity(
+    activity,
+    (now - since) / 1000,
+    status !== "agent-gone" && status !== "no record",
+  );
+  const pillLabel = report.disconnected
+    ? "no agent"
+    : report.stalled
+      ? `stopped · ${report.elapsed ?? "a while"} ago`
+      : busy
+        ? `${activity.turn || activity.inFlight > 0 ? "working" : "waiting"}${report.elapsed === null ? "" : ` · ${report.elapsed}`}`
+        : "idle";
 
   /** The header over the document column, in its three states (README \u00a71):
    * reading on the ground, ink while changes are unsaved, and the one

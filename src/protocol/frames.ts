@@ -1,5 +1,5 @@
 /**
- * Frame codecs: the chat session protocol's wire vocabulary (PLAN.md 4.3),
+ * Frame codecs: the chat session protocol's wire vocabulary,
  * validated at the boundary. decodeFrame turns an untrusted record into a
  * typed Frame or a refused verdict with a NAMED issue, and CONSTRUCTS the
  * result field by field from validated values - it never casts the raw
@@ -8,7 +8,7 @@
  * A refused verdict is the only operator-visible auth/validation signal,
  * so its issue names the exact reason and no frame is ever half-applied.
  *
- * Shapes follow PLAN.md exactly. `epoch` is the fencing token: every
+ * See docs/skill-chat-substrate.md for the source contract. `epoch` is the fencing token: every
  * post-attach frame carries it (a takeover increments it; stale-epoch
  * frames are refused, which is what makes the lease enforceable). `seq` is
  * lucid's durable log authority; `n` is the source's per-epoch counter;

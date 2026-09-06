@@ -1,5 +1,5 @@
 /**
- * Owns the event-class policy PLAN.md Part 0 declares and Part 1 uses:
+ * Owns the event-class policy shared by sources and the host:
  * which HarnessEvent kinds are droppable (coalescible under pressure,
  * latest-wins) vs lossless (never dropped, replay-covered), and the named
  * constants bounding the outbound and input directions. Pure vocabulary +

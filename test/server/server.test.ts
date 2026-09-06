@@ -325,6 +325,33 @@ describe("whether the agent is working", () => {
     expect(body.activity.turn).toBe(false);
   });
 
+  test("a session error followed by detach leaves queued input waiting, not working", async () => {
+    emit("session-ended", { kind: "error", message: "the harness session ended" }, 1);
+    const host = createConversationHost(join(root, CONV), {
+      now: () => Date.now(),
+      presence: () => undefined,
+      executorLease: () => true,
+      onEffect: () => {},
+      onRecord: () => {},
+    });
+    try {
+      expect(
+        host.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "shutdown" })).verdict,
+      ).toBe("accepted");
+    } finally {
+      host.close();
+    }
+    const sent = await api(`/api/conversations/${CONV}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "what is this artifact about?" }),
+    });
+    expect(sent.status).toBe(200);
+    const body = await (await api(`/api/conversations/${CONV}`)).json();
+    expect(body.status).toBe("agent-gone");
+    expect(body.activity).toEqual({ turn: false, inFlight: 0, waiting: 1 });
+  });
+
   test("a record with no events at all is not working", async () => {
     const body = (await (await api(`/api/conversations/${CONV}`)).json()) as {
       activity: { turn: boolean };

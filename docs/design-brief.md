@@ -4,9 +4,10 @@ A brief for designing lucid's browser surface. It assumes no knowledge of the
 product and no access to its source. Everything a design needs to account for
 is here.
 
-It ships with a **behaviour reference**: a single HTML file showing all 47
-states on one page, drawn by the product's own stylesheets. Where this
-document describes a state, that file shows it. Read them together.
+Read this with [current visual rules](design.md) and the runnable behavior
+reference (`bun run build:reference`). The reference uses the product's
+instrumentation stylesheet; do not use a historical exported HTML page as
+a claim about the current interface.
 
 ---
 

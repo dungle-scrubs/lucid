@@ -5,7 +5,7 @@
  * drives claude, and every event folds back into the store's transcript.
  * This is the on-demand, evidence-logged run the plan defers from CI - it
  * needs an installed claude and is nondeterministic. Evidence is written
- * to spikes/evidence/df-smoke.md.
+ * to artifacts/evidence/df-smoke.md.
  *
  * Run: bun scripts/smoke-live.ts
  */
@@ -195,11 +195,11 @@ const main = async (): Promise<void> => {
     resolved === undefined
       ? "unknown"
       : `${String(resolved.version)} (${String(resolved.bin)}, via ${String(resolved.source)})`;
-  mkdirSync("spikes/evidence", { recursive: true });
+  mkdirSync("artifacts/evidence", { recursive: true });
   // The file is rewritten whole on every run, so anything a reader needs has
   // to be generated here. Prose appended by hand does not survive.
   writeFileSync(
-    `spikes/evidence/df-smoke${HARNESS === "claude" ? "" : `-${HARNESS}`}.md`,
+    `artifacts/evidence/df-smoke${HARNESS === "claude" ? "" : `-${HARNESS}`}.md`,
     [
       `# DF-SMOKE - live conversation against ${HARNESS} ${sessionId}`,
       "",

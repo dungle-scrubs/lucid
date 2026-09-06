@@ -58,6 +58,8 @@ export interface Activity {
 }
 
 export interface Report {
+  /** Saved input is waiting without an attached agent. */
+  readonly disconnected: boolean;
   /** Whether the dock shows anything at all. */
   readonly busy: boolean;
   /** Whether what it shows is an alarm. */
@@ -83,24 +85,34 @@ export const formatElapsed = (seconds: number): string => {
  * transcript last changed. The caller owns that clock because only it knows
  * when idle turned into busy.
  */
-export const describeActivity = (activity: Activity, workingFor: number): Report => {
+export const describeActivity = (
+  activity: Activity,
+  workingFor: number,
+  connected = true,
+): Report => {
   const working = activity.turn || activity.inFlight > 0;
   const busy = working || activity.waiting > 0;
-  if (!busy) return { busy: false, stalled: false, label: "", elapsed: null };
+  if (!busy) return { busy: false, disconnected: false, stalled: false, label: "", elapsed: null };
+  if (!connected) {
+    return {
+      busy: true,
+      disconnected: true,
+      stalled: false,
+      label: "No agent is connected. Your message is saved.",
+      elapsed: null,
+    };
+  }
 
   // A turn that is running and a note nobody took are different failures
   // with different patience. Judging them against one threshold is what
   // made the alarm useless: too eager for the turn, too slow for the note.
   const stalled = working ? workingFor > TURN_STALL_AFTER : workingFor > UNDELIVERED_STALL_AFTER;
 
-  const label = activity.turn
-    ? "the agent is working"
-    : activity.inFlight > 0
-      ? `${activity.inFlight} sent, waiting for the agent`
-      : `${activity.waiting} written, not delivered yet`;
+  const label = working ? "The agent is working" : "Waiting for the agent";
 
   return {
     busy: true,
+    disconnected: false,
     stalled,
     label,
     // An alarm always says how long. Ordinary work says so once the wait is

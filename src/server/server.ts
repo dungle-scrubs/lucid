@@ -99,10 +99,13 @@ const logSize = (dir: string): number => {
  * A turn is running when the last events belong to a turn that has not
  * produced a terminal event yet. Older turns are irrelevant: one that never
  * finished because its driver was killed is history, not activity. */
-const turnRunning = (transcript: {
-  events: readonly { turnId: string; event: unknown }[];
-}): boolean => {
-  const events = transcript.events;
+const turnRunning = (
+  transcript: {
+    events: readonly { epoch: number; turnId: string; event: unknown }[];
+  },
+  epoch: number,
+): boolean => {
+  const events = transcript.events.filter((event) => event.epoch === epoch);
   const last = events[events.length - 1];
   if (last === undefined) return false;
   const turnId = last.turnId;
@@ -277,6 +280,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         // when there is one and omitted when there is not, rather than
         // shown as a blank.
         const attached = snapshot.state.attachment;
+        const driving = attached !== null && snapshot.status !== "agent-gone";
         const identity = [...snapshot.transcript.events]
           .reverse()
           .find((e) => (e.event as { kind?: string }).kind === "identity");
@@ -320,8 +324,13 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             // false while the agent is working. A delivered input whose
             // turn has not terminated is that turn, which is what
             // inFlightInputs counts, so it is the other half of the answer.
-            turn: turnRunning(snapshot.transcript) || snapshot.state.inFlightInputs > 0,
-            inFlight: snapshot.state.inFlightInputs,
+            // An old session error is history after detach or process loss.
+            // Only the current attachment can have work in progress.
+            turn:
+              driving &&
+              (turnRunning(snapshot.transcript, snapshot.state.epoch) ||
+                snapshot.state.inFlightInputs > 0),
+            inFlight: driving ? snapshot.state.inFlightInputs : 0,
             waiting: snapshot.transcript.inputs.filter(
               (i) => i.status === "outstanding" || i.status === "queued",
             ).length,
