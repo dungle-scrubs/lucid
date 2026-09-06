@@ -2,7 +2,7 @@
 number: 05
 title: "One window: the conversation you can talk back to"
 type: protocol
-status: Draft
+status: Implemented
 author: Kevin Frilot
 date: 2026-08-24
 ---

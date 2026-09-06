@@ -346,7 +346,34 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     clearTimeout(deadline);
     if (refusal !== null) {
       const thrown = refusal;
-      void pump;
+      try {
+        proc.endInput();
+      } catch {}
+      try {
+        proc.kill("SIGTERM");
+      } catch {}
+      const settles = async (): Promise<boolean> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            pump.then(
+              () => true,
+              () => true,
+            ),
+            new Promise<boolean>((resolve) => {
+              timer = setTimeout(() => resolve(false), deps.refusalGraceMs ?? 1_000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+      if (!(await settles())) {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+        await settles();
+      }
       throw thrown;
     }
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
+
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { openWriter } from "../src/store/conversation-host.js";
 import { acquirePresence } from "../src/store/presence.js";
 import { createConversationRecord, openConversation } from "../src/store/store.js";
 
@@ -100,13 +102,7 @@ const main = async (): Promise<void> => {
   log(`final transcript inputs: ${finalTranscript.inputs.length}, seq ${hostB.state().seq}`);
 
   // Reopened fold matches live transcript
-  const reopened = openConversation(dir, {
-    now: () => Date.now(),
-    presence: () => undefined,
-    executorLease: () => false,
-    onEffect: () => {},
-    onRecord: () => {},
-  });
+  const reopened = openWriter(dir);
   const reopenedTranscript = reopened.transcript();
   const matches = JSON.stringify(reopenedTranscript) === JSON.stringify(finalTranscript);
   log(`reopened fold matches live: ${matches}`);

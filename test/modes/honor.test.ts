@@ -29,7 +29,7 @@ import {
   writeDriverPreference,
 } from "../../src/store/driver-preference.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
-import { FakeHcnProcess, fakeSpawner, fixtureEvents } from "../harness/fakes.js";
+import { FakeHcnProcess, fakeArtifactHost, fakeSpawner, fixtureEvents } from "../harness/fakes.js";
 
 const SID = "eb04301d-8756-4a8b-ae3e-aac0e71f7265";
 const BIN = "/fake/hcn";
@@ -113,6 +113,7 @@ const openRig = async (
       conversationId: "conv-1",
       secret,
       runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      host: fakeArtifactHost(),
       mintTurnId: () => `turn-${++turnCount}`,
       sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
     },
@@ -581,6 +582,7 @@ describe("RFC-12: the pin and the startup fold", () => {
         conversationId: "conv-1",
         secret,
         runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+        host: fakeArtifactHost(),
         mintTurnId: () => `turn-${++turnCount}`,
         sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
       },
@@ -623,4 +625,93 @@ describe("RFC-12: the pin and the startup fold", () => {
       effort: "high",
     });
   });
+});
+
+test("credit arriving during a driver switch reaches the replacement", async () => {
+  let opened = 0;
+  let inspectCount = 0;
+  let resumeInspect!: (value: boolean) => void;
+  let endSource: Parameters<typeof createHeadlessHost>[0]["onEnded"];
+  const delivered: Frame[][] = [];
+  const driver = await openHonoringDriver({
+    base: {
+      conversationId: "switch-credit",
+      secret: "test-secret",
+      runner: createHcnRunner({ spawn: fakeSpawner([]).spawn, bin: BIN }),
+      mintTurnId: () => "turn-1",
+      host: fakeArtifactHost(),
+      sendFrame: () => ({ verdict: "refused", issue: "not-used" }),
+    },
+    sessionCapable: async () =>
+      ++inspectCount === 1
+        ? true
+        : new Promise<boolean>((resolve) => {
+            resumeInspect = resolve;
+          }),
+    initialHarness: "claude",
+    harnessPinned: false,
+    readPreference: () => null,
+    mintSessionId: () => "session",
+    createHostFn: (deps) => {
+      const frames: Frame[] = [];
+      delivered.push(frames);
+      opened += 1;
+      endSource = deps.onEnded;
+      return { receive: (frame) => frames.push(frame), close: () => {} };
+    },
+  });
+  endSource?.({ kind: "driver-change" });
+  const credit: Frame = { kind: "credit", epoch: 2, tokens: 17 };
+  driver.receive(credit);
+  resumeInspect(true);
+  await until(() => opened === 2, "replacement source");
+  expect(delivered[0]).toEqual([]);
+  expect(delivered[1]).toEqual([credit]);
+  driver.close();
+});
+
+test("credit arriving during a late refusal reaches the fallback", async () => {
+  let inspections = 0;
+  let resumeFallback!: (value: boolean) => void;
+  let endSource: Parameters<typeof createHeadlessHost>[0]["onEnded"];
+  const delivered: Frame[][] = [];
+  const driver = await openHonoringDriver({
+    base: {
+      conversationId: "fallback-credit",
+      secret: "test-secret",
+      runner: createHcnRunner({ spawn: fakeSpawner([]).spawn, bin: BIN }),
+      mintTurnId: () => "turn-1",
+      host: fakeArtifactHost(),
+      sendFrame: () => ({ verdict: "refused", issue: "not-used" }),
+    },
+    sessionCapable: async () =>
+      ++inspections < 3
+        ? true
+        : new Promise<boolean>((resolve) => {
+            resumeFallback = resolve;
+          }),
+    initialHarness: "claude",
+    harnessPinned: false,
+    readPreference: () => null,
+    mintSessionId: () => "session",
+    createHostFn: (deps) => {
+      const frames: Frame[] = [];
+      delivered.push(frames);
+      endSource = deps.onEnded;
+      return { receive: (frame) => frames.push(frame), close: () => {} };
+    },
+  });
+  try {
+    endSource?.({ kind: "driver-change" });
+    await until(() => delivered.length === 2, "replacement source");
+    endSource?.({ kind: "open-refused", message: "synthetic late refusal" });
+    const credit: Frame = { kind: "credit", epoch: 3, tokens: 23 };
+    driver.receive(credit);
+    resumeFallback(true);
+    await until(() => delivered.length === 3, "fallback source");
+    expect(delivered[1]).toEqual([]);
+    expect(delivered[2]).toEqual([credit]);
+  } finally {
+    driver.close();
+  }
 });

@@ -22,7 +22,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
-import { createHeadlessHost } from "../../src/modes/host.js";
+import { createHeadlessHost, hostSeamFor } from "../../src/modes/host.js";
 import { encodeAnnotationBatch } from "../../src/protocol/annotations.js";
 import type { Frame } from "../../src/protocol/frames.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
@@ -53,23 +53,7 @@ const rig = () => {
       mintTurnId: () => `turn-${++turns}`,
       sendFrame: (f: Frame) => host.handleFrame(JSON.stringify(f)),
       sessionId: SID,
-      host: {
-        cursor: () => host.cursor(),
-        collectEffects: (from: number) => host.collectEffects(from),
-        advanceCursor: (off: number) => host.advanceCursor(off),
-        artifactIndex: () => host.artifactIndex(),
-        readArtifact: (id: string, v: number) => host.readArtifact(id, v),
-        // Production wires this. Without it the driver refuses every artifact
-        // block as "no host" before the patch path is reached, so a rig
-        // missing it cannot see a patch refusal at all.
-        writeArtifact: (params: {
-          artifactId: string;
-          version: number;
-          author: string;
-          contentType: string;
-          bytes: string;
-        }) => host.writeArtifact(params),
-      },
+      host: hostSeamFor(host),
     } as unknown as Parameters<typeof createHeadlessHost>[0],
     "headless-session",
   );

@@ -43,7 +43,7 @@ import { watch as fsWatch } from "node:fs";
 import { join } from "node:path";
 import type { ChannelState } from "../protocol/index.js";
 import { readRecordFiles, type ViewSnapshot, viewSnapshot } from "./conversation-host.js";
-import type { LockEvent } from "./lock.js";
+import type { LockEvent } from "./flock.js";
 import { foldUnderAppendLock, type Transcript } from "./log.js";
 
 /** The poll fallback cadence, unchanged from `watch.ts` (D-004: network

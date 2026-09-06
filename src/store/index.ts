@@ -13,6 +13,7 @@ export {
   type HostRecord,
   type HostSnapshot,
   openConversation,
+  openWriter,
   type RecoveryRecord,
   type Transcript,
   type TranscriptEvent,
@@ -29,12 +30,9 @@ export {
   type AcquireOpts,
   type AppendLock,
   acquireAppendLock,
-  heldLocks,
-  type LockBackend,
   LockError,
   type LockEvent,
-  lockBackend,
-} from "./lock.js";
+} from "./flock.js";
 export type { AppendEvent } from "./store.js";
 export {
   createConversationRecord,

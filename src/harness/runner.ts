@@ -16,10 +16,11 @@
  * What it is NOT: it is not the protocol reducer, the durable store, or the
  * flock. It is the process boundary and nothing else.
  */
+import type { HarnessName } from "../protocol/frames.js";
 import type { HarnessEvent } from "./events.js";
 
 /** A harness as hcn names it. Validated by `src/cli/harness.ts`. */
-export type HarnessName = "claude" | "codex" | "pi" | "muse";
+export type { HarnessName };
 
 /** The integration modes a capability query can ask about. */
 export type HarnessMode = "headless-turn" | "headless-session" | "interactive";

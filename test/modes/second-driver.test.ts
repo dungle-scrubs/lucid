@@ -28,7 +28,7 @@ import { createHeadlessHost } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/frames.js";
 import { createTurnIds } from "../../src/protocol/turn-id.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
-import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
+import { FakeHcnProcess, fakeArtifactHost, fakeSpawner } from "../harness/fakes.js";
 
 const SID = "eb04301d-8756-4a8b-ae3e-aac0e71f7265";
 const settle = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -59,10 +59,11 @@ const record = () => {
           conversationId: "conv-1",
           secret,
           runner: createHcnRunner({ spawn: spawner.spawn, bin: "/fake/hcn" }),
+          host: fakeArtifactHost(),
           mintTurnId,
           sendFrame: (f: Frame) => host.handleFrame(JSON.stringify(f)),
           sessionId: SID,
-        } as unknown as Parameters<typeof createHeadlessHost>[0],
+        },
         "headless-session",
       );
       proc.emit({

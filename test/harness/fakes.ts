@@ -12,6 +12,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HcnProcess, SpawnHcn } from "../../src/harness/process.js";
+import type { ArtifactHost } from "../../src/modes/host.js";
+import { ARTIFACT_BYTES_MAX } from "../../src/protocol/frames.js";
+import { type ArtifactVersion, foldCollect, hashArtifactBytes } from "../../src/store/log.js";
 
 export const FIXTURES = join(import.meta.dir, "..", "fixtures", "hcn");
 
@@ -96,6 +99,7 @@ export class FakeHcnProcess implements HcnProcess {
   }
   kill(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
     this.signals.push(signal);
+    this.exit(null);
   }
 
   /** Emit one NDJSON line of hcn output. */
@@ -133,4 +137,36 @@ export const fakeSpawner = (procs: FakeHcnProcess[]) => {
     return proc;
   };
   return { spawn, calls };
+};
+
+/** In-memory artifact seam for source tests that do not exercise the durable store. */
+export const fakeArtifactHost = (overrides: Partial<ArtifactHost> = {}): ArtifactHost => {
+  const versions = new Map<string, Map<number, ArtifactVersion>>();
+  let cursor = 0;
+  const empty = foldCollect("fake", "fake-secret", Buffer.alloc(0));
+  return {
+    cursor: () => cursor,
+    collectEffects: () => ({ ...empty, entries: empty.collected }),
+    advanceCursor: (offset) => {
+      cursor = Math.max(cursor, offset);
+    },
+    artifactHeads: () =>
+      new Map([...versions].map(([id, values]) => [id, Math.max(...values.keys())])),
+    readArtifact: (id, version) => versions.get(id)?.get(version) ?? null,
+    writeArtifact: (params) => {
+      if (params.bytes.length > ARTIFACT_BYTES_MAX)
+        return { verdict: "refused", issue: "artifact-too-large" };
+      const values = versions.get(params.artifactId) ?? new Map<number, ArtifactVersion>();
+      const existing = values.get(params.version);
+      if (existing !== undefined)
+        return existing.bytes === params.bytes
+          ? { verdict: "accepted", version: existing }
+          : { verdict: "refused", issue: "artifact-version-exists" };
+      const version = { ...params, at: 0, hash: hashArtifactBytes(params.bytes) };
+      values.set(params.version, version);
+      versions.set(params.artifactId, values);
+      return { verdict: "accepted", version };
+    },
+    ...overrides,
+  };
 };

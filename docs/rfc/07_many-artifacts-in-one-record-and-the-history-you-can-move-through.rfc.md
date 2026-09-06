@@ -2,12 +2,14 @@
 number: 07
 title: "Many artifacts in one record, and the history you can move through"
 type: feature
-status: Draft
+status: Implemented
 author: Kevin Frilot
 date: 2026-08-26
 ---
 
 # RFC-07: Many artifacts in one record, and the history you can move through
+
+> Superseded in part by RFC-09: the artifact list, second pane, and retire behavior are withdrawn.
 
 ## Abstract
 

@@ -272,6 +272,8 @@ describe("openSession over hcn session --json", () => {
     for (const e of fixtureEvents("session-refusal-no-session-mode")) r.proc.emit(e);
     r.proc.exit(2);
     await expect(opening).rejects.toBeInstanceOf(HarnessRefusal);
+    expect(r.proc.inputEnded).toBe(true);
+    expect(r.proc.signals).toEqual(["SIGTERM"]);
   });
 
   test("the session argv carries the id, provider and stall budget", async () => {
@@ -450,6 +452,8 @@ describe("review fixes: what the cross-family review found", () => {
     // The binary was version-checked at resolution, but a stream can still
     // report an older protocol. That is the claim this checks.
     await expect(open(r, "0.5.3")).rejects.toBeInstanceOf(HarnessVersionError);
+    expect(r.proc.inputEnded).toBe(true);
+    expect(r.proc.signals).toEqual(["SIGTERM"]);
   });
 
   test("an event with no turn open is held for the next turn, never dropped", async () => {
@@ -588,4 +592,26 @@ describe("a turn that carries a failure still delivers its events", () => {
     // The failure does not swallow the turn: the message still arrives.
     expect(kinds).toEqual(["failure", "message", "done"]);
   });
+});
+
+test("a refused child that ignores SIGTERM is killed before the refusal returns", async () => {
+  class ResistantProcess extends FakeHcnProcess {
+    override kill(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
+      this.signals.push(signal);
+      if (signal === "SIGKILL") this.exit(null);
+    }
+  }
+  const proc = new ResistantProcess();
+  const runner = createHcnRunner({ spawn: fakeSpawner([proc]).spawn, bin: BIN, refusalGraceMs: 0 });
+  const opening = runner.openSession({ harness: "codex", sessionId: "session" });
+  for (const e of fixtureEvents("session-refusal-no-session-mode")) proc.emit(e);
+  // Cleanup also bounds the RED run, without making its missing SIGKILL pass.
+  const cleanup = setTimeout(() => proc.exit(2), 50);
+  try {
+    await expect(opening).rejects.toBeInstanceOf(HarnessRefusal);
+    expect(proc.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  } finally {
+    clearTimeout(cleanup);
+    proc.exit(2);
+  }
 });

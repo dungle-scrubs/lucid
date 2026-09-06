@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,12 +6,14 @@ import { fileURLToPath } from "node:url";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import {
   A003_GATE_OPEN,
-  attachCapabilities,
-  chunkInjection,
-  INJECTION_CAP,
+  chunkHookInput,
+  deliverFirstQueued,
+  HOOK_CHUNK_CAP_BYTES,
   parseAnnounce,
   selectRung,
-} from "../../src/modes/interactive.js";
+} from "../../src/modes/interactive-host.js";
+import { openWriter } from "../../src/store/conversation-host.js";
+import { Flock, LockError } from "../../src/store/flock.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
 import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
 import { attach } from "../protocol/helpers.js";
@@ -43,25 +45,25 @@ describe("interactive adapter ladder - rung 1 logic (M5.3)", () => {
   });
 
   test("injection chunking holds every chunk at or under the cap and preserves the message exactly", () => {
-    expect(chunkInjection("short")).toEqual(["short"]);
+    expect(chunkHookInput("short")).toEqual(["short"]);
     // An empty message still delivers one chunk so its disposition is real.
-    expect(chunkInjection("")).toEqual([""]);
+    expect(chunkHookInput("")).toEqual([""]);
 
-    const long = "x".repeat(INJECTION_CAP * 2 + 37);
-    const chunks = chunkInjection(long);
+    const long = "x".repeat(HOOK_CHUNK_CAP_BYTES * 2 + 37);
+    const chunks = chunkHookInput(long);
     expect(chunks.length).toBe(3);
-    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(INJECTION_CAP);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(HOOK_CHUNK_CAP_BYTES);
     expect(chunks.join("")).toBe(long);
 
     // A tiny cap exercises the boundary; reassembly is lossless.
-    const c2 = chunkInjection("abcdef", 2);
+    const c2 = chunkHookInput("abcdef", 2);
     expect(c2).toEqual(["ab", "cd", "ef"]);
-    expect(() => chunkInjection("x", 0)).toThrow();
-    expect(() => chunkInjection("x", 1.5)).toThrow();
+    expect(() => chunkHookInput("x", 0)).toThrow();
+    expect(() => chunkHookInput("x", 1.5)).toThrow();
 
     // Astral chars are never split across chunks: each chunk is
     // independently well-formed UTF-8 (no lone surrogate -> no U+FFFD).
-    const emoji = chunkInjection("a\u{1F600}b\u{1F601}c", 2);
+    const emoji = chunkHookInput("a\u{1F600}b\u{1F601}c", 2);
     for (const c of emoji) expect(Buffer.from(c, "utf8").toString("utf8")).toBe(c);
     expect(emoji.join("")).toBe("a\u{1F600}b\u{1F601}c");
   });
@@ -73,7 +75,7 @@ describe("interactive adapter ladder - rung 1 logic (M5.3)", () => {
       const proc = new FakeHcnProcess();
       const spawner = fakeSpawner([proc]);
       const runner = createHcnRunner({ spawn: spawner.spawn, bin: "/fake/hcn" });
-      const pending = attachCapabilities(runner, "claude", "sonnet");
+      const pending = runner.capabilities("claude", "sonnet", "interactive");
       proc.emitRaw(JSON.stringify(payload));
       proc.exit(0);
       return { result: await pending, argv: spawner.calls[0]?.argv ?? [] };
@@ -148,3 +150,23 @@ describe("interactive adapter ladder - rung 1 logic (M5.3)", () => {
     expect(host.state().epoch).toBe(1);
   });
 });
+
+test.each(["lock-timeout", "lock-unavailable"] as const)(
+  "hook delivery reports a typed %s without matching error prose",
+  (code) => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-hook-lock-"));
+    createConversationRecord(root, "hook-lock");
+    const dir = join(root, "hook-lock");
+    const host = openWriter(dir);
+    host.enqueueInput({ id: "queued", text: "feedback", mode: "queue" });
+    host.close();
+    const failingLock = spyOn(Flock.prototype, "acquire").mockImplementation(() => {
+      throw new LockError(code, "test-lock", "synthetic failure with no code in its message");
+    });
+    try {
+      expect(deliverFirstQueued(dir)).toMatchObject({ ok: false, code: "hook-resolution-failed" });
+    } finally {
+      failingLock.mockRestore();
+    }
+  },
+);

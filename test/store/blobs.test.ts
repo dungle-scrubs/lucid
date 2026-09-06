@@ -253,3 +253,26 @@ describe("storing through the record, blob and entry together", () => {
     expect(lines.length).toBe(2);
   });
 });
+
+test("invalid attachment metadata leaves no blob or log entry", () => {
+  const root = rec();
+  createConversationRecord(root, "invalid");
+  const dir = join(root, "invalid");
+  const host = openConversation(dir, {
+    now: () => 1234,
+    presence: () => undefined,
+    executorLease: () => false,
+    onEffect: () => {},
+    onRecord: () => {},
+  });
+  const raw = bytes("must not become an orphan");
+  try {
+    expect(
+      host.writeAttachment({ bytes: raw, contentType: "", name: "valid.txt", text: true }),
+    ).toEqual({ verdict: "refused", issue: "attachment-invalid" });
+    expect(hasBlob(dir, hashBlob(raw))).toBe(false);
+    expect(readFileSync(join(dir, "log.ndjson"), "utf8")).toBe("");
+  } finally {
+    host.close();
+  }
+});

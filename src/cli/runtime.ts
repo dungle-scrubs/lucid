@@ -1,3 +1,4 @@
+import { LockError } from "../store/flock.js";
 /**
  * HostRuntime — the deep module that owns the headless conversation lifecycle.
  *
@@ -42,7 +43,7 @@ import { nodeHarnessDeps } from "../harness/node-deps.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { decideAction } from "../modes/controller.js";
 import { openHonoringDriver } from "../modes/honor.js";
-import { createHeadlessHost } from "../modes/host.js";
+import { createHeadlessHost, hostSeamFor } from "../modes/host.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { inputFrame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
@@ -51,8 +52,8 @@ import { readDriverPreference } from "../store/driver-preference.js";
 import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
 import { type HostRecord, openConversation } from "../store/store.js";
 import { followRecord } from "../store/tailer.js";
-import { type Conversations, conversations } from "./conversations.js";
 import { resolveStartupHarness, supportsSession } from "./harness.js";
+import { type Conversations, conversations } from "./record-addressing.js";
 
 /** Production deps for the runtime. All fields are injectable for tests. */
 export interface RuntimeDeps {
@@ -64,6 +65,7 @@ export interface RuntimeDeps {
   readonly harnessName?: string;
   readonly runner?: HarnessRunner;
   readonly onRecord?: (r: HostRecord) => void;
+  readonly diagnostic?: (line: string) => void;
   /** Called once the conversation is running and before the caller blocks on
    * `done`. `run` holds the terminal for the life of the session, so without
    * this it printed nothing at all - which is indistinguishable from a hang,
@@ -86,6 +88,16 @@ export interface RuntimeDeps {
   readonly pollMs?: number;
 }
 
+export class PresenceAcquireError extends Error {
+  constructor(
+    readonly conversationId: string,
+    cause: unknown,
+  ) {
+    super(`could not acquire presence for ${conversationId}`, { cause });
+    this.name = "PresenceAcquireError";
+  }
+}
+
 export interface RunningConversation {
   readonly kind: "running";
   readonly conversationId: string;
@@ -100,6 +112,12 @@ export interface RunningConversation {
   abort(): void;
   /** Whether the presence lock is still held. */
   readonly presenceHeld: () => boolean;
+}
+
+export interface DrivenConversation extends RunningConversation {
+  readonly host: import("../store/conversation-host.js").ConversationHost;
+  readonly source: import("../modes/honor.js").HonoringSource;
+  observeTrigger(observer: () => void): () => void;
 }
 
 export interface AwaitToken {
@@ -129,7 +147,9 @@ export const isAwaitToken = (r: StartResult): r is AwaitToken => r.kind === "awa
  * interactive-unattached channel (live human process, dead lease) returns
  * an AwaitToken without acquiring presence or spawning a harness.
  */
-export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult> => {
+export const openDrivenConversation = async (
+  opts: RuntimeDeps = {},
+): Promise<DrivenConversation | AwaitToken> => {
   const convsFactory = opts.conversationsFactory ?? conversations;
   const acquirePresenceFn = opts.acquirePresenceFn ?? acquirePresence;
   const openConversationFn = opts.openConversationFn ?? openConversation;
@@ -153,6 +173,14 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   const { secret } = convs.ensure(conversationId);
 
   let receive: ((frame: Frame) => void) | undefined;
+  // The append callback and follower see the same input. Deliver it once
+  // per source; a replacement owns replay from the durable cursor.
+  const handed = new Set<string>();
+  const deliver = (frame: Frame): void => {
+    if (receive === undefined || (frame.kind === "input" && handed.has(frame.id))) return;
+    receive(frame);
+    if (frame.kind === "input") handed.add(frame.id);
+  };
   // RFC-04 R2: the host's dispatch gate must read the presence handle
   // this runtime actually holds — not `presence` above, the ps-level
   // interactive-process probe, which is a different fact. The handle does
@@ -166,7 +194,7 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     presence: () => presenceProbe(),
     executorLease: () => presenceHandle?.held() === true,
     onEffect: (eff) => {
-      if (eff.type === "send") receive?.(eff.frame);
+      if (eff.type === "send") deliver(eff.frame);
     },
     onRecord: (r) => opts.onRecord?.(r),
   });
@@ -196,9 +224,14 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
 
   // Presence is held for the source's lifetime and kernel-released on
   // death; the runtime ensures a single explicit release.
-  const presence = acquirePresenceFn(dir, conversationId, {
-    onEvent: opts.onPresenceEvent,
-  });
+  let presence: PresenceHandle;
+  try {
+    presence = acquirePresenceFn(dir, conversationId, { onEvent: opts.onPresenceEvent });
+  } catch (cause) {
+    host.close();
+    if (cause instanceof LockError && cause.code === "lock-unavailable") throw cause;
+    throw new PresenceAcquireError(conversationId, cause);
+  }
   // Publish the handle to the host's R2 gate: from here on, transacts in
   // this process see themselves as the holder, and after `release()` (or
   // a takeover) they stop dispatching.
@@ -228,26 +261,61 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   // whether a harness holds a persistent session (PLAN D-008), once per
   // spawn through the honoring driver below.
   const runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
+  // Wire termination: done resolves when the source is closed or the
+  // signal aborts. No polling, no monkey-patch.
+  let resolveDone!: () => void;
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+
+  let doneResolved = false;
+  // Bind the tailer's lifetime to the runtime's abort, so abort() and
+  // done stop it.
+  const tailerAbort = new AbortController();
+  const finish = (): void => {
+    if (doneResolved) return;
+    doneResolved = true;
+    receive = undefined;
+    try {
+      tailerAbort.abort();
+    } catch {}
+    try {
+      host.close();
+    } catch {}
+    doRelease();
+    resolveDone();
+  };
+
   const baseDeps = {
     conversationId,
     secret,
     runner,
     mintTurnId,
-    sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
-    host: {
-      cursor: () => host.cursor(),
-      collectEffects: (from: number) => host.collectEffects(from),
-      advanceCursor: (off: number) => host.advanceCursor(off),
-      artifactIndex: () => host.artifactIndex(),
-      readArtifact: (artifactId: string, version: number) => host.readArtifact(artifactId, version),
-      writeArtifact: (params: {
-        readonly artifactId: string;
-        readonly version: number;
-        readonly author: string;
-        readonly contentType: string;
-        readonly bytes: string;
-      }) => host.writeArtifact(params),
+    now: nowFn,
+    onEnded: (end: import("../modes/host.js").SourceEnd) => {
+      if (doneResolved) return;
+      try {
+        if (end.kind === "store-failed")
+          (
+            opts.diagnostic ??
+            ((line: string) => {
+              process.stderr.write(line);
+            })
+          )(
+            `${JSON.stringify({
+              code: end.code,
+              conversationId,
+              operation: end.operation,
+              ...(end.artifactId === undefined ? {} : { artifactId: end.artifactId }),
+            })}\n`,
+          );
+      } catch {
+      } finally {
+        finish();
+      }
     },
+    sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
+    host: hostSeamFor(host),
   } as const;
 
   // A second driver must not strand a presence lock it cannot attach
@@ -277,6 +345,7 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
       mintSessionId: uuidFn,
       createHostFn: createHeadlessHostFn,
       onSpawn: () => {
+        handed.clear();
         lookedAt = host.cursor();
       },
     });
@@ -288,31 +357,7 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     doRelease();
     throw e;
   }
-  receive = source.receive;
-
-  // Wire termination: done resolves when the source is closed or the
-  // signal aborts. No polling, no monkey-patch.
-  let resolveDone!: () => void;
-  const done = new Promise<void>((resolve) => {
-    resolveDone = resolve;
-  });
-
-  let doneResolved = false;
-  // Bind the tailer's lifetime to the runtime's abort, so abort() and
-  // done stop it.
-  const tailerAbort = new AbortController();
-  const finish = (): void => {
-    if (doneResolved) return;
-    doneResolved = true;
-    try {
-      tailerAbort.abort();
-    } catch {}
-    try {
-      host.close();
-    } catch {}
-    doRelease();
-    resolveDone();
-  };
+  if (!doneResolved) receive = source.receive;
 
   // Abort helper — idempotent, releases presence exactly once.
   const abort = (): void => {
@@ -336,18 +381,6 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     }
   }
 
-  // Wrap source.close so an external close also finishes the runtime.
-  // Avoid mutating the source object when possible — keep our own flag
-  // and finish on any close call. We patch only to observe.
-  const originalClose = source.close.bind(source);
-  (source as { close: () => void }).close = () => {
-    try {
-      originalClose();
-    } finally {
-      finish();
-    }
-  };
-
   // The durable cursor records what was DISPATCHED, not what was looked
   // at. A cursor entry is itself new bytes, so writing one past a
   // no-effect range puts goodBytes past the cursor again and the next
@@ -356,13 +389,6 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
   // and persist only after real dispatch. `lookedAt` was declared before
   // the source opened: each attach (the first and every swap) sets it
   // past that attach's own effects through onSpawn.
-
-  /** Inputs this process has already handed to the harness, by id.
-   *
-   * Redelivery is at-least-once and the harness dedupes by id, so a repeat
-   * is safe. It is not free: without this set an armed input would be
-   * re-sent on every tick until its disposition landed. */
-  const handed = new Set<string>();
 
   /** Deliver inputs the reducer armed for redelivery but that no boundary
    * is coming for.
@@ -395,14 +421,15 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
       if (queued.status !== "outstanding" || queued.redeliver !== true) continue;
       if (handed.has(queued.id)) continue;
       if (presenceHandle?.held() !== true) return;
-      handed.add(queued.id);
       try {
-        receive(inputFrame(queued));
+        deliver(inputFrame(queued));
       } catch {}
     }
   };
 
+  const observers = new Set<() => void>();
   const onTrigger = (tailer: import("../store/tailer.js").RecordTailer): void => {
+    if (doneResolved) return;
     // peek() is lock-free and may see a torn tail — only for DECIDING
     // whether to bother. Anything we act on goes through the locked
     // collect.
@@ -439,7 +466,7 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
         if (presenceHandle?.held() !== true) return;
         if (eff.type === "send") {
           try {
-            receive?.(eff.frame);
+            deliver(eff.frame);
           } catch {}
         }
       }
@@ -464,11 +491,25 @@ export const startHeadless = async (opts: RuntimeDeps = {}): Promise<StartResult
     pollMs: opts.pollMs ?? 500,
     signal: tailerAbort.signal,
     tailerDeps: { now: nowFn, presence: () => presenceProbe() },
-    onTrigger,
+    onTrigger: (tailer) => {
+      try {
+        onTrigger(tailer);
+      } finally {
+        for (const observer of observers) observer();
+      }
+    },
   }).catch(() => {});
 
   return {
     kind: "running",
+    host,
+    source,
+    observeTrigger: (observer) => {
+      observers.add(observer);
+      return () => {
+        observers.delete(observer);
+      };
+    },
     conversationId,
     dir,
     harness,
@@ -496,3 +537,6 @@ export const runHeadless = async (
   await handle.done;
   return { conversationId: handle.conversationId, dir: handle.dir };
 };
+
+export const startHeadless = (opts: RuntimeDeps = {}): Promise<StartResult> =>
+  openDrivenConversation(opts);

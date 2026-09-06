@@ -27,8 +27,9 @@ import { join } from "node:path";
 import { createHcnRunner } from "../src/harness/hcn-runner.js";
 import { nodeHarnessDeps } from "../src/harness/node-deps.js";
 import type { HarnessName } from "../src/harness/runner.js";
-import { openHeadlessSession, openHeadlessTurns } from "../src/modes/headless.js";
+import { hostSeamFor, openHeadlessSession, openHeadlessTurns } from "../src/modes/host.js";
 import type { Frame } from "../src/protocol/index.js";
+import { openWriter } from "../src/store/conversation-host.js";
 import { createConversationRecord, openConversation } from "../src/store/store.js";
 
 const flagValue = (flag: string): string | undefined => {
@@ -86,6 +87,7 @@ const main = async (): Promise<void> => {
       conversationId,
       secret,
       runner,
+      host: hostSeamFor(host),
       mintTurnId: () => `${prefix}-${++n}`,
       sendFrame: (f: Frame) => host.handleFrame(JSON.stringify(f)),
     };
@@ -163,13 +165,7 @@ const main = async (): Promise<void> => {
 
   b.source.close();
   await sleep(1500);
-  const reopened = openConversation(dir, {
-    now: () => Date.now(),
-    presence: () => undefined,
-    executorLease: () => false,
-    onRecord: () => {},
-    onEffect: () => {},
-  });
+  const reopened = openWriter(dir);
   const ids = [...new Set(reopened.transcript().events.map((e) => e.turnId))];
   const bothHalves =
     ids.some((i) => i?.startsWith("pre")) && ids.some((i) => i?.startsWith("post"));

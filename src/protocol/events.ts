@@ -46,8 +46,7 @@ export const EventKind = {
    * `hcn-question` block out of a turn and emits this beside the message
    * that carried it. Lossless by class - a question nobody sees is a
    * conversation that stops - and it was already treated that way, because
-   * an unknown kind defaults to lossless. Naming it here stops the drift
-   * probe reporting a kind hcn documents. */
+   * an unknown kind defaults to lossless. */
   question: "question",
   /** The harness naming what went wrong with a turn: class, reason, and
    * when a limit lifts. Lossless - a failure nobody sees reads as the
@@ -58,20 +57,27 @@ export const EventKind = {
 
 export type HarnessEventKind = (typeof EventKind)[keyof typeof EventKind];
 
-/** Droppable: coalescible under pressure, latest-wins, credit-gated. */
-export const DROPPABLE_KINDS = [EventKind.token, EventKind.progress, EventKind.context] as const;
-
-/** Lossless: never dropped, never credit-gated, replay-covered. */
-export const LOSSLESS_KINDS = [
-  EventKind.identity,
-  EventKind.message,
-  EventKind.tool,
-  EventKind.limit,
-  EventKind.error,
-  EventKind.done,
-] as const;
-
 export type EventClass = "droppable" | "lossless";
+
+export const EVENT_CLASS = {
+  context: "droppable",
+  done: "lossless",
+  error: "lossless",
+  failure: "lossless",
+  identity: "lossless",
+  limit: "lossless",
+  message: "lossless",
+  progress: "droppable",
+  question: "lossless",
+  token: "droppable",
+  tool: "lossless",
+} as const satisfies Record<HarnessEventKind, EventClass>;
+
+const kindsOf = (eventClass: EventClass): readonly HarnessEventKind[] =>
+  Object.values(EventKind).filter((kind) => EVENT_CLASS[kind] === eventClass);
+
+export const DROPPABLE_KINDS = kindsOf("droppable");
+export const LOSSLESS_KINDS = kindsOf("lossless");
 
 /** Class of a HarnessEvent kind. Unknown or malformed kinds are LOSSLESS:
  * data we cannot classify is data we must not drop. */
@@ -79,14 +85,6 @@ export const classOfEventKind = (kind: unknown): EventClass =>
   typeof kind === "string" && (DROPPABLE_KINDS as readonly string[]).includes(kind)
     ? "droppable"
     : "lossless";
-
-/** The drift probe: an unknown kind still flows (as lossless), but the
- * host can log it - a harness renaming an event kind must be detectable
- * at exactly this seam. */
-export const isKnownEventKind = (kind: unknown): boolean =>
-  typeof kind === "string" &&
-  ((DROPPABLE_KINDS as readonly string[]).includes(kind) ||
-    (LOSSLESS_KINDS as readonly string[]).includes(kind));
 
 /** A droppable event waiting for credit, still owned by the turn that
  * produced it - flushing must never re-stamp an event with a turn it did

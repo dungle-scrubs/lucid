@@ -41,11 +41,3 @@ export const AttachmentLedger = {
     return lease === attachment.lease ? attachment : { ...attachment, lease };
   },
 } as const;
-
-/** Thin helpers so reducer call sites keep their short names if desired. */
-export const isLive = (state: ChannelState, now: number): boolean =>
-  AttachmentLedger.isLive(state, now);
-export const renewLease = (lease: Lease, now: number): Lease =>
-  AttachmentLedger.renewLease(lease, now);
-export const renewAttachment = (attachment: Attachment, now: number): Attachment =>
-  AttachmentLedger.renewAttachment(attachment, now);

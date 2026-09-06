@@ -24,7 +24,6 @@ import {
 } from "./errors.js";
 
 const SECRET_BYTES = 32;
-const _REDACTED = "redacted";
 
 export { pathsForDir, type RecordPaths, recordPaths, StoreError, validConversationId };
 
@@ -51,7 +50,9 @@ export const createConversationRecord = (
     renameSync(staging, paths.dir);
   } catch (cause) {
     rmSync(staging, { recursive: true, force: true });
-    throw new StoreError("record-exists", `could not publish record at ${paths.dir}`, { cause });
+    throw new StoreError("record-publish-failed", `could not publish record at ${paths.dir}`, {
+      cause,
+    });
   }
   return { secret, paths };
 };
@@ -64,6 +65,7 @@ export {
   type HostRecord,
   type HostSnapshot,
   openConversation,
+  openWriter,
   type RecoveryRecord,
   type ViewSnapshot,
   viewConversation,
@@ -84,7 +86,6 @@ export type {
 } from "./log.js";
 export {
   ARTIFACT_BYTES_MAX,
-  artifactKey,
   collectEffectsUnderAppendLock,
   foldCollect,
   hashArtifactBytes,

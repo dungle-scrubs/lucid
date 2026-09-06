@@ -40,7 +40,9 @@
 import { type ChatOpts, chatConversation } from "./chat.js";
 import { type AnnounceResult, announce } from "./hooks/announce.js";
 import { readStdin } from "./hooks/delivery.js";
+
 import { type InjectResult, inject } from "./hooks/inject.js";
+
 import { type MappedCommand, mapSubcommand } from "./mapping.js";
 import { type Conversations, conversations } from "./record-addressing.js";
 import type { RunOpts, RunResult } from "./run.js";

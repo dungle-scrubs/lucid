@@ -3,14 +3,15 @@ import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HarnessRunner } from "../../src/harness/runner.js";
-import { createHeadlessHost } from "../../src/modes/host.js";
+import { createHeadlessHost, hostSeamFor } from "../../src/modes/host.js";
 import { encodeFrame } from "../../src/protocol/index.js";
 import { createConversationRecord, openConversation, StoreError } from "../../src/store/store.js";
 import { attach } from "../protocol/helpers.js";
 
 const freshRoot = () => mkdtempSync(join(tmpdir(), "lucid-cursor-"));
 const recordDir = (root: string, id: string) => join(root, id);
-const attachFrame = (secret: string, overrides: any = {}) => attach({ secret, ...overrides });
+const attachFrame = (secret: string, overrides: Parameters<typeof attach>[0] = {}) =>
+  attach({ secret, ...overrides });
 
 describe("delivery cursor (RFC-04 R3/R4 + step7)", () => {
   test("cursor is durable and ordered after the entries it describes", () => {
@@ -193,15 +194,22 @@ describe("delivery cursor (RFC-04 R3/R4 + step7)", () => {
     writer.close();
     // Now a headless host attaches and should drain via cursor path
     const fakeRunner: HarnessRunner = {
-      openSession: async () =>
-        ({
-          send: async () => ({ disposition: "rejected", reason: "fake" }),
-          turns: { [Symbol.asyncIterator]: async function* () {} },
-          close: async () => {},
-        }) as any,
-      streamTurn: () => ({ [Symbol.asyncIterator]: async function* () {} }) as any,
-      inspect: async () => ({}) as any,
-      capabilities: async () => ({}) as any,
+      openSession: async () => ({
+        answer: async () => ({ disposition: "rejected", reason: "fake" }),
+        send: async () => ({ disposition: "rejected", reason: "fake" }),
+        turns: { [Symbol.asyncIterator]: async function* () {} },
+        close: async () => ({ exitCode: 0, cause: "clean" }),
+      }),
+      streamTurn: () => ({ [Symbol.asyncIterator]: async function* () {} }),
+      inspect: async () => ({ name: "claude", session: true, verifiedAgainst: "test" }),
+      capabilities: async () => ({
+        vision: false,
+        images: false,
+        streaming: "no",
+        session: true,
+        source: "runtime-verified",
+        confidence: "high",
+      }),
     };
     const hostForAttach = openConversation(recordDir(root, "conv-1"), {
       now: () => 2000,
@@ -219,11 +227,7 @@ describe("delivery cursor (RFC-04 R3/R4 + step7)", () => {
         runner: fakeRunner,
         mintTurnId: () => "turn-1",
         sendFrame: (frame) => hostForAttach.handleFrame(JSON.stringify(frame)),
-        host: {
-          cursor: () => hostForAttach.cursor(),
-          collectEffects: (off) => hostForAttach.collectEffects(off),
-          advanceCursor: (off) => hostForAttach.advanceCursor(off),
-        },
+        host: hostSeamFor(hostForAttach),
       },
       "headless-session",
     );
@@ -320,4 +324,23 @@ describe("delivery cursor (RFC-04 R3/R4 + step7)", () => {
     expect(re.state().inputs.length).toBe(0);
     expect(re.state().appliedInputs).toMatchObject({ "in-1": true });
   });
+});
+
+test("advancing an empty record to zero appends no cursor", () => {
+  const root = freshRoot();
+  createConversationRecord(root, "zero");
+  const dir = recordDir(root, "zero");
+  const host = openConversation(dir, {
+    now: () => 1234,
+    presence: () => undefined,
+    executorLease: () => false,
+    onEffect: () => {},
+    onRecord: () => {},
+  });
+  try {
+    host.advanceCursor(0);
+    expect(readFileSync(join(dir, "log.ndjson"), "utf8")).toBe("");
+  } finally {
+    host.close();
+  }
 });

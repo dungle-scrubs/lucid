@@ -6,12 +6,14 @@
  */
 
 import { join } from "node:path";
+import { LockError } from "./flock.js";
 
 export class StoreError extends Error {
   override readonly name = "StoreError";
   constructor(
     readonly code:
       | "record-exists"
+      | "record-publish-failed"
       | "invalid-conversation-id"
       | "missing-secret"
       | "invalid-secret"
@@ -24,6 +26,18 @@ export class StoreError extends Error {
     super(message, options);
   }
 }
+
+export type StoreFailureCode = "record-busy" | "record-unreadable" | "record-write-failed";
+
+export const classifyStoreFailure = (cause: unknown): StoreFailureCode | undefined => {
+  if (cause instanceof LockError)
+    return cause.code === "lock-timeout" ? "record-busy" : "record-write-failed";
+  if (cause instanceof StoreError)
+    return cause.code === "corrupt-log" || cause.code === "fold-refused"
+      ? "record-unreadable"
+      : "record-write-failed";
+  return undefined;
+};
 
 export interface RecordPaths {
   readonly dir: string;

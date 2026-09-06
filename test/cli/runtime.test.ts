@@ -2,12 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { conversations } from "../../src/cli/conversations.js";
-import { startHeadless } from "../../src/cli/runtime.js";
+import { conversations } from "../../src/cli/record-addressing.js";
+import { openDrivenConversation, startHeadless } from "../../src/cli/runtime.js";
+import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessRunner } from "../../src/harness/runner.js";
 import type { createHeadlessHost } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/index.js";
+import { createConversationHost, openWriter } from "../../src/store/conversation-host.js";
+import { StoreError } from "../../src/store/errors.js";
 import type { acquirePresence, PresenceHandle } from "../../src/store/presence.js";
+import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
 import { attach, event } from "../protocol/helpers.js";
 
 /** The runtime never opens a session or streams a turn in these tests: the
@@ -196,4 +200,82 @@ describe("RFC-12: the startup honor fold at the runtime seam", () => {
     expect(source.spawns[0]?.harness).toBe("claude");
     running.abort();
   });
+});
+
+test("failed-log shutdown releases presence and closes the host while harness close is pending and diagnostics throw", async () => {
+  const root = mkdtempSync(join(tmpdir(), "runtime-failed-log-"));
+  const { dir } = conversations(root).ensure("failed-log");
+  const writer = openWriter(dir);
+  writer.writeArtifact({
+    artifactId: "doc",
+    version: 1,
+    author: "human",
+    contentType: "text/html",
+    bytes: "private test document",
+  });
+  writer.close();
+  const proc = new FakeHcnProcess();
+  const hcn = createHcnRunner({ spawn: fakeSpawner([proc]).spawn, bin: "/fake/hcn" });
+  const diagnostics: string[] = [];
+  let released = 0;
+  let closed = 0;
+  let held = true;
+  const handle = await openDrivenConversation({
+    rootDir: root,
+    conversationId: "failed-log",
+    runner: { ...fakeRunner, openSession: hcn.openSession },
+    acquirePresenceFn: () => ({
+      held: () => held,
+      release: () => {
+        held = false;
+        released += 1;
+      },
+    }),
+    openConversationFn: (path, deps) => {
+      const host = createConversationHost(path, deps);
+      return {
+        ...host,
+        readArtifact: () => {
+          throw new StoreError("corrupt-log", "synthetic failure");
+        },
+        close: () => {
+          closed += 1;
+          host.close();
+        },
+      };
+    },
+    diagnostic: (line) => {
+      diagnostics.push(line);
+      throw new Error("sink failed");
+    },
+  });
+  if (handle.kind !== "running") throw new Error("did not start");
+  const cursor = handle.host.cursor();
+  proc.emit({ kind: "session", sessionId: "session-1", harness: "claude", hcn: "0.6.0" });
+  handle.source.receive({
+    kind: "input",
+    id: "in-1",
+    text: "sensitive input",
+    mode: "queue",
+    seq: 1,
+  });
+  await handle.done;
+  await new Promise((r) => setTimeout(r, 0));
+  expect(released).toBe(1);
+  expect(closed).toBe(1);
+  expect(handle.presenceHeld()).toBe(false);
+  expect(handle.host.cursor()).toBe(cursor);
+  expect(proc.commands.filter((c) => c.op === "send")).toEqual([]);
+  expect(proc.commands.filter((c) => c.op === "close")).toHaveLength(1);
+  expect(diagnostics).toEqual([
+    `${JSON.stringify({
+      code: "record-unreadable",
+      conversationId: "failed-log",
+      operation: "artifact-state",
+      artifactId: "doc",
+    })}\n`,
+  ]);
+  handle.abort();
+  expect(released).toBe(1);
+  proc.exit(0);
 });

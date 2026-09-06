@@ -29,7 +29,7 @@ import type {
   HarnessRunner,
   HarnessVocabulary,
 } from "../harness/runner.js";
-import { DRIVER_HARNESS_NAMES } from "../store/driver-preference.js";
+import { HARNESS_NAMES } from "../protocol/frames.js";
 
 /** What the projection tells the page (RFC-12, "What the client is told").
  * The same object answers every poll, so it is built once and frozen by
@@ -48,9 +48,9 @@ export interface DriverChoices {
 export const driverChoicesFromFacts = (
   facts: Readonly<Partial<Record<HarnessName, HarnessFacts>>>,
 ): DriverChoices => ({
-  harnesses: DRIVER_HARNESS_NAMES,
+  harnesses: HARNESS_NAMES,
   vocabulary: Object.fromEntries(
-    DRIVER_HARNESS_NAMES.flatMap((harness) => {
+    HARNESS_NAMES.flatMap((harness) => {
       const vocabulary = facts[harness]?.vocabulary;
       return vocabulary === undefined ? [] : [[harness, vocabulary] as const];
     }),
@@ -72,10 +72,10 @@ export const driverChoices = (runner?: HarnessRunner): Promise<DriverChoices> =>
     try {
       hcn = runner ?? createHcnRunner(nodeHarnessDeps());
     } catch {
-      return { harnesses: DRIVER_HARNESS_NAMES, vocabulary: {} };
+      return { harnesses: HARNESS_NAMES, vocabulary: {} };
     }
     const facts = await Promise.all(
-      DRIVER_HARNESS_NAMES.map(async (harness) => {
+      HARNESS_NAMES.map(async (harness) => {
         const fact = await hcn.inspect(harness).catch(() => undefined);
         return [harness, fact] as const;
       }),

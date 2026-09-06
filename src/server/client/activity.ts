@@ -4,7 +4,8 @@
  * The page used to call a turn stalled after 45 seconds of an unchanged
  * transcript. Both halves of that were wrong, and `live1`'s log shows why.
  *
- * A turn appends nothing between its input and its terminal event: the
+ * Shipped drivers grant no droppable credit (RFC-13 A2). Token, progress,
+ * and context deltas therefore do not land in the log. In the measured run: the
  * disposition lands at +0.1s and the message and `done` arrive together at
  * +19s, with no line in between. So "the transcript changed" is not a
  * heartbeat, and its absence is not silence.

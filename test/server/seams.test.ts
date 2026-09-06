@@ -16,15 +16,14 @@ const doc = (body: string): Document =>
   new DOMParser().parseFromString(`<!doctype html><html><body>${body}</body></html>`, "text/html");
 
 /** The selectors a whole-element spot would have written against `body`. */
-const cssFor = (d: Document, nth: number): string => {
-  const p = d.body.querySelectorAll("p")[nth];
+const cssFor = (nth: number): string => {
   return `body > p:nth-of-type(${nth + 1})`;
 };
 
 const selectors = (d: Document, nth: number): SpotSelectors => ({
   quote: { exact: p(d, nth).textContent ?? "", prefix: "", suffix: "" },
   position: { start: 0, end: 10 },
-  css: cssFor(d, nth),
+  css: cssFor(nth),
 });
 
 function p(d: Document, nth: number): Element {

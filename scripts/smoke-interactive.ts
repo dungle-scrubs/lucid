@@ -29,9 +29,10 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LUCID_RECORD_DIR } from "../src/cli/env-stamp.js";
+import { LUCID_RECORD_DIR } from "../src/cli/record-addressing.js";
 import { sendInput } from "../src/cli/send.js";
-import { createConversationRecord, openConversation } from "../src/store/store.js";
+import { openWriter } from "../src/store/conversation-host.js";
+import { createConversationRecord } from "../src/store/store.js";
 
 const CODEWORD = "pomegranate";
 const lines: string[] = [];
@@ -121,13 +122,7 @@ const main = async (): Promise<void> => {
   if (err.trim() !== "") log(`stderr: ${err.trim().slice(0, 200)}`);
 
   // --- what the record shows -----------------------------------------------
-  const host = openConversation(dir, {
-    now: () => Date.now(),
-    presence: () => undefined,
-    executorLease: () => false,
-    onEffect: () => {},
-    onRecord: () => {},
-  });
+  const host = openWriter(dir);
   const t = host.transcript();
   const raw = readFileSync(join(dir, "log.ndjson"), "utf8");
 
@@ -154,13 +149,7 @@ const main = async (): Promise<void> => {
   log(`transcript: ${t.events.length} events, ${t.inputs.length} inputs`);
 
   // --- the record survives the session -------------------------------------
-  const reopened = openConversation(dir, {
-    now: () => Date.now(),
-    presence: () => undefined,
-    executorLease: () => false,
-    onEffect: () => {},
-    onRecord: () => {},
-  });
+  const reopened = openWriter(dir);
   const foldOk = reopened.state().seq === host.state().seq;
   log(`\n## one record, folded the same twice: ${foldOk} (seq ${host.state().seq})`);
   if (!foldOk) ok = false;

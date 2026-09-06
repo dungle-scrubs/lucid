@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { HarnessRunner, SessionHandle } from "../../src/harness/runner.js";
-import { createHeadlessHost } from "../../src/modes/host.js";
+import type { HarnessRunner, HarnessTurn, SessionHandle } from "../../src/harness/runner.js";
+import { createHeadlessHost, hostSeamFor } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/index.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
 
@@ -23,7 +23,7 @@ const makeRunner = (
       async *[Symbol.asyncIterator]() {
         if (opts.emitQuestion) {
           // Emit a turn that asks a question - this goes through the host pump and sequencer, so n stays in sync
-          const qTurn: any = {
+          const qTurn: HarnessTurn = {
             turnId: questionTurnId,
             inputId: "init",
             [Symbol.asyncIterator]: async function* () {
@@ -38,7 +38,7 @@ const makeRunner = (
           await new Promise(() => {});
         }
       },
-    } as unknown as AsyncIterable<any>,
+    },
     send: async (id: string, text: string) => {
       calls.push(`send:${id}`);
       texts[id] = text;
@@ -57,7 +57,7 @@ const makeRunner = (
   };
   return {
     openSession: async () => handle,
-    streamTurn: () => ({ [Symbol.asyncIterator]: async function* () {} }) as any,
+    streamTurn: () => ({ [Symbol.asyncIterator]: async function* () {} }),
     inspect: async () => ({ name: "claude", session: true, verifiedAgainst: "test" }),
     capabilities: async () => ({
       vision: false,
@@ -97,11 +97,7 @@ describe("demotion (RFC-05 Error Handling)", () => {
         runner,
         mintTurnId: () => `turn-${++tCounter}`,
         sendFrame: (f) => host2.handleFrame(JSON.stringify(f)),
-        host: {
-          cursor: () => host2.cursor(),
-          collectEffects: (o) => host2.collectEffects(o),
-          advanceCursor: (o) => host2.advanceCursor(o),
-        },
+        host: hostSeamFor(host2),
         sessionId: sid,
       },
       "headless-session",
@@ -151,11 +147,7 @@ describe("demotion (RFC-05 Error Handling)", () => {
         runner,
         mintTurnId: () => `turn-${++tCounter}`,
         sendFrame: (f) => host.handleFrame(JSON.stringify(f)),
-        host: {
-          cursor: () => host.cursor(),
-          collectEffects: (o) => host.collectEffects(o),
-          advanceCursor: (o) => host.advanceCursor(o),
-        },
+        host: hostSeamFor(host),
         sessionId: sid,
       },
       "headless-session",
@@ -195,6 +187,9 @@ describe("demotion (RFC-05 Error Handling)", () => {
           typeof (e.event as { message?: unknown }).message === "string" &&
           String((e.event as { message: unknown }).message).includes("no-open-question"),
       ),
+    ).toBe(true);
+    expect(
+      errorEvents.some((e) => e.event?.code === "answer-demoted" && e.event?.inputId === "ans-1"),
     ).toBe(true);
     expect(host.state().questionOpen).toBeNull();
     const allMessages = transcript.events

@@ -13,7 +13,7 @@
  */
 
 import { INPUT_QUEUE_MAX, type ProtocolIssue } from "../protocol/index.js";
-import { createConversationHost } from "../store/conversation-host.js";
+import { openWriter } from "../store/conversation-host.js";
 import { type Conversations, conversations } from "./record-addressing.js";
 
 export interface SendOpts {
@@ -21,7 +21,7 @@ export interface SendOpts {
   readonly text: string;
   /** Injected seams — CliHost provides the single `effectiveRoot`-bound factory so adapters don't re-derive `conversations(rootDir)`. */
   readonly conversationsFactory?: (rootDir?: string) => Conversations;
-  readonly createHostFn?: typeof createConversationHost;
+  readonly createHostFn?: typeof openWriter;
   readonly now?: () => number;
   readonly makeId?: () => string;
 }
@@ -72,17 +72,8 @@ export const sendInput = (conversationId: string, opts: SendOpts): { inputId: st
   const convs = convsFactory(opts.rootDir);
   const { dir: recordDir } = convs.ensure(conversationId);
 
-  const createHost = opts.createHostFn ?? createConversationHost;
-  const host = createHost(recordDir, {
-    now: opts.now ?? (() => Date.now()),
-    presence: () => undefined,
-    // R2: `send` never acquires the presence lock, so it acts on none of
-    // the effects its own append produces — the live holder's catch-up
-    // fold finds them (RFC-04).
-    executorLease: () => false,
-    onEffect: () => {},
-    onRecord: () => {},
-  });
+  const createHost = opts.createHostFn ?? openWriter;
+  const host = createHost(recordDir, { now: opts.now });
 
   const inputId = opts.makeId?.() ?? `send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const result = host.enqueueInput({ id: inputId, text: opts.text, mode: "queue" });

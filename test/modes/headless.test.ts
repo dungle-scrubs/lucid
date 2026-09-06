@@ -3,14 +3,14 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHcnRunner } from "../../src/harness/hcn-runner.js";
-import { openHeadlessSession, openHeadlessTurns } from "../../src/modes/headless.js";
+import { openHeadlessSession, openHeadlessTurns } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/index.js";
 import {
   createConversationRecord,
   type HostRecord,
   openConversation,
 } from "../../src/store/store.js";
-import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
+import { FakeHcnProcess, fakeArtifactHost, fakeSpawner } from "../harness/fakes.js";
 
 const sid = "eb04301d-8756-4a8b-ae3e-aac0e71f7265";
 const BIN = "/fake/hcn";
@@ -68,6 +68,7 @@ const rig = (
     conversationId: "conv-1",
     secret,
     runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+    host: fakeArtifactHost(),
     mintTurnId: () => `turn-${++turnCount}`,
     sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
   };
@@ -274,6 +275,7 @@ describe("headless modes (M5.2)", () => {
       conversationId: "conv-1",
       secret,
       runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      host: fakeArtifactHost(),
       mintTurnId: () => `turn-${++turnCount}`,
       sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
     });
@@ -490,6 +492,7 @@ describe("a session hcn refuses is recorded, not silent", () => {
       conversationId: "conv-1",
       secret,
       runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      host: fakeArtifactHost(),
       mintTurnId: () => "turn-1",
       sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
       sessionId: sid,
@@ -549,6 +552,7 @@ describe("RFC-03 R002: a stale resume hint does not cost the turn", () => {
       conversationId: "conv-1",
       secret,
       runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      host: fakeArtifactHost(),
       mintTurnId: () => "turn-1",
       sendFrame: (frame) => host.handleFrame(JSON.stringify(frame)),
       // The hint a reopened record would supply.

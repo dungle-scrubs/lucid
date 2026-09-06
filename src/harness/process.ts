@@ -26,6 +26,8 @@ export type SpawnHcn = (argv: readonly string[], opts: { readonly cwd?: string }
 
 export interface HarnessDeps {
   readonly spawn: SpawnHcn;
+  /** Grace before escalating a refused child from SIGTERM to SIGKILL. */
+  readonly refusalGraceMs?: number;
   /** Absolute path to the hcn binary. */
   readonly bin: string;
   /** Structured boundary log, one line per transition. */

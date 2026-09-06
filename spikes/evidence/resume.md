@@ -25,15 +25,15 @@ a resume id as a hint, so muse degraded rather than broke.
 ## Run
 
 ```
-# resume - claude, sessionId e2784d95-b7f0-4fc2-b5dd-4840e7c95b1b
-record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-resume-XwQQs8/res-1
+# resume - claude, sessionId 62955545-a5e7-4443-aa7b-e5397a4244db
+record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-resume-AAjxqE/res-1
 
 ## establish, then lose the process
-first turn done; seq 6
+first turn done; seq 7
 source closed; attachment released
 
 ## reopen the record and resume the same session
-folded: seq 8, events 3
+folded: seq 9, events 4
 answered; codeword recalled by the harness itself: true
 
 ## one record across the restart

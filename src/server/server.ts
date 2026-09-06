@@ -39,7 +39,8 @@ import { EventKind } from "../protocol/events.js";
 import { TEXT_MAX } from "../protocol/frames.js";
 import { getBlob } from "../store/blobs.js";
 import {
-  createConversationHost,
+  type ConversationHost,
+  openWriter,
   viewArtifactCatalog,
   viewArtifactVersion,
   viewSnapshot,
@@ -52,8 +53,13 @@ import {
   readDriverPreference,
   writeDriverPreference,
 } from "../store/driver-preference.js";
-import { validConversationId } from "../store/errors.js";
-import { ARTIFACT_TITLE_MAX, isArtifactTitle, validArtifactId } from "../store/log.js";
+import { classifyStoreFailure, validConversationId } from "../store/errors.js";
+import {
+  ARTIFACT_TITLE_MAX,
+  isArtifactField,
+  isArtifactTitle,
+  validArtifactId,
+} from "../store/log.js";
 import { presenceHeld } from "../store/presence.js";
 // The projection is `buildView`'s, not a second one written for the
 // browser. Terminal and browser disagreeing about what a conversation says
@@ -115,6 +121,25 @@ const json = (body: unknown, status = 200): Response =>
 
 const text = (body: string, status: number): Response =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+
+const withWriter = (dir: string, action: (host: ConversationHost) => Response): Response => {
+  let host: ConversationHost | undefined;
+  try {
+    host = openWriter(dir);
+    return action(host);
+  } catch (cause) {
+    const code = classifyStoreFailure(cause);
+    if (code === "record-busy") {
+      const response = json({ error: "record-busy" }, 503);
+      response.headers.set("retry-after", "1");
+      return response;
+    }
+    if (code === "record-unreadable") return json({ error: "damaged" }, 409);
+    throw cause;
+  } finally {
+    host?.close();
+  }
+};
 
 export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer> => {
   const port = opts.port ?? SERVER_PORT;
@@ -432,33 +457,21 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         }
         const dir = conversations(rootDir).dirFor(id);
         if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
-        const host = createConversationHost(dir, {
-          now: () => Date.now(),
-          presence: () => undefined,
-          executorLease: () => false,
-          onEffect: () => {},
-          onRecord: () => {},
-        });
-        try {
+        const { html, basedOn } = b;
+        return withWriter(dir, (host) => {
           // The next version in the single ordered list. There is no
           // branching: a save based on a version the agent has since
           // replaced still appends at the end, recording what it was
           // working from. The agent reconciles; lucid does not merge.
-          let current = 0;
-          for (const key of host.artifactIndex().keys()) {
-            const sep = key.indexOf("\0");
-            if (sep === -1 || key.slice(0, sep) !== artifactId) continue;
-            const v = Number(key.slice(sep + 1));
-            if (Number.isSafeInteger(v) && v > current) current = v;
-          }
+          const current = host.artifactHeads().get(artifactId) ?? 0;
           if (current === 0) return json({ error: "no-such-artifact" }, 404);
           const result = host.writeArtifact({
             artifactId,
             version: current + 1,
             author: "human",
             contentType: "text/html",
-            bytes: b.html,
-            basedOn: b.basedOn,
+            bytes: html,
+            basedOn: basedOn,
             values,
           });
           if (result.verdict === "refused") {
@@ -473,12 +486,10 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             verdict: "accepted",
             artifactId,
             version: result.version.version,
-            basedOn: b.basedOn,
-            supersededSince: b.basedOn !== current,
+            basedOn: basedOn,
+            supersededSince: basedOn !== current,
           });
-        } finally {
-          host.close();
-        }
+        });
       }
 
       // Restore is a person's act on the record, and it is an append like any
@@ -511,41 +522,26 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         }
         const dir = conversations(rootDir).dirFor(id);
         if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
-        const host = createConversationHost(dir, {
-          now: () => Date.now(),
-          presence: () => undefined,
-          executorLease: () => false,
-          onEffect: () => {},
-          onRecord: () => {},
-        });
-        try {
+        const { title } = b;
+        return withWriter(dir, (host) => {
           // E-ART-01. Naming an artifact the record does not hold is refused
           // here, because this is the only place that can answer a caller.
           // The fold tolerates such an entry anyway, so a record written by
           // a build whose endpoint had a defect still opens.
-          let held = false;
-          for (const key of host.artifactIndex().keys()) {
-            const sep = key.indexOf("\0");
-            if (sep !== -1 && key.slice(0, sep) === artifactId) {
-              held = true;
-              break;
-            }
-          }
-          if (!held) return json({ error: "unknown-artifact" }, 404);
+          if (!host.artifactHeads().has(artifactId))
+            return json({ error: "unknown-artifact" }, 404);
           const result = host.writeArtifactMeta({
             artifactId,
-            ...(b.title === undefined ? {} : { title: b.title }),
+            ...(title === undefined ? {} : { title: title }),
           });
           if (result.verdict === "refused") {
             return json({ error: result.issue, verdict: "refused" }, 400);
           }
           return json({
             artifactId,
-            ...(b.title === undefined ? {} : { title: b.title }),
+            ...(title === undefined ? {} : { title: title }),
           });
-        } finally {
-          host.close();
-        }
+        });
       }
 
       const restore = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/restore\/?$/);
@@ -566,26 +562,14 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         }
         const dir = conversations(rootDir).dirFor(id);
         if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
-        const host = createConversationHost(dir, {
-          now: () => Date.now(),
-          presence: () => undefined,
-          executorLease: () => false,
-          onEffect: () => {},
-          onRecord: () => {},
-        });
-        try {
-          let current = 0;
-          for (const key of host.artifactIndex().keys()) {
-            const sep = key.indexOf("\0");
-            if (sep === -1 || key.slice(0, sep) !== artifactId) continue;
-            const v = Number(key.slice(sep + 1));
-            if (Number.isSafeInteger(v) && v > current) current = v;
-          }
+        const { version } = b;
+        return withWriter(dir, (host) => {
+          const current = host.artifactHeads().get(artifactId) ?? 0;
           if (current === 0) return json({ error: "unknown-artifact" }, 404);
           // Restoring what is already current would append a copy that
           // records nothing.
-          if (b.version === current) return json({ error: "restore-of-current" }, 409);
-          const from = host.readArtifact(artifactId, b.version);
+          if (version === current) return json({ error: "restore-of-current" }, 409);
+          const from = host.readArtifact(artifactId, version);
           if (from === null) return json({ error: "version-unreadable" }, 404);
           const result = host.writeArtifact({
             artifactId,
@@ -593,7 +577,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             author: "human",
             contentType: from.contentType,
             bytes: from.bytes,
-            basedOn: b.version,
+            basedOn: version,
             // The values the restored version carried, if it carried any.
             // Restoring a state means restoring the controls too.
             ...(from.values === undefined ? {} : { values: from.values }),
@@ -608,12 +592,10 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             verdict: "accepted",
             artifactId,
             version: result.version.version,
-            restoredFrom: b.version,
+            restoredFrom: version,
             replaced: current,
           });
-        } finally {
-          host.close();
-        }
+        });
       }
 
       // The driver preference (RFC-12). A person's choice of what drives
@@ -723,7 +705,9 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         // media type ride in headers so the body is exactly the file.
         const name = req.headers.get("x-lucid-filename") ?? "";
         const contentType = req.headers.get("content-type") ?? "application/octet-stream";
-        if (name === "" || name.length > 128) return json({ error: "filename-required" }, 400);
+        if (!isArtifactField(name)) return json({ error: "filename-required" }, 400);
+
+        if (!isArtifactField(contentType)) return json({ error: "attachment-invalid" }, 400);
 
         const raw = new Uint8Array(await req.arrayBuffer());
         // Checked here as well as in the store. The endpoint is the rule and
@@ -734,14 +718,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         }
 
         const { dir } = conversations(rootDir).ensure(id);
-        const host = createConversationHost(dir, {
-          now: () => Date.now(),
-          presence: () => undefined,
-          executorLease: () => false,
-          onEffect: () => {},
-          onRecord: () => {},
-        });
-        try {
+        return withWriter(dir, (host) => {
           const result = host.writeAttachment({
             bytes: raw,
             contentType,
@@ -763,9 +740,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             name,
             text: isTextBytes(raw),
           });
-        } finally {
-          host.close();
-        }
+        });
       }
 
       if (write && req.method === "POST") {
@@ -786,14 +761,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
         if (value.length > TEXT_MAX) return json({ error: "text-too-large" }, 413);
 
         const { dir } = conversations(rootDir).ensure(id);
-        const host = createConversationHost(dir, {
-          now: () => Date.now(),
-          presence: () => undefined,
-          executorLease: () => false,
-          onEffect: () => {},
-          onRecord: () => {},
-        });
-        try {
+        return withWriter(dir, (host) => {
           const inputId = `browser-${randomUUID()}`;
           const result = host.enqueueInput({ id: inputId, text: value, mode: "queue" });
           if (result.verdict === "refused") {
@@ -803,9 +771,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             );
           }
           return json({ inputId, verdict: "accepted" });
-        } finally {
-          host.close();
-        }
+        });
       }
 
       return text("not found", 404);

@@ -177,3 +177,15 @@ describe("reading an attachment back for a thumbnail", () => {
     await r.stop();
   });
 });
+
+test("an empty content type is refused before storing the attachment", async () => {
+  const r = await rig();
+  try {
+    const res = await r.post("a file", "file.txt", "");
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "attachment-invalid" });
+    expect(readFileSync(join(r.dir, "log.ndjson"), "utf8")).toBe("");
+  } finally {
+    await r.stop();
+  }
+});

@@ -33,6 +33,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { StoreError } from "../store/errors.js";
 import { createConversationRecord, type RecordPaths, recordPaths } from "../store/store.js";
 
 // ---------------------------------------------------------------------------
@@ -195,7 +196,7 @@ export const conversations = (rootDir?: string): Conversations => {
         const created = createConversationRecord(root, conversationId);
         return { secret: created.secret, dir: created.paths.dir };
       } catch (e) {
-        if (!(e instanceof Error) || !/exists/.test(e.message)) throw e;
+        if (!(e instanceof StoreError) || e.code !== "record-exists") throw e;
         const secretPath = join(root, conversationId, "secret");
         if (!existsSync(secretPath)) throw e;
         const secret = readFileSync(secretPath, "utf8").trim();

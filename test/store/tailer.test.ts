@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { appendFileSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LockEvent } from "../../src/store/lock.js";
+import type { LockEvent } from "../../src/store/flock.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
 import { createTailer, followRecord } from "../../src/store/tailer.js";
 

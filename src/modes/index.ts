@@ -7,17 +7,18 @@
  */
 
 export { type ControllerAction, type ControllerActionKind, decideAction } from "./controller.js";
-export { type HeadlessDeps, openHeadlessSession, openHeadlessTurns } from "./headless.js";
-export { createHeadlessHost, type SourceChannel } from "./host.js";
+export {
+  createHeadlessHost,
+  type HeadlessDeps,
+  openHeadlessSession,
+  openHeadlessTurns,
+  type SourceChannel,
+} from "./host.js";
 export {
   A003_GATE_OPEN,
   type AnnounceAttach,
-  attachCapabilities,
-  chunkInjection,
-  createInteractiveHost,
-  type DeliveryResult,
-  INJECTION_CAP,
-  type InteractiveHost,
+  chunkHookInput,
+  HOOK_CHUNK_CAP_BYTES,
   type LadderEnv,
   parseAnnounce,
   RUNGS,

@@ -21,7 +21,3 @@ export const CreditLedger = {
     return Math.min(tokens, DROPPABLE_QUEUE_MAX - state.credits);
   },
 } as const;
-
-export const isStarved = (state: ChannelState): boolean => CreditLedger.isStarved(state);
-export const clampedGrant = (state: ChannelState, tokens: number): number =>
-  CreditLedger.clampedGrant(state, tokens);

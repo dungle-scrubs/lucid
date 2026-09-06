@@ -2,7 +2,7 @@
 number: 08
 title: "Revising an artifact without retyping it"
 type: protocol
-status: Draft
+status: Implemented
 author: Kevin Frilot
 date: 2026-08-26
 ---

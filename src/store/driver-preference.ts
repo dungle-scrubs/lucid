@@ -34,19 +34,9 @@ import {
   renameSync,
   writeSync,
 } from "node:fs";
-import type { HarnessName } from "../harness/runner.js";
+import { HARNESS_NAMES, type HarnessName } from "../protocol/frames.js";
 import { pathsForDir, StoreError } from "./errors.js";
 import { validArtifactId } from "./log.js";
-
-/** The four hcn knows. The seam's `HarnessName` types the list, so a name
- * added there is a compile error here, not a silent drift; the RFC pins
- * these four as what a person may choose. */
-export const DRIVER_HARNESS_NAMES = [
-  "claude",
-  "codex",
-  "pi",
-  "muse",
-] as const satisfies readonly HarnessName[];
 
 /** How long a preference field may be, in UTF-16 code units. The record's
  * existing wire-id bound, stated here so the endpoint can echo it back. */
@@ -75,7 +65,7 @@ export interface DriverPreference {
 
 /** One of the four names, as a guard. */
 export const isDriverHarness = (v: unknown): v is HarnessName =>
-  typeof v === "string" && (DRIVER_HARNESS_NAMES as readonly string[]).includes(v);
+  typeof v === "string" && (HARNESS_NAMES as readonly string[]).includes(v);
 
 /** A preference field's shape: the record's existing wire-id rule, reached
  * through `validArtifactId` rather than restated, so the bound the fold

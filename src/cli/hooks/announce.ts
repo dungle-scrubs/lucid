@@ -12,8 +12,9 @@
  * the Stop hook.
  */
 
-import { openConversation, StoreError } from "../../store/store.js";
-import { exitHook, guardHookEntry, readStdin } from "./delivery.js";
+import { guardHookEntry } from "../../modes/interactive-host.js";
+import { openWriter, StoreError } from "../../store/store.js";
+import { exitHook, readStdin } from "./delivery.js";
 
 export interface AnnounceResult {
   readonly ok: boolean;
@@ -28,15 +29,7 @@ export const announce = async (stdin: string): Promise<AnnounceResult> => {
 
   // Append attach (+ identity) via the store's lock-wrapped transaction.
   try {
-    const host = openConversation(recordDir, {
-      now: () => Date.now(),
-      presence: () => true,
-      // R2: the hook never holds the presence lock — attach is a write,
-      // and its effects are the holder's to find (RFC-04).
-      executorLease: () => false,
-      onEffect: () => {},
-      onRecord: () => {},
-    });
+    const host = openWriter(recordDir, { presence: () => true });
     const frame = {
       kind: "attach" as const,
       conversationId,

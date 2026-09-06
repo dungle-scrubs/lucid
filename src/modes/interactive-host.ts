@@ -1,45 +1,8 @@
-/**
- * InteractiveHost — the deep module that owns the interactive ladder
- * AND the hook injection discipline (01).
- *
- * Before (C02 + ladder deepening), the ladder — announce→attach, tail pump
- * capability query, and the `hooks →
- * cooperative → observe` degradation — lived in `interactive-host.ts`
- * behind a strategy table, while the durable hook pipeline — `guard →
- * queued selection → encoded-byte chunk (cap 4000, surrogate-safe) →
- * enqueue(steer) per chunk → decision:block → HERDR_ENV isolation` — lived
- * in `src/cli/hooks/delivery.ts` (HookDelivery). Fixing the cap fixed
- * only delivery; fixing rung selection fixed only the host; the next
- * rung (cooperative, gated on A-003) would have been a third copy and
- * the future `Stop` hook a fourth copy of `guard + chunk`. The test file
- * imported each helper individually, not a seam, and `delivery` and `host`
- * re-exported each other's constant via a cycle
- * (`interactive-host → delivery → chunkHookInput`, `delivery → host` would-be).
- *
- * Now one module owns the whole discipline — rung selection, announce
- * parse, capability query, per-rung delivery,
- * AND the single encoded-byte chunk metric, the single cap, surrogate
- * safety, the stdin guard (`JSON + LUCID_RECORD_DIR` verification via
- * `resolveVerifiedRecord`), queued-input selection, chunked
- * `enqueueInput(steer)` per chunk, `decision:block` stdout, and
- * `HERDR_ENV` isolation — and hides it behind a small, deep interface:
- * `createInteractiveHost(env) → InteractiveHost` plus the durable hook
- * helpers `guardHookEntry` / `readQueuedInputs` / `deliverFirstQueued`
- * and the single chunker `chunkHookInput` / `encodedByteLength`. The
- * hooks (`announce`/`inject`/future `Stop`) and `interactive.ts` become
- * thin adapters. Deletion test: deleting this module would scatter
- * `selectRung + parseAnnounce + chunk + guard + queued
- * + steer-per-chunk + decision:block + HERDR_ENV` across every hook and
- * the interactive adapter.
- *
- * What it is NOT: it is not the flock, the durable log, or the presence
- * lock — it drives a harness's native transcript through the normalizer
- * and speaks injection via the store.
- */
+/** Hook input delivery and the vocabulary for selecting an interactive rung. */
 
 import { resolveVerifiedRecord, type VerifiedRecord } from "../cli/record-addressing.js";
-import type { CapabilityResult, HarnessName, HarnessRunner } from "../harness/runner.js";
-import { openConversation, viewConversation } from "../store/store.js";
+import { LockError } from "../store/flock.js";
+import { openWriter, viewConversation } from "../store/store.js";
 
 // ---------------------------------------------------------------------------
 // Hook chunking + guard — single source (was HookDelivery, now here)
@@ -63,10 +26,6 @@ export const encodedByteLength = (text: string): number =>
  * solo rather than looping forever). An empty input yields `[""]` so
  * its disposition remains real.
  *
- * This is the ONE chunker the codebase uses for hook delivery. The old
- * `chunkInput` (bytes + UTF-16 slice, inject.ts) and `chunkInjection`
- * (chars + code-point slice, interactive.ts) both delegated here via a
- * cycle — now one constant, one metric, and surrogate safety is uniform.
  */
 export const chunkHookInput = (
   text: string,
@@ -102,10 +61,6 @@ export const chunkHookInput = (
   if (chunk.length > 0) chunks.push(chunk);
   return chunks;
 };
-
-/** Backward-compat aliases so existing callers keep importing from here. */
-export const chunkInput = chunkHookInput;
-export const CHUNK_CAP_BYTES = HOOK_CHUNK_CAP_BYTES;
 
 export type HookGuard =
   | { readonly proceed: true; readonly record: VerifiedRecord; readonly payload: unknown }
@@ -164,8 +119,7 @@ export const readQueuedInputs = (recordDir: string): readonly { id: string; text
  * `enqueueInput(steer)` per chunk. On success writes the A-002-proven
  * `{decision:"block", reason}` to `process.stdout` (hook output
  * composition is the hook runner's job — we emit only our decision).
- * On per-chunk refusal reports E004 without blind retry. Handles
- * HERDR_ENV isolation here so callers don't re-derive it.
+ * On per-chunk refusal reports E004 without blind retry.
  */
 export const deliverFirstQueued = (recordDir: string): HookDeliverResult => {
   let queued: readonly { id: string; text: string }[];
@@ -178,18 +132,8 @@ export const deliverFirstQueued = (recordDir: string): HookDeliverResult => {
   const first = queued[0];
   if (!first) return { ok: true };
   const chunks = chunkHookInput(first.text);
-  // D-025: HERDR_ENV must be unset for the child the hook will spawn.
-  delete process.env.HERDR_ENV;
   try {
-    const host = openConversation(recordDir, {
-      now: () => Date.now(),
-      presence: () => true,
-      // R2: the Stop hook is a transient writer, never the lease holder —
-      // the running host picks the chunks up (RFC-04).
-      executorLease: () => false,
-      onEffect: () => {},
-      onRecord: () => {},
-    });
+    const host = openWriter(recordDir, { presence: () => true });
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i] as string;
       const res = host.enqueueInput({
@@ -206,18 +150,12 @@ export const deliverFirstQueued = (recordDir: string): HookDeliverResult => {
     process.stdout.write(`${JSON.stringify({ decision: "block", reason })}\n`);
     return { ok: true, delivered: 1, chunks: chunks.length };
   } catch (e) {
-    if (e instanceof Error && /lock-timeout|lock-unavailable/.test(e.message)) {
+    if (e instanceof LockError) {
       return { ok: false, code: "hook-resolution-failed", message: e.message };
     }
     throw e;
   }
 };
-
-// Re-export durable result under the legacy name so `delivery.ts` can
-// re-export it as `DeliverResult` without colliding with the rung
-// `DeliveryResult` below. Host consumers that need the durable shape
-// import `HookDeliverResult`; legacy `delivery.ts` consumers keep `DeliverResult`.
-export type DeliverResultDurable = HookDeliverResult;
 
 // ---------------------------------------------------------------------------
 // Rungs — the degradation surface
@@ -258,27 +196,6 @@ export const selectRung = (env: LadderEnv): RungProfile => {
 };
 
 // ---------------------------------------------------------------------------
-// Injection chunking — single source (now owned here)
-// ---------------------------------------------------------------------------
-
-export const INJECTION_CAP = HOOK_CHUNK_CAP_BYTES;
-
-export const chunkInjection = (
-  text: string,
-  cap: number = HOOK_CHUNK_CAP_BYTES,
-): readonly string[] => chunkHookInput(text, cap);
-
-// ---------------------------------------------------------------------------
-// Capability query
-// ---------------------------------------------------------------------------
-
-export const attachCapabilities = (
-  runner: HarnessRunner,
-  harness: HarnessName,
-  model: string,
-): Promise<CapabilityResult> => runner.capabilities(harness, model, "interactive");
-
-// ---------------------------------------------------------------------------
 // Announce parse
 // ---------------------------------------------------------------------------
 
@@ -312,108 +229,5 @@ export const parseAnnounce = (line: string): AnnounceAttach | null => {
     sessionId: row.session_id,
     transcriptPath: row.transcript_path,
     source: typeof row.source === "string" ? row.source : "unknown",
-  };
-};
-
-// ---------------------------------------------------------------------------
-// Host — strategy table that owns the rung lifecycle
-// ---------------------------------------------------------------------------
-
-export interface InteractiveHostDeps {
-  readonly harness: HarnessName;
-  readonly runner: HarnessRunner;
-  /** The env that decides the rung at creation time (injected so tests are deterministic). */
-  readonly env?: LadderEnv;
-}
-
-export interface DeliveryRequest {
-  readonly text: string;
-}
-
-export interface DeliveryResult {
-  readonly kind: "injected" | "queued" | "resume-instruction";
-  readonly rung: Rung;
-  readonly chunks?: number;
-}
-
-interface StrategyHandle {
-  /** Deliver text under this rung's discipline. */
-  deliver(text: string): DeliveryResult;
-}
-
-const hooksStrategy = (): StrategyHandle => ({
-  deliver(text: string): DeliveryResult {
-    const chunks = chunkHookInput(text);
-    return { kind: "injected", rung: "hooks", chunks: chunks.length };
-  },
-});
-
-const cooperativeStrategy = (): StrategyHandle => ({
-  deliver(_text: string): DeliveryResult {
-    // Gated — would poll the cooperative drop file (A-003).
-    return { kind: "queued", rung: "cooperative" };
-  },
-});
-
-const observeStrategy = (): StrategyHandle => ({
-  deliver(_text: string): DeliveryResult {
-    // Tail-only: queued input surfaces as a resume instruction, never injected.
-    return { kind: "resume-instruction", rung: "observe" };
-  },
-});
-
-export interface InteractiveHost {
-  /** The rung selected for this host instance. */
-  readonly rung: RungProfile;
-  /** Parse a SessionStart hook line into an attach intent. */
-  parseAnnounce(line: string): AnnounceAttach | null;
-  /** Query harness capabilities for the interactive mode. */
-  capabilities(model: string): Promise<CapabilityResult>;
-  /** Chunk text under the single encoded-byte cap. */
-  chunk(text: string, cap?: number): readonly string[];
-  /** Deliver text via the selected rung's discipline (speculative; durable hook enqueue lives in `deliverFirstQueued`). */
-  deliver(text: string): DeliveryResult;
-  /** Durable hook delivery: oldest queued input → chunked steer + decision:block (same cap/metric). Thin wrapper over the deep `deliverFirstQueued` so hosts own the policy. */
-  deliverQueued(recordDir: string): HookDeliverResult;
-  /** Reselect rung from a fresh env (e.g. after HERDR_ENV changes). */
-  reselect(env: LadderEnv): RungProfile;
-}
-
-export const createInteractiveHost = (deps: InteractiveHostDeps): InteractiveHost => {
-  let env = deps.env ?? { hooksIsolated: false, cooperativeAvailable: false };
-  let rung = selectRung(env);
-
-  const table: Record<Rung, StrategyHandle> = {
-    hooks: hooksStrategy(),
-    cooperative: cooperativeStrategy(),
-    observe: observeStrategy(),
-  };
-
-  const current = (): StrategyHandle => table[rung.rung] ?? table.observe;
-
-  return {
-    get rung() {
-      return rung;
-    },
-    parseAnnounce(line: string): AnnounceAttach | null {
-      return parseAnnounce(line);
-    },
-    capabilities(model: string): Promise<CapabilityResult> {
-      return attachCapabilities(deps.runner, deps.harness, model);
-    },
-    chunk(text: string, cap?: number): readonly string[] {
-      return chunkInjection(text, cap);
-    },
-    deliver(text: string): DeliveryResult {
-      return current().deliver(text);
-    },
-    deliverQueued(recordDir: string): HookDeliverResult {
-      return deliverFirstQueued(recordDir);
-    },
-    reselect(next: LadderEnv): RungProfile {
-      env = next;
-      rung = selectRung(env);
-      return rung;
-    },
   };
 };

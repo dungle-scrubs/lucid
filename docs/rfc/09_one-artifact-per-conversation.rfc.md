@@ -2,7 +2,7 @@
 number: 09
 title: "One artifact per conversation"
 type: protocol
-status: Draft
+status: Implemented
 author: Kevin Frilot
 date: 2026-08-27
 ---

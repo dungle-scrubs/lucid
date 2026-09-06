@@ -21,21 +21,21 @@ harness yet; this script composes the prompt by hand.
 
 ```
 # cross-harness handoff: claude -> pi
-record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-xharness-zpHm8W/xh-1
+record: /var/folders/tw/f14p0yj14539tbphfm20yc340000gn/T/lucid-xharness-ZGJ0hS/xh-1
 
 ## claude establishes the codeword
 claude attached: profile headless-session
-claude turn done; seq 6
+claude turn done; seq 7
 claude yielded; attachment released
 
 ## pi takes over the same record
-pi folded: 3 events, seq 8
+pi folded: 4 events, seq 9
 pi answered; codeword recovered from the record: true
 
 ## one record, both harnesses
 turnIds: a-turn-1, b-turn-1
 events from both sources in one fold: true
-reopened seq 14, inputs 2
+reopened seq 15, inputs 2
 ```
 
 Verdict: PASS

@@ -5,13 +5,18 @@ import { join } from "node:path";
 import { ChatRefused, chatConversation } from "../../src/cli/chat.js";
 import { runCli } from "../../src/cli/dispatch.js";
 import { conversations } from "../../src/cli/record-addressing.js";
+import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessRunner } from "../../src/harness/runner.js";
 import { EventKind, INPUT_QUEUE_MAX } from "../../src/protocol/events.js";
 import type { Frame } from "../../src/protocol/index.js";
 import { encodeFrame } from "../../src/protocol/index.js";
+import { viewArtifactCatalog, viewArtifactVersion } from "../../src/store/conversation-host.js";
+import { StoreError } from "../../src/store/errors.js";
+import { LockError } from "../../src/store/flock.js";
 import { openConversation } from "../../src/store/store.js";
 import { NotTTYError } from "../../src/tui/input.js";
 import type { TuiView } from "../../src/tui/view.js";
+import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
 import { attach } from "../protocol/helpers.js";
 
 // Helpers
@@ -891,4 +896,128 @@ describe("lucid chat — one window drives, renders, and sends (RFC-05)", () => 
     });
     expect(seen).toBe("demo");
   });
+});
+
+test("chat applies an artifact patch and tells the next input what the record holds", async () => {
+  const root = mkdtempSync(join(tmpdir(), "chat-artifact-"));
+  const { dir } = conversations(root).ensure("chat-artifact");
+  const proc = new FakeHcnProcess();
+  const hcn = createHcnRunner({ spawn: fakeSpawner([proc]).spawn, bin: "/fake/hcn" });
+  const runner: HarnessRunner = { ...fakeRunnerSession, openSession: hcn.openSession };
+  const sent = () => proc.commands.filter((m) => m.op === "send");
+  let patched = false;
+  const keys = (async function* () {
+    proc.emit({
+      kind: "session",
+      sessionId: "chat-session",
+      harness: "claude",
+      hcn: "0.6.0",
+      escalateQuestions: true,
+    });
+    yield "revise";
+    yield "\r";
+    await _until(() => sent().length === 1);
+    const first = sent()[0];
+    proc.emit({ kind: "disposition", id: first?.id, disposition: "started" });
+    proc.emit({ kind: "turn", turnId: "native-1", id: first?.id });
+    proc.emit({
+      kind: "message",
+      role: "assistant",
+      text: '```lucid-artifact\n{"id":"doc","replaces":null,"contentType":"text/html"}\n<p>one</p>\n```\n```lucid-artifact\n{"id":"doc","replaces":1,"contentType":"text/html","form":"patch"}\n{"edits":[{"find":"one","replace":"two"}]}\n```',
+    });
+    proc.emit({ kind: "done", exitCode: null, cause: "clean" });
+    await _until(
+      () =>
+        viewArtifactCatalog(dir)[0]?.versions.includes(2) === true ||
+        readFileSync(join(dir, "log.ndjson"), "utf8").includes("could not be read"),
+    );
+    patched = viewArtifactVersion(dir, "doc", 2)?.bytes === "<p>two</p>";
+    yield "again";
+    yield "\r";
+    await _until(() => sent().length >= 2);
+    expect(sent().map((c) => c.id)).toEqual([first?.id, sent()[1]?.id]);
+    yield "\x03";
+  })();
+  try {
+    await chatConversation({
+      rootDir: root,
+      conversationId: "chat-artifact",
+      runner,
+      keys,
+      onView: () => {},
+      pollMs: 10,
+    });
+    expect(patched).toBe(true);
+    expect(sent()[1]?.text).toContain("current version 2");
+    expect(sent()[1]?.text).toContain("[lucid artifact state]");
+  } finally {
+    proc.exit(0);
+  }
+});
+
+test.each(["collect", "append"] as const)(
+  "chat preserves the submitted draft when %s fails",
+  async (boundary) => {
+    const root = mkdtempSync(join(tmpdir(), "chat-submit-failure-"));
+    const views: TuiView[] = [];
+    let submitting = false;
+    const keys = (async function* () {
+      yield "keep this draft";
+      submitting = true;
+      yield "\r";
+      yield "\x03";
+    })();
+    await chatConversation({
+      rootDir: root,
+      conversationId: "submit-failure",
+      runner: fakeRunnerSession,
+      keys,
+      onView: (view) => views.push(view),
+      createHeadlessHostFn: () => ({ receive: () => {}, close: () => {} }),
+      openConversationFn: (dir, deps) => {
+        const host = openConversation(dir, deps);
+        return {
+          ...host,
+          collectEffects: (offset) => {
+            if (submitting && boundary === "collect")
+              throw new LockError("lock-timeout", "test-lock", "record is busy");
+            return host.collectEffects(offset);
+          },
+          enqueueInput: (params) => {
+            if (submitting && boundary === "append")
+              throw new StoreError("append-failed", "synthetic failure");
+            return host.enqueueInput(params);
+          },
+        };
+      },
+    });
+    expect(views.at(-1)?.inputBox).toContain("keep this draft");
+    expect(JSON.stringify(views.at(-1)?.lines)).toContain("send failed");
+  },
+);
+
+test("chat reports a stopped driver without claiming another driver took over", async () => {
+  const root = mkdtempSync(join(tmpdir(), "chat-driver-ended-"));
+  const views: TuiView[] = [];
+  let ended: Parameters<
+    NonNullable<import("../../src/cli/runtime.js").RuntimeDeps["createHeadlessHostFn"]>
+  >[0]["onEnded"];
+  await chatConversation({
+    rootDir: root,
+    conversationId: "driver-ended",
+    runner: fakeRunnerSession,
+    keys: (async function* () {
+      ended?.({ kind: "closed" });
+      await Promise.resolve();
+      yield "draft";
+      yield "\x03";
+    })(),
+    onView: (view) => views.push(view),
+    createHeadlessHostFn: (deps) => {
+      ended = deps.onEnded;
+      return { receive: () => {}, close: () => {} };
+    },
+  });
+  expect(JSON.stringify(views.at(-1))).toContain("driver stopped");
+  expect(JSON.stringify(views.at(-1))).not.toContain("another driver took over");
 });

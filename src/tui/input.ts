@@ -289,20 +289,6 @@ const openKeys = (opts: InputOptions): { keys: AsyncIterable<string>; restore: (
   };
 };
 
-export const readInput = async (opts: InputOptions): Promise<InputResult> => {
-  const { keys, restore } = openKeys(opts);
-  try {
-    // One submit and done. The generator is abandoned here, which closes
-    // the key source - correct for a one-shot read.
-    for await (const result of driveAll(keys, opts.onDraft)) return result;
-    return { kind: "interrupt" };
-  } finally {
-    // Restore even if drive or onDraft threw. A terminal left raw after a
-    // crash is the worst small bug in this module.
-    restore();
-  }
-};
-
 /**
  * The keypress loop that lives for the life of a chat session: stays
  * in raw mode across submits, reports every draft change, hands each

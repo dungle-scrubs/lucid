@@ -108,6 +108,7 @@ export type ProtocolIssue = (typeof PROTOCOL_ISSUES)[number];
  * breaks monotonic seq/epoch/n comparison and never-expiring leases). */
 const ID_MAX = 128;
 export const TEXT_MAX = 1_000_000;
+export const ARTIFACT_BYTES_MAX = 1_000_000;
 const TOKENS_MAX = 1_000_000;
 
 export interface Lease {

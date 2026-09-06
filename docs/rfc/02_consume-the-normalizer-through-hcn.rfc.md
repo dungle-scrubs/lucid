@@ -228,9 +228,10 @@ process: argv, stdin command writes, stdout framing, exit codes, SIGTERM on
 close. Scripts feed `hcn` NDJSON, not claude stream-json.
 
 Fixtures live in `test/fixtures/hcn/` as captured `hcn --json` stdout
-(`session-claude-two-turns.ndjson`, `run-claude-clean.ndjson`,
-`run-claude-limit.ndjson`, `session-claude-stall.ndjson`, and the refusal
-pair). They are evidence: captured by `scripts/capture-hcn-fixtures.ts`
+(`session-two-turns.ndjson`, `run-clean.ndjson`,
+`inspect-capabilities-claude.ndjson`, and
+`session-refusal-no-session-mode.ndjson`). No limit or stall recording is
+currently committed. They are evidence: captured by `scripts/capture-hcn-fixtures.ts`
 against an installed `hcn`, committed, never hand-edited. A test that needs
 a sequence no fixture shows MAY compose one inline and MUST say so.
 

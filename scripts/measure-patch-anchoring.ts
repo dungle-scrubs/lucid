@@ -234,7 +234,7 @@ const messages = all.flatMap((d) => {
   const f = (d.frame ?? {}) as Record<string, unknown>;
   const ev = (f.event ?? {}) as Record<string, unknown>;
   return ev.kind === "message" && ev.role === "assistant"
-    ? [{ turnId: String(f.turnId), text: String(ev.text ?? "") }]
+    ? [{ at: Number(d.at ?? 0), turnId: String(f.turnId), text: String(ev.text ?? "") }]
     : [];
 });
 const errors = all.flatMap((d) => {

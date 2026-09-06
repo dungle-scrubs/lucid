@@ -440,6 +440,15 @@ const sendInputs = (inputs: readonly QueuedInput[]): readonly Effect[] =>
  * any other event whose turnId is not the asking turn and not the
  * answer's turn (when answering) clears on the first event of that
  * unrelated turn. */
+const isLegacyAnswerDemotion = (message: unknown): boolean => {
+  const prefix = "answer demoted: no-open-question for ";
+  return (
+    typeof message === "string" &&
+    message.startsWith(prefix) &&
+    isWireId(message.slice(prefix.length))
+  );
+};
+
 const nextQuestionOpenAfterEvent = (
   current: OpenQuestion | null,
   frame: Extract<Frame, { kind: "event" }>,
@@ -465,8 +474,7 @@ const nextQuestionOpenAfterEvent = (
   // lucid's view, because the harness has said it was wrong.
   if (
     ev.kind === EventKind.error &&
-    typeof ev.message === "string" &&
-    ev.message.includes("no-open-question")
+    (Object.hasOwn(ev, "code") ? ev.code === "answer-demoted" : isLegacyAnswerDemotion(ev.message))
   )
     return null;
   // Nothing here reads the terminal cause, and that is the point rather

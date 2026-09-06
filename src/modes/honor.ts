@@ -143,6 +143,14 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
   let profile: HeadlessProfile = "headless-turn";
   let generation = 0;
   let switching = false;
+  const pendingCredits: Extract<Frame, { kind: "credit" }>[] = [];
+  const flushCredits = (): void => {
+    if (ended) {
+      pendingCredits.length = 0;
+      return;
+    }
+    for (const frame of pendingCredits.splice(0)) deliver(frame);
+  };
   let pendingSwitch = false;
   let ended = false;
   /** The switch in flight's context: the driver it is leaving (what a
@@ -210,6 +218,8 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     attempted: DriverPreference | null,
   ): Promise<void> => {
     if (attempted !== null) refused = attempted;
+    const wasSwitching = switching;
+    switching = true;
     try {
       const opened = await openUnder(spawn, {
         switched: false,
@@ -232,6 +242,10 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       // semantics for a source that cannot attach. The record already
       // carries the failed spawns' own error events.
       ended = true;
+      deps.base.onEnded?.({ kind: "closed" });
+    } finally {
+      switching = wasSwitching;
+      if (!switching || ended) flushCredits();
     }
   };
 
@@ -272,6 +286,7 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       await fallbackTo(from, cause instanceof Error ? cause.message : String(cause), attempted);
     } finally {
       switching = false;
+      flushCredits();
       if (pendingSwitch && !ended) {
         pendingSwitch = false;
         void switchTo();
@@ -285,6 +300,12 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     // pipe after the successor attached); its epoch is stale and the
     // reducer has already fenced it.
     if (gen !== generation || ended) return;
+    if (end.kind === "store-failed") {
+      ended = true;
+      pendingCredits.length = 0;
+      deps.base.onEnded?.(end);
+      return;
+    }
     if (end.kind === "driver-change") {
       void switchTo();
       return;
@@ -295,6 +316,7 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
         // driver in force to keep, and its own error event is already in
         // the record - the existing semantics for an open that refuses.
         ended = true;
+        deps.base.onEnded?.(end);
         return;
       }
       const ctx = switchCtx;
@@ -307,6 +329,7 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     // the existing behavior for a driver whose harness died, and the
     // record already says the session ended.
     ended = true;
+    deps.base.onEnded?.(end);
   };
 
   const opened = await openUnder(initial, { switched: false });
@@ -321,18 +344,17 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
 
   return {
     receive: (frame: Frame): void => {
-      // During a switch nothing is live to receive. An input frame is safe
-      // to drop ONLY because the record holds it: the replacement's attach
-      // replays every input still awaiting an applied disposition, and an
-      // input arriving mid-switch is exactly that. The window between the
-      // replacement's attach and the swap below is synchronous (the only
-      // await in a switch is the profile inspect), so no frame can land in
-      // it. Non-input frames are not replayed, so they wait for the swap.
-      if (switching || ended) return;
+      if (ended) return;
+      // Inputs are replayed from the record after attach. Credits have no replay.
+      if (switching) {
+        if (frame.kind === "credit") pendingCredits.push(frame);
+        return;
+      }
       deliver(frame);
     },
     close: (): void => {
       ended = true;
+      pendingCredits.length = 0;
       try {
         source.close();
       } catch {}

@@ -18,7 +18,7 @@ import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import { createHeadlessHost } from "../../src/modes/host.js";
 import type { Frame } from "../../src/protocol/frames.js";
 import { createConversationRecord, openConversation } from "../../src/store/store.js";
-import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
+import { FakeHcnProcess, fakeArtifactHost, fakeSpawner } from "../harness/fakes.js";
 
 const BIN = "/fake/hcn";
 const SID = "eb04301d-8756-4a8b-ae3e-aac0e71f7265";
@@ -44,6 +44,7 @@ const rig = (opts: { stallMs: number }) => {
       conversationId: "conv-1",
       secret,
       runner: createHcnRunner({ spawn: spawner.spawn, bin: BIN }),
+      host: fakeArtifactHost(),
       mintTurnId: () => `turn-${++turns}`,
       sendFrame: (frame: Frame) => host.handleFrame(JSON.stringify(frame)),
       sessionId: SID,

@@ -2,7 +2,7 @@
 number: 06
 title: "An artifact you can address"
 type: feature
-status: Draft
+status: Implemented
 author: Kevin Frilot
 date: 2026-08-24
 ---

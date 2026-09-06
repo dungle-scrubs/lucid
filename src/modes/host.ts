@@ -40,10 +40,11 @@ import {
   quoteForRefusal,
 } from "../protocol/artifacts.js";
 import { EventKind } from "../protocol/events.js";
+import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
 import type { Frame, InputMode, ReduceResult } from "../protocol/index.js";
 import { applyPatch, parsePatchBody } from "../protocol/patch.js";
-import type { CollectedBatch } from "../store/log.js";
-import { ARTIFACT_BYTES_MAX } from "../store/log.js";
+import type { ConversationHost } from "../store/conversation-host.js";
+import { classifyStoreFailure, type StoreFailureCode } from "../store/errors.js";
 import { createSequencer } from "./sequencer.js";
 
 /** How long a harness may say nothing after being handed an input before
@@ -57,69 +58,78 @@ import { createSequencer } from "./sequencer.js";
  * all between them. */
 export const STALL_MS = 90_000;
 
-/** What the record currently holds, read fresh so a save made a second ago
- * is in it. Headers only — the document bytes are read to get at the author
- * and the values and are not kept. */
-/**
- * @param owed Artifacts whose current version the agent must be shown,
- * because a patch of theirs was just refused for an anchor that did not
- * match. Draining it is the caller's job, so the resend costs one prompt
- * rather than every prompt after a single miss.
- *
- * The state block carries bytes only for a version a person saved, on the
- * reasoning that the agent already has the ones it wrote. A failed anchor is
- * exactly where that reasoning breaks: the agent's picture of its own version
- * has drifted, which is why the anchor missed, and its own current version is
- * then the one thing it is never sent. Without this the retry is another
- * guess from the same stale picture.
- */
-/** What is owed right now, and no longer owed after. Called once per prompt:
- * the resend answers a miss, and repeating it every turn would put the
- * document back in the context this whole RFC exists to keep it out of. */
-const drainOwed = (ctx: HostContext): ReadonlySet<string> => {
-  if (ctx.owedBytes.size === 0) return EMPTY_OWED;
-  const due = new Set(ctx.owedBytes);
-  ctx.owedBytes.clear();
-  return due;
+const readForArtifact = (
+  deps: HeadlessDeps,
+  ctx: HostContext,
+  operation: "artifact-state" | "patch-base",
+  artifactId: string,
+  version: number,
+): ReturnType<ArtifactHost["readArtifact"]> | "busy" | undefined => {
+  try {
+    return deps.host.readArtifact(artifactId, version);
+  } catch (cause) {
+    if (classifyStoreFailure(cause) === "record-busy") {
+      ctx.warning(
+        {
+          kind: EventKind.error,
+          code: "record-busy",
+          message: `${operation === "patch-base" ? "E-PATCH-09" : "E-LOG-01"} record-busy: append lock for artifact ${artifactId}`,
+          terminal: false,
+        },
+        operation,
+        artifactId,
+      );
+    } else {
+      ctx.stop({
+        kind: "store-failed",
+        code: classifyStoreFailure(cause) ?? "record-unreadable",
+        operation,
+        artifactId,
+      });
+    }
+    return ctx.isStopped() ? undefined : "busy";
+  }
 };
-
-const EMPTY_OWED: ReadonlySet<string> = new Set<string>();
 
 const artifactState = (
   deps: HeadlessDeps,
-  owed: ReadonlySet<string> = EMPTY_OWED,
-): readonly ArtifactState[] => {
-  const index = deps.host?.artifactIndex?.();
-  if (index === undefined || deps.host?.readArtifact === undefined) return [];
-  const current = new Map<string, number>();
-  for (const key of index.keys()) {
-    const sep = key.indexOf("\0");
-    if (sep === -1) continue;
-    const id = key.slice(0, sep);
-    const v = Number(key.slice(sep + 1));
-    if (!Number.isSafeInteger(v)) continue;
-    if ((current.get(id) ?? 0) < v) current.set(id, v);
-  }
-  const retired = deps.host?.artifactRetired?.() ?? new Map<string, boolean>();
-  const out: ArtifactState[] = [];
-  for (const [artifactId, version] of [...current.entries()].sort(([a], [b]) =>
+  ctx: HostContext,
+): { artifacts: ArtifactState[]; busy: string[] } => {
+  const artifacts: ArtifactState[] = [];
+  const busy: string[] = [];
+  for (const [artifactId, version] of [...deps.host.artifactHeads()].sort(([a], [b]) =>
     a.localeCompare(b),
   )) {
-    const one = deps.host.readArtifact(artifactId, version);
+    const one = readForArtifact(deps, ctx, "artifact-state", artifactId, version);
+    if (one === undefined) break;
+    if (one === "busy") {
+      busy.push(artifactId);
+      continue;
+    }
     if (one === null) continue;
-    out.push({
+    artifacts.push({
       artifactId,
       version,
       author: one.author,
       ...(one.basedOn === undefined ? {} : { basedOn: one.basedOn }),
       ...(one.values === undefined ? {} : { values: one.values }),
-      // A version a person saved, or one the agent wrote and has just proved
-      // it can no longer anchor against.
-      ...(one.author === "human" || owed.has(artifactId) ? { bytes: one.bytes } : {}),
-      ...(retired.get(artifactId) === true ? { retired: true } : {}),
+      ...(one.author === "human" || ctx.owedBytes.has(artifactId) ? { bytes: one.bytes } : {}),
     });
+    ctx.owedBytes.delete(artifactId);
   }
-  return out;
+  return { artifacts, busy };
+};
+
+const composeAvailableState = (prompt: string, state: ReturnType<typeof artifactState>): string => {
+  const composed = composeArtifactState(prompt, state.artifacts);
+  return state.busy.length === 0
+    ? composed
+    : state.busy
+        .map(
+          (id) =>
+            `Artifact ${quoteForRefusal(id)} is busy; its state is omitted from this prompt.\n`,
+        )
+        .join("") + composed;
 };
 
 /** What sendFrame returns. */
@@ -132,7 +142,33 @@ type SendResult = ReduceResult | { readonly verdict: "refused"; readonly issue: 
 export type SourceEnd =
   | { readonly kind: "driver-change" }
   | { readonly kind: "open-refused"; readonly message: string }
-  | { readonly kind: "closed" };
+  | { readonly kind: "closed" }
+  | {
+      readonly kind: "store-failed";
+      readonly code: StoreFailureCode;
+      readonly operation: string;
+      readonly artifactId?: string;
+    };
+
+export interface ArtifactHost
+  extends Pick<
+    ConversationHost,
+    | "cursor"
+    | "collectEffects"
+    | "advanceCursor"
+    | "artifactHeads"
+    | "readArtifact"
+    | "writeArtifact"
+  > {}
+
+export const hostSeamFor = (host: ConversationHost): ArtifactHost => ({
+  cursor: () => host.cursor(),
+  collectEffects: (offset) => host.collectEffects(offset),
+  advanceCursor: (offset) => host.advanceCursor(offset),
+  artifactHeads: () => host.artifactHeads(),
+  readArtifact: (id, version) => host.readArtifact(id, version),
+  writeArtifact: (params) => host.writeArtifact(params),
+});
 
 export interface HeadlessDeps {
   readonly harness: HarnessName;
@@ -177,38 +213,7 @@ export interface HeadlessDeps {
   readonly stallTickMs?: number;
   /** The in-process channel to the host. */
   readonly sendFrame: (frame: Frame) => SendResult;
-  /** The record, for delivery-cursor bookkeeping (RFC-04 R3). When present
-   * the host advances the cursor after the attach drain. Optional only
-   * because in-process tests build a source without one; delivery does not
-   * depend on it, so its absence changes nothing that is dispatched. */
-  readonly host?: {
-    cursor(): number;
-    collectEffects(fromOffset: number): CollectedBatch;
-    advanceCursor(offset: number): void;
-    artifactIndex?: () => ReadonlyMap<string, number>;
-    /** artifactId -> whether it is retired, so the prompt can say so. */
-    artifactRetired?: () => ReadonlyMap<string, boolean>;
-    /** Read one version's header — author, basedOn, values — so the prompt
-     * can say what the record currently holds. */
-    readArtifact?: (
-      artifactId: string,
-      version: number,
-    ) => {
-      readonly author: string;
-      readonly basedOn?: number;
-      readonly values?: Readonly<Record<string, string>>;
-      /** Needed for a version a person saved: it is the one the agent has
-       * never seen, and would otherwise revise away. */
-      readonly bytes?: string;
-    } | null;
-    writeArtifact?: (params: {
-      readonly artifactId: string;
-      readonly version: number;
-      readonly author: string;
-      readonly contentType: string;
-      readonly bytes: string;
-    }) => { verdict: "accepted"; version: unknown } | { verdict: "refused"; issue: string };
-  };
+  readonly host: ArtifactHost;
 }
 
 export interface SourceChannel {
@@ -244,39 +249,10 @@ const handleArtifactMessage = (
     }
     const { header, bytes } = d.block;
     const isPatch = header.form === "patch";
-    if (
-      deps.host === undefined ||
-      deps.host.artifactIndex === undefined ||
-      deps.host.writeArtifact === undefined
-    ) {
-      // No durable host to write to — still report that we saw it, but
-      // cannot store. This path is exercised in in-process tests that
-      // build a source without a host; production always has one.
-      //
-      // Ahead of every refusal below because it is not one: nothing is wrong
-      // with the emission, there is just nowhere to put it. The identity
-      // check needs the index this guard proves exists.
-      ctx.sequencer.emit(turnId, {
-        kind: EventKind.error,
-        message: `artifact ${header.id} not stored: no host`,
-        terminal: false,
-      });
-      continue;
-    }
-
     // Every artifact this conversation holds, and the current version of
     // each. One pass, because the identity check needs the whole set and the
     // version lookup needs one entry of it.
-    const held = new Map<string, number>();
-    const idx = deps.host.artifactIndex?.() ?? new Map<string, number>();
-    for (const [key] of idx) {
-      const sep = key.indexOf("\0");
-      if (sep === -1) continue;
-      const id = key.slice(0, sep);
-      const v = Number(key.slice(sep + 1));
-      if (!Number.isSafeInteger(v)) continue;
-      if ((held.get(id) ?? 0) < v) held.set(id, v);
-    }
+    const held = new Map(deps.host.artifactHeads());
     // Artifacts created by an earlier block of this same message count as
     // held. Otherwise a message that creates the artifact and then revises
     // it would refuse its own second block.
@@ -338,19 +314,19 @@ const handleArtifactMessage = (
 
     if (current === 0) {
       // Unknown id — starts new artifact at v1, regardless of replaces.
-      const res = deps.host.writeArtifact?.({
+      const res = deps.host.writeArtifact({
         artifactId: header.id,
         version: 1,
         author: "agent",
         contentType: header.contentType,
         bytes,
       });
-      if (res?.verdict === "accepted") {
+      if (res.verdict === "accepted") {
         localVersions.set(header.id, 1);
       } else {
         ctx.sequencer.emit(turnId, {
           kind: EventKind.error,
-          message: `artifact ${header.id} not stored: ${res?.issue ?? "no host"}`,
+          message: `artifact ${header.id} not stored: ${res.issue}`,
           terminal: false,
         });
       }
@@ -384,7 +360,9 @@ const handleArtifactMessage = (
       // `current` already folds in versions written by an earlier block of
       // this same message, so a second block anchors against what the first
       // one produced rather than silently against the version before it.
-      const base = deps.host.readArtifact?.(header.id, current);
+      const base = readForArtifact(deps, ctx, "patch-base", header.id, current);
+      if (base === undefined) return;
+      if (base === "busy") continue;
       if (base?.bytes === undefined) {
         ctx.sequencer.emit(turnId, {
           kind: EventKind.error,
@@ -429,12 +407,12 @@ const handleArtifactMessage = (
       contentType: header.contentType,
       bytes: document,
     });
-    if (res?.verdict === "accepted") {
+    if (res.verdict === "accepted") {
       localVersions.set(header.id, next);
     } else {
       ctx.sequencer.emit(turnId, {
         kind: EventKind.error,
-        message: `artifact ${header.id} v${next} not stored: ${res?.issue ?? "no host"}`,
+        message: `artifact ${header.id} v${next} not stored: ${res.issue}`,
         terminal: false,
       });
     }
@@ -446,6 +424,9 @@ const handleArtifactMessage = (
 // ---------------------------------------------------------------------------
 
 interface HostContext {
+  isStopped(): boolean;
+  stop(end: Extract<SourceEnd, { kind: "store-failed" }>): void;
+  warning(event: HarnessEvent, operation: string, artifactId: string): void;
   readonly sequencer: ReturnType<typeof createSequencer>;
   /** The harness session lucid says to continue, from attach-ok. Absent
    * means open fresh (RFC-03). */
@@ -563,8 +544,9 @@ const sessionStrategy = (
         }
         framed = withProtocol;
       }
-      composed = composeArtifactState(framed, artifactState(deps, drainOwed(ctx)));
+      composed = composeAvailableState(framed, artifactState(deps, ctx));
     }
+    if (ctx.isStopped()) return;
     // hcn answers a send with exactly one disposition, and it answers
     // before it opens the turn. So the reply is awaited and recorded when
     // it lands: one disposition per input, the same as before, just no
@@ -587,6 +569,8 @@ const sessionStrategy = (
             // but never the transcript).
             ctx.sequencer.emit(ctx.getTurnId(), {
               kind: EventKind.error,
+              code: "answer-demoted",
+              inputId: id,
               message: `answer demoted: no-open-question for ${id}`,
               terminal: false,
             });
@@ -647,8 +631,8 @@ const sessionStrategy = (
       if (mode === "steer" || mode === "answer" || !turnRunning) {
         // RFC-12: an input about to reach an idle session crosses a turn
         // boundary, so the preference is honored before the hand-over. A
-        // steer or an answer is an interrupt for the driver in force and
-        // never switches (RFC-12: a running turn is not interrupted).
+        // steer or an answer stays on the driver in force even while idle
+        // (RFC-13 A8); an answer belongs to the driver that asked it.
         if (mode === "queue" && !closed && ctx.boundaryChange()) {
           endAsDriverChange();
           return;
@@ -839,11 +823,13 @@ const turnStrategy = (
             // Read once, not per prompt. The resume retry below composes the
             // same turn again, and draining the debt twice would send the
             // second attempt without the document the first one owed.
-            const state = artifactState(deps, drainOwed(ctx));
-            const composedPrompt = composeArtifactState(
+            const state = artifactState(deps, ctx);
+            const composedPrompt = composeAvailableState(
               composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
               state,
             );
+            if (ctx.isStopped())
+              return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
             let raw = deps.runner.streamTurn({
               harness: deps.harness,
               prompt: composedPrompt,
@@ -884,7 +870,7 @@ const turnStrategy = (
               }
               if (refused !== null) {
                 // End the probe's child: its iterator was abandoned unread.
-                void probe.return?.(undefined);
+                void probe.return?.(undefined).catch(() => {});
                 ctx.openRefused(refused);
                 closed = true;
                 wake();
@@ -909,7 +895,7 @@ const turnStrategy = (
                   kind: "error",
                   message: `could not resume harness session ${staleId}; continuing fresh`,
                 });
-                const retryPrompt = composeArtifactState(
+                const retryPrompt = composeAvailableState(
                   composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
                   state,
                 );
@@ -988,7 +974,7 @@ const turnStrategy = (
     close(): void {
       closed = true;
       wake();
-      void activeTurn?.return?.(undefined);
+      void activeTurn?.return?.(undefined).catch(() => {});
     },
   };
 };
@@ -1001,6 +987,58 @@ export const createHeadlessHost = (
   deps: HeadlessDeps & { readonly sessionId?: string; readonly resume?: string },
   profile: "headless-session" | "headless-turn",
 ): SourceChannel => {
+  let stopped = false;
+  let notified = false;
+  let strategy: StrategyHandle | undefined;
+  let watchdog: ReturnType<typeof setInterval> | undefined;
+  let warningFailure: Extract<SourceEnd, { kind: "store-failed" }> | undefined;
+  const notify = (end: SourceEnd): void => {
+    if (!notified) {
+      notified = true;
+      deps.onEnded?.(end);
+    }
+  };
+  const stop = (end: Extract<SourceEnd, { kind: "store-failed" }>): void => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(watchdog);
+    try {
+      strategy?.close();
+    } catch {}
+    notify(end);
+  };
+  const send = deps.sendFrame;
+  deps = {
+    ...deps,
+    sendFrame: (frame) => {
+      if (stopped) return { verdict: "refused", issue: "source-stopped" };
+      try {
+        const result = send(frame);
+        if (
+          result.verdict === "refused" &&
+          (warningFailure !== undefined || frame.kind === "detach")
+        ) {
+          stop(
+            warningFailure ?? {
+              kind: "store-failed",
+              code: "record-write-failed",
+              operation: "detach",
+            },
+          );
+        }
+        return result;
+      } catch (cause) {
+        stop(
+          warningFailure ?? {
+            kind: "store-failed",
+            code: classifyStoreFailure(cause) ?? "record-write-failed",
+            operation: frame.kind,
+          },
+        );
+        return { verdict: "refused", issue: "source-stopped" };
+      }
+    },
+  };
   const sequencer = createSequencer(deps, profile);
   let currentTurnId = deps.mintTurnId();
   const expected: Array<{ inputId: string; applied: boolean }> = [];
@@ -1024,6 +1062,18 @@ export const createHeadlessHost = (
   };
 
   const ctx: HostContext = {
+    isStopped: () => stopped,
+    stop,
+    warning: (event, operation, artifactId) => {
+      warningFailure = { kind: "store-failed", code: "record-busy", operation, artifactId };
+      try {
+        sequencer.emit(currentTurnId, event);
+      } catch {
+        stop(warningFailure);
+      } finally {
+        warningFailure = undefined;
+      }
+    },
     sequencer,
     reported: () => {
       ended = true;
@@ -1080,7 +1130,7 @@ export const createHeadlessHost = (
     stallReported = false;
   };
 
-  const watchdog = setInterval(() => {
+  watchdog = setInterval(() => {
     if (handedOverAt === null || stallReported) return;
     if (clock() - handedOverAt < stallAfter) return;
     stallReported = true;
@@ -1093,7 +1143,7 @@ export const createHeadlessHost = (
   // Nothing here should hold the process open on its own.
   (watchdog as unknown as { unref?: () => void }).unref?.();
 
-  const strategy: StrategyHandle =
+  strategy =
     profile === "headless-session"
       ? sessionStrategy(deps as HeadlessDeps & { sessionId: string }, ctx)
       : turnStrategy(deps as HeadlessDeps & { resume?: string }, ctx);
@@ -1123,6 +1173,7 @@ export const createHeadlessHost = (
         }
       }
       for await (const event of turn) {
+        if (stopped) return;
         // RFC-06 Emission: parse artifact fences out of message events and
         // store versions. Malformed/oversize/stale are refused with reason
         // recorded, turn still completes.
@@ -1132,6 +1183,7 @@ export const createHeadlessHost = (
         ) {
           handleArtifactMessage((event as { text: string }).text, currentTurnId, deps, ctx);
         }
+        if (stopped) return;
         // The harness said something, so it is answering. Every event goes
         // through here, which is why the watch is cleared here rather than
         // at each of the places one can be produced.
@@ -1142,7 +1194,7 @@ export const createHeadlessHost = (
     }
   })();
   const sessionEnded = (why: string): void => {
-    if (ended) return;
+    if (ended || stopped) return;
     ended = true;
     try {
       ctx.sequencer.emit(ctx.getTurnId(), {
@@ -1165,6 +1217,15 @@ export const createHeadlessHost = (
         sessionEnded("the harness closed its turn stream");
     })
     .catch((cause: unknown) => {
+      const code = classifyStoreFailure(cause);
+      if (code !== undefined) {
+        stop({
+          kind: "store-failed",
+          code,
+          operation: "turn",
+        });
+        return;
+      }
       // RFC-12: a spawn that never started (the hcn binary itself) is an
       // open refusal for the owner's purposes: hcn's own invocation
       // refusals are already carried by the strategies; this is the case
@@ -1181,11 +1242,17 @@ export const createHeadlessHost = (
       // one that triggered it), and that input is exactly what the
       // watchdog would later report as silence.
       clearInterval(watchdog);
-      sequencer.detachOnce(sourceEnd.kind === "driver-change" ? "yield" : "shutdown");
-      deps.onEnded?.(sourceEnd);
+      if (!stopped) {
+        try {
+          sequencer.detachOnce(sourceEnd.kind === "driver-change" ? "yield" : "shutdown");
+        } finally {
+          if (!stopped) notify(sourceEnd);
+        }
+      }
     });
 
   const receive = (frame: Frame): void => {
+    if (stopped) return;
     switch (frame.kind) {
       case "input":
         handedOverAt = clock();
@@ -1193,7 +1260,7 @@ export const createHeadlessHost = (
         // The mode travels with the input all the way to the strategy. It
         // used to stop here, which made `steer` and `queue` mean the same
         // thing to a harness.
-        strategy.onInput(frame.id, frame.text, frame.mode);
+        strategy?.onInput(frame.id, frame.text, frame.mode);
         return;
       case "credit":
         sequencer.onCredit(frame.tokens);
@@ -1234,7 +1301,7 @@ export const createHeadlessHost = (
   // tailing work, where effects arrive that attachReplay cannot see because
   // another process appended them.
   for (const frame of sequencer.attachReplay) receive(frame);
-  if (deps.host !== undefined) {
+  if (!stopped) {
     const cur = deps.host.cursor();
     const batch = deps.host.collectEffects(cur);
     if (batch.goodBytes > cur) deps.host.advanceCursor(batch.goodBytes);
@@ -1243,25 +1310,29 @@ export const createHeadlessHost = (
   return {
     receive,
     close: (): void => {
+      if (stopped) return;
       clearInterval(watchdog);
-      sequencer.detachOnce("shutdown");
       try {
-        strategy.close();
-      } catch {}
+        sequencer.detachOnce("shutdown");
+      } finally {
+        if (!stopped) {
+          stopped = true;
+          try {
+            strategy?.close();
+          } catch {}
+          notify({ kind: "closed" });
+        }
+      }
     },
   };
 };
 
-// Compat wrappers — preserve the existing openHeadlessSession / Turns
-// surface so tests and callers that import from headless.ts keep working
-// while the host is the single owner. These are thin adapters over the
-// same strategy table; the deletion test passes: deleting this file would
-// require moving the strategy table back into two places.
+/** Mode 2: one persistent process serves many turns. Thin adapter over Host. */
+export const openHeadlessSession = (
+  deps: Parameters<typeof createHeadlessHost>[0] & { readonly sessionId: string },
+): ReturnType<typeof createHeadlessHost> => createHeadlessHost(deps, "headless-session");
 
-export const openHeadlessSessionViaHost = (
-  deps: HeadlessDeps & { readonly sessionId: string },
-): SourceChannel => createHeadlessHost(deps, "headless-session");
-
-export const openHeadlessTurnsViaHost = (
-  deps: HeadlessDeps & { readonly resume?: string },
-): SourceChannel => createHeadlessHost(deps, "headless-turn");
+/** Mode 1: one process per turn. Thin adapter over Host. */
+export const openHeadlessTurns = (
+  deps: Parameters<typeof createHeadlessHost>[0] & { readonly resume?: string },
+): ReturnType<typeof createHeadlessHost> => createHeadlessHost(deps, "headless-turn");

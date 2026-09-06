@@ -53,11 +53,11 @@ import {
   type TransitionRecord,
 } from "../protocol/index.js";
 import { pathsForDir, type RecordPaths, StoreError } from "./errors.js";
-import type { LockEvent } from "./lock.js";
+import type { LockEvent } from "./flock.js";
+import type { ArtifactVersions } from "./log.js";
 import {
   type AppendEvent,
   type ArtifactVersion,
-  artifactKey,
   type CollectedBatch,
   createLog,
   foldLog,
@@ -189,6 +189,8 @@ export interface ConversationHost {
   /** Seek index built during the fold that already happens at open — reading
    * a version is a seek, not a fold. */
   artifactIndex(): ReadonlyMap<string, number>;
+  artifactHeads(): ReadonlyMap<string, number>;
+  artifactVersions(): ArtifactVersions;
   /** artifactId -> its title. An id absent from this map has no title and
    * displays as its id (RFC-07 R11). */
   artifactTitles(): ReadonlyMap<string, string>;
@@ -229,6 +231,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
   const { secret, conversationId, paths } = readRecordFiles(dir);
 
   const log = createLog(paths, secret, conversationId, {
+    now: deps.now,
     onLockEvent: deps.onLockEvent,
     onAppendEvent: deps.onAppendEvent,
   });
@@ -277,7 +280,7 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
 
   const collectEffects = (fromOffset: number): CollectedBatch => log.collectEffects(fromOffset);
   const cursor = (): number => log.cursor();
-  const advanceCursor = (offset: number): void => log.advanceCursor(offset, deps.now());
+  const advanceCursor = (offset: number): void => log.advanceCursor(offset);
   const artifactIndex = (): ReadonlyMap<string, number> => log.artifactIndex();
   const readArtifact = (
     artifactId: string,
@@ -326,6 +329,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     advanceCursor,
     collectEffects,
     artifactIndex,
+    artifactHeads: () => log.artifactHeads(),
+    artifactVersions: () => log.artifactVersions(),
     readArtifact,
     writeArtifact,
     handleFrame: (
@@ -449,9 +454,7 @@ export interface ArtifactCatalogEntry {
   /** Ascending. Every version the record holds, not a range. */
   readonly versions: readonly number[];
   readonly latest: number;
-  /** Who authored each version, by version number. Read by seeking to each
-   * version's line for its header only — a catalog still carries no
-   * document bytes. */
+  /** Who authored each version, from the fold headers without document bytes. */
   readonly authors: Readonly<Record<number, string>>;
   /** Per version, the seq of the last frame accepted before it: where it sits
    * in the conversation. An artifact entry carries no seq of its own, because
@@ -469,43 +472,24 @@ export interface ArtifactCatalogEntry {
 export const viewArtifactCatalog = (dir: string): readonly ArtifactCatalogEntry[] => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
   const raw = existsSync(paths.logPath) ? readFileSync(paths.logPath) : Buffer.alloc(0);
-  const { artifactIndex, artifactAfterSeq, artifactTitles } = foldLog(conversationId, secret, raw);
-  const byId = new Map<string, number[]>();
-  for (const key of artifactIndex.keys()) {
-    // `artifactKey` joins on NUL, which cannot occur in either half.
-    const sep = key.indexOf("\0");
-    if (sep === -1) continue;
-    const id = key.slice(0, sep);
-    const version = Number(key.slice(sep + 1));
-    if (!Number.isSafeInteger(version)) continue;
-    const seen = byId.get(id);
-    if (seen === undefined) byId.set(id, [version]);
-    else seen.push(version);
-  }
-  return [...byId.entries()]
-    .map(([artifactId, versions]) => {
-      const sorted = [...versions].sort((a, b) => a - b);
+  const { artifactVersions, artifactTitles } = foldLog(conversationId, secret, raw);
+  return [...artifactVersions]
+    .map(([artifactId, headers]) => {
+      const versions = [...headers.keys()].sort((a, b) => a - b);
       const authors: Record<number, string> = {};
-      // Where each version sits in the conversation. A reader showing a
-      // saved version as a moment in the thread needs this: without it the
-      // only honest place is the end, and the end reads as "just now".
       const afterSeq: Record<number, number> = {};
-      for (const v of sorted) {
-        const one = readArtifactVersion(raw, artifactId, v, artifactIndex);
-        if (one !== null) authors[v] = one.author;
-        const at = artifactAfterSeq.get(artifactKey(artifactId, v));
-        if (at !== undefined) afterSeq[v] = at;
+      for (const [version, header] of headers) {
+        authors[version] = header.author;
+        afterSeq[version] = header.afterSeq;
       }
       const title = artifactTitles.get(artifactId);
       return {
         artifactId,
-        // Only when one was written. Absent and empty are the same thing to
-        // a reader, and absent is the one the wire should carry.
-        ...(title === undefined ? {} : { title }),
-        versions: sorted,
-        latest: sorted[sorted.length - 1] as number,
+        versions,
+        latest: versions[versions.length - 1] as number,
         authors,
         afterSeq,
+        ...(title === undefined ? {} : { title }),
       };
     })
     .sort((a, b) => a.artifactId.localeCompare(b.artifactId));
@@ -524,3 +508,16 @@ export const viewArtifactVersion = (
   const { artifactIndex } = foldLog(conversationId, secret, raw);
   return readArtifactVersion(raw, artifactId, version, artifactIndex);
 };
+
+/** A writer appends durable facts but never holds the executor lease or dispatches effects. */
+export const openWriter = (
+  dir: string,
+  deps: { now?: () => number; presence?: () => boolean | undefined } = {},
+): ConversationHost =>
+  createConversationHost(dir, {
+    now: deps.now ?? Date.now,
+    presence: deps.presence ?? (() => undefined),
+    executorLease: () => false,
+    onEffect: () => {},
+    onRecord: () => {},
+  });

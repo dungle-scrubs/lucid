@@ -1465,14 +1465,6 @@ body {
   color: color-mix(in srgb, var(--color-text) 60%, transparent);
 }
 
-/* 3d: with the connection dead the transcript is still all there - it was
-   on disk the whole time - but every sent turn steps back to 55%, and the
-   composer says Reload. */
-.thread.dead .msg,
-.thread.dead .batch {
-  opacity: 0.55;
-}
-
 .thread-root {
   position: relative;
   flex: 1;
@@ -1612,6 +1604,12 @@ body {
 
 .msg .body p + p {
   margin-top: 8px;
+}
+
+/* The dock owns the divider above itself; its first child must not draw a
+   second one. */
+.dock > :first-child {
+  border-top: 0;
 }
 
 .msg .body > :first-child {
@@ -1949,11 +1947,6 @@ body {
   }
 }
 
-/* The dock owns the divider above itself; its first child must not draw a
-   second one. */
-.dock > :first-child {
-  border-top: 0;
-}
 /* 3d: the composer at 50%, saying Reload - the one action is in the
    header, and nothing here can be done. */
 .dock.dead {

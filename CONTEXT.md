@@ -35,7 +35,7 @@ Take nouns from here. One name per thing.
 | Term | What it is |
 |---|---|
 | **conversation** | One exchange, identified by a `conversationId`, living in one directory |
-| **record** | That directory: `log.ndjson`, `meta.json`, `driver.json`, `secret`, the two locks |
+| **record** | That directory: `log.ndjson`, `meta.json`, `driver.json`, `secret`, `files/`, the two locks |
 | **log** | The append-only NDJSON file. The single source of truth |
 | **append lock** | A `flock(2)` on the log, held for one append transaction |
 | **presence lock** | A separate `flock(2)`, held for a source's whole participation. Also the executor lease |
@@ -56,7 +56,7 @@ Take nouns from here. One name per thing.
 | **input** | Something a human said, delivered to the agent. Carries an idempotent `id` and a `mode` |
 | **disposition** | What actually happened to an input: `applied`, `queued`, `rejected` |
 | **event** | Agent output. `droppable` (`token`, `progress`, `context`) or `lossless` (everything else) |
-| **credit** | Flow control for the droppable class only |
+| **credit** | Flow control for the droppable class only. Shipped drivers grant none; live deltas remain unrecorded (RFC-13 A2) |
 
 **The modes**
 
@@ -85,7 +85,7 @@ Take nouns from here. One name per thing.
 | **document mode** | What a click in the document means: `use` operates it, `markup` selects an element to write about. Not a `profile` - that word is taken, and these are unrelated |
 | **note box** | Where a note is written. Opens beside what was selected |
 | **browser surface** | `lucid2 serve`: one loopback server, every record, a record chosen by URL |
-| **driver preference** | `driver.json`, beside `meta.json`. The harness, provider, model and effort a person chose in the browser. Written by the server; honored by a headless driver at the next turn boundary. Never in the log |
+| **driver preference** | `driver.json`, beside `meta.json`. The harness, provider, model and effort a person chose in the browser. Written by the server; honored at the next queue-input boundary. An idle steer or answer stays on the driver in force (RFC-13 A8). Never in the log |
 
 **Not lucid's words.** `hcn` owns harness descriptors, capability claims, and
 the shape of a harness invocation. lucid never mirrors them.
@@ -107,6 +107,8 @@ the shape of a harness invocation. lucid never mirrors them.
 
 - An agent emits a document; it renders beside the conversation, in a frame
   the page cannot reach into.
+- Attach an image or file as context for an input (RFC-11). The record keeps
+  its bytes in `files/`; the agent receives a separate context copy.
 - **Two modes, because two things wanted the same click.** In *use* mode the
   document behaves as the agent built it: tick a box, fill a field, edit a
   sentence or a line of a code block. In *mark up* mode a click selects an

@@ -2,7 +2,7 @@
 number: 11
 title: "Attaching an image or a file as context"
 type: protocol
-status: Draft
+status: Implemented
 author: Kevin Frilot
 date: 2026-08-28
 ---

@@ -32,7 +32,7 @@
 
 import { stripAnnotationBatch } from "../protocol/annotations.js";
 import { stripArtifactBlocks } from "../protocol/artifacts.js";
-import { EventKind } from "../protocol/events.js";
+import { EventKind, type HarnessEventKind } from "../protocol/events.js";
 import type { ChannelStatus } from "../protocol/index.js";
 import type { Transcript, TranscriptInput } from "../store/store.js";
 
@@ -157,7 +157,7 @@ const eventText = (event: Record<string, unknown>): string => {
  * the durable log, and neither is anything a person said or was told. Left
  * unfiltered, `identity` fell through to the `[kind]` fallback and printed a
  * bare `[identity]` line between the question and the answer. */
-const UNRENDERED: ReadonlySet<string> = new Set([EventKind.done, EventKind.identity]);
+const UNRENDERED: readonly HarnessEventKind[] = [EventKind.done, EventKind.identity];
 
 export const buildView = (input: {
   readonly transcript: Transcript;
@@ -184,7 +184,7 @@ export const buildView = (input: {
     .filter(
       (e) => !((e.event.kind as string) === EventKind.token && turnsWithMessage.has(e.turnId)),
     )
-    .filter((e) => !UNRENDERED.has(e.event.kind as string))
+    .filter((e) => !UNRENDERED.some((kind) => kind === e.event.kind))
     .map((e) => ({
       kind: "agent",
       seq: e.seq,
