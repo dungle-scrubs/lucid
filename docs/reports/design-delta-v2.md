@@ -96,28 +96,15 @@ the same driver, so selection and status can never disagree.
 
 ## 3. Scoping ruling for this pass
 
-> **Superseded by RFC-12** (`docs/rfc/12_choosing-the-driver.rfc.md`,
-> 2026-08-29): the open menus with real harness / model / effort lists
-> are now in scope - the preference file, the endpoint, and the honor
-> rule that re-spawns the driver are specified there. The ruling's mode
-> clause stands: mode never switches into `interactive` from this line,
-> and the interactive report-only treatment stands with it.
+The driver menus are in scope and their underlying behavior is implemented.
+[Drivers](../drivers.md) defines the preference file, endpoint, vocabulary,
+and honor rule. The line reports the driver in force; controls show the
+person's preference, which can differ after a refused change.
 
-The line renders from real state. What the browser can change today is
-nothing: the harness, its profile, and the model are chosen where the
-driver is spawned (`lucid2 chat/run` flags and hook attachment); an input
-frame carries text and a mode, not model selection. Per the design's own
-rules, a menu whose choice could not act must not be drawn as clickable.
-
-So this pass ships: the full line (typography, segments, separators and
-wrap rules, mode variants, tooltips, glosses) rendering the live driver;
-the interactive composer variant ("Interject...", no clip button - the
-product already attaches interactively through hooks); the headless-turn
-permanent line; and the mode tooltip. The open menus with real harness /
-model / effort lists land together with driver spawn control in the
-substrate - a deliberate gap, recorded here, for Kevin to schedule. Mode
-never switches into `interactive` from this line: the attach flow is not
-designed ("close this before shipping mode as interactive").
+Mode never switches into `interactive` from this line. Interactive sessions
+remain report-only because lucid does not own their process. Preserve the
+interactive composer variant and the headless-turn permanent line described
+above. An unavailable dimension has no control; it is not a disabled choice.
 
 ## Definition of done
 
@@ -125,5 +112,5 @@ designed ("close this before shipping mode as interactive").
   `src/server/client/`; `rg -i "sepia|process.yellow"` is clean.
 - The driver line renders on every conversation with a driver, in the
   mode variant the channel status names, and its tooltips read verbatim
-  from `CONTEXT.md`'s mode table.
+  from the profile definitions in [Drivers](../drivers.md#profiles).
 - `bun run check` and `bun run build` green on each commit.

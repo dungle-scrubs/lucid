@@ -1,8 +1,11 @@
 # Agent conventions — lucid-v2
 
-Coding-agent rules for this repo. `CONTEXT.md` wins on what lucid is, what
-the words mean, and what is next; `docs/smoke-seven.md` wins on smoke
-semantics. `PLAN.md` is the delivered substrate RFC, kept as history.
+Coding-agent rules for this repo. `CONTEXT.md` wins on product scope and vocabulary.
+`docs/README.md` routes current contracts and active work;
+`docs/smoke-seven.md` wins on smoke semantics. Completed proposals and
+reviews live in Git, as described in the documentation index.
+For changes larger than a correction, follow the RFC workflow in
+`docs/rfc/README.md` before code.
 
 ## Build and verify — single command
 
@@ -56,8 +59,8 @@ A patch is green only when `bun run check` is green. Do not skip gates via `-k n
   - `scripts/smoke-interactive.ts` — the mode with no `hcn` in it at all: a
     claude session lucid does not own, reached through project-scope hooks
 
-  The interactive lane is the one that closes PLAN.md's gate on the artifact
-  layer ("tested through every integration mode"). It has a negative control:
+  The interactive lane confirms the human-owned integration mode.
+  It has a negative control:
   with the hooks removed the session answers its own prompt and lucid never
   attaches.
 

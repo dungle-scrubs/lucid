@@ -1,28 +1,44 @@
-# Real-harness compatibility smoke - the original seven (M7.2)
+# Smoke verification
 
-"Fully tested" is the invariant suite against the deterministic fake
-harness; the real-harness smoke is **necessary but no longer the proof**
-(PLAN 4.7). Each of the original seven is proven deterministically by a
-fake-harness oracle in this repo AND exercised against real harnesses at
-the runner layer by the normalizer's `smoke:seven`. The remaining
-lucid-v2 live confirmation - the seven driven through the store+protocol
-against live claude - is nondeterministic, run on demand, evidence
-logged; it is **deferred (DF-SMOKE)** until run against a live harness,
-because it cannot execute in deterministic CI.
+`bun run check` is the deterministic gate: lint, both TypeScript projects,
+and fake-harness tests with injected clocks. Live confirmation adds evidence
+about real processes and models. It runs on demand, is nondeterministic, and
+does not replace the deterministic gate or gate CI.
 
-| # | Smoke | Deterministic proof (lucid-v2) | Real-harness runner proof |
-|---|-------|--------------------------------|---------------------------|
-| 1 | headless single-turn | `test/modes/headless.test.ts` session-mode turn maps event-for-event into the durable log | normalizer `smoke:seven`, `smoke:claude` (M3.3, D-026) |
-| 2 | interactive single-turn | `test/modes/interactive.test.ts` hook delivery + announce; `test/tui/view.test.ts` render | spike A-002 (live claude 2.1.226) |
-| 3 | session continuity across paths | `test/gate-5-6.test.ts` all-three-modes conversation | normalizer session smoke |
-| 4 | path handoff | `test/modes/controller.test.ts` D-020 exactly-once handoff (both directions) | `scripts/smoke-handoff.ts` (on demand) |
-| 5 | streaming fidelity | `test/modes/headless.test.ts` token coalescing + credit; `events.test.ts` | normalizer token-granularity smoke (A-001) |
-| 6 | limit/error propagation | `test/modes/headless.test.ts` limit terminates turn, durable classified `done` | normalizer `smoke:seven` limit smoke |
-| 7 | kill and resume | `test/store/store.test.ts` fold/reopen; death-before-ack oracle (`controller.test.ts`, `reducer.test.ts`) | normalizer kill+resume smoke |
+## The seven invariants
 
-## Running the live confirmation (DF-SMOKE)
+| # | Smoke | Deterministic oracle |
+|---|---|---|
+| 1 | Headless single turn reaches the durable log | [headless](../test/modes/headless.test.ts) |
+| 2 | Interactive delivery and rendering | [interactive](../test/modes/interactive.test.ts), [terminal view](../test/tui/view.test.ts) |
+| 3 | Continuity across integration paths | [cross-mode gates](../test/gate-5-6.test.ts) |
+| 4 | Handoff preserves input and fences the old source | [controller](../test/modes/controller.test.ts) |
+| 5 | Event fidelity, coalescing, and credit | [headless](../test/modes/headless.test.ts), [events](../test/protocol/events.test.ts) |
+| 6 | Limit and error propagation with durable termination | [headless](../test/modes/headless.test.ts) |
+| 7 | Kill, reopen, and recover before acknowledgement | [store](../test/store/store.test.ts), [controller](../test/modes/controller.test.ts), [reducer](../test/protocol/reducer.test.ts) |
 
-Run the applicable `scripts/smoke-*.ts` lane through hcn, as listed in
-`AGENTS.md`. Record results under `spikes/evidence/`, including failures
-and their causes. Live checks confirm the deterministic oracles; they do
-not gate CI. Record follow-up work in the repository's local tracker.
+## Live confirmation lanes
+
+| Lane | Script | Recorded evidence |
+|---|---|---|
+| Harness process through hcn | [smoke-live](../scripts/smoke-live.ts) | [pi](../spikes/evidence/df-smoke-pi.md) |
+| Harness recalls its session after process loss | [smoke-resume](../scripts/smoke-resume.ts) | [resume](../spikes/evidence/resume.md) |
+| One record, two different harnesses | [smoke-cross-harness](../scripts/smoke-cross-harness.ts) | [cross-harness](../spikes/evidence/cross-harness-handoff.md) |
+| Two processes pass ownership | [smoke-handoff](../scripts/smoke-handoff.ts) | [handoff](../spikes/evidence/handoff-smoke.md) |
+| Human-owned session attaches through hooks | [smoke-interactive](../scripts/smoke-interactive.ts) | [interactive](../spikes/evidence/interactive.md) |
+
+Read each script's arguments before running it. Use the workspace's standing
+live model and machine guidance in [AGENTS](../AGENTS.md). A direct model call
+can confirm store/protocol plumbing when a harness is unavailable, but cannot
+stand in for a harness-process or hook-attachment claim.
+
+Evidence describes the versions, model, and conditions recorded in that run.
+It is not a promise that every current harness and model passes. Keep failed
+observations and their causes. Generate new evidence through the scripts;
+do not hand-edit old results. Historical DF-SMOKE labels mean an on-demand
+lane, not that the lane has never run.
+
+The interactive lane includes a negative control: without project hooks,
+the session answers its prompt and lucid never attaches. Keep that control
+when changing the integration. Deterministic proof plus applicable live
+confirmation establishes the seam; live output alone does not prove it.

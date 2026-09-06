@@ -5,11 +5,12 @@ durable log and is the single sequencing authority; you speak a small,
 typed frame protocol to it. This skill is the whole contract - an agent
 that reads only this can drive a conversation correctly.
 
-## The one rule: exactly one writer
+## The one rule: exactly one active source
 
-A conversation has **exactly one active writer at a time**, enforced by an
-`epoch` fencing token, not by convention. Everything else follows from
-this.
+A conversation has **exactly one active source at a time**, enforced by an
+`epoch` fencing token and the executor lease. Other processes may append
+human inputs through serialized append transactions. See
+[architecture](architecture.md) for the distinction.
 
 - lucid assigns you an `epoch` when you attach. Every post-attach frame
   you send carries it.
@@ -85,7 +86,8 @@ Stream the harness's output as `event { epoch, n, turnId, event }`:
 - Event **classes** decide flow control. `token`, `progress`, `context`
   are **droppable** - lucid grants `credit { epoch, tokens }` for them,
   and a droppable event sent with no credit is refused `no-credit`.
-  `identity`, `message`, `tool`, `limit`, `error`, `done` are **lossless**
+  `identity`, `message`, `tool`, `question`, `limit`, `error`, `failure`,
+  `done` are **lossless**
   - never gated, never dropped.
 - **Coalescing under starvation, exactly:** keep at most one pending
   droppable per **(turnId, kind)** - latest-wins, so a turn can hold one
@@ -96,6 +98,10 @@ Stream the harness's output as `event { epoch, n, turnId, event }`:
   surviving pending droppables, under their own turnId, when credit
   arrives.
 
+Production drivers currently grant no droppable credit. Completed lossless
+messages are durable; live token deltas remain unrecorded. The credit rules
+above still apply to sources that receive grants.
+
 ## Receiving input
 
 lucid delivers human input as `input { seq, id, text, mode }`. It may
@@ -103,7 +109,7 @@ arrive at any time, including from a process other than the one you are
 talking to - a conversation can be written to while you drive it, and
 lucid delivers what it finds. Nothing about that changes your side of the
 contract; it only means input is not confined to the moments you expect. `mode` is
-what lucid **requests** (`queue` or `steer`); what actually happened is
+what lucid **requests** (`queue`, `steer`, or `answer`); what actually happened is
 the `disposition` you send back:
 
 - `disposition { epoch, inputId, outcome: applied | queued | rejected }`.
@@ -182,7 +188,9 @@ For a human-owned process, capability degrades in a strict order:
 3. **observe** - tail only; queued input surfaces as a resume
    instruction, never injected.
 
-Pick the highest rung the environment supports; fall back honestly.
+The cooperative rung remains disabled by the A003 gate. Use hooks when
+available and otherwise observe; do not advertise cooperative delivery as
+shipped capability.
 
 ## Refusals are the signal
 
