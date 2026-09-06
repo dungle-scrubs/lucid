@@ -56,7 +56,7 @@ describe("streamTurn over hcn run --json", () => {
     // Same events, same order, same content - a length check alone would
     // pass on a decoder that mangled every field.
     expect(events).toEqual(recorded);
-    expect((events.at(-1) as { kind: string }).kind).toBe("done");
+    expect(events.at(-1)).toMatchObject({ kind: "done", cause: "clean" });
     expect(r.spawner.calls[0]?.argv).toEqual([BIN, "run", "claude", "--json", "hi"]);
   });
 
