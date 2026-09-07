@@ -1,9 +1,11 @@
 # Active RFCs
 
-There are no active RFCs after RFC 13. Current reading-view design is
-listed in the [documentation index](../README.md#browser-design).
+- [RFC 14: Annotated content comparison](14_annotated-content-comparison.rfc.md) - Draft; inline notes on earlier or current content, delivered into the conversation.
 
-The highest allocated RFC number is **13**. The next RFC is **14**.
+Current reading-view design is listed in the
+[documentation index](../README.md#browser-design).
+
+The highest allocated RFC number is **14**. The next RFC is **15**.
 Never reset numbering because completed files have been removed. Before
 allocating, check this high-water mark, active filenames, and Git history;
 use one greater than the highest number allocated and update this mark.
