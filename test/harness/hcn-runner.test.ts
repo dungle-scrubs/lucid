@@ -619,6 +619,113 @@ test("a refused child that ignores SIGTERM is killed before the refusal returns"
   }
 });
 
+test("closing an opened session through its signal allows the graceful close reply", async () => {
+  const r = rig();
+  const controller = new AbortController();
+  const opening = r.runner.openSession({
+    harness: "claude",
+    sessionId: "graceful",
+    signal: controller.signal,
+  });
+  r.proc.emit({ kind: "session", sessionId: "graceful", harness: "claude", hcn: HCN_MIN_VERSION });
+  const session = await opening;
+  try {
+    controller.abort();
+    expect(r.proc.commands.at(-1)).toEqual({ op: "close" });
+    expect(r.proc.signals).toEqual([]);
+    r.proc.emit({ kind: "closed", exitCode: 0, cause: "clean" });
+    r.proc.exit(0);
+    expect(await session.close()).toEqual({ exitCode: 0, cause: "clean" });
+  } finally {
+    r.proc.exit(0);
+  }
+});
+
+test("aborting session startup settles the open and terminates its silent child", async () => {
+  const r = rig();
+  const controller = new AbortController();
+  const opening = r.runner.openSession({
+    harness: "claude",
+    sessionId: "quiet",
+    signal: controller.signal,
+  });
+  void opening.catch(() => {});
+  controller.abort();
+  await Promise.resolve();
+  try {
+    expect(r.proc.signals).toEqual(["SIGTERM"]);
+    r.proc.exit(null);
+    await expect(opening).rejects.toMatchObject({ issue: "aborted" });
+  } finally {
+    r.proc.exit(null);
+    await opening.catch(() => {});
+  }
+});
+
+test("aborting a quiet turn terminates its process while a read is pending", async () => {
+  const r = rig();
+  const controller = new AbortController();
+  const turn = r.runner.streamTurn({
+    harness: "claude",
+    prompt: "Continue",
+    signal: controller.signal,
+    turnId: "cancel-quiet",
+  });
+  const iterator = turn[Symbol.asyncIterator]();
+  const pending = iterator.next();
+  try {
+    controller.abort();
+    expect(r.proc.signals).toEqual(["SIGTERM"]);
+  } finally {
+    r.proc.exit(null);
+    await pending;
+    await iterator.return?.();
+  }
+});
+
+test("an aborted turn that ignores SIGTERM is killed and releases its reader", async () => {
+  class ResistantProcess extends FakeHcnProcess {
+    override kill(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
+      this.signals.push(signal);
+      if (signal === "SIGKILL") this.exit(null);
+    }
+  }
+  const proc = new ResistantProcess();
+  const controller = new AbortController();
+  const runner = createHcnRunner({ spawn: fakeSpawner([proc]).spawn, bin: BIN, refusalGraceMs: 0 });
+  const iterator = runner
+    .streamTurn({
+      harness: "claude",
+      prompt: "continue",
+      turnId: "resistant",
+      signal: controller.signal,
+    })
+    [Symbol.asyncIterator]();
+  const reading = iterator.next();
+  const cleanup = setTimeout(() => proc.exit(null), 50);
+  try {
+    controller.abort();
+    await reading;
+    expect(proc.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  } finally {
+    clearTimeout(cleanup);
+    proc.exit(null);
+    await iterator.return?.();
+  }
+});
+
+test("malformed runtime inspection is a typed settings refusal", async () => {
+  const r = rig();
+  const checking = r.runner.inspect("claude", {
+    model: "concrete-opus",
+    effort: "high",
+    runtime: { cwd: "/saved", profile: "headless-turn", resume: "native" },
+  });
+  r.proc.emitRaw("not json");
+  r.proc.exit(0);
+  await expect(checking).rejects.toMatchObject({ issue: "invalid-settings" });
+});
+
 test("settings inspection validates argv, propagates refusal, and reuses descriptor facts", async () => {
   // Inline inspection responses: these are command results, not fabricated NDJSON fixtures.
   const facts = new FakeHcnProcess();
@@ -652,6 +759,51 @@ test("settings inspection validates argv, propagates refusal, and reuses descrip
   refused.exit(2);
   await expect(rejected).rejects.toBeInstanceOf(HarnessRefusal);
   expect(r.spawner.calls).toHaveLength(3);
+});
+
+test("native resume inspection validates rendering in the saved folder and preserves unknown compatibility", async () => {
+  const facts = new FakeHcnProcess();
+  const checked = new FakeHcnProcess();
+  const r = rig([facts, checked]);
+  const initial = r.runner.inspect("claude");
+  facts.emitRaw(JSON.stringify({ name: "claude", sessionMode: {}, verifiedAgainst: "2.1.233" }));
+  facts.exit(0);
+  await initial;
+  const query = r.runner.inspect("claude", {
+    model: "concrete-opus",
+    effort: "high",
+    runtime: { cwd: "/saved/nested", resume: "native-id", profile: "headless-turn" },
+  });
+  checked.emitRaw(
+    JSON.stringify({
+      v: 1,
+      argv: ["claude", "--resume", "native-id"],
+      executable: { path: "/selected/claude", version: "2.9.0" },
+      resume: { status: "unknown", reason: "Unverified version" },
+    }),
+  );
+  checked.exit(0);
+  expect((await query).runtime).toMatchObject({
+    executable: { path: "/selected/claude", version: "2.9.0" },
+    resume: { status: "unknown" },
+  });
+  expect(r.spawner.calls[1]?.argv).toEqual([
+    BIN,
+    "inspect",
+    "claude",
+    "--runtime",
+    "--prompt",
+    "Validate settings",
+    "--model",
+    "concrete-opus",
+    "--effort",
+    "high",
+    "--resume",
+    "native-id",
+    "--mode",
+    "headless-turn",
+  ]);
+  expect(r.spawner.calls[1]?.opts.cwd).toBe("/saved/nested");
 });
 
 test("isolated naming asks hcn to enforce isolation, bounds runtime, and refuses resume", async () => {

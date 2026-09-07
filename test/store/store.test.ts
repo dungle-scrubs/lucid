@@ -294,6 +294,7 @@ describe("durable conversation store (M5.1)", () => {
 
     // A's source dies mid-turn and its lease lapses; a takeover happens on A.
     hostA.now = 1_000 + 15_000;
+    hostA.presence = false;
     hostA.host.handleFrame(
       encodeFrame(
         attachFrame(a.secret, {

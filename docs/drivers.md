@@ -118,11 +118,9 @@ through the shared driven-conversation lifecycle if they changed. Never
 interrupt a running turn for a preference. Steer and answer stay on the
 current driver, including when idle. An interactive session never respawns.
 
-A refused change keeps the current driver answering the input. Record a
-nonterminal error naming the refused choice and the driver that continues.
-Leave the preference intact so the browser can show why choice and reality
-differ. Remember the refused preference and retry only after it changes,
-not on every input.
+A refused change stops the driver and leaves the input pending. Record the
+failure and preserve the selected settings. Never reopen the previous driver
+or start a fresh session automatically after a refusal.
 
 ## Session recall
 
@@ -130,11 +128,21 @@ The record keeps session IDs per harness, reported on identity events.
 Attach returns only the session ID for the requested harness. Same-harness
 reopen uses its own hint; switching harnesses never carries the other
 harness's session ID across. A harness with no recorded session starts fresh
-with the conversation replayed.
+with outstanding inputs replayed. Transfer of completed history is a separate
+RFC 15 implementation slice.
 
-A hint may name a missing session. Try it once; if refused, retry the same
-input fresh and record why. Input idempotence and event replay watermarks
-remain separate from harness session recall.
+Every later headless turn resumes the latest native identity for its harness.
+Each launch uses the exact saved working folder. A missing folder blocks
+execution. A refused resume leaves the input and settings pending for recovery.
+Input idempotence and event replay watermarks remain separate from native recall.
+
+Named interactive sources record their native identity with the producing
+epoch, turn, and corroborated process owner. The latest participation survives
+detach even if no identity arrived. A living terminal remains protected after
+detach or lease expiry. Unknown ownership blocks takeover. Once departure is
+confirmed and an executor lease is held, its captured session can continue in
+headless-turn mode with a recorded mode-change notice. The worker records its
+own process identity on attachment.
 
 See [honor tests](../test/modes/honor.test.ts),
 [session prompts](../test/modes/session-prompts.test.ts),

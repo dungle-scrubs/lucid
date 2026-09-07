@@ -55,6 +55,23 @@ async function* lines(chunks: AsyncIterable<string>): AsyncIterable<string> {
  * budget (`--stall`) governs everything after this point. */
 const OPEN_TIMEOUT_MS = 30_000;
 
+async function settlesWithin(work: Promise<unknown>, graceMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), graceMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const flag = (name: string, value: string | undefined): string[] =>
   value === undefined ? [] : [name, value];
 
@@ -80,8 +97,9 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
    * inspection commands, which never spawn a harness. */
   const runToCompletion = async (
     argv: readonly string[],
+    cwd?: string,
   ): Promise<{ out: string[]; err: string[]; code: number | null }> => {
-    const proc = deps.spawn([deps.bin, ...argv], {});
+    const proc = deps.spawn([deps.bin, ...argv], cwd === undefined ? {} : { cwd });
     const out: string[] = [];
     const err: string[] = [];
     const readErr = (async () => {
@@ -119,27 +137,70 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
   };
 
   const inspect: HarnessRunner["inspect"] = async (harness, choice) => {
+    let runtime: HarnessFacts["runtime"];
     if (choice) {
-      const check = await runToCompletion([
-        "inspect",
-        harness,
-        "--argv",
-        "--prompt",
-        "Validate settings",
-        ...flag("--model", choice.model),
-        ...flag("--effort", choice.effort),
-        ...flag("--provider", choice.provider),
-        ...flag("--isolation", choice.isolation),
-      ]);
+      const check = await runToCompletion(
+        [
+          "inspect",
+          harness,
+          choice.runtime ? "--runtime" : "--argv",
+          "--prompt",
+          "Validate settings",
+          ...flag("--model", choice.model),
+          ...flag("--effort", choice.effort),
+          ...flag("--provider", choice.provider),
+          ...flag("--isolation", choice.isolation),
+          ...flag("--resume", choice.runtime?.resume),
+          ...flag("--mode", choice.runtime?.profile),
+        ],
+        choice.runtime?.cwd,
+      );
       if (check.code !== 0)
         throw new HarnessRefusal("invalid-settings", check.err.join("\n") || check.out.join("\n"));
+      if (choice.runtime) {
+        let value: unknown;
+        try {
+          value = JSON.parse(check.out.join("\n"));
+        } catch {
+          throw new HarnessRefusal(
+            "invalid-settings",
+            "hcn runtime inspection did not return valid JSON",
+          );
+        }
+        if (value === null || typeof value !== "object" || Array.isArray(value))
+          throw new HarnessRefusal(
+            "invalid-settings",
+            "hcn runtime inspection did not return an object",
+          );
+        const parsed = value as Record<string, unknown>;
+        const executable = parsed.executable as Record<string, unknown> | undefined;
+        const resume = parsed.resume as Record<string, unknown> | undefined;
+        if (
+          parsed.v === 1 &&
+          executable &&
+          resume &&
+          Array.isArray(parsed.argv) &&
+          parsed.argv.length > 0 &&
+          parsed.argv.every((part) => typeof part === "string")
+        ) {
+          const path = typeof executable.path === "string" ? executable.path : null;
+          const version = typeof executable.version === "string" ? executable.version : null;
+          runtime = {
+            executable: { path, version },
+            resume: {
+              status: resume.status === "supported" && path && version ? "supported" : "unknown",
+              reason: typeof resume.reason === "string" ? resume.reason : null,
+            },
+          };
+        }
+      }
     }
     let pending = factCache.get(harness);
     if (!pending) {
       pending = readFacts(harness);
       factCache.set(harness, pending);
     }
-    return pending;
+    return runtime === undefined ? pending : { ...(await pending), runtime };
   };
   const factCache = new Map<HarnessName, Promise<HarnessFacts>>();
   const readFacts = async (harness: HarnessName): Promise<HarnessFacts> => {
@@ -151,6 +212,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     const vocabulary = vocabularyOf(parsed);
     return {
       name: String(parsed.name ?? harness),
+      ...(typeof parsed.bin === "string" ? { binary: parsed.bin } : {}),
       // The descriptor's sessionMode is the runtime-verified answer to
       // "can this harness hold a persistent session" (PLAN D-008).
       session: parsed.sessionMode !== null && parsed.sessionMode !== undefined,
@@ -179,6 +241,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
   };
 
   const streamTurn = (opts: StreamTurnOptions): AsyncIterable<HarnessEvent> => {
+    if (opts.signal?.aborted) throw new HarnessRefusal("aborted", "The turn was canceled");
     if (opts.isolation && opts.resume !== undefined)
       throw new HarnessRefusal("invalid-isolation", "An isolated turn cannot resume a session");
     const argv = [
@@ -196,6 +259,24 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     ];
     log({ event: "hcn_run", turnId: opts.turnId, harness: opts.harness });
     const proc = deps.spawn(argv, opts.cwd === undefined ? {} : { cwd: opts.cwd });
+    let terminating = false;
+    const terminate = (): void => {
+      if (terminating) return;
+      terminating = true;
+      try {
+        proc.kill("SIGTERM");
+      } catch {}
+      void (async () => {
+        if (await settlesWithin(proc.exited, deps.refusalGraceMs ?? 1_000)) return;
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      })();
+    };
+    const removeAbort = (): void => opts.signal?.removeEventListener("abort", terminate);
+    opts.signal?.addEventListener("abort", terminate, { once: true });
+    if (opts.signal?.aborted) terminate();
+    void proc.exited.then(removeAbort, removeAbort);
     // A pipe nobody reads fills, and a child blocked writing to it stops
     // producing stdout - a hang that looks exactly like a harness stall.
     drainStderr(proc, opts.turnId);
@@ -216,7 +297,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
           // stop them. Whoever walks away owns ending it.
           if (!drained) {
             log({ event: "hcn_run_abandoned", turnId: opts.turnId, harness: opts.harness });
-            proc.kill("SIGTERM");
+            terminate();
           }
         }
       },
@@ -224,6 +305,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
   };
 
   const openSession = async (opts: OpenSessionOptions): Promise<SessionHandle> => {
+    if (opts.signal?.aborted) throw new HarnessRefusal("aborted", "The session was canceled");
     const argv = [
       deps.bin,
       "session",
@@ -366,6 +448,46 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
     // and it would race the pump, settling before the refusal it is about to
     // read. A deadline is the only thing that bounds the silent case, and
     // the pump settles every case that actually produces output.
+    let closeRequested = false;
+    const requestClose = (): void => {
+      if (closeRequested) return;
+      closeRequested = true;
+      try {
+        proc.write(`${JSON.stringify({ op: "close" })}\n`);
+        proc.endInput();
+      } catch {
+        // The process may already have closed its input pipe.
+      }
+    };
+    let closing: Promise<void> | undefined;
+    const closeSession = (): Promise<void> => {
+      requestClose();
+      closing ??= (async () => {
+        const grace = deps.refusalGraceMs ?? 1_000;
+        if (await settlesWithin(pump, grace)) return;
+        try {
+          proc.kill("SIGTERM");
+        } catch {}
+        if (await settlesWithin(pump, grace)) return;
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+        await settlesWithin(pump, grace);
+      })();
+      return closing;
+    };
+    const abort = (): void => {
+      requestClose();
+      if (!sawSession) {
+        refusal = new HarnessRefusal("aborted", "The session was canceled before opening");
+        settleOpen();
+      } else {
+        void closeSession();
+      }
+    };
+    const removeAbort = (): void => opts.signal?.removeEventListener("abort", abort);
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    void proc.exited.then(removeAbort, removeAbort);
     const deadline = setTimeout(() => {
       if (!sawSession && refusal === null && closedInfo === null) {
         refusal = new HarnessSpawnError(`hcn produced no session line within ${OPEN_TIMEOUT_MS}ms`);
@@ -385,27 +507,11 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       try {
         proc.kill("SIGTERM");
       } catch {}
-      const settles = async (): Promise<boolean> => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          return await Promise.race([
-            pump.then(
-              () => true,
-              () => true,
-            ),
-            new Promise<boolean>((resolve) => {
-              timer = setTimeout(() => resolve(false), deps.refusalGraceMs ?? 1_000);
-            }),
-          ]);
-        } finally {
-          clearTimeout(timer);
-        }
-      };
-      if (!(await settles())) {
+      if (!(await settlesWithin(pump, deps.refusalGraceMs ?? 1_000))) {
         try {
           proc.kill("SIGKILL");
         } catch {}
-        await settles();
+        await settlesWithin(pump, deps.refusalGraceMs ?? 1_000);
       }
       throw thrown;
     }
@@ -430,13 +536,7 @@ export const createHcnRunner = (deps: HarnessDeps): HarnessRunner => {
       send: (id, text) => dispatch("send", id, text),
       answer: (id, text) => dispatch("answer", id, text),
       async close(): Promise<SessionClosed> {
-        try {
-          proc.write(`${JSON.stringify({ op: "close" })}\n`);
-          proc.endInput();
-        } catch {
-          // stdin is already gone; the pump still settles on exit.
-        }
-        await pump;
+        await closeSession();
         return closedInfo ?? { exitCode: null, cause: "killed" };
       },
     };

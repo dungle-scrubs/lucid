@@ -35,6 +35,12 @@ export type FrameKind = (typeof FRAME_KINDS)[number];
 
 export type AttachProfile = "interactive" | "headless-session" | "headless-turn";
 
+export interface AttachmentIntent {
+  readonly attachmentOrigin?: "explicit" | "automatic";
+  readonly capabilities?: readonly string[];
+  readonly explicitAttachmentId?: string;
+}
+
 /** The harnesses lucid can drive, as hcn names them. Closed on purpose: a
  * harness name partitions attribution in the log, so a typo that decoded
  * would silently make a record un-resumable instead of failing loudly
@@ -96,6 +102,11 @@ export const REFUSAL_ISSUES = [
   "stale-answer",
   "covers-ahead-of-log",
   "wrong-direction",
+  "execution-stale",
+  "execution-blocked",
+  "execution-ineligible",
+  "executor-required",
+  "invalid-execution",
 ] as const;
 export type RefusalIssue = (typeof REFUSAL_ISSUES)[number];
 
@@ -111,6 +122,8 @@ export const TEXT_MAX = 1_000_000;
 export const ARTIFACT_BYTES_MAX = 1_000_000;
 const TOKENS_MAX = 1_000_000;
 
+import { type ProcessOwner, parseProcessOwner } from "./process-owner.js";
+
 export interface Lease {
   readonly expires: number;
   readonly renewEvery: number;
@@ -120,14 +133,17 @@ export type Frame =
   // source -> lucid
   | {
       readonly kind: "attach";
+      readonly attachmentOrigin?: "explicit" | "automatic";
+      readonly capabilities?: readonly string[];
+      readonly explicitAttachmentId?: string;
       readonly conversationId: string;
       readonly profile: AttachProfile;
       readonly secret: string;
       readonly version: number;
       readonly resumeFrom?: number;
-      /** Which harness this source drives. REQUIRED for the two headless
-       * profiles; ignored for interactive, where lucid does not own the
-       * process and never resumes it (RFC-03 rule 1, R008). */
+      readonly owner?: ProcessOwner;
+      /** Required for headless sources. Named interactive sources also
+       * attribute identity, without granting ownership of their process. */
       readonly harness?: HarnessName;
     }
   | {
@@ -165,6 +181,7 @@ export type Frame =
   | { readonly kind: "event-ack"; readonly epoch: number; readonly n: number }
   | {
       readonly kind: "input";
+      readonly managed?: true;
       readonly seq: number;
       readonly id: string;
       readonly text: string;
@@ -288,8 +305,40 @@ export const isWireText = (v: string): boolean => v.length <= TEXT_MAX;
 export const isInputMode = (v: unknown): v is InputMode =>
   typeof v === "string" && (INPUT_MODES as readonly string[]).includes(v);
 
+const attachmentIntent = (record: Record<string, unknown>): AttachmentIntent => {
+  const capabilities = own(record, "capabilities");
+  if (
+    capabilities !== undefined &&
+    (!Array.isArray(capabilities) ||
+      capabilities.length > 16 ||
+      capabilities.some((v) => typeof v !== "string" || !/^[\x21-\x7e]{1,64}$/.test(v)) ||
+      new Set(capabilities).size !== capabilities.length)
+  )
+    refuse("wrong-type");
+  const origin = own(record, "attachmentOrigin");
+  const explicitId = own(record, "explicitAttachmentId");
+  if (origin !== undefined && origin !== "explicit" && origin !== "automatic") refuse("wrong-type");
+  if (
+    explicitId !== undefined &&
+    (typeof explicitId !== "string" || !isWireId(explicitId) || origin !== "explicit")
+  )
+    refuse("wrong-type");
+  if (
+    Array.isArray(capabilities) &&
+    capabilities.includes("managed-input-v1") &&
+    (origin === undefined || (origin === "explicit" && explicitId === undefined))
+  )
+    refuse("missing-field");
+  return {
+    ...(capabilities === undefined ? {} : { capabilities: [...(capabilities as string[])] }),
+    ...(origin === undefined ? {} : { attachmentOrigin: origin as "explicit" | "automatic" }),
+    ...(explicitId === undefined ? {} : { explicitAttachmentId: explicitId as string }),
+  };
+};
+
 const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
   attach: (r) => ({
+    ...attachmentIntent(r),
     kind: "attach",
     conversationId: str(r, "conversationId", ID_MAX),
     profile: enumOf(r, "profile", ["interactive", "headless-session", "headless-turn"] as const),
@@ -300,6 +349,9 @@ const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
     // profile. A MISSING one is a reducer concern (invalid-grant), because a
     // well-formed frame making an unsupportable request is a different fault.
     ...(own(r, "harness") !== undefined ? { harness: enumOf(r, "harness", HARNESS_NAMES) } : {}),
+    ...(own(r, "owner") === undefined
+      ? {}
+      : { owner: parseProcessOwner(own(r, "owner")) ?? refuse("wrong-type") }),
   }),
   event: (r) => ({
     kind: "event",
@@ -343,6 +395,9 @@ const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
   refused: (r) => ({ kind: "refused", issue: enumOf(r, "issue", PROTOCOL_ISSUES) }),
   "event-ack": (r) => ({ kind: "event-ack", epoch: withEpoch(r), n: nat(r, "n") }),
   input: (r) => {
+    const managed = own(r, "managed");
+    if (managed !== undefined && managed !== true) refuse("wrong-type");
+    if (managed === true && own(r, "mode") !== "queue") refuse("wrong-type");
     const mode = enumOf(r, "mode", INPUT_MODES);
     const rawTurnId = own(r, "turnId");
     // RFC-05 R2 + B3: an answer MUST carry a wire-valid turnId. A malformed
@@ -362,6 +417,7 @@ const DECODERS: Record<FrameKind, (r: Record<string, unknown>) => Frame> = {
     }
     const turnId = optStr(r, "turnId", ID_MAX);
     return {
+      ...(managed === true ? { managed: true } : {}),
       kind: "input",
       seq: nat(r, "seq"),
       id: str(r, "id", ID_MAX),

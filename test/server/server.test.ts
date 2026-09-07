@@ -185,6 +185,26 @@ describe("reading a conversation", () => {
 });
 
 describe("writing reaches the record with nothing driving", () => {
+  test("concurrent retries return one accepted receipt and conflicting text is refused", async () => {
+    const submit = (text: string) =>
+      api(`/api/conversations/${CONV}/input`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "browser-stable-request", text }),
+      });
+    const responses = await Promise.all([submit("one prompt"), submit("one prompt")]);
+    const receipts = await Promise.all(responses.map((response) => response.json()));
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(receipts[0]).toEqual(receipts[1]);
+    expect(receipts[0]).toMatchObject({ inputId: "browser-stable-request", verdict: "accepted" });
+    const conflict = await submit("different prompt");
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ error: "E-COMP-06", verdict: "refused" });
+    const view = await api(`/api/conversations/${CONV}`);
+    const data = (await view.json()) as { lines: Array<{ text?: string }> };
+    expect(data.lines.filter((line) => line.text === "one prompt")).toHaveLength(1);
+  });
+
   test("an append lands and waits, exactly as sending from a terminal does", async () => {
     const res = await api(`/api/conversations/${CONV}/input`, {
       method: "POST",

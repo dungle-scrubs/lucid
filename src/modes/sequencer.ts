@@ -43,6 +43,7 @@ import {
 type SendResult = ReduceResult | { readonly verdict: "refused"; readonly issue: string };
 
 export interface SequencerDeps {
+  readonly owner?: import("../protocol/process-owner.js").ProcessOwner;
   readonly harness: HarnessName;
   readonly conversationId: string;
   readonly secret: string;
@@ -97,6 +98,7 @@ export const createSequencer = (
     // refused: it is what attributes this writer's identity events, so a
     // later attach of the same harness can be told which session to resume.
     harness: deps.harness,
+    ...(deps.owner === undefined ? {} : { owner: deps.owner }),
     ...(resumeFrom === undefined ? {} : { resumeFrom }),
   });
   if (result.verdict !== "accepted" || !("record" in result))

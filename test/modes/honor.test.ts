@@ -5,7 +5,7 @@
  * hcn processes, the same shape as headless.test.ts) driving the honoring
  * driver: a preference changed in the record re-spawns the harness before
  * the next turn, no input is lost, the conversation continues, and a
- * refused re-spawn keeps the driver in force.
+ * refused re-spawn preserves the pending prompt and selected settings (RFC 15).
  *
  * The scripted events are hcn's vocabulary, not a harness's (the same
  * rule headless.test.ts states). The session-refusal fixture is a
@@ -378,8 +378,8 @@ describe("RFC-12: the driver honors a changed preference (session profile)", () 
   });
 });
 
-describe("RFC-12: a refused re-spawn keeps the current driver", () => {
-  test("a refused session spawn falls back, records both sides, and does not retry every turn", async () => {
+describe("RFC 15: a refused change preserves the selection and prompt", () => {
+  test("a refused session spawn stops without returning to the previous driver", async () => {
     const r = await openRig();
     const proc1 = r.procs[0] as FakeHcnProcess;
     sessionLine(proc1, SID);
@@ -400,42 +400,20 @@ describe("RFC-12: a refused re-spawn keeps the current driver", () => {
     for (const e of fixtureEvents("session-refusal-no-session-mode")) proc2.emit(e);
     proc2.exit(2);
 
-    // The fallback re-opens the driver in force: claude, resuming its own
-    // session, with the refusal note riding the source that continues.
-    const proc3 = r.procs[2] as FakeHcnProcess;
-    await until(() => r.spawner.calls.length >= 3, "the fallback spawn");
-    expect(r.argvOf(2)).toEqual([BIN, "session", "claude", "--json", "--resume", SID]);
-    sessionLine(proc3, SID);
-    await until(
-      () => proc3.commands.some((c) => c.op === "send" && c.id === "B"),
-      "B on the fallback",
-    );
-    accept(proc3, "B", "hcn-t2");
-    proc3.emit(assistant("the old driver answered"));
-    proc3.emit(doneClean);
     await settle();
-
-    expect(r.logText()).toContain("driver change refused:");
-    expect(r.logText()).toContain("continuing under claude");
-    expect(r.appliedCount("B")).toBe(1);
-
-    // No retry spam (RFC-12): the refused preference is not re-attempted
-    // on the next turn - the file has not changed again.
+    expect(r.driver.state().ended).toBe(true);
+    expect(r.spawner.calls).toHaveLength(2);
+    expect(r.appliedCount("B")).toBe(0);
+    expect(r.host.state().inputs.some((input) => input.id === "B")).toBe(true);
+    expect(r.pref()).toMatchObject({ harness: "pi", model: "bogus-model" });
+    expect(r.logText()).toContain("no persistent headless session mode");
     r.send("C");
-    await until(
-      () => proc3.commands.some((c) => c.op === "send" && c.id === "C"),
-      "C without a new spawn",
-    );
-    accept(proc3, "C", "hcn-t3");
-    proc3.emit(assistant("C answered"));
-    proc3.emit(doneClean);
     await settle();
-
-    expect(r.spawner.calls.length).toBe(3);
-    expect(r.appliedCount("C")).toBe(1);
+    expect(r.spawner.calls).toHaveLength(2);
+    expect(r.appliedCount("C")).toBe(0);
   });
 
-  test("a refused turn spawn is caught before the input is consumed, and the driver in force answers", async () => {
+  test("a refused turn spawn keeps the input pending and the requested model selected", async () => {
     const r = await openRig({ harness: "codex" });
     const proc1 = r.procs[0] as FakeHcnProcess;
 
@@ -478,24 +456,13 @@ describe("RFC-12: a refused re-spawn keeps the current driver", () => {
     });
     proc2.exit(2);
 
-    // The fallback runs the SAME input on the driver in force, which has
-    // no model flag to refuse.
-    const proc3 = r.procs[2] as FakeHcnProcess;
-    await until(() => r.spawner.calls.length >= 3, "the fallback spawn");
-    const fallbackArgv = r.argvOf(2);
-    expect(fallbackArgv.slice(0, 4)).toEqual([BIN, "run", "codex", "--json"]);
-    expect(fallbackArgv).not.toContain("totally-bogus");
-    proc3.emit(identity("codex-sess-1"));
-    proc3.emit(assistant("the old driver answered B"));
-    proc3.emit(doneClean);
-    proc3.exit(0);
     await settle();
-
-    expect(r.logText()).toContain("driver change refused:");
-    expect(r.logText()).toContain("continuing under codex");
-    // Exactly once: the refused spawn consumed nothing.
-    expect(r.appliedCount("B")).toBe(1);
-    expect(r.logText()).toContain("the old driver answered B");
+    expect(r.driver.state().ended).toBe(true);
+    expect(r.spawner.calls).toHaveLength(2);
+    expect(r.appliedCount("B")).toBe(0);
+    expect(r.host.state().inputs.some((input) => input.id === "B")).toBe(true);
+    expect(r.pref()).toMatchObject({ harness: "codex", model: "totally-bogus" });
+    expect(r.logText()).toContain("unknown-model");
   });
 });
 
@@ -671,9 +638,7 @@ test("credit arriving during a driver switch reaches the replacement", async () 
   driver.close();
 });
 
-test("credit arriving during a late refusal reaches the fallback", async () => {
-  let inspections = 0;
-  let resumeFallback!: (value: boolean) => void;
+test("credit arriving after a late refusal does not revive an ended driver", async () => {
   let endSource: Parameters<typeof createHeadlessHost>[0]["onEnded"];
   const delivered: Frame[][] = [];
   const driver = await openHonoringDriver({
@@ -685,12 +650,7 @@ test("credit arriving during a late refusal reaches the fallback", async () => {
       host: fakeArtifactHost(),
       sendFrame: () => ({ verdict: "refused", issue: "not-used" }),
     },
-    sessionCapable: async () =>
-      ++inspections < 3
-        ? true
-        : new Promise<boolean>((resolve) => {
-            resumeFallback = resolve;
-          }),
+    sessionCapable: async () => true,
     initialHarness: "claude",
     harnessPinned: false,
     readPreference: () => null,
@@ -708,10 +668,10 @@ test("credit arriving during a late refusal reaches the fallback", async () => {
     endSource?.({ kind: "open-refused", message: "synthetic late refusal" });
     const credit: Frame = { kind: "credit", epoch: 3, tokens: 23 };
     driver.receive(credit);
-    resumeFallback(true);
-    await until(() => delivered.length === 3, "fallback source");
+    await settle();
+    expect(driver.state().ended).toBe(true);
+    expect(delivered).toHaveLength(2);
     expect(delivered[1]).toEqual([]);
-    expect(delivered[2]).toEqual([credit]);
   } finally {
     driver.close();
   }

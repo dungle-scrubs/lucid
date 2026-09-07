@@ -12,7 +12,10 @@
  * the Stop hook.
  */
 
-import { guardHookEntry } from "../../modes/interactive-host.js";
+import { nativeOwner } from "../../harness/native-owner.js";
+import { guardHookEntry, parseAnnouncePayload } from "../../modes/interactive-host.js";
+import { EventKind } from "../../protocol/events.js";
+import { createTurnIds } from "../../protocol/turn-id.js";
 import { openWriter, StoreError } from "../../store/store.js";
 import { exitHook, readStdin } from "./delivery.js";
 
@@ -26,6 +29,10 @@ export const announce = async (stdin: string): Promise<AnnounceResult> => {
   const guard = guardHookEntry(stdin);
   if (!guard.proceed) return guard.result as AnnounceResult;
   const { dir: recordDir, conversationId, secret } = guard.record;
+  const input = parseAnnouncePayload(guard.payload);
+  if (input === null)
+    return { ok: false, code: "hook-resolution-failed", message: "Invalid SessionStart payload" };
+  const owner = await nativeOwner("claude");
 
   // Append attach (+ identity) via the store's lock-wrapped transaction.
   try {
@@ -36,9 +43,40 @@ export const announce = async (stdin: string): Promise<AnnounceResult> => {
       secret,
       profile: "interactive" as const,
       version: 1,
+      harness: "claude" as const,
+      ...(owner === undefined ? {} : { owner }),
     };
     const { encodeFrame } = await import("../../protocol/index.js");
-    host.handleFrame(encodeFrame(frame as unknown as Parameters<typeof encodeFrame>[0]));
+    try {
+      const attached = host.handleFrame(encodeFrame(frame));
+      if (attached.verdict === "refused")
+        return {
+          ok: false,
+          code: "hook-resolution-failed",
+          message: `attach refused: ${attached.issue}`,
+        };
+      const identity = host.handleFrame(
+        encodeFrame({
+          kind: "event",
+          epoch: attached.state.epoch,
+          n: 1,
+          turnId: createTurnIds()(),
+          event: {
+            kind: EventKind.identity,
+            sessionId: input.sessionId,
+            authority: "harness-minted",
+          },
+        }),
+      );
+      if (identity.verdict === "refused")
+        return {
+          ok: false,
+          code: "hook-resolution-failed",
+          message: `identity refused: ${identity.issue}`,
+        };
+    } finally {
+      host.close();
+    }
   } catch (e) {
     if (e instanceof StoreError) {
       // A store error during attach is a hook-resolution failure

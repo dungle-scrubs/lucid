@@ -37,6 +37,9 @@ import { completeLegacyPreference, type DriverChoice } from "./driver-preference
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { ownerPresence, terminalPresence } from "../process-owner.js";
+import { parseExecutionFact, reduceExecution } from "../protocol/execution.js";
+import { HubError } from "../protocol/hub-errors.js";
 import type { Effect } from "../protocol/index.js";
 import {
   type ChannelState,
@@ -52,6 +55,7 @@ import {
   reduce,
   type TransitionRecord,
 } from "../protocol/index.js";
+import { enqueueManagedInput } from "../protocol/reducer.js";
 import { pathsForDir, type RecordPaths, StoreError } from "./errors.js";
 import type { LockEvent } from "./flock.js";
 import type { ArtifactVersions } from "./log.js";
@@ -80,6 +84,9 @@ export type {
 } from "./log.js";
 
 export interface HostDeps {
+  readonly ownerPresence?: (
+    owner: import("../protocol/process-owner.js").ProcessOwner,
+  ) => boolean | undefined;
   readonly expectedConversationId?: string;
   readonly now: () => number;
   /** The normalizer's ps-level INTERACTIVE-process probe. Liveness
@@ -161,6 +168,16 @@ export const readRecordFiles = (
 };
 
 export interface ConversationHost {
+  writeExecution(fact: unknown): ReduceResult;
+  acceptInput(
+    input: { readonly id: string; readonly text: string; readonly mode: "queue" },
+    options?: { readonly completeSettings?: DriverChoice; readonly managed?: boolean },
+  ):
+    | {
+        readonly verdict: "accepted";
+        readonly receipt: { readonly inputId: string; readonly seq: number };
+      }
+    | { readonly verdict: "refused"; readonly issue: string };
   readonly conversationId: string;
   readonly dir: string;
   /** Atomic snapshot: one `log.state()` read → transcript + status. */
@@ -251,17 +268,8 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     epoch: log.state().epoch,
   });
 
-  const transact = (
-    entry: LogEntry | null,
-    produce: (s: ChannelState) => {
-      result: ReduceResult;
-      frame: import("../protocol/index.js").Frame | null;
-    },
-  ): ReduceResult => {
-    const result = log.append((s) => {
-      const { result: r, frame } = produce(s);
-      return { entry, result: r, frame };
-    });
+  const transactDynamic = (produce: Parameters<typeof log.append>[0]): ReduceResult => {
+    const result = log.append(produce);
     // RFC-04 R2: only the presence-lock holder acts on effects. A
     // non-holder's write still lands and the reduce still returns its
     // effects — the holder rediscovers them on its catch-up fold — but
@@ -272,6 +280,14 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     deps.onRecord((result as unknown as { record: HostRecord }).record);
     return result;
   };
+
+  const transact = (
+    entry: LogEntry | null,
+    produce: (s: ChannelState) => {
+      result: ReduceResult;
+      frame: import("../protocol/index.js").Frame | null;
+    },
+  ): ReduceResult => transactDynamic((s) => ({ entry, ...produce(s) }));
 
   const snapshot = (): HostSnapshot => {
     const s = log.state();
@@ -325,9 +341,9 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
     artifactTitles,
     writeArtifactMeta,
     writeAttachment,
-    state: (): ChannelState => snapshot().state,
+    state: (): ChannelState => log.state(),
     close: (): void => log.close(),
-    transcript: () => snapshot().transcript,
+    transcript: () => log.transcript(),
     status: (): ChannelStatus => snapshot().status,
     cursor,
     advanceCursor,
@@ -366,17 +382,45 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
         return { verdict: "refused", wire: true, issue: decoded.issue };
       }
       const presence = decoded.frame.kind === "attach" ? deps.presence() : undefined;
+      const claim = decoded.frame.kind === "attach" ? decoded.frame.owner : undefined;
+      const owner =
+        claim && (deps.ownerPresence ?? ownerPresence)(claim) === true ? claim : undefined;
       const durable =
         decoded.frame.kind === "attach" ? { ...decoded.frame, secret: REDACTED } : decoded.frame;
       const entry: LogEntry = {
         v: 1,
         at,
         src: "frame",
+        ...(decoded.frame.kind === "attach" && decoded.frame.profile !== "interactive"
+          ? { ownersDeparted: true }
+          : {}),
         frame: durable as unknown as Record<string, unknown>,
         ...(presence === undefined ? {} : { presence }),
+        ...(owner === undefined ? {} : { owner }),
       };
       return transact(entry, (s) => {
-        const r = reduce(s, decoded.frame, at, ctxOf(presence));
+        const r = reduce(s, decoded.frame, at, {
+          ...(decoded.frame.kind === "attach" && decoded.frame.profile !== "interactive"
+            ? { ownersDeparted: true }
+            : {}),
+          ...ctxOf(presence),
+          ...(owner === undefined ? {} : { owner }),
+        });
+        // Recheck under the append lock. A terminal can attach while a
+        // worker waits for its executor lease or validates a harness.
+        if (
+          r.verdict === "accepted" &&
+          decoded.frame.kind === "attach" &&
+          decoded.frame.profile !== "interactive" &&
+          terminalPresence(s.terminalParticipations, (owner) =>
+            owner === undefined ? deps.presence() : (deps.ownerPresence ?? ownerPresence)(owner),
+          ) !== false
+        )
+          throw new HubError(
+            "The terminal owner has not departed. Keep the input pending.",
+            "E-HUB-03",
+            409,
+          );
         return { result: r, frame: decoded.frame };
       });
     },
@@ -397,6 +441,77 @@ export const createConversationHost = (dir: string, deps: HostDeps): Conversatio
           completeLegacyPreference(dir, completeSettings);
         return { result: r, frame: null };
       });
+    },
+    acceptInput: (input, options = {}) => {
+      const at = deps.now();
+      let conflict = false;
+      let acceptedSeq = 0;
+      const result = transactDynamic((state) => {
+        // append refreshes the transcript under its lock before this lookup.
+        const previous = log.transcript().inputs.find((entry) => entry.id === input.id);
+        if (previous && previous.text === input.text && previous.mode === input.mode) {
+          acceptedSeq = previous.seq;
+          return {
+            entry: null,
+            frame: null,
+            result: {
+              verdict: "accepted",
+              state,
+              effects: [],
+              record: {
+                verdict: "accepted",
+                kind: "input",
+                conversationId,
+                epoch: state.epoch,
+                seq: previous.seq,
+                now: at,
+              },
+            },
+          };
+        }
+        conflict = previous !== undefined;
+        const result = options.managed
+          ? enqueueManagedInput(state, input, at)
+          : enqueueInput(state, input, at);
+        if (result.verdict === "accepted") {
+          acceptedSeq = result.state.seq;
+          if (options.completeSettings) completeLegacyPreference(dir, options.completeSettings);
+        }
+        return {
+          entry: options.managed
+            ? {
+                v: 1,
+                at,
+                src: "managed-input",
+                payloadVersion: 1,
+                input,
+                namingEligible: true,
+                intent: { kind: "requested", attempt: 0 },
+              }
+            : { v: 1, at, src: "input", input, namingEligible: true },
+          result,
+          frame: null,
+        };
+      });
+      return result.verdict === "accepted"
+        ? { verdict: "accepted", receipt: { inputId: input.id, seq: acceptedSeq } }
+        : { verdict: "refused", issue: conflict ? "E-COMP-06" : result.issue };
+    },
+    writeExecution: (raw: unknown): ReduceResult => {
+      const at = deps.now();
+      const result = transactDynamic((state) => {
+        const fact = parseExecutionFact(raw);
+        const reduced = reduceExecution(state, fact, at, deps.executorLease());
+        return {
+          result: reduced,
+          frame: null,
+          entry:
+            fact && reduced.verdict === "accepted" && reduced.state !== state
+              ? { v: 1, at, src: "execution", payloadVersion: 1, fact }
+              : null,
+        };
+      });
+      return result;
     },
     grantCredit: (tokens: number): ReduceResult => {
       const at = deps.now();

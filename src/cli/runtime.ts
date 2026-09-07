@@ -42,14 +42,19 @@ import { createHcnRunner } from "../harness/hcn-runner.js";
 import { nodeHarnessDeps } from "../harness/node-deps.js";
 import type { HarnessName, HarnessRunner } from "../harness/runner.js";
 import { decideAction } from "../modes/controller.js";
+import type { DriverSpawn, HeadlessProfile } from "../modes/honor.js";
 import { openHonoringDriver } from "../modes/honor.js";
 import { createHeadlessHost, hostSeamFor } from "../modes/host.js";
+import { ownerPresence, readProcessOwner, terminalPresence } from "../process-owner.js";
+import { HubError } from "../protocol/hub-errors.js";
 import type { ChannelStatus, Frame } from "../protocol/index.js";
 import { inputFrame } from "../protocol/index.js";
 import { channelStatus } from "../protocol/liveness.js";
 import { createTurnIds } from "../protocol/turn-id.js";
 import { requireDriverPreference } from "../store/driver-preference.js";
 import { acquirePresence, type PresenceEvent, type PresenceHandle } from "../store/presence.js";
+import { readRecordMetadata } from "../store/record-identity.js";
+import { locationProjection } from "../store/settings.js";
 import { type HostRecord, openConversation } from "../store/store.js";
 import { followRecord } from "../store/tailer.js";
 import { resolveStartupHarness, supportsSession } from "./harness.js";
@@ -57,6 +62,7 @@ import { type Conversations, conversations } from "./record-addressing.js";
 
 /** Production deps for the runtime. All fields are injectable for tests. */
 export interface RuntimeDeps {
+  readonly ownerPresence?: typeof ownerPresence;
   readonly rootDir?: string;
   readonly conversationId?: string;
   /** Harness to drive headlessly. Defaults to `claudeCode` (or `LUCID_HARNESS` env). */
@@ -186,6 +192,7 @@ export const openDrivenConversation = async (
   // this process holds nothing.
   let presenceHandle: PresenceHandle | undefined;
   const host = openConversationFn(dir, {
+    ownerPresence: opts.ownerPresence,
     now: nowFn,
     presence: () => presenceProbe(),
     executorLease: () => presenceHandle?.held() === true,
@@ -200,12 +207,29 @@ export const openDrivenConversation = async (
   // second adapter of the liveness seam (watch is the first), so the
   // seam becomes real: one adapter = hypothetical, two = real.
   const presenceVal = presenceProbe();
-  const status = channelStatusFn(host.state(), nowFn(), {
-    processAlive: presenceVal === true,
+  const previous = host.state();
+  const terminal = previous.lastTerminalParticipation;
+  const probeOwner = (owner: import("../protocol/process-owner.js").ProcessOwner | undefined) =>
+    owner === undefined ? presenceProbe() : (opts.ownerPresence ?? ownerPresence)(owner);
+  const ownerState = terminalPresence(previous.terminalParticipations, probeOwner);
+  const ownerAlive = terminal !== null && ownerState === true;
+  if (terminal !== null && ownerState === undefined) {
+    host.close();
+    throw new HubError(
+      "The previous terminal owner could not be verified. Keep the prompt pending until ownership is resolved.",
+      "E-HUB-03",
+      409,
+      ["Verify terminal ownership"],
+    );
+  }
+  const status = channelStatusFn(previous, nowFn(), {
+    processAlive: presenceVal === true || ownerAlive,
   });
   const action = decideActionFn(status);
-  if (action.action === "await-reattach") {
-    const resumeInstruction = `interactive session still attached for ${conversationId} — awaiting reattach (run will retry after the human yields or the lease expires)`;
+  if (ownerAlive || action.action === "await-reattach") {
+    const resumeInstruction = ownerAlive
+      ? `The terminal owner for ${conversationId} is still alive. Wait for it to exit or reconnect.`
+      : `The interactive source for ${conversationId} is unattached. Reconnect it before continuing.`;
     try {
       host.close();
     } catch {}
@@ -253,8 +277,52 @@ export const openDrivenConversation = async (
   const startup = resolveStartupHarness({ harness: opts.harness, harnessName: opts.harnessName });
   let preference: ReturnType<typeof requireDriverPreference>;
   let runner: HarnessRunner;
+  let cwd: string;
+  let modeNotice: string | undefined;
+  let modePreference: ReturnType<typeof requireDriverPreference> = null;
   try {
+    host.collectEffects(host.cursor());
+    const latest = host.state().terminalParticipations.at(-1);
+    if (latest?.profile === "interactive") {
+      const alive = terminalPresence(host.state().terminalParticipations, probeOwner);
+      if (alive !== false)
+        throw new HubError(
+          "Terminal ownership changed before launch. Wait for its process to exit or verify ownership.",
+          "E-HUB-03",
+          409,
+        );
+      if (latest.epoch !== terminal?.epoch)
+        throw new HubError(
+          "The terminal participation changed before launch. Reconcile the pending input again.",
+          "E-HUB-03",
+          409,
+        );
+    }
     preference = requireDriverPreference(dir);
+    if (terminal !== null && ownerState === false && preference?.profile === "interactive") {
+      if (
+        terminal.harness !== preference.harness ||
+        (host.state().nativeSessions[preference.harness]?.epoch ?? 0) < terminal.epoch
+      )
+        throw new HubError(
+          "The departed terminal has no verified native session to continue.",
+          "E-HUB-03",
+        );
+      modePreference = preference;
+      preference = { ...preference, profile: "headless-turn" };
+      if (host.state().lastParticipation?.epoch === terminal.epoch)
+        modeNotice =
+          "The terminal process has exited. Continuing its session in headless-turn mode.";
+    }
+    const location = locationProjection(readRecordMetadata(dir));
+    if (location.status !== "available" || location.workingDirectory === null)
+      throw new HubError(
+        "Choose an available working folder before continuing this conversation.",
+        "E-HUB-04",
+        400,
+        ["Choose a working folder"],
+      );
+    cwd = location.workingDirectory;
     runner = opts.runner ?? createHcnRunner(nodeHarnessDeps());
   } catch (cause) {
     try {
@@ -294,6 +362,9 @@ export const openDrivenConversation = async (
   };
 
   const baseDeps = {
+    owner: readProcessOwner(process.pid) ?? undefined,
+    ...(modeNotice === undefined ? {} : { notes: [modeNotice] }),
+    cwd,
     conversationId,
     secret,
     runner,
@@ -342,15 +413,53 @@ export const openDrivenConversation = async (
   let lookedAt = 0;
   let source: import("../modes/honor.js").HonoringSource;
   let profile: "headless-session" | "headless-turn";
+  const validateProcess = async (
+    spawn: DriverSpawn,
+    selectedProfile: HeadlessProfile,
+    resume: string | undefined,
+  ): Promise<void> => {
+    const state = host.state();
+    const native = state.nativeSessions[spawn.harness];
+    const latest = state.harnessSessions[spawn.harness];
+    if (resume === undefined && latest === undefined) return;
+    if (!native?.current || native.sessionId !== latest || native.sessionId !== resume)
+      throw new HubError(
+        "The requested native session identity is unverified or changed. Keep this input pending.",
+        "E-HUB-03",
+      );
+    const facts = await runner.inspect(spawn.harness, {
+      model: spawn.model,
+      effort: spawn.effort,
+      ...(spawn.provider === undefined ? {} : { provider: spawn.provider }),
+      runtime: { cwd, profile: selectedProfile, resume },
+    });
+    if (facts.runtime?.resume.status !== "supported")
+      throw new HubError(
+        facts.runtime?.resume.reason ??
+          "Native resume compatibility is unknown for the selected executable.",
+        "E-HUB-03",
+      );
+  };
   try {
     source = await openHonoringDriver({
       base: baseDeps,
       sessionCapable: (h) => supportsSession(runner, h),
       initialHarness: harness,
       harnessPinned: startup.pinned,
-      readPreference: () => requireDriverPreference(dir),
+      readPreference: () => {
+        const saved = requireDriverPreference(dir);
+        return modePreference !== null &&
+          saved?.harness === modePreference.harness &&
+          saved?.profile === "interactive"
+          ? { ...saved, profile: "headless-turn" }
+          : saved;
+      },
       mintSessionId: uuidFn,
       createHostFn: createHeadlessHostFn,
+      validateProcess,
+      validateSpawn: async (spawn, selectedProfile) => {
+        await validateProcess(spawn, selectedProfile, host.state().harnessSessions[spawn.harness]);
+      },
       onSpawn: () => {
         handed.clear();
         lookedAt = host.cursor();
@@ -425,6 +534,9 @@ export const openDrivenConversation = async (
       return;
     }
     for (const queued of inputs) {
+      // Managed work is selected from execution authorization, never from
+      // the legacy delivery cursor or its armed-input recovery path.
+      if (queued.managed) continue;
       if (queued.status !== "outstanding" || queued.redeliver !== true) continue;
       if (handed.has(queued.id)) continue;
       if (presenceHandle?.held() !== true) return;

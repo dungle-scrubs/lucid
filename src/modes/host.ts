@@ -171,6 +171,10 @@ export const hostSeamFor = (host: ConversationHost): ArtifactHost => ({
 });
 
 export interface HeadlessDeps {
+  /** Validate the exact identity immediately before each external process. */
+  readonly beforeProcess?: (resume: string | undefined) => Promise<void>;
+  readonly owner?: import("../protocol/process-owner.js").ProcessOwner;
+  readonly cwd?: string;
   readonly harness: HarnessName;
   readonly conversationId: string;
   readonly secret: string;
@@ -193,10 +197,7 @@ export interface HeadlessDeps {
   /** RFC-12 honor: fired once when this source stops answering on its own,
    * with the reason (see SourceEnd). */
   readonly onEnded?: (end: SourceEnd) => void;
-  /** RFC-12 honor: non-terminal error notes to emit once this source is
-   * attached. The refused-driver-change wording rides the source that
-   * continues after a refused re-spawn, so the person reads why the line
-   * and the preference disagree. */
+  /** Notices recorded after attach and before replay starts a turn. */
   readonly notes?: readonly string[];
   /** RFC-12 honor: this source was opened as a driver change, so its first
    * turn probes for an invocation refusal before the input is consumed
@@ -478,16 +479,26 @@ const sessionStrategy = (
   // surface stays synchronous: everything that needs the session awaits this
   // one handle rather than the caller learning about the wait.
   // hcn session carries --model, --provider and (since 0.6.0) --effort.
-  const opening = deps.runner.openSession({
-    harness: deps.harness,
-    sessionId: deps.sessionId,
-    // Continue the session this harness last held in this record, if lucid
-    // found one. The id comes from attach-ok and nowhere else.
-    ...(ctx.resumeSessionId === undefined ? {} : { resume: ctx.resumeSessionId }),
-    ...(deps.model === undefined ? {} : { model: deps.model }),
-    ...(deps.provider === undefined ? {} : { provider: deps.provider }),
-    ...(deps.effort === undefined ? {} : { effort: deps.effort }),
-  });
+  const cancellation = new AbortController();
+  const open = () =>
+    deps.runner.openSession({
+      signal: cancellation.signal,
+      ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
+      harness: deps.harness,
+      sessionId: deps.sessionId,
+      // Continue the session this harness last held in this record, if lucid
+      // found one. The id comes from attach-ok and nowhere else.
+      ...(ctx.resumeSessionId === undefined ? {} : { resume: ctx.resumeSessionId }),
+      ...(deps.model === undefined ? {} : { model: deps.model }),
+      ...(deps.provider === undefined ? {} : { provider: deps.provider }),
+      ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+    });
+  const opening = deps.beforeProcess
+    ? deps.beforeProcess(ctx.resumeSessionId).then(() => {
+        if (cancellation.signal.aborted) throw new Error("Source closed before process start");
+        return open();
+      })
+    : open();
   // A failure to open must not become an unhandled rejection. It must also
   // not be silent: a session hcn refuses (a harness with no session mode, an
   // unknown model, a provider it cannot express) ends the source exactly like
@@ -648,6 +659,7 @@ const sessionStrategy = (
         try {
           session = await opening;
         } catch (cause) {
+          if (closed) return;
           const message = cause instanceof Error ? cause.message : String(cause);
           // Record why before the pump detaches. This is the only place that
           // knows, and the log is the only thing the operator will have.
@@ -725,6 +737,7 @@ const sessionStrategy = (
       // and the next attach replays it.
       closed = true;
       waiting.length = 0;
+      cancellation.abort();
       void opening.then((session) => session.close()).catch(() => {});
     },
   };
@@ -743,9 +756,8 @@ const turnStrategy = (
   // Seeded from the record, not just from this source's own first turn.
   // Holding it only in memory is why a restart used to start from nothing.
   let resumeId: string | undefined = deps.resume ?? ctx.resumeSessionId;
-  // A resume hint is tried at most once. A second attempt would re-refuse.
-  let resumeTried = false;
   let activeTurn: AsyncIterator<HarnessEvent> | null = null;
+  let activeAbort: AbortController | null = null;
   let resolveWaiting: (() => void) | null = null;
   // RFC-12: whether the next spawn is this source's first, so the refusal
   // probe (see below) runs once, on the turn that proves the new spawn.
@@ -757,19 +769,21 @@ const turnStrategy = (
     w?.();
   };
 
-  /** Replay what was read while deciding, then the rest of the stream. The
-   * probe and the resume-retry both read ahead of the pump; this hands the
-   * pump a single stream that preserves everything. */
+  /** Return the first payload read by the refusal probe, then stream the rest. */
   const composite = (
     head: readonly HarnessEvent[],
     tail: AsyncIterator<HarnessEvent>,
   ): AsyncIterable<HarnessEvent> => ({
     async *[Symbol.asyncIterator]() {
-      for (const e of head) yield e;
-      let step = await tail.next();
-      while (!step.done) {
-        yield step.value;
-        step = await tail.next();
+      try {
+        for (const e of head) yield e;
+        let step = await tail.next();
+        while (!step.done) {
+          yield step.value;
+          step = await tail.next();
+        }
+      } finally {
+        await tail.return?.();
       }
     },
   });
@@ -813,16 +827,10 @@ const turnStrategy = (
             // shift it. We therefore do NOT disposition here — Host will.
             // Instead we just create the turn iterable and capture
             // resumeId on identity events via a wrapper.
-            // RFC-03 R002: a resume id read out of the record is a HINT. The
-            // harness may no longer have that session - hcn refuses an
-            // unknown id before spawn, which is a refusal, not an outage.
-            // Try it once, and if it is refused run the same input fresh
-            // rather than losing the turn to a stale id.
-            const attemptResume = resumeId !== undefined && !resumeTried;
-            if (attemptResume) resumeTried = true;
-            // Read once, not per prompt. The resume retry below composes the
-            // same turn again, and draining the debt twice would send the
-            // second attempt without the document the first one owed.
+            // Every later turn uses the latest emitted identity. A refusal
+            // preserves the input for explicit recovery, never a fresh retry.
+            const attemptResume = resumeId !== undefined;
+            // Read the artifact state once for this input.
             const state = artifactState(deps, ctx);
             const composedPrompt = composeAvailableState(
               composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
@@ -830,7 +838,13 @@ const turnStrategy = (
             );
             if (ctx.isStopped())
               return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
+            activeAbort = new AbortController();
+            await deps.beforeProcess?.(resumeId);
+            if (closed || ctx.isStopped())
+              return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
             let raw = deps.runner.streamTurn({
+              signal: activeAbort.signal,
+              ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
               harness: deps.harness,
               prompt: composedPrompt,
               turnId,
@@ -839,82 +853,46 @@ const turnStrategy = (
               ...(deps.effort === undefined ? {} : { effort: deps.effort }),
               ...(attemptResume && resumeId !== undefined ? { resume: resumeId } : {}),
             });
-            // RFC-12: a source opened as a driver change probes its first
-            // turn for an invocation refusal before the input is consumed.
-            // hcn answers a refused invocation (exit 2: an unknown model, a
-            // provider the harness cannot express) with a failure as the
-            // run's FIRST stdout event, class `rejected`; a harness that
-            // rejects its own arguments answers class `native`, and a
-            // provider that cannot serve the requested model answers
-            // `unavailable` (verified against the pinned binary). All three
-            // reached no verdict on the work, so the input may safely run
-            // on the driver in force instead. Anything else first means the
-            // invocation started and the turn is real. One known overlap: a
-            // stale resume id on pi/muse also refuses pre-spawn with class
-            // `rejected`, so it reads here as a refused change rather than
-            // going through the fresh-retry below - the driver in force
-            // continues either way, and hcn's message names the real cause.
-            if (deps.probeFirstTurn === true && spawns === 0) {
+            if (attemptResume || (deps.probeFirstTurn === true && spawns === 0)) {
               spawns += 1;
               const probe = raw[Symbol.asyncIterator]();
-              const step = await probe.next();
-              let refused: string | null = null;
-              if (!step.done) {
-                const e = step.value as { kind?: string; class?: string; message?: string };
-                if (
-                  e.kind === "failure" &&
-                  (e.class === "rejected" || e.class === "native" || e.class === "unavailable")
-                ) {
-                  refused = String(e.message ?? "the new driver's invocation was refused");
-                }
+              activeTurn = probe;
+              let step = await probe.next();
+              // An identity announces the native process; it does not prove
+              // the prompt ran. Record headers without buffering an answer.
+              while (!step.done && step.value.kind === EventKind.identity) {
+                const id = step.value.sessionId;
+                if (typeof id === "string" && id !== "") resumeId = id;
+                ctx.sequencer.emit(turnId, step.value);
+                step = await probe.next();
               }
-              if (refused !== null) {
-                // End the probe's child: its iterator was abandoned unread.
-                void probe.return?.(undefined).catch(() => {});
-                ctx.openRefused(refused);
+              const failure =
+                !step.done && step.value.kind === EventKind.failure ? step.value : undefined;
+              const failedEnd =
+                !step.done && step.value.kind === EventKind.done && step.value.cause !== "clean";
+              if (step.done || failure || failedEnd) {
                 closed = true;
+                if (!step.done) ctx.sequencer.emit(turnId, step.value);
+                const detail =
+                  typeof failure?.message === "string"
+                    ? failure.message
+                    : "No successful turn outcome was received";
+                const message = `${detail}. The prompt and selected settings are preserved.`;
+                ctx.sequencer.emit(turnId, {
+                  kind: EventKind.error,
+                  code: "E-HUB-05",
+                  message,
+                  terminal: true,
+                });
+                ctx.reported();
+                ctx.openRefused(message);
+                activeAbort.abort();
+                void probe.return?.(undefined).catch(() => {});
+                activeTurn = null;
                 wake();
                 return { done: true, value: undefined as unknown as AsyncIterable<HarnessEvent> };
               }
-              raw = composite(step.done ? [] : [step.value], probe);
-            }
-            if (attemptResume) {
-              const buffered: HarnessEvent[] = [];
-              let refusedResume = false;
-              for await (const e of raw) {
-                buffered.push(e);
-                if (e.kind === "failure" && (e as { class?: string }).class === "rejected") {
-                  refusedResume = true;
-                }
-              }
-              if (refusedResume) {
-                // The stale id is not this conversation's problem any more.
-                const staleId = resumeId;
-                resumeId = undefined;
-                ctx.sequencer.emit(turnId, {
-                  kind: "error",
-                  message: `could not resume harness session ${staleId}; continuing fresh`,
-                });
-                const retryPrompt = composeAvailableState(
-                  composeArtifactPrompt(composeAnnotationPrompt(next.text), "headless-turn"),
-                  state,
-                );
-                raw = deps.runner.streamTurn({
-                  harness: deps.harness,
-                  prompt: retryPrompt,
-                  turnId,
-                  ...(deps.model === undefined ? {} : { model: deps.model }),
-                  ...(deps.provider === undefined ? {} : { provider: deps.provider }),
-                  ...(deps.effort === undefined ? {} : { effort: deps.effort }),
-                });
-              } else {
-                // It worked: replay what was read while deciding.
-                raw = {
-                  async *[Symbol.asyncIterator]() {
-                    for (const e of buffered) yield e;
-                  },
-                };
-              }
+              raw = composite([step.value], probe);
             }
             // Capture that this queued input's turn has started: if Host
             // hasn't yet disposed it, we need the waiter to be signaled.
@@ -974,6 +952,7 @@ const turnStrategy = (
     close(): void {
       closed = true;
       wake();
+      activeAbort?.abort();
       void activeTurn?.return?.(undefined).catch(() => {});
     },
   };
@@ -1093,12 +1072,7 @@ export const createHeadlessHost = (
     openRefused: (message: string) => setSourceEnd({ kind: "open-refused", message }),
   };
 
-  // RFC-12: the notes ride a source opened to continue after a refused
-  // driver change - the wording the person reads in the transcript. One
-  // non-terminal error each, through the same sequencer path every error
-  // takes, under a turn id this source owns. Emitted after the attach (the
-  // sequencer exists) and before the attach replay is dispatched, so the
-  // note lands ahead of the turn that continues the conversation.
+  // Record the mode notice before replay can produce an answer.
   for (const note of deps.notes ?? []) {
     ctx.sequencer.emit(ctx.getTurnId(), {
       kind: EventKind.error,

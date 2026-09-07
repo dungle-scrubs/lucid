@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { conversations } from "../../src/cli/record-addressing.js";
@@ -8,10 +8,12 @@ import { createHcnRunner } from "../../src/harness/hcn-runner.js";
 import type { HarnessRunner } from "../../src/harness/runner.js";
 import { HCN_MIN_VERSION } from "../../src/harness/version.js";
 import type { createHeadlessHost } from "../../src/modes/host.js";
+import { readProcessOwner } from "../../src/process-owner.js";
 import type { Frame } from "../../src/protocol/index.js";
 import { createConversationHost, openWriter } from "../../src/store/conversation-host.js";
 import { StoreError } from "../../src/store/errors.js";
 import type { acquirePresence, PresenceHandle } from "../../src/store/presence.js";
+import { createConversationRecord } from "../../src/store/store.js";
 import { FakeHcnProcess, fakeSpawner } from "../harness/fakes.js";
 import { attach, event } from "../protocol/helpers.js";
 
@@ -25,7 +27,15 @@ const fakeRunner: HarnessRunner = {
   streamTurn: () => {
     throw new Error("not used by this test");
   },
-  inspect: async () => ({ name: "claude", session: true, verifiedAgainst: "fake" }),
+  inspect: async () => ({
+    name: "claude",
+    session: true,
+    verifiedAgainst: "fake",
+    runtime: {
+      executable: { path: "/fake/claude", version: "fake" },
+      resume: { status: "supported", reason: null },
+    },
+  }),
   capabilities: async () => ({
     vision: false,
     images: false,
@@ -53,6 +63,463 @@ const fakePresence = (): { handle: PresenceHandle; acquire: typeof acquirePresen
   };
   return { handle, acquire };
 };
+
+test("legacy runtime does not drain managed inputs armed during lease expiry", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-runtime-managed-fence-"));
+  const { dir } = conversations(root).ensure("managed-fence");
+  const writer = openWriter(dir);
+  writer.acceptInput(
+    { id: "managed", text: "do not dispatch to old source", mode: "queue" },
+    { managed: true },
+  );
+  writer.close();
+  const seen: Frame[] = [];
+  const running = await openDrivenConversation({
+    rootDir: root,
+    conversationId: "managed-fence",
+    runner: fakeRunner,
+    acquirePresenceFn: fakePresence().acquire,
+    presence: () => false,
+    pollMs: 1,
+    createHeadlessHostFn: () => ({
+      receive: (frame) => {
+        seen.push(frame);
+      },
+      close: () => {},
+    }),
+  });
+  if (running.kind !== "running") throw new Error("expected runtime");
+  try {
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(seen.filter((frame) => frame.kind === "input")).toHaveLength(0);
+  } finally {
+    running.abort();
+    await running.done;
+  }
+});
+
+test.each([false, true])(
+  "a detached living owner prevents takeover, with identity: %s",
+  async (identity) => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-runtime-owner-"));
+    const { dir, secret } = conversations(root).ensure("living-owner");
+    const owner = readProcessOwner(process.pid);
+    if (!owner) throw new Error("test process identity unavailable");
+    const writer = openWriter(dir, { now: () => 1 });
+    writer.handleFrame(
+      JSON.stringify({
+        kind: "attach",
+        conversationId: "living-owner",
+        secret,
+        version: 1,
+        profile: "interactive",
+        harness: "claude",
+        owner,
+      }),
+    );
+    if (identity)
+      writer.handleFrame(
+        JSON.stringify({
+          kind: "event",
+          epoch: 1,
+          n: 1,
+          turnId: "interactive-owner",
+          event: { kind: "identity", sessionId: "native-live", authority: "harness-minted" },
+        }),
+      );
+    writer.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "yield" }));
+    writer.close();
+    const result = await openDrivenConversation({
+      rootDir: root,
+      conversationId: "living-owner",
+      runner: fakeRunner,
+      acquirePresenceFn: () => {
+        throw new Error("must not acquire while the terminal owner lives");
+      },
+    });
+    expect(result.kind).toBe("await-reattach");
+  },
+);
+
+test("a departed terminal continues its native session in the saved folder with a mode notice", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-runtime-departed-"));
+  const folder = join(root, "nested");
+  mkdirSync(folder);
+  const { dir, secret } = conversations(root).ensure("departed", {
+    workingDirectory: folder,
+    preference: {
+      v: 1,
+      harness: "claude",
+      model: "concrete-opus",
+      effort: "high",
+      profile: "interactive",
+      revision: 1,
+    },
+  });
+  const terminal = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  try {
+    const owner = readProcessOwner(terminal.pid);
+    if (!owner) throw new Error("terminal process identity unavailable");
+    const writer = openWriter(dir, { now: () => 1 });
+    expect(
+      writer.handleFrame(
+        JSON.stringify({
+          kind: "attach",
+          conversationId: "departed",
+          secret,
+          version: 1,
+          profile: "interactive",
+          harness: "claude",
+          owner,
+        }),
+      ).verdict,
+    ).toBe("accepted");
+    writer.handleFrame(
+      JSON.stringify({
+        kind: "event",
+        epoch: 1,
+        n: 1,
+        turnId: "terminal-id",
+        event: { kind: "identity", sessionId: "native-terminal", authority: "harness-minted" },
+      }),
+    );
+    writer.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "yield" }));
+    writer.enqueueInput({ id: "continue", text: "continue the work", mode: "queue" });
+    writer.close();
+    terminal.kill();
+    await terminal.exited;
+    const proc = new FakeHcnProcess();
+    const spawner = fakeSpawner([proc]);
+    const runner = {
+      ...createHcnRunner({ spawn: spawner.spawn, bin: "/fake/hcn" }),
+      inspect: fakeRunner.inspect,
+    };
+    const running = await openDrivenConversation({
+      rootDir: root,
+      conversationId: "departed",
+      runner,
+      acquirePresenceFn: fakePresence().acquire,
+    });
+    if (running.kind !== "running") throw new Error("expected continuation");
+    try {
+      await Bun.sleep(0);
+      expect(running.profile).toBe("headless-turn");
+      expect(spawner.calls[0]?.argv).toContain("native-terminal");
+      expect(spawner.calls[0]?.opts.cwd).toBe(realpathSync(folder));
+      const log = readFileSync(join(dir, "log.ndjson"), "utf8");
+      expect(log).toContain("terminal process has exited");
+      expect(log).toContain("headless-turn");
+      expect(running.host.state().lastParticipation?.owner?.pid).toBe(process.pid);
+      expect(JSON.parse(readFileSync(join(dir, "driver.json"), "utf8"))).toMatchObject({
+        profile: "interactive",
+        revision: 1,
+      });
+      proc.emit({ kind: "identity", sessionId: "native-terminal", authority: "harness-minted" });
+      proc.emit({ kind: "done", cause: "clean", exitCode: 0 });
+      proc.exit(0);
+      await Bun.sleep(0);
+    } finally {
+      running.abort();
+      proc.exit(0);
+    }
+    const next = new FakeHcnProcess();
+    const nextSpawner = fakeSpawner([next]);
+    const writerAgain = openWriter(dir);
+    writerAgain.enqueueInput({ id: "again", text: "continue again", mode: "queue" });
+    writerAgain.close();
+    const restarted = await openDrivenConversation({
+      rootDir: root,
+      conversationId: "departed",
+      runner: {
+        ...createHcnRunner({ spawn: nextSpawner.spawn, bin: "/fake/hcn" }),
+        inspect: fakeRunner.inspect,
+      },
+      acquirePresenceFn: fakePresence().acquire,
+    });
+    if (restarted.kind !== "running") throw new Error("expected continuation after restart");
+    try {
+      await Bun.sleep(0);
+      expect(nextSpawner.calls[0]?.argv).toContain("native-terminal");
+      expect(
+        readFileSync(join(dir, "log.ndjson"), "utf8").match(/terminal process has exited/g),
+      ).toHaveLength(1);
+    } finally {
+      restarted.abort();
+      next.exit(0);
+    }
+  } finally {
+    terminal.kill();
+    await terminal.exited;
+  }
+});
+
+test("a terminal attaching during executor acquisition prevents the pending headless launch", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-runtime-owner-race-"));
+  const { dir, secret } = conversations(root).ensure("race");
+  const presence = fakePresence();
+  const owner = readProcessOwner(process.pid);
+  if (!owner) throw new Error("test owner unavailable");
+  const proc = new FakeHcnProcess();
+  const spawner = fakeSpawner([proc]);
+  const runner = {
+    ...createHcnRunner({ spawn: spawner.spawn, bin: "/fake/hcn" }),
+    inspect: fakeRunner.inspect,
+  };
+  try {
+    await expect(
+      openDrivenConversation({
+        rootDir: root,
+        conversationId: "race",
+        runner,
+        acquirePresenceFn: (...args) => {
+          const handle = presence.acquire(...args);
+          const writer = openWriter(dir, { now: () => 1 });
+          writer.handleFrame(
+            JSON.stringify({
+              kind: "attach",
+              conversationId: "race",
+              secret,
+              version: 1,
+              profile: "interactive",
+              harness: "claude",
+              owner,
+            }),
+          );
+          writer.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "yield" }));
+          writer.close();
+          return handle;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "E-HUB-03" });
+    expect(spawner.calls).toHaveLength(0);
+    expect(presence.handle.held()).toBe(false);
+  } finally {
+    proc.exit(0);
+  }
+});
+
+test.each(["headless-turn", "interactive"] as const)(
+  "unknown compatibility preserves the prompt and %s selection",
+  async (profile) => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-runtime-unknown-adapter-"));
+    const { dir, secret } = conversations(root).ensure("unknown", {
+      workingDirectory: root,
+      preference: {
+        v: 1,
+        harness: "claude",
+        model: "concrete-opus",
+        effort: "high",
+        profile,
+        revision: 1,
+      },
+    });
+    const writer = openWriter(dir, { now: () => 1 });
+    writer.handleFrame(
+      JSON.stringify({
+        kind: "attach",
+        conversationId: "unknown",
+        secret,
+        version: 1,
+        profile,
+        harness: "claude",
+      }),
+    );
+    writer.handleFrame(
+      JSON.stringify({
+        kind: "event",
+        epoch: 1,
+        n: 1,
+        turnId: "prior",
+        event: { kind: "identity", sessionId: "native-prior", authority: "harness-minted" },
+      }),
+    );
+    writer.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "yield" }));
+    writer.enqueueInput({ id: "held", text: "continue", mode: "queue" });
+    writer.close();
+    const proc = new FakeHcnProcess();
+    const spawner = fakeSpawner([proc]);
+    const runner = {
+      ...createHcnRunner({ spawn: spawner.spawn, bin: "/fake/hcn" }),
+      inspect: async () => ({
+        name: "claude",
+        session: true,
+        verifiedAgainst: "old",
+        runtime: {
+          executable: { path: "/selected/claude", version: "new" },
+          resume: { status: "unknown" as const, reason: "Version not verified" },
+        },
+      }),
+    };
+    const presence = fakePresence();
+    let result: Awaited<ReturnType<typeof openDrivenConversation>> | undefined;
+    try {
+      await expect(
+        openDrivenConversation({
+          rootDir: root,
+          conversationId: "unknown",
+          runner,
+          presence: () => false,
+          acquirePresenceFn: presence.acquire,
+        }).then((running) => {
+          result = running;
+          return running;
+        }),
+      ).rejects.toMatchObject({ code: "E-HUB-03" });
+      expect(spawner.calls).toHaveLength(0);
+      expect(presence.handle.held()).toBe(false);
+      expect(JSON.parse(readFileSync(join(dir, "driver.json"), "utf8")).profile).toBe(profile);
+      const reopened = openWriter(dir);
+      try {
+        expect(reopened.state().inputs).toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: "held", text: "continue" })]),
+        );
+        expect(reopened.state().epoch).toBe(1);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      if (result?.kind === "running") result.abort();
+      proc.exit(0);
+    }
+  },
+);
+
+test("a legacy conversation with no saved folder refuses launch and keeps its prompt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-runtime-no-cwd-"));
+  const { paths } = createConversationRecord(root, "legacy");
+  const writer = openWriter(paths.dir);
+  writer.enqueueInput({ id: "pending", text: "continue here", mode: "queue" });
+  writer.close();
+  const presence = fakePresence();
+  const source = makeFakeSource();
+  await expect(
+    openDrivenConversation({
+      rootDir: root,
+      conversationId: "legacy",
+      runner: fakeRunner,
+      acquirePresenceFn: presence.acquire,
+      createHeadlessHostFn: source.factory,
+    }),
+  ).rejects.toMatchObject({ code: "E-HUB-04" });
+  expect(presence.handle.held()).toBe(false);
+  const reopened = openWriter(paths.dir);
+  try {
+    expect(reopened.state().inputs).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "pending", text: "continue here" })]),
+    );
+    expect(reopened.state().epoch).toBe(0);
+  } finally {
+    reopened.close();
+  }
+});
+
+test.each(["verified", "different"])(
+  "an unverified later identity %s cannot authorize native resume",
+  async (latestId) => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-unverified-latest-"));
+    const { dir, secret } = conversations(root).ensure("unknown-id", {
+      workingDirectory: root,
+      preference: { v: 1, revision: 1, harness: "claude", profile: "headless-turn" },
+    });
+    const writer = openWriter(dir, { now: () => 1 });
+    try {
+      writer.handleFrame(
+        JSON.stringify({
+          kind: "attach",
+          conversationId: "unknown-id",
+          secret,
+          version: 1,
+          profile: "headless-turn",
+          harness: "claude",
+        }),
+      );
+      for (const [index, identity] of [
+        { sessionId: "verified", authority: "harness-minted" },
+        { sessionId: latestId, authority: "future-authority" },
+      ].entries())
+        writer.handleFrame(
+          JSON.stringify({
+            kind: "event",
+            epoch: 1,
+            n: index + 1,
+            turnId: "prior",
+            event: { kind: "identity", ...identity },
+          }),
+        );
+      writer.handleFrame(JSON.stringify({ kind: "detach", epoch: 1, reason: "yield" }));
+      writer.enqueueInput({ id: "pending", mode: "queue", text: "continue" });
+    } finally {
+      writer.close();
+    }
+    let running: Awaited<ReturnType<typeof openDrivenConversation>> | undefined;
+    try {
+      await expect(
+        openDrivenConversation({
+          rootDir: root,
+          conversationId: "unknown-id",
+          runner: fakeRunner,
+          acquirePresenceFn: fakePresence().acquire,
+        }).then((result) => {
+          running = result;
+          return result;
+        }),
+      ).rejects.toMatchObject({ code: "E-HUB-03" });
+    } finally {
+      if (running?.kind === "running") running.abort();
+    }
+  },
+);
+
+test("both headless profiles launch in the saved working folder rather than the caller folder", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lucid-runtime-cwd-"));
+  const folder = join(root, "project", "nested");
+  mkdirSync(folder, { recursive: true });
+  for (const profile of ["headless-turn", "headless-session"] as const) {
+    conversations(root).ensure(profile, {
+      workingDirectory: folder,
+      preference: {
+        v: 1,
+        harness: "claude",
+        model: "concrete-opus",
+        effort: "high",
+        profile,
+        revision: 1,
+      },
+    });
+    const proc = new FakeHcnProcess();
+    const spawner = fakeSpawner([proc]);
+    const runner = {
+      ...createHcnRunner({ spawn: spawner.spawn, bin: "/fake/hcn" }),
+      inspect: fakeRunner.inspect,
+    };
+    const running = await openDrivenConversation({
+      rootDir: root,
+      conversationId: profile,
+      runner,
+      acquirePresenceFn: fakePresence().acquire,
+    });
+    if (running.kind !== "running") throw new Error("expected a running conversation");
+    try {
+      if (profile === "headless-session")
+        proc.emit({
+          kind: "session",
+          sessionId: "native-cwd",
+          harness: "claude",
+          hcn: HCN_MIN_VERSION,
+        });
+      running.host.enqueueInput({ id: "cwd-input", text: "work here", mode: "queue" });
+      await Bun.sleep(0);
+      expect(spawner.calls).toHaveLength(1);
+      expect(spawner.calls[0]?.opts.cwd).toBe(realpathSync(folder));
+    } finally {
+      proc.exit(0);
+      running.abort();
+    }
+  }
+});
 
 /** Replaces the headless host: captures the `sendFrame` the runtime binds
  * to its real conversation host, and records every frame the host

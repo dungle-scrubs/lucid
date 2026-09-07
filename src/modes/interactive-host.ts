@@ -1,6 +1,7 @@
 /** Hook input delivery and the vocabulary for selecting an interactive rung. */
 
 import { resolveVerifiedRecord, type VerifiedRecord } from "../cli/record-addressing.js";
+import { isWireId } from "../protocol/frames.js";
 import { LockError } from "../store/flock.js";
 import { openWriter, viewConversation } from "../store/store.js";
 
@@ -110,7 +111,11 @@ export interface HookDeliverResult {
 export const readQueuedInputs = (recordDir: string): readonly { id: string; text: string }[] => {
   const view = viewConversation(recordDir);
   return view.transcript.inputs
-    .filter((inp) => inp.status === "outstanding" || inp.status === "queued")
+    .filter(
+      (inp) =>
+        !Object.hasOwn(view.state.executions, inp.id) &&
+        (inp.status === "outstanding" || inp.status === "queued"),
+    )
     .map((inp) => ({ id: inp.id, text: inp.text }));
 };
 
@@ -206,21 +211,23 @@ export interface AnnounceAttach {
 }
 
 export const parseAnnounce = (line: string): AnnounceAttach | null => {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(line);
+    return parseAnnouncePayload(JSON.parse(line));
   } catch {
     return null;
   }
+};
+
+export const parseAnnouncePayload = (parsed: unknown): AnnounceAttach | null => {
   const row =
     parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null;
   if (
     row === null ||
-    row.hook !== "SessionStart" ||
+    (row.hook_event_name ?? row.hook) !== "SessionStart" ||
     typeof row.session_id !== "string" ||
-    row.session_id === "" ||
+    !isWireId(row.session_id) ||
     typeof row.transcript_path !== "string" ||
     row.transcript_path === ""
   )

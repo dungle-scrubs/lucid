@@ -31,6 +31,7 @@ import {
   truncateSync,
   writeSync,
 } from "node:fs";
+import { reduceExecution } from "../protocol/execution.js";
 import { ARTIFACT_BYTES_MAX } from "../protocol/frames.js";
 import type { ChannelState, InputMode, ProtocolIssue } from "../protocol/index.js";
 import {
@@ -43,6 +44,7 @@ import {
   type ReduceResult,
   reduce,
 } from "../protocol/index.js";
+import { enqueueManagedInput } from "../protocol/reducer.js";
 import { putBlob } from "./blobs.js";
 import { type RecordPaths, StoreError } from "./errors.js";
 import type { LockEvent } from "./flock.js";
@@ -59,9 +61,27 @@ export type LogEntry =
   | {
       readonly v: 1;
       readonly at: number;
+      readonly src: "execution";
+      readonly payloadVersion: 1;
+      readonly fact: import("../protocol/execution.js").ExecutionFact;
+    }
+  | {
+      readonly v: 1;
+      readonly at: number;
+      readonly src: "managed-input";
+      readonly namingEligible: true;
+      readonly payloadVersion: 1;
+      readonly input: { readonly id: string; readonly text: string; readonly mode: "queue" };
+      readonly intent: { readonly kind: "requested"; readonly attempt: 0 };
+    }
+  | {
+      readonly v: 1;
+      readonly at: number;
       readonly src: "frame";
+      readonly ownersDeparted?: true;
       readonly frame: Record<string, unknown>;
       readonly presence?: boolean;
+      readonly owner?: import("../protocol/process-owner.js").ProcessOwner;
     }
   | {
       readonly v: 1;
@@ -145,8 +165,10 @@ export type LogEntry =
     };
 
 const ENTRY_SOURCES = [
+  "execution",
   "frame",
   "input",
+  "managed-input",
   "credit",
   "artifact",
   "artifact-meta",
@@ -517,22 +539,38 @@ const applyArtifactMeta = (raw: unknown, titles: Map<string, string>): void => {
 
 const applyEntry = (
   state: ChannelState,
-  entry: Extract<LogEntry, { src: "frame" | "input" | "credit" }>,
+  entry: Extract<LogEntry, { src: "frame" | "input" | "managed-input" | "execution" | "credit" }>,
   secret: string,
 ): { result: ReduceResult; frame: import("../protocol/index.js").Frame | null } => {
   switch (entry.src) {
+    case "execution":
+      if (entry.payloadVersion !== 1)
+        throw new StoreError("corrupt-log", "Unsupported execution payload");
+      return { result: reduceExecution(state, entry.fact, entry.at, true), frame: null };
     case "frame": {
       const raw = entry.frame.kind === "attach" ? { ...entry.frame, secret } : entry.frame;
       const decoded = decodeFrame(raw);
       if (decoded.verdict !== "ok")
         throw new StoreError("corrupt-log", `logged frame no longer decodes: ${decoded.issue}`);
       return {
-        result: reduce(state, decoded.frame, entry.at, ctxOf(entry.presence)),
+        result: reduce(state, decoded.frame, entry.at, {
+          ...ctxOf(entry.presence),
+          ...(entry.ownersDeparted === true ? { ownersDeparted: true } : {}),
+          ...(entry.owner === undefined ? {} : { owner: entry.owner }),
+        }),
         frame: decoded.frame,
       };
     }
     case "input":
       return { result: enqueueInput(state, entry.input, entry.at), frame: null };
+    case "managed-input":
+      if (
+        entry.payloadVersion !== 1 ||
+        entry.intent?.kind !== "requested" ||
+        entry.intent.attempt !== 0
+      )
+        throw new StoreError("corrupt-log", "Unsupported managed input payload");
+      return { result: enqueueManagedInput(state, entry.input, entry.at), frame: null };
     case "credit":
       return { result: grantCredit(state, entry.tokens, entry.at), frame: null };
   }
@@ -554,7 +592,7 @@ const collectTranscript = (
         event: frameOrNull.event,
       }),
     );
-  if (entry.src === "input" && result.record.seq !== undefined)
+  if ((entry.src === "input" || entry.src === "managed-input") && result.record.seq !== undefined)
     acc.inputs.push({
       seq: result.record.seq,
       id: entry.input.id,
@@ -695,7 +733,7 @@ const walk = (
             // not (RFC-05 B4), so it is carried - state advances to the
             // refusal's (unchanged) state, its bytes count as read - and
             // the refusal is reported, not thrown.
-            if (parsed.src !== "input")
+            if (parsed.src !== "input" && parsed.src !== "managed-input")
               throw new StoreError(
                 "fold-refused",
                 `log entry at byte ${offset} refused on fold (${result.issue})`,
@@ -704,7 +742,7 @@ const walk = (
             state = result.state;
           } else {
             if (
-              parsed.src === "input" &&
+              (parsed.src === "input" || parsed.src === "managed-input") &&
               "namingEligible" in parsed &&
               parsed.namingEligible === true
             )
@@ -1135,7 +1173,7 @@ export const createLog = (
         onWritten: () => {
           curState = result.state;
           collectTranscript(acc, entry, frame, result);
-          if (entry.src === "input" && entry.namingEligible) {
+          if ((entry.src === "input" || entry.src === "managed-input") && entry.namingEligible) {
             try {
               initializeNaming(paths.dir, acc.inputs);
             } catch {

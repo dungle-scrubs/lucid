@@ -19,11 +19,8 @@
  * it. Inputs that arrive while the switch itself is running are safe the
  * same way: the record holds them until a source answers.
  *
- * A failed re-spawn keeps the current driver (RFC-12): the input in hand
- * runs on the spawn that was driving, the refusal is recorded as one
- * non-terminal error event worded to name both sides, and the refused
- * preference is remembered so it is not retried on every turn - only after
- * the file changes again.
+ * A failed re-spawn stops this driver. The selected preference and pending
+ * input remain unchanged for explicit recovery (RFC 15).
  *
  * What it is NOT: it never drives an interactive session (that path never
  * builds a headless source; for it the driver line stays a report), and it
@@ -51,6 +48,12 @@ export interface DriverSpawn {
 export type HeadlessProfile = "headless-session" | "headless-turn";
 
 export interface HonorDeps {
+  readonly validateProcess?: (
+    spawn: DriverSpawn,
+    profile: HeadlessProfile,
+    resume: string | undefined,
+  ) => Promise<void>;
+  readonly validateSpawn?: (spawn: DriverSpawn, profile: HeadlessProfile) => Promise<void>;
   /** The deps every spawn shares (conversation, secret, runner, sendFrame,
    * host seams, turn-id minter). The choice-dependent fields - harness,
    * model, provider, effort, and the honor hooks - are added per spawn. */
@@ -74,7 +77,7 @@ export interface HonorDeps {
    * injects, so a switch opens through the exact code path a restart uses. */
   readonly createHostFn: typeof createHeadlessHost;
   /** RFC-12: called once after every source open lands - the initial
-   * spawn, a switch, and a fallback. The new source's attach advanced the
+   * spawn and a switch. The new source's attach advanced the
    * durable cursor past its own attach batch: effects the owner's tailer
    * must not re-collect, because the replay inside them already reached
    * the source directly. */
@@ -116,18 +119,6 @@ const sameSpawn = (a: DriverSpawn, b: DriverSpawn): boolean =>
   a.provider === b.provider &&
   a.effort === b.effort;
 
-const samePreference = (a: DriverPreference, b: DriverPreference): boolean =>
-  a.harness === b.harness &&
-  a.profile === b.profile &&
-  a.model === b.model &&
-  a.provider === b.provider &&
-  a.effort === b.effort;
-
-/** `claude`, or `claude/claude-opus-5` when a model is set - the driver
- * in force, named the way the RFC's refusal wording names it. */
-const labelOf = (spawn: DriverSpawn): string =>
-  spawn.model === undefined ? spawn.harness : `${spawn.harness}/${spawn.model}`;
-
 /**
  * Open the honoring driver: the first source under the folded startup
  * preference, then the boundary rule on top. Resolved when the first
@@ -158,18 +149,6 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
   };
   let pendingSwitch = false;
   let ended = false;
-  /** The switch in flight's context: the driver it is leaving (what a
-   * failed re-spawn falls back to) and the preference it attempted (what
-   * the no-retry rule remembers when that attempt refuses). Null when no
-   * switch has opened a replacement yet. */
-  let switchCtx: {
-    readonly from: DriverSpawn;
-    readonly attempted: DriverPreference | null;
-  } | null = null;
-  /** RFC-12 no-retry: the preference whose re-spawn was refused. It is not
-   * re-attempted until the file changes again; the person fixes it with
-   * another choice, not with lucid quietly hammering the same one. */
-  let refused: DriverPreference | null = null;
   let source: SourceChannel;
   let deliver: (frame: Frame) => void;
 
@@ -177,7 +156,6 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     if (switching || ended) return false;
     const pref = deps.readPreference();
     if (pref === null) return false;
-    if (refused !== null && samePreference(pref, refused)) return false;
     const desired = spawnOf(pref, current.harness, deps.harnessPinned);
     // Both headless profiles express effort since hcn 0.6.0 grew
     // `hcn session --effort`, so every dimension compares on both.
@@ -202,15 +180,23 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       );
     const nextProfile: HeadlessProfile =
       spawn.profile ?? (session ? "headless-session" : "headless-turn");
+    if (deps.validateSpawn) await deps.validateSpawn(spawn, nextProfile);
+    const validateProcess = deps.validateProcess;
     const host: HeadlessDeps = {
       ...deps.base,
+      ...(validateProcess === undefined
+        ? {}
+        : {
+            beforeProcess: (resume: string | undefined) =>
+              validateProcess(spawn, nextProfile, resume),
+          }),
       harness: spawn.harness,
       ...(spawn.model === undefined ? {} : { model: spawn.model }),
       ...(spawn.provider === undefined ? {} : { provider: spawn.provider }),
       ...(spawn.effort === undefined ? {} : { effort: spawn.effort }),
       driverChangeAtBoundary: wantsChange,
       onEnded: (end: SourceEnd) => handleEnded(gen, end),
-      ...(opts.notes === undefined ? {} : { notes: opts.notes }),
+      notes: opts.notes ?? (opts.switched ? [] : deps.base.notes),
       ...(opts.switched ? { probeFirstTurn: true } : {}),
     };
     const opened: SourceChannel =
@@ -220,51 +206,6 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     return { source: opened, profile: nextProfile };
   };
 
-  /** Re-open under the driver in force, carrying the refusal wording. The
-   * note is the design's rule made real: a consequence with no visual gets
-   * words, and the line keeps rendering the driver in force while the
-   * menus keep showing the preference - the note says why they differ.
-   * `attempted` is the preference the failed spawn ran under: the no-retry
-   * memory is the choice that refused, never whatever the file happens to
-   * hold now - a person fixing the choice mid-fallback must not have the
-   * fix silently suppressed. */
-  const fallbackTo = async (
-    spawn: DriverSpawn,
-    message: string,
-    attempted: DriverPreference | null,
-  ): Promise<void> => {
-    if (attempted !== null) refused = attempted;
-    const wasSwitching = switching;
-    switching = true;
-    try {
-      const opened = await openUnder(spawn, {
-        switched: false,
-        notes: [`driver change refused: ${message}; continuing under ${labelOf(spawn)}`],
-      });
-      try {
-        source.close();
-      } catch {}
-      source = opened.source;
-      profile = opened.profile;
-      deliver = opened.source.receive;
-      // The driver in force is driving again. If even this spawn refuses
-      // to open, there is nothing older to fall back to: the conversation
-      // is undrivable from here, which handleEnded answers with ended.
-      switchCtx = null;
-      deps.onSpawn?.();
-    } catch {
-      // The driver in force cannot re-open either (attach refused): the
-      // conversation is undrivable from here, which is the existing
-      // semantics for a source that cannot attach. The record already
-      // carries the failed spawns' own error events.
-      ended = true;
-      deps.base.onEnded?.({ kind: "closed" });
-    } finally {
-      switching = wasSwitching;
-      if (!switching || ended) flushCredits();
-    }
-  };
-
   const switchTo = async (): Promise<void> => {
     if (switching || ended) {
       if (switching) pendingSwitch = true;
@@ -272,7 +213,6 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     }
     switching = true;
     const pref = deps.readPreference();
-    switchCtx = { from: current, attempted: pref };
     const desired = pref === null ? current : spawnOf(pref, current.harness, deps.harnessPinned);
     try {
       const opened = await openUnder(desired, { switched: true });
@@ -286,20 +226,18 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
       profile = opened.profile;
       source = opened.source;
       deliver = opened.source.receive;
-      refused = null;
       deps.onSpawn?.();
-      // switchCtx deliberately survives here: the successor's open can
-      // still refuse LATE (the session handshake, the turn probe), and the
-      // fallback then needs what this switch replaced. It is replaced by
-      // the next switch, or cleared when a fallback lands.
     } catch (cause) {
-      // openSource itself threw (attach refused, spawn failed before any
-      // stream): keep the current driver's arguments and continue on them.
-      const from = switchCtx?.from ?? current;
-      const attempted = switchCtx?.attempted ?? null;
-      switchCtx = null;
-      current = from;
-      await fallbackTo(from, cause instanceof Error ? cause.message : String(cause), attempted);
+      current = desired;
+      ended = true;
+      pendingCredits.length = 0;
+      try {
+        source.close();
+      } catch {}
+      deps.base.onEnded?.({
+        kind: "open-refused",
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
     } finally {
       switching = false;
       flushCredits();
@@ -324,21 +262,6 @@ export const openHonoringDriver = async (deps: HonorDeps): Promise<HonoringSourc
     }
     if (end.kind === "driver-change") {
       void switchTo();
-      return;
-    }
-    if (end.kind === "open-refused") {
-      if (switchCtx === null) {
-        // The startup spawn or the fallback itself: there is no older
-        // driver in force to keep, and its own error event is already in
-        // the record - the existing semantics for an open that refuses.
-        ended = true;
-        deps.base.onEnded?.(end);
-        return;
-      }
-      const ctx = switchCtx;
-      switchCtx = null;
-      current = ctx.from;
-      void fallbackTo(ctx.from, end.message, ctx.attempted);
       return;
     }
     // A plain end: the harness stream closed. Nothing re-opens - that is

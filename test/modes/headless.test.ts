@@ -32,6 +32,7 @@ const rig = (
   opts: {
     mode?: "session" | "turn";
     processes?: number;
+    beforeProcess?: (resume: string | undefined) => Promise<void>;
     /** An input already in the record before any source attaches - the
      * `lucid send` while nothing was running, folded by the next `run`. */
     pendingInput?: { id: string; text: string };
@@ -65,6 +66,7 @@ const rig = (
   let turnCount = 0;
   const mode = opts.mode ?? "session";
   const common = {
+    beforeProcess: opts.beforeProcess,
     harness: "claude" as const,
     conversationId: "conv-1",
     secret,
@@ -141,6 +143,88 @@ const rig = (
 };
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+test("each turn validates its exact resume ID before another process starts", async () => {
+  const checked: Array<string | undefined> = [];
+  const r = rig({
+    mode: "turn",
+    processes: 2,
+    beforeProcess: async (resume) => {
+      checked.push(resume);
+      if (resume !== undefined) throw new Error("Selected executable no longer supports resume");
+    },
+  });
+  try {
+    r.host.enqueueInput({ id: "first", text: "start", mode: "queue" });
+    await flush();
+    r.procs[0]?.emit(identity);
+    r.procs[0]?.emit(doneClean);
+    r.procs[0]?.exit(0);
+    await flush();
+    r.host.enqueueInput({ id: "second", text: "continue", mode: "queue" });
+    await flush();
+    expect(checked).toEqual([undefined, sid]);
+    expect(r.spawner.calls).toHaveLength(1);
+    expect(r.host.state().inputs.find((input) => input.id === "second")?.status).toBe("queued");
+    expect(
+      r
+        .logEntries()
+        .some((entry) => String(entry.frame?.event?.message).includes("no longer supports resume")),
+    ).toBe(true);
+  } finally {
+    r.source.close();
+    r.host.close();
+    for (const proc of r.procs) proc.exit(0);
+  }
+});
+
+test("a resumed turn records its answer while the native process is still running", async () => {
+  const r = rig({ mode: "turn", processes: 2 });
+  try {
+    r.host.enqueueInput({ id: "first", text: "start", mode: "queue" });
+    await flush();
+    r.procs[0]?.emit(identity);
+    r.procs[0]?.emit(doneClean);
+    r.procs[0]?.exit(0);
+    await flush();
+    r.host.enqueueInput({ id: "second", text: "continue", mode: "queue" });
+    await flush();
+    r.procs[1]?.emit(identity);
+    r.procs[1]?.emit(assistant("visible before process exit"));
+    await flush();
+    expect(
+      r.logEntries().some((entry) => entry.frame?.event?.text === "visible before process exit"),
+    ).toBe(true);
+  } finally {
+    for (const proc of r.procs) proc.exit(0);
+    r.source.close();
+    r.host.close();
+  }
+});
+
+test("every later headless turn resumes the native identity emitted by the preceding turn", async () => {
+  const r = rig({ mode: "turn", processes: 3 });
+  try {
+    for (let index = 0; index < 3; index++) {
+      r.host.enqueueInput({ id: `resume-${index}`, text: `prompt ${index}`, mode: "queue" });
+      await flush();
+      const argv = r.spawner.calls[index]?.argv ?? [];
+      if (index === 0) expect(argv).not.toContain("--resume");
+      else expect(argv).toEqual(expect.arrayContaining(["--resume", `native-${index - 1}`]));
+      const proc = r.procs[index];
+      proc?.emit({ kind: "identity", sessionId: `native-${index}`, authority: "harness-minted" });
+      proc?.emit(assistant(`answer ${index}`));
+      proc?.emit(doneClean);
+      proc?.exit(0);
+      await flush();
+    }
+    expect(r.reopen().state().harnessSessions.claude).toBe("native-2");
+  } finally {
+    r.source.close();
+    r.host.close();
+    for (const proc of r.procs) proc.exit(0);
+  }
+});
 
 describe("headless modes (M5.2)", () => {
   test("session mode: attach handshake, one turn mapped event-for-event into the durable log with turnId correlation", async () => {
@@ -530,11 +614,11 @@ describe("a session hcn refuses is recorded, not silent", () => {
   });
 });
 
-describe("RFC-03 R002: a stale resume hint does not cost the turn", () => {
-  test("a refused resume is retried fresh, and the reason is recorded", async () => {
+describe("RFC 15: failed recall preserves the submitted prompt", () => {
+  test("a refused resume stays pending without a fresh attempt, and the reason is recorded", async () => {
     const root = mkdtempSync(join(tmpdir(), "lucid-modes-"));
     const { secret } = createConversationRecord(root, "conv-1");
-    // Two processes: the first refuses the resume, the second runs fresh.
+    // The unused second process detects an unauthorized fresh attempt.
     const refuser = new FakeHcnProcess();
     const fresh = new FakeHcnProcess();
     const spawner = fakeSpawner([refuser, fresh]);
@@ -576,22 +660,13 @@ describe("RFC-03 R002: a stale resume hint does not cost the turn", () => {
     await flush();
     await flush();
 
-    // The same input runs again, without the stale id.
-    expect(spawner.calls).toHaveLength(2);
+    expect(spawner.calls).toHaveLength(1);
     expect(spawner.calls[0]?.argv).toContain("--resume");
-    expect(spawner.calls[1]?.argv).not.toContain("--resume");
-    expect(spawner.calls[1]?.argv.join(" ")).toContain("go");
-
-    fresh.emit(identity);
-    fresh.emit(assistant("answered fresh"));
-    fresh.emit(doneClean);
-    fresh.exit(0);
-    await flush();
-    await flush();
-
-    // The turn is not lost, and the record says why the resume did not hold.
-    const kinds = r0LogKinds(root);
-    expect(kinds).toContain("message");
+    expect(host.state().inputs).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "in-1", text: "go" })]),
+    );
+    expect(host.state().appliedInputs["in-1"]).toBeUndefined();
+    expect(r0LogKinds(root)).not.toContain("message");
     const errors = readFileSync(join(root, "conv-1", "log.ndjson"), "utf8")
       .trim()
       .split("\n")

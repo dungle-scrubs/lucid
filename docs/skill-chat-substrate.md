@@ -22,7 +22,7 @@ human inputs through serialized append transactions. See
 
 ## Attaching
 
-Send `attach { conversationId, profile, secret, version, harness?, resumeFrom? }`:
+Send `attach { conversationId, profile, secret, version, harness?, owner?, resumeFrom?, capabilities?, attachmentOrigin?, explicitAttachmentId? }`:
 
 - `secret` - read it from the conversation record's `secret` file (mode
   0600). Possession of read access IS your authorization. A wrong secret
@@ -33,11 +33,15 @@ Send `attach { conversationId, profile, secret, version, harness?, resumeFrom? }
   turn).
 - `harness` - which harness you drive: `claude`, `codex`, `pi`, or `muse`.
   A headless profile MUST send it; omitting it is refused `invalid-grant`.
-  An interactive attach SHOULD NOT send one and is not refused for it -
-  lucid ignores the field there, because an interactive session is not a
-  harness lucid can reopen, and storing the id would put a session in the
-  record that no source may resume. A name outside the four fails at the
+  A named interactive source SHOULD send its harness so emitted native
+  identity can be attributed. This grants no ownership of its process.
+  An unnamed source remains unattributed. A name outside the four fails at the
   codec as `wrong-type`, so a typo never reaches the reducer.
+- `owner` - optional process identity `{ pid, startedAt, executable }`.
+  The host corroborates the claim against the local process table before
+  recording it as owner evidence. Replay uses that recorded corroboration;
+  it does not check whether the historical process still lives. The latest
+  participation and owner survive detach, including before the first identity.
 - `resumeFrom` - the last lucid `seq` you durably applied. lucid replies
   `attach-ok { epoch, lease, replayFrom, version, resumeSessionId? }`.
   `replayFrom` echoes
@@ -57,17 +61,17 @@ session for **your** harness. Open your harness against that session
 instead of a fresh one, and the conversation keeps its own memory across
 your process dying.
 
-Two things make it safe to use and safe to ignore:
+Two rules govern its use:
 
 - It is scoped to the harness you named on attach. A record whose newest
   session belongs to a different harness is ordinary - cross-harness
   handoff is supported - so the absence of the field means "none of
   yours", not "none at all". Never resume a session id you did not get
   back for your own harness.
-- **It is a hint, not a promise.** The session may be gone, or the harness
-  may refuse it. Try it once; if the harness rejects it, run the same
-  input fresh and record why. A stale hint costs the harness's context,
-  never the turn.
+- **It is a hint, not a promise.** Resume on every supported later turn.
+  The session may be gone or the harness may refuse it. A refusal MUST keep
+  the input pending and record the cause. Never retry fresh automatically
+  or fall back to the prior model. Fresh recovery needs explicit authorization.
 
 A headless source may not steal a conversation that a live human process
 holds - whether it is interactively attached OR never attached (a fresh
@@ -161,21 +165,35 @@ kind arriving AT lucid is refused `wrong-direction`):
 - `attach-ok { epoch, lease: { expires, renewEvery }, replayFrom, version, resumeSessionId? }`
 - `refused { issue }` - a named refusal (below), never a half-applied frame
 - `event-ack { epoch, n }` - your event `n` is durable; trim your replay buffer to it
-- `input { seq, id, text, mode, turnId? }` - human input to deliver
+- `input { seq, id, text, mode, turnId?, managed? }` - human input to deliver
 - `control { seq, action: pause | end | switch-path }` - a conversation control
 - `lease { epoch, expires }` - a lease renewal grant
 - `credit { epoch, tokens }` - flow credits for the droppable class only
 
 ## Capabilities - declare the source, never guess
 
-Capabilities are carried on the **`identity` event** you emit at the start
-of a session (not an attach field): `{ sessionId, authority,
+Model capabilities are carried on the **`identity` event** you emit at the start
+of a session: `{ sessionId, authority,
 capabilities: { …, source, confidence } }`. Query the active harness and
 pass them through **with their source**: `runtime-verified` (the registry
 confirmed the model), `curated` (a descriptor default), or `unknown`
 (degrade - no streaming/vision claims, `confidence: none`). Declaring a
 capability through the skill is not verification; the `source` field is
 how a reader knows which it is.
+
+Source protocol support is a separate attach declaration: `capabilities`
+contains at most 16 distinct ASCII names, each at most 64 characters.
+`managed-input-v1` declares support for durable execution holds, attempts,
+coverage, and explicit recovery. Absence means unsupported. Built-in
+drivers do not yet declare this capability; managed acceptance remains off.
+
+A declaring source supplies `attachmentOrigin: explicit | automatic`.
+An explicit attachment also supplies a stable `explicitAttachmentId` and
+reuses it on reconnect. Automatic restarts never create explicit attachment
+intent. These fields grant no executor authority. Unknown names grant none.
+A managed input carries `managed: true` and must not reach a harness before
+the executor records its authorized attempt. Its initial applied disposition
+requires the current attempt's epoch and harness to match the source.
 
 ## The interactive ladder (truthfully)
 
@@ -193,6 +211,14 @@ available and otherwise observe; do not advertise cooperative delivery as
 shipped capability.
 
 ## Refusals are the signal
+
+Internal execution writes also report typed issues: `invalid-execution`
+for a malformed fact, `executor-required` without the executor lease,
+`execution-stale` for an outdated attempt or conflicting action identity,
+`execution-blocked` while another attempt is unresolved, and
+`execution-ineligible` when the requested transition cannot apply. Re-read
+the current attempt before selecting a recovery action. These facts are
+internal record entries, not source event frames.
 
 Every refusal names its `issue` from a closed set and **never
 half-applies** the frame. The right response depends on the class - "fix

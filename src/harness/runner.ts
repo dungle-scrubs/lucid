@@ -35,8 +35,13 @@ export interface CapabilityResult {
   readonly confidence: "high" | "medium" | "none";
 }
 
-/** The descriptor facts lucid reads. Everything else stays inside hcn. */
+/** Descriptor facts, plus optional uncached results for this inspection request. */
 export interface HarnessFacts {
+  readonly runtime?: {
+    readonly executable: { readonly path: string | null; readonly version: string | null };
+    readonly resume: { readonly status: "supported" | "unknown"; readonly reason: string | null };
+  };
+  readonly binary?: string;
   readonly name: string;
   /** Whether the harness declares a persistent session mode. Decides which
    * headless profile `lucid run` uses - a runtime-verified capability, not a
@@ -115,6 +120,7 @@ export interface SessionHandle {
 }
 
 export interface OpenSessionOptions {
+  readonly signal?: AbortSignal;
   readonly harness: HarnessName;
   /** The id this session will be KNOWN BY. Names a session; does not
    * continue one. */
@@ -135,6 +141,7 @@ export interface OpenSessionOptions {
 }
 
 export interface StreamTurnOptions {
+  readonly signal?: AbortSignal;
   readonly isolation?: "tool-free";
   readonly harness: HarnessName;
   readonly prompt: string;
@@ -161,10 +168,15 @@ export interface HarnessRunner {
   inspect(
     harness: HarnessName,
     choice?: {
-      readonly model: string;
-      readonly effort: string;
+      readonly model?: string;
+      readonly effort?: string;
       readonly provider?: string;
       readonly isolation?: "tool-free";
+      readonly runtime?: {
+        readonly cwd: string;
+        readonly profile: "headless-turn" | "headless-session";
+        readonly resume?: string;
+      };
     },
   ): Promise<HarnessFacts>;
   /** `hcn inspect <h> --capabilities`. No spawn. */

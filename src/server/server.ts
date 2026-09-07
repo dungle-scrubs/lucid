@@ -45,7 +45,7 @@ import { conversations } from "../cli/record-addressing.js";
 import { detectAnnotationBatch } from "../protocol/annotations.js";
 import { isTextBytes, sniffImageType, withinAttachmentBound } from "../protocol/attachment.js";
 import { EventKind } from "../protocol/events.js";
-import { TEXT_MAX } from "../protocol/frames.js";
+import { isWireId, TEXT_MAX } from "../protocol/frames.js";
 import { getBlob } from "../store/blobs.js";
 import {
   type ConversationHost,
@@ -895,6 +895,12 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
             return json({ error: "invalid-json" }, 400);
           }
           const value = (body as { text?: unknown }).text;
+          const requestedId = (body as { id?: unknown }).id;
+          if (
+            requestedId !== undefined &&
+            (typeof requestedId !== "string" || !isWireId(requestedId))
+          )
+            return json({ error: "invalid-input-id", verdict: "refused" }, 400);
           if (typeof value !== "string" || value.trim() === "") {
             return json({ error: "text-required" }, 400);
           }
@@ -909,19 +915,24 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
               ? (await settings.project(dir)).conversationSettings.selected
               : null;
           return withWriter(dir, id, (host) => {
-            const inputId = `browser-${randomUUID()}`;
-            const result = host.enqueueInput(
+            const inputId =
+              typeof requestedId === "string" ? requestedId : `browser-${randomUUID()}`;
+            const result = host.acceptInput(
               { id: inputId, text: value, mode: "queue" },
-              completed ?? undefined,
+              { completeSettings: completed ?? undefined },
             );
             if (result.verdict === "refused") {
               return json(
                 { error: result.issue, verdict: "refused" },
-                result.issue === "input-queue-full" ? 429 : 400,
+                result.issue === "E-COMP-06"
+                  ? 409
+                  : result.issue === "input-queue-full"
+                    ? 429
+                    : 400,
               );
             }
             wakeNaming();
-            return json({ inputId, verdict: "accepted" });
+            return json({ ...result.receipt, verdict: "accepted" });
           });
         }
 
