@@ -56,7 +56,7 @@ const refusalMessage = (
 };
 
 /** Append `text` as a transient `input` to `conversationId`'s log.
- * Creates the record if it does not exist (first send mints it).
+ * Refuses an unknown identity; record creation is explicit.
  * Returns the enqueued input id so a test can assert at-least-once.
  * Throws `SendRefused` when the reducer refuses the input - the record
  * is unchanged either way (a refused transition never writes), so the
@@ -70,10 +70,10 @@ const refusalMessage = (
 export const sendInput = (conversationId: string, opts: SendOpts): { inputId: string } => {
   const convsFactory = opts.conversationsFactory ?? conversations;
   const convs = convsFactory(opts.rootDir);
-  const { dir: recordDir } = convs.ensure(conversationId);
+  const recordDir = convs.dirFor(conversationId);
 
   const createHost = opts.createHostFn ?? openWriter;
-  const host = createHost(recordDir, { now: opts.now });
+  const host = createHost(recordDir, { now: opts.now, expectedConversationId: conversationId });
 
   const inputId = opts.makeId?.() ?? `send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const result = host.enqueueInput({ id: inputId, text: opts.text, mode: "queue" });

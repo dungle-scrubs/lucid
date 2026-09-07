@@ -166,11 +166,7 @@ export const openDrivenConversation = async (
 
   const convs = convsFactory(opts.rootDir);
   const conversationId = opts.conversationId ?? `conv-${Date.now()}-${suffixFn()}`;
-  const dir = convs.dirFor(conversationId);
-
-  // Ensure the record exists (conversations.ensure handles create-vs-open
-  // and the fallback read — no duplication here).
-  const { secret } = convs.ensure(conversationId);
+  const { dir, secret } = convs.ensure(conversationId);
 
   let receive: ((frame: Frame) => void) | undefined;
   // The append callback and follower see the same input. Deliver it once

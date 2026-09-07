@@ -37,6 +37,7 @@ import {
 import { HARNESS_NAMES, type HarnessName } from "../protocol/frames.js";
 import { pathsForDir, StoreError } from "./errors.js";
 import { validArtifactId } from "./log.js";
+import { readRecordIdentity, withRecordLock } from "./record-identity.js";
 
 /** How long a preference field may be, in UTF-16 code units. The record's
  * existing wire-id bound, stated here so the endpoint can echo it back. */
@@ -142,42 +143,47 @@ const writeAll = (fd: number, bytes: Buffer): void => {
  * choice with it. The record directory must already exist - a caller
  * creating one goes through the mint.
  */
-export const writeDriverPreference = (dir: string, choice: DriverChoice): DriverPreference => {
-  if (!isDriverHarness(choice.harness)) {
-    throw new StoreError(
-      "corrupt-log",
-      `malformed driver harness on write: ${JSON.stringify(choice.harness)}`,
-    );
-  }
-  for (const [name, value] of Object.entries({
-    provider: choice.provider,
-    model: choice.model,
-    effort: choice.effort,
-  })) {
-    if (value !== undefined && !isDriverField(value)) {
-      throw new StoreError("corrupt-log", `malformed driver ${name} on write`);
+export const writeDriverPreference = (
+  dir: string,
+  choice: DriverChoice,
+  expectedConversationId = readRecordIdentity(dir),
+): DriverPreference =>
+  withRecordLock(pathsForDir(dir), expectedConversationId, () => {
+    if (!isDriverHarness(choice.harness)) {
+      throw new StoreError(
+        "corrupt-log",
+        `malformed driver harness on write: ${JSON.stringify(choice.harness)}`,
+      );
     }
-  }
-  const file: DriverPreference = {
-    v: 1,
-    harness: choice.harness,
-    ...(choice.provider === undefined ? {} : { provider: choice.provider }),
-    ...(choice.model === undefined ? {} : { model: choice.model }),
-    ...(choice.effort === undefined ? {} : { effort: choice.effort }),
-  };
-  const path = pathsForDir(dir).driverPath;
-  // Same directory, so the rename is on one filesystem and is atomic. The
-  // pid keeps a second writer's temporary from colliding with this one;
-  // within one process the write and rename are synchronous and cannot
-  // interleave.
-  const tmp = `${path}.${process.pid}.part`;
-  const fd = openSync(tmp, "w", 0o600);
-  try {
-    writeAll(fd, Buffer.from(JSON.stringify(file)));
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, path);
-  return file;
-};
+    for (const [name, value] of Object.entries({
+      provider: choice.provider,
+      model: choice.model,
+      effort: choice.effort,
+    })) {
+      if (value !== undefined && !isDriverField(value)) {
+        throw new StoreError("corrupt-log", `malformed driver ${name} on write`);
+      }
+    }
+    const file: DriverPreference = {
+      v: 1,
+      harness: choice.harness,
+      ...(choice.provider === undefined ? {} : { provider: choice.provider }),
+      ...(choice.model === undefined ? {} : { model: choice.model }),
+      ...(choice.effort === undefined ? {} : { effort: choice.effort }),
+    };
+    const path = pathsForDir(dir).driverPath;
+    // Same directory, so the rename is on one filesystem and is atomic. The
+    // pid keeps a second writer's temporary from colliding with this one;
+    // within one process the write and rename are synchronous and cannot
+    // interleave.
+    const tmp = `${path}.${process.pid}.part`;
+    const fd = openSync(tmp, "w", 0o600);
+    try {
+      writeAll(fd, Buffer.from(JSON.stringify(file)));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+    return file;
+  });

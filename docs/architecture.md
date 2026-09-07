@@ -25,6 +25,36 @@ cannot steal from a human process whose presence is still corroborated.
 The record secret is created with mode 0600; local filesystem access is the
 attach authorization boundary. An identity stamp is not authentication.
 
+## Conversation discovery
+
+The terminal and browser use the same record-root resolver: an explicit root,
+then LUCID_ROOT, then ~/.lucid2/records. User-config defaults are planned in
+RFC 15's next creation slice. A custom root replaces the default.
+
+The saved metadata identity selects a record, including after its directory
+is renamed. Unknown and duplicate identities are refused by existing-record
+operations; send, watch, and browser writes cannot create a replacement.
+Explicit terminal creation publishes metadata and its known folder association
+with the record's atomic rename. Dot-prefixed staging directories stay hidden.
+
+The hub rebuilds discovery from records at startup, on filesystem hints,
+every five seconds while the server runs, and when the browser loads,
+returns to focus, or refreshes. Pages use opaque identity cursors. Individual
+record errors remain visible beside valid records; an unreadable root is an
+error. Listing never writes metadata or starts a harness.
+
+Projects are resolved absolute paths: the nearest repository root, or the
+starting folder when there is no repository. Nested repositories and worktrees
+have their own roots. Metadata retains the exact working directory separately.
+Legacy records appear under No project. A missing working folder does not
+change the saved project. Display titles use saved titles of seven words or
+fewer, or a bounded fallback from the first prompt. An annotation-first
+record uses its typed prompt or its first note. Generated titles and
+folder recovery belong to later RFC 15 slices.
+
+Every writer checks metadata identity under the append lock before mutation.
+Driver-preference replacement and attachment-file creation use that same lock.
+
 ## One fold and one append transaction
 
 The log walker owns replay, effect collection, artifact headers, and the

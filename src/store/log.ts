@@ -42,7 +42,9 @@ import {
 } from "../protocol/index.js";
 import { putBlob } from "./blobs.js";
 import { type RecordPaths, StoreError } from "./errors.js";
-import { Flock, type LockEvent } from "./flock.js";
+import type { LockEvent } from "./flock.js";
+
+import { withRecordLock } from "./record-identity.js";
 
 // ---------------------------------------------------------------------------
 // Durable entry types (the log's own vocabulary)
@@ -836,13 +838,7 @@ const withAppendLock = <T>(
   opts: { onLockEvent?: (e: LockEvent) => void },
   fn: () => T,
 ): T => {
-  const flock = new Flock(paths.lockPath, conversationId);
-  const lock = flock.acquire({ onEvent: opts.onLockEvent });
-  try {
-    return fn();
-  } finally {
-    lock.release();
-  }
+  return withRecordLock(paths, conversationId, fn, opts.onLockEvent);
 };
 
 /** Read the log under the append lock: fold every good byte and repair a
@@ -1141,23 +1137,25 @@ export const createLog = (
   const writeAttachment: ConversationLog["writeAttachment"] = (params) => {
     if (!isArtifactField(params.contentType) || !isArtifactField(params.name))
       return { verdict: "refused", issue: "attachment-invalid" };
-    let hash: string;
-    try {
-      hash = putBlob(paths.dir, params.bytes);
-    } catch {
-      return { verdict: "refused", issue: "attachment-too-large" };
-    }
-    const entry: LogEntry = {
-      v: 1,
-      at: deps.now(),
-      src: "attach",
-      hash,
-      bytes: params.bytes.byteLength,
-      contentType: params.contentType,
-      name: params.name,
-      text: params.text,
-    };
-    return transaction(() => ({ line: lineOf(entry), result: { verdict: "accepted", hash } }));
+    return transaction<ReturnType<ConversationLog["writeAttachment"]>>(() => {
+      let hash: string;
+      try {
+        hash = putBlob(paths.dir, params.bytes);
+      } catch {
+        return { line: null, result: { verdict: "refused", issue: "attachment-too-large" } };
+      }
+      const entry: LogEntry = {
+        v: 1,
+        at: deps.now(),
+        src: "attach",
+        hash,
+        bytes: params.bytes.byteLength,
+        contentType: params.contentType,
+        name: params.name,
+        text: params.text,
+      };
+      return { line: lineOf(entry), result: { verdict: "accepted", hash } };
+    });
   };
 
   const writeArtifactMeta: ConversationLog["writeArtifactMeta"] = (params) => {

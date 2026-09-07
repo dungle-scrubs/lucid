@@ -57,9 +57,9 @@ const verifyTailwindCompiled = async () => {
       `${OUTFILE} carries no compiled Tailwind. The plugin did not run, and the binary would serve a stylesheet with no utilities and no theme in it.`,
     );
   }
-  if (!bytes.includes(APP_MARKER)) {
+  if (!bytes.includes(APP_MARKER) || !bytes.includes(".hub-row")) {
     throw new Error(
-      `${OUTFILE} carries no ${APP_MARKER}. The browser surface's own stylesheet did not reach the binary.`,
+      `${OUTFILE} is missing the artifact or hub stylesheet. Both browser surfaces must reach the binary.`,
     );
   }
 };

@@ -23,6 +23,12 @@ import {
   validConversationId,
 } from "./errors.js";
 
+import { associateFolder } from "./project-directory.js";
+
+export interface CreateRecordOptions {
+  readonly workingDirectory?: string;
+}
+
 const SECRET_BYTES = 32;
 
 export { pathsForDir, type RecordPaths, recordPaths, StoreError, validConversationId };
@@ -30,6 +36,7 @@ export { pathsForDir, type RecordPaths, recordPaths, StoreError, validConversati
 export const createConversationRecord = (
   rootDir: string,
   conversationId: string,
+  options: CreateRecordOptions = {},
 ): { readonly secret: string; readonly paths: RecordPaths } => {
   if (!validConversationId(conversationId))
     throw new StoreError(
@@ -39,6 +46,8 @@ export const createConversationRecord = (
   const paths = recordPaths(rootDir, conversationId);
   if (existsSync(paths.dir))
     throw new StoreError("record-exists", `conversation record already exists: ${paths.dir}`);
+  const association =
+    options.workingDirectory === undefined ? {} : associateFolder(options.workingDirectory);
   mkdirSync(rootDir, { recursive: true });
   const staging = mkdtempSync(join(rootDir, ".create-"));
   const secret = Buffer.from(crypto.getRandomValues(new Uint8Array(SECRET_BYTES))).toString("hex");
@@ -46,7 +55,9 @@ export const createConversationRecord = (
     const tmp = pathsForDir(staging);
     writeFileSync(tmp.secretPath, secret, { mode: 0o600 });
     writeFileSync(tmp.logPath, "", { mode: 0o600 });
-    writeFileSync(tmp.metaPath, JSON.stringify({ v: 1, conversationId }), { mode: 0o600 });
+    writeFileSync(tmp.metaPath, JSON.stringify({ v: 1, conversationId, ...association }), {
+      mode: 0o600,
+    });
     renameSync(staging, paths.dir);
   } catch (cause) {
     rmSync(staging, { recursive: true, force: true });

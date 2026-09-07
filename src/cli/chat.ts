@@ -65,8 +65,8 @@ export const chatConversation = async (opts: ChatOpts = {}): Promise<void> => {
       // Render once via lock-free peek (one-shot, no dispatch, so torn tail
       // tolerance is fine — it is a single paint, not an act).
       if (opts.conversationId === undefined) throw new NotTTYError();
-      const dir = convsFactory(opts.rootDir).dirFor(opts.conversationId);
       try {
+        const dir = convsFactory(opts.rootDir).dirFor(opts.conversationId);
         const snap = viewSnapshot(dir, { now: nowFn, presence: presenceProbe });
         const view = buildView({
           transcript: snap.transcript,

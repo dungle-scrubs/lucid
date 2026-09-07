@@ -34,7 +34,7 @@ export const serveConversation = async (opts: ServeOpts = {}): Promise<void> => 
   const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const running = await startServe(opts);
   log(`lucid browser on ${running.url}`);
-  log(`open a conversation: ${running.url}/c/demo`);
+  log(`open the conversation hub: ${running.url}/`);
 
   await new Promise<void>((resolve) => {
     const stop = (): void => resolve();

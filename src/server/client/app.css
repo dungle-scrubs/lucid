@@ -267,8 +267,10 @@ body {
      A dragged width arrives as a custom property rather than a flex value,
      so this rule wins on order and nothing needs !important to beat it. */
   .pane.conversation {
-    flex: 1 1 45%;
+    flex: 0 0 33dvh;
     border-top: 1px solid var(--edge-2);
+    margin-inline: -14px;
+    padding-inline: 14px;
   }
   .pane-grip {
     display: none;
@@ -2686,4 +2688,46 @@ body {
   background: var(--color-accent-2-100);
   color: var(--color-accent-2-800);
   font-size: 12.5px;
+}
+
+/* A hub link and artifact controls remain reachable in a narrow window. */
+.doc-mark {
+  cursor: pointer;
+  color: inherit;
+  text-decoration: none;
+  gap: 1px;
+}
+
+.doc-mark:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+.doc-mark .dot {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  color: var(--color-accent);
+  font: 700 26px / 18px var(--font-heading);
+}
+
+.doc-mark .dot::after {
+  content: ".";
+}
+
+@media (max-width: 600px) {
+  .doc-head {
+    flex: 0 0 auto;
+    min-height: 34px;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    padding-block: 6px;
+  }
+
+  .doc-rename {
+    min-width: 100px;
+    max-width: calc(100% - 100px);
+    flex: 1;
+  }
 }

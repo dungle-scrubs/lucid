@@ -36,7 +36,6 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { basename } from "node:path";
 import type { Effect } from "../protocol/index.js";
 import {
   type ChannelState,
@@ -64,6 +63,7 @@ import {
   type LogEntry,
   readArtifactVersion,
 } from "./log.js";
+import { readRecordIdentity } from "./record-identity.js";
 
 const REDACTED = "redacted";
 
@@ -79,6 +79,7 @@ export type {
 } from "./log.js";
 
 export interface HostDeps {
+  readonly expectedConversationId?: string;
   readonly now: () => number;
   /** The normalizer's ps-level INTERACTIVE-process probe. Liveness
    * arithmetic and the attach reducer's presence corroboration read it.
@@ -154,10 +155,7 @@ export const readRecordFiles = (
   const secret = readFileSync(paths.secretPath, "utf8").trim();
   if (!HEX_SECRET.test(secret))
     throw new StoreError("invalid-secret", `malformed secret file: ${paths.secretPath}`);
-  const conversationId = existsSync(paths.metaPath)
-    ? (JSON.parse(readFileSync(paths.metaPath, "utf8")) as { conversationId: string })
-        .conversationId
-    : basename(dir);
+  const conversationId = readRecordIdentity(dir);
   return { secret, conversationId, paths };
 };
 
@@ -230,6 +228,8 @@ export interface ConversationHost {
 export const createConversationHost = (dir: string, deps: HostDeps): ConversationHost => {
   const { secret, conversationId, paths } = readRecordFiles(dir);
 
+  if (deps.expectedConversationId !== undefined && deps.expectedConversationId !== conversationId)
+    throw new StoreError("corrupt-log", "Record identity changed");
   const log = createLog(paths, secret, conversationId, {
     now: deps.now,
     onLockEvent: deps.onLockEvent,
@@ -512,9 +512,14 @@ export const viewArtifactVersion = (
 /** A writer appends durable facts but never holds the executor lease or dispatches effects. */
 export const openWriter = (
   dir: string,
-  deps: { now?: () => number; presence?: () => boolean | undefined } = {},
+  deps: {
+    now?: () => number;
+    presence?: () => boolean | undefined;
+    expectedConversationId?: string;
+  } = {},
 ): ConversationHost =>
   createConversationHost(dir, {
+    expectedConversationId: deps.expectedConversationId,
     now: deps.now ?? Date.now,
     presence: deps.presence ?? (() => undefined),
     executorLease: () => false,

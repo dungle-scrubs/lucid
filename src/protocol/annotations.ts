@@ -286,3 +286,9 @@ export const stripAnnotationBatch = (text: string): string => {
   });
   return out.replace(/\n{3,}/g, "\n\n").trim();
 };
+
+/** The person's prompt without the serialized note payload. */
+export const textWithoutAnnotations = (text: string): string => {
+  FENCE_RE.lastIndex = 0;
+  return text.replace(FENCE_RE, "").trim();
+};

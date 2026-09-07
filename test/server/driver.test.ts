@@ -82,7 +82,7 @@ describe("writing a preference", () => {
     await r.stop();
   });
 
-  test("a conversation with no record yet is created, as an input creates one", async () => {
+  test("an unknown conversation is not created by a preference", async () => {
     const root = mkdtempSync(join(tmpdir(), "lucid-driver-fresh-"));
     const server = await startServe({ rootDir: root, port: 0 });
     const res = await fetch(`http://127.0.0.1:${server.port}/api/conversations/fresh/driver`, {
@@ -90,8 +90,8 @@ describe("writing a preference", () => {
       headers: { "x-lucid-token": server.token, "content-type": "application/json" },
       body: '{"harness":"muse"}',
     });
-    expect(res.status).toBe(200);
-    expect(readDriverPreference(join(root, "fresh"))).toEqual({ v: 1, harness: "muse" });
+    expect(res.status).toBe(404);
+    expect(readDriverPreference(join(root, "fresh"))).toBeNull();
     await server.close();
     rmSync(root, { recursive: true, force: true });
   });
@@ -245,15 +245,14 @@ describe("what the poll carries", () => {
     await r.stop();
   });
 
-  test("a record that does not exist says null, not an error", async () => {
+  test("an unknown record returns not-found", async () => {
     const root = mkdtempSync(join(tmpdir(), "lucid-driver-none-"));
     const server = await startServe({ rootDir: root, port: 0 });
     const res = await fetch(`http://127.0.0.1:${server.port}/api/conversations/nothing-yet`, {
       headers: { "x-lucid-token": server.token },
     });
-    const body = (await res.json()) as { status: string; driverPreference: unknown };
-    expect(body.status).toBe("no record");
-    expect(body.driverPreference).toBeNull();
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: "not-found" });
     await server.close();
     rmSync(root, { recursive: true, force: true });
   });

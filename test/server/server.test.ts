@@ -154,12 +154,10 @@ describe("reading a conversation", () => {
     expect(data.lines.some((l) => l.text.includes("a question from the terminal"))).toBe(true);
   });
 
-  test("a record that does not exist is empty, not an error", async () => {
+  test("an unknown record returns not-found", async () => {
     const res = await api("/api/conversations/never-made");
-    expect(res.status).toBe(200);
-    const data = (await res.json()) as { lines: unknown[]; damaged: boolean };
-    expect(data.lines).toEqual([]);
-    expect(data.damaged).toBe(false);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: "not-found" });
   });
 
   test("a damaged record says so rather than rendering as silence", async () => {

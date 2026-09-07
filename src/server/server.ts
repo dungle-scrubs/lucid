@@ -45,6 +45,7 @@ import {
   viewArtifactVersion,
   viewSnapshot,
 } from "../store/conversation-host.js";
+import { RecordLookupError, watchConversations } from "../store/discovery.js";
 import {
   DRIVER_BODY_FIELDS,
   DRIVER_FIELD_MAX,
@@ -66,8 +67,10 @@ import { presenceHeld } from "../store/presence.js";
 // would be a defect with no owner, so there is one derivation and both read
 // it. Only `lines` is used here; the rest of `TuiView` is terminal chrome.
 import { buildView } from "../tui/view.js";
+import hub from "./client/hub.html";
 import index from "./client/index.html";
 import { SERVER_PORT, TOKEN_HEADER } from "./constants.js";
+import { createConversationListing } from "./conversation-list.js";
 import { driverChoices } from "./driver-choices.js";
 import { mintToken } from "./token.js";
 
@@ -125,10 +128,14 @@ const json = (body: unknown, status = 200): Response =>
 const text = (body: string, status: number): Response =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 
-const withWriter = (dir: string, action: (host: ConversationHost) => Response): Response => {
+const withWriter = (
+  dir: string,
+  conversationId: string,
+  action: (host: ConversationHost) => Response,
+): Response => {
   let host: ConversationHost | undefined;
   try {
-    host = openWriter(dir);
+    host = openWriter(dir, { expectedConversationId: conversationId });
     return action(host);
   } catch (cause) {
     const code = classifyStoreFailure(cause);
@@ -147,7 +154,10 @@ const withWriter = (dir: string, action: (host: ConversationHost) => Response): 
 export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer> => {
   const port = opts.port ?? SERVER_PORT;
   const token = opts.token ?? mintToken();
-  const rootDir = opts.rootDir;
+  const records = conversations(opts.rootDir);
+  const conversationPage = createConversationListing();
+  const rootDir = records.rootDir;
+  const discovery = watchConversations(rootDir, { scan: records.list });
 
   /** This server's own origins. A request carrying any other `Origin` is
    * refused before it is routed, which is what stops a page you happened to
@@ -174,616 +184,661 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
     // version are linkable at all; before them the page picked the artifact
     // with the most recent version entry and nothing else was reachable.
     routes: {
+      "/": hub,
       "/c/:id": index,
       "/c/:id/:artifactId": index,
       "/c/:id/:artifactId/:version": index,
     },
     fetch: async (req: Request): Promise<Response> => {
-      const url = new URL(req.url);
-      const path = url.pathname;
-      const origin = req.headers.get("origin");
+      try {
+        const url = new URL(req.url);
+        const path = url.pathname;
+        let resolvedRecord: string | undefined;
+        const dirForRequest = (id: string): string => (resolvedRecord ??= records.dirFor(id));
+        const origin = req.headers.get("origin");
 
-      if (origin !== null && !ownOrigins.has(origin)) {
-        return text("forbidden: origin not allowed", 403);
-      }
-      if (req.method === "OPTIONS") {
-        return new Response(null, {
-          status: 204,
-          headers: {
-            "access-control-allow-origin": origin ?? `http://127.0.0.1:${server.port}`,
-            "access-control-allow-methods": "GET, POST, OPTIONS",
-            "access-control-allow-headers": `${TOKEN_HEADER}, content-type`,
-            vary: "Origin",
-          },
-        });
-      }
-
-      // The page fetches its token here. Same exposure as serving it inside
-      // the page: same-origin only, and a foreign origin is already refused
-      // above.
-      if (path === "/api/session" && req.method === "GET") return json({ token });
-
-      if (path.startsWith("/api/") && req.headers.get(TOKEN_HEADER) !== token) {
-        return json({ error: "unauthorized" }, 401);
-      }
-
-      if (path === "/" && req.method === "GET") {
-        return json({ lucid: "browser", open: "/c/<conversationId>" });
-      }
-
-      // A URL bar, a history entry, or a pasted link carries a trailing
-      // slash as often as not, and Bun's route table above matches exact
-      // paths only - "/c/demo/" would fall through to the 404 at the foot
-      // of this handler. Send the canonical path back and let the browser
-      // re-ask: the page route answers it, and the address bar ends up on
-      // the form that reloads cleanly.
-      if (path.length > 1 && path.endsWith("/")) {
-        return new Response(null, {
-          status: 308,
-          headers: { location: path.replace(/\/+$/, "") + url.search },
-        });
-      }
-
-      const read = path.match(/^\/api\/conversations\/([^/]+)\/?$/);
-      if (read && req.method === "GET") {
-        const id = decodeURIComponent(read[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-        const dir = conversations(rootDir).dirFor(id);
-        // An absent conversation is empty, not an error — the page is often
-        // opened before anything has been said. This is checked before the
-        // fold so that a missing record and a damaged one cannot arrive at
-        // the same answer.
-        if (!existsSync(join(dir, "log.ndjson"))) {
-          return json({
-            conversationId: id,
-            lines: [],
-            status: "no record",
-            damaged: false,
-            driverPreference: null,
-            // The lists ride along on an empty record too: choosing a driver
-            // while nothing runs is the natural moment to choose one
-            // (RFC-12, open question 1), and the menus are how.
-            driverChoices: await driverChoices(),
+        if (origin !== null && !ownOrigins.has(origin)) {
+          return text("forbidden: origin not allowed", 403);
+        }
+        if (req.method === "OPTIONS") {
+          return new Response(null, {
+            status: 204,
+            headers: {
+              "access-control-allow-origin": origin ?? `http://127.0.0.1:${server.port}`,
+              "access-control-allow-methods": "GET, POST, OPTIONS",
+              "access-control-allow-headers": `${TOKEN_HEADER}, content-type`,
+              vary: "Origin",
+            },
           });
         }
-        let snapshot: ReturnType<typeof viewSnapshot>;
-        try {
-          // Whether anything is driving comes from the presence lock, not
-          // from the lease: an idle driver lets its lease lapse while
-          // sitting perfectly healthy, and reading the lease alone made
-          // the page say "agent-gone" while an agent was answering.
-          snapshot = viewSnapshot(dir, { presence: () => presenceHeld(dir) });
-        } catch (cause) {
-          // The fold throws on an unparseable line rather than skipping it,
-          // and `goodBytes` only ever covers a torn trailing write. Reporting
-          // this as an empty conversation would render damage as silence,
-          // which is the one answer a reader cannot tell from the truth.
-          return json({
-            conversationId: id,
-            lines: [],
-            status: "damaged",
-            damaged: true,
-            error: cause instanceof Error ? cause.message : String(cause),
-            driverPreference: readDriverPreference(dir),
-            driverChoices: await driverChoices(),
+
+        // The page fetches its token here. Same exposure as serving it inside
+        // the page: same-origin only, and a foreign origin is already refused
+        // above.
+        if (path === "/api/session" && req.method === "GET") return json({ token });
+
+        if (path.startsWith("/api/") && req.headers.get(TOKEN_HEADER) !== token) {
+          return json({ error: "unauthorized" }, 401);
+        }
+
+        // A URL bar, a history entry, or a pasted link carries a trailing
+        // slash as often as not, and Bun's route table above matches exact
+        // paths only - "/c/demo/" would fall through to the 404 at the foot
+        // of this handler. Send the canonical path back and let the browser
+        // re-ask: the page route answers it, and the address bar ends up on
+        // the form that reloads cleanly.
+        if (path.length > 1 && path.endsWith("/")) {
+          return new Response(null, {
+            status: 308,
+            headers: { location: path.replace(/\/+$/, "") + url.search },
           });
         }
-        const view = buildView({
-          transcript: snapshot.transcript,
-          status: snapshot.status,
-          rung: "",
-          draft: "",
-        });
-        // What is driving, so the page can say it. The harness is on the
-        // attachment; the model is not always known — hcn reports it on the
-        // identity event and some harnesses leave it empty — so it is sent
-        // when there is one and omitted when there is not, rather than
-        // shown as a blank.
-        const attached = snapshot.state.attachment;
-        const driving = attached !== null && snapshot.status !== "agent-gone";
-        const identity = [...snapshot.transcript.events]
-          .reverse()
-          .find((e) => (e.event as { kind?: string }).kind === "identity");
-        const observed = ((
-          identity?.event as { capabilities?: { escalation?: { observedOn?: unknown } } }
-        )?.capabilities?.escalation?.observedOn ?? {}) as { model?: string; version?: string };
-        // An input that carried an annotation batch keeps its place in the
-        // timeline; the batch rides along on that line so the page can draw
-        // the notes there rather than in a list of its own. Joined on seq,
-        // which both the line and the input carry.
-        const batchBySeq = new Map<number, unknown>();
-        for (const i of snapshot.transcript.inputs) {
-          const parsed = detectAnnotationBatch(i.text);
-          if (parsed !== null && !("malformed" in parsed)) batchBySeq.set(i.seq, parsed);
-        }
-        const lines = view.lines.map((l) =>
-          l.seq !== undefined && batchBySeq.has(l.seq) ? { ...l, batch: batchBySeq.get(l.seq) } : l,
-        );
 
-        return json({
-          conversationId: id,
-          lines,
-          status: snapshot.status,
-          // Whether anything is in flight, so the page can say so. Silence
-          // and working look identical otherwise, and the question "is
-          // something happening?" had no answer on the surface.
-          activity: {
-            // Whether the NEWEST turn has produced a terminal event.
-            //
-            // Not `state.turn`: that names the most recent turn so an abort
-            // can target it, and its own comment says it may name a turn
-            // that has already finished. Reading it as "a turn is running"
-            // made the page say the agent was working for as long as the
-            // record existed.
-            //
-            // The transcript alone is not enough. A turn appends nothing
-            // between its input and its terminal event - `live1`'s log has
-            // the disposition at +0.1s and then the message and `done`
-            // together at +19s, with no line in between. So mid-turn the
-            // newest event is the PREVIOUS turn's `done` and this reads
-            // false while the agent is working. A delivered input whose
-            // turn has not terminated is that turn, which is what
-            // inFlightInputs counts, so it is the other half of the answer.
-            // An old session error is history after detach or process loss.
-            // Only the current attachment can have work in progress.
-            turn:
-              driving &&
-              (turnRunning(snapshot.transcript, snapshot.state.epoch) ||
-                snapshot.state.inFlightInputs > 0),
-            inFlight: driving ? snapshot.state.inFlightInputs : 0,
-            waiting: snapshot.transcript.inputs.filter(
-              (i) => i.status === "outstanding" || i.status === "queued",
-            ).length,
-          },
-          driver: {
-            ...(attached?.harness === undefined ? {} : { harness: attached.harness }),
-            ...(attached?.profile === undefined ? {} : { profile: attached.profile }),
-            ...(typeof observed.model === "string" && observed.model !== ""
-              ? { model: observed.model }
-              : {}),
-            ...(typeof observed.version === "string" && observed.version !== ""
-              ? { harnessVersion: observed.version }
-              : {}),
-          },
-          // What the person chose, beside what is driving (RFC-12). The two
-          // are never one field: after a refused re-spawn they differ, and
-          // the difference is the story the page has to tell. Null is the
-          // state of every record no choice has been made in.
-          driverPreference: readDriverPreference(dir),
-          // The lists the choice is made from (RFC-12): the four harnesses,
-          // each harness's models and efforts. Read once per process through
-          // the harness seam, so a poll costs no spawn.
-          driverChoices: await driverChoices(),
-          // A torn trailing write folds cleanly but short. That is damage
-          // too, and the page says so.
-          damaged: snapshot.goodBytes < logSize(dir),
-        });
-      }
-
-      // Documents travel on their own channel, not with the conversation.
-      // Conversation updates are small and constant; documents are large and
-      // rare, so folding one into the other would make every poll pay a
-      // document's size for a transcript's worth of change.
-      const catalog = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/?$/);
-      if (catalog && req.method === "GET") {
-        const id = decodeURIComponent(catalog[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-        const dir = conversations(rootDir).dirFor(id);
-        if (!existsSync(join(dir, "log.ndjson"))) return json({ artifacts: [], notes: {} });
-        try {
-          // Which spots already carry a sent note, per version. Derived from
-          // the record's own inputs: an annotation batch names the artifact
-          // and the version it was made against, so a mark belongs to that
-          // version and to no other. Nothing is re-anchored — an id means an
-          // element in the render it came from.
-          const notes: Record<string, unknown[]> = {};
+        if (path === "/api/conversations" && req.method === "GET") {
           try {
-            for (const i of viewSnapshot(dir).transcript.inputs) {
-              const batch = detectAnnotationBatch(i.text);
-              if (batch === null || "malformed" in batch) continue;
-              const key = `${batch.artifactId}@${batch.version}`;
-              const at = notes[key] ?? [];
-              notes[key] = at;
-              // The notes themselves, not just which ids they touched: a
-              // note made against an older version has to be re-anchored
-              // here, and that needs the selectors written with it.
-              for (const n of batch.notes) at.push(n);
-            }
+            const listing = discovery.refresh();
+            if (listing instanceof RecordLookupError) throw listing;
+            const page = await conversationPage(listing, url.searchParams);
+            return json(page, "error" in page ? 400 : 200);
+          } catch (cause) {
+            if (cause instanceof RecordLookupError)
+              return json(
+                {
+                  ...(cause.reason === "not-found" ? {} : { code: "E-HUB-01" }),
+                  error: cause.reason,
+                  reason:
+                    cause.reason === "not-found"
+                      ? "This conversation is not in the configured record folder. Open the hub to choose an existing conversation."
+                      : cause.reason === "ambiguous"
+                        ? "More than one record has this conversation identity. Resolve the duplicate records before opening it."
+                        : "The configured record folder is unavailable. Check its location and access, then refresh.",
+                  actions:
+                    cause.reason === "not-found"
+                      ? ["open-hub"]
+                      : cause.reason === "ambiguous"
+                        ? ["resolve-duplicate-records", "refresh"]
+                        : ["check-record-folder", "refresh"],
+                },
+                503,
+              );
+            throw cause;
+          }
+        }
+
+        const recordRoute = path.match(/^\/api\/conversations\/([^/]+)/);
+        if (recordRoute) {
+          let id: string;
+          try {
+            id = decodeURIComponent(recordRoute[1] ?? "");
           } catch {
-            // A record that will not fold has no marks to report; the
-            // conversation endpoint is where that is said.
+            return json({ error: "invalid-conversation-id" }, 400);
           }
-          return json({ artifacts: viewArtifactCatalog(dir), notes });
-        } catch {
-          // A record too damaged to fold has no readable catalog. The
-          // conversation endpoint is where that is reported; saying "no
-          // documents" here would be a second, quieter version of the same
-          // claim.
-          return json({ artifacts: [], notes: {}, damaged: true });
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          dirForRequest(id);
         }
-      }
 
-      // One version per request, read by seeking to the line it lives on.
-      // Nothing is held between requests.
-      const version = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/(\d+)\/?$/);
-      if (version && req.method === "GET") {
-        const id = decodeURIComponent(version[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-        const artifactId = decodeURIComponent(version[2] ?? "");
-        const n = Number(version[3]);
-        if (!Number.isSafeInteger(n) || n < 1) return json({ error: "invalid-version" }, 400);
-        const dir = conversations(rootDir).dirFor(id);
-        if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-version" }, 404);
-        let found: ReturnType<typeof viewArtifactVersion>;
-        try {
-          found = viewArtifactVersion(dir, artifactId, n);
-        } catch {
-          return json({ error: "damaged" }, 409);
-        }
-        if (found === null) return json({ error: "no-such-version" }, 404);
-        return json({
-          artifactId: found.artifactId,
-          version: found.version,
-          author: found.author,
-          contentType: found.contentType,
-          hash: found.hash,
-          at: found.at,
-          bytes: found.bytes,
-          // A save records what it was working from and the values of the
-          // controls at the time. An agent emission has neither.
-          ...(found.basedOn === undefined ? {} : { basedOn: found.basedOn }),
-          ...(found.values === undefined ? {} : { values: found.values }),
-        });
-      }
-
-      // A save is an artifact version entry. It is NOT an input: it starts
-      // no turn, is not counted against the input bound, and carries no
-      // disposition. It records what is true and waits to be read — through
-      // live delivery, or the next time anything folds the record.
-      const save = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/save\/?$/);
-      if (save && req.method === "POST") {
-        const id = decodeURIComponent(save[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-        const artifactId = decodeURIComponent(save[2] ?? "");
-        let body: unknown;
-        try {
-          body = await req.json();
-        } catch {
-          return json({ error: "invalid-json" }, 400);
-        }
-        const b = body as { html?: unknown; values?: unknown; basedOn?: unknown };
-        if (typeof b.html !== "string" || b.html.trim() === "") {
-          return json({ error: "html-required" }, 400);
-        }
-        if (typeof b.basedOn !== "number" || !Number.isSafeInteger(b.basedOn) || b.basedOn < 1) {
-          return json({ error: "based-on-required" }, 400);
-        }
-        const values: Record<string, string> = {};
-        if (b.values !== null && typeof b.values === "object" && !Array.isArray(b.values)) {
-          for (const [k, v] of Object.entries(b.values as Record<string, unknown>)) {
-            if (typeof v === "string") values[k] = v;
+        const read = path.match(/^\/api\/conversations\/([^/]+)\/?$/);
+        if (read && req.method === "GET") {
+          const id = decodeURIComponent(read[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          const dir = dirForRequest(id);
+          let snapshot: ReturnType<typeof viewSnapshot>;
+          try {
+            // Whether anything is driving comes from the presence lock, not
+            // from the lease: an idle driver lets its lease lapse while
+            // sitting perfectly healthy, and reading the lease alone made
+            // the page say "agent-gone" while an agent was answering.
+            snapshot = viewSnapshot(dir, { presence: () => presenceHeld(dir) });
+          } catch (cause) {
+            // The fold throws on an unparseable line rather than skipping it,
+            // and `goodBytes` only ever covers a torn trailing write. Reporting
+            // this as an empty conversation would render damage as silence,
+            // which is the one answer a reader cannot tell from the truth.
+            return json({
+              conversationId: id,
+              lines: [],
+              status: "damaged",
+              damaged: true,
+              error: cause instanceof Error ? cause.message : String(cause),
+              driverPreference: readDriverPreference(dir),
+              driverChoices: await driverChoices(),
+            });
           }
-        }
-        const dir = conversations(rootDir).dirFor(id);
-        if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
-        const { html, basedOn } = b;
-        return withWriter(dir, (host) => {
-          // The next version in the single ordered list. There is no
-          // branching: a save based on a version the agent has since
-          // replaced still appends at the end, recording what it was
-          // working from. The agent reconciles; lucid does not merge.
-          const current = host.artifactHeads().get(artifactId) ?? 0;
-          if (current === 0) return json({ error: "no-such-artifact" }, 404);
-          const result = host.writeArtifact({
-            artifactId,
-            version: current + 1,
-            author: "human",
-            contentType: "text/html",
-            bytes: html,
-            basedOn: basedOn,
-            values,
+          const view = buildView({
+            transcript: snapshot.transcript,
+            status: snapshot.status,
+            rung: "",
+            draft: "",
           });
-          if (result.verdict === "refused") {
-            // Refused, and what was typed is still in the page — nothing
-            // here clears it.
-            return json(
-              { error: result.issue, verdict: "refused" },
-              result.issue === "artifact-too-large" ? 413 : 409,
-            );
+          // What is driving, so the page can say it. The harness is on the
+          // attachment; the model is not always known — hcn reports it on the
+          // identity event and some harnesses leave it empty — so it is sent
+          // when there is one and omitted when there is not, rather than
+          // shown as a blank.
+          const attached = snapshot.state.attachment;
+          const driving = attached !== null && snapshot.status !== "agent-gone";
+          const identity = [...snapshot.transcript.events]
+            .reverse()
+            .find((e) => (e.event as { kind?: string }).kind === "identity");
+          const observed = ((
+            identity?.event as { capabilities?: { escalation?: { observedOn?: unknown } } }
+          )?.capabilities?.escalation?.observedOn ?? {}) as { model?: string; version?: string };
+          // An input that carried an annotation batch keeps its place in the
+          // timeline; the batch rides along on that line so the page can draw
+          // the notes there rather than in a list of its own. Joined on seq,
+          // which both the line and the input carry.
+          const batchBySeq = new Map<number, unknown>();
+          for (const i of snapshot.transcript.inputs) {
+            const parsed = detectAnnotationBatch(i.text);
+            if (parsed !== null && !("malformed" in parsed)) batchBySeq.set(i.seq, parsed);
           }
+          const lines = view.lines.map((l) =>
+            l.seq !== undefined && batchBySeq.has(l.seq)
+              ? { ...l, batch: batchBySeq.get(l.seq) }
+              : l,
+          );
+
           return json({
-            verdict: "accepted",
-            artifactId,
-            version: result.version.version,
-            basedOn: basedOn,
-            supersededSince: basedOn !== current,
+            conversationId: id,
+            lines,
+            status: snapshot.status,
+            // Whether anything is in flight, so the page can say so. Silence
+            // and working look identical otherwise, and the question "is
+            // something happening?" had no answer on the surface.
+            activity: {
+              // Whether the NEWEST turn has produced a terminal event.
+              //
+              // Not `state.turn`: that names the most recent turn so an abort
+              // can target it, and its own comment says it may name a turn
+              // that has already finished. Reading it as "a turn is running"
+              // made the page say the agent was working for as long as the
+              // record existed.
+              //
+              // The transcript alone is not enough. A turn appends nothing
+              // between its input and its terminal event - `live1`'s log has
+              // the disposition at +0.1s and then the message and `done`
+              // together at +19s, with no line in between. So mid-turn the
+              // newest event is the PREVIOUS turn's `done` and this reads
+              // false while the agent is working. A delivered input whose
+              // turn has not terminated is that turn, which is what
+              // inFlightInputs counts, so it is the other half of the answer.
+              // An old session error is history after detach or process loss.
+              // Only the current attachment can have work in progress.
+              turn:
+                driving &&
+                (turnRunning(snapshot.transcript, snapshot.state.epoch) ||
+                  snapshot.state.inFlightInputs > 0),
+              inFlight: driving ? snapshot.state.inFlightInputs : 0,
+              waiting: snapshot.transcript.inputs.filter(
+                (i) => i.status === "outstanding" || i.status === "queued",
+              ).length,
+            },
+            driver: {
+              ...(attached?.harness === undefined ? {} : { harness: attached.harness }),
+              ...(attached?.profile === undefined ? {} : { profile: attached.profile }),
+              ...(typeof observed.model === "string" && observed.model !== ""
+                ? { model: observed.model }
+                : {}),
+              ...(typeof observed.version === "string" && observed.version !== ""
+                ? { harnessVersion: observed.version }
+                : {}),
+            },
+            // What the person chose, beside what is driving (RFC-12). The two
+            // are never one field: after a refused re-spawn they differ, and
+            // the difference is the story the page has to tell. Null is the
+            // state of every record no choice has been made in.
+            driverPreference: readDriverPreference(dir),
+            // The lists the choice is made from (RFC-12): the four harnesses,
+            // each harness's models and efforts. Read once per process through
+            // the harness seam, so a poll costs no spawn.
+            driverChoices: await driverChoices(),
+            // A torn trailing write folds cleanly but short. That is damage
+            // too, and the page says so.
+            damaged: snapshot.goodBytes < logSize(dir),
           });
-        });
-      }
+        }
 
-      // Restore is a person's act on the record, and it is an append like any
-      // other. lucid copies the bytes of the version being restored into a new
-      // version at the end of the list. Nothing is removed, rewritten or
-      // hidden - the version it replaced is still there and still reachable,
-      // which is what makes undoing a restore the same act again.
-      const meta = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/meta\/?$/);
-      if (meta && req.method === "POST") {
-        const id = decodeURIComponent(meta[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-        const artifactId = decodeURIComponent(meta[2] ?? "");
-        if (!validArtifactId(artifactId)) return json({ error: "unknown-artifact" }, 404);
-        let body: unknown;
-        try {
-          body = await req.json();
-        } catch {
-          return json({ error: "invalid-json" }, 400);
-        }
-        const b = body as { title?: unknown };
-        // E-ART-07. The bound is checked here, where a caller can be told,
-        // rather than left to the fold, which would silently drop the field.
-        if (b.title !== undefined && !isArtifactTitle(b.title)) {
-          return json({ error: "invalid-title", max: ARTIFACT_TITLE_MAX }, 400);
-        }
-        // A request that says nothing is a mistake worth reporting rather
-        // than an append of an entry with no opinion in it.
-        if (b.title === undefined) {
-          return json({ error: "nothing-to-write" }, 400);
-        }
-        const dir = conversations(rootDir).dirFor(id);
-        if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
-        const { title } = b;
-        return withWriter(dir, (host) => {
-          // E-ART-01. Naming an artifact the record does not hold is refused
-          // here, because this is the only place that can answer a caller.
-          // The fold tolerates such an entry anyway, so a record written by
-          // a build whose endpoint had a defect still opens.
-          if (!host.artifactHeads().has(artifactId))
-            return json({ error: "unknown-artifact" }, 404);
-          const result = host.writeArtifactMeta({
-            artifactId,
-            ...(title === undefined ? {} : { title: title }),
-          });
-          if (result.verdict === "refused") {
-            return json({ error: result.issue, verdict: "refused" }, 400);
+        // Documents travel on their own channel, not with the conversation.
+        // Conversation updates are small and constant; documents are large and
+        // rare, so folding one into the other would make every poll pay a
+        // document's size for a transcript's worth of change.
+        const catalog = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/?$/);
+        if (catalog && req.method === "GET") {
+          const id = decodeURIComponent(catalog[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          const dir = dirForRequest(id);
+          if (!existsSync(join(dir, "log.ndjson"))) return json({ artifacts: [], notes: {} });
+          try {
+            // Which spots already carry a sent note, per version. Derived from
+            // the record's own inputs: an annotation batch names the artifact
+            // and the version it was made against, so a mark belongs to that
+            // version and to no other. Nothing is re-anchored — an id means an
+            // element in the render it came from.
+            const notes: Record<string, unknown[]> = {};
+            try {
+              for (const i of viewSnapshot(dir).transcript.inputs) {
+                const batch = detectAnnotationBatch(i.text);
+                if (batch === null || "malformed" in batch) continue;
+                const key = `${batch.artifactId}@${batch.version}`;
+                const at = notes[key] ?? [];
+                notes[key] = at;
+                // The notes themselves, not just which ids they touched: a
+                // note made against an older version has to be re-anchored
+                // here, and that needs the selectors written with it.
+                for (const n of batch.notes) at.push(n);
+              }
+            } catch {
+              // A record that will not fold has no marks to report; the
+              // conversation endpoint is where that is said.
+            }
+            return json({ artifacts: viewArtifactCatalog(dir), notes });
+          } catch {
+            // A record too damaged to fold has no readable catalog. The
+            // conversation endpoint is where that is reported; saying "no
+            // documents" here would be a second, quieter version of the same
+            // claim.
+            return json({ artifacts: [], notes: {}, damaged: true });
           }
+        }
+
+        // One version per request, read by seeking to the line it lives on.
+        // Nothing is held between requests.
+        const version = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/(\d+)\/?$/);
+        if (version && req.method === "GET") {
+          const id = decodeURIComponent(version[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          const artifactId = decodeURIComponent(version[2] ?? "");
+          const n = Number(version[3]);
+          if (!Number.isSafeInteger(n) || n < 1) return json({ error: "invalid-version" }, 400);
+          const dir = dirForRequest(id);
+          if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-version" }, 404);
+          let found: ReturnType<typeof viewArtifactVersion>;
+          try {
+            found = viewArtifactVersion(dir, artifactId, n);
+          } catch {
+            return json({ error: "damaged" }, 409);
+          }
+          if (found === null) return json({ error: "no-such-version" }, 404);
           return json({
-            artifactId,
-            ...(title === undefined ? {} : { title: title }),
+            artifactId: found.artifactId,
+            version: found.version,
+            author: found.author,
+            contentType: found.contentType,
+            hash: found.hash,
+            at: found.at,
+            bytes: found.bytes,
+            // A save records what it was working from and the values of the
+            // controls at the time. An agent emission has neither.
+            ...(found.basedOn === undefined ? {} : { basedOn: found.basedOn }),
+            ...(found.values === undefined ? {} : { values: found.values }),
           });
-        });
-      }
+        }
 
-      const restore = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/restore\/?$/);
-      if (restore && req.method === "POST") {
-        const id = decodeURIComponent(restore[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-        const artifactId = decodeURIComponent(restore[2] ?? "");
-        if (!validArtifactId(artifactId)) return json({ error: "unknown-artifact" }, 404);
-        let body: unknown;
-        try {
-          body = await req.json();
-        } catch {
-          return json({ error: "invalid-json" }, 400);
-        }
-        const b = body as { version?: unknown };
-        if (typeof b.version !== "number" || !Number.isSafeInteger(b.version) || b.version < 1) {
-          return json({ error: "version-required" }, 400);
-        }
-        const dir = conversations(rootDir).dirFor(id);
-        if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
-        const { version } = b;
-        return withWriter(dir, (host) => {
-          const current = host.artifactHeads().get(artifactId) ?? 0;
-          if (current === 0) return json({ error: "unknown-artifact" }, 404);
-          // Restoring what is already current would append a copy that
-          // records nothing.
-          if (version === current) return json({ error: "restore-of-current" }, 409);
-          const from = host.readArtifact(artifactId, version);
-          if (from === null) return json({ error: "version-unreadable" }, 404);
-          const result = host.writeArtifact({
-            artifactId,
-            version: current + 1,
-            author: "human",
-            contentType: from.contentType,
-            bytes: from.bytes,
-            basedOn: version,
-            // The values the restored version carried, if it carried any.
-            // Restoring a state means restoring the controls too.
-            ...(from.values === undefined ? {} : { values: from.values }),
+        // A save is an artifact version entry. It is NOT an input: it starts
+        // no turn, is not counted against the input bound, and carries no
+        // disposition. It records what is true and waits to be read — through
+        // live delivery, or the next time anything folds the record.
+        const save = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/save\/?$/);
+        if (save && req.method === "POST") {
+          const id = decodeURIComponent(save[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          const artifactId = decodeURIComponent(save[2] ?? "");
+          let body: unknown;
+          try {
+            body = await req.json();
+          } catch {
+            return json({ error: "invalid-json" }, 400);
+          }
+          const b = body as { html?: unknown; values?: unknown; basedOn?: unknown };
+          if (typeof b.html !== "string" || b.html.trim() === "") {
+            return json({ error: "html-required" }, 400);
+          }
+          if (typeof b.basedOn !== "number" || !Number.isSafeInteger(b.basedOn) || b.basedOn < 1) {
+            return json({ error: "based-on-required" }, 400);
+          }
+          const values: Record<string, string> = {};
+          if (b.values !== null && typeof b.values === "object" && !Array.isArray(b.values)) {
+            for (const [k, v] of Object.entries(b.values as Record<string, unknown>)) {
+              if (typeof v === "string") values[k] = v;
+            }
+          }
+          const dir = dirForRequest(id);
+          if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
+          const { html, basedOn } = b;
+          return withWriter(dir, id, (host) => {
+            // The next version in the single ordered list. There is no
+            // branching: a save based on a version the agent has since
+            // replaced still appends at the end, recording what it was
+            // working from. The agent reconciles; lucid does not merge.
+            const current = host.artifactHeads().get(artifactId) ?? 0;
+            if (current === 0) return json({ error: "no-such-artifact" }, 404);
+            const result = host.writeArtifact({
+              artifactId,
+              version: current + 1,
+              author: "human",
+              contentType: "text/html",
+              bytes: html,
+              basedOn: basedOn,
+              values,
+            });
+            if (result.verdict === "refused") {
+              // Refused, and what was typed is still in the page — nothing
+              // here clears it.
+              return json(
+                { error: result.issue, verdict: "refused" },
+                result.issue === "artifact-too-large" ? 413 : 409,
+              );
+            }
+            return json({
+              verdict: "accepted",
+              artifactId,
+              version: result.version.version,
+              basedOn: basedOn,
+              supersededSince: basedOn !== current,
+            });
           });
-          if (result.verdict === "refused") {
-            return json(
-              { error: result.issue, verdict: "refused" },
-              result.issue === "artifact-too-large" ? 413 : 409,
-            );
+        }
+
+        // Restore is a person's act on the record, and it is an append like any
+        // other. lucid copies the bytes of the version being restored into a new
+        // version at the end of the list. Nothing is removed, rewritten or
+        // hidden - the version it replaced is still there and still reachable,
+        // which is what makes undoing a restore the same act again.
+        const meta = path.match(/^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/meta\/?$/);
+        if (meta && req.method === "POST") {
+          const id = decodeURIComponent(meta[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          const artifactId = decodeURIComponent(meta[2] ?? "");
+          if (!validArtifactId(artifactId)) return json({ error: "unknown-artifact" }, 404);
+          let body: unknown;
+          try {
+            body = await req.json();
+          } catch {
+            return json({ error: "invalid-json" }, 400);
           }
-          return json({
-            verdict: "accepted",
-            artifactId,
-            version: result.version.version,
-            restoredFrom: version,
-            replaced: current,
+          const b = body as { title?: unknown };
+          // E-ART-07. The bound is checked here, where a caller can be told,
+          // rather than left to the fold, which would silently drop the field.
+          if (b.title !== undefined && !isArtifactTitle(b.title)) {
+            return json({ error: "invalid-title", max: ARTIFACT_TITLE_MAX }, 400);
+          }
+          // A request that says nothing is a mistake worth reporting rather
+          // than an append of an entry with no opinion in it.
+          if (b.title === undefined) {
+            return json({ error: "nothing-to-write" }, 400);
+          }
+          const dir = dirForRequest(id);
+          if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
+          const { title } = b;
+          return withWriter(dir, id, (host) => {
+            // E-ART-01. Naming an artifact the record does not hold is refused
+            // here, because this is the only place that can answer a caller.
+            // The fold tolerates such an entry anyway, so a record written by
+            // a build whose endpoint had a defect still opens.
+            if (!host.artifactHeads().has(artifactId))
+              return json({ error: "unknown-artifact" }, 404);
+            const result = host.writeArtifactMeta({
+              artifactId,
+              ...(title === undefined ? {} : { title: title }),
+            });
+            if (result.verdict === "refused") {
+              return json({ error: result.issue, verdict: "refused" }, 400);
+            }
+            return json({
+              artifactId,
+              ...(title === undefined ? {} : { title: title }),
+            });
           });
-        });
-      }
-
-      // The driver preference (RFC-12). A person's choice of what drives
-      // the conversation, stored in the record and honored by whichever
-      // headless process holds the presence lock - never by this server,
-      // which spawns nothing and takes no lock. This endpoint writes one
-      // file and answers.
-      //
-      // Validation is shape only, in the RFC's pinned order: json, harness,
-      // fields, unknown keys. Membership is hcn's to judge at spawn - the
-      // lists describe a pinned hcn and drift from the one that will spawn,
-      // and a harness whose model vocabulary is extensible accepts ids no
-      // descriptor listed - so a value hcn refuses surfaces later, as an
-      // error event in the record, where the person reads it.
-      const driverPref = path.match(/^\/api\/conversations\/([^/]+)\/driver\/?$/);
-      if (driverPref && req.method === "POST") {
-        const id = decodeURIComponent(driverPref[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-        let body: unknown;
-        try {
-          body = await req.json();
-        } catch {
-          return json({ error: "invalid-json" }, 400);
         }
-        const b = (body ?? {}) as Record<string, unknown>;
-        // A preference without its harness names nothing: model and effort
-        // are values in a harness's vocabulary, and a value without its
-        // domain cannot be honored. Aliases are refused with the rest - the
-        // file holds hcn's canonical names.
-        if (!isDriverHarness(b.harness)) return json({ error: "invalid-harness" }, 400);
-        for (const field of ["provider", "model", "effort"] as const) {
-          const value = b[field];
-          if (value === undefined) continue;
-          if (!isDriverField(value)) {
-            return json({ error: "invalid-field", field, max: DRIVER_FIELD_MAX }, 400);
+
+        const restore = path.match(
+          /^\/api\/conversations\/([^/]+)\/artifacts\/([^/]+)\/restore\/?$/,
+        );
+        if (restore && req.method === "POST") {
+          const id = decodeURIComponent(restore[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          const artifactId = decodeURIComponent(restore[2] ?? "");
+          if (!validArtifactId(artifactId)) return json({ error: "unknown-artifact" }, 404);
+          let body: unknown;
+          try {
+            body = await req.json();
+          } catch {
+            return json({ error: "invalid-json" }, 400);
           }
-        }
-        // No field outside the five. `mode` and `profile` are unknown
-        // fields: mode is not settable from the browser, and the attach
-        // flow behind an interactive switch is not designed.
-        for (const key of Object.keys(b)) {
-          if (!DRIVER_BODY_FIELDS.has(key)) {
-            return json({ error: "unknown-field", field: key }, 400);
+          const b = body as { version?: unknown };
+          if (typeof b.version !== "number" || !Number.isSafeInteger(b.version) || b.version < 1) {
+            return json({ error: "version-required" }, 400);
           }
-        }
-        // The record is created when it does not exist, as an input does:
-        // choosing a driver while nothing runs is the natural moment to
-        // choose one, and the preference is honored by the next headless
-        // driver to start.
-        const { dir } = conversations(rootDir).ensure(id);
-        const stored = writeDriverPreference(dir, {
-          harness: b.harness,
-          ...(isDriverField(b.provider) ? { provider: b.provider } : {}),
-          ...(isDriverField(b.model) ? { model: b.model } : {}),
-          ...(isDriverField(b.effort) ? { effort: b.effort } : {}),
-        });
-        return json(stored);
-      }
-
-      const write = path.match(/^\/api\/conversations\/([^/]+)\/input\/?$/);
-      // Read an attachment back, for a thumbnail (RFC-11).
-      //
-      // This is the BROWSER surface, and it is where the hex guard belongs:
-      // the name is resolved as a sha256 hex string before anything touches
-      // the filesystem, so `../secret` fails on the shape of the name. The
-      // agent surface is a different problem with a different answer - see
-      // the offered path in `src/store/deliver.ts`.
-      const blob = path.match(/^\/api\/conversations\/([^/]+)\/attachments\/([^/]+)\/?$/);
-      if (blob && req.method === "GET") {
-        const id = decodeURIComponent(blob[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-        const hash = decodeURIComponent(blob[2] ?? "");
-        if (!/^[0-9a-f]{64}$/.test(hash)) return json({ error: "not-an-attachment" }, 400);
-        const dir = conversations(rootDir).dirFor(id);
-        let bytes: Uint8Array | null = null;
-        try {
-          bytes = getBlob(dir, hash);
-        } catch {
-          return json({ error: "not-an-attachment" }, 400);
-        }
-        if (bytes === null) return json({ error: "no-such-attachment" }, 404);
-        return new Response(bytes.buffer as ArrayBuffer, {
-          headers: {
-            // Never the type the sender claimed - that is a claim, and letting
-            // it decide how a browser renders bytes is how a file becomes a
-            // script. The type is read off the bytes instead, and only four
-            // image types are recognised. Everything else is octet-stream.
-            "content-type": sniffImageType(bytes) ?? "application/octet-stream",
-            "content-disposition": "inline",
-            "x-content-type-options": "nosniff",
-            "cache-control": "private, max-age=31536000, immutable",
-          },
-        });
-      }
-
-      // Attach a file to a conversation (RFC-11).
-      //
-      // The bytes are stored and an entry records that they exist. Nothing is
-      // sent here - attaching and sending are separate acts, and a file that
-      // is never sent is still a fact about the conversation.
-      const attach = path.match(/^\/api\/conversations\/([^/]+)\/attachments\/?$/);
-      if (attach && req.method === "POST") {
-        const id = decodeURIComponent(attach[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-
-        // Read the body as bytes. It is a file, not JSON, and the name and
-        // media type ride in headers so the body is exactly the file.
-        const name = req.headers.get("x-lucid-filename") ?? "";
-        const contentType = req.headers.get("content-type") ?? "application/octet-stream";
-        if (!isArtifactField(name)) return json({ error: "filename-required" }, 400);
-
-        if (!isArtifactField(contentType)) return json({ error: "attachment-invalid" }, 400);
-
-        const raw = new Uint8Array(await req.arrayBuffer());
-        // Checked here as well as in the store. The endpoint is the rule and
-        // the browser is a convenience; a body this large should not have
-        // been read, and a later bound is not an excuse for no bound.
-        if (!withinAttachmentBound(raw.byteLength)) {
-          return json({ error: "attachment-too-large" }, 413);
-        }
-
-        const { dir } = conversations(rootDir).ensure(id);
-        return withWriter(dir, (host) => {
-          const result = host.writeAttachment({
-            bytes: raw,
-            contentType,
-            name,
-            // Decided on the bytes, once, and recorded. The media type states
-            // what the browser claims and the extension states less.
-            text: isTextBytes(raw),
+          const dir = dirForRequest(id);
+          if (!existsSync(join(dir, "log.ndjson"))) return json({ error: "no-such-record" }, 404);
+          const { version } = b;
+          return withWriter(dir, id, (host) => {
+            const current = host.artifactHeads().get(artifactId) ?? 0;
+            if (current === 0) return json({ error: "unknown-artifact" }, 404);
+            // Restoring what is already current would append a copy that
+            // records nothing.
+            if (version === current) return json({ error: "restore-of-current" }, 409);
+            const from = host.readArtifact(artifactId, version);
+            if (from === null) return json({ error: "version-unreadable" }, 404);
+            const result = host.writeArtifact({
+              artifactId,
+              version: current + 1,
+              author: "human",
+              contentType: from.contentType,
+              bytes: from.bytes,
+              basedOn: version,
+              // The values the restored version carried, if it carried any.
+              // Restoring a state means restoring the controls too.
+              ...(from.values === undefined ? {} : { values: from.values }),
+            });
+            if (result.verdict === "refused") {
+              return json(
+                { error: result.issue, verdict: "refused" },
+                result.issue === "artifact-too-large" ? 413 : 409,
+              );
+            }
+            return json({
+              verdict: "accepted",
+              artifactId,
+              version: result.version.version,
+              restoredFrom: version,
+              replaced: current,
+            });
           });
-          if (result.verdict === "refused") {
-            return json(
-              { error: result.issue },
-              result.issue === "attachment-too-large" ? 413 : 400,
-            );
+        }
+
+        // The driver preference (RFC-12). A person's choice of what drives
+        // the conversation, stored in the record and honored by whichever
+        // headless process holds the presence lock - never by this server,
+        // which spawns nothing and takes no lock. This endpoint writes one
+        // file and answers.
+        //
+        // Validation is shape only, in the RFC's pinned order: json, harness,
+        // fields, unknown keys. Membership is hcn's to judge at spawn - the
+        // lists describe a pinned hcn and drift from the one that will spawn,
+        // and a harness whose model vocabulary is extensible accepts ids no
+        // descriptor listed - so a value hcn refuses surfaces later, as an
+        // error event in the record, where the person reads it.
+        const driverPref = path.match(/^\/api\/conversations\/([^/]+)\/driver\/?$/);
+        if (driverPref && req.method === "POST") {
+          const id = decodeURIComponent(driverPref[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          let body: unknown;
+          try {
+            body = await req.json();
+          } catch {
+            return json({ error: "invalid-json" }, 400);
           }
-          return json({
-            hash: result.hash,
-            bytes: raw.byteLength,
-            contentType,
-            name,
-            text: isTextBytes(raw),
+          const b = (body ?? {}) as Record<string, unknown>;
+          // A preference without its harness names nothing: model and effort
+          // are values in a harness's vocabulary, and a value without its
+          // domain cannot be honored. Aliases are refused with the rest - the
+          // file holds hcn's canonical names.
+          if (!isDriverHarness(b.harness)) return json({ error: "invalid-harness" }, 400);
+          for (const field of ["provider", "model", "effort"] as const) {
+            const value = b[field];
+            if (value === undefined) continue;
+            if (!isDriverField(value)) {
+              return json({ error: "invalid-field", field, max: DRIVER_FIELD_MAX }, 400);
+            }
+          }
+          // No field outside the five. `mode` and `profile` are unknown
+          // fields: mode is not settable from the browser, and the attach
+          // flow behind an interactive switch is not designed.
+          for (const key of Object.keys(b)) {
+            if (!DRIVER_BODY_FIELDS.has(key)) {
+              return json({ error: "unknown-field", field: key }, 400);
+            }
+          }
+          // The record is created when it does not exist, as an input does:
+          // choosing a driver while nothing runs is the natural moment to
+          // choose one, and the preference is honored by the next headless
+          // driver to start.
+          const dir = dirForRequest(id);
+          const stored = writeDriverPreference(
+            dir,
+            {
+              harness: b.harness,
+              ...(isDriverField(b.provider) ? { provider: b.provider } : {}),
+              ...(isDriverField(b.model) ? { model: b.model } : {}),
+              ...(isDriverField(b.effort) ? { effort: b.effort } : {}),
+            },
+            id,
+          );
+          return json(stored);
+        }
+
+        const write = path.match(/^\/api\/conversations\/([^/]+)\/input\/?$/);
+        // Read an attachment back, for a thumbnail (RFC-11).
+        //
+        // This is the BROWSER surface, and it is where the hex guard belongs:
+        // the name is resolved as a sha256 hex string before anything touches
+        // the filesystem, so `../secret` fails on the shape of the name. The
+        // agent surface is a different problem with a different answer - see
+        // the offered path in `src/store/deliver.ts`.
+        const blob = path.match(/^\/api\/conversations\/([^/]+)\/attachments\/([^/]+)\/?$/);
+        if (blob && req.method === "GET") {
+          const id = decodeURIComponent(blob[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          const hash = decodeURIComponent(blob[2] ?? "");
+          if (!/^[0-9a-f]{64}$/.test(hash)) return json({ error: "not-an-attachment" }, 400);
+          const dir = dirForRequest(id);
+          let bytes: Uint8Array | null = null;
+          try {
+            bytes = getBlob(dir, hash);
+          } catch {
+            return json({ error: "not-an-attachment" }, 400);
+          }
+          if (bytes === null) return json({ error: "no-such-attachment" }, 404);
+          return new Response(bytes.buffer as ArrayBuffer, {
+            headers: {
+              // Never the type the sender claimed - that is a claim, and letting
+              // it decide how a browser renders bytes is how a file becomes a
+              // script. The type is read off the bytes instead, and only four
+              // image types are recognised. Everything else is octet-stream.
+              "content-type": sniffImageType(bytes) ?? "application/octet-stream",
+              "content-disposition": "inline",
+              "x-content-type-options": "nosniff",
+              "cache-control": "private, max-age=31536000, immutable",
+            },
           });
-        });
-      }
-
-      if (write && req.method === "POST") {
-        const id = decodeURIComponent(write[1] ?? "");
-        if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
-        let body: unknown;
-        try {
-          body = await req.json();
-        } catch {
-          return json({ error: "invalid-json" }, 400);
         }
-        const value = (body as { text?: unknown }).text;
-        if (typeof value !== "string" || value.trim() === "") {
-          return json({ error: "text-required" }, 400);
-        }
-        // The protocol's own bound, imported rather than restated. A limit
-        // mirrored here would drift from the one that actually refuses.
-        if (value.length > TEXT_MAX) return json({ error: "text-too-large" }, 413);
 
-        const { dir } = conversations(rootDir).ensure(id);
-        return withWriter(dir, (host) => {
-          const inputId = `browser-${randomUUID()}`;
-          const result = host.enqueueInput({ id: inputId, text: value, mode: "queue" });
-          if (result.verdict === "refused") {
-            return json(
-              { error: result.issue, verdict: "refused" },
-              result.issue === "input-queue-full" ? 429 : 400,
-            );
+        // Attach a file to a conversation (RFC-11).
+        //
+        // The bytes are stored and an entry records that they exist. Nothing is
+        // sent here - attaching and sending are separate acts, and a file that
+        // is never sent is still a fact about the conversation.
+        const attach = path.match(/^\/api\/conversations\/([^/]+)\/attachments\/?$/);
+        if (attach && req.method === "POST") {
+          const id = decodeURIComponent(attach[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+
+          // Read the body as bytes. It is a file, not JSON, and the name and
+          // media type ride in headers so the body is exactly the file.
+          const name = req.headers.get("x-lucid-filename") ?? "";
+          const contentType = req.headers.get("content-type") ?? "application/octet-stream";
+          if (!isArtifactField(name)) return json({ error: "filename-required" }, 400);
+
+          if (!isArtifactField(contentType)) return json({ error: "attachment-invalid" }, 400);
+
+          const raw = new Uint8Array(await req.arrayBuffer());
+          // Checked here as well as in the store. The endpoint is the rule and
+          // the browser is a convenience; a body this large should not have
+          // been read, and a later bound is not an excuse for no bound.
+          if (!withinAttachmentBound(raw.byteLength)) {
+            return json({ error: "attachment-too-large" }, 413);
           }
-          return json({ inputId, verdict: "accepted" });
-        });
-      }
 
-      return text("not found", 404);
+          const dir = dirForRequest(id);
+          return withWriter(dir, id, (host) => {
+            const result = host.writeAttachment({
+              bytes: raw,
+              contentType,
+              name,
+              // Decided on the bytes, once, and recorded. The media type states
+              // what the browser claims and the extension states less.
+              text: isTextBytes(raw),
+            });
+            if (result.verdict === "refused") {
+              return json(
+                { error: result.issue },
+                result.issue === "attachment-too-large" ? 413 : 400,
+              );
+            }
+            return json({
+              hash: result.hash,
+              bytes: raw.byteLength,
+              contentType,
+              name,
+              text: isTextBytes(raw),
+            });
+          });
+        }
+
+        if (write && req.method === "POST") {
+          const id = decodeURIComponent(write[1] ?? "");
+          if (!validConversationId(id)) return json({ error: "invalid-conversation-id" }, 400);
+          let body: unknown;
+          try {
+            body = await req.json();
+          } catch {
+            return json({ error: "invalid-json" }, 400);
+          }
+          const value = (body as { text?: unknown }).text;
+          if (typeof value !== "string" || value.trim() === "") {
+            return json({ error: "text-required" }, 400);
+          }
+          // The protocol's own bound, imported rather than restated. A limit
+          // mirrored here would drift from the one that actually refuses.
+          if (value.length > TEXT_MAX) return json({ error: "text-too-large" }, 413);
+
+          const dir = dirForRequest(id);
+          return withWriter(dir, id, (host) => {
+            const inputId = `browser-${randomUUID()}`;
+            const result = host.enqueueInput({ id: inputId, text: value, mode: "queue" });
+            if (result.verdict === "refused") {
+              return json(
+                { error: result.issue, verdict: "refused" },
+                result.issue === "input-queue-full" ? 429 : 400,
+              );
+            }
+            return json({ inputId, verdict: "accepted" });
+          });
+        }
+
+        return text("not found", 404);
+      } catch (cause) {
+        if (cause instanceof RecordLookupError)
+          return json(
+            { code: "E-HUB-01", error: cause.reason },
+            cause.reason === "not-found" ? 404 : cause.reason === "root-unavailable" ? 503 : 409,
+          );
+        const code = classifyStoreFailure(cause);
+        if (code === "record-busy") return json({ error: code }, 503);
+        if (code === "record-unreadable") return json({ error: "damaged" }, 409);
+        throw cause;
+      }
     },
   });
 
@@ -796,6 +851,7 @@ export const startServer = async (opts: ServerOpts = {}): Promise<RunningServer>
     token,
     url: `http://127.0.0.1:${bound}`,
     close: async () => {
+      discovery.close();
       await server.stop(true);
     },
   };

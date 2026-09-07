@@ -2666,7 +2666,13 @@ const App = (): React.ReactElement => {
           return;
         }
         if (!res.ok) {
-          setProblem(`Could not read the conversation (${res.status}).`);
+          const failure = (await res.json()) as { reason?: unknown };
+          if (!alive) return;
+          setProblem(
+            typeof failure.reason === "string"
+              ? failure.reason
+              : `Could not read the conversation (${res.status}).`,
+          );
           return;
         }
         const data = (await res.json()) as {
@@ -3806,10 +3812,10 @@ const App = (): React.ReactElement => {
                           hold. Not an error and not styled as one - the way
                           on is the artifact it does hold, named plainly. */}
                       <div className="doc-head">
-                        <span className="doc-mark" aria-hidden="true">
+                        <a className="doc-mark" href="/" aria-label="Lucid hub">
                           <span className="dot" />
                           <span className="word">lucid</span>
-                        </span>
+                        </a>
                         <span className="doc-head-sep" aria-hidden="true" />
                         {allArtifacts.length === 0 ? (
                           <span className="none-name">No document</span>
@@ -3873,10 +3879,10 @@ const App = (): React.ReactElement => {
                           - the header says so rather than showing dead
                           controls. The way in is the conversation. */}
                       <div className="doc-head">
-                        <span className="doc-mark" aria-hidden="true">
+                        <a className="doc-mark" href="/" aria-label="Lucid hub">
                           <span className="dot" />
                           <span className="word">lucid</span>
-                        </span>
+                        </a>
                         <span className="doc-head-sep" aria-hidden="true" />
                         <span className="none-name">No document</span>
                       </div>
@@ -3922,10 +3928,10 @@ const App = (): React.ReactElement => {
                     the conversation card below carries the same two answers. */}
                       {dead || damaged ? (
                         <div className="doc-head dead">
-                          <span className="doc-mark" aria-hidden="true">
+                          <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
-                          </span>
+                          </a>
                           <span className="doc-head-sep" aria-hidden="true" />
                           {headerTitle(doc)}
                           {/* 3d: Reload is the only action. The token cannot
@@ -3941,10 +3947,10 @@ const App = (): React.ReactElement => {
                         </div>
                       ) : edited ? (
                         <div className="doc-head saving-bar">
-                          <span className="doc-mark" aria-hidden="true">
+                          <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
-                          </span>
+                          </a>
                           <span className="doc-head-sep" aria-hidden="true" />
                           {headerTitle(doc)}
                           <span className="saving-clause">
@@ -3973,10 +3979,10 @@ const App = (): React.ReactElement => {
                         <div className="doc-head">
                           {/* lucid, over the document: the mark, a hairline, then
                       the name. Nothing else above the sheet. */}
-                          <span className="doc-mark" aria-hidden="true">
+                          <a className="doc-mark" href="/" aria-label="Lucid hub">
                             <span className="dot" />
                             <span className="word">lucid</span>
-                          </span>
+                          </a>
                           <span className="doc-head-sep" aria-hidden="true" />
                           {headerTitle(doc)}
                           {/* One version is a badge with nothing to open. More than

@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { startServe } from "../../src/cli/serve.js";
 import type { HarnessFacts, HarnessName } from "../../src/harness/runner.js";
 import { driverChoices, driverChoicesFromFacts } from "../../src/server/driver-choices.js";
+import { createConversationRecord } from "../../src/store/store.js";
 
 const facts = (over: Partial<HarnessFacts> = {}): HarnessFacts => ({
   name: "x",
@@ -67,6 +68,7 @@ describe("the projection from inspect facts", () => {
 describe("what the pinned hcn serves", () => {
   test("the poll carries the lists, read through the seam", async () => {
     const root = mkdtempSync(join(tmpdir(), "lucid-driver-choices-"));
+    createConversationRecord(root, "anything");
     const server = await startServe({ rootDir: root, port: 0 });
     try {
       const res = await fetch(`http://127.0.0.1:${server.port}/api/conversations/anything`, {
